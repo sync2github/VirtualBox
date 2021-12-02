@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_handletable_h
-#define ___iprt_handletable_h
+#ifndef IPRT_INCLUDED_handletable_h
+#define IPRT_INCLUDED_handletable_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -60,7 +63,7 @@ RT_C_DECLS_BEGIN
  *                          RTHANDLETABLE_FLAGS_CONTEXT set. Otherwise NULL.
  * @param   pvUser          The user context argument specified when creating the table.
  */
-typedef DECLCALLBACK(int) FNRTHANDLETABLERETAIN(RTHANDLETABLE hHandleTable, void *pvObj, void *pvCtx, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNRTHANDLETABLERETAIN,(RTHANDLETABLE hHandleTable, void *pvObj, void *pvCtx, void *pvUser));
 /** Pointer to a FNHANDLETABLERETAIN. */
 typedef FNRTHANDLETABLERETAIN *PFNRTHANDLETABLERETAIN;
 
@@ -75,7 +78,7 @@ typedef FNRTHANDLETABLERETAIN *PFNRTHANDLETABLERETAIN;
  * @param   pvUser          The user context argument specified when creating the table.
  *
  */
-typedef DECLCALLBACK(void) FNRTHANDLETABLEDELETE(RTHANDLETABLE hHandleTable, uint32_t h, void *pvObj, void *pvCtx, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNRTHANDLETABLEDELETE,(RTHANDLETABLE hHandleTable, uint32_t h, void *pvObj, void *pvCtx, void *pvUser));
 /** Pointer to a FNRTHANDLETABLEDELETE. */
 typedef FNRTHANDLETABLEDELETE *PFNRTHANDLETABLEDELETE;
 
@@ -242,5 +245,5 @@ RTDECL(void *)  RTHandleTableFreeWithCtx(RTHANDLETABLE hHandleTable, uint32_t h,
 RT_C_DECLS_END
 
 
-#endif
+#endif /* !IPRT_INCLUDED_handletable_h */
 

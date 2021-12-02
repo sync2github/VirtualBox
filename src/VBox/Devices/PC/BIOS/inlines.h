@@ -1,9 +1,10 @@
+/* $Id: inlines.h 84752 2020-06-10 10:58:33Z vboxsync $ */
 /** @file
  * Inline routines for Watcom C.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#ifndef VBOX_INCLUDED_SRC_PC_BIOS_inlines_h
+#define VBOX_INCLUDED_SRC_PC_BIOS_inlines_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 extern unsigned inp(unsigned port);
 extern unsigned outp(unsigned port, unsigned value);
@@ -25,12 +31,38 @@ extern unsigned outpw(unsigned port, unsigned value);
 #define inw(p)      inpw(p)
 #define outw(p, v)  outpw(p, v)
 
-extern  uint8_t     read_byte(uint16_t seg, uint16_t offset);
-extern  uint16_t    read_word(uint16_t seg, uint16_t offset);
-extern  uint32_t    read_dword(uint16_t seg, uint16_t offset);
-extern  void        write_byte(uint16_t seg, uint16_t offset, uint8_t data);
-extern  void        write_word(uint16_t seg, uint16_t offset, uint16_t data);
-extern  void        write_dword(uint16_t seg, uint16_t offset, uint32_t data);
+/* Far byte/word/dword access routines. */
+
+inline uint8_t read_byte(uint16_t seg, uint16_t offset)
+{
+    return( *(seg:>(uint8_t *)offset) );
+}
+
+inline void write_byte(uint16_t seg, uint16_t offset, uint8_t data)
+{
+    *(seg:>(uint8_t *)offset) = data;
+}
+
+inline uint16_t read_word(uint16_t seg, uint16_t offset)
+{
+    return( *(seg:>(uint16_t *)offset) );
+}
+
+inline void write_word(uint16_t seg, uint16_t offset, uint16_t data)
+{
+    *(seg:>(uint16_t *)offset) = data;
+}
+
+inline uint32_t read_dword(uint16_t seg, uint16_t offset)
+{
+    return( *(seg:>(uint32_t *)offset) );
+}
+
+inline void write_dword(uint16_t seg, uint16_t offset, uint32_t data)
+{
+    *(seg:>(uint32_t *)offset) = data;
+}
+
 
 void int_enable(void);
 #pragma aux int_enable = "sti" modify exact [] nomemory;
@@ -66,6 +98,20 @@ void halt_forever(void);
     "hlt"                   \
     "jmp forever"           \
     modify exact [] nomemory aborts;
+
+/* Output a null-terminated string to a specified port, without the
+ * terminating null character.
+ */
+static void out_ctrl_str_asm(uint16_t port, const char *s);
+#pragma aux out_ctrl_str_asm =   \
+    "mov    al, [bx]"       \
+    "next:"                 \
+    "out    dx, al"         \
+    "inc    bx"             \
+    "mov    al, [bx]"       \
+    "or     al, al"         \
+    "jnz    next"           \
+    parm [dx] [bx] modify exact [ax bx] nomemory;
 
 #ifdef __386__
 
@@ -145,7 +191,7 @@ uint64_t swap_64(uint64_t val);
 
 #if VBOX_BIOS_CPU >= 80386
 
-/* Warning: msr_read/msr_write destroy high bits of 32-bit registers. */
+/* Warning: msr_read/msr_write destroy high bits of 32-bit registers (EAX, ECX, EDX). */
 
 uint64_t msr_read(uint32_t msr);
 #pragma aux msr_read =  \
@@ -176,4 +222,40 @@ void msr_write(uint64_t val, uint32_t msr);
     "wrmsr"             \
     parm [ax bx cx dx] [di si] modify [] nomemory;
 
+/* Warning: eflags_read/eflags_write destroy high bits of 32-bit registers (EDX). */
+uint32_t eflags_read( void );
+#pragma aux eflags_read =   \
+    ".386"                  \
+    "pushfd"                \
+    "pop  edx"              \
+    "mov  ax, dx"           \
+    "shr  edx, 16"          \
+    value [dx ax] modify [dx ax];
+
+uint32_t eflags_write( uint32_t e_flags );
+#pragma aux eflags_write =  \
+    ".386"                  \
+    "shl  edx, 16"          \
+    "mov  dx, ax"           \
+    "push edx"              \
+    "popfd"                 \
+    parm [dx ax] modify [dx ax];
+
+/* Warning cpuid destroys high bits of 32-bit registers (EAX, EBX, ECX, EDX). */
+void cpuid( uint32_t __far cpu_id[4], uint32_t leaf );
+#pragma aux cpuid =         \
+    ".586"                  \
+    "shl  edx, 16"          \
+    "mov  dx, ax"           \
+    "mov  eax, edx"         \
+    "cpuid"                 \
+    "mov  es:[di+0], eax"   \
+    "mov  es:[di+4], ebx"   \
+    "mov  es:[di+8], ecx"   \
+    "mov  es:[di+12], edx"  \
+    parm [es di] [dx ax] modify [bx cx dx]
+
 #endif
+
+#endif /* !VBOX_INCLUDED_SRC_PC_BIOS_inlines_h */
+

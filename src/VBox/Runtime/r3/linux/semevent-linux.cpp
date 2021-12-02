@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semevent-linux.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Event Semaphore, Linux (2.6.x+).
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,7 +37,7 @@
  * against glibc < 2.6.
  */
 #include "../posix/semevent-posix.cpp"
-asm volatile (".global epoll_pwait");
+__asm__ (".global epoll_pwait");
 
 #else /* glibc < 2.6 */
 

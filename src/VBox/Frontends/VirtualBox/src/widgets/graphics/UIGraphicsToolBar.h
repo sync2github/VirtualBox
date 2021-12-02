@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIGraphicsToolBar.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIGraphicsToolBar class declaration.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIGraphicsToolBar_h__
-#define __UIGraphicsToolBar_h__
+#ifndef FEQT_INCLUDED_SRC_widgets_graphics_UIGraphicsToolBar_h
+#define FEQT_INCLUDED_SRC_widgets_graphics_UIGraphicsToolBar_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "QIGraphicsWidget.h"
@@ -61,5 +64,5 @@ private:
     QMap<UIGraphicsToolBarIndex, UIGraphicsButton*> m_buttons;
 };
 
-#endif /* __UIGraphicsToolBar_h__ */
+#endif /* !FEQT_INCLUDED_SRC_widgets_graphics_UIGraphicsToolBar_h */
 

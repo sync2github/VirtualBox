@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: mp-r0drv-netbsd.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Multiprocessor, Ring-0 Driver, NetBSD.
  */
 
 /*
- * Copyright (C) 2008-2011 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 #include "the-netbsd-kernel.h"
 
 #include <iprt/mp.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/asm.h>
 #include <iprt/cpuset.h>
 #include "r0drv/mp-r0drv.h"

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManageMisc.cpp 92143 2021-10-29 12:52:44Z vboxsync $ */
 /** @file
  * VBoxManage - VirtualBox's command-line interface.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,6 +27,7 @@
 # include <VBox/com/ErrorInfo.h>
 # include <VBox/com/errorprint.h>
 # include <VBox/com/VirtualBox.h>
+# include <VBox/com/NativeEventQueue.h>
 #endif /* !VBOX_ONLY_DOCS */
 
 #include <iprt/asm.h>
@@ -35,11 +36,12 @@
 #include <iprt/ctype.h>
 #include <iprt/dir.h>
 #include <iprt/env.h>
-#include <VBox/err.h>
 #include <iprt/file.h>
+#include <iprt/sha.h>
 #include <iprt/initterm.h>
 #include <iprt/param.h>
 #include <iprt/path.h>
+#include <iprt/cpp/path.h>
 #include <iprt/stream.h>
 #include <iprt/string.h>
 #include <iprt/stdarg.h>
@@ -129,15 +131,13 @@ RTEXITCODE handleUnregisterVM(HandlerArg *a)
                 {
                     if (RT_C_IS_PRINT(c))
                         return errorSyntax(USAGE_UNREGISTERVM, "Invalid option -%c", c);
-                    else
-                        return errorSyntax(USAGE_UNREGISTERVM, "Invalid option case %i", c);
+                    return errorSyntax(USAGE_UNREGISTERVM, "Invalid option case %i", c);
                 }
-                else if (c == VERR_GETOPT_UNKNOWN_OPTION)
+                if (c == VERR_GETOPT_UNKNOWN_OPTION)
                     return errorSyntax(USAGE_UNREGISTERVM, "unknown option: %s\n", ValueUnion.psz);
-                else if (ValueUnion.pDef)
+                if (ValueUnion.pDef)
                     return errorSyntax(USAGE_UNREGISTERVM, "%s: %Rrs", ValueUnion.pDef->pszLong, c);
-                else
-                    return errorSyntax(USAGE_UNREGISTERVM, "error: %Rrs", c);
+                return errorSyntax(USAGE_UNREGISTERVM, "error: %Rrs", c);
         }
     }
 
@@ -192,6 +192,8 @@ static const RTGETOPTDEF g_aCreateVMOptions[] =
     { "-uuid",            'u', RTGETOPT_REQ_UUID },
     { "--register",       'r', RTGETOPT_REQ_NOTHING },
     { "-register",        'r', RTGETOPT_REQ_NOTHING },
+    { "--default",        'd', RTGETOPT_REQ_NOTHING },
+    { "-default",         'd', RTGETOPT_REQ_NOTHING },
 };
 
 RTEXITCODE handleCreateVM(HandlerArg *a)
@@ -202,6 +204,9 @@ RTEXITCODE handleCreateVM(HandlerArg *a)
     Bstr bstrOsTypeId;
     Bstr bstrUuid;
     bool fRegister = false;
+    bool fDefault = false;
+    /* TBD. Now not used */
+    Bstr bstrDefaultFlags;
     com::SafeArray<BSTR> groups;
 
     int c;
@@ -238,6 +243,10 @@ RTEXITCODE handleCreateVM(HandlerArg *a)
                 fRegister = true;
                 break;
 
+            case 'd':   // --default
+                fDefault = true;
+                break;
+
             default:
                 return errorGetOpt(USAGE_CREATEVM, c, &ValueUnion);
         }
@@ -272,10 +281,17 @@ RTEXITCODE handleCreateVM(HandlerArg *a)
                                         machine.asOutParam()));
 
         CHECK_ERROR_BREAK(machine, SaveSettings());
+        if (fDefault)
+        {
+            /* ApplyDefaults assumes the machine is already registered */
+            CHECK_ERROR_BREAK(machine, ApplyDefaults(bstrDefaultFlags.raw()));
+            CHECK_ERROR_BREAK(machine, SaveSettings());
+        }
         if (fRegister)
         {
             CHECK_ERROR_BREAK(a->virtualBox, RegisterMachine(machine));
         }
+
         Bstr uuid;
         CHECK_ERROR_BREAK(machine, COMGETTER(Id)(uuid.asOutParam()));
         Bstr settingsFile;
@@ -289,6 +305,101 @@ RTEXITCODE handleCreateVM(HandlerArg *a)
     while (0);
 
     return SUCCEEDED(rc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+}
+
+static const RTGETOPTDEF g_aMoveVMOptions[] =
+{
+    { "--type",           't', RTGETOPT_REQ_STRING },
+    { "--folder",         'f', RTGETOPT_REQ_STRING },
+};
+
+RTEXITCODE handleMoveVM(HandlerArg *a)
+{
+    HRESULT                        rc;
+    const char                    *pszSrcName      = NULL;
+    const char                    *pszType         = NULL;
+    char                          szTargetFolder[RTPATH_MAX];
+
+    int c;
+    int vrc = VINF_SUCCESS;
+    RTGETOPTUNION ValueUnion;
+    RTGETOPTSTATE GetState;
+
+    // start at 0 because main() has hacked both the argc and argv given to us
+    RTGetOptInit(&GetState, a->argc, a->argv, g_aMoveVMOptions, RT_ELEMENTS(g_aMoveVMOptions),
+                 0, RTGETOPTINIT_FLAGS_NO_STD_OPTS);
+    while ((c = RTGetOpt(&GetState, &ValueUnion)))
+    {
+        switch (c)
+        {
+            case 't':   // --type
+                pszType = ValueUnion.psz;
+                break;
+
+            case 'f':   // --target folder
+                if (ValueUnion.psz && ValueUnion.psz[0] != '\0')
+                {
+                    vrc = RTPathAbs(ValueUnion.psz, szTargetFolder, sizeof(szTargetFolder));
+                    if (RT_FAILURE(vrc))
+                        return RTMsgErrorExit(RTEXITCODE_FAILURE, "RTPathAbs(%s,,) failed with rc=%Rrc", ValueUnion.psz, vrc);
+                } else {
+                    szTargetFolder[0] = '\0';
+                }
+                break;
+
+            case VINF_GETOPT_NOT_OPTION:
+                if (!pszSrcName)
+                    pszSrcName = ValueUnion.psz;
+                else
+                    return errorSyntax(USAGE_MOVEVM, "Invalid parameter '%s'", ValueUnion.psz);
+                break;
+
+            default:
+                return errorGetOpt(USAGE_MOVEVM, c, &ValueUnion);
+        }
+    }
+
+
+    if (!pszType)
+    {
+        pszType = "basic";
+    }
+
+    /* Check for required options */
+    if (!pszSrcName)
+        return errorSyntax(USAGE_MOVEVM, "VM name required");
+
+    /* Get the machine object */
+    ComPtr<IMachine> srcMachine;
+    CHECK_ERROR_RET(a->virtualBox, FindMachine(Bstr(pszSrcName).raw(),
+                                               srcMachine.asOutParam()),
+                    RTEXITCODE_FAILURE);
+
+    if (srcMachine)
+    {
+        /* Start the moving */
+        ComPtr<IProgress> progress;
+
+        /* we have to open a session for this task */
+        CHECK_ERROR_RET(srcMachine, LockMachine(a->session, LockType_Write), RTEXITCODE_FAILURE);
+        ComPtr<IMachine> sessionMachine;
+
+        CHECK_ERROR_RET(a->session, COMGETTER(Machine)(sessionMachine.asOutParam()), RTEXITCODE_FAILURE);
+        CHECK_ERROR_RET(sessionMachine,
+                        MoveTo(Bstr(szTargetFolder).raw(),
+                               Bstr(pszType).raw(),
+                               progress.asOutParam()),
+                        RTEXITCODE_FAILURE);
+        rc = showProgress(progress);
+        CHECK_PROGRESS_ERROR_RET(progress, ("Move VM failed"), RTEXITCODE_FAILURE);
+
+        sessionMachine.setNull();
+        CHECK_ERROR_RET(a->session, UnlockMachine(), RTEXITCODE_FAILURE);
+
+        RTPrintf("Machine has been successfully moved into %s\n", szTargetFolder[0] != '\0' ? szTargetFolder : "the same location");
+    }
+
+    return RTEXITCODE_SUCCESS;
 }
 
 static const RTGETOPTDEF g_aCloneVMOptions[] =
@@ -339,6 +450,9 @@ static int parseCloneOptions(const char *psz, com::SafeArray<CloneOptions_T> *op
             else if (   !RTStrNICmp(psz, "Link", len)
                      || !RTStrNICmp(psz, "Linked", len))
                 options->push_back(CloneOptions_Link);
+            else if (   !RTStrNICmp(psz, "KeepHwUUIDs", len)
+                     || !RTStrNICmp(psz, "KeepHwUUID", len))
+                options->push_back(CloneOptions_KeepHwUUIDs);
             else
                 rc = VERR_PARSE_ERROR;
         }
@@ -412,17 +526,17 @@ RTEXITCODE handleCloneVM(HandlerArg *a)
                 if (!pszSrcName)
                     pszSrcName = ValueUnion.psz;
                 else
-                    return errorSyntax(USAGE_CLONEVM, "Invalid parameter '%s'", ValueUnion.psz);
+                    return errorSyntax("Invalid parameter '%s'", ValueUnion.psz);
                 break;
 
             default:
-                return errorGetOpt(USAGE_CLONEVM, c, &ValueUnion);
+                return errorGetOpt(c, &ValueUnion);
         }
     }
 
     /* Check for required options */
     if (!pszSrcName)
-        return errorSyntax(USAGE_CLONEVM, "VM name required");
+        return errorSyntax("VM name required");
 
     /* Get the machine object */
     ComPtr<IMachine> srcMachine;
@@ -495,17 +609,17 @@ RTEXITCODE handleStartVM(HandlerArg *a)
     HRESULT rc = S_OK;
     std::list<const char *> VMs;
     Bstr sessionType;
-    Utf8Str strEnv;
+    com::SafeArray<IN_BSTR> aBstrEnv;
 
 #if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
     /* make sure the VM process will by default start on the same display as VBoxManage */
     {
         const char *pszDisplay = RTEnvGet("DISPLAY");
         if (pszDisplay)
-            strEnv = Utf8StrFmt("DISPLAY=%s\n", pszDisplay);
+            aBstrEnv.push_back(BstrFmt("DISPLAY=%s", pszDisplay).raw());
         const char *pszXAuth = RTEnvGet("XAUTHORITY");
         if (pszXAuth)
-            strEnv.append(Utf8StrFmt("XAUTHORITY=%s\n", pszXAuth));
+            aBstrEnv.push_back(BstrFmt("XAUTHORITY=%s", pszXAuth).raw());
     }
 #endif
 
@@ -552,7 +666,7 @@ RTEXITCODE handleStartVM(HandlerArg *a)
 
             case 'E':   // --putenv
                 if (!RTStrStr(ValueUnion.psz, "\n"))
-                    strEnv.append(Utf8StrFmt("%s\n", ValueUnion.psz));
+                    aBstrEnv.push_back(Bstr(ValueUnion.psz).raw());
                 else
                     return errorSyntax(USAGE_STARTVM, "Parameter to option --putenv must not contain any newline character");
                 break;
@@ -595,7 +709,7 @@ RTEXITCODE handleStartVM(HandlerArg *a)
         {
             ComPtr<IProgress> progress;
             CHECK_ERROR(machine, LaunchVMProcess(a->session, sessionType.raw(),
-                                                 Bstr(strEnv).raw(), progress.asOutParam()));
+                                                 ComSafeArrayAsInParam(aBstrEnv), progress.asOutParam()));
             if (SUCCEEDED(rc) && !progress.isNull())
             {
                 RTPrintf("Waiting for VM \"%s\" to power on...\n", pszVM);
@@ -704,14 +818,14 @@ RTEXITCODE handleGetExtraData(HandlerArg *a)
 {
     HRESULT rc = S_OK;
 
-    if (a->argc != 2)
+    if (a->argc > 2 || a->argc < 1)
         return errorSyntax(USAGE_GETEXTRADATA, "Incorrect number of parameters");
 
     /* global data? */
     if (!strcmp(a->argv[0], "global"))
     {
         /* enumeration? */
-        if (!strcmp(a->argv[1], "enumerate"))
+        if (a->argc < 2 || !strcmp(a->argv[1], "enumerate"))
         {
             SafeArray<BSTR> aKeys;
             CHECK_ERROR(a->virtualBox, GetExtraDataKeys(ComSafeArrayAsOutParam(aKeys)));
@@ -747,7 +861,7 @@ RTEXITCODE handleGetExtraData(HandlerArg *a)
         if (machine)
         {
             /* enumeration? */
-            if (!strcmp(a->argv[1], "enumerate"))
+            if (a->argc < 2 || !strcmp(a->argv[1], "enumerate"))
             {
                 SafeArray<BSTR> aKeys;
                 CHECK_ERROR(machine, GetExtraDataKeys(ComSafeArrayAsOutParam(aKeys)));
@@ -915,194 +1029,302 @@ RTEXITCODE handleSetProperty(HandlerArg *a)
             bstrLoggingLevel.setNull();
         CHECK_ERROR(systemProperties, COMSETTER(LoggingLevel)(bstrLoggingLevel.raw()));
     }
+    else if (!strcmp(a->argv[0], "proxymode"))
+    {
+        ProxyMode_T enmProxyMode;
+        if (!RTStrICmpAscii(a->argv[1], "system"))
+            enmProxyMode = ProxyMode_System;
+        else if (!RTStrICmpAscii(a->argv[1], "noproxy"))
+            enmProxyMode = ProxyMode_NoProxy;
+        else if (!RTStrICmpAscii(a->argv[1], "manual"))
+            enmProxyMode = ProxyMode_Manual;
+        else
+            return errorArgument("Unknown proxy mode: '%s'", a->argv[1]);
+        CHECK_ERROR(systemProperties, COMSETTER(ProxyMode)(enmProxyMode));
+    }
+    else if (!strcmp(a->argv[0], "proxyurl"))
+    {
+        Bstr bstrProxyUrl(a->argv[1]);
+        CHECK_ERROR(systemProperties, COMSETTER(ProxyURL)(bstrProxyUrl.raw()));
+    }
+#ifdef VBOX_WITH_MAIN_NLS
+    else if (!strcmp(a->argv[0], "language"))
+    {
+        Bstr bstrLanguage(a->argv[1]);
+        CHECK_ERROR(systemProperties, COMSETTER(LanguageId)(bstrLanguage.raw()));
+
+        /* Kudge alert! Make sure the language change notification is processed,
+                        otherwise it may arrive as (XP)COM shuts down and cause
+                        trouble in debug builds. */
+# ifdef DEBUG
+        uint64_t const tsStart = RTTimeNanoTS();
+# endif
+        unsigned cMsgs = 0;
+        int vrc;
+        while (   RT_SUCCESS(vrc = NativeEventQueue::getMainEventQueue()->processEventQueue(32 /*ms*/))
+               || vrc == VERR_INTERRUPTED)
+            cMsgs++;
+# ifdef DEBUG
+        RTPrintf("vrc=%Rrc cMsgs=%u nsElapsed=%'RU64\n", vrc, cMsgs, RTTimeNanoTS() - tsStart);
+# endif
+    }
+#endif
     else
         return errorSyntax(USAGE_SETPROPERTY, "Invalid parameter '%s'", a->argv[0]);
 
     return SUCCEEDED(rc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
 }
 
+/**
+ * sharedfolder add
+ */
+static RTEXITCODE handleSharedFolderAdd(HandlerArg *a)
+{
+    /*
+     * Parse arguments (argv[0] == subcommand).
+     */
+    static const RTGETOPTDEF s_aAddOptions[] =
+    {
+        { "--name",             'n', RTGETOPT_REQ_STRING },
+        { "-name",              'n', RTGETOPT_REQ_STRING },     // deprecated
+        { "--hostpath",         'p', RTGETOPT_REQ_STRING },
+        { "-hostpath",          'p', RTGETOPT_REQ_STRING },     // deprecated
+        { "--readonly",         'r', RTGETOPT_REQ_NOTHING },
+        { "-readonly",          'r', RTGETOPT_REQ_NOTHING },    // deprecated
+        { "--transient",        't', RTGETOPT_REQ_NOTHING },
+        { "-transient",         't', RTGETOPT_REQ_NOTHING },    // deprecated
+        { "--automount",        'a', RTGETOPT_REQ_NOTHING },
+        { "-automount",         'a', RTGETOPT_REQ_NOTHING },    // deprecated
+        { "--auto-mount-point", 'm', RTGETOPT_REQ_STRING },
+    };
+    const char *pszMachineName    = NULL;
+    const char *pszName           = NULL;
+    const char *pszHostPath       = NULL;
+    bool        fTransient        = false;
+    bool        fWritable         = true;
+    bool        fAutoMount        = false;
+    const char *pszAutoMountPoint = "";
+
+    RTGETOPTSTATE GetState;
+    RTGetOptInit(&GetState, a->argc, a->argv, s_aAddOptions, RT_ELEMENTS(s_aAddOptions), 1 /*iFirst*/, 0 /*fFlags*/);
+    int c;
+    RTGETOPTUNION ValueUnion;
+    while ((c = RTGetOpt(&GetState, &ValueUnion)))
+    {
+        switch (c)
+        {
+            case 'n':
+                pszName = ValueUnion.psz;
+                break;
+            case 'p':
+                pszHostPath = ValueUnion.psz;
+                break;
+            case 'r':
+                fWritable = false;
+                break;
+            case 't':
+                fTransient = true;
+                break;
+            case 'a':
+                fAutoMount = true;
+                break;
+            case 'm':
+                pszAutoMountPoint = ValueUnion.psz;
+                break;
+            case VINF_GETOPT_NOT_OPTION:
+                if (pszMachineName)
+                    return errorArgument("Machine name is given more than once: first '%s', then '%s'",
+                                         pszMachineName, ValueUnion.psz);
+                pszMachineName = ValueUnion.psz;
+                break;
+            default:
+                return errorGetOpt(c, &ValueUnion);
+        }
+    }
+
+    if (!pszMachineName)
+        return errorSyntax("No machine was specified");
+
+    if (!pszName)
+        return errorSyntax("No shared folder name (--name) was given");
+    if (strchr(pszName, ' '))
+        return errorSyntax("Invalid shared folder name '%s': contains space", pszName);
+    if (strchr(pszName, '\t'))
+        return errorSyntax("Invalid shared folder name '%s': contains tabs", pszName);
+    if (strchr(pszName, '\n') || strchr(pszName, '\r'))
+        return errorSyntax("Invalid shared folder name '%s': contains newline", pszName);
+
+    if (!pszHostPath)
+        return errorSyntax("No host path (--hostpath) was given");
+    char szAbsHostPath[RTPATH_MAX];
+    int vrc = RTPathAbs(pszHostPath, szAbsHostPath, sizeof(szAbsHostPath));
+    if (RT_FAILURE(vrc))
+        return RTMsgErrorExit(RTEXITCODE_FAILURE, "RTAbsPath failed on '%s': %Rrc", pszHostPath, vrc);
+
+    /*
+     * Done parsing, do some work.
+     */
+    ComPtr<IMachine> ptrMachine;
+    CHECK_ERROR2I_RET(a->virtualBox, FindMachine(Bstr(pszMachineName).raw(), ptrMachine.asOutParam()), RTEXITCODE_FAILURE);
+    AssertReturn(ptrMachine.isNotNull(), RTEXITCODE_FAILURE);
+
+    HRESULT hrc;
+    if (fTransient)
+    {
+        /* open an existing session for the VM */
+        CHECK_ERROR2I_RET(ptrMachine, LockMachine(a->session, LockType_Shared), RTEXITCODE_FAILURE);
+
+        /* get the session machine */
+        ComPtr<IMachine> ptrSessionMachine;
+        CHECK_ERROR2I_RET(a->session, COMGETTER(Machine)(ptrSessionMachine.asOutParam()), RTEXITCODE_FAILURE);
+
+        /* get the session console */
+        ComPtr<IConsole> ptrConsole;
+        CHECK_ERROR2I_RET(a->session, COMGETTER(Console)(ptrConsole.asOutParam()), RTEXITCODE_FAILURE);
+        if (ptrConsole.isNull())
+            return RTMsgErrorExit(RTEXITCODE_FAILURE, "Machine '%s' is not currently running.", pszMachineName);
+
+        CHECK_ERROR2(hrc, ptrConsole, CreateSharedFolder(Bstr(pszName).raw(), Bstr(szAbsHostPath).raw(),
+                                                         fWritable, fAutoMount, Bstr(pszAutoMountPoint).raw()));
+        a->session->UnlockMachine();
+    }
+    else
+    {
+        /* open a session for the VM */
+        CHECK_ERROR2I_RET(ptrMachine, LockMachine(a->session, LockType_Write), RTEXITCODE_FAILURE);
+
+        /* get the mutable session machine */
+        ComPtr<IMachine> ptrSessionMachine;
+        CHECK_ERROR2I_RET(a->session, COMGETTER(Machine)(ptrSessionMachine.asOutParam()), RTEXITCODE_FAILURE);
+
+        CHECK_ERROR2(hrc, ptrSessionMachine, CreateSharedFolder(Bstr(pszName).raw(), Bstr(szAbsHostPath).raw(),
+                                                                fWritable, fAutoMount, Bstr(pszAutoMountPoint).raw()));
+        if (SUCCEEDED(hrc))
+        {
+            CHECK_ERROR2(hrc, ptrSessionMachine, SaveSettings());
+        }
+
+        a->session->UnlockMachine();
+    }
+
+    return SUCCEEDED(hrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+}
+
+/**
+ * sharedfolder remove
+ */
+static RTEXITCODE handleSharedFolderRemove(HandlerArg *a)
+{
+    /*
+     * Parse arguments (argv[0] == subcommand).
+     */
+    static const RTGETOPTDEF s_aRemoveOptions[] =
+    {
+        { "--name",             'n', RTGETOPT_REQ_STRING },
+        { "-name",              'n', RTGETOPT_REQ_STRING },     // deprecated
+        { "--transient",        't', RTGETOPT_REQ_NOTHING },
+        { "-transient",         't', RTGETOPT_REQ_NOTHING },    // deprecated
+    };
+    const char *pszMachineName    = NULL;
+    const char *pszName           = NULL;
+    bool        fTransient        = false;
+
+    RTGETOPTSTATE GetState;
+    RTGetOptInit(&GetState, a->argc, a->argv, s_aRemoveOptions, RT_ELEMENTS(s_aRemoveOptions), 1 /*iFirst*/, 0 /*fFlags*/);
+    int c;
+    RTGETOPTUNION ValueUnion;
+    while ((c = RTGetOpt(&GetState, &ValueUnion)))
+    {
+        switch (c)
+        {
+            case 'n':
+                pszName = ValueUnion.psz;
+                break;
+            case 't':
+                fTransient = true;
+                break;
+            case VINF_GETOPT_NOT_OPTION:
+                if (pszMachineName)
+                    return errorArgument("Machine name is given more than once: first '%s', then '%s'",
+                                         pszMachineName, ValueUnion.psz);
+                pszMachineName = ValueUnion.psz;
+                break;
+            default:
+                return errorGetOpt(c, &ValueUnion);
+        }
+    }
+
+    if (!pszMachineName)
+        return errorSyntax("No machine was specified");
+    if (!pszName)
+        return errorSyntax("No shared folder name (--name) was given");
+
+    /*
+     * Done parsing, do some real work.
+     */
+    ComPtr<IMachine> ptrMachine;
+    CHECK_ERROR2I_RET(a->virtualBox, FindMachine(Bstr(pszMachineName).raw(), ptrMachine.asOutParam()), RTEXITCODE_FAILURE);
+    AssertReturn(ptrMachine.isNotNull(), RTEXITCODE_FAILURE);
+
+    HRESULT hrc;
+    if (fTransient)
+    {
+        /* open an existing session for the VM */
+        CHECK_ERROR2I_RET(ptrMachine, LockMachine(a->session, LockType_Shared), RTEXITCODE_FAILURE);
+        /* get the session machine */
+        ComPtr<IMachine> ptrSessionMachine;
+        CHECK_ERROR2I_RET(a->session, COMGETTER(Machine)(ptrSessionMachine.asOutParam()), RTEXITCODE_FAILURE);
+        /* get the session console */
+        ComPtr<IConsole> ptrConsole;
+        CHECK_ERROR2I_RET(a->session, COMGETTER(Console)(ptrConsole.asOutParam()), RTEXITCODE_FAILURE);
+        if (ptrConsole.isNull())
+            return RTMsgErrorExit(RTEXITCODE_FAILURE, "Machine '%s' is not currently running.\n", pszMachineName);
+
+        CHECK_ERROR2(hrc, ptrConsole, RemoveSharedFolder(Bstr(pszName).raw()));
+
+        a->session->UnlockMachine();
+    }
+    else
+    {
+        /* open a session for the VM */
+        CHECK_ERROR2I_RET(ptrMachine, LockMachine(a->session, LockType_Write), RTEXITCODE_FAILURE);
+
+        /* get the mutable session machine */
+        ComPtr<IMachine> ptrSessionMachine;
+        CHECK_ERROR2I_RET(a->session, COMGETTER(Machine)(ptrSessionMachine.asOutParam()), RTEXITCODE_FAILURE);
+
+        CHECK_ERROR2(hrc, ptrSessionMachine, RemoveSharedFolder(Bstr(pszName).raw()));
+
+        /* commit and close the session */
+        if (SUCCEEDED(hrc))
+        {
+            CHECK_ERROR2(hrc, ptrSessionMachine, SaveSettings());
+        }
+        a->session->UnlockMachine();
+    }
+
+    return SUCCEEDED(hrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+}
+
+
 RTEXITCODE handleSharedFolder(HandlerArg *a)
 {
-    HRESULT rc;
-
-    /* we need at least a command and target */
-    if (a->argc < 2)
-        return errorSyntax(USAGE_SHAREDFOLDER, "Not enough parameters");
-
-    const char *pszMachineName = a->argv[1];
-    ComPtr<IMachine> machine;
-    CHECK_ERROR(a->virtualBox, FindMachine(Bstr(pszMachineName).raw(), machine.asOutParam()));
-    if (!machine)
-        return RTEXITCODE_FAILURE;
+    if (a->argc < 1)
+        return errorSyntax("Not enough parameters");
 
     if (!strcmp(a->argv[0], "add"))
     {
-        /* we need at least four more parameters */
-        if (a->argc < 5)
-            return errorSyntax(USAGE_SHAREDFOLDER_ADD, "Not enough parameters");
-
-        char *name = NULL;
-        char *hostpath = NULL;
-        bool fTransient = false;
-        bool fWritable = true;
-        bool fAutoMount = false;
-
-        for (int i = 2; i < a->argc; i++)
-        {
-            if (   !strcmp(a->argv[i], "--name")
-                || !strcmp(a->argv[i], "-name"))
-            {
-                if (a->argc <= i + 1 || !*a->argv[i+1])
-                    return errorArgument("Missing argument to '%s'", a->argv[i]);
-                i++;
-                name = a->argv[i];
-            }
-            else if (   !strcmp(a->argv[i], "--hostpath")
-                     || !strcmp(a->argv[i], "-hostpath"))
-            {
-                if (a->argc <= i + 1 || !*a->argv[i+1])
-                    return errorArgument("Missing argument to '%s'", a->argv[i]);
-                i++;
-                hostpath = a->argv[i];
-            }
-            else if (   !strcmp(a->argv[i], "--readonly")
-                     || !strcmp(a->argv[i], "-readonly"))
-            {
-                fWritable = false;
-            }
-            else if (   !strcmp(a->argv[i], "--transient")
-                     || !strcmp(a->argv[i], "-transient"))
-            {
-                fTransient = true;
-            }
-            else if (   !strcmp(a->argv[i], "--automount")
-                     || !strcmp(a->argv[i], "-automount"))
-            {
-                fAutoMount = true;
-            }
-            else
-                return errorSyntax(USAGE_SHAREDFOLDER_ADD, "Invalid parameter '%s'", Utf8Str(a->argv[i]).c_str());
-        }
-
-        if (NULL != strstr(name, " "))
-            return errorSyntax(USAGE_SHAREDFOLDER_ADD, "No spaces allowed in parameter '-name'!");
-
-        /* required arguments */
-        if (!name || !hostpath)
-        {
-            return errorSyntax(USAGE_SHAREDFOLDER_ADD, "Parameters --name and --hostpath are required");
-        }
-
-        if (fTransient)
-        {
-            ComPtr<IConsole> console;
-
-            /* open an existing session for the VM */
-            CHECK_ERROR_RET(machine, LockMachine(a->session, LockType_Shared), RTEXITCODE_FAILURE);
-
-            /* get the session machine */
-            ComPtr<IMachine> sessionMachine;
-            CHECK_ERROR_RET(a->session, COMGETTER(Machine)(sessionMachine.asOutParam()), RTEXITCODE_FAILURE);
-
-            /* get the session console */
-            CHECK_ERROR_RET(a->session, COMGETTER(Console)(console.asOutParam()), RTEXITCODE_FAILURE);
-            if (console.isNull())
-                return RTMsgErrorExit(RTEXITCODE_FAILURE,
-                                      "Machine '%s' is not currently running.\n", pszMachineName);
-
-            CHECK_ERROR(console, CreateSharedFolder(Bstr(name).raw(),
-                                                    Bstr(hostpath).raw(),
-                                                    fWritable, fAutoMount));
-            a->session->UnlockMachine();
-        }
-        else
-        {
-            /* open a session for the VM */
-            CHECK_ERROR_RET(machine, LockMachine(a->session, LockType_Write), RTEXITCODE_FAILURE);
-
-            /* get the mutable session machine */
-            ComPtr<IMachine> sessionMachine;
-            a->session->COMGETTER(Machine)(sessionMachine.asOutParam());
-
-            CHECK_ERROR(sessionMachine, CreateSharedFolder(Bstr(name).raw(),
-                                                           Bstr(hostpath).raw(),
-                                                           fWritable, fAutoMount));
-            if (SUCCEEDED(rc))
-                CHECK_ERROR(sessionMachine, SaveSettings());
-
-            a->session->UnlockMachine();
-        }
+        setCurrentSubcommand(HELP_SCOPE_SHAREDFOLDER_ADD);
+        return handleSharedFolderAdd(a);
     }
-    else if (!strcmp(a->argv[0], "remove"))
+
+    if (!strcmp(a->argv[0], "remove"))
     {
-        /* we need at least two more parameters */
-        if (a->argc < 3)
-            return errorSyntax(USAGE_SHAREDFOLDER_REMOVE, "Not enough parameters");
-
-        char *name = NULL;
-        bool fTransient = false;
-
-        for (int i = 2; i < a->argc; i++)
-        {
-            if (   !strcmp(a->argv[i], "--name")
-                || !strcmp(a->argv[i], "-name"))
-            {
-                if (a->argc <= i + 1 || !*a->argv[i+1])
-                    return errorArgument("Missing argument to '%s'", a->argv[i]);
-                i++;
-                name = a->argv[i];
-            }
-            else if (   !strcmp(a->argv[i], "--transient")
-                     || !strcmp(a->argv[i], "-transient"))
-            {
-                fTransient = true;
-            }
-            else
-                return errorSyntax(USAGE_SHAREDFOLDER_REMOVE, "Invalid parameter '%s'", Utf8Str(a->argv[i]).c_str());
-        }
-
-        /* required arguments */
-        if (!name)
-            return errorSyntax(USAGE_SHAREDFOLDER_REMOVE, "Parameter --name is required");
-
-        if (fTransient)
-        {
-            /* open an existing session for the VM */
-            CHECK_ERROR_RET(machine, LockMachine(a->session, LockType_Shared), RTEXITCODE_FAILURE);
-            /* get the session machine */
-            ComPtr<IMachine> sessionMachine;
-            CHECK_ERROR_RET(a->session, COMGETTER(Machine)(sessionMachine.asOutParam()), RTEXITCODE_FAILURE);
-            /* get the session console */
-            ComPtr<IConsole> console;
-            CHECK_ERROR_RET(a->session, COMGETTER(Console)(console.asOutParam()), RTEXITCODE_FAILURE);
-            if (console.isNull())
-                return RTMsgErrorExit(RTEXITCODE_FAILURE,
-                                      "Machine '%s' is not currently running.\n", pszMachineName);
-
-            CHECK_ERROR(console, RemoveSharedFolder(Bstr(name).raw()));
-
-            a->session->UnlockMachine();
-        }
-        else
-        {
-            /* open a session for the VM */
-            CHECK_ERROR_RET(machine, LockMachine(a->session, LockType_Write), RTEXITCODE_FAILURE);
-
-            /* get the mutable session machine */
-            ComPtr<IMachine> sessionMachine;
-            a->session->COMGETTER(Machine)(sessionMachine.asOutParam());
-
-            CHECK_ERROR(sessionMachine, RemoveSharedFolder(Bstr(name).raw()));
-
-            /* commit and close the session */
-            CHECK_ERROR(sessionMachine, SaveSettings());
-            a->session->UnlockMachine();
-        }
+        setCurrentSubcommand(HELP_SCOPE_SHAREDFOLDER_REMOVE);
+        return handleSharedFolderRemove(a);
     }
-    else
-        return errorSyntax(USAGE_SHAREDFOLDER, "Invalid parameter '%s'", Utf8Str(a->argv[0]).c_str());
 
-    return RTEXITCODE_SUCCESS;
+    return errorUnknownSubcommand(a->argv[0]);
 }
 
 RTEXITCODE handleExtPack(HandlerArg *a)
@@ -1126,9 +1348,11 @@ RTEXITCODE handleExtPack(HandlerArg *a)
 
         static const RTGETOPTDEF s_aInstallOptions[] =
         {
-            { "--replace",  'r', RTGETOPT_REQ_NOTHING },
+            { "--replace",        'r', RTGETOPT_REQ_NOTHING },
+            { "--accept-license", 'a', RTGETOPT_REQ_STRING },
         };
 
+        RTCList<RTCString> lstLicenseHashes;
         RTGetOptInit(&GetState, a->argc, a->argv, s_aInstallOptions, RT_ELEMENTS(s_aInstallOptions), 1, 0 /*fFlags*/);
         while ((ch = RTGetOpt(&GetState, &ValueUnion)))
         {
@@ -1136,6 +1360,11 @@ RTEXITCODE handleExtPack(HandlerArg *a)
             {
                 case 'r':
                     fReplace = true;
+                    break;
+
+                case 'a':
+                    lstLicenseHashes.append(ValueUnion.psz);
+                    lstLicenseHashes[lstLicenseHashes.size() - 1].toLower();
                     break;
 
                 case VINF_GETOPT_NOT_OPTION:
@@ -1161,6 +1390,41 @@ RTEXITCODE handleExtPack(HandlerArg *a)
         ComPtr<IExtPackFile> ptrExtPackFile;
         CHECK_ERROR2I_RET(ptrExtPackMgr, OpenExtPackFile(bstrTarball.raw(), ptrExtPackFile.asOutParam()), RTEXITCODE_FAILURE);
         CHECK_ERROR2I_RET(ptrExtPackFile, COMGETTER(Name)(bstrName.asOutParam()), RTEXITCODE_FAILURE);
+        BOOL fShowLicense = true;
+        CHECK_ERROR2I_RET(ptrExtPackFile, COMGETTER(ShowLicense)(&fShowLicense), RTEXITCODE_FAILURE);
+        if (fShowLicense)
+        {
+            Bstr bstrLicense;
+            CHECK_ERROR2I_RET(ptrExtPackFile,
+                              QueryLicense(Bstr("").raw() /* PreferredLocale */,
+                                           Bstr("").raw() /* PreferredLanguage */,
+                                           Bstr("txt").raw() /* Format */,
+                                           bstrLicense.asOutParam()), RTEXITCODE_FAILURE);
+            Utf8Str strLicense(bstrLicense);
+            uint8_t abHash[RTSHA256_HASH_SIZE];
+            char    szDigest[RTSHA256_DIGEST_LEN + 1];
+            RTSha256(strLicense.c_str(), strLicense.length(), abHash);
+            vrc = RTSha256ToString(abHash, szDigest, sizeof(szDigest));
+            AssertRCStmt(vrc, szDigest[0] = '\0');
+            if (lstLicenseHashes.contains(szDigest))
+                RTPrintf("License accepted.\n");
+            else
+            {
+                RTPrintf("%s\n", strLicense.c_str());
+                RTPrintf("Do you agree to these license terms and conditions (y/n)? " );
+                ch = RTStrmGetCh(g_pStdIn);
+                RTPrintf("\n");
+                if (ch != 'y' && ch != 'Y')
+                {
+                    RTPrintf("Installation of \"%ls\" aborted.\n", bstrName.raw());
+                    return RTEXITCODE_FAILURE;
+                }
+                if (szDigest[0])
+                    RTPrintf("License accepted. For batch installation add\n"
+                             "--accept-license=%s\n"
+                             "to the VBoxManage command line.\n\n", szDigest);
+            }
+        }
         ComPtr<IProgress> ptrProgress;
         CHECK_ERROR2I_RET(ptrExtPackFile, Install(fReplace, NULL, ptrProgress.asOutParam()), RTEXITCODE_FAILURE);
         hrc = showProgress(ptrProgress);
@@ -1223,3 +1487,910 @@ RTEXITCODE handleExtPack(HandlerArg *a)
     return RTEXITCODE_SUCCESS;
 }
 
+RTEXITCODE handleUnattendedDetect(HandlerArg *a)
+{
+    HRESULT hrc;
+
+    /*
+     * Options.  We work directly on an IUnattended instace while parsing
+     * the options.  This saves a lot of extra clutter.
+     */
+    bool    fMachineReadable = false;
+    char    szIsoPath[RTPATH_MAX];
+    szIsoPath[0] = '\0';
+
+    /*
+     * Parse options.
+     */
+    static const RTGETOPTDEF s_aOptions[] =
+    {
+        { "--iso",                              'i', RTGETOPT_REQ_STRING },
+        { "--machine-readable",                 'M', RTGETOPT_REQ_NOTHING },
+    };
+
+    RTGETOPTSTATE GetState;
+    int vrc = RTGetOptInit(&GetState, a->argc, a->argv, s_aOptions, RT_ELEMENTS(s_aOptions), 1, RTGETOPTINIT_FLAGS_OPTS_FIRST);
+    AssertRCReturn(vrc, RTEXITCODE_FAILURE);
+
+    int c;
+    RTGETOPTUNION ValueUnion;
+    while ((c = RTGetOpt(&GetState, &ValueUnion)) != 0)
+    {
+        switch (c)
+        {
+            case 'i': // --iso
+                vrc = RTPathAbs(ValueUnion.psz, szIsoPath, sizeof(szIsoPath));
+                if (RT_FAILURE(vrc))
+                    return errorSyntax("RTPathAbs failed on '%s': %Rrc", ValueUnion.psz, vrc);
+                break;
+
+            case 'M': // --machine-readable.
+                fMachineReadable = true;
+                break;
+
+            default:
+                return errorGetOpt(c, &ValueUnion);
+        }
+    }
+
+    /*
+     * Check for required stuff.
+     */
+    if (szIsoPath[0] == '\0')
+        return errorSyntax("No ISO specified");
+
+    /*
+     * Do the job.
+     */
+    ComPtr<IUnattended> ptrUnattended;
+    CHECK_ERROR2_RET(hrc, a->virtualBox, CreateUnattendedInstaller(ptrUnattended.asOutParam()), RTEXITCODE_FAILURE);
+    CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(IsoPath)(Bstr(szIsoPath).raw()), RTEXITCODE_FAILURE);
+    CHECK_ERROR2(hrc, ptrUnattended, DetectIsoOS());
+    RTEXITCODE rcExit = SUCCEEDED(hrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+
+    /*
+     * Retrieve the results.
+     */
+    Bstr bstrDetectedOSTypeId;
+    CHECK_ERROR2_RET(hrc, ptrUnattended, COMGETTER(DetectedOSTypeId)(bstrDetectedOSTypeId.asOutParam()), RTEXITCODE_FAILURE);
+    Bstr bstrDetectedVersion;
+    CHECK_ERROR2_RET(hrc, ptrUnattended, COMGETTER(DetectedOSVersion)(bstrDetectedVersion.asOutParam()), RTEXITCODE_FAILURE);
+    Bstr bstrDetectedFlavor;
+    CHECK_ERROR2_RET(hrc, ptrUnattended, COMGETTER(DetectedOSFlavor)(bstrDetectedFlavor.asOutParam()), RTEXITCODE_FAILURE);
+    Bstr bstrDetectedLanguages;
+    CHECK_ERROR2_RET(hrc, ptrUnattended, COMGETTER(DetectedOSLanguages)(bstrDetectedLanguages.asOutParam()), RTEXITCODE_FAILURE);
+    Bstr bstrDetectedHints;
+    CHECK_ERROR2_RET(hrc, ptrUnattended, COMGETTER(DetectedOSHints)(bstrDetectedHints.asOutParam()), RTEXITCODE_FAILURE);
+    if (fMachineReadable)
+        RTPrintf("OSTypeId=\"%ls\"\n"
+                 "OSVersion=\"%ls\"\n"
+                 "OSFlavor=\"%ls\"\n"
+                 "OSLanguages=\"%ls\"\n"
+                 "OSHints=\"%ls\"\n",
+                 bstrDetectedOSTypeId.raw(),
+                 bstrDetectedVersion.raw(),
+                 bstrDetectedFlavor.raw(),
+                 bstrDetectedLanguages.raw(),
+                 bstrDetectedHints.raw());
+    else
+    {
+        RTMsgInfo("Detected '%s' to be:\n", szIsoPath);
+        RTPrintf("    OS TypeId    = %ls\n"
+                 "    OS Version   = %ls\n"
+                 "    OS Flavor    = %ls\n"
+                 "    OS Languages = %ls\n"
+                 "    OS Hints     = %ls\n",
+                 bstrDetectedOSTypeId.raw(),
+                 bstrDetectedVersion.raw(),
+                 bstrDetectedFlavor.raw(),
+                 bstrDetectedLanguages.raw(),
+                 bstrDetectedHints.raw());
+    }
+
+    return rcExit;
+}
+
+RTEXITCODE handleUnattendedInstall(HandlerArg *a)
+{
+    HRESULT hrc;
+    char    szAbsPath[RTPATH_MAX];
+
+    /*
+     * Options.  We work directly on an IUnattended instance while parsing
+     * the options.  This saves a lot of extra clutter.
+     */
+    ComPtr<IUnattended> ptrUnattended;
+    CHECK_ERROR2_RET(hrc, a->virtualBox, CreateUnattendedInstaller(ptrUnattended.asOutParam()), RTEXITCODE_FAILURE);
+    RTCList<RTCString>  arrPackageSelectionAdjustments;
+    ComPtr<IMachine>    ptrMachine;
+    bool                fDryRun = false;
+    const char         *pszSessionType = "none";
+
+    /*
+     * Parse options.
+     */
+    static const RTGETOPTDEF s_aOptions[] =
+    {
+        { "--iso",                              'i', RTGETOPT_REQ_STRING },
+        { "--user",                             'u', RTGETOPT_REQ_STRING },
+        { "--password",                         'p', RTGETOPT_REQ_STRING },
+        { "--password-file",                    'X', RTGETOPT_REQ_STRING },
+        { "--full-user-name",                   'U', RTGETOPT_REQ_STRING },
+        { "--key",                              'k', RTGETOPT_REQ_STRING },
+        { "--install-additions",                'A', RTGETOPT_REQ_NOTHING },
+        { "--no-install-additions",             'N', RTGETOPT_REQ_NOTHING },
+        { "--additions-iso",                    'a', RTGETOPT_REQ_STRING },
+        { "--install-txs",                      't', RTGETOPT_REQ_NOTHING },
+        { "--no-install-txs",                   'T', RTGETOPT_REQ_NOTHING },
+        { "--validation-kit-iso",               'K', RTGETOPT_REQ_STRING },
+        { "--locale",                           'l', RTGETOPT_REQ_STRING },
+        { "--country",                          'Y', RTGETOPT_REQ_STRING },
+        { "--time-zone",                        'z', RTGETOPT_REQ_STRING },
+        { "--proxy",                            'y', RTGETOPT_REQ_STRING },
+        { "--hostname",                         'H', RTGETOPT_REQ_STRING },
+        { "--package-selection-adjustment",     's', RTGETOPT_REQ_STRING },
+        { "--dry-run",                          'D', RTGETOPT_REQ_NOTHING },
+        // advance options:
+        { "--auxiliary-base-path",              'x', RTGETOPT_REQ_STRING },
+        { "--image-index",                      'm', RTGETOPT_REQ_UINT32 },
+        { "--script-template",                  'c', RTGETOPT_REQ_STRING },
+        { "--post-install-template",            'C', RTGETOPT_REQ_STRING },
+        { "--post-install-command",             'P', RTGETOPT_REQ_STRING },
+        { "--extra-install-kernel-parameters",  'I', RTGETOPT_REQ_STRING },
+        { "--language",                         'L', RTGETOPT_REQ_STRING },
+        // start vm related options:
+        { "--start-vm",                         'S', RTGETOPT_REQ_STRING },
+        /** @todo Add a --wait option too for waiting for the VM to shut down or
+         *        something like that...? */
+    };
+
+    RTGETOPTSTATE GetState;
+    int vrc = RTGetOptInit(&GetState, a->argc, a->argv, s_aOptions, RT_ELEMENTS(s_aOptions), 1, RTGETOPTINIT_FLAGS_OPTS_FIRST);
+    AssertRCReturn(vrc, RTEXITCODE_FAILURE);
+
+    int c;
+    RTGETOPTUNION ValueUnion;
+    while ((c = RTGetOpt(&GetState, &ValueUnion)) != 0)
+    {
+        switch (c)
+        {
+            case VINF_GETOPT_NOT_OPTION:
+                if (ptrMachine.isNotNull())
+                    return errorSyntax("VM name/UUID given more than once!");
+                CHECK_ERROR2_RET(hrc, a->virtualBox, FindMachine(Bstr(ValueUnion.psz).raw(), ptrMachine.asOutParam()), RTEXITCODE_FAILURE);
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(Machine)(ptrMachine), RTEXITCODE_FAILURE);
+                break;
+
+            case 'i':   // --iso
+                vrc = RTPathAbs(ValueUnion.psz, szAbsPath, sizeof(szAbsPath));
+                if (RT_FAILURE(vrc))
+                    return errorSyntax("RTPathAbs failed on '%s': %Rrc", ValueUnion.psz, vrc);
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(IsoPath)(Bstr(szAbsPath).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'u':   // --user
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(User)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'p':   // --password
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(Password)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'X':   // --password-file
+            {
+                Utf8Str strPassword;
+                RTEXITCODE rcExit = readPasswordFile(ValueUnion.psz, &strPassword);
+                if (rcExit != RTEXITCODE_SUCCESS)
+                    return rcExit;
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(Password)(Bstr(strPassword).raw()), RTEXITCODE_FAILURE);
+                break;
+            }
+
+            case 'U':   // --full-user-name
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(FullUserName)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'k':   // --key
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(ProductKey)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'A':   // --install-additions
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(InstallGuestAdditions)(TRUE), RTEXITCODE_FAILURE);
+                break;
+            case 'N':   // --no-install-additions
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(InstallGuestAdditions)(FALSE), RTEXITCODE_FAILURE);
+                break;
+            case 'a':   // --additions-iso
+                vrc = RTPathAbs(ValueUnion.psz, szAbsPath, sizeof(szAbsPath));
+                if (RT_FAILURE(vrc))
+                    return errorSyntax("RTPathAbs failed on '%s': %Rrc", ValueUnion.psz, vrc);
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(AdditionsIsoPath)(Bstr(szAbsPath).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 't':   // --install-txs
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(InstallTestExecService)(TRUE), RTEXITCODE_FAILURE);
+                break;
+            case 'T':   // --no-install-txs
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(InstallTestExecService)(FALSE), RTEXITCODE_FAILURE);
+                break;
+            case 'K':   // --valiation-kit-iso
+                vrc = RTPathAbs(ValueUnion.psz, szAbsPath, sizeof(szAbsPath));
+                if (RT_FAILURE(vrc))
+                    return errorSyntax("RTPathAbs failed on '%s': %Rrc", ValueUnion.psz, vrc);
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(ValidationKitIsoPath)(Bstr(szAbsPath).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'l':   // --locale
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(Locale)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'Y':   // --country
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(Country)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'z':   // --time-zone;
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(TimeZone)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'y':   // --proxy
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(Proxy)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'H':   // --hostname
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(Hostname)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 's':   // --package-selection-adjustment
+                arrPackageSelectionAdjustments.append(ValueUnion.psz);
+                break;
+
+            case 'D':
+                fDryRun = true;
+                break;
+
+            case 'x':   // --auxiliary-base-path
+                vrc = RTPathAbs(ValueUnion.psz, szAbsPath, sizeof(szAbsPath));
+                if (RT_FAILURE(vrc))
+                    return errorSyntax("RTPathAbs failed on '%s': %Rrc", ValueUnion.psz, vrc);
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(AuxiliaryBasePath)(Bstr(szAbsPath).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'm':   // --image-index
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(ImageIndex)(ValueUnion.u32), RTEXITCODE_FAILURE);
+                break;
+
+            case 'c':   // --script-template
+                vrc = RTPathAbs(ValueUnion.psz, szAbsPath, sizeof(szAbsPath));
+                if (RT_FAILURE(vrc))
+                    return errorSyntax("RTPathAbs failed on '%s': %Rrc", ValueUnion.psz, vrc);
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(ScriptTemplatePath)(Bstr(szAbsPath).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'C':   // --post-install-script-template
+                vrc = RTPathAbs(ValueUnion.psz, szAbsPath, sizeof(szAbsPath));
+                if (RT_FAILURE(vrc))
+                    return errorSyntax("RTPathAbs failed on '%s': %Rrc", ValueUnion.psz, vrc);
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(PostInstallScriptTemplatePath)(Bstr(szAbsPath).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'P':   // --post-install-command.
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(PostInstallCommand)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'I':   // --extra-install-kernel-parameters
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(ExtraInstallKernelParameters)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'L':   // --language
+                CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(Language)(Bstr(ValueUnion.psz).raw()), RTEXITCODE_FAILURE);
+                break;
+
+            case 'S':   // --start-vm
+                pszSessionType = ValueUnion.psz;
+                break;
+
+            default:
+                return errorGetOpt(c, &ValueUnion);
+        }
+    }
+
+    /*
+     * Check for required stuff.
+     */
+    if (ptrMachine.isNull())
+        return errorSyntax("Missing VM name/UUID");
+
+    /*
+     * Set accumulative attributes.
+     */
+    if (arrPackageSelectionAdjustments.size() == 1)
+        CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(PackageSelectionAdjustments)(Bstr(arrPackageSelectionAdjustments[0]).raw()),
+                         RTEXITCODE_FAILURE);
+    else if (arrPackageSelectionAdjustments.size() > 1)
+    {
+        RTCString strAdjustments;
+        strAdjustments.join(arrPackageSelectionAdjustments, ";");
+        CHECK_ERROR2_RET(hrc, ptrUnattended, COMSETTER(PackageSelectionAdjustments)(Bstr(strAdjustments).raw()), RTEXITCODE_FAILURE);
+    }
+
+    /*
+     * Get details about the machine so we can display them below.
+     */
+    Bstr bstrMachineName;
+    CHECK_ERROR2_RET(hrc, ptrMachine, COMGETTER(Name)(bstrMachineName.asOutParam()), RTEXITCODE_FAILURE);
+    Bstr bstrUuid;
+    CHECK_ERROR2_RET(hrc, ptrMachine, COMGETTER(Id)(bstrUuid.asOutParam()), RTEXITCODE_FAILURE);
+    BSTR bstrInstalledOS;
+    CHECK_ERROR2_RET(hrc, ptrMachine, COMGETTER(OSTypeId)(&bstrInstalledOS), RTEXITCODE_FAILURE);
+    Utf8Str strInstalledOS(bstrInstalledOS);
+
+    /*
+     * Temporarily lock the machine to check whether it's running or not.
+     * We take this opportunity to disable the first run wizard.
+     */
+    CHECK_ERROR2_RET(hrc, ptrMachine, LockMachine(a->session, LockType_Shared), RTEXITCODE_FAILURE);
+    {
+        ComPtr<IConsole> ptrConsole;
+        CHECK_ERROR2(hrc, a->session, COMGETTER(Console)(ptrConsole.asOutParam()));
+
+        if (   ptrConsole.isNull()
+            && SUCCEEDED(hrc)
+            && (   RTStrICmp(pszSessionType, "gui") == 0
+                || RTStrICmp(pszSessionType, "none") == 0))
+        {
+            ComPtr<IMachine> ptrSessonMachine;
+            CHECK_ERROR2(hrc, a->session, COMGETTER(Machine)(ptrSessonMachine.asOutParam()));
+            if (ptrSessonMachine.isNotNull())
+            {
+                CHECK_ERROR2(hrc, ptrSessonMachine, SetExtraData(Bstr("GUI/FirstRun").raw(), Bstr("0").raw()));
+            }
+        }
+
+        a->session->UnlockMachine();
+        if (FAILED(hrc))
+            return RTEXITCODE_FAILURE;
+        if (ptrConsole.isNotNull())
+            return RTMsgErrorExit(RTEXITCODE_FAILURE, "Machine '%ls' is currently running", bstrMachineName.raw());
+    }
+
+    /*
+     * Do the work.
+     */
+    RTMsgInfo("%s unattended installation of %s in machine '%ls' (%ls).\n",
+              RTStrICmp(pszSessionType, "none") == 0 ? "Preparing" : "Starting",
+              strInstalledOS.c_str(), bstrMachineName.raw(), bstrUuid.raw());
+
+    CHECK_ERROR2_RET(hrc, ptrUnattended,Prepare(), RTEXITCODE_FAILURE);
+    if (!fDryRun)
+    {
+        CHECK_ERROR2_RET(hrc, ptrUnattended, ConstructMedia(), RTEXITCODE_FAILURE);
+        CHECK_ERROR2_RET(hrc, ptrUnattended, ReconfigureVM(), RTEXITCODE_FAILURE);
+    }
+
+    /*
+     * Retrieve and display the parameters actually used.
+     */
+    RTMsgInfo("Using values:\n");
+#define SHOW_ATTR(a_Attr, a_szText, a_Type, a_szFmt) do { \
+            a_Type Value; \
+            HRESULT hrc2 = ptrUnattended->COMGETTER(a_Attr)(&Value); \
+            if (SUCCEEDED(hrc2)) \
+                RTPrintf("  %32s = " a_szFmt "\n", a_szText, Value); \
+            else \
+                RTPrintf("  %32s = failed: %Rhrc\n", a_szText, hrc2); \
+        } while (0)
+#define SHOW_STR_ATTR(a_Attr, a_szText) do { \
+            Bstr bstrString; \
+            HRESULT hrc2 = ptrUnattended->COMGETTER(a_Attr)(bstrString.asOutParam()); \
+            if (SUCCEEDED(hrc2)) \
+                RTPrintf("  %32s = %ls\n", a_szText, bstrString.raw()); \
+            else \
+                RTPrintf("  %32s = failed: %Rhrc\n", a_szText, hrc2); \
+        } while (0)
+
+    SHOW_STR_ATTR(IsoPath,                       "isoPath");
+    SHOW_STR_ATTR(User,                          "user");
+    SHOW_STR_ATTR(Password,                      "password");
+    SHOW_STR_ATTR(FullUserName,                  "fullUserName");
+    SHOW_STR_ATTR(ProductKey,                    "productKey");
+    SHOW_STR_ATTR(AdditionsIsoPath,              "additionsIsoPath");
+    SHOW_ATTR(    InstallGuestAdditions,         "installGuestAdditions",    BOOL, "%RTbool");
+    SHOW_STR_ATTR(ValidationKitIsoPath,          "validationKitIsoPath");
+    SHOW_ATTR(    InstallTestExecService,        "installTestExecService",   BOOL, "%RTbool");
+    SHOW_STR_ATTR(Locale,                        "locale");
+    SHOW_STR_ATTR(Country,                       "country");
+    SHOW_STR_ATTR(TimeZone,                      "timeZone");
+    SHOW_STR_ATTR(Proxy,                         "proxy");
+    SHOW_STR_ATTR(Hostname,                      "hostname");
+    SHOW_STR_ATTR(PackageSelectionAdjustments,   "packageSelectionAdjustments");
+    SHOW_STR_ATTR(AuxiliaryBasePath,             "auxiliaryBasePath");
+    SHOW_ATTR(    ImageIndex,                    "imageIndex",               ULONG, "%u");
+    SHOW_STR_ATTR(ScriptTemplatePath,            "scriptTemplatePath");
+    SHOW_STR_ATTR(PostInstallScriptTemplatePath, "postInstallScriptTemplatePath");
+    SHOW_STR_ATTR(PostInstallCommand,            "postInstallCommand");
+    SHOW_STR_ATTR(ExtraInstallKernelParameters,  "extraInstallKernelParameters");
+    SHOW_STR_ATTR(Language,                      "language");
+    SHOW_STR_ATTR(DetectedOSTypeId,              "detectedOSTypeId");
+    SHOW_STR_ATTR(DetectedOSVersion,             "detectedOSVersion");
+    SHOW_STR_ATTR(DetectedOSFlavor,              "detectedOSFlavor");
+    SHOW_STR_ATTR(DetectedOSLanguages,           "detectedOSLanguages");
+    SHOW_STR_ATTR(DetectedOSHints,               "detectedOSHints");
+
+#undef SHOW_STR_ATTR
+#undef SHOW_ATTR
+
+    /* We can drop the IUnatteded object now. */
+    ptrUnattended.setNull();
+
+    /*
+     * Start the VM if requested.
+     */
+    if (   fDryRun
+        || RTStrICmp(pszSessionType, "none") == 0)
+    {
+        if (!fDryRun)
+            RTMsgInfo("VM '%ls' (%ls) is ready to be started (e.g. VBoxManage startvm).\n", bstrMachineName.raw(), bstrUuid.raw());
+        hrc = S_OK;
+    }
+    else
+    {
+        com::SafeArray<IN_BSTR> aBstrEnv;
+#if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
+        /* make sure the VM process will start on the same display as VBoxManage */
+        const char *pszDisplay = RTEnvGet("DISPLAY");
+        if (pszDisplay)
+            aBstrEnv.push_back(BstrFmt("DISPLAY=%s", pszDisplay).raw());
+        const char *pszXAuth = RTEnvGet("XAUTHORITY");
+        if (pszXAuth)
+            aBstrEnv.push_back(BstrFmt("XAUTHORITY=%s", pszXAuth).raw());
+#endif
+        ComPtr<IProgress> ptrProgress;
+        CHECK_ERROR2(hrc, ptrMachine, LaunchVMProcess(a->session, Bstr(pszSessionType).raw(), ComSafeArrayAsInParam(aBstrEnv), ptrProgress.asOutParam()));
+        if (SUCCEEDED(hrc) && !ptrProgress.isNull())
+        {
+            RTMsgInfo("Waiting for VM '%ls' to power on...\n", bstrMachineName.raw());
+            CHECK_ERROR2(hrc, ptrProgress, WaitForCompletion(-1));
+            if (SUCCEEDED(hrc))
+            {
+                BOOL fCompleted = true;
+                CHECK_ERROR2(hrc, ptrProgress, COMGETTER(Completed)(&fCompleted));
+                if (SUCCEEDED(hrc))
+                {
+                    ASSERT(fCompleted);
+
+                    LONG iRc;
+                    CHECK_ERROR2(hrc, ptrProgress, COMGETTER(ResultCode)(&iRc));
+                    if (SUCCEEDED(hrc))
+                    {
+                        if (SUCCEEDED(iRc))
+                            RTMsgInfo("VM '%ls' (%ls) has been successfully started.\n", bstrMachineName.raw(), bstrUuid.raw());
+                        else
+                        {
+                            ProgressErrorInfo info(ptrProgress);
+                            com::GluePrintErrorInfo(info);
+                        }
+                        hrc = iRc;
+                    }
+                }
+            }
+        }
+
+        /*
+         * Do we wait for the VM to power down?
+         */
+    }
+
+    return SUCCEEDED(hrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+}
+
+
+RTEXITCODE handleUnattended(HandlerArg *a)
+{
+    /*
+     * Sub-command switch.
+     */
+    if (a->argc < 1)
+        return errorNoSubcommand();
+
+    if (!strcmp(a->argv[0], "detect"))
+    {
+        setCurrentSubcommand(HELP_SCOPE_UNATTENDED_DETECT);
+        return handleUnattendedDetect(a);
+    }
+
+    if (!strcmp(a->argv[0], "install"))
+    {
+        setCurrentSubcommand(HELP_SCOPE_UNATTENDED_INSTALL);
+        return handleUnattendedInstall(a);
+    }
+
+    /* Consider some kind of create-vm-and-install-guest-os command. */
+    return errorUnknownSubcommand(a->argv[0]);
+}
+
+/**
+ * Common Cloud profile options.
+ */
+typedef struct
+{
+    const char     *pszProviderName;
+    const char     *pszProfileName;
+} CLOUDPROFILECOMMONOPT;
+typedef CLOUDPROFILECOMMONOPT *PCLOUDPROFILECOMMONOPT;
+
+/**
+ * Sets the properties of cloud profile
+ *
+ * @returns 0 on success, 1 on failure
+ */
+
+static RTEXITCODE setCloudProfileProperties(HandlerArg *a, int iFirst, PCLOUDPROFILECOMMONOPT pCommonOpts)
+{
+
+    HRESULT hrc = S_OK;
+
+    Bstr bstrProvider(pCommonOpts->pszProviderName);
+    Bstr bstrProfile(pCommonOpts->pszProfileName);
+
+    /*
+     * Parse options.
+     */
+    static const RTGETOPTDEF s_aOptions[] =
+    {
+        { "--clouduser",    'u', RTGETOPT_REQ_STRING },
+        { "--fingerprint",  'p', RTGETOPT_REQ_STRING },
+        { "--keyfile",      'k', RTGETOPT_REQ_STRING },
+        { "--passphrase",   'P', RTGETOPT_REQ_STRING },
+        { "--tenancy",      't', RTGETOPT_REQ_STRING },
+        { "--compartment",  'c', RTGETOPT_REQ_STRING },
+        { "--region",       'r', RTGETOPT_REQ_STRING }
+    };
+
+    RTGETOPTSTATE GetState;
+    int vrc = RTGetOptInit(&GetState, a->argc, a->argv, s_aOptions, RT_ELEMENTS(s_aOptions), iFirst, 0);
+    AssertRCReturn(vrc, RTEXITCODE_FAILURE);
+
+    com::SafeArray<BSTR> names;
+    com::SafeArray<BSTR> values;
+
+    int c;
+    RTGETOPTUNION ValueUnion;
+    while ((c = RTGetOpt(&GetState, &ValueUnion)) != 0)
+    {
+        switch (c)
+        {
+            case 'u':   // --clouduser
+                Bstr("user").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'p':   // --fingerprint
+                Bstr("fingerprint").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'k':   // --keyfile
+                Bstr("key_file").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'P':   // --passphrase
+                Bstr("pass_phrase").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 't':   // --tenancy
+                Bstr("tenancy").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'c':   // --compartment
+                Bstr("compartment").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'r':   // --region
+                Bstr("region").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            default:
+                return errorGetOpt(USAGE_CLOUDPROFILE, c, &ValueUnion);
+        }
+    }
+
+    /* check for required options */
+    if (bstrProvider.isEmpty())
+        return errorSyntax(USAGE_CLOUDPROFILE, "Parameter --provider is required");
+    if (bstrProfile.isEmpty())
+        return errorSyntax(USAGE_CLOUDPROFILE, "Parameter --profile is required");
+
+    ComPtr<IVirtualBox> pVirtualBox = a->virtualBox;
+
+    ComPtr<ICloudProviderManager> pCloudProviderManager;
+    CHECK_ERROR2_RET(hrc, pVirtualBox,
+                     COMGETTER(CloudProviderManager)(pCloudProviderManager.asOutParam()),
+                     RTEXITCODE_FAILURE);
+
+    ComPtr<ICloudProvider> pCloudProvider;
+
+    CHECK_ERROR2_RET(hrc, pCloudProviderManager,
+                     GetProviderByShortName(bstrProvider.raw(), pCloudProvider.asOutParam()),
+                     RTEXITCODE_FAILURE);
+
+    ComPtr<ICloudProfile> pCloudProfile;
+
+    if (pCloudProvider)
+    {
+        CHECK_ERROR2_RET(hrc, pCloudProvider,
+                         GetProfileByName(bstrProfile.raw(), pCloudProfile.asOutParam()),
+                         RTEXITCODE_FAILURE);
+        CHECK_ERROR2_RET(hrc, pCloudProfile,
+                         SetProperties(ComSafeArrayAsInParam(names), ComSafeArrayAsInParam(values)),
+                         RTEXITCODE_FAILURE);
+    }
+
+    CHECK_ERROR2(hrc, pCloudProvider, SaveProfiles());
+
+    RTPrintf("Provider %ls: profile '%ls' was updated.\n",bstrProvider.raw(), bstrProfile.raw());
+
+    return SUCCEEDED(hrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+}
+
+/**
+ * Gets the properties of cloud profile
+ *
+ * @returns 0 on success, 1 on failure
+ */
+static RTEXITCODE showCloudProfileProperties(HandlerArg *a, PCLOUDPROFILECOMMONOPT pCommonOpts)
+{
+    HRESULT hrc = S_OK;
+
+    Bstr bstrProvider(pCommonOpts->pszProviderName);
+    Bstr bstrProfile(pCommonOpts->pszProfileName);
+
+    /* check for required options */
+    if (bstrProvider.isEmpty())
+        return errorSyntax(USAGE_CLOUDPROFILE, "Parameter --provider is required");
+    if (bstrProfile.isEmpty())
+        return errorSyntax(USAGE_CLOUDPROFILE, "Parameter --profile is required");
+
+    ComPtr<IVirtualBox> pVirtualBox = a->virtualBox;
+    ComPtr<ICloudProviderManager> pCloudProviderManager;
+    CHECK_ERROR2_RET(hrc, pVirtualBox,
+                     COMGETTER(CloudProviderManager)(pCloudProviderManager.asOutParam()),
+                     RTEXITCODE_FAILURE);
+    ComPtr<ICloudProvider> pCloudProvider;
+    CHECK_ERROR2_RET(hrc, pCloudProviderManager,
+                     GetProviderByShortName(bstrProvider.raw(), pCloudProvider.asOutParam()),
+                     RTEXITCODE_FAILURE);
+
+    ComPtr<ICloudProfile> pCloudProfile;
+    if (pCloudProvider)
+    {
+        CHECK_ERROR2_RET(hrc, pCloudProvider,
+                         GetProfileByName(bstrProfile.raw(), pCloudProfile.asOutParam()),
+                         RTEXITCODE_FAILURE);
+
+        Bstr bstrProviderID;
+        pCloudProfile->COMGETTER(ProviderId)(bstrProviderID.asOutParam());
+        RTPrintf("Provider GUID: %ls\n", bstrProviderID.raw());
+
+        com::SafeArray<BSTR> names;
+        com::SafeArray<BSTR> values;
+        CHECK_ERROR2_RET(hrc, pCloudProfile,
+                         GetProperties(Bstr().raw(), ComSafeArrayAsOutParam(names), ComSafeArrayAsOutParam(values)),
+                         RTEXITCODE_FAILURE);
+        size_t cNames = names.size();
+        size_t cValues = values.size();
+        bool fFirst = true;
+        for (size_t k = 0; k < cNames; k++)
+        {
+            Bstr value;
+            if (k < cValues)
+                value = values[k];
+            RTPrintf("%s%ls=%ls\n",
+                     fFirst ? "Property:      " : "               ",
+                     names[k], value.raw());
+            fFirst = false;
+        }
+
+        RTPrintf("\n");
+    }
+
+    return SUCCEEDED(hrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+}
+
+static RTEXITCODE addCloudProfile(HandlerArg *a, int iFirst, PCLOUDPROFILECOMMONOPT pCommonOpts)
+{
+    HRESULT hrc = S_OK;
+
+    Bstr bstrProvider(pCommonOpts->pszProviderName);
+    Bstr bstrProfile(pCommonOpts->pszProfileName);
+
+
+    /* check for required options */
+    if (bstrProvider.isEmpty())
+        return errorSyntax(USAGE_CLOUDPROFILE, "Parameter --provider is required");
+    if (bstrProfile.isEmpty())
+        return errorSyntax(USAGE_CLOUDPROFILE, "Parameter --profile is required");
+
+    /*
+     * Parse options.
+     */
+    static const RTGETOPTDEF s_aOptions[] =
+    {
+        { "--clouduser",    'u', RTGETOPT_REQ_STRING },
+        { "--fingerprint",  'p', RTGETOPT_REQ_STRING },
+        { "--keyfile",      'k', RTGETOPT_REQ_STRING },
+        { "--passphrase",   'P', RTGETOPT_REQ_STRING },
+        { "--tenancy",      't', RTGETOPT_REQ_STRING },
+        { "--compartment",  'c', RTGETOPT_REQ_STRING },
+        { "--region",       'r', RTGETOPT_REQ_STRING }
+    };
+
+    RTGETOPTSTATE GetState;
+    int vrc = RTGetOptInit(&GetState, a->argc, a->argv, s_aOptions, RT_ELEMENTS(s_aOptions), iFirst, 0);
+    AssertRCReturn(vrc, RTEXITCODE_FAILURE);
+
+    com::SafeArray<BSTR> names;
+    com::SafeArray<BSTR> values;
+
+    int c;
+    RTGETOPTUNION ValueUnion;
+    while ((c = RTGetOpt(&GetState, &ValueUnion)) != 0)
+    {
+        switch (c)
+        {
+            case 'u':   // --clouduser
+                Bstr("user").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'p':   // --fingerprint
+                Bstr("fingerprint").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'k':   // --keyfile
+                Bstr("key_file").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'P':   // --passphrase
+                Bstr("pass_phrase").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 't':   // --tenancy
+                Bstr("tenancy").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'c':   // --compartment
+                Bstr("compartment").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            case 'r':   // --region
+                Bstr("region").detachTo(names.appendedRaw());
+                Bstr(ValueUnion.psz).detachTo(values.appendedRaw());
+                break;
+            default:
+                return errorGetOpt(USAGE_CLOUDPROFILE, c, &ValueUnion);
+        }
+    }
+
+    ComPtr<IVirtualBox> pVirtualBox = a->virtualBox;
+
+    ComPtr<ICloudProviderManager> pCloudProviderManager;
+    CHECK_ERROR2_RET(hrc, pVirtualBox,
+                     COMGETTER(CloudProviderManager)(pCloudProviderManager.asOutParam()),
+                     RTEXITCODE_FAILURE);
+
+    ComPtr<ICloudProvider> pCloudProvider;
+    CHECK_ERROR2_RET(hrc, pCloudProviderManager,
+                     GetProviderByShortName(bstrProvider.raw(), pCloudProvider.asOutParam()),
+                     RTEXITCODE_FAILURE);
+
+    CHECK_ERROR2_RET(hrc, pCloudProvider,
+                     CreateProfile(bstrProfile.raw(),
+                                   ComSafeArrayAsInParam(names),
+                                   ComSafeArrayAsInParam(values)),
+                     RTEXITCODE_FAILURE);
+
+    CHECK_ERROR2(hrc, pCloudProvider, SaveProfiles());
+
+    RTPrintf("Provider %ls: profile '%ls' was added.\n",bstrProvider.raw(), bstrProfile.raw());
+
+    return SUCCEEDED(hrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+}
+
+static RTEXITCODE deleteCloudProfile(HandlerArg *a, PCLOUDPROFILECOMMONOPT pCommonOpts)
+{
+    HRESULT hrc = S_OK;
+
+    Bstr bstrProvider(pCommonOpts->pszProviderName);
+    Bstr bstrProfile(pCommonOpts->pszProfileName);
+
+    /* check for required options */
+    if (bstrProvider.isEmpty())
+        return errorSyntax(USAGE_CLOUDPROFILE, "Parameter --provider is required");
+    if (bstrProfile.isEmpty())
+        return errorSyntax(USAGE_CLOUDPROFILE, "Parameter --profile is required");
+
+    ComPtr<IVirtualBox> pVirtualBox = a->virtualBox;
+    ComPtr<ICloudProviderManager> pCloudProviderManager;
+    CHECK_ERROR2_RET(hrc, pVirtualBox,
+                     COMGETTER(CloudProviderManager)(pCloudProviderManager.asOutParam()),
+                     RTEXITCODE_FAILURE);
+    ComPtr<ICloudProvider> pCloudProvider;
+    CHECK_ERROR2_RET(hrc, pCloudProviderManager,
+                     GetProviderByShortName(bstrProvider.raw(), pCloudProvider.asOutParam()),
+                     RTEXITCODE_FAILURE);
+
+    ComPtr<ICloudProfile> pCloudProfile;
+    if (pCloudProvider)
+    {
+        CHECK_ERROR2_RET(hrc, pCloudProvider,
+                         GetProfileByName(bstrProfile.raw(), pCloudProfile.asOutParam()),
+                         RTEXITCODE_FAILURE);
+
+        CHECK_ERROR2_RET(hrc, pCloudProfile,
+                         Remove(),
+                         RTEXITCODE_FAILURE);
+
+        CHECK_ERROR2_RET(hrc, pCloudProvider,
+                         SaveProfiles(),
+                         RTEXITCODE_FAILURE);
+
+        RTPrintf("Provider %ls: profile '%ls' was deleted.\n",bstrProvider.raw(), bstrProfile.raw());
+    }
+
+    return SUCCEEDED(hrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+}
+
+RTEXITCODE handleCloudProfile(HandlerArg *a)
+{
+    if (a->argc < 1)
+        return errorNoSubcommand();
+
+    static const RTGETOPTDEF s_aOptions[] =
+    {
+        /* common options */
+        { "--provider",     'v', RTGETOPT_REQ_STRING },
+        { "--profile",      'f', RTGETOPT_REQ_STRING },
+        /* subcommands */
+        { "add",            1000, RTGETOPT_REQ_NOTHING },
+        { "show",           1001, RTGETOPT_REQ_NOTHING },
+        { "update",         1002, RTGETOPT_REQ_NOTHING },
+        { "delete",         1003, RTGETOPT_REQ_NOTHING },
+    };
+
+    RTGETOPTSTATE GetState;
+    int vrc = RTGetOptInit(&GetState, a->argc, a->argv, s_aOptions, RT_ELEMENTS(s_aOptions), 0, 0);
+    AssertRCReturn(vrc, RTEXITCODE_FAILURE);
+
+    CLOUDPROFILECOMMONOPT   CommonOpts = { NULL, NULL };
+    int c;
+    RTGETOPTUNION ValueUnion;
+    while ((c = RTGetOpt(&GetState, &ValueUnion)) != 0)
+    {
+        switch (c)
+        {
+            case 'v':   // --provider
+                CommonOpts.pszProviderName = ValueUnion.psz;
+                break;
+            case 'f':   // --profile
+                CommonOpts.pszProfileName = ValueUnion.psz;
+                break;
+            /* Sub-commands: */
+            case 1000:
+                setCurrentSubcommand(HELP_SCOPE_CLOUDPROFILE_ADD);
+                return addCloudProfile(a, GetState.iNext, &CommonOpts);
+            case 1001:
+                setCurrentSubcommand(HELP_SCOPE_CLOUDPROFILE_SHOW);
+                return showCloudProfileProperties(a, &CommonOpts);
+            case 1002:
+                setCurrentSubcommand(HELP_SCOPE_CLOUDPROFILE_UPDATE);
+                return setCloudProfileProperties(a, GetState.iNext, &CommonOpts);
+            case 1003:
+                setCurrentSubcommand(HELP_SCOPE_CLOUDPROFILE_DELETE);
+                return deleteCloudProfile(a, &CommonOpts);
+            case VINF_GETOPT_NOT_OPTION:
+                return errorUnknownSubcommand(ValueUnion.psz);
+
+            default:
+                return errorGetOpt(c, &ValueUnion);
+        }
+    }
+
+    return errorNoSubcommand();
+}

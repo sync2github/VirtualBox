@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvVUSBRootHub.cpp 91945 2021-10-21 13:17:30Z vboxsync $ */
 /** @file
  * Virtual USB - Root Hub Driver.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -233,22 +233,7 @@
 static int vusbHubAttach(PVUSBHUB pHub, PVUSBDEV pDev)
 {
     LogFlow(("vusbHubAttach: pHub=%p[%s] pDev=%p[%s]\n", pHub, pHub->pszName, pDev, pDev->pUsbIns->pszName));
-    AssertMsg(pDev->enmState == VUSB_DEVICE_STATE_DETACHED, ("enmState=%d\n", pDev->enmState));
-
-    pDev->pHub = pHub;
-    pDev->enmState = VUSB_DEVICE_STATE_ATTACHED;
-
-    /* noone else ever messes with the default pipe while we are attached */
-    vusbDevMapEndpoint(pDev, &g_Endpoint0);
-    vusbDevDoSelectConfig(pDev, &g_Config0);
-
-    int rc = pHub->pOps->pfnAttach(pHub, pDev);
-    if (RT_FAILURE(rc))
-    {
-        pDev->pHub = NULL;
-        pDev->enmState = VUSB_DEVICE_STATE_DETACHED;
-    }
-    return rc;
+    return vusbDevAttach(pDev, pHub);
 }
 
 
@@ -394,6 +379,12 @@ static PVUSBURB vusbRhNewUrb(PVUSBROOTHUB pRh, uint8_t DstAddress, PVUSBDEV pDev
 {
     RT_NOREF(pszTag);
     PVUSBURBPOOL pUrbPool = &pRh->Hub.Dev.UrbPool;
+
+    if (RT_UNLIKELY(cbData > (32 * _1M)))
+    {
+        LogFunc(("Bad URB size (%u)!\n", cbData));
+        return NULL;
+    }
 
     if (!pDev)
         pDev = vusbRhFindDevByAddress(pRh, DstAddress);
@@ -940,10 +931,9 @@ static DECLCALLBACK(int) vusbRhSetFrameProcessing(PVUSBIROOTHUBCONNECTOR pInterf
 
         VMSTATE enmState = PDMDrvHlpVMState(pThis->pDrvIns);
         if (   enmState == VMSTATE_RUNNING
-            || enmState == VMSTATE_RUNNING_LS
-            || enmState == VMSTATE_RUNNING_FT)
+            || enmState == VMSTATE_RUNNING_LS)
         {
-            rc = PDMR3ThreadResume(pThis->hThreadPeriodFrame);
+            rc = PDMDrvHlpThreadResume(pThis->pDrvIns, pThis->hThreadPeriodFrame);
             AssertRCReturn(rc, rc);
         }
     }
@@ -981,11 +971,33 @@ static DECLCALLBACK(int) vusbRhSetFrameProcessing(PVUSBIROOTHUBCONNECTOR pInterf
 
 
 /** @interface_method_impl{VUSBIROOTHUBCONNECTOR,pfnGetPeriodicFrameRate} */
-static DECLCALLBACK(uint32_t) vusbRhGetPriodicFrameRate(PVUSBIROOTHUBCONNECTOR pInterface)
+static DECLCALLBACK(uint32_t) vusbRhGetPeriodicFrameRate(PVUSBIROOTHUBCONNECTOR pInterface)
 {
     PVUSBROOTHUB pThis = VUSBIROOTHUBCONNECTOR_2_VUSBROOTHUB(pInterface);
 
     return pThis->uFrameRate;
+}
+
+/** @interface_method_impl{VUSBIROOTHUBCONNECTOR,pfnUpdateIsocFrameDelta} */
+static DECLCALLBACK(uint32_t) vusbRhUpdateIsocFrameDelta(PVUSBIROOTHUBCONNECTOR pInterface, PVUSBIDEVICE pDevice,
+                                                         int EndPt, VUSBDIRECTION enmDir, uint16_t uNewFrameID, uint8_t uBits)
+{
+    PVUSBROOTHUB    pRh = VUSBIROOTHUBCONNECTOR_2_VUSBROOTHUB(pInterface);
+    AssertReturn(pRh, 0);
+    PVUSBDEV        pDev = (PVUSBDEV)pDevice;
+    PVUSBPIPE       pPipe = &pDev->aPipes[EndPt];
+    uint32_t        *puLastFrame;
+    int32_t         uFrameDelta;
+    uint32_t        uMaxVal = 1 << uBits;
+
+    puLastFrame  = enmDir == VUSBDIRECTION_IN ? &pPipe->uLastFrameIn : &pPipe->uLastFrameOut;
+    uFrameDelta  = uNewFrameID - *puLastFrame;
+    *puLastFrame = uNewFrameID;
+    /* Take care of wrap-around. */
+    if (uFrameDelta < 0)
+        uFrameDelta += uMaxVal;
+
+    return (uint16_t)uFrameDelta;
 }
 
 /* -=-=-=-=-=- VUSB Device methods (for the root hub) -=-=-=-=-=- */
@@ -1060,7 +1072,36 @@ static DECLCALLBACK(VUSBDEVICESTATE) vusbRhDevGetState(PVUSBIDEVICE pInterface)
 }
 
 
+static const char *vusbGetSpeedString(VUSBSPEED enmSpeed)
+{
+    const char  *pszSpeed = NULL;
 
+    switch (enmSpeed)
+    {
+        case VUSB_SPEED_LOW:
+            pszSpeed = "Low";
+            break;
+        case VUSB_SPEED_FULL:
+            pszSpeed = "Full";
+            break;
+        case VUSB_SPEED_HIGH:
+            pszSpeed = "High";
+            break;
+        case VUSB_SPEED_VARIABLE:
+            pszSpeed = "Variable";
+            break;
+        case VUSB_SPEED_SUPER:
+            pszSpeed = "Super";
+            break;
+        case VUSB_SPEED_SUPERPLUS:
+            pszSpeed = "SuperPlus";
+            break;
+        default:
+            pszSpeed = "Unknown";
+            break;
+    }
+    return pszSpeed;
+}
 
 /* -=-=-=-=-=- VUSB Hub methods -=-=-=-=-=- */
 
@@ -1101,7 +1142,8 @@ static int vusbRhHubOpAttach(PVUSBHUB pHub, PVUSBDEV pDev)
         pDev->pNext = pRh->pDevices;
         pRh->pDevices = pDev;
         RTCritSectLeave(&pRh->CritSectDevices);
-        LogRel(("VUSB: Attached '%s' to port %d\n", pDev->pUsbIns->pszName, iPort));
+        LogRel(("VUSB: Attached '%s' to port %d on %s (%sSpeed)\n", pDev->pUsbIns->pszName,
+                iPort, pHub->pszName, vusbGetSpeedString(pDev->pUsbIns->enmSpeed)));
     }
     else
     {
@@ -1148,7 +1190,7 @@ static void vusbRhHubOpDetach(PVUSBHUB pHub, PVUSBDEV pDev)
      */
     unsigned uPort = pDev->i16Port;
     pRh->pIRhPort->pfnDetach(pRh->pIRhPort, &pDev->IDevice, uPort);
-    LogRel(("VUSB: Detached '%s' from port %u\n", pDev->pUsbIns->pszName, uPort));
+    LogRel(("VUSB: Detached '%s' from port %u on %s\n", pDev->pUsbIns->pszName, uPort, pHub->pszName));
     ASMBitSet(&pRh->Bitmap, uPort);
     pHub->cDevices--;
 }
@@ -1227,14 +1269,15 @@ static DECLCALLBACK(int) vusbRhConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
 {
     RT_NOREF(fFlags);
     PDMDRV_CHECK_VERSIONS_RETURN(pDrvIns);
+    PVUSBROOTHUB    pThis = PDMINS_2_DATA(pDrvIns, PVUSBROOTHUB);
+    PCPDMDRVHLPR3   pHlp  = pDrvIns->pHlpR3;
+
     LogFlow(("vusbRhConstruct: Instance %d\n", pDrvIns->iInstance));
-    PVUSBROOTHUB pThis = PDMINS_2_DATA(pDrvIns, PVUSBROOTHUB);
 
     /*
      * Validate configuration.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "CaptureFilename\0"))
-        return VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES;
+    PDMDRV_VALIDATE_CONFIG_RETURN(pDrvIns, "CaptureFilename", "");
 
     /*
      * Check that there are no drivers below us.
@@ -1251,7 +1294,7 @@ static DECLCALLBACK(int) vusbRhConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
         return rc;
 
     char *pszCaptureFilename = NULL;
-    rc = CFGMR3QueryStringAlloc(pCfg, "CaptureFilename", &pszCaptureFilename);
+    rc = pHlp->pfnCFGMQueryStringAlloc(pCfg, "CaptureFilename", &pszCaptureFilename);
     if (   RT_FAILURE(rc)
         && rc != VERR_CFGM_VALUE_NOT_FOUND)
         return PDMDrvHlpVMSetError(pDrvIns, rc, RT_SRC_POS,
@@ -1292,7 +1335,8 @@ static DECLCALLBACK(int) vusbRhConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
     pThis->IRhConnector.pfnAttachDevice               = vusbRhAttachDevice;
     pThis->IRhConnector.pfnDetachDevice               = vusbRhDetachDevice;
     pThis->IRhConnector.pfnSetPeriodicFrameProcessing = vusbRhSetFrameProcessing;
-    pThis->IRhConnector.pfnGetPeriodicFrameRate       = vusbRhGetPriodicFrameRate;
+    pThis->IRhConnector.pfnGetPeriodicFrameRate       = vusbRhGetPeriodicFrameRate;
+    pThis->IRhConnector.pfnUpdateIsocFrameDelta       = vusbRhUpdateIsocFrameDelta;
     pThis->hSniffer                                   = VUSBSNIFFER_NIL;
     pThis->cbHci                                      = 0;
     pThis->cbHciTd                                    = 0;
@@ -1332,15 +1376,15 @@ static DECLCALLBACK(int) vusbRhConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
                                        N_("VUSBSniffer cannot open '%s' for writing. The directory must exist and it must be writable for the current user"),
                                        pszCaptureFilename);
 
-        MMR3HeapFree(pszCaptureFilename);
+        PDMDrvHlpMMHeapFree(pDrvIns, pszCaptureFilename);
     }
 
     /*
      * Register ourselves as a USB hub.
      * The current implementation uses the VUSBIRHCONFIG interface for communication.
      */
-    PCPDMUSBHUBHLP pHlp; /* not used currently */
-    rc = PDMDrvHlpUSBRegisterHub(pDrvIns, pThis->fHcVersions, pThis->Hub.cPorts, &g_vusbHubReg, &pHlp);
+    PCPDMUSBHUBHLP pHlpUsb; /* not used currently */
+    rc = PDMDrvHlpUSBRegisterHub(pDrvIns, pThis->fHcVersions, pThis->Hub.cPorts, &g_vusbHubReg, &pHlpUsb);
     if (RT_FAILURE(rc))
         return rc;
 

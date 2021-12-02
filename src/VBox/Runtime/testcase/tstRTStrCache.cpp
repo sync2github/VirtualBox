@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTStrCache.cpp 86384 2020-10-01 14:24:19Z vboxsync $ */
 /** @file
  * IPRT Testcase - StrCache.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 
 #include <iprt/asm.h>
 #include <iprt/ctype.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/initterm.h>
 #include <iprt/mem.h>
 #include <iprt/rand.h>
@@ -132,6 +132,9 @@ static void tst2(void)
 
     tstShowStats(hStrCache);
     RTTESTI_CHECK_RC(RTStrCacheDestroy(hStrCache), VINF_SUCCESS);
+
+    for (uint32_t i = 0; i < 8192; i++)
+        RTMemFree(apszTests[i]);
 }
 
 

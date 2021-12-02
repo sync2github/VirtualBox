@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: buildsource.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 Test Manager - Build Sources.
@@ -7,7 +7,7 @@ Test Manager - Build Sources.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard python imports.
@@ -127,7 +127,7 @@ class BuildSourceData(ModelDataBase):
             (oNewValue, sError) = ModelDataBase._validateAndConvertAttribute(self, sAttr, sParam, oValue,
                                                                              aoNilValues, fAllowNull, oDb);
             if sError is None:
-                if len(self.asTypes) <= 0:
+                if not self.asTypes:
                     oNewValue = None;
                 else:
                     for sType in oNewValue:
@@ -149,22 +149,28 @@ class BuildSourceData(ModelDataBase):
 
         return (oNewValue, sError);
 
-class BuildSourceLogic(ModelLogicBase): # pylint: disable=R0903
+class BuildSourceLogic(ModelLogicBase): # pylint: disable=too-few-public-methods
     """
     Build source database logic.
     """
+
+    def __init__(self, oDb):
+        ModelLogicBase.__init__(self, oDb)
+        self.dCache = None;
 
     #
     # Standard methods.
     #
 
-    def fetchForListing(self, iStart, cMaxRows, tsNow):
+    def fetchForListing(self, iStart, cMaxRows, tsNow, aiSortColumns = None):
         """
         Fetches build sources.
 
         Returns an array (list) of BuildSourceData items, empty list if none.
         Raises exception on error.
         """
+        _ = aiSortColumns;
+
         if tsNow is None:
             self._oDb.execute('SELECT   *\n'
                               'FROM     BuildSources\n'
@@ -206,7 +212,7 @@ class BuildSourceLogic(ModelLogicBase): # pylint: disable=R0903
         # Validate the input.
         #
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Add);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('addEntry invalid input: %s' % (dErrors,));
         self._assertUnique(oData, None);
 
@@ -248,7 +254,7 @@ class BuildSourceLogic(ModelLogicBase): # pylint: disable=R0903
         # Validate the input and read the old entry.
         #
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Edit);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('addEntry invalid input: %s' % (dErrors,));
         self._assertUnique(oData, oData.idBuildSrc);
         oOldData = BuildSourceData().initFromDbWithId(self._oDb, oData.idBuildSrc);
@@ -324,6 +330,40 @@ class BuildSourceLogic(ModelLogicBase): # pylint: disable=R0903
         self._oDb.maybeCommit(fCommit);
         return True;
 
+    def cachedLookup(self, idBuildSrc):
+        """
+        Looks up the most recent BuildSourceData object for idBuildSrc
+        via an object cache.
+
+        Returns a shared BuildSourceData object.  None if not found.
+        Raises exception on DB error.
+        """
+        if self.dCache is None:
+            self.dCache = self._oDb.getCache('BuildSourceData');
+        oEntry = self.dCache.get(idBuildSrc, None);
+        if oEntry is None:
+            self._oDb.execute('SELECT   *\n'
+                              'FROM     BuildSources\n'
+                              'WHERE    idBuildSrc = %s\n'
+                              '     AND tsExpire   = \'infinity\'::TIMESTAMP\n'
+                              , (idBuildSrc, ));
+            if self._oDb.getRowCount() == 0:
+                # Maybe it was deleted, try get the last entry.
+                self._oDb.execute('SELECT   *\n'
+                                  'FROM     BuildSources\n'
+                                  'WHERE    idBuildSrc = %s\n'
+                                  'ORDER BY tsExpire DESC\n'
+                                  'LIMIT 1\n'
+                                  , (idBuildSrc, ));
+            elif self._oDb.getRowCount() > 1:
+                raise self._oDb.integrityException('%s infinity rows for %s' % (self._oDb.getRowCount(), idBuildSrc));
+
+            if self._oDb.getRowCount() == 1:
+                aaoRow = self._oDb.fetchOne();
+                oEntry = BuildSourceData();
+                oEntry.initFromDbRow(aaoRow);
+                self.dCache[idBuildSrc] = oEntry;
+        return oEntry;
 
     #
     # Other methods.
@@ -347,7 +387,7 @@ class BuildSourceLogic(ModelLogicBase): # pylint: disable=R0903
         sExtraConditions = '';
 
         # Types
-        if oBuildSource.asTypes is not None  and  len(oBuildSource.asTypes) > 0:
+        if oBuildSource.asTypes is not None  and  oBuildSource.asTypes:
             if len(oBuildSource.asTypes) == 1:
                 sExtraConditions += oCursor.formatBindArgs('   AND BuildCategories.sType = %s', (oBuildSource.asTypes[0],));
             else:
@@ -357,7 +397,7 @@ class BuildSourceLogic(ModelLogicBase): # pylint: disable=R0903
                 sExtraConditions += oCursor.formatBindArgs(', %s)\n', (oBuildSource.asTypes[-1],));
 
         # BuildSource OSes.ARCHes. (Paranoia: use a dictionary to avoid duplicate values.)
-        if oBuildSource.asOsArches is not None  and  len(oBuildSource.asOsArches) > 0:
+        if oBuildSource.asOsArches is not None  and  oBuildSource.asOsArches:
             sExtraConditions += oCursor.formatBindArgs('  AND BuildCategories.asOsArches && %s', (oBuildSource.asOsArches,));
 
         # TestBox OSes.ARCHes. (Paranoia: use a dictionary to avoid duplicate values.)
@@ -463,7 +503,7 @@ class BuildSourceLogic(ModelLogicBase): # pylint: disable=R0903
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class BuildSourceDataTestCase(ModelDataBaseTestCase):
     def setUp(self):
         self.aoSamples = [BuildSourceData(),];

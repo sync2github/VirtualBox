@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMouseHandler.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMouseHandler class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMouseHandler_h___
-#define ___UIMouseHandler_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_UIMouseHandler_h
+#define FEQT_INCLUDED_SRC_runtime_UIMouseHandler_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QMap>
@@ -37,11 +40,6 @@ class UIMachineWindow;
 class UIMachineView;
 class CDisplay;
 class CMouse;
-#ifdef VBOX_WS_X11
-# if QT_VERSION < 0x050000
-typedef union _XEvent XEvent;
-# endif /* QT_VERSION < 0x050000 */
-#endif /* VBOX_WS_X11 */
 
 
 /* Delegate to control VM mouse functionality: */
@@ -74,15 +72,8 @@ public:
     /* Current mouse state: */
     int state() const;
 
-#if QT_VERSION < 0x050000
-# ifdef VBOX_WS_X11
-    /** Qt4: X11: Performs pre-processing of all the native events. */
-    bool x11EventFilter(XEvent *pEvent, ulong uScreenId);
-# endif
-#else
     /** Qt5: Performs pre-processing of all the native events. */
     bool nativeEventFilter(void *pMessage, ulong uScreenId);
-#endif
 
 protected slots:
 
@@ -150,7 +141,13 @@ protected:
     QPoint m_capturedMousePos;
     int m_iLastMouseWheelDelta;
     int m_iMouseCaptureViewIndex;
+
+#ifdef VBOX_WS_WIN
+    /** Holds whether cursor position was just
+      * reseted to simulate infinite mouse moving. */
+    bool m_fCursorPositionReseted;
+#endif
 };
 
-#endif // !___UIMouseHandler_h___
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIMouseHandler_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTR0Thread.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT R0 Testcase - Kernel thread.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 #include <iprt/thread.h>
 
 #include <iprt/asm-amd64-x86.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <VBox/sup.h>
 #include "tstRTR0Thread.h"
 #include "tstRTR0Common.h"

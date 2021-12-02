@@ -1,11 +1,11 @@
 #!/bin/sh
-# $Id$
+# $Id: postinstall.sh 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # VirtualBox postinstall script for Solaris Guest Additions.
 #
 
 #
-# Copyright (C) 2008-2013 Oracle Corporation
+# Copyright (C) 2008-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -158,12 +158,9 @@ if test ! -z "$xorgbin"; then
         # Exit as partially failed installation
         retval=2
     elif test ! -f "$vboxadditions32_path/$vboxvideo_src" && test ! -f "$vboxadditions64_path/$vboxvideo_src"; then
-        echo "*** $vboxadditions32_path/$vboxvideo_src or $vboxadditions64_path/$vboxvideo_src not found!"
-        echo "*** X.org $xorgversion not supported by this package!"
-        echo "*** Failed to install the VirtualBox X.org drivers."
-
-        # Exit as partially failed installation
-        retval=2
+        # Xorg 1.19 and later already contain a driver for vboxvideo.
+        echo "As of X.Org Server 1.19, the VirtualBox graphics driver (vboxvideo) is part"
+        echo "of Solaris.  Please install it from the package repository if necessary."
     else
         echo "Installing video driver for X.Org $xorgversion..."
 
@@ -390,10 +387,6 @@ if test "$currentzone" = "global"; then
         echo "## $BOOTADMBIN not found/executable. Skipped explicit boot-archive update."
     fi
 fi
-
-# Set up our OpenGL pass-through library.
-ln -sf $vboxadditions_path/vbox_vendor_select /lib/opengl/ogl_select
-test "$currentzone" = "global" && /lib/svc/method/ogl-select start
 
 echo "Done."
 if test $retval -eq 0; then

@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: EmulatedUSBImpl.cpp 91503 2021-10-01 08:57:59Z vboxsync $ */
 /** @file
- *
  * Emulated USB manager implementation.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,11 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#define LOG_GROUP_MAIN_OVERRIDE LOG_GROUP_MAIN_EMULATEDUSB
+#define LOG_GROUP LOG_GROUP_MAIN_EMULATEDUSB
+#include "LoggingNew.h"
 
 #include "EmulatedUSBImpl.h"
 #include "ConsoleImpl.h"
-#include "Logging.h"
 
 #include <VBox/vmm/pdmusb.h>
 
@@ -213,8 +212,7 @@ HRESULT EUSBWEBCAM::Initialize(Console *pConsole,
     if (SUCCEEDED(hrc) && RT_FAILURE(vrc))
     {
         LogFlowThisFunc(("%Rrc\n", vrc));
-        hrc = pConsole->setError(VBOX_E_IPRT_ERROR,
-                                 "Init emulated USB webcam (%Rrc)", vrc);
+        hrc = pConsole->setErrorBoth(VBOX_E_IPRT_ERROR, vrc, EmulatedUSB::tr("Init emulated USB webcam (%Rrc)"), vrc);
     }
 
     return hrc;
@@ -313,8 +311,7 @@ HRESULT EUSBWEBCAM::Attach(Console *pConsole,
     if (SUCCEEDED(hrc) && RT_FAILURE(vrc))
     {
         LogFlowThisFunc(("%Rrc\n", vrc));
-        hrc = pConsole->setError(VBOX_E_IPRT_ERROR,
-                                 "Attach emulated USB webcam (%Rrc)", vrc);
+        hrc = pConsole->setErrorBoth(VBOX_E_VM_ERROR, vrc, EmulatedUSB::tr("Attach emulated USB webcam (%Rrc)"), vrc);
     }
 
     return hrc;
@@ -332,8 +329,7 @@ HRESULT EUSBWEBCAM::Detach(Console *pConsole,
     if (SUCCEEDED(hrc) && RT_FAILURE(vrc))
     {
         LogFlowThisFunc(("%Rrc\n", vrc));
-        hrc = pConsole->setError(VBOX_E_IPRT_ERROR,
-                                 "Detach emulated USB webcam (%Rrc)", vrc);
+        hrc = pConsole->setErrorBoth(VBOX_E_VM_ERROR, vrc, EmulatedUSB::tr("Detach emulated USB webcam (%Rrc)"), vrc);
     }
 
     return hrc;
@@ -391,13 +387,16 @@ void EmulatedUSB::uninit()
     m.pConsole.setNull();
 
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
-    WebcamsMap::iterator it = m.webcams.begin();
-    while (it != m.webcams.end())
+    for (WebcamsMap::iterator it = m.webcams.begin(); it != m.webcams.end(); ++it)
     {
         EUSBWEBCAM *p = it->second;
-        m.webcams.erase(it++);
-        p->Release();
+        if (p)
+        {
+            it->second = NULL;
+            p->Release();
+        }
     }
+    m.webcams.clear();
     alock.release();
 
     /* Enclose the state transition Ready->InUninit->NotReady */

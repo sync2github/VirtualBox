@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: time-r0drv-linux.c 85698 2020-08-11 17:05:29Z vboxsync $ */
 /** @file
  * IPRT - Time, Ring-0 Driver, Linux.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,6 +31,12 @@
 #define LOG_GROUP RTLOGGROUP_TIME
 #include "the-linux-kernel.h"
 #include "internal/iprt.h"
+/* Make sure we have the setting functions we need for RTTimeNow: */
+#if RTLNX_VER_MAX(2,6,16)
+# define RTTIME_INCL_TIMEVAL
+#elif RTLNX_VER_MAX(3,17,0)
+# define RTTIME_INCL_TIMESPEC
+#endif
 #include <iprt/time.h>
 #include <iprt/asm.h>
 
@@ -38,17 +44,29 @@
 
 DECLINLINE(uint64_t) rtTimeGetSystemNanoTS(void)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 16) /* This must match timer-r0drv-linux.c! */
+#if RTLNX_VER_MIN(5,6,0)
+    /*
+     * Starting with kernel version 5.6-rc3 only 64-bit time interfaces
+     * are allowed in the kernel.
+     */
+    uint64_t u64;
+    struct timespec64 Ts = { 0, 0 };
+
+    ktime_get_ts64(&Ts);
+    u64 = Ts.tv_sec * RT_NS_1SEC_64 + Ts.tv_nsec;
+    return u64;
+
+#elif RTLNX_VER_MIN(2,6,16) /* This must match timer-r0drv-linux.c! */
     /*
      * Use ktime_get_ts, this is also what clock_gettime(CLOCK_MONOTONIC,) is using.
      */
     uint64_t u64;
-    struct timespec Ts;
+    struct timespec Ts = { 0, 0 };
     ktime_get_ts(&Ts);
     u64 = Ts.tv_sec * RT_NS_1SEC_64 + Ts.tv_nsec;
     return u64;
 
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 60)
+#elif RTLNX_VER_MIN(2,5,60)
     /*
      * Seems there is no way of getting to the exact source of
      * sys_clock_gettime(CLOCK_MONOTONIC, &ts) here, I think. But
@@ -170,13 +188,19 @@ RT_EXPORT_SYMBOL(RTTimeSystemMilliTS);
 RTDECL(PRTTIMESPEC) RTTimeNow(PRTTIMESPEC pTime)
 {
     IPRT_LINUX_SAVE_EFL_AC();
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 16)
+#if RTLNX_VER_MIN(3,17,0)
+    struct timespec64 Ts;
+    ktime_get_real_ts64(&Ts);   /* ktime_get_real_ts64 was added as a macro in 3.17, function since 4.18. */
+    IPRT_LINUX_RESTORE_EFL_AC();
+    return RTTimeSpecSetTimespec64(pTime, &Ts);
+
+#elif RTLNX_VER_MIN(2,6,16)
     struct timespec Ts;
-    ktime_get_real_ts(&Ts);
+    ktime_get_real_ts(&Ts);     /* ktime_get_real_ts was removed in Linux 4.20. */
     IPRT_LINUX_RESTORE_EFL_AC();
     return RTTimeSpecSetTimespec(pTime, &Ts);
 
-#else   /* < 2.6.16 */
+#else /* < 2.6.16 */
     struct timeval Tv;
     do_gettimeofday(&Tv);
     IPRT_LINUX_RESTORE_EFL_AC();

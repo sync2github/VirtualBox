@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SessionImpl.cpp 92274 2021-11-08 16:29:09Z vboxsync $ */
 /** @file
  * VBox Client Session COM Class implementation in VBoxC.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,16 +15,19 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_SESSION
+#include "LoggingNew.h"
+
 #include "SessionImpl.h"
 #include "ConsoleImpl.h"
 #include "Global.h"
 #include "ClientTokenHolder.h"
 
 #include "AutoCaller.h"
-#include "Logging.h"
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/process.h>
+
 
 /**
  *  Local macro to check whether the session is open and return an error if not.
@@ -34,7 +37,7 @@
 #define CHECK_OPEN() \
     do { \
         if (mState != SessionState_Locked) \
-            return setError(E_UNEXPECTED, tr ("The session is not locked (session state: %s)"), \
+            return setError(E_UNEXPECTED, Session::tr("The session is not locked (session state: %s)"), \
                             Global::stringifySessionState(mState)); \
     } while (0)
 
@@ -257,24 +260,23 @@ HRESULT Session::getPID(ULONG *aPid)
 HRESULT Session::getRemoteConsole(ComPtr<IConsole> &aConsole)
 {
     LogFlowThisFuncEnter();
-
+#ifndef VBOX_COM_INPROC_API_CLIENT
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-#ifndef VBOX_COM_INPROC_API_CLIENT
-    AssertMsgReturn(mType == SessionType_WriteLock && !!mConsole,
-                    ("This is not a direct session!\n"),
-                    VBOX_E_INVALID_OBJECT_STATE);
+    if (mType == SessionType_WriteLock && !!mConsole)
+    {
+        /* return a failure if the session already transitioned to Closing
+         * but the server hasn't processed Machine::OnSessionEnd() yet. */
+        if (mState == SessionState_Locked)
+        {
+            mConsole.queryInterfaceTo(aConsole.asOutParam());
 
-    /* return a failure if the session already transitioned to Closing
-     * but the server hasn't processed Machine::OnSessionEnd() yet. */
-    if (mState != SessionState_Locked)
+            LogFlowThisFuncLeave();
+            return S_OK;
+        }
         return VBOX_E_INVALID_VM_STATE;
-
-    mConsole.queryInterfaceTo(aConsole.asOutParam());
-
-    LogFlowThisFuncLeave();
-
-    return S_OK;
+    }
+    return setError(VBOX_E_INVALID_OBJECT_STATE, "This is not a direct session");
 
 #else  /* VBOX_COM_INPROC_API_CLIENT */
     RT_NOREF(aConsole);
@@ -584,6 +586,24 @@ HRESULT Session::onNetworkAdapterChange(const ComPtr<INetworkAdapter> &aNetworkA
 #endif
 }
 
+HRESULT Session::onAudioAdapterChange(const ComPtr<IAudioAdapter> &aAudioAdapter)
+{
+    LogFlowThisFunc(("\n"));
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+    AssertReturn(mState == SessionState_Locked, VBOX_E_INVALID_VM_STATE);
+    AssertReturn(mType == SessionType_WriteLock, VBOX_E_INVALID_OBJECT_STATE);
+#ifndef VBOX_COM_INPROC_API_CLIENT
+    AssertReturn(mConsole, VBOX_E_INVALID_OBJECT_STATE);
+
+    return mConsole->i_onAudioAdapterChange(aAudioAdapter);
+#else
+    RT_NOREF(aAudioAdapter);
+    return S_OK;
+#endif
+
+}
+
 HRESULT Session::onSerialPortChange(const ComPtr<ISerialPort> &aSerialPort)
 {
     LogFlowThisFunc(("\n"));
@@ -618,7 +638,7 @@ HRESULT Session::onParallelPortChange(const ComPtr<IParallelPort> &aParallelPort
 #endif
 }
 
-HRESULT Session::onStorageControllerChange()
+HRESULT Session::onStorageControllerChange(const Guid &aMachineId, const Utf8Str &aControllerName)
 {
     LogFlowThisFunc(("\n"));
 
@@ -628,8 +648,10 @@ HRESULT Session::onStorageControllerChange()
 #ifndef VBOX_COM_INPROC_API_CLIENT
     AssertReturn(mConsole, VBOX_E_INVALID_OBJECT_STATE);
 
-    return mConsole->i_onStorageControllerChange();
+    return mConsole->i_onStorageControllerChange(aMachineId, aControllerName);
 #else
+    NOREF(aMachineId);
+    NOREF(aControllerName);
     return S_OK;
 #endif
 }
@@ -648,6 +670,23 @@ HRESULT Session::onMediumChange(const ComPtr<IMediumAttachment> &aMediumAttachme
     return mConsole->i_onMediumChange(aMediumAttachment, aForce);
 #else
     RT_NOREF(aMediumAttachment, aForce);
+    return S_OK;
+#endif
+}
+
+HRESULT Session::onVMProcessPriorityChange(VMProcPriority_T priority)
+{
+    LogFlowThisFunc(("\n"));
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+    AssertReturn(mState == SessionState_Locked, VBOX_E_INVALID_VM_STATE);
+    AssertReturn(mType == SessionType_WriteLock, VBOX_E_INVALID_OBJECT_STATE);
+#ifndef VBOX_COM_INPROC_API_CLIENT
+    AssertReturn(mConsole, VBOX_E_INVALID_OBJECT_STATE);
+
+    return mConsole->i_onVMProcessPriorityChange(priority);
+#else
+    RT_NOREF(priority);
     return S_OK;
 #endif
 }
@@ -703,7 +742,7 @@ HRESULT Session::onVRDEServerChange(BOOL aRestart)
 #endif
 }
 
-HRESULT Session::onVideoCaptureChange()
+HRESULT Session::onRecordingChange(BOOL aEnable)
 {
     LogFlowThisFunc(("\n"));
 
@@ -713,8 +752,9 @@ HRESULT Session::onVideoCaptureChange()
 #ifndef VBOX_COM_INPROC_API_CLIENT
     AssertReturn(mConsole, VBOX_E_INVALID_OBJECT_STATE);
 
-    return mConsole->i_onVideoCaptureChange();
+    return mConsole->i_onRecordingChange(aEnable);
 #else
+    RT_NOREF(aEnable);
     return S_OK;
 #endif
 }
@@ -765,6 +805,23 @@ HRESULT Session::onClipboardModeChange(ClipboardMode_T aClipboardMode)
     return mConsole->i_onClipboardModeChange(aClipboardMode);
 #else
     RT_NOREF(aClipboardMode);
+    return S_OK;
+#endif
+}
+
+HRESULT Session::onClipboardFileTransferModeChange(BOOL aEnabled)
+{
+    LogFlowThisFunc(("\n"));
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+    AssertReturn(mState == SessionState_Locked, VBOX_E_INVALID_VM_STATE);
+    AssertReturn(mType == SessionType_WriteLock, VBOX_E_INVALID_OBJECT_STATE);
+#ifndef VBOX_COM_INPROC_API_CLIENT
+    AssertReturn(mConsole, VBOX_E_INVALID_OBJECT_STATE);
+
+    return mConsole->i_onClipboardFileTransferModeChange(RT_BOOL(aEnabled));
+#else
+    RT_NOREF(aEnabled);
     return S_OK;
 #endif
 }
@@ -1045,7 +1102,10 @@ HRESULT Session::resumeWithReason(Reason_T aReason)
 #endif
 }
 
-HRESULT Session::saveStateWithReason(Reason_T aReason, const ComPtr<IProgress> &aProgress, const Utf8Str &aStateFilePath,
+HRESULT Session::saveStateWithReason(Reason_T aReason,
+                                     const ComPtr<IProgress> &aProgress,
+                                     const ComPtr<ISnapshot> &aSnapshot,
+                                     const Utf8Str &aStateFilePath,
                                      BOOL aPauseVM, BOOL *aLeftPaused)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
@@ -1055,12 +1115,12 @@ HRESULT Session::saveStateWithReason(Reason_T aReason, const ComPtr<IProgress> &
     AssertReturn(mConsole, VBOX_E_INVALID_OBJECT_STATE);
 
     bool fLeftPaused = false;
-    HRESULT rc = mConsole->i_saveState(aReason, aProgress, aStateFilePath, !!aPauseVM, fLeftPaused);
+    HRESULT rc = mConsole->i_saveState(aReason, aProgress, aSnapshot, aStateFilePath, !!aPauseVM, fLeftPaused);
     if (aLeftPaused)
         *aLeftPaused = fLeftPaused;
     return rc;
 #else
-    RT_NOREF(aReason, aProgress, aStateFilePath, aPauseVM, aLeftPaused);
+    RT_NOREF(aReason, aProgress, aSnapshot, aStateFilePath, aPauseVM, aLeftPaused);
     AssertFailed();
     return E_NOTIMPL;
 #endif
@@ -1089,11 +1149,12 @@ HRESULT Session::cancelSaveStateWithReason()
  *
  *  @param aFinalRelease    called as a result of FinalRelease()
  *  @param aFromServer      called as a result of Uninitialize()
- *  @param pLockW           The write lock this object is protected with.
+ *  @param aLockW           The write lock this object is protected with.
  *                          Must be acquired already and will be released
  *                          and later reacquired during the unlocking.
  *
- *  @note To be called only from #uninit(), #UnlockMachine() or #Uninitialize().
+ *  @note To be called only from #uninit(), ISession::UnlockMachine() or
+ *        ISession::Uninitialize().
  */
 HRESULT Session::i_unlockMachine(bool aFinalRelease, bool aFromServer, AutoWriteLock &aLockW)
 {

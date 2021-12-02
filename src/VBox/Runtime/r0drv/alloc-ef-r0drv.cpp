@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: alloc-ef-r0drv.cpp 83549 2020-04-04 11:09:20Z vboxsync $ */
 /** @file
  * IPRT - Memory Allocation, electric fence for ring-0 drivers.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -36,7 +36,7 @@
 #include <iprt/asm.h>
 #include <iprt/asm-amd64-x86.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
 #include <iprt/memobj.h>
 #include <iprt/param.h>
@@ -136,6 +136,7 @@ typedef enum RTMEMTYPE
     RTMEMTYPE_RTMEMALLOCZ,
     RTMEMTYPE_RTMEMREALLOC,
     RTMEMTYPE_RTMEMFREE,
+    RTMEMTYPE_RTMEMFREEZ,
 
     RTMEMTYPE_NEW,
     RTMEMTYPE_NEW_ARRAY,
@@ -644,7 +645,7 @@ static void * rtR0MemAlloc(const char *pszOp, RTMEMTYPE enmType, size_t cbUnalig
 /**
  * Internal free.
  */
-static void rtR0MemFree(const char *pszOp, RTMEMTYPE enmType, void *pv, void *pvCaller, RT_SRC_POS_DECL)
+static void rtR0MemFree(const char *pszOp, RTMEMTYPE enmType, void *pv, size_t cbUser, void *pvCaller, RT_SRC_POS_DECL)
 {
     NOREF(enmType); RT_SRC_POS_NOREF();
 
@@ -693,11 +694,17 @@ static void rtR0MemFree(const char *pszOp, RTMEMTYPE enmType, void *pv, void *pv
             RTAssertDoPanic();
 #endif
 
-#ifdef RTR0MEM_EF_FREE_FILL
         /*
          * Fill the user part of the block.
          */
-        memset(pv, RTR0MEM_EF_FREE_FILL, pBlock->cbUnaligned);
+        AssertMsg(enmType != RTMEMTYPE_RTMEMFREEZ || cbUser == pBlock->cbUnaligned,
+                  ("cbUser=%#zx cbUnaligned=%#zx\n", cbUser, pBlock->cbUnaligned));
+        RT_NOREF(cbUser);
+        if (enmType == RTMEMTYPE_RTMEMFREEZ)
+            RT_BZERO(pv, pBlock->cbUnaligned);
+#ifdef RTR0MEM_EF_FREE_FILL
+        else
+            memset(pv, RTR0MEM_EF_FREE_FILL, pBlock->cbUnaligned);
 #endif
 
 #if defined(RTR0MEM_EF_FREE_DELAYED) && RTR0MEM_EF_FREE_DELAYED > 0
@@ -747,7 +754,7 @@ static void *rtR0MemRealloc(const char *pszOp, RTMEMTYPE enmType, void *pvOld, s
         return rtR0MemAlloc(pszOp, enmType, cbNew, cbNew, pszTag, pvCaller, RT_SRC_POS_ARGS);
     if (!cbNew)
     {
-        rtR0MemFree(pszOp, RTMEMTYPE_RTMEMREALLOC, pvOld, pvCaller, RT_SRC_POS_ARGS);
+        rtR0MemFree(pszOp, RTMEMTYPE_RTMEMREALLOC, pvOld, 0, pvCaller, RT_SRC_POS_ARGS);
         return NULL;
     }
 
@@ -761,7 +768,7 @@ static void *rtR0MemRealloc(const char *pszOp, RTMEMTYPE enmType, void *pvOld, s
         if (pvRet)
         {
             memcpy(pvRet, pvOld, RT_MIN(cbNew, pBlock->cbUnaligned));
-            rtR0MemFree(pszOp, RTMEMTYPE_RTMEMREALLOC, pvOld, pvCaller, RT_SRC_POS_ARGS);
+            rtR0MemFree(pszOp, RTMEMTYPE_RTMEMREALLOC, pvOld, 0, pvCaller, RT_SRC_POS_ARGS);
         }
         return pvRet;
     }
@@ -787,7 +794,14 @@ RTDECL(void *)  RTMemEfTmpAllocZ(size_t cb, const char *pszTag, RT_SRC_POS_DECL)
 RTDECL(void)    RTMemEfTmpFree(void *pv, RT_SRC_POS_DECL) RT_NO_THROW_DEF
 {
     if (pv)
-        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREE, pv, ASMReturnAddress(), RT_SRC_POS_ARGS);
+        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREE, pv, 0, ASMReturnAddress(), RT_SRC_POS_ARGS);
+}
+
+
+RTDECL(void)    RTMemEfTmpFreeZ(void *pv, size_t cb, RT_SRC_POS_DECL) RT_NO_THROW_DEF
+{
+    if (pv)
+        rtR0MemFree("FreeZ", RTMEMTYPE_RTMEMFREEZ, pv, cb, ASMReturnAddress(), RT_SRC_POS_ARGS);
 }
 
 
@@ -830,11 +844,26 @@ RTDECL(void *)  RTMemEfRealloc(void *pvOld, size_t cbNew, const char *pszTag, RT
     return rtR0MemRealloc("Realloc", RTMEMTYPE_RTMEMREALLOC, pvOld, cbNew, pszTag, ASMReturnAddress(), RT_SRC_POS_ARGS);
 }
 
+RTDECL(void *)  RTMemEfReallocZ(void *pvOld, size_t cbOld, size_t cbNew, const char *pszTag, RT_SRC_POS_DECL) RT_NO_THROW_DEF
+{
+    void *pvDst = rtR0MemRealloc("Realloc", RTMEMTYPE_RTMEMREALLOC, pvOld, cbNew, pszTag, ASMReturnAddress(), RT_SRC_POS_ARGS);
+    if (pvDst && cbNew > cbOld)
+        memset((uint8_t *)pvDst + cbOld, 0, cbNew - cbOld);
+    return pvDst;
+}
+
 
 RTDECL(void)    RTMemEfFree(void *pv, RT_SRC_POS_DECL) RT_NO_THROW_DEF
 {
     if (pv)
-        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREE, pv, ASMReturnAddress(), RT_SRC_POS_ARGS);
+        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREE, pv, 0, ASMReturnAddress(), RT_SRC_POS_ARGS);
+}
+
+
+RTDECL(void)    RTMemEfFreeZ(void *pv, size_t cb, RT_SRC_POS_DECL) RT_NO_THROW_DEF
+{
+    if (pv)
+        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREEZ, pv, cb, ASMReturnAddress(), RT_SRC_POS_ARGS);
 }
 
 
@@ -884,7 +913,14 @@ RTDECL(void *)  RTMemEfTmpAllocZNP(size_t cb, const char *pszTag) RT_NO_THROW_DE
 RTDECL(void)    RTMemEfTmpFreeNP(void *pv) RT_NO_THROW_DEF
 {
     if (pv)
-        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREE, pv, ASMReturnAddress(), NULL, 0, NULL);
+        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREE, pv, 0, ASMReturnAddress(), NULL, 0, NULL);
+}
+
+
+RTDECL(void)    RTMemEfTmpFreeZNP(void *pv, size_t cb) RT_NO_THROW_DEF
+{
+    if (pv)
+        rtR0MemFree("FreeZ", RTMEMTYPE_RTMEMFREEZ, pv, cb, ASMReturnAddress(), NULL, 0, NULL);
 }
 
 
@@ -928,10 +964,26 @@ RTDECL(void *)  RTMemEfReallocNP(void *pvOld, size_t cbNew, const char *pszTag) 
 }
 
 
+RTDECL(void *)  RTMemEfReallocZNP(void *pvOld, size_t cbOld, size_t cbNew, const char *pszTag) RT_NO_THROW_DEF
+{
+    void *pvDst = rtR0MemRealloc("ReallocZ", RTMEMTYPE_RTMEMREALLOC, pvOld, cbNew, pszTag, ASMReturnAddress(), NULL, 0, NULL);
+    if (pvDst && cbNew > cbOld)
+        memset((uint8_t *)pvDst + cbOld, 0, cbNew - cbOld);
+    return pvDst;
+}
+
+
 RTDECL(void)    RTMemEfFreeNP(void *pv) RT_NO_THROW_DEF
 {
     if (pv)
-        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREE, pv, ASMReturnAddress(), NULL, 0, NULL);
+        rtR0MemFree("Free", RTMEMTYPE_RTMEMFREE, pv, 0, ASMReturnAddress(), NULL, 0, NULL);
+}
+
+
+RTDECL(void)    RTMemEfFreeZNP(void *pv, size_t cb) RT_NO_THROW_DEF
+{
+    if (pv)
+        rtR0MemFree("FreeZ", RTMEMTYPE_RTMEMFREEZ, pv, cb, ASMReturnAddress(), NULL, 0, NULL);
 }
 
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HostImpl.cpp 91503 2021-10-01 08:57:59Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation: Host
  */
 
 /*
- * Copyright (C) 2004-2016 Oracle Corporation
+ * Copyright (C) 2004-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,8 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+#define LOG_GROUP LOG_GROUP_MAIN_HOST
 
 #define __STDC_LIMIT_MACROS
 #define __STDC_CONSTANT_MACROS
@@ -41,8 +43,9 @@
 #include "HostVideoInputDeviceImpl.h"
 #include "MachineImpl.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 #include "Performance.h"
+#include "HostUpdateImpl.h"
 
 #include "MediumImpl.h"
 #include "HostPower.h"
@@ -51,9 +54,7 @@
 # include <HostHardwareLinux.h>
 #endif
 
-#if defined(RT_OS_LINUX) || defined(RT_OS_DARWIN) || defined(RT_OS_FREEBSD)
-# include <set>
-#endif
+#include <set>
 
 #ifdef VBOX_WITH_RESOURCE_USAGE_API
 # include "PerformanceImpl.h"
@@ -111,6 +112,11 @@ typedef struct SOLARISDVD
 /** Pointer to a Solaris DVD descriptor. */
 typedef SOLARISDVD *PSOLARISDVD;
 
+/** Solaris fixed drive (SSD, HDD, ++) descriptor list entry as returned by the
+ * solarisWalkDeviceNodeForFixedDrive callback. */
+typedef SOLARISDVD SOLARISFIXEDDISK;
+/** Pointer to a Solaris fixed drive (SSD, HDD, ++) descriptor. */
+typedef SOLARISFIXEDDISK *PSOLARISFIXEDDISK;
 
 
 #endif /* RT_OS_SOLARIS */
@@ -123,7 +129,6 @@ typedef SOLARISDVD *PSOLARISDVD;
 # include <guiddef.h>
 # include <devguid.h>
 # include <iprt/win/objbase.h>
-//# include <iprt/win/setupapi.h>
 # include <iprt/win/shlobj.h>
 # include <cfgmgr32.h>
 # include <tchar.h>
@@ -133,38 +138,35 @@ typedef SOLARISDVD *PSOLARISDVD;
 # include "darwin/iokit.h"
 #endif
 
-#ifdef VBOX_WITH_CROGL
-#include <VBox/VBoxOGL.h>
-#endif /* VBOX_WITH_CROGL */
-
-#include <iprt/asm-amd64-x86.h>
-#include <iprt/string.h>
-#include <iprt/mp.h>
-#include <iprt/time.h>
-#include <iprt/param.h>
-#include <iprt/env.h>
-#include <iprt/mem.h>
-#include <iprt/system.h>
-#ifndef RT_OS_WINDOWS
-# include <iprt/path.h>
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
+# include <iprt/asm-amd64-x86.h>
 #endif
 #ifdef RT_OS_SOLARIS
 # include <iprt/ctype.h>
 #endif
+#if defined(RT_OS_SOLARIS) || defined(RT_OS_WINDOWS)
+# include <iprt/file.h>
+#endif
+#include <iprt/mp.h>
+#include <iprt/env.h>
+#include <iprt/mem.h>
+#include <iprt/param.h>
+#include <iprt/string.h>
+#include <iprt/system.h>
+#ifndef RT_OS_WINDOWS
+# include <iprt/path.h>
+#endif
+#include <iprt/time.h>
+#ifdef RT_OS_WINDOWS
+# include <iprt/dir.h>
+# include <iprt/vfs.h>
+#endif
+
 #ifdef VBOX_WITH_HOSTNETIF_API
 # include "netif.h"
 #endif
 
-/* XXX Solaris: definitions in /usr/include/sys/regset.h clash with hm_svm.h */
-#undef DS
-#undef ES
-#undef CS
-#undef SS
-#undef FS
-#undef GS
-
 #include <VBox/usb.h>
-#include <VBox/vmm/hm_svm.h>
 #include <VBox/err.h>
 #include <VBox/settings.h>
 #include <VBox/sup.h>
@@ -176,10 +178,12 @@ typedef SOLARISDVD *PSOLARISDVD;
 #include <stdio.h>
 
 #include <algorithm>
-#include <string>
+#include <iprt/sanitized/string>
 #include <vector>
 
 #include "HostDnsService.h"
+#include "HostDriveImpl.h"
+#include "HostDrivePartitionImpl.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -192,7 +196,8 @@ struct Host::Data
     Data()
         :
           fDVDDrivesListBuilt(false),
-          fFloppyDrivesListBuilt(false)
+          fFloppyDrivesListBuilt(false),
+          fPersistentConfigUpToDate(false)
     {};
 
     VirtualBox              *pParent;
@@ -225,6 +230,9 @@ struct Host::Data
                             fLongModeSupported,
                             fPAESupported,
                             fNestedPagingSupported,
+                            fUnrestrictedGuestSupported,
+                            fNestedHWVirtSupported,
+                            fVirtVmsaveVmload,
                             fRecheckVTSupported;
 
     /** @}  */
@@ -235,6 +243,12 @@ struct Host::Data
     HostPowerService        *pHostPowerService;
     /** Host's DNS informaton fetching */
     HostDnsMonitorProxy     hostDnsMonitorProxy;
+
+    /** Startup syncing of persistent config in extra data */
+    bool                    fPersistentConfigUpToDate;
+
+    /** The reference to the update check handler singleton. */
+    const ComObjPtr<HostUpdate> pHostUpdate;
 };
 
 
@@ -289,7 +303,12 @@ HRESULT Host::init(VirtualBox *aParent)
     /* Create the list of network interfaces so their metrics get registered. */
     i_updateNetIfList();
 
-    m->hostDnsMonitorProxy.init(HostDnsMonitor::getHostDnsMonitor(m->pParent), m->pParent);
+    m->hostDnsMonitorProxy.init(m->pParent);
+
+    hrc = unconst(m->pHostUpdate).createObject();
+    if (SUCCEEDED(hrc))
+        hrc = m->pHostUpdate->init(m->pParent);
+    AssertComRCReturn(hrc, hrc);
 
 #if defined(RT_OS_WINDOWS)
     m->pHostPowerService = new HostPowerServiceWin(m->pParent);
@@ -306,8 +325,12 @@ HRESULT Host::init(VirtualBox *aParent)
     m->fLongModeSupported = false;
     m->fPAESupported = false;
     m->fNestedPagingSupported = false;
+    m->fUnrestrictedGuestSupported = false;
+    m->fNestedHWVirtSupported = false;
+    m->fVirtVmsaveVmload = false;
     m->fRecheckVTSupported = false;
 
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
     if (ASMHasCpuId())
     {
         /* Note! This code is duplicated in SUPDrv.c and other places! */
@@ -327,29 +350,32 @@ HRESULT Host::init(VirtualBox *aParent)
             m->fLongModeSupported = ASMIsValidExtRange(uExtMaxId)
                                  && (fExtFeaturesEdx & X86_CPUID_EXT_FEATURE_EDX_LONG_MODE);
 
-#if defined(RT_OS_DARWIN) && ARCH_BITS == 32 /* darwin.x86 has some optimizations of 64-bit on 32-bit. */
+# if defined(RT_OS_DARWIN) && ARCH_BITS == 32 /* darwin.x86 has some optimizations of 64-bit on 32-bit. */
             int     f64bitCapable = 0;
             size_t  cbParameter   = sizeof(f64bitCapable);
             if (sysctlbyname("hw.cpu64bit_capable", &f64bitCapable, &cbParameter, NULL, NULL) != -1)
                 m->fLongModeSupported = f64bitCapable != 0;
-#endif
+# endif
 
             /* VT-x? */
             if (   ASMIsIntelCpuEx(uVendorEBX, uVendorECX, uVendorEDX)
-                || ASMIsViaCentaurCpuEx(uVendorEBX, uVendorECX, uVendorEDX))
+                || ASMIsViaCentaurCpuEx(uVendorEBX, uVendorECX, uVendorEDX)
+                || ASMIsShanghaiCpuEx(uVendorEBX, uVendorECX, uVendorEDX))
             {
                 if (    (fFeaturesEcx & X86_CPUID_FEATURE_ECX_VMX)
                      && (fFeaturesEdx & X86_CPUID_FEATURE_EDX_MSR)
                      && (fFeaturesEdx & X86_CPUID_FEATURE_EDX_FXSR)
                    )
                 {
-                    int rc = SUPR3QueryVTxSupported();
+                    const char *pszIgn;
+                    int rc = SUPR3QueryVTxSupported(&pszIgn);
                     if (RT_SUCCESS(rc))
                         m->fVTSupported = true;
                 }
             }
             /* AMD-V */
-            else if (ASMIsAmdCpuEx(uVendorEBX, uVendorECX, uVendorEDX))
+            else if (   ASMIsAmdCpuEx(uVendorEBX, uVendorECX, uVendorEDX)
+                     || ASMIsHygonCpuEx(uVendorEBX, uVendorECX, uVendorEDX))
             {
                 if (   (fExtFeaturesEcx & X86_CPUID_AMD_FEATURE_ECX_SVM)
                     && (fFeaturesEdx    & X86_CPUID_FEATURE_EDX_MSR)
@@ -358,49 +384,40 @@ HRESULT Host::init(VirtualBox *aParent)
                    )
                 {
                     m->fVTSupported = true;
+                    m->fUnrestrictedGuestSupported = true;
 
                     /* Query AMD features. */
                     if (uExtMaxId >= 0x8000000a)
                     {
                         uint32_t fSVMFeaturesEdx;
                         ASMCpuId(0x8000000a, &uDummy, &uDummy, &uDummy, &fSVMFeaturesEdx);
-                        if (fSVMFeaturesEdx & AMD_CPUID_SVM_FEATURE_EDX_NESTED_PAGING)
+                        if (fSVMFeaturesEdx & X86_CPUID_SVM_FEATURE_EDX_NESTED_PAGING)
                             m->fNestedPagingSupported = true;
+                        if (fSVMFeaturesEdx & X86_CPUID_SVM_FEATURE_EDX_VIRT_VMSAVE_VMLOAD)
+                            m->fVirtVmsaveVmload = true;
                     }
                 }
             }
         }
     }
+#endif /* defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86) */
+
 
     /* Check with SUPDrv if VT-x and AMD-V are really supported (may fail). */
     if (m->fVTSupported)
     {
-        int rc = SUPR3InitEx(false /*fUnrestricted*/, NULL);
-        if (RT_SUCCESS(rc))
-        {
-            uint32_t fVTCaps;
-            rc = SUPR3QueryVTCaps(&fVTCaps);
-            if (RT_SUCCESS(rc))
-            {
-                Assert(fVTCaps & (SUPVTCAPS_AMD_V | SUPVTCAPS_VT_X));
-                if (fVTCaps & SUPVTCAPS_NESTED_PAGING)
-                    m->fNestedPagingSupported = true;
-                else
-                    Assert(m->fNestedPagingSupported == false);
-            }
-            else
-            {
-                LogRel(("SUPR0QueryVTCaps -> %Rrc\n", rc));
-                m->fVTSupported = m->fNestedPagingSupported = false;
-            }
-            rc = SUPR3Term(false);
-            AssertRC(rc);
-        }
-        else
-            m->fRecheckVTSupported = true; /* Try again later when the driver is loaded. */
+        m->fRecheckVTSupported = true; /* Try again later when the driver is loaded; cleared by i_updateProcessorFeatures on success. */
+        i_updateProcessorFeatures();
     }
 
-#ifdef VBOX_WITH_CROGL
+    /* Check for NEM in root paritition (hyper-V / windows). */
+    if (!m->fVTSupported && SUPR3IsNemSupportedWhenNoVtxOrAmdV())
+    {
+        m->fVTSupported = m->fNestedPagingSupported = true;
+        m->fRecheckVTSupported = false;
+    }
+
+#ifdef VBOX_WITH_3D_ACCELERATION
     /* Test for 3D hardware acceleration support later when (if ever) need. */
     m->f3DAccelerationSupported = -1;
 #else
@@ -433,12 +450,12 @@ HRESULT Host::init(VirtualBox *aParent)
         ComPtr<IHostNetworkInterface> hif;
         ComPtr<IProgress> progress;
 
-        int r = NetIfCreateHostOnlyNetworkInterface(m->pParent,
-                                                    hif.asOutParam(),
-                                                    progress.asOutParam(),
-                                                    it->c_str());
-        if (RT_FAILURE(r))
-            LogRel(("failed to create %s, error (0x%x)\n", it->c_str(), r));
+        int vrc = NetIfCreateHostOnlyNetworkInterface(m->pParent,
+                                                      hif.asOutParam(),
+                                                      progress.asOutParam(),
+                                                      it->c_str());
+        if (RT_FAILURE(vrc))
+            LogRel(("failed to create %s, error (%Rrc)\n", it->c_str(), vrc));
     }
 
 #endif /* defined(RT_OS_LINUX) || defined(RT_OS_DARWIN) || defined(RT_OS_FREEBSD) */
@@ -478,6 +495,14 @@ void Host::uninit()
         ComObjPtr<HostNetworkInterface> &pNet = m->llNetIfs.front();
         pNet->uninit();
         m->llNetIfs.pop_front();
+    }
+
+    m->hostDnsMonitorProxy.uninit();
+
+    if (m->pHostUpdate)
+    {
+        m->pHostUpdate->uninit();
+        unconst(m->pHostUpdate).setNull();
     }
 
 #ifdef VBOX_WITH_USB
@@ -536,7 +561,7 @@ void Host::uninit()
  * Returns a list of host DVD drives.
  *
  * @returns COM status code
- * @param drives address of result pointer
+ * @param aDVDDrives    address of result pointer
  */
 
 HRESULT Host::getDVDDrives(std::vector<ComPtr<IMedium> > &aDVDDrives)
@@ -560,7 +585,7 @@ HRESULT Host::getDVDDrives(std::vector<ComPtr<IMedium> > &aDVDDrives)
  * Returns a list of host floppy drives.
  *
  * @returns COM status code
- * @param drives address of result pointer
+ * @param   aFloppyDrives   address of result pointer
  */
 HRESULT Host::getFloppyDrives(std::vector<ComPtr<IMedium> > &aFloppyDrives)
 {
@@ -623,11 +648,162 @@ static int vboxNetWinAddComponent(std::list< ComObjPtr<HostNetworkInterface> > *
 }
 #endif /* defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT) */
 
+#if defined(RT_OS_WINDOWS)
+struct HostOnlyInfo
+{
+    HostOnlyInfo() : fDhcpEnabled(false), uIPv6PrefixLength(0) {};
+
+    Bstr bstrName;
+    bool fDhcpEnabled;
+    Bstr strIPv4Address;
+    Bstr strIPv4NetMask;
+    Bstr strIPv6Address;
+    ULONG uIPv6PrefixLength;
+};
+
+typedef std::map<Utf8Str, HostOnlyInfo*> GUID_TO_HOST_ONLY_INFO;
+
+HRESULT Host::i_updatePersistentConfigForHostOnlyAdapters(void)
+{
+    /* No need to do the sync twice */
+    if (m->fPersistentConfigUpToDate)
+        return S_OK;
+    m->fPersistentConfigUpToDate = true;
+    bool fChangesMade = false;
+
+    /* Extract the list of configured host-only interfaces */
+    GUID_TO_HOST_ONLY_INFO aSavedAdapters;
+    SafeArray<BSTR> aGlobalExtraDataKeys;
+    HRESULT hrc = m->pParent->GetExtraDataKeys(ComSafeArrayAsOutParam(aGlobalExtraDataKeys));
+    AssertMsg(SUCCEEDED(hrc), ("VirtualBox::GetExtraDataKeys failed with %Rhrc\n", hrc));
+    for (size_t i = 0; i < aGlobalExtraDataKeys.size(); ++i)
+    {
+        Utf8Str strKey = aGlobalExtraDataKeys[i];
+
+        if (strKey.startsWith("HostOnly/{"))
+        {
+            Bstr bstrValue;
+            hrc = m->pParent->GetExtraData(aGlobalExtraDataKeys[i], bstrValue.asOutParam());
+            if (hrc != S_OK)
+                continue;
+
+            Utf8Str strGuid = strKey.substr(10, 36); /* Skip "HostOnly/{" */
+            if (aSavedAdapters.find(strGuid) == aSavedAdapters.end())
+                aSavedAdapters[strGuid] = new HostOnlyInfo();
+
+            if (strKey.endsWith("}/Name"))
+                aSavedAdapters[strGuid]->bstrName = bstrValue;
+            else if (strKey.endsWith("}/IPAddress"))
+            {
+                if (bstrValue == "DHCP")
+                    aSavedAdapters[strGuid]->fDhcpEnabled = true;
+                else
+                    aSavedAdapters[strGuid]->strIPv4Address = bstrValue;
+            }
+            else if (strKey.endsWith("}/IPNetMask"))
+                aSavedAdapters[strGuid]->strIPv4NetMask = bstrValue;
+            else if (strKey.endsWith("}/IPV6Address"))
+                aSavedAdapters[strGuid]->strIPv6Address = bstrValue;
+            else if (strKey.endsWith("}/IPV6PrefixLen"))
+                aSavedAdapters[strGuid]->uIPv6PrefixLength = Utf8Str(bstrValue).toUInt32();
+        }
+    }
+
+    /* Go over the list of existing adapters and update configs saved in extra data */
+    std::set<Bstr> aKnownNames;
+    for (HostNetworkInterfaceList::iterator it = m->llNetIfs.begin(); it != m->llNetIfs.end(); ++it)
+    {
+        /* Get type */
+        HostNetworkInterfaceType_T t;
+        hrc = (*it)->COMGETTER(InterfaceType)(&t);
+        if (FAILED(hrc) || t != HostNetworkInterfaceType_HostOnly)
+            continue;
+        /* Get id */
+        Bstr bstrGuid;
+        hrc = (*it)->COMGETTER(Id)(bstrGuid.asOutParam());
+        if (FAILED(hrc))
+            continue;
+        /* Get name */
+        Bstr bstrName;
+        hrc = (*it)->COMGETTER(Name)(bstrName.asOutParam());
+        if (FAILED(hrc))
+            continue;
+
+        /* Remove adapter from map as it does not need any further processing */
+        aSavedAdapters.erase(Utf8Str(bstrGuid));
+        /* Add adapter name to the list of known names, so we won't attempt to create adapters with the same name */
+        aKnownNames.insert(bstrName);
+        /* Make sure our extra data contains the latest config */
+        hrc = (*it)->i_updatePersistentConfig();
+        if (hrc != S_OK)
+            break;
+    }
+
+    /* The following loop not only creates missing adapters, it destroys HostOnlyInfo objects contained in the map as well */
+    for (GUID_TO_HOST_ONLY_INFO::iterator it = aSavedAdapters.begin(); it != aSavedAdapters.end(); ++it)
+    {
+        Utf8Str strGuid = (*it).first;
+        HostOnlyInfo *pInfo = (*it).second;
+        /* We create adapters only if we haven't seen one with the same name */
+        if (aKnownNames.find(pInfo->bstrName) == aKnownNames.end())
+        {
+            /* There is no adapter with such name yet, create it */
+            ComPtr<IHostNetworkInterface> hif;
+            ComPtr<IProgress> progress;
+
+            int vrc = NetIfCreateHostOnlyNetworkInterface(m->pParent, hif.asOutParam(), progress.asOutParam(),
+                                                          pInfo->bstrName.raw());
+            if (RT_FAILURE(vrc))
+            {
+                LogRel(("Failed to create host-only adapter (%Rrc)\n", vrc));
+                hrc = E_UNEXPECTED;
+                break;
+            }
+
+            /* Wait for the adapter to get configured completely, before we modify IP addresses. */
+            progress->WaitForCompletion(-1);
+            fChangesMade = true;
+            if (pInfo->fDhcpEnabled)
+            {
+                hrc = hif->EnableDynamicIPConfig();
+                if (FAILED(hrc))
+                    LogRel(("EnableDynamicIPConfig failed with 0x%x\n", hrc));
+            }
+            else
+            {
+                hrc = hif->EnableStaticIPConfig(pInfo->strIPv4Address.raw(), pInfo->strIPv4NetMask.raw());
+                if (FAILED(hrc))
+                    LogRel(("EnableStaticIpConfig failed with 0x%x\n", hrc));
+            }
+# if 0
+            /* Somehow HostNetworkInterface::EnableStaticIPConfigV6 is not implemented yet. */
+            if (SUCCEEDED(hrc))
+            {
+                hrc = hif->EnableStaticIPConfigV6(pInfo->strIPv6Address.raw(), pInfo->uIPv6PrefixLength);
+                if (FAILED(hrc))
+                    LogRel(("EnableStaticIPConfigV6 failed with 0x%x\n", hrc));
+            }
+# endif
+            /* Now we have seen this name */
+            aKnownNames.insert(pInfo->bstrName);
+            /* Drop the old config as the newly created adapter has different GUID */
+            i_removePersistentConfig(strGuid);
+        }
+        delete pInfo;
+    }
+    /* Update the list again if we have created some adapters */
+    if (SUCCEEDED(hrc) && fChangesMade)
+        hrc = i_updateNetIfList();
+
+    return hrc;
+}
+#endif /* defined(RT_OS_WINDOWS) */
+
 /**
  * Returns a list of host network interfaces.
  *
  * @returns COM status code
- * @param drives address of result pointer
+ * @param   aNetworkInterfaces  address of result pointer
  */
 HRESULT Host::getNetworkInterfaces(std::vector<ComPtr<IHostNetworkInterface> > &aNetworkInterfaces)
 {
@@ -639,6 +815,14 @@ HRESULT Host::getNetworkInterfaces(std::vector<ComPtr<IHostNetworkInterface> > &
         Log(("Failed to update host network interface list with rc=%Rhrc\n", rc));
         return rc;
     }
+#if defined(RT_OS_WINDOWS)
+    rc = i_updatePersistentConfigForHostOnlyAdapters();
+    if (FAILED(rc))
+    {
+        LogRel(("Failed to update persistent config for host-only adapters with rc=%Rhrc\n", rc));
+        return rc;
+    }
+#endif /* defined(RT_OS_WINDOWS) */
 
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
@@ -822,7 +1006,7 @@ HRESULT Host::getUSBDevices(std::vector<ComPtr<IHostUSBDevice> > &aUSBDevices)
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
     MultiResult rc = i_checkUSBProxyService();
-    if (FAILED(rc))
+    if (FAILED(rc) || SUCCEEDED_WARNING(rc))
         return rc;
 
     return m->pUSBProxyService->getDeviceCollection(aUSBDevices);
@@ -830,10 +1014,7 @@ HRESULT Host::getUSBDevices(std::vector<ComPtr<IHostUSBDevice> > &aUSBDevices)
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
-    NOREF(aUSBDevices);
-# ifndef RT_OS_WINDOWS
-    NOREF(aUSBDevices);
-# endif
+    RT_NOREF(aUSBDevices);
     ReturnComNotImplemented();
 #endif
 }
@@ -887,10 +1068,7 @@ HRESULT Host::getUSBDeviceFilters(std::vector<ComPtr<IHostUSBDeviceFilter> > &aU
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
-    NOREF(aUSBDeviceFilters);
-# ifndef RT_OS_WINDOWS
-    NOREF(aUSBDeviceFilters);
-# endif
+    RT_NOREF(aUSBDeviceFilters);
     ReturnComNotImplemented();
 #endif
 }
@@ -899,7 +1077,7 @@ HRESULT Host::getUSBDeviceFilters(std::vector<ComPtr<IHostUSBDeviceFilter> > &aU
  * Returns the number of installed logical processors
  *
  * @returns COM status code
- * @param   count address of result variable
+ * @param   aCount  address of result variable
  */
 
 HRESULT Host::getProcessorCount(ULONG *aCount)
@@ -914,7 +1092,7 @@ HRESULT Host::getProcessorCount(ULONG *aCount)
  * Returns the number of online logical processors
  *
  * @returns COM status code
- * @param   count address of result variable
+ * @param   aCount  address of result variable
  */
 HRESULT Host::getProcessorOnlineCount(ULONG *aCount)
 {
@@ -928,7 +1106,7 @@ HRESULT Host::getProcessorOnlineCount(ULONG *aCount)
  * Returns the number of installed physical processor cores.
  *
  * @returns COM status code
- * @param   count address of result variable
+ * @param   aCount  address of result variable
  */
 HRESULT Host::getProcessorCoreCount(ULONG *aCount)
 {
@@ -942,7 +1120,7 @@ HRESULT Host::getProcessorCoreCount(ULONG *aCount)
  * Returns the number of installed physical processor cores.
  *
  * @returns COM status code
- * @param   count address of result variable
+ * @param   aCount  address of result variable
  */
 HRESULT Host::getProcessorOnlineCoreCount(ULONG *aCount)
 {
@@ -956,8 +1134,9 @@ HRESULT Host::getProcessorOnlineCoreCount(ULONG *aCount)
  * Returns the (approximate) maximum speed of the given host CPU in MHz
  *
  * @returns COM status code
- * @param   cpu id to get info for.
- * @param   speed address of result variable, speed is 0 if unknown or aCpuId is invalid.
+ * @param   aCpuId  id to get info for.
+ * @param   aSpeed  address of result variable, speed is 0 if unknown or aCpuId
+ *          is invalid.
  */
 HRESULT Host::getProcessorSpeed(ULONG aCpuId,
                                 ULONG *aSpeed)
@@ -972,8 +1151,9 @@ HRESULT Host::getProcessorSpeed(ULONG aCpuId,
  * Returns a description string for the host CPU
  *
  * @returns COM status code
- * @param   cpu id to get info for.
- * @param   description address of result variable, empty string if not known or aCpuId is invalid.
+ * @param   aCpuId  id to get info for.
+ * @param   aDescription address of result variable, empty string if not known
+ *          or aCpuId is invalid.
  */
 HRESULT Host::getProcessorDescription(ULONG aCpuId, com::Utf8Str &aDescription)
 {
@@ -991,11 +1171,50 @@ HRESULT Host::getProcessorDescription(ULONG aCpuId, com::Utf8Str &aDescription)
 }
 
 /**
+ * Updates fVTSupported, fNestedPagingSupported, fUnrestrictedGuestSupported,
+ * fVirtVmsaveVmload and fNestedHWVirtSupported with info from SUPR3QueryVTCaps().
+ *
+ * This is repeated till we successfully open the support driver, in case it
+ * is loaded after VBoxSVC starts.
+ */
+void Host::i_updateProcessorFeatures()
+{
+    /* Perhaps the driver is available now... */
+    int rc = SUPR3InitEx(false /*fUnrestricted*/, NULL);
+    if (RT_SUCCESS(rc))
+    {
+        uint32_t fVTCaps;
+        rc = SUPR3QueryVTCaps(&fVTCaps);
+        AssertMsgRC(rc, ("SUPR3QueryVTCaps failed rc=%Rrc\n", rc));
+
+        SUPR3Term(false);
+
+        AutoWriteLock wlock(this COMMA_LOCKVAL_SRC_POS);
+        if (RT_FAILURE(rc))
+        {
+            LogRel(("SUPR0QueryVTCaps -> %Rrc\n", rc));
+            fVTCaps = 0;
+        }
+        m->fVTSupported                = (fVTCaps & (SUPVTCAPS_AMD_V | SUPVTCAPS_VT_X)) != 0;
+        m->fNestedPagingSupported      = (fVTCaps & SUPVTCAPS_NESTED_PAGING) != 0;
+        m->fUnrestrictedGuestSupported = (fVTCaps & (SUPVTCAPS_AMD_V | SUPVTCAPS_VTX_UNRESTRICTED_GUEST)) != 0;
+        m->fNestedHWVirtSupported      =     (fVTCaps & (SUPVTCAPS_AMD_V | SUPVTCAPS_NESTED_PAGING))
+                                          ==            (SUPVTCAPS_AMD_V | SUPVTCAPS_NESTED_PAGING)
+                                      ||     (fVTCaps & (  SUPVTCAPS_VT_X | SUPVTCAPS_NESTED_PAGING
+                                                         | SUPVTCAPS_VTX_UNRESTRICTED_GUEST | SUPVTCAPS_VTX_VMCS_SHADOWING))
+                                          ==            (  SUPVTCAPS_VT_X | SUPVTCAPS_NESTED_PAGING
+                                                         | SUPVTCAPS_VTX_UNRESTRICTED_GUEST | SUPVTCAPS_VTX_VMCS_SHADOWING);
+        m->fVirtVmsaveVmload           = (fVTCaps & SUPVTCAPS_AMDV_VIRT_VMSAVE_VMLOAD) != 0;
+        m->fRecheckVTSupported = false; /* No need to try again, we cached everything. */
+    }
+}
+
+/**
  * Returns whether a host processor feature is supported or not
  *
  * @returns COM status code
- * @param   Feature to query.
- * @param   address of supported bool result variable
+ * @param   aFeature    to query.
+ * @param   aSupported  supported bool result variable
  */
 HRESULT Host::getProcessorFeature(ProcessorFeature_T aFeature, BOOL *aSupported)
 {
@@ -1006,6 +1225,9 @@ HRESULT Host::getProcessorFeature(ProcessorFeature_T aFeature, BOOL *aSupported)
         case ProcessorFeature_PAE:
         case ProcessorFeature_LongMode:
         case ProcessorFeature_NestedPaging:
+        case ProcessorFeature_UnrestrictedGuest:
+        case ProcessorFeature_NestedHWVirt:
+        case ProcessorFeature_VirtVmsaveVmload:
             break;
         default:
             return setError(E_INVALIDARG, tr("The aFeature value %d (%#x) is out of range."), (int)aFeature, (int)aFeature);
@@ -1020,37 +1242,14 @@ HRESULT Host::getProcessorFeature(ProcessorFeature_T aFeature, BOOL *aSupported)
 
         if (   m->fRecheckVTSupported
             && (   aFeature == ProcessorFeature_HWVirtEx
-                || aFeature == ProcessorFeature_NestedPaging)
+                || aFeature == ProcessorFeature_NestedPaging
+                || aFeature == ProcessorFeature_UnrestrictedGuest
+                || aFeature == ProcessorFeature_NestedHWVirt
+                || aFeature == ProcessorFeature_VirtVmsaveVmload)
            )
         {
             alock.release();
-
-            /* Perhaps the driver is available now... */
-            int rc = SUPR3InitEx(false /*fUnrestricted*/, NULL);
-            if (RT_SUCCESS(rc))
-            {
-                uint32_t fVTCaps;
-                rc = SUPR3QueryVTCaps(&fVTCaps);
-
-                AutoWriteLock wlock(this COMMA_LOCKVAL_SRC_POS);
-                if (RT_SUCCESS(rc))
-                {
-                    Assert(fVTCaps & (SUPVTCAPS_AMD_V | SUPVTCAPS_VT_X));
-                    if (fVTCaps & SUPVTCAPS_NESTED_PAGING)
-                        m->fNestedPagingSupported = true;
-                    else
-                        Assert(m->fNestedPagingSupported == false);
-                }
-                else
-                {
-                    LogRel(("SUPR0QueryVTCaps -> %Rrc\n", rc));
-                    m->fVTSupported = m->fNestedPagingSupported = true;
-                }
-                rc = SUPR3Term(false);
-                AssertRC(rc);
-                m->fRecheckVTSupported = false; /* No need to try again, we cached everything. */
-            }
-
+            i_updateProcessorFeatures();
             alock.acquire();
         }
 
@@ -1070,6 +1269,18 @@ HRESULT Host::getProcessorFeature(ProcessorFeature_T aFeature, BOOL *aSupported)
 
             case ProcessorFeature_NestedPaging:
                 *aSupported = m->fNestedPagingSupported;
+                break;
+
+            case ProcessorFeature_UnrestrictedGuest:
+                *aSupported = m->fUnrestrictedGuestSupported;
+                break;
+
+            case ProcessorFeature_NestedHWVirt:
+                *aSupported = m->fNestedHWVirtSupported;
+                break;
+
+            case ProcessorFeature_VirtVmsaveVmload:
+                *aSupported = m->fVirtVmsaveVmload;
                 break;
 
             default:
@@ -1103,12 +1314,19 @@ HRESULT Host::getProcessorCPUIDLeaf(ULONG aCpuId, ULONG aLeaf, ULONG aSubLeaf,
              ? setError(E_FAIL, tr("CPU no.%u is not present"), aCpuId)
              : setError(E_FAIL, tr("CPU no.%u is not online"), aCpuId);
 
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
     uint32_t uEAX, uEBX, uECX, uEDX;
     ASMCpuId_Idx_ECX(aLeaf, aSubLeaf, &uEAX, &uEBX, &uECX, &uEDX);
     *aValEAX = uEAX;
     *aValEBX = uEBX;
     *aValECX = uECX;
     *aValEDX = uEDX;
+#else
+    *aValEAX = 0;
+    *aValEBX = 0;
+    *aValECX = 0;
+    *aValEDX = 0;
+#endif
 
     return S_OK;
 }
@@ -1117,7 +1335,7 @@ HRESULT Host::getProcessorCPUIDLeaf(ULONG aCpuId, ULONG aLeaf, ULONG aSubLeaf,
  * Returns the amount of installed system memory in megabytes
  *
  * @returns COM status code
- * @param   size address of result variable
+ * @param   aSize   address of result variable
  */
 HRESULT Host::getMemorySize(ULONG *aSize)
 {
@@ -1135,7 +1353,7 @@ HRESULT Host::getMemorySize(ULONG *aSize)
  * Returns the current system memory free space in megabytes
  *
  * @returns COM status code
- * @param   available address of result variable
+ * @param   aAvailable  address of result variable
  */
 HRESULT Host::getMemoryAvailable(ULONG *aAvailable)
 {
@@ -1153,7 +1371,7 @@ HRESULT Host::getMemoryAvailable(ULONG *aAvailable)
  * Returns the name string of the host operating system
  *
  * @returns COM status code
- * @param   os address of result variable
+ * @param   aOperatingSystem result variable
  */
 HRESULT Host::getOperatingSystem(com::Utf8Str &aOperatingSystem)
 {
@@ -1171,7 +1389,7 @@ HRESULT Host::getOperatingSystem(com::Utf8Str &aOperatingSystem)
  * Returns the version string of the host operating system
  *
  * @returns COM status code
- * @param   os address of result variable
+ * @param   aVersion    address of result variable
  */
 HRESULT Host::getOSVersion(com::Utf8Str &aVersion)
 {
@@ -1195,7 +1413,7 @@ HRESULT Host::getOSVersion(com::Utf8Str &aVersion)
     if (szOSServicePack[0] != '\0')
     {
         char *psz = strchr(szOSRelease, '\0');
-        RTStrPrintf(psz, &szOSRelease[sizeof(szOSRelease)] - psz, "sp%s", szOSServicePack);
+        RTStrPrintf(psz, (size_t)(&szOSRelease[sizeof(szOSRelease)] - psz), "sp%s", szOSServicePack);
     }
 
     aVersion = szOSRelease;
@@ -1206,7 +1424,7 @@ HRESULT Host::getOSVersion(com::Utf8Str &aVersion)
  * Returns the current host time in milliseconds since 1970-01-01 UTC.
  *
  * @returns COM status code
- * @param   time address of result variable
+ * @param   aUTCTime    address of result variable
  */
 HRESULT Host::getUTCTime(LONG64 *aUTCTime)
 {
@@ -1229,7 +1447,7 @@ HRESULT Host::getAcceleration3DAvailable(BOOL *aSupported)
     {
         alock.release();
 
-#ifdef VBOX_WITH_CROGL
+#ifdef VBOX_WITH_3D_ACCELERATION
         bool fSupported = VBoxOglIs3DAccelerationSupported();
 #else
         bool fSupported = false; /* shoudn't get here, but just in case. */
@@ -1256,14 +1474,14 @@ HRESULT Host::createHostOnlyNetworkInterface(ComPtr<IHostNetworkInterface> &aHos
     /* No need to lock anything. If there ever will - watch out, the function
      * called below grabs the VirtualBox lock. */
 
-    int r = NetIfCreateHostOnlyNetworkInterface(m->pParent, aHostInterface.asOutParam(), aProgress.asOutParam());
-    if (RT_SUCCESS(r))
+    int vrc = NetIfCreateHostOnlyNetworkInterface(m->pParent, aHostInterface.asOutParam(), aProgress.asOutParam());
+    if (RT_SUCCESS(vrc))
     {
         if (aHostInterface.isNull())
             return setError(E_FAIL,
                             tr("Unable to create a host network interface"));
 
-#if !defined(RT_OS_WINDOWS)
+# if !defined(RT_OS_WINDOWS)
         Bstr tmpAddr, tmpMask, tmpName;
         HRESULT hrc;
         hrc = aHostInterface->COMGETTER(Name)(tmpName.asOutParam());
@@ -1288,7 +1506,7 @@ HRESULT Host::createHostOnlyNetworkInterface(ComPtr<IHostNetworkInterface> &aHos
                                                tmpName.raw()).raw(),
                                                tmpMask.raw());
         ComAssertComRCRet(hrc, hrc);
-#endif
+# endif /* !defined(RT_OS_WINDOWS) */
     }
 
     return S_OK;
@@ -1296,6 +1514,19 @@ HRESULT Host::createHostOnlyNetworkInterface(ComPtr<IHostNetworkInterface> &aHos
     return E_NOTIMPL;
 #endif
 }
+
+
+#ifdef RT_OS_WINDOWS
+HRESULT Host::i_removePersistentConfig(const Bstr &bstrGuid)
+{
+    HRESULT hrc = m->pParent->SetExtraData(BstrFmt("HostOnly/{%ls}/Name", bstrGuid.raw()).raw(), NULL);
+    if (SUCCEEDED(hrc)) hrc = m->pParent->SetExtraData(BstrFmt("HostOnly/{%ls}/IPAddress", bstrGuid.raw()).raw(), NULL);
+    if (SUCCEEDED(hrc)) hrc = m->pParent->SetExtraData(BstrFmt("HostOnly/{%ls}/IPNetMask", bstrGuid.raw()).raw(), NULL);
+    if (SUCCEEDED(hrc)) hrc = m->pParent->SetExtraData(BstrFmt("HostOnly/{%ls}/IPV6Address", bstrGuid.raw()).raw(), NULL);
+    if (SUCCEEDED(hrc)) hrc = m->pParent->SetExtraData(BstrFmt("HostOnly/{%ls}/IPV6PrefixLen", bstrGuid.raw()).raw(), NULL);
+    return hrc;
+}
+#endif /* RT_OS_WINDOWS */
 
 HRESULT Host::removeHostOnlyNetworkInterface(const com::Guid &aId,
                                              ComPtr<IProgress> &aProgress)
@@ -1321,14 +1552,20 @@ HRESULT Host::removeHostOnlyNetworkInterface(const com::Guid &aId,
         ComAssertComRCRet(rc, rc);
     }
 
-    int r = NetIfRemoveHostOnlyNetworkInterface(m->pParent, Guid(aId).ref(), aProgress.asOutParam());
+    int r = NetIfRemoveHostOnlyNetworkInterface(m->pParent, aId, aProgress.asOutParam());
     if (RT_SUCCESS(r))
     {
         /* Drop configuration parameters for removed interface */
+#ifdef RT_OS_WINDOWS
+        rc = i_removePersistentConfig(Utf8StrFmt("%RTuuid", &aId));
+        if (FAILED(rc))
+            LogRel(("i_removePersistentConfig(%RTuuid) failed with 0x%x\n", &aId, rc));
+#else /* !RT_OS_WINDOWS */
         rc = m->pParent->SetExtraData(BstrFmt("HostOnly/%ls/IPAddress", name.raw()).raw(), NULL);
         rc = m->pParent->SetExtraData(BstrFmt("HostOnly/%ls/IPNetMask", name.raw()).raw(), NULL);
         rc = m->pParent->SetExtraData(BstrFmt("HostOnly/%ls/IPV6Address", name.raw()).raw(), NULL);
         rc = m->pParent->SetExtraData(BstrFmt("HostOnly/%ls/IPV6NetMask", name.raw()).raw(), NULL);
+#endif /* !RT_OS_WINDOWS */
 
         return S_OK;
     }
@@ -1357,8 +1594,7 @@ HRESULT Host::createUSBDeviceFilter(const com::Utf8Str &aName,
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
-    NOREF(aName);
-    NOREF(aFilter);
+    RT_NOREF(aName, aFilter);
     ReturnComNotImplemented();
 #endif
 }
@@ -1418,8 +1654,7 @@ HRESULT Host::insertUSBDeviceFilter(ULONG aPosition,
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
-    NOREF(aPosition);
-    NOREF(aFilter);
+    RT_NOREF(aPosition, aFilter);
     ReturnComNotImplemented();
 #endif
 }
@@ -1472,7 +1707,7 @@ HRESULT Host::removeUSBDeviceFilter(ULONG aPosition)
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
-    NOREF(aPosition);
+    RT_NOREF(aPosition);
     ReturnComNotImplemented();
 #endif
 }
@@ -1485,7 +1720,7 @@ HRESULT Host::findHostDVDDrive(const com::Utf8Str &aName,
     if (SUCCEEDED(rc))
         rc = medium.queryInterfaceTo(aDrive.asOutParam());
     else
-        rc = setError(rc, Medium::tr("The host DVD drive named '%s' could not be found"), aName.c_str());
+        rc = setError(rc, tr("The host DVD drive named '%s' could not be found"), aName.c_str());
     return rc;
 }
 
@@ -1499,7 +1734,7 @@ HRESULT Host::findHostFloppyDrive(const com::Utf8Str &aName, ComPtr<IMedium> &aD
     if (SUCCEEDED(rc))
         return medium.queryInterfaceTo(aDrive.asOutParam());
     else
-        return setError(rc, Medium::tr("The host floppy drive named '%s' could not be found"), aName.c_str());
+        return setError(rc, tr("The host floppy drive named '%s' could not be found"), aName.c_str());
 }
 
 HRESULT Host::findHostNetworkInterfaceByName(const com::Utf8Str &aName,
@@ -1517,6 +1752,14 @@ HRESULT Host::findHostNetworkInterfaceByName(const com::Utf8Str &aName,
         Log(("Failed to update host network interface list with rc=%Rhrc\n", rc));
         return rc;
     }
+#if defined(RT_OS_WINDOWS)
+    rc = i_updatePersistentConfigForHostOnlyAdapters();
+    if (FAILED(rc))
+    {
+        LogRel(("Failed to update persistent config for host-only adapters with rc=%Rhrc\n", rc));
+        return rc;
+    }
+#endif /* defined(RT_OS_WINDOWS) */
 
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
@@ -1531,7 +1774,7 @@ HRESULT Host::findHostNetworkInterfaceByName(const com::Utf8Str &aName,
 
     if (!found)
         return setError(E_INVALIDARG,
-                        HostNetworkInterface::tr("The host network interface named '%s' could not be found"), aName.c_str());
+                        tr("The host network interface named '%s' could not be found"), aName.c_str());
 
     return found.queryInterfaceTo(aNetworkInterface.asOutParam());
 #endif
@@ -1552,6 +1795,14 @@ HRESULT Host::findHostNetworkInterfaceById(const com::Guid &aId,
         Log(("Failed to update host network interface list with rc=%Rhrc\n", rc));
         return rc;
     }
+#if defined(RT_OS_WINDOWS)
+    rc = i_updatePersistentConfigForHostOnlyAdapters();
+    if (FAILED(rc))
+    {
+        LogRel(("Failed to update persistent config for host-only adapters with rc=%Rhrc\n", rc));
+        return rc;
+    }
+#endif /* defined(RT_OS_WINDOWS) */
 
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
@@ -1566,7 +1817,7 @@ HRESULT Host::findHostNetworkInterfaceById(const com::Guid &aId,
 
     if (!found)
         return setError(E_INVALIDARG,
-                        HostNetworkInterface::tr("The host network interface with the given GUID could not be found"));
+                        tr("The host network interface with the given GUID could not be found"));
     return found.queryInterfaceTo(aNetworkInterface.asOutParam());
 
 #endif
@@ -1582,6 +1833,14 @@ HRESULT Host::findHostNetworkInterfacesOfType(HostNetworkInterfaceType_T aType,
         Log(("Failed to update host network interface list with rc=%Rhrc\n", rc));
         return rc;
     }
+#if defined(RT_OS_WINDOWS)
+    rc = i_updatePersistentConfigForHostOnlyAdapters();
+    if (FAILED(rc))
+    {
+        LogRel(("Failed to update persistent config for host-only adapters with rc=%Rhrc\n", rc));
+        return rc;
+    }
+#endif /* defined(RT_OS_WINDOWS) */
 
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
@@ -1637,8 +1896,7 @@ HRESULT Host::findUSBDeviceByAddress(const com::Utf8Str &aName,
                          aName.c_str());
 
 #else   /* !VBOX_WITH_USB */
-    NOREF(aName);
-    NOREF(aDevice);
+    RT_NOREF(aName, aDevice);
     return E_NOTIMPL;
 #endif  /* !VBOX_WITH_USB */
 }
@@ -1672,8 +1930,7 @@ HRESULT Host::findUSBDeviceById(const com::Guid &aId,
                          aId.raw());
 
 #else   /* !VBOX_WITH_USB */
-    NOREF(aId);
-    NOREF(aDevice);
+    RT_NOREF(aId, aDevice);
     return E_NOTIMPL;
 #endif  /* !VBOX_WITH_USB */
 }
@@ -1715,6 +1972,7 @@ HRESULT Host::addUSBDeviceSource(const com::Utf8Str &aBackend, const com::Utf8St
     /* The USB proxy service will do the locking. */
     return m->pUSBProxyService->addUSBDeviceSource(aBackend, aId, aAddress, aPropertyNames, aPropertyValues);
 #else
+    RT_NOREF(aBackend, aId, aAddress, aPropertyNames, aPropertyValues);
     ReturnComNotImplemented();
 #endif
 }
@@ -1725,9 +1983,41 @@ HRESULT Host::removeUSBDeviceSource(const com::Utf8Str &aId)
     /* The USB proxy service will do the locking. */
     return m->pUSBProxyService->removeUSBDeviceSource(aId);
 #else
+    RT_NOREF(aId);
     ReturnComNotImplemented();
 #endif
 }
+
+
+HRESULT Host::getUpdate(ComPtr<IHostUpdate> &aUpdate)
+{
+    HRESULT hrc = m->pHostUpdate.queryInterfaceTo(aUpdate.asOutParam());
+    return hrc;
+}
+
+
+HRESULT  Host::getHostDrives(std::vector<ComPtr<IHostDrive> > &aHostDrives)
+{
+    std::list<std::pair<com::Utf8Str, com::Utf8Str> > llDrivesPathsList;
+    HRESULT hrc = i_getDrivesPathsList(llDrivesPathsList);
+    if (SUCCEEDED(hrc))
+    {
+        for (std::list<std::pair<com::Utf8Str, com::Utf8Str> >::const_iterator it = llDrivesPathsList.begin();
+             it != llDrivesPathsList.end();
+             ++it)
+        {
+            ComObjPtr<HostDrive> pHostDrive;
+            hrc = pHostDrive.createObject();
+            if (SUCCEEDED(hrc))
+                hrc = pHostDrive->initFromPathAndModel(it->first, it->second);
+            if (FAILED(hrc))
+                break;
+            aHostDrives.push_back(pHostDrive);
+        }
+    }
+    return hrc;
+}
+
 
 // public methods only for internal purposes
 ////////////////////////////////////////////////////////////////////////////////
@@ -1766,7 +2056,7 @@ HRESULT Host::i_loadSettings(const settings::Host &data)
 
     rc = m->pUSBProxyService->i_loadSettings(data.llUSBDeviceSources);
 #else
-    NOREF(data);
+    RT_NOREF(data);
 #endif /* VBOX_WITH_USB */
     return rc;
 }
@@ -1781,6 +2071,7 @@ HRESULT Host::i_saveSettings(settings::Host &data)
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
     data.llUSBDeviceFilters.clear();
+    data.llUSBDeviceSources.clear();
 
     for (USBDeviceFilterList::const_iterator it = m->llUSBDeviceFilters.begin();
          it != m->llUSBDeviceFilters.end();
@@ -1794,7 +2085,7 @@ HRESULT Host::i_saveSettings(settings::Host &data)
 
     return m->pUSBProxyService->i_saveSettings(data.llUSBDeviceSources);
 #else
-    NOREF(data);
+    RT_NOREF(data);
     return S_OK;
 #endif /* VBOX_WITH_USB */
 
@@ -2048,7 +2339,7 @@ HRESULT Host::i_findHostDriveByNameOrId(DeviceType_T mediumType,
 
 /**
  * Called from getDrives() to build the DVD drives list.
- * @param pll
+ * @param   list    Media list
  * @return
  */
 HRESULT Host::i_buildDVDDrivesList(MediaList &list)
@@ -2177,7 +2468,7 @@ HRESULT Host::i_buildFloppyDrivesList(MediaList &list)
                     list.push_back(hostFloppyDriveObj);
             }
 #else
-    NOREF(list);
+    RT_NOREF(list);
     /* PORTME */
 #endif
     }
@@ -2315,10 +2606,10 @@ void Host::i_getUSBFilters(Host::USBDeviceFilterList *aGlobalFilters)
  */
 static char *solarisGetSliceFromPath(const char *pszDevLinkPath)
 {
-    char *pszFound = NULL;
-    char *pszSlice = strrchr(pszDevLinkPath, 's');
-    char *pszDisk  = strrchr(pszDevLinkPath, 'd');
-    if (pszSlice && pszSlice > pszDisk)
+    char *pszSlice = (char *)strrchr(pszDevLinkPath, 's');
+    char *pszDisk  = (char *)strrchr(pszDevLinkPath, 'd');
+    char *pszFound;
+    if (pszSlice && (uintptr_t)pszSlice > (uintptr_t)pszDisk)
         pszFound = pszSlice;
     else
         pszFound = pszDisk;
@@ -2333,13 +2624,14 @@ static char *solarisGetSliceFromPath(const char *pszDevLinkPath)
  * Walk device links and returns an allocated path for the first one in the snapshot.
  *
  * @param   DevLink     Handle to the device link being walked.
- * @param   pvArg       Opaque data containing the pointer to the path.
- * @returns Pointer to an allocated device path string.
+ * @param   pvArg       Opaque pointer that we use to point to the return
+ *                      variable (char *).  Caller must call RTStrFree on it.
+ * @returns DI_WALK_TERMINATE to stop the walk.
  */
 static int solarisWalkDevLink(di_devlink_t DevLink, void *pvArg)
 {
     char **ppszPath = (char **)pvArg;
-    *ppszPath = strdup(di_devlink_path(DevLink));
+    *ppszPath = RTStrDup(di_devlink_path(DevLink));
     return DI_WALK_TERMINATE;
 }
 
@@ -2412,17 +2704,18 @@ static int solarisWalkDeviceNodeForDVD(di_node_t Node, void *pvArg)
                                     {
                                         RTStrPrintf(pDrive->szDescription, sizeof(pDrive->szDescription),
                                                     "%s %s", pszVendor, pszProduct);
+                                        RTStrPurgeEncoding(pDrive->szDescription);
                                         RTStrCopy(pDrive->szRawDiskPath, sizeof(pDrive->szRawDiskPath), pszDevLinkPath);
                                         if (*ppDrives)
                                             pDrive->pNext = *ppDrives;
                                         *ppDrives = pDrive;
 
                                         /* We're not interested in any of the other slices, stop minor nodes traversal. */
-                                        free(pszDevLinkPath);
+                                        RTStrFree(pszDevLinkPath);
                                         break;
                                     }
                                 }
-                                free(pszDevLinkPath);
+                                RTStrFree(pszDevLinkPath);
                             }
                         }
                         di_devlink_fini(&DevLink);
@@ -2460,6 +2753,154 @@ void Host::i_getDVDInfoFromDevTree(std::list<ComObjPtr<Medium> > &list)
     }
 }
 
+
+/**
+ * Walk all devices in the system and enumerate fixed drives.
+ * @param   Node        Handle to the current node.
+ * @param   pvArg       Opaque data (holds list pointer).
+ * @returns Solaris specific code whether to continue walking or not.
+ */
+static int solarisWalkDeviceNodeForFixedDrive(di_node_t Node, void *pvArg) RT_NOEXCEPT
+{
+    PSOLARISFIXEDDISK *ppDrives = (PSOLARISFIXEDDISK *)pvArg;
+
+    int *pInt = NULL;
+    if (    di_prop_lookup_ints(DDI_DEV_T_ANY, Node, "inquiry-device-type", &pInt) > 0
+        && *pInt == DTYPE_DIRECT) /* Fixed drive */
+    {
+        char *pszProduct = NULL;
+        if (di_prop_lookup_strings(DDI_DEV_T_ANY, Node, "inquiry-product-id", &pszProduct) > 0)
+        {
+            char *pszVendor = NULL;
+            if (di_prop_lookup_strings(DDI_DEV_T_ANY, Node, "inquiry-vendor-id", &pszVendor) > 0)
+            {
+                /*
+                 * Found a fixed drive, we need to scan the minor nodes to find the correct
+                 * slice that represents the whole drive.
+                 */
+                int Major = di_driver_major(Node);
+                di_minor_t Minor = DI_MINOR_NIL;
+                di_devlink_handle_t DevLink = di_devlink_init(NULL /* name */, 0 /* flags */);
+                if (DevLink)
+                {
+                    /*
+                     * The device name we have to select depends on drive type. For fixed drives, the
+                     * name without slice or partition should be selected, for USB flash drive the
+                     * partition 0 should be selected and slice 0 for other cases.
+                     */
+                    char *pszDisk       = NULL;
+                    char *pszPartition0 = NULL;
+                    char *pszSlice0     = NULL;
+                    while ((Minor = di_minor_next(Node, Minor)) != DI_MINOR_NIL)
+                    {
+                        dev_t Dev = di_minor_devt(Minor);
+                        if (   Major != (int)major(Dev)
+                            || di_minor_spectype(Minor) == S_IFBLK
+                            || di_minor_type(Minor) != DDM_MINOR)
+                            continue;
+
+                        char *pszMinorPath = di_devfs_minor_path(Minor);
+                        if (!pszMinorPath)
+                            continue;
+
+                        char *pszDevLinkPath = NULL;
+                        di_devlink_walk(DevLink, NULL, pszMinorPath, DI_PRIMARY_LINK, &pszDevLinkPath, solarisWalkDevLink);
+                        di_devfs_path_free(pszMinorPath);
+
+                        if (pszDevLinkPath)
+                        {
+                            char const *pszCurSlice = strrchr(pszDevLinkPath, 's');
+                            char const *pszCurDisk  = strrchr(pszDevLinkPath, 'd');
+                            char const *pszCurPart  = strrchr(pszDevLinkPath, 'p');
+                            char **ppszDst  = NULL;
+                            if (pszCurSlice && (uintptr_t)pszCurSlice > (uintptr_t)pszCurDisk && !strcmp(pszCurSlice, "s0"))
+                                ppszDst = &pszSlice0;
+                            else if (pszCurPart && (uintptr_t)pszCurPart > (uintptr_t)pszCurDisk && !strcmp(pszCurPart, "p0"))
+                                ppszDst = &pszPartition0;
+                            else if (   (!pszCurSlice || (uintptr_t)pszCurSlice < (uintptr_t)pszCurDisk)
+                                     && (!pszCurPart  || (uintptr_t)pszCurPart  < (uintptr_t)pszCurDisk)
+                                     && *pszDevLinkPath != '\0')
+                                ppszDst = &pszDisk;
+                            else
+                                RTStrFree(pszDevLinkPath);
+                            if (ppszDst)
+                            {
+                                if (*ppszDst != NULL)
+                                    RTStrFree(*ppszDst);
+                                *ppszDst = pszDevLinkPath;
+                            }
+                        }
+                    }
+                    di_devlink_fini(&DevLink);
+                    if (pszDisk || pszPartition0 || pszSlice0)
+                    {
+                        PSOLARISFIXEDDISK pDrive = (PSOLARISFIXEDDISK)RTMemAllocZ(sizeof(*pDrive));
+                        if (RT_LIKELY(pDrive))
+                        {
+                            RTStrPrintf(pDrive->szDescription, sizeof(pDrive->szDescription), "%s %s", pszVendor, pszProduct);
+                            RTStrPurgeEncoding(pDrive->szDescription);
+
+                            const char *pszDevPath = pszDisk ? pszDisk : pszPartition0 ? pszPartition0 : pszSlice0;
+                            int rc = RTStrCopy(pDrive->szRawDiskPath, sizeof(pDrive->szRawDiskPath), pszDevPath);
+                            AssertRC(rc);
+
+                            if (*ppDrives)
+                                pDrive->pNext = *ppDrives;
+                            *ppDrives = pDrive;
+                        }
+                        RTStrFree(pszDisk);
+                        RTStrFree(pszPartition0);
+                        RTStrFree(pszSlice0);
+                    }
+                }
+            }
+        }
+    }
+    return DI_WALK_CONTINUE;
+}
+
+
+/**
+ * Solaris specific function to enumerate fixed drives via the device tree.
+ * Works on Solaris 10 as well as OpenSolaris without depending on libhal.
+ *
+ * @returns COM status, either S_OK or E_OUTOFMEMORY.
+ * @param   list        Reference to list where the the path/model pairs are to
+ *                      be returned.
+ */
+HRESULT Host::i_getFixedDrivesFromDevTree(std::list<std::pair<com::Utf8Str, com::Utf8Str> > &list) RT_NOEXCEPT
+{
+    PSOLARISFIXEDDISK pDrives = NULL;
+    di_node_t RootNode = di_init("/", DINFOCPYALL);
+    if (RootNode != DI_NODE_NIL)
+        di_walk_node(RootNode, DI_WALK_CLDFIRST, &pDrives, solarisWalkDeviceNodeForFixedDrive);
+    di_fini(RootNode);
+
+    HRESULT hrc = S_OK;
+    try
+    {
+        for (PSOLARISFIXEDDISK pCurDrv = pDrives; pCurDrv; pCurDrv = pCurDrv->pNext)
+            list.push_back(std::pair<com::Utf8Str, com::Utf8Str>(pCurDrv->szRawDiskPath, pCurDrv->szDescription));
+    }
+    catch (std::bad_alloc &)
+    {
+        LogRelFunc(("Out of memory!\n"));
+        list.clear();
+        hrc = E_OUTOFMEMORY;
+    }
+
+    while (pDrives)
+    {
+        PSOLARISFIXEDDISK pFreeMe = pDrives;
+        pDrives = pDrives->pNext;
+        ASMCompilerBarrier();
+        RTMemFree(pFreeMe);
+    }
+
+    return hrc;
+}
+
+
 /* Solaris hosts, loading libhal at runtime */
 
 /**
@@ -2467,7 +2908,7 @@ void Host::i_getDVDInfoFromDevTree(std::list<ComObjPtr<Medium> > &list)
  * system.
  *
  * @returns true if information was successfully obtained, false otherwise
- * @retval  list drives found will be attached to this list
+ * @param   list        Reference to list where the DVDs drives are to be returned.
  */
 bool Host::i_getDVDInfoFromHal(std::list<ComObjPtr<Medium> > &list)
 {
@@ -2778,6 +3219,131 @@ bool Host::i_getFloppyInfoFromHal(std::list< ComObjPtr<Medium> > &list)
     }
     return halSuccess;
 }
+
+
+/**
+ * Helper function to query the hal subsystem for information about fixed drives attached to the
+ * system.
+ *
+ * @returns COM status code. (setError is not called on failure as we only fail
+ *          with E_OUTOFMEMORY.)
+ * @retval  S_OK on success.
+ * @retval  S_FALSE if HAL cannot be used.
+ * @param   list        Reference to list to return the path/model string pairs.
+ */
+HRESULT Host::i_getFixedDrivesFromHal(std::list<std::pair<com::Utf8Str, com::Utf8Str> > &list) RT_NOEXCEPT
+{
+    HRESULT hrc = S_FALSE;
+    if (!gLibHalCheckPresence())
+        return hrc;
+
+    DBusError dbusError;
+    gDBusErrorInit(&dbusError);
+    DBusConnection *dbusConnection = gDBusBusGet(DBUS_BUS_SYSTEM, &dbusError);
+    if (dbusConnection != 0)
+    {
+        LibHalContext *halContext = gLibHalCtxNew();
+        if (halContext != 0)
+        {
+            if (gLibHalCtxSetDBusConnection(halContext, dbusConnection))
+            {
+                if (gLibHalCtxInit(halContext, &dbusError))
+                {
+                    int cDevices;
+                    char **halDevices = gLibHalFindDeviceStringMatch(halContext, "storage.drive_type", "disk",
+                                                                     &cDevices, &dbusError);
+                    if (halDevices != 0)
+                    {
+                        /* Hal is installed and working, so if no devices are reported, assume
+                           that there are none. */
+                        hrc = S_OK;
+                        for (int i = 0; i < cDevices && hrc == S_OK; i++)
+                        {
+                            char *pszDevNode = gLibHalDeviceGetPropertyString(halContext, halDevices[i], "block.device",
+                                                                              &dbusError);
+                            /* The fixed drive ioctls work only for raw device nodes. */
+                            char *pszTmp = getfullrawname(pszDevNode);
+                            gLibHalFreeString(pszDevNode);
+                            pszDevNode = pszTmp;
+                            if (pszDevNode != 0)
+                            {
+                                /* We do not check the error here, as this field may
+                                   not even exist. */
+                                char *pszVendor = gLibHalDeviceGetPropertyString(halContext, halDevices[i], "info.vendor", 0);
+                                char *pszProduct = gLibHalDeviceGetPropertyString(halContext, halDevices[i], "info.product",
+                                                                                  &dbusError);
+                                Utf8Str strDescription;
+                                if (pszProduct != NULL && pszProduct[0] != '\0')
+                                {
+                                    int vrc;
+                                    if (pszVendor != NULL && pszVendor[0] != '\0')
+                                        vrc = strDescription.printfNoThrow("%s %s", pszVendor, pszProduct);
+                                    else
+                                        vrc = strDescription.assignNoThrow(pszProduct);
+                                    AssertRCStmt(vrc, hrc = E_OUTOFMEMORY);
+                                }
+                                if (pszVendor != NULL)
+                                    gLibHalFreeString(pszVendor);
+                                if (pszProduct != NULL)
+                                    gLibHalFreeString(pszProduct);
+
+                                /* Correct device/partition/slice already choosen. Just add it to the return list */
+                                if (hrc == S_OK)
+                                    try
+                                    {
+                                        list.push_back(std::pair<com::Utf8Str, com::Utf8Str>(pszDevNode, strDescription));
+                                    }
+                                    catch (std::bad_alloc &)
+                                    {
+                                        AssertFailedStmt(hrc = E_OUTOFMEMORY);
+                                    }
+                                gLibHalFreeString(pszDevNode);
+                            }
+                            else
+                            {
+                                LogRel(("Host::COMGETTER(HostDrives): failed to get property \"block.device\" for device %s.  dbus error: %s (%s)\n",
+                                        halDevices[i], dbusError.name, dbusError.message));
+                                gDBusErrorFree(&dbusError);
+                            }
+                        }
+                        gLibHalFreeStringArray(halDevices);
+                    }
+                    else
+                    {
+                        LogRel(("Host::COMGETTER(HostDrives): failed to get devices with capability \"storage.disk\".  dbus error: %s (%s)\n", dbusError.name, dbusError.message));
+                        gDBusErrorFree(&dbusError);
+                    }
+                    if (!gLibHalCtxShutdown(halContext, &dbusError))  /* what now? */
+                    {
+                        LogRel(("Host::COMGETTER(HostDrives): failed to shutdown the libhal context.  dbus error: %s (%s)\n",
+                                dbusError.name, dbusError.message));
+                        gDBusErrorFree(&dbusError);
+                    }
+                }
+                else
+                {
+                    LogRel(("Host::COMGETTER(HostDrives): failed to initialise libhal context.  dbus error: %s (%s)\n",
+                            dbusError.name, dbusError.message));
+                    gDBusErrorFree(&dbusError);
+                }
+                gLibHalCtxFree(halContext);
+            }
+            else
+                LogRel(("Host::COMGETTER(HostDrives): failed to set libhal connection to dbus.\n"));
+        }
+        else
+            LogRel(("Host::COMGETTER(HostDrives): failed to get a libhal context - out of memory?\n"));
+        gDBusConnectionUnref(dbusConnection);
+    }
+    else
+    {
+        LogRel(("Host::COMGETTER(HostDrives): failed to connect to dbus.  dbus error: %s (%s)\n",
+                dbusError.name, dbusError.message));
+        gDBusErrorFree(&dbusError);
+    }
+    return hrc;
+}
+
 #endif  /* RT_OS_SOLARIS and VBOX_USE_HAL */
 
 /** @todo get rid of dead code below - RT_OS_SOLARIS and RT_OS_LINUX are never both set */
@@ -2980,7 +3546,7 @@ HRESULT Host::i_checkUSBProxyService()
         {
             case VERR_FILE_NOT_FOUND:  /** @todo what does this mean? */
                 return setWarning(E_FAIL,
-                                  tr("Could not load the Host USB Proxy Service (VERR_FILE_NOT_FOUND). The service might not be installed on the host computer"));
+                                  tr("Could not load the Host USB Proxy Service (VERR_FILE_NOT_FOUND).  The service might not be installed on the host computer"));
             case VERR_VUSB_USB_DEVICE_PERMISSION:
                 return setWarning(E_FAIL,
                                   tr("VirtualBox is not currently allowed to access USB devices.  You can change this by adding your user to the 'vboxusers' group.  Please see the user manual for a more detailed explanation"));
@@ -3329,6 +3895,200 @@ void Host::i_generateMACAddress(Utf8Str &mac)
     guid.create();
     mac = Utf8StrFmt("080027%02X%02X%02X",
                      guid.raw()->au8[0], guid.raw()->au8[1], guid.raw()->au8[2]);
+}
+
+#ifdef RT_OS_WINDOWS
+HRESULT Host::i_getFixedDrivesFromGlobalNamespace(std::list<std::pair<com::Utf8Str, com::Utf8Str> > &aDriveList) RT_NOEXCEPT
+{
+    RTERRINFOSTATIC  ErrInfo;
+    uint32_t         offError;
+    RTVFSDIR         hVfsDir;
+    int rc = RTVfsChainOpenDir("\\\\:iprtnt:\\GLOBAL??", 0 /*fFlags*/, &hVfsDir, &offError, RTErrInfoInitStatic(&ErrInfo));
+    if (RT_FAILURE(rc))
+        return setError(E_FAIL, tr("Failed to open NT\\GLOBAL?? (error %Rrc)"), rc);
+
+    /*
+     * Scan whole directory and find any 'PhysicalDiskX' entries. Next, combine with '\\.\'
+     * to obtain the harddisk dev path.
+     */
+    size_t          cbDirEntryAlloced = sizeof(RTDIRENTRYEX);
+    PRTDIRENTRYEX   pDirEntry         = (PRTDIRENTRYEX)RTMemTmpAlloc(cbDirEntryAlloced);
+    if (!pDirEntry)
+    {
+        RTVfsDirRelease(hVfsDir);
+        return setError(E_OUTOFMEMORY, tr("Out of memory! (direntry buffer)"));
+    }
+
+    HRESULT hrc = S_OK;
+    for (;;)
+    {
+        size_t cbDirEntry = cbDirEntryAlloced;
+        rc = RTVfsDirReadEx(hVfsDir, pDirEntry, &cbDirEntry, RTFSOBJATTRADD_NOTHING);
+        if (RT_FAILURE(rc))
+        {
+            if (rc == VERR_BUFFER_OVERFLOW)
+            {
+                RTMemTmpFree(pDirEntry);
+                cbDirEntryAlloced = RT_ALIGN_Z(RT_MIN(cbDirEntry, cbDirEntryAlloced) + 64, 64);
+                pDirEntry  = (PRTDIRENTRYEX)RTMemTmpAlloc(cbDirEntryAlloced);
+                if (pDirEntry)
+                    continue;
+                hrc = setError(E_OUTOFMEMORY, tr("Out of memory! (direntry buffer)"));
+            }
+            else if (rc != VERR_NO_MORE_FILES)
+                hrc = setError(VBOX_E_IPRT_ERROR, tr("RTVfsDirReadEx failed: %Rrc"), rc);
+            break;
+        }
+        if (RTStrStartsWith(pDirEntry->szName, "PhysicalDrive"))
+        {
+            char szPhysicalDrive[64];
+            RTStrPrintf(szPhysicalDrive, sizeof(szPhysicalDrive), "\\\\.\\%s", pDirEntry->szName);
+
+            RTFILE hRawFile = NIL_RTFILE;
+            int vrc = RTFileOpen(&hRawFile, szPhysicalDrive, RTFILE_O_READ | RTFILE_O_OPEN | RTFILE_O_DENY_NONE);
+            if (RT_FAILURE(vrc))
+            {
+                try
+                {
+                    aDriveList.push_back(std::pair<com::Utf8Str, com::Utf8Str>(szPhysicalDrive, tr("Unknown (Access denied)")));
+                }
+                catch (std::bad_alloc &)
+                {
+                    hrc = setError(E_OUTOFMEMORY, tr("Out of memory"));
+                    break;
+                }
+                continue;
+            }
+
+            DWORD   cbBytesReturned = 0;
+            uint8_t abBuffer[1024];
+            RT_ZERO(abBuffer);
+
+            STORAGE_PROPERTY_QUERY query;
+            RT_ZERO(query);
+            query.PropertyId = StorageDeviceProperty;
+            query.QueryType  = PropertyStandardQuery;
+
+            BOOL fRc = DeviceIoControl((HANDLE)RTFileToNative(hRawFile),
+                                       IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query),
+                                       abBuffer, sizeof(abBuffer), &cbBytesReturned, NULL);
+            RTFileClose(hRawFile);
+            char szModel[1024];
+            if (fRc)
+            {
+                PSTORAGE_DEVICE_DESCRIPTOR pDevDescriptor = (PSTORAGE_DEVICE_DESCRIPTOR)abBuffer;
+                char *pszProduct = pDevDescriptor->ProductIdOffset ? (char *)&abBuffer[pDevDescriptor->ProductIdOffset] : NULL;
+                if (pszProduct)
+                {
+                    RTStrPurgeEncoding(pszProduct);
+                    if (*pszProduct != '\0')
+                    {
+                        char *pszVendor = pDevDescriptor->VendorIdOffset  ? (char *)&abBuffer[pDevDescriptor->VendorIdOffset] : NULL;
+                        if (pszVendor)
+                            RTStrPurgeEncoding(pszVendor);
+                        if (pszVendor && *pszVendor)
+                            RTStrPrintf(szModel, sizeof(szModel), "%s %s", pszVendor, pszProduct);
+                        else
+                            RTStrCopy(szModel, sizeof(szModel), pszProduct);
+                    }
+                }
+            }
+            try
+            {
+                aDriveList.push_back(std::pair<com::Utf8Str, com::Utf8Str>(szPhysicalDrive, szModel));
+            }
+            catch (std::bad_alloc &)
+            {
+                hrc = setError(E_OUTOFMEMORY, tr("Out of memory"));
+                break;
+            }
+        }
+    }
+    if (FAILED(hrc))
+        aDriveList.clear();
+    RTMemTmpFree(pDirEntry);
+    RTVfsDirRelease(hVfsDir);
+    return hrc;
+}
+#endif
+
+/**
+ * @throws nothing
+ */
+HRESULT Host::i_getDrivesPathsList(std::list<std::pair<com::Utf8Str, com::Utf8Str> > &aDriveList) RT_NOEXCEPT
+{
+#ifdef RT_OS_WINDOWS
+    return i_getFixedDrivesFromGlobalNamespace(aDriveList);
+
+#elif defined(RT_OS_DARWIN)
+    /*
+     * Get the list of fixed drives from iokit.cpp and transfer it to aDriveList.
+     */
+    PDARWINFIXEDDRIVE pDrives = DarwinGetFixedDrives();
+    HRESULT hrc;
+    try
+    {
+        for (PDARWINFIXEDDRIVE pCurDrv = pDrives; pCurDrv; pCurDrv = pCurDrv->pNext)
+            aDriveList.push_back(std::pair<com::Utf8Str, com::Utf8Str>(pCurDrv->szName, pCurDrv->pszModel));
+        hrc = S_OK;
+    }
+    catch (std::bad_alloc &)
+    {
+        aDriveList.clear();
+        hrc = E_OUTOFMEMORY;
+    }
+
+    while (pDrives)
+    {
+        PDARWINFIXEDDRIVE pFreeMe = pDrives;
+        pDrives = pDrives->pNext;
+        ASMCompilerBarrier();
+        RTMemFree(pFreeMe);
+    }
+    return hrc;
+
+#elif defined(RT_OS_LINUX) || defined(RT_OS_FREEBSD)
+    /*
+     * The list of fixed drives is kept in the VBoxMainDriveInfo instance, so
+     * update it and tranfer the info to aDriveList.
+     *
+     * This obviously requires us to write lock the object!
+     */
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+    int vrc = m->hostDrives.updateFixedDrives(); /* nothrow */
+    if (RT_FAILURE(vrc))
+        return setErrorBoth(E_FAIL, vrc, tr("Failed to update fixed drive list (%Rrc)"), vrc);
+
+    try
+    {
+        for (DriveInfoList::const_iterator it = m->hostDrives.FixedDriveBegin(); it != m->hostDrives.FixedDriveEnd(); ++it)
+            aDriveList.push_back(std::pair<com::Utf8Str, com::Utf8Str>(it->mDevice, it->mDescription));
+    }
+    catch (std::bad_alloc &)
+    {
+        aDriveList.clear();
+        return E_OUTOFMEMORY;
+    }
+    return S_OK;
+
+#elif defined(RT_OS_SOLARIS)
+    /*
+     * We can get the info from HAL, if not present/working we'll get by
+     * walking the device tree.
+     */
+# ifdef VBOX_USE_LIBHAL
+    HRESULT hrc = i_getFixedDrivesFromHal(aDriveList);
+    if (hrc != S_FALSE)
+        return hrc;
+    aDriveList.clear(); /* just in case */
+# endif
+    return i_getFixedDrivesFromDevTree(aDriveList);
+
+#else
+    /* PORTME */
+    RT_NOREF(aDriveList);
+    return E_NOTIMPL;
+#endif
 }
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

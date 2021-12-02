@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxIPC.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxIPC - IPC thread, acts as a (purely) local IPC server.
  *           Multiple sessions are supported, whereas every session
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,15 +30,14 @@
 #include <iprt/asm.h>
 #include <iprt/assert.h>
 #include <iprt/critsect.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/ldr.h>
 #include <iprt/list.h>
 #include <iprt/localipc.h>
 #include <iprt/mem.h>
 #include <iprt/process.h>
 
-#include <VBox/VMMDev.h>
-#ifdef DEBUG
+#ifdef DEBUG /** @todo r=bird: these are all default settings...  */
 # define LOG_ENABLED
 # define LOG_GROUP LOG_GROUP_DEFAULT
 #endif

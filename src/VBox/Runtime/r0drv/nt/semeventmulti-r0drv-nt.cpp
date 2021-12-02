@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semeventmulti-r0drv-nt.cpp 90488 2021-08-03 09:17:59Z vboxsync $ */
 /** @file
  * IPRT -  Multiple Release Event Semaphores, Ring-0 Driver, NT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -296,5 +296,11 @@ RTDECL(int)  RTSemEventMultiWaitExDebug(RTSEMEVENTMULTI hEventMultiSem, uint32_t
 RTDECL(uint32_t) RTSemEventMultiGetResolution(void)
 {
     return RTTimerGetSystemGranularity();
+}
+
+
+RTR0DECL(bool) RTSemEventMultiIsSignalSafe(void)
+{
+    return KeGetCurrentIrql() <= DISPATCH_LEVEL;
 }
 

@@ -1,10 +1,10 @@
--- $Id$
+-- $Id: TestManagerDatabaseInit.pgsql 84884 2020-06-20 21:53:12Z vboxsync $
 --- @file
 -- VBox Test Manager Database Creation script.
 --
 
 --
--- Copyright (C) 2012-2015 Oracle Corporation
+-- Copyright (C) 2012-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;
@@ -124,6 +124,8 @@ CREATE TABLE Users (
     sFullName           text        NOT NULL,
     --- The login name used by apache.
     sLoginName          text        NOT NULL,
+    --- Read access only.
+    fReadOnly           BOOLEAN     NOT NULL DEFAULT FALSE,
 
     PRIMARY KEY (uid, tsExpire)
 );
@@ -525,7 +527,7 @@ CREATE INDEX TestGroups_id_index ON TestGroups (idTestGroup, tsExpire DESC, tsEf
 
 
 --- @table TestGroupMembers
--- The N:M relation ship between test case configurations and test groups.
+-- The N:M relationship between test case configurations and test groups.
 --
 -- @remarks This table stores history.  Never update or delete anything.  The
 --          equivalent of deleting is done by setting the 'tsExpire' field to
@@ -690,11 +692,11 @@ CREATE TABLE SchedGroupMembers (
 -- String table for the test boxes.
 --
 -- This is a string cache for all string members in TestBoxes except the name.
--- The rational is to avoid duplicating large strings like sReport when the 
--- testbox reports a new cMbScratch value or the box when the test sheriff 
--- sends a reboot command or similar.  
--- 
--- At the time this table was introduced, we had 400558 TestBoxes rows,  where 
+-- The rational is to avoid duplicating large strings like sReport when the
+-- testbox reports a new cMbScratch value or the box when the test sheriff
+-- sends a reboot command or similar.
+--
+-- At the time this table was introduced, we had 400558 TestBoxes rows,  where
 -- the SUM(LENGTH(sReport)) was 993MB.  There were really just 1066 distinct
 -- sReport values, with a total length of 0x3 MB.
 --
@@ -1168,7 +1170,7 @@ CREATE TABLE BuildBlacklist (
 
     PRIMARY KEY (idBlacklisting, tsExpire)
 );
-CREATE INDEX BuildBlacklistIdx ON BuildBlacklist (iLastRevision DESC, iFirstRevision ASC, sProduct, sBranch, 
+CREATE INDEX BuildBlacklistIdx ON BuildBlacklist (iLastRevision DESC, iFirstRevision ASC, sProduct, sBranch,
                                                   tsExpire DESC, tsEffective ASC);
 
 --- @table BuildCategories
@@ -1310,6 +1312,31 @@ CREATE TABLE VcsRevisions (
 
     UNIQUE (sRepository, iRevision)
 );
+CREATE INDEX VcsRevisionsByDate ON VcsRevisions (tsCreated DESC);
+
+
+--- @table VcsBugReferences
+-- This is for relating commits to a bug and vice versa.
+--
+-- This feature isn't so much for the test manager as a cheap way of extending
+-- bug trackers without VCS integration.  We just need to parse the commit
+-- messages when inserting them into the VcsRevisions table.
+--
+-- Same input, updating and history considerations as VcsRevisions.
+--
+CREATE TABLE VcsBugReferences (
+    --- The version control tree name.
+    sRepository         TEXT        NOT NULL,
+    --- The version control tree revision number.
+    iRevision           INTEGER     NOT NULL,
+    --- The bug tracker identifier - see g_kaBugTrackers in config.py.
+    sBugTracker         CHAR(4)     NOT NULL,
+    --- The bug number in the bug tracker.
+    lBugNo              BIGINT      NOT NULL,
+
+    UNIQUE (sRepository, iRevision, sBugTracker, lBugNo)
+);
+CREATE INDEX VcsBugReferencesLookupIdx ON VcsBugReferences (sBugTracker, lBugNo);
 
 
 
@@ -1442,7 +1469,7 @@ CREATE INDEX TestResultsParentIdx ON TestResults (idTestResultParent);
 CREATE INDEX TestResultsNameIdx ON TestResults (idStrName, tsCreated DESC);
 CREATE INDEX TestResultsNameIdx2 ON TestResults (idTestResult, idStrName);
 
-ALTER TABLE TestResultFailures ADD CONSTRAINT TestResultFailures_idTestResult_idTestSet_fkey 
+ALTER TABLE TestResultFailures ADD CONSTRAINT TestResultFailures_idTestResult_idTestSet_fkey
     FOREIGN KEY (idTestResult, idTestSet) REFERENCES TestResults(idTestResult, idTestSet) MATCH FULL;
 
 
@@ -1902,6 +1929,9 @@ CREATE TABLE SchedQueues (
     --
     cMissingGangMembers smallint    DEFAULT 1  NOT NULL,
 
+    --- @todo
+    --- The number of times this has been considered for scheduling.
+    -- cConsidered SMALLINT DEFAULT 0 NOT NULL,
 
     PRIMARY KEY (idSchedGroup, idItem)
 );

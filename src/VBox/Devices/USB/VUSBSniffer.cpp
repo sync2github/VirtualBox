@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VUSBSniffer.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual USB - Sniffer facility.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,6 +22,7 @@
 #define LOG_GROUP LOG_GROUP_DRV_VUSB
 #include <VBox/log.h>
 #include <iprt/file.h>
+#include <iprt/errcore.h>
 #include <iprt/path.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
@@ -29,11 +30,6 @@
 #include <iprt/time.h>
 
 #include "VUSBSnifferInternal.h"
-
-
-/*********************************************************************************************************************************
-*   Defined Constants And Macros                                                                                                 *
-*********************************************************************************************************************************/
 
 
 /*********************************************************************************************************************************
@@ -149,7 +145,7 @@ DECLHIDDEN(int) VUSBSnifferCreate(PVUSBSNIFFER phSniffer, uint32_t fFlags,
     if (!pFmt)
         return VERR_NOT_FOUND;
 
-    pThis = (PVUSBSNIFFERINT)RTMemAllocZ(RT_OFFSETOF(VUSBSNIFFERINT, abFmt[pFmt->cbFmt]));
+    pThis = (PVUSBSNIFFERINT)RTMemAllocZ(RT_UOFFSETOF_DYN(VUSBSNIFFERINT, abFmt[pFmt->cbFmt]));
     if (pThis)
     {
         pThis->hFile         = NIL_RTFILE;

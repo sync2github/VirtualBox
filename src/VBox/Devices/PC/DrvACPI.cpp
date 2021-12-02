@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvACPI.cpp 91864 2021-10-20 09:04:23Z vboxsync $ */
 /** @file
  * DrvACPI - ACPI Host Driver.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -533,7 +533,7 @@ static DECLCALLBACK(int) drvACPIPoller(PPDMDRVINS pDrvIns, PPDMTHREAD pThread)
         PDMACPIPOWERSOURCE enmPowerSource = PDM_ACPI_POWER_SOURCE_UNKNOWN;
         PRTSTREAM  pStrmStatus;
         PRTSTREAM  pStrmType;
-        PRTDIR     pDir = NULL;
+        RTDIR      hDir = NIL_RTDIR;
         RTDIRENTRY DirEntry;
         char       szLine[1024];
         bool       fBatteryPresent = false;     /* one or more batteries present */
@@ -547,7 +547,7 @@ static DECLCALLBACK(int) drvACPIPoller(PPDMDRVINS pDrvIns, PPDMTHREAD pThread)
         PDMACPIBATCAPACITY enmBatteryRemainingCapacity; /* total remaining capacity of vbox batt */
         uint32_t u32BatteryPresentRate;         /* total present (dis)charging rate of vbox batt */
 
-        int rc = RTDirOpen(&pDir, "/sys/class/power_supply/");
+        int rc = RTDirOpen(&hDir, "/sys/class/power_supply/");
         if (RT_SUCCESS(rc))
         {
             /*
@@ -555,7 +555,7 @@ static DECLCALLBACK(int) drvACPIPoller(PPDMDRVINS pDrvIns, PPDMTHREAD pThread)
              */
             while (pThread->enmState == PDMTHREADSTATE_RUNNING)
             {
-                rc = RTDirRead(pDir, &DirEntry, NULL);
+                rc = RTDirRead(hDir, &DirEntry, NULL);
                 if (RT_FAILURE(rc))
                     break;
                 if (   strcmp(DirEntry.szName, ".") == 0
@@ -678,7 +678,7 @@ static DECLCALLBACK(int) drvACPIPoller(PPDMDRVINS pDrvIns, PPDMTHREAD pThread)
                 RTStrmClose(pStrmType);
 #undef POWER_OPEN
             }
-            RTDirClose(pDir);
+            RTDirClose(hDir);
         }
         else /* !/sys */
         {
@@ -688,13 +688,13 @@ static DECLCALLBACK(int) drvACPIPoller(PPDMDRVINS pDrvIns, PPDMTHREAD pThread)
             /*
              * Read the status of the powerline-adapter.
              */
-            rc = RTDirOpen(&pDir, "/proc/acpi/ac_adapter/");
+            rc = RTDirOpen(&hDir, "/proc/acpi/ac_adapter/");
             if (RT_SUCCESS(rc))
             {
 #define POWER_OPEN(s, n) RTStrmOpenF("r", s, "/proc/acpi/ac_adapter/%s/" n, DirEntry.szName)
                 while (pThread->enmState == PDMTHREADSTATE_RUNNING)
                 {
-                    rc = RTDirRead(pDir, &DirEntry, NULL);
+                    rc = RTDirRead(hDir, &DirEntry, NULL);
                     if (RT_FAILURE(rc))
                         break;
                     if (   strcmp(DirEntry.szName, ".") == 0
@@ -724,14 +724,14 @@ static DECLCALLBACK(int) drvACPIPoller(PPDMDRVINS pDrvIns, PPDMTHREAD pThread)
                         break;
                     }
                 }
-                RTDirClose(pDir);
+                RTDirClose(hDir);
 #undef POWER_OPEN
             }
 
             /*
              * Read the status of all batteries and collect it into one.
              */
-            rc = RTDirOpen(&pDir, "/proc/acpi/battery/");
+            rc = RTDirOpen(&hDir, "/proc/acpi/battery/");
             if (RT_SUCCESS(rc))
             {
 #define POWER_OPEN(s, n) RTStrmOpenF("r", s, "/proc/acpi/battery/%s/" n, DirEntry.szName)
@@ -740,7 +740,7 @@ static DECLCALLBACK(int) drvACPIPoller(PPDMDRVINS pDrvIns, PPDMTHREAD pThread)
 
                 while (pThread->enmState == PDMTHREADSTATE_RUNNING)
                 {
-                    rc = RTDirRead(pDir, &DirEntry, NULL);
+                    rc = RTDirRead(hDir, &DirEntry, NULL);
                     if (RT_FAILURE(rc))
                         break;
                     if (   strcmp(DirEntry.szName, ".") == 0
@@ -860,7 +860,7 @@ static DECLCALLBACK(int) drvACPIPoller(PPDMDRVINS pDrvIns, PPDMTHREAD pThread)
                     RTStrmClose(pStrmStatus);
                     RTStrmClose(pStrmInfo);
                 }
-                RTDirClose(pDir);
+                RTDirClose(hDir);
 #undef POWER_OPEN
             }
         } /* /proc/acpi */
@@ -974,7 +974,7 @@ static DECLCALLBACK(void) drvACPIDestruct(PPDMDRVINS pDrvIns)
  */
 static DECLCALLBACK(int) drvACPIConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint32_t fFlags)
 {
-    RT_NOREF(fFlags);
+    RT_NOREF(pCfg, fFlags);
     PDMDRV_CHECK_VERSIONS_RETURN(pDrvIns);
     PDRVACPI pThis = PDMINS_2_DATA(pDrvIns, PDRVACPI);
     int rc = VINF_SUCCESS;
@@ -995,8 +995,7 @@ static DECLCALLBACK(int) drvACPIConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, ui
     /*
      * Validate the config.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "\0"))
-        return VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES;
+    PDMDRV_VALIDATE_CONFIG_RETURN(pDrvIns, "", "");
 
     /*
      * Check that no-one is attached to us.

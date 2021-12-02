@@ -1,10 +1,11 @@
 #! /bin/sh
-#
-# Linux Additions X11 setup init script ($Revision$)
+# $Id: vboxadd-x11.sh 83249 2020-03-10 15:22:11Z vboxsync $
+## @file
+# Linux Additions X11 setup init script ($Revision: 83249 $)
 #
 
 #
-# Copyright (C) 2006-2012 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +30,6 @@
 ### END INIT INFO
 
 PATH=$PATH:/bin:/sbin:/usr/sbin
-LOG="/var/log/vboxadd-install-x11.log"
 CONFIG_DIR="/var/lib/VBoxGuestAdditions"
 CONFIG="${CONFIG_DIR}/config"
 MODPROBE=/sbin/modprobe
@@ -45,6 +45,8 @@ x_version=`echo "$xver" | sed -n 's/^X Window System Version \([0-9.]\+\)/\1/p'`
 x_version_short=`echo "${x_version}" | sed 's/\([0-9]*\.[0-9]*\)\..*/\1/'`
 # Version of Redhat or Fedora installed.  Needed for setting up selinux policy.
 redhat_release=`cat /etc/redhat-release 2> /dev/null`
+# Version of OL installed.  Needed for blacklisting vboxvideo.
+oracle_release=`cat /etc/oracle-release 2> /dev/null`
 # All the different possible locations for XFree86/X.Org configuration files
 # - how many of these have ever been used?
 x11conf_files="/etc/X11/xorg.conf /etc/X11/xorg.conf-4 /etc/X11/.xorg.conf \
@@ -148,6 +150,30 @@ restart()
     return 0
 }
 
+setup_opengl()
+{
+    # Install the guest OpenGL drivers.  For now we don't support
+    # multi-architecture installations
+    rm -f /etc/ld.so.conf.d/00vboxvideo.conf
+    rm -Rf /var/lib/VBoxGuestAdditions/lib
+    if /usr/bin/VBoxClient --check3d 2>/dev/null; then
+        mkdir -p /var/lib/VBoxGuestAdditions/lib
+        ln -sf "${INSTALL_DIR}/lib/VBoxOGL.so" /var/lib/VBoxGuestAdditions/lib/libGL.so.1
+        # SELinux for the OpenGL libraries, so that gdm can load them during the
+        # acceleration support check.  This prevents an "Oh no, something has gone
+        # wrong!" error when starting EL7 guests.
+        if test -e /etc/selinux/config; then
+            if command -v semanage > /dev/null; then
+                semanage fcontext -a -t lib_t "/var/lib/VBoxGuestAdditions/lib/libGL.so.1"
+            fi
+            # This is needed on old Fedora/Redhat systems.  No one remembers which.
+            chcon -h  -t lib_t "/var/lib/VBoxGuestAdditions/lib/libGL.so.1" 2>/dev/null
+        fi
+        echo "/var/lib/VBoxGuestAdditions/lib" > /etc/ld.so.conf.d/00vboxvideo.conf
+    fi
+    ldconfig
+}
+
 setup()
 {
     if test -r "${CONFIG}"; then
@@ -201,6 +227,28 @@ setup()
                 break
             fi
         done
+    fi
+
+    case "${x_version}" in
+    4.* | 6.* | 7.* | 1.?.* | 1.1[0-6].* )
+        blacklist_vboxvideo="yes"
+        ;;
+    esac
+    case "$oracle_release" in
+        Oracle*release\ 6.* )
+            # relevant for OL6/UEK4 but cannot hurt for other kernels
+            blacklist_vboxvideo="yes"
+    esac
+    if test -n "${blacklist_vboxvideo}"; then
+        test -d /etc/modprobe.d &&
+            echo "blacklist vboxvideo" > /etc/modprobe.d/blacklist-vboxvideo.conf
+    else
+        test -f /etc/modprobe.d/blacklist-vboxvideo.conf &&
+            rm -f /etc/modprobe.d/blacklist-vboxvideo.conf
+        # We do not want to load the driver if X.Org Server is already
+        # running, as without a driver the server will touch the hardware
+        # directly, causing problems.
+        ps -Af | grep -q '[X]org' || ${MODPROBE} -q vboxvideo
     fi
 
     test -z "$x_version" -o -z "$modules_dir" &&
@@ -308,7 +356,7 @@ setup()
             autokeyboard=""
             case $x_version in
                 6.8.* )
-                    autokeyboard="true"
+                    autokeyboard="--autoKeyboard"
                     ;;
                 4.2.* | 4.3.* )
                     main_cfg="/etc/X11/XF86Config"
@@ -330,20 +378,6 @@ setup()
             # For anything else, assume kernel drivers.
             dox11config=""
             ;;
-    esac
-    case "${x_version}" in
-    4.* | 6.* | 7.* | 1.?.* | 1.1[0-6].* )
-        echo "blacklist vboxvideo" > /etc/modprobe.d/blacklist-vboxvideo.conf
-        ;;
-    *)
-        if test -f /etc/modprobe.d/blacklist-vboxvideo.conf; then
-            rm -f /etc/modprobe.d/blacklist-vboxvideo.conf
-            # We do not want to load the driver if X.Org Server is already
-            # running, as without a driver the server will touch the hardware
-            # directly, causing problems.
-            ps -Af | grep -q '[X]org' || ${MODPROBE} vboxvideo
-        fi
-        ;;
     esac
     test -n "${dox11config}" &&
         echo "Installing $xserver_version modules" >&2
@@ -431,20 +465,26 @@ EOF
     # open our drivers
     case "$redhat_release" in
         Fedora\ release\ 8* )
-            chcon -u system_u -t lib_t "${lib_dir}"/*.so
+            chcon -u system_u -t lib_t "${lib_dir}"/*.so 2>/dev/null
             ;;
     esac
 
     # Our logging code generates some glue code on 32-bit systems.  At least F10
     # needs a rule to allow this.  Send all output to /dev/null in case this is
     # completely irrelevant on the target system.
+    # chcon is needed on old Fedora/Redhat systems.  No one remembers which.
     chcon -t unconfined_execmem_exec_t '/usr/bin/VBoxClient' > /dev/null 2>&1
     semanage fcontext -a -t unconfined_execmem_exec_t '/usr/bin/VBoxClient' > /dev/null 2>&1
 
     # And set up VBoxClient to start when the X session does
     install_x11_startup_app "${lib_dir}/98vboxadd-xclient" "${lib_dir}/vboxclient.desktop" VBoxClient VBoxClient-all ||
-        fail "See the log file $LOG for more information."
+        fail "Failed to set up VBoxClient to start automatically."
     ln -s "${lib_dir}/98vboxadd-xclient" /usr/bin/VBoxClient-all 2>/dev/null
+    case "${x_version}" in 4.* | 6.* | 7.* | 1.?.* | 1.1* )
+        setup_opengl
+    esac
+    # Try enabling VMSVGA drm device resizing.
+    #VBoxClient --vmsvga
 }
 
 cleanup()
@@ -540,6 +580,7 @@ EOF
 
     # Remove other files
     rm /usr/share/xserver-xorg/pci/vboxvideo.ids 2>/dev/null
+    return 0
 }
 
 dmnstatus()

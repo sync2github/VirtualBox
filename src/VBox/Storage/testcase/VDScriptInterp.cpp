@@ -1,11 +1,10 @@
-/** $Id$ */
+/* $Id: VDScriptInterp.cpp 90802 2021-08-23 19:08:27Z vboxsync $ */
 /** @file
- *
  * VBox HDD container test utility - scripting engine, interpreter.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,12 +14,14 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
 #define LOGGROUP LOGGROUP_DEFAULT
+#include <iprt/assert.h>
+#include <iprt/err.h>
 #include <iprt/list.h>
 #include <iprt/mem.h>
-#include <iprt/assert.h>
-#include <iprt/string.h>
 #include <iprt/stream.h>
+#include <iprt/string.h>
 
 #include <VBox/log.h>
 
@@ -504,6 +505,7 @@ static int vdScriptInterpreterEvaluateExpression(PVDSCRIPTINTERPCTX pThis, PVDSC
         case VDSCRIPTEXPRTYPE_POSTFIX_INCREMENT:
         case VDSCRIPTEXPRTYPE_POSTFIX_DECREMENT:
             AssertMsgFailed(("TODO\n"));
+            RT_FALL_THRU();
         case VDSCRIPTEXPRTYPE_POSTFIX_FNCALL:
         {
             PVDSCRIPTFN pFn = (PVDSCRIPTFN)RTStrSpaceGet(&pThis->pScriptCtx->hStrSpaceFn, pExpr->FnCall.pFnIde->pIde->aszIde);
@@ -570,6 +572,7 @@ static int vdScriptInterpreterEvaluateExpression(PVDSCRIPTINTERPCTX pThis, PVDSC
         case VDSCRIPTEXPRTYPE_ASSIGN_OR:
         case VDSCRIPTEXPRTYPE_ASSIGNMENT_LIST:
             AssertMsgFailed(("TODO\n"));
+            RT_FALL_THRU();
         default:
             AssertMsgFailed(("Invalid expression type: %d\n", pExpr->enmType));
     }
@@ -634,7 +637,7 @@ static int vdScriptInterpreterEvaluateStatement(PVDSCRIPTINTERPCTX pThis, PVDSCR
                 vdScriptStackPop(&pThis->StackCtrl);
                 pCtrl = (PVDSCRIPTINTERPCTRL)vdScriptStackGetUsed(&pThis->StackCtrl);
             }
-            AssertMsg(VALID_PTR(pCtrl), ("Incorrect program, return outside of function\n"));
+            AssertMsg(RT_VALID_PTR(pCtrl), ("Incorrect program, return outside of function\n"));
             break;
         }
         case VDSCRIPTSTMTTYPE_FOR:
@@ -658,7 +661,7 @@ static int vdScriptInterpreterEvaluateStatement(PVDSCRIPTINTERPCTX pThis, PVDSCR
                 vdScriptStackPop(&pThis->StackCtrl);
                 pCtrl = (PVDSCRIPTINTERPCTRL)vdScriptStackGetUsed(&pThis->StackCtrl);
             }
-            AssertMsg(VALID_PTR(pCtrl), ("Incorrect program, continue outside of loop\n"));
+            AssertMsg(RT_VALID_PTR(pCtrl), ("Incorrect program, continue outside of loop\n"));
 
             /* Put the conditionals for while and for loops onto the control stack again. */
             PVDSCRIPTASTSTMT pLoopStmt = (PVDSCRIPTASTSTMT)pCtrl->Ctrl.pAstNode;
@@ -689,7 +692,7 @@ static int vdScriptInterpreterEvaluateStatement(PVDSCRIPTINTERPCTX pThis, PVDSCR
                 vdScriptStackPop(&pThis->StackCtrl);
                 pCtrl = (PVDSCRIPTINTERPCTRL)vdScriptStackGetUsed(&pThis->StackCtrl);
             }
-            AssertMsg(VALID_PTR(pCtrl), ("Incorrect program, break outside of loop\n"));
+            AssertMsg(RT_VALID_PTR(pCtrl), ("Incorrect program, break outside of loop\n"));
             vdScriptStackPop(&pThis->StackCtrl); /* Remove loop control statement. */
             break;
         }

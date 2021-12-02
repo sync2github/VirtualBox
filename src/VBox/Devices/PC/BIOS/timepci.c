@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -36,6 +36,15 @@
  *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA
  *
+ */
+
+/*
+ * Oracle LGPL Disclaimer: For the avoidance of doubt, except that if any license choice
+ * other than GPL or LGPL is available it will apply instead, Oracle elects to use only
+ * the Lesser General Public License version 2.1 (LGPLv2) at this time for any software where
+ * a choice of LGPL license versions is made available with the language indicating
+ * that LGPLv2 or any later version may be used, or where a choice of which version
+ * of the LGPL is applied is otherwise unspecified.
  */
 
 
@@ -118,7 +127,7 @@ void BIOSCALL int70_function(pusha_regs_t regs, uint16_t ds, uint16_t es, iret_a
             // Handle Periodic Interrupt.
 
             if( read_byte( 0x40, 0xA0 ) != 0 ) {
-                // Wait Interval (Int 15, AH=83) active.
+                // Wait Interval (Int 15, AH=83 or AH=86) active.
                 uint32_t    time;
 
                 time = read_dword( 0x40, 0x9C );  // Time left in microseconds.
@@ -128,7 +137,7 @@ void BIOSCALL int70_function(pusha_regs_t regs, uint16_t ds, uint16_t es, iret_a
 
                     segment = read_word( 0x40, 0x98 );
                     offset  = read_word( 0x40, 0x9A );
-                    write_byte( 0x40, 0xA0, 0 );  // Turn of status byte.
+                    write_byte( 0x40, 0xA0, 0 );  // Turn off status byte.
                     outb_cmos( 0xB, registerB & 0x37 ); // Clear the Periodic Interrupt.
                     write_byte( segment, offset, read_byte(segment, offset) | 0x80 );  // Write to specified flag byte.
                 } else {

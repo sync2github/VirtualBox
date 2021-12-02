@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: CertificateImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM ICertificate implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_CERTIFICATEIMPL
-#define ____H_CERTIFICATEIMPL
+#ifndef MAIN_INCLUDED_CertificateImpl_h
+#define MAIN_INCLUDED_CertificateImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* VBox includes */
 #include <iprt/crypto/x509.h>
@@ -47,7 +50,7 @@ class ATL_NO_VTABLE Certificate
 
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(Certificate)
+    DECLARE_COMMON_CLASS_METHODS(Certificate)
 
     HRESULT initCertificate(PCRTCRX509CERTIFICATE a_pCert, bool a_fTrusted, bool a_fExpired);
     void uninit();
@@ -56,7 +59,7 @@ public:
     void FinalRelease();
 
 private:
-    // wrapped ICertificate properties
+    // Wrapped ICertificate properties
     HRESULT getVersionNumber(CertificateVersion_T *aVersionNumber);
     HRESULT getSerialNumber(com::Utf8Str &aSerialNumber);
     HRESULT getSignatureAlgorithmOID(com::Utf8Str &aSignatureAlgorithmOID);
@@ -78,23 +81,22 @@ private:
     HRESULT getSelfSigned(BOOL *aSelfSigned);
     HRESULT getTrusted(BOOL *aTrusted);
     HRESULT getExpired(BOOL *aExpired);
-    // wrapped ICertificate methods
+
+    // Wrapped ICertificate methods
     HRESULT isCurrentlyExpired(BOOL *aResult);
     HRESULT queryInfo(LONG aWhat, com::Utf8Str &aResult);
 
-    /** @name Methods extracting COM data from the certificate object
-     * @{  */
+    // Methods extracting COM data from the certificate object
     HRESULT i_getAlgorithmName(PCRTCRX509ALGORITHMIDENTIFIER a_pAlgId, com::Utf8Str &a_rReturn);
     HRESULT i_getX509Name(PCRTCRX509NAME a_pName, std::vector<com::Utf8Str> &a_rReturn);
     HRESULT i_getTime(PCRTASN1TIME a_pTime, com::Utf8Str &a_rReturn);
     HRESULT i_getUniqueIdentifier(PCRTCRX509UNIQUEIDENTIFIER a_pUniqueId, com::Utf8Str &a_rReturn);
     HRESULT i_getEncodedBytes(PRTASN1CORE a_pAsn1Obj, std::vector<BYTE> &a_rReturn);
-    /** @} */
 
     struct Data;
     /** Pointer to the private instance data   */
     Data *m;
 };
 
-#endif // !____H_CERTIFICATEIMPL
+#endif /* !MAIN_INCLUDED_CertificateImpl_h */
 

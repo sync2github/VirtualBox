@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIDnDMIMEData.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIDnDMIMEData class declaration.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIDnDMIMEData_h___
-#define ___UIDnDMIMEData_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_UIDnDMIMEData_h
+#define FEQT_INCLUDED_SRC_runtime_UIDnDMIMEData_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QMimeData>
@@ -136,5 +139,5 @@ protected:
     mutable State     m_enmState;
 };
 
-#endif /* ___UIDnDMIMEData_h___ */
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIDnDMIMEData_h */
 

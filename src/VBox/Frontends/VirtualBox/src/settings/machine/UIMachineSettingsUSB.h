@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineSettingsUSB.h 86233 2020-09-23 12:10:51Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineSettingsUSB class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,181 +15,180 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIMachineSettingsUSB_h__
-#define __UIMachineSettingsUSB_h__
+#ifndef FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsUSB_h
+#define FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsUSB_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UISettingsPage.h"
-#include "UIMachineSettingsUSB.gen.h"
 
 /* Forward declarations: */
+class QCheckBox;
+class QHBoxLayout;
+class QRadioButton;
+class QVBoxLayout;
+class QTreeWidgetItem;
+class QILabelSeparator;
+class QITreeWidget;
 class VBoxUSBMenu;
-class UIToolBar;
+class QIToolBar;
+struct UIDataSettingsMachineUSB;
+struct UIDataSettingsMachineUSBFilter;
+typedef UISettingsCache<UIDataSettingsMachineUSBFilter> UISettingsCacheMachineUSBFilter;
+typedef UISettingsCachePool<UIDataSettingsMachineUSB, UISettingsCacheMachineUSBFilter> UISettingsCacheMachineUSB;
 
-/* Common settings / USB page / USB filter data: */
-struct UIDataSettingsMachineUSBFilter
-{
-    /* Default constructor: */
-    UIDataSettingsMachineUSBFilter()
-        : m_fActive(false)
-        , m_strName(QString())
-        , m_strVendorId(QString())
-        , m_strProductId(QString())
-        , m_strRevision(QString())
-        , m_strManufacturer(QString())
-        , m_strProduct(QString())
-        , m_strSerialNumber(QString())
-        , m_strPort(QString())
-        , m_strRemote(QString())
-        , m_action(KUSBDeviceFilterAction_Null)
-        , m_fHostUSBDevice(false)
-        , m_hostUSBDeviceState(KUSBDeviceState_NotSupported) {}
-    /* Functions: */
-    bool equal(const UIDataSettingsMachineUSBFilter &other) const
-    {
-        return (m_fActive == other.m_fActive) &&
-               (m_strName == other.m_strName) &&
-               (m_strVendorId == other.m_strVendorId) &&
-               (m_strProductId == other.m_strProductId) &&
-               (m_strRevision == other.m_strRevision) &&
-               (m_strManufacturer == other.m_strManufacturer) &&
-               (m_strProduct == other.m_strProduct) &&
-               (m_strSerialNumber == other.m_strSerialNumber) &&
-               (m_strPort == other.m_strPort) &&
-               (m_strRemote == other.m_strRemote) &&
-               (m_action == other.m_action) &&
-               (m_hostUSBDeviceState == other.m_hostUSBDeviceState);
-    }
-    /* Operators: */
-    bool operator==(const UIDataSettingsMachineUSBFilter &other) const { return equal(other); }
-    bool operator!=(const UIDataSettingsMachineUSBFilter &other) const { return !equal(other); }
-    /* Common variables: */
-    bool m_fActive;
-    QString m_strName;
-    QString m_strVendorId;
-    QString m_strProductId;
-    QString m_strRevision;
-    QString m_strManufacturer;
-    QString m_strProduct;
-    QString m_strSerialNumber;
-    QString m_strPort;
-    QString m_strRemote;
-    /* Host only variables: */
-    KUSBDeviceFilterAction m_action;
-    bool m_fHostUSBDevice;
-    KUSBDeviceState m_hostUSBDeviceState;
-};
-typedef UISettingsCache<UIDataSettingsMachineUSBFilter> UICacheSettingsMachineUSBFilter;
-
-/* Common settings / USB page / USB data: */
-struct UIDataSettingsMachineUSB
-{
-    /* Default constructor: */
-    UIDataSettingsMachineUSB()
-        : m_fUSBEnabled(false)
-        , m_USBControllerType(KUSBControllerType_Null) {}
-    /* Functions: */
-    bool equal(const UIDataSettingsMachineUSB &other) const
-    {
-        return (m_fUSBEnabled == other.m_fUSBEnabled) &&
-               (m_USBControllerType == other.m_USBControllerType);
-    }
-    /* Operators: */
-    bool operator==(const UIDataSettingsMachineUSB &other) const { return equal(other); }
-    bool operator!=(const UIDataSettingsMachineUSB &other) const { return !equal(other); }
-    /* Variables: */
-    bool m_fUSBEnabled;
-    KUSBControllerType m_USBControllerType;
-};
-typedef UISettingsCachePool<UIDataSettingsMachineUSB, UICacheSettingsMachineUSBFilter> UICacheSettingsMachineUSB;
-
-/* Common settings / USB page: */
-class UIMachineSettingsUSB : public UISettingsPageMachine,
-                             public Ui::UIMachineSettingsUSB
+/** Machine settings: USB page. */
+class SHARED_LIBRARY_STUFF UIMachineSettingsUSB : public UISettingsPageMachine
 {
     Q_OBJECT;
 
 public:
 
-    enum RemoteMode
-    {
-        ModeAny = 0,
-        ModeOn,
-        ModeOff
-    };
+    /** Remote mode types. */
+    enum { ModeAny, ModeOn, ModeOff };
 
+    /** Constructs USB settings page. */
     UIMachineSettingsUSB();
+    /** Destructs USB settings page. */
+    ~UIMachineSettingsUSB();
 
+    /** Returns whether the USB is enabled. */
     bool isUSBEnabled() const;
 
 protected:
 
-    /* Load data to cache from corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void loadToCacheFrom(QVariant &data);
-    /* Load data to corresponding widgets from cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void getFromCache();
+    /** Returns whether the page content was changed. */
+    virtual bool changed() const /* override */;
 
-    /* Save data from corresponding widgets to cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void putToCache();
-    /* Save data from cache to corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void saveFromCacheTo(QVariant &data);
+    /** Loads settings from external object(s) packed inside @a data to cache.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void loadToCacheFrom(QVariant &data) /* override */;
+    /** Loads data from cache to corresponding widgets.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void getFromCache() /* override */;
 
-    /* Page changed: */
-    bool changed() const { return m_cache.wasChanged(); }
+    /** Saves data from corresponding widgets to cache.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void putToCache() /* override */;
+    /** Saves settings from cache to external object(s) packed inside @a data.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void saveFromCacheTo(QVariant &data) /* overrride */;
 
-    /* API: Validation stuff: */
-    bool validate(QList<UIValidationMessage> &messages);
+    /** Performs validation, updates @a messages list if something is wrong. */
+    virtual bool validate(QList<UIValidationMessage> &messages) /* override */;
 
-    void setOrderAfter (QWidget *aWidget);
+    /** Defines TAB order for passed @a pWidget. */
+    virtual void setOrderAfter(QWidget *pWidget) /* override */;
 
-    void retranslateUi();
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
+
+    /** Performs final page polishing. */
+    virtual void polishPage() /* override */;
 
 private slots:
 
-    void usbAdapterToggled(bool fEnabled);
-    void currentChanged (QTreeWidgetItem *aItem = 0);
+    /** Handles whether USB adapted is @a fEnabled. */
+    void sltHandleUsbAdapterToggle(bool fEnabled);
 
-    void newClicked();
-    void addClicked();
-    void edtClicked();
-    void addConfirmed (QAction *aAction);
-    void delClicked();
-    void mupClicked();
-    void mdnClicked();
-    void showContextMenu(const QPoint &pos);
-    void sltUpdateActivityState(QTreeWidgetItem *pChangedItem);
+    /** Handles USB filter tree @a pCurrentItem change. */
+    void sltHandleCurrentItemChange(QTreeWidgetItem *pCurrentItem);
+    /** Handles context menu request for @a position of USB filter tree. */
+    void sltHandleContextMenuRequest(const QPoint &position);
+    /** Handles USB filter tree activity state change for @a pChangedItem. */
+    void sltHandleActivityStateChange(QTreeWidgetItem *pChangedItem);
+
+    /** Handles command to add new USB filter. */
+    void sltNewFilter();
+    /** Handles command to add existing USB filter. */
+    void sltAddFilter();
+    /** Handles command to edit USB filter. */
+    void sltEditFilter();
+    /** Handles command to confirm add of existing USB filter defined by @a pAction. */
+    void sltAddFilterConfirmed(QAction *pAction);
+    /** Handles command to remove chosen USB filter. */
+    void sltRemoveFilter();
+    /** Handles command to move chosen USB filter up. */
+    void sltMoveFilterUp();
+    /** Handles command to move chosen USB filter down. */
+    void sltMoveFilterDown();
 
 private:
 
-    /* Helper: Prepare stuff: */
-    void prepareValidation();
+    /** Prepares all. */
+    void prepare();
+    /** Prepares widgets. */
+    void prepareWidgets();
+    /** Prepares radio-buttons. */
+    void prepareRadioButtons();
+    /** Prepares filters tree-widget. */
+    void prepareFiltersTreeWidget();
+    /** Prepares filters toolbar. */
+    void prepareFiltersToolbar();
+    /** Prepares connections. */
+    void prepareConnections();
+    /** Cleanups all. */
+    void cleanup();
 
-    void addUSBFilter(const UIDataSettingsMachineUSBFilter &usbFilterData, bool fIsNew);
+    /** Adds USB filter item based on a given @a filterData, fChoose if requested. */
+    void addUSBFilterItem(const UIDataSettingsMachineUSBFilter &filterData, bool fChoose);
 
-    /* Returns the multi-line description of the given USB filter: */
-    static QString toolTipFor(const UIDataSettingsMachineUSBFilter &data);
+    /** Saves existing USB data from the cache. */
+    bool saveUSBData();
+    /** Removes USB controllers of passed @a types. */
+    bool removeUSBControllers(const QSet<KUSBControllerType> &types = QSet<KUSBControllerType>());
+    /** Creates USB controllers of passed @a enmType. */
+    bool createUSBControllers(KUSBControllerType enmType);
+    /** Removes USB filter at passed @a iPosition of the @a filtersObject. */
+    bool removeUSBFilter(CUSBDeviceFilters &comFiltersObject, int iPosition);
+    /** Creates USB filter at passed @a iPosition of the @a filtersObject using the @a filterData. */
+    bool createUSBFilter(CUSBDeviceFilters &comFiltersObject, int iPosition, const UIDataSettingsMachineUSBFilter &filterData);
 
-    void polishPage();
+    /** Holds the "New Filter %1" translation tag. */
+    QString  m_strTrUSBFilterName;
 
-    /* Other variables: */
-    UIToolBar *m_pToolBar;
-    QAction *mNewAction;
-    QAction *mAddAction;
-    QAction *mEdtAction;
-    QAction *mDelAction;
-    QAction *mMupAction;
-    QAction *mMdnAction;
-    VBoxUSBMenu *mUSBDevicesMenu;
-    QString mUSBFilterName;
-    QList<UIDataSettingsMachineUSBFilter> m_filters;
+    /** Holds the page data cache instance. */
+    UISettingsCacheMachineUSB *m_pCache;
 
-    /* Cache: */
-    UICacheSettingsMachineUSB m_cache;
+    /** @name Widgets
+     * @{ */
+        /** Holds the USB check-box instance. */
+        QCheckBox        *m_pCheckBoxUSB;
+        /** Holds the USB settings widget instance. */
+        QWidget          *m_pWidgetUSBSettings;
+        /** Holds the USB settings widget layout instance. */
+        QVBoxLayout      *m_pLayoutUSBSettings;
+        /** Holds the USB1 radio-button instance. */
+        QRadioButton     *m_pRadioButtonUSB1;
+        /** Holds the USB2 radio-button instance. */
+        QRadioButton     *m_pRadioButtonUSB2;
+        /** Holds the USB3 radio-button instance. */
+        QRadioButton     *m_pRadioButtonUSB3;
+        /** Holds the USB widget separator instance. */
+        QILabelSeparator *m_pLabelSeparatorFilters;
+        /** Holds the USB filters layout instance. */
+        QHBoxLayout      *m_pLayoutFilters;
+        /** Holds the USB filters tree-widget instance. */
+        QITreeWidget     *m_pTreeWidgetFilters;
+        /** Holds the USB filters toolbar instance. */
+        QIToolBar        *m_pToolbarFilters;
+        /** Holds the New action instance. */
+        QAction          *m_pActionNew;
+        /** Holds the Add action instance. */
+        QAction          *m_pActionAdd;
+        /** Holds the Edit action instance. */
+        QAction          *m_pActionEdit;
+        /** Holds the Remove action instance. */
+        QAction          *m_pActionRemove;
+        /** Holds the Move Up action instance. */
+        QAction          *m_pActionMoveUp;
+        /** Holds the Move Down action instance. */
+        QAction          *m_pActionMoveDown;
+        /** Holds the USB devices menu instance. */
+        VBoxUSBMenu      *m_pMenuUSBDevices;
+    /** @} */
 };
 
-#endif // __UIMachineSettingsUSB_h__
-
+#endif /* !FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsUSB_h */

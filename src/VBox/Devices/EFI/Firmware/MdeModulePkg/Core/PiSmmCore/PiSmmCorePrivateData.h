@@ -2,14 +2,8 @@
   The internal header file that declared a data structure that is shared
   between the SMM IPL and the SMM Core.
 
-  Copyright (c) 2009 - 2014, Intel Corporation. All rights reserved.<BR>
-  This program and the accompanying materials are licensed and made available
-  under the terms and conditions of the BSD License which accompanies this
-  distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -71,7 +65,7 @@ typedef struct {
 
   ///
   /// The SMM Foundation Entry Point.  The SMM Core fills in this field when the
-  /// SMM Core is initialized.  The SMM IPL is responsbile for registering this entry
+  /// SMM Core is initialized.  The SMM IPL is responsible for registering this entry
   /// point with the SMM Configuration Protocol.  The SMM Configuration Protocol may
   /// not be available at the time the SMM IPL and SMM Core are started, so the SMM IPL
   /// sets up a protocol notification on the SMM Configuration Protocol and registers
@@ -98,14 +92,14 @@ typedef struct {
   EFI_SMM_SYSTEM_TABLE2           *Smst;
 
   ///
-  /// This field is used by the SMM Communicatioon Protocol to pass a buffer into
+  /// This field is used by the SMM Communication Protocol to pass a buffer into
   /// a software SMI handler and for the software SMI handler to pass a buffer back to
   /// the caller of the SMM Communication Protocol.
   ///
   VOID                            *CommunicationBuffer;
 
   ///
-  /// This field is used by the SMM Communicatioon Protocol to pass the size of a buffer,
+  /// This field is used by the SMM Communication Protocol to pass the size of a buffer,
   /// in bytes, into a software SMI handler and for the software SMI handler to pass the
   /// size, in bytes, of a buffer back to the caller of the SMM Communication Protocol.
   ///
@@ -120,53 +114,6 @@ typedef struct {
   EFI_PHYSICAL_ADDRESS            PiSmmCoreImageBase;
   UINT64                          PiSmmCoreImageSize;
   EFI_PHYSICAL_ADDRESS            PiSmmCoreEntryPoint;
-
-  UINTN                           FullSmramRangeCount;
-  EFI_SMRAM_DESCRIPTOR            *FullSmramRanges;
 } SMM_CORE_PRIVATE_DATA;
-
-//
-// Page management
-//
-
-typedef struct {
-  LIST_ENTRY  Link;
-  UINTN       NumberOfPages;
-} FREE_PAGE_LIST;
-
-extern LIST_ENTRY  mSmmMemoryMap;
-
-//
-// Pool management
-//
-
-//
-// MIN_POOL_SHIFT must not be less than 5
-//
-#define MIN_POOL_SHIFT  6
-#define MIN_POOL_SIZE   (1 << MIN_POOL_SHIFT)
-
-//
-// MAX_POOL_SHIFT must not be less than EFI_PAGE_SHIFT - 1
-//
-#define MAX_POOL_SHIFT  (EFI_PAGE_SHIFT - 1)
-#define MAX_POOL_SIZE   (1 << MAX_POOL_SHIFT)
-
-//
-// MAX_POOL_INDEX are calculated by maximum and minimum pool sizes
-//
-#define MAX_POOL_INDEX  (MAX_POOL_SHIFT - MIN_POOL_SHIFT + 1)
-
-typedef struct {
-  UINTN        Size;
-  BOOLEAN      Available;
-} POOL_HEADER;
-
-typedef struct {
-  POOL_HEADER  Header;
-  LIST_ENTRY   Link;
-} FREE_POOL_HEADER;
-
-extern LIST_ENTRY  mSmmPoolLists[MAX_POOL_INDEX];
 
 #endif

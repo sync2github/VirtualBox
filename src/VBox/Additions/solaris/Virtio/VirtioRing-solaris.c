@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VirtioRing-solaris.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Guest Additions: Virtio Driver for Solaris, Ring implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,7 +33,7 @@
 #include <iprt/asm.h>
 #include <iprt/cdefs.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
 
 #include <sys/cmn_err.h>
@@ -77,7 +77,7 @@ void VirtioRingInit(PVIRTIOQUEUE pQueue, uint_t cDescs, caddr_t virtBuf, ulong_t
     pRing->cDesc          = cDescs;
     pRing->pRingDesc      = (void *)virtBuf;
     pRing->pRingAvail     = (PVIRTIORINGAVAIL)(virtBuf + (cDescs * sizeof(pRing->pRingDesc[0])));
-    pRing->pRingUsedElem  = RT_ALIGN_PT(pRing->pRingAvail + RT_OFFSETOF(VIRTIORINGAVAIL, aRings[pQueue->Ring.cDesc]), Align,
+    pRing->pRingUsedElem  = RT_ALIGN_PT(pRing->pRingAvail + RT_UOFFSETOF_DYN(VIRTIORINGAVAIL, aRings[pQueue->Ring.cDesc]), Align,
                                         PVIRTIORINGUSEDELEM);
 
     for (uint_t i = 0; i < pRing->cDesc - 1; i++)

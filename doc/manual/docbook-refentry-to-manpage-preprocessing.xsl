@@ -5,7 +5,7 @@
         turning a refentry (manpage) into a unix manual page and
         VBoxManage built-in help.
 
-    Copyright (C) 2006-2015 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -66,6 +66,13 @@ Only supported on: refsect2</xsl:message>
     Remove bits only intended for the manual.
     -->
   <xsl:template match="remark[@role='help-manual']"/>
+
+  <!--
+   Remove remarks without a role.
+   These are used for leaving questions and such while working with the documentation team.
+  -->
+  <xsl:template match="remark[not(@role)]"/>
+
 
 </xsl:stylesheet>
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VFSExplorerImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_VFSEXPLORERIMPL
-#define ____H_VFSEXPLORERIMPL
+#ifndef MAIN_INCLUDED_VFSExplorerImpl_h
+#define MAIN_INCLUDED_VFSExplorerImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VFSExplorerWrap.h"
 
@@ -25,7 +28,7 @@ class ATL_NO_VTABLE VFSExplorer :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(VFSExplorer)
+    DECLARE_COMMON_CLASS_METHODS(VFSExplorer)
 
     // public initializer/uninitializer for internal purposes only
     HRESULT FinalConstruct() { return BaseFinalConstruct(); }
@@ -35,10 +38,13 @@ public:
     void uninit();
 
     /* public methods only for internal purposes */
-    static HRESULT setErrorStatic(HRESULT aResultCode,
-                                  const Utf8Str &aText)
+    static HRESULT setErrorStatic(HRESULT aResultCode, const char *aText, ...)
     {
-        return setErrorInternal(aResultCode, getStaticClassIID(), getStaticComponentName(), aText, false, true);
+        va_list va;
+        va_start(va, aText);
+        HRESULT hrc = setErrorInternalV(aResultCode, getStaticClassIID(), getStaticComponentName(), aText, va, false, true);
+        va_end(va);
+        return hrc;
     }
 
 private:
@@ -81,5 +87,5 @@ private:
 
 };
 
-#endif /* !____H_VFSEXPLORERIMPL */
+#endif /* !MAIN_INCLUDED_VFSExplorerImpl_h */
 

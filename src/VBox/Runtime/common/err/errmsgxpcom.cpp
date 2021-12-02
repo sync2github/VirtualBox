@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: errmsgxpcom.cpp 83743 2020-04-17 11:25:08Z vboxsync $ */
 /** @file
  * IPRT - Status code messages for XPCOM.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,12 +28,18 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include "internal/iprt.h"
 
 #include <iprt/asm.h>
 #include <iprt/string.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
+
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
+typedef uint32_t VBOXSTATUSTYPE; /* used by errmsgvboxcomdata.h */
 
 
 /*********************************************************************************************************************************

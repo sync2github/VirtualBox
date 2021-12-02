@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: RTSha256Digest.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - SHA256 digest creation
  *
@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -36,6 +36,7 @@
 
 #include <iprt/alloca.h>
 #include <iprt/assert.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
 #include <iprt/file.h>
@@ -126,7 +127,7 @@ RTR3DECL(int) RTSha256DigestFromFile(const char *pszFile, char **ppszDigest, PFN
     if (pfnProgressCallback)
     {
         uint64_t cbFile;
-        rc = RTFileGetSize(hFile, &cbFile);
+        rc = RTFileQuerySize(hFile, &cbFile);
         if (RT_FAILURE(rc))
         {
             RTFileClose(hFile);

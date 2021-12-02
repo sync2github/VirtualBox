@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: strprintf2.cpp 91789 2021-10-17 18:16:11Z vboxsync $ */
 /** @file
  * IPRT - String Formatters, alternative.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -75,14 +75,14 @@ static DECLCALLBACK(size_t) rtStrPrintf2Output(void *pvArg, const char *pachChar
             default:
                 memcpy(pszCur, pachChars, cbChars);
                 break;
-            case 8: pszCur[7] = pachChars[7];
-            case 7: pszCur[6] = pachChars[6];
-            case 6: pszCur[5] = pachChars[5];
-            case 5: pszCur[4] = pachChars[4];
-            case 4: pszCur[3] = pachChars[3];
-            case 3: pszCur[2] = pachChars[2];
-            case 2: pszCur[1] = pachChars[1];
-            case 1: pszCur[0] = pachChars[0];
+            case 8: pszCur[7] = pachChars[7]; RT_FALL_THRU();
+            case 7: pszCur[6] = pachChars[6]; RT_FALL_THRU();
+            case 6: pszCur[5] = pachChars[5]; RT_FALL_THRU();
+            case 5: pszCur[4] = pachChars[4]; RT_FALL_THRU();
+            case 4: pszCur[3] = pachChars[3]; RT_FALL_THRU();
+            case 3: pszCur[2] = pachChars[2]; RT_FALL_THRU();
+            case 2: pszCur[1] = pachChars[1]; RT_FALL_THRU();
+            case 1: pszCur[0] = pachChars[0]; RT_FALL_THRU();
             case 0:
                 break;
         }
@@ -106,25 +106,21 @@ static DECLCALLBACK(size_t) rtStrPrintf2Output(void *pvArg, const char *pachChar
 }
 
 
-RTDECL(ssize_t) RTStrPrintf2(char *pszBuffer, size_t cchBuffer, const char *pszFormat, ...)
+RTDECL(ssize_t) RTStrPrintf2V(char *pszBuffer, size_t cchBuffer, const char *pszFormat, va_list args)
 {
-    /* Explicitly inline RTStrPrintf2V + RTStrPrintf2ExV here because this is a frequently use API. */
     STRPRINTF2OUTPUTARGS Args;
     size_t cchRet;
-    va_list args;
     AssertMsg(cchBuffer > 0, ("Excellent idea! Format a string with no space for the output!\n"));
 
     Args.pszCur      = pszBuffer;
     Args.cbLeft      = cchBuffer;
     Args.fOverflowed = false;
 
-    va_start(args, pszFormat);
     cchRet = RTStrFormatV(rtStrPrintf2Output, &Args, NULL, NULL, pszFormat, args);
-    va_end(args);
 
     return !Args.fOverflowed ? (ssize_t)cchRet : -(ssize_t)cchRet - 1;
 }
-RT_EXPORT_SYMBOL(RTStrPrintf2);
+RT_EXPORT_SYMBOL(RTStrPrintf2V);
 
 
 RTDECL(ssize_t) RTStrPrintf2ExV(PFNSTRFORMAT pfnFormat, void *pvArg, char *pszBuffer, size_t cchBuffer,
@@ -141,23 +137,4 @@ RTDECL(ssize_t) RTStrPrintf2ExV(PFNSTRFORMAT pfnFormat, void *pvArg, char *pszBu
     return !Args.fOverflowed ? (ssize_t)cchRet : -(ssize_t)cchRet - 1;
 }
 RT_EXPORT_SYMBOL(RTStrPrintf2ExV);
-
-
-RTDECL(ssize_t) RTStrPrintf2V(char *pszBuffer, size_t cchBuffer, const char *pszFormat, va_list args)
-{
-    return RTStrPrintf2ExV(NULL, NULL, pszBuffer, cchBuffer, pszFormat, args);
-}
-RT_EXPORT_SYMBOL(RTStrPrintf2V);
-
-
-RTDECL(ssize_t) RTStrPrintf2Ex(PFNSTRFORMAT pfnFormat, void *pvArg, char *pszBuffer, size_t cchBuffer, const char *pszFormat, ...)
-{
-    va_list args;
-    ssize_t cbRet;
-    va_start(args, pszFormat);
-    cbRet = RTStrPrintf2ExV(pfnFormat, pvArg, pszBuffer, cchBuffer, pszFormat, args);
-    va_end(args);
-    return cbRet;
-}
-RT_EXPORT_SYMBOL(RTStrPrintf2Ex);
 

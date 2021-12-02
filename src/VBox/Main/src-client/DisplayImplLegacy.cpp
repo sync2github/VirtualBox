@@ -1,13 +1,13 @@
-/* $Id$ */
+/* $Id: DisplayImplLegacy.cpp 85300 2020-07-13 10:04:45Z vboxsync $ */
 /** @file
- * VirtualBox IDisplay implementation
+ * VirtualBox IDisplay implementation, helpers for legacy GAs.
  *
- * Methods and helpers to support old guest additions 3.x or older.
- * This is not used by the current guest additions.
+ * Methods and helpers to support old Guest Additions 3.x or older.
+ * This is not used by the current Guest Additions.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -18,12 +18,14 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_DISPLAY
+#include "LoggingNew.h"
+
 #include "DisplayImpl.h"
 #include "ConsoleImpl.h"
 #include "ConsoleVRDPServer.h"
 #include "VMMDev.h"
-
-#include "Logging.h"
+#include <VBox/VMMDev.h>
 
 /* generated header */
 #include "VBoxEvents.h"
@@ -949,18 +951,16 @@ void Display::processDisplayData(void *pvVRAM, unsigned uScreenId)
                 if (pFBInfo->fDisabled)
                 {
                     pFBInfo->fDisabled = false;
-                    fireGuestMonitorChangedEvent(mParent->i_getEventSource(),
-                                                 GuestMonitorChangedEventType_Enabled,
-                                                 uScreenId,
-                                                 pFBInfo->xOrigin, pFBInfo->yOrigin,
-                                                 pFBInfo->w, pFBInfo->h);
+                    ::FireGuestMonitorChangedEvent(mParent->i_getEventSource(), GuestMonitorChangedEventType_Enabled, uScreenId,
+                                                   pFBInfo->xOrigin, pFBInfo->yOrigin, pFBInfo->w, pFBInfo->h);
                 }
 
                 i_handleDisplayResize(uScreenId, pScreen->bitsPerPixel,
-                                                      (uint8_t *)pvVRAM + pFBInfo->u32Offset,
-                                                      pScreen->u32LineSize,
-                                                      pScreen->u16Width, pScreen->u16Height,
-                                                      VBVA_SCREEN_F_ACTIVE);
+                                      (uint8_t *)pvVRAM + pFBInfo->u32Offset,
+                                      pScreen->u32LineSize,
+                                      pScreen->u16Width, pScreen->u16Height,
+                                      VBVA_SCREEN_F_ACTIVE,
+                                      pScreen->xOrigin, pScreen->yOrigin, false);
             }
         }
         else if (pHdr->u8Type == VBOX_VIDEO_INFO_TYPE_END)

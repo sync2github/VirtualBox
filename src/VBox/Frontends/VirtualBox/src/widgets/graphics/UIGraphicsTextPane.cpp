@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIGraphicsTextPane.cpp 91003 2021-08-30 15:40:14Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIGraphicsTextPane class implementation.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,27 +15,21 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QAccessibleObject>
-# include <QPainter>
-# include <QTextLayout>
-# include <QApplication>
-# include <QFontMetrics>
-# include <QGraphicsSceneHoverEvent>
+#include <QAccessibleObject>
+#include <QPainter>
+#include <QTextLayout>
+#include <QApplication>
+#include <QFontMetrics>
+#include <QGraphicsSceneHoverEvent>
 
 /* GUI includes: */
-# include "UIGraphicsTextPane.h"
-# include "UIRichTextString.h"
+#include "UICursor.h"
+#include "UIGraphicsTextPane.h"
+#include "UIRichTextString.h"
 
 /* Other VBox includes: */
-# include <iprt/assert.h>
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
+#include <iprt/assert.h>
 
 /** QAccessibleObject extension used as an accessibility interface for UITextTableLine. */
 class UIAccessibilityInterfaceForUITextTableLine : public QAccessibleObject
@@ -82,7 +76,7 @@ public:
         AssertPtrReturn(parent(), QRect());
 
         /* Return the parent's rect for now: */
-        // TODO: Return sub-rect.
+        /// @todo Return sub-rect.
         return parent()->rect();
     }
 
@@ -110,7 +104,6 @@ private:
     /** Returns corresponding text-table line. */
     UITextTableLine *line() const { return qobject_cast<UITextTableLine*>(object()); }
 };
-
 
 UIGraphicsTextPane::UIGraphicsTextPane(QIGraphicsWidget *pParent, QPaintDevice *pPaintDevice)
     : QIGraphicsWidget(pParent)
@@ -389,15 +382,19 @@ void UIGraphicsTextPane::updateHoverStuff()
 {
     /* Update mouse-cursor: */
     if (m_strHoveredAnchor.isNull())
-        unsetCursor();
+        UICursor::unsetCursor(this);
     else
-        setCursor(Qt::PointingHandCursor);
+        UICursor::setCursor(this, Qt::PointingHandCursor);
 
     /* Update text-layout: */
     updateTextLayout();
 
     /* Update tool-tip: */
-    setToolTip(m_strHoveredAnchor.section(',', -1));
+    const QString strType = m_strHoveredAnchor.section(',', 0, 0);
+    if (strType == "#attach")
+        setToolTip(m_strHoveredAnchor.section(',', -1));
+    else
+        setToolTip(QString());
 
     /* Update text-pane: */
     update();
@@ -451,7 +448,7 @@ QTextLayout* UIGraphicsTextPane::buildTextLayout(const QFont &font, QPaintDevice
 
     /* Create layout; */
     QTextLayout *pTextLayout = new QTextLayout(ms.toString(), font, pPaintDevice);
-    pTextLayout->setAdditionalFormats(ms.formatRanges());
+    pTextLayout->setFormats(ms.formatRanges());
 
     /* Configure layout: */
     QTextOption textOption;
@@ -491,7 +488,7 @@ QString UIGraphicsTextPane::searchForHoveredAnchor(QPaintDevice *pPaintDevice, c
         const QString strLayoutText = pTextLayout->text();
 
         /* Enumerate format ranges: */
-        foreach (const QTextLayout::FormatRange &range, pTextLayout->additionalFormats())
+        foreach (const QTextLayout::FormatRange &range, pTextLayout->formats())
         {
             /* Skip unrelated formats: */
             if (!range.format.isAnchor())
@@ -521,4 +518,3 @@ QString UIGraphicsTextPane::searchForHoveredAnchor(QPaintDevice *pPaintDevice, c
     /* Null string by default: */
     return QString();
 }
-

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: hostres.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Host resolver
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -18,8 +18,9 @@
 #ifndef RT_OS_WINDOWS
 # include <netdb.h>
 #endif
-#include <iprt/ctype.h>
 #include <iprt/assert.h>
+#include <iprt/ctype.h>
+#include <iprt/errcore.h>
 #include <slirp.h>
 
 #define isdigit(ch)    RT_C_IS_DIGIT(ch)
@@ -265,14 +266,14 @@ verify_header(PNATState pData, struct mbuf **pMBuf)
     if (RT_UNLIKELY(pHdr->qdcount != RT_H2N_U16_C(1)))
     {
         LogErr(("NAT: hostres: multiple questions\n"));
-        refuse_mbuf(m, RCode_NotImp);
+        refuse_mbuf(m, RCode_FormErr);
         return VERR_PARSE_ERROR;
     }
 
     if (RT_UNLIKELY(pHdr->ancount != 0))
     {
         LogErr(("NAT: hostres: answers in query\n"));
-        refuse_mbuf(m, RCode_NotImp);
+        refuse_mbuf(m, RCode_FormErr);
         return VERR_PARSE_ERROR;
     }
 
@@ -511,7 +512,7 @@ respond(struct response *res)
         && qclass != Class_ANY)
     {
         LogErr(("NAT: hostres: unsupported qclass %d\n", qclass));
-        return refuse(res, RCode_NotImp);
+        return refuse(res, RCode_NXDomain);
     }
 
     if (   qtype != Type_A
@@ -520,7 +521,7 @@ respond(struct response *res)
         && qtype != Type_ANY)
     {
         LogErr(("NAT: hostres: unsupported qtype %d\n", qtype));
-        return refuse(res, RCode_NotImp);
+        return refuse(res, RCode_NXDomain);
     }
 
 

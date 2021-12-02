@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DisplayUtils.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Implementation of IDisplay helpers.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,7 +20,7 @@
 #include <iprt/log.h>
 #include <VBox/err.h>
 #include <VBox/vmm/ssm.h>
-#include <VBox/VBoxVideo.h>
+#include <VBoxVideo.h>
 
 int readSavedDisplayScreenshot(const Utf8Str &strStateFilePath, uint32_t u32Type, uint8_t **ppu8Data, uint32_t *pcbData,
                                uint32_t *pu32Width, uint32_t *pu32Height)

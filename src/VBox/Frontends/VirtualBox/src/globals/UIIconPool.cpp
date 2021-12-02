@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIIconPool.cpp 91544 2021-10-04 15:04:20Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIIconPool class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,23 +15,29 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QApplication>
-# include <QWidget>
-# include <QStyle>
+#include <QApplication>
+#include <QFile>
+#include <QPainter>
+#include <QStyle>
+#include <QWidget>
 
 /* GUI includes: */
-# include "UIIconPool.h"
+#include "UIIconPool.h"
+#include "UIExtraDataManager.h"
+#include "UIModalWindowManager.h"
+
+/* COM includes: */
+#include "COMEnums.h"
+#include "CMachine.h"
 
 /* Other VBox includes: */
-# include <iprt/assert.h>
+#include <iprt/assert.h>
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
 
+/*********************************************************************************************************************************
+*   Class UIIconPool implementation.                                                                                             *
+*********************************************************************************************************************************/
 
 /* static */
 QPixmap UIIconPool::pixmap(const QString &strName)
@@ -40,7 +46,8 @@ QPixmap UIIconPool::pixmap(const QString &strName)
     QIcon icon = iconSet(strName);
 
     /* Return pixmap of first available size: */
-    return icon.pixmap(icon.availableSizes().first());
+    const int iHint = QApplication::style()->pixelMetric(QStyle::PM_SmallIconSize);
+    return icon.pixmap(icon.availableSizes().value(0, QSize(iHint, iHint)));
 }
 
 /* static */
@@ -229,6 +236,26 @@ QIcon UIIconPool::defaultIcon(UIDefaultIconType defaultIconType, const QWidget *
 }
 
 /* static */
+QPixmap UIIconPool::joinPixmaps(const QPixmap &pixmap1, const QPixmap &pixmap2)
+{
+    if (pixmap1.isNull())
+        return pixmap2;
+    if (pixmap2.isNull())
+        return pixmap1;
+
+    QPixmap result(pixmap1.width() + pixmap2.width() + 2,
+                   qMax(pixmap1.height(), pixmap2.height()));
+    result.fill(Qt::transparent);
+
+    QPainter painter(&result);
+    painter.drawPixmap(0, 0, pixmap1);
+    painter.drawPixmap(pixmap1.width() + 2, result.height() - pixmap2.height(), pixmap2);
+    painter.end();
+
+    return result;
+}
+
+/* static */
 void UIIconPool::addName(QIcon &icon, const QString &strName,
                          QIcon::Mode mode /* = QIcon::Normal */, QIcon::State state /* = QIcon::Off */)
 {
@@ -238,30 +265,59 @@ void UIIconPool::addName(QIcon &icon, const QString &strName,
     icon.addPixmap(pixmap, mode, state);
 
 #ifdef VBOX_WS_MAC
-# ifdef VBOX_GUI_WITH_HIDPI
-    /* Test if HiDPI icons are enabled. Works only with a patched version of Qt 4.x
-     * with the changes from https://codereview.qt-project.org/#change,54636 applied. */
+    /* Test if HiDPI icons are enabled: */
     if (!qApp->testAttribute(Qt::AA_UseHighDpiPixmaps))
         return;
-# else /* !VBOX_GUI_WITH_HIDPI */
-    /* Otherwise HiDPI icons are useless: */
-    return;
-# endif /* !VBOX_GUI_WITH_HIDPI */
 #endif /* VBOX_WS_MAC */
 
     /* Parse name to prefix and suffix: */
     QString strPrefix = strName.section('.', 0, -2);
     QString strSuffix = strName.section('.', -1, -1);
-    /* Prepare HiDPI pixmap on the basis of values above: */
-    QPixmap pixmapHiDPI(strPrefix + "_hidpi." + strSuffix);
-    /* Add HiDPI pixmap (if any): */
-    if (!pixmapHiDPI.isNull())
-        icon.addPixmap(pixmapHiDPI, mode, state);
+    /* Prepare HiDPI pixmaps: */
+    const QStringList aPixmapNames = QStringList() << (strPrefix + "_x2." + strSuffix)
+                                                   << (strPrefix + "_x3." + strSuffix)
+                                                   << (strPrefix + "_x4." + strSuffix);
+    foreach (const QString &strPixmapName, aPixmapNames)
+    {
+        QPixmap pixmapHiDPI(strPixmapName);
+        if (!pixmapHiDPI.isNull())
+            icon.addPixmap(pixmapHiDPI, mode, state);
+    }
 }
 
 
+/*********************************************************************************************************************************
+*   Class UIIconPoolGeneral implementation.                                                                                      *
+*********************************************************************************************************************************/
+
+/* static */
+UIIconPoolGeneral *UIIconPoolGeneral::s_pInstance = 0;
+
+/* static */
+void UIIconPoolGeneral::create()
+{
+    AssertReturnVoid(!s_pInstance);
+    new UIIconPoolGeneral;
+}
+
+/* static */
+void UIIconPoolGeneral::destroy()
+{
+    AssertPtrReturnVoid(s_pInstance);
+    delete s_pInstance;
+}
+
+/* static */
+UIIconPoolGeneral *UIIconPoolGeneral::instance()
+{
+    return s_pInstance;
+}
+
 UIIconPoolGeneral::UIIconPoolGeneral()
 {
+    /* Init instance: */
+    s_pInstance = this;
+
     /* Prepare OS type icon-name hash: */
     m_guestOSTypeIconNames.insert("Other",           ":/os_other.png");
     m_guestOSTypeIconNames.insert("Other_64",        ":/os_other_64.png");
@@ -272,6 +328,7 @@ UIIconPoolGeneral::UIIconPoolGeneral()
     m_guestOSTypeIconNames.insert("Windows95",       ":/os_win95.png");
     m_guestOSTypeIconNames.insert("Windows98",       ":/os_win98.png");
     m_guestOSTypeIconNames.insert("WindowsMe",       ":/os_winme.png");
+    m_guestOSTypeIconNames.insert("WindowsNT3x",     ":/os_winnt4.png");
     m_guestOSTypeIconNames.insert("WindowsNT4",      ":/os_winnt4.png");
     m_guestOSTypeIconNames.insert("Windows2000",     ":/os_win2k.png");
     m_guestOSTypeIconNames.insert("WindowsXP",       ":/os_winxp.png");
@@ -291,8 +348,11 @@ UIIconPoolGeneral::UIIconPoolGeneral()
     m_guestOSTypeIconNames.insert("Windows2012_64",  ":/os_win2k12_64.png");
     m_guestOSTypeIconNames.insert("Windows10",       ":/os_win10.png");
     m_guestOSTypeIconNames.insert("Windows10_64",    ":/os_win10_64.png");
+    m_guestOSTypeIconNames.insert("Windows11_64",    ":/os_win11_64.png");
+    m_guestOSTypeIconNames.insert("Windows2016_64",  ":/os_win2k16_64.png");
+    m_guestOSTypeIconNames.insert("Windows2019_64",  ":/os_win2k19_64.png");
     m_guestOSTypeIconNames.insert("WindowsNT",       ":/os_win_other.png");
-    m_guestOSTypeIconNames.insert("WindowsNT_64",    ":/os_win_other.png"); /// @todo os_win_other_64
+    m_guestOSTypeIconNames.insert("WindowsNT_64",    ":/os_win_other_64.png");
     m_guestOSTypeIconNames.insert("OS2Warp3",        ":/os_os2warp3.png");
     m_guestOSTypeIconNames.insert("OS2Warp4",        ":/os_os2warp4.png");
     m_guestOSTypeIconNames.insert("OS2Warp45",       ":/os_os2warp45.png");
@@ -326,8 +386,8 @@ UIIconPoolGeneral::UIIconPoolGeneral()
     m_guestOSTypeIconNames.insert("Xandros_64",      ":/os_xandros_64.png");
     m_guestOSTypeIconNames.insert("Oracle",          ":/os_oracle.png");
     m_guestOSTypeIconNames.insert("Oracle_64",       ":/os_oracle_64.png");
-    m_guestOSTypeIconNames.insert("Linux",           ":/os_linux_other.png");
-    m_guestOSTypeIconNames.insert("Linux_64",        ":/os_linux_other.png"); /// @todo os_linux_other_64
+    m_guestOSTypeIconNames.insert("Linux",           ":/os_linux.png");
+    m_guestOSTypeIconNames.insert("Linux_64",        ":/os_linux_64.png");
     m_guestOSTypeIconNames.insert("FreeBSD",         ":/os_freebsd.png");
     m_guestOSTypeIconNames.insert("FreeBSD_64",      ":/os_freebsd_64.png");
     m_guestOSTypeIconNames.insert("OpenBSD",         ":/os_openbsd.png");
@@ -349,14 +409,114 @@ UIIconPoolGeneral::UIIconPoolGeneral()
     m_guestOSTypeIconNames.insert("MacOS109_64",     ":/os_macosx_64.png");
     m_guestOSTypeIconNames.insert("MacOS1010_64",    ":/os_macosx_64.png");
     m_guestOSTypeIconNames.insert("MacOS1011_64",    ":/os_macosx_64.png");
+    m_guestOSTypeIconNames.insert("MacOS1012_64",    ":/os_macosx_64.png");
+    m_guestOSTypeIconNames.insert("MacOS1013_64",    ":/os_macosx_64.png");
     m_guestOSTypeIconNames.insert("JRockitVE",       ":/os_jrockitve.png");
     m_guestOSTypeIconNames.insert("VBoxBS_64",       ":/os_other_64.png");
+    m_guestOSTypeIconNames.insert("Cloud",           ":/os_cloud.png");
+
+    /* Prepare warning/error icons: */
+    m_pixWarning = defaultIcon(UIDefaultIconType_MessageBoxWarning).pixmap(16, 16);
+    Assert(!m_pixWarning.isNull());
+    m_pixError = defaultIcon(UIDefaultIconType_MessageBoxCritical).pixmap(16, 16);
+    Assert(!m_pixError.isNull());
 }
 
-QPixmap UIIconPoolGeneral::guestOSTypeIcon(const QString &strOSTypeID, QSize *pLogicalSize /* = 0 */) const
+UIIconPoolGeneral::~UIIconPoolGeneral()
 {
-    /* Prepare fallback pixmap: */
-    static QPixmap nullPixmap;
+    /* Deinit instance: */
+    s_pInstance = 0;
+}
+
+QIcon UIIconPoolGeneral::userMachineIcon(const CMachine &comMachine) const
+{
+    /* Get machine ID: */
+    const QUuid uMachineId = comMachine.GetId();
+    AssertReturn(comMachine.isOk(), QPixmap());
+
+    /* Prepare icon: */
+    QIcon icon;
+
+    /* 1. First, load icon from IMachine extra-data: */
+    if (icon.isNull())
+        foreach (const QString &strIconName, gEDataManager->machineWindowIconNames(uMachineId))
+            if (!strIconName.isEmpty() && QFile::exists(strIconName))
+                icon.addFile(strIconName);
+
+    /* 2. Otherwise, load icon from IMachine interface itself: */
+    if (icon.isNull())
+    {
+        const QVector<BYTE> byteVector = comMachine.GetIcon();
+        AssertReturn(comMachine.isOk(), QPixmap());
+        const QByteArray byteArray = QByteArray::fromRawData(reinterpret_cast<const char*>(byteVector.constData()), byteVector.size());
+        const QImage image = QImage::fromData(byteArray);
+        if (!image.isNull())
+        {
+            QPixmap pixmap = QPixmap::fromImage(image);
+            const int iMinimumLength = qMin(pixmap.width(), pixmap.height());
+            if (pixmap.width() != iMinimumLength || pixmap.height() != iMinimumLength)
+                pixmap = pixmap.scaled(QSize(iMinimumLength, iMinimumLength), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            icon.addPixmap(pixmap);
+        }
+    }
+
+    /* Return icon: */
+    return icon;
+}
+
+QPixmap UIIconPoolGeneral::userMachinePixmap(const CMachine &comMachine, const QSize &size) const
+{
+    /* Acquire icon: */
+    const QIcon icon = userMachineIcon(comMachine);
+
+    /* Prepare pixmap: */
+    QPixmap pixmap;
+
+    /* Check whether we have valid icon: */
+    if (!icon.isNull())
+    {
+        /* Get pixmap of requested size: */
+        pixmap = icon.pixmap(size);
+        /* And even scale it if size is not valid: */
+        if (pixmap.size() != size)
+            pixmap = pixmap.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+
+    /* Return pixmap: */
+    return pixmap;
+}
+
+QPixmap UIIconPoolGeneral::userMachinePixmapDefault(const CMachine &comMachine, QSize *pLogicalSize /* = 0 */) const
+{
+    /* Acquire icon: */
+    const QIcon icon = userMachineIcon(comMachine);
+
+    /* Prepare pixmap: */
+    QPixmap pixmap;
+
+    /* Check whether we have valid icon: */
+    if (!icon.isNull())
+    {
+        /* Determine desired icon size: */
+        const int iIconMetric = QApplication::style()->pixelMetric(QStyle::PM_LargeIconSize);
+        const QSize iconSize = QSize(iIconMetric, iIconMetric);
+
+        /* Pass up logical size if necessary: */
+        if (pLogicalSize)
+            *pLogicalSize = iconSize;
+
+        /* Get pixmap of requested size: */
+        pixmap = icon.pixmap(iconSize);
+    }
+
+    /* Return pixmap: */
+    return pixmap;
+}
+
+QIcon UIIconPoolGeneral::guestOSTypeIcon(const QString &strOSTypeID) const
+{
+    /* Prepare fallback icon: */
+    static QPixmap nullIcon;
 
     /* If we do NOT have that 'guest OS type' icon cached already: */
     if (!m_guestOSTypeIcons.contains(strOSTypeID))
@@ -364,95 +524,72 @@ QPixmap UIIconPoolGeneral::guestOSTypeIcon(const QString &strOSTypeID, QSize *pL
         /* Compose proper icon if we have that 'guest OS type' known: */
         if (m_guestOSTypeIconNames.contains(strOSTypeID))
             m_guestOSTypeIcons[strOSTypeID] = iconSet(m_guestOSTypeIconNames[strOSTypeID]);
+        /* Assign fallback icon if we do NOT have that 'guest OS type' registered: */
+        else if (!strOSTypeID.isNull())
+            m_guestOSTypeIcons[strOSTypeID] = iconSet(m_guestOSTypeIconNames["Other"]);
         /* Assign fallback icon if we do NOT have that 'guest OS type' known: */
         else
-            m_guestOSTypeIcons[strOSTypeID] = iconSet(nullPixmap);
+            m_guestOSTypeIcons[strOSTypeID] = iconSet(nullIcon);
     }
 
     /* Retrieve corresponding icon: */
     const QIcon &icon = m_guestOSTypeIcons[strOSTypeID];
     AssertMsgReturn(!icon.isNull(),
                     ("Undefined icon for type '%s'.", strOSTypeID.toLatin1().constData()),
-                    nullPixmap);
+                    nullIcon);
 
-    /* Retrieve available sizes for that icon: */
-    const QList<QSize> availableSizes = icon.availableSizes();
-    AssertMsgReturn(!availableSizes.isEmpty(),
-                    ("Undefined icon for type '%s'.", strOSTypeID.toLatin1().constData()),
-                    nullPixmap);
-
-    /* Determine desired icon size: */
-    const QStyle *pStyle = QApplication::style();
-    const int iIconMetric = pStyle->pixelMetric(QStyle::PM_LargeIconSize);
-    const QSize iconSize = QSize(iIconMetric, iIconMetric);
-
-    /* Pass up logical size if necessary: */
-    if (pLogicalSize)
-        *pLogicalSize = iconSize;
-
-    /* Return pixmap of first available size: */
-    return icon.pixmap(iconSize);
+    /* Return icon: */
+    return icon;
 }
 
-QPixmap UIIconPoolGeneral::guestOSTypePixmap(const QString &strOSTypeID, const QSize &physicalSize) const
+QPixmap UIIconPoolGeneral::guestOSTypePixmap(const QString &strOSTypeID, const QSize &size) const
 {
-    /* Prepare fallback pixmap: */
-    static QPixmap nullPixmap;
+    /* Acquire icon: */
+    const QIcon icon = guestOSTypeIcon(strOSTypeID);
 
-    /* If we do NOT have that 'guest OS type' pixmap cached already: */
-    if (!m_guestOSTypePixmaps.contains(strOSTypeID))
+    /* Prepare pixmap: */
+    QPixmap pixmap;
+
+    /* Check whether we have valid icon: */
+    if (!icon.isNull())
     {
-        /* Compose proper pixmap if we have that 'guest OS type' known: */
-        if (m_guestOSTypeIconNames.contains(strOSTypeID))
-            m_guestOSTypePixmaps[strOSTypeID] = QPixmap(m_guestOSTypeIconNames[strOSTypeID]);
-        /* Assign fallback pixmap if we do NOT have that 'guest OS type' known: */
-        else
-            m_guestOSTypePixmaps[strOSTypeID] = nullPixmap;
+        /* Get pixmap of requested size: */
+        pixmap = icon.pixmap(size);
+        /* And even scale it if size is not valid: */
+        if (pixmap.size() != size)
+            pixmap = pixmap.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
 
-    /* Retrieve corresponding pixmap: */
-    const QPixmap &pixmap = m_guestOSTypePixmaps.value(strOSTypeID);
-    AssertMsgReturn(!pixmap.isNull(),
-                    ("Undefined pixmap for type '%s'.", strOSTypeID.toLatin1().constData()),
-                    nullPixmap);
-
-    /* Return pixmap of the requested size: */
-    return pixmap.size() == physicalSize ? pixmap : pixmap.scaled(physicalSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    /* Return pixmap: */
+    return pixmap;
 }
 
-QPixmap UIIconPoolGeneral::guestOSTypePixmapHiDPI(const QString &strOSTypeID, const QSize &physicalSize) const
+QPixmap UIIconPoolGeneral::guestOSTypePixmapDefault(const QString &strOSTypeID, QSize *pLogicalSize /* = 0 */) const
 {
-    /* Prepare fallback pixmap: */
-    static QPixmap nullPixmap;
+    /* Acquire icon: */
+    const QIcon icon = guestOSTypeIcon(strOSTypeID);
 
-    /* If we do NOT have that 'guest OS type' pixmap cached already: */
-    if (!m_guestOSTypePixmapsHiDPI.contains(strOSTypeID))
+    /* Prepare pixmap: */
+    QPixmap pixmap;
+
+    /* Check whether we have valid icon: */
+    if (!icon.isNull())
     {
-        /* Compose proper pixmap if we have that 'guest OS type' known: */
-        if (m_guestOSTypeIconNames.contains(strOSTypeID))
-        {
-            /* Get name: */
-            const QString strName =  m_guestOSTypeIconNames.value(strOSTypeID);
-            /* Parse name to prefix and suffix: */
-            const QString strPrefix = strName.section('.', 0, -2);
-            const QString strSuffix = strName.section('.', -1, -1);
-            /* Prepare HiDPI pixmap on the basis of values above: */
-            const QPixmap pixmapHiDPI(strPrefix + "_hidpi." + strSuffix);
-            /* Remember HiDPI pixmap: */
-            m_guestOSTypePixmapsHiDPI[strOSTypeID] = pixmapHiDPI;
-        }
-        /* Assign fallback pixmap if we do NOT have that 'guest OS type' known: */
+        /* Determine desired icon size: */
+        const int iIconMetric = QApplication::style()->pixelMetric(QStyle::PM_LargeIconSize);
+        const QSize iconSize = QSize(iIconMetric, iIconMetric);
+
+        /* Pass up logical size if necessary: */
+        if (pLogicalSize)
+            *pLogicalSize = iconSize;
+
+        /* Get pixmap of requested size (take into account the DPI of the main shown window, if possible): */
+        if (windowManager().mainWindowShown() && windowManager().mainWindowShown()->windowHandle())
+            pixmap = icon.pixmap(windowManager().mainWindowShown()->windowHandle(), iconSize);
         else
-            m_guestOSTypePixmapsHiDPI[strOSTypeID] = nullPixmap;
+            pixmap = icon.pixmap(iconSize);
     }
 
-    /* Retrieve corresponding pixmap: */
-    const QPixmap &pixmap = m_guestOSTypePixmapsHiDPI.value(strOSTypeID);
-    AssertMsgReturn(!pixmap.isNull(),
-                    ("Undefined pixmap for type '%s'.", strOSTypeID.toLatin1().constData()),
-                    nullPixmap);
-
-    /* Return pixmap of the requested size: */
-    return pixmap.size() == physicalSize ? pixmap : pixmap.scaled(physicalSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    /* Return pixmap: */
+    return pixmap;
 }
-

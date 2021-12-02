@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 87281 2021-01-15 17:19:08Z vboxsync $
 ## @file
 # Sub-Makefile for the VBox Disassembler.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -20,6 +20,7 @@ include $(KBUILD_PATH)/subheader.kmk
 ifdef VBOX_WITH_TESTCASES
 
 
+if1of ($(KBUILD_TARGET_ARCH), amd64 x86)
 PROGRAMS               += tstDisasm-1
 tstDisasm-1_TEMPLATE    = VBOXR3TSTEXE
 tstDisasm-1_DEFS        = IN_DIS
@@ -29,6 +30,7 @@ tstDisasm-1_SOURCES     = \
 tstDisasm-1_LIBS        = \
 	$(PATH_STAGE_LIB)/DisasmR3$(VBOX_SUFF_LIB) \
 	$(LIB_RUNTIME)
+endif
 
 
 PROGRAMS += tstDisasm-2
@@ -220,10 +222,6 @@ $(foreach bits, 32 16, $(foreach binary, $(filter-out $(VBOX_DISAS_TESTS_BINARIE
 # Add the .tst to the clean up.
 VBOX_DISAS_TEST_CLEAN += $(addprefix $(VBOX_DISAS_TEST_OUT_DIR)/, $(VBOX_DISAS_TESTS))
 OTHER_CLEAN += $(VBOX_DISAS_TEST_CLEAN)
-
-# We don't want any of the tests rules to run in parallel because the
-# output will be difficult to follow. Abusing VBOX_DISAS_TEST_CLEAN here...
-.NOTPARALLEL: $$(VBOX_DISAS_TEST_CLEAN)
 
 
 #

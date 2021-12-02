@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: _iprt_atomic.h 44529 2013-02-04 15:54:15Z vboxsync $ */
 /** @file
  * IPRT Atomic Operation, for including into a system config header.
  */

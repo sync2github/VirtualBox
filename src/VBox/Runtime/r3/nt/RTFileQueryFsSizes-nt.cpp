@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTFileQueryFsSizes-nt.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTFileQueryFsSizes, Native NT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include "internal-r3-nt.h"
 
 #include <iprt/file.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 
 

@@ -1,11 +1,12 @@
 #!/bin/sh
-# $Id$
+# $Id: postinst-common.sh 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # Oracle VM VirtualBox
 # VirtualBox Linux post-installer common portions
 #
 
-# Copyright (C) 2015 Oracle Corporation
+#
+# Copyright (C) 2015-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -55,6 +56,7 @@ install_init_script "${MY_PATH}/vboxdrv.sh" vboxdrv
 install_init_script "${MY_PATH}/vboxballoonctrl-service.sh" vboxballoonctrl-service
 install_init_script "${MY_PATH}/vboxautostart-service.sh" vboxautostart-service
 install_init_script "${MY_PATH}/vboxweb-service.sh" vboxweb-service
+finish_init_script_install
 
 delrunlevel vboxdrv
 addrunlevel vboxdrv
@@ -101,10 +103,13 @@ test -n "${START}" &&
         echo >&2
         echo "There were problems setting up VirtualBox.  To re-start the set-up process, run" >&2
         echo "  /sbin/vboxconfig" >&2
-        echo "as root." >&2
+        echo "as root.  If your system is using EFI Secure Boot you may need to sign the" >&2
+        echo "kernel modules (vboxdrv, vboxnetflt, vboxnetadp, vboxpci) before you can load" >&2
+        echo "them. Please see your Linux system's documentation for more information." >&2
+    else
+        start_init_script vboxdrv
+        start_init_script vboxballoonctrl-service
+        start_init_script vboxautostart-service
+        start_init_script vboxweb-service
     fi
-    start_init_script vboxdrv
-    start_init_script vboxballoonctrl-service
-    start_init_script vboxautostart-service
-    start_init_script vboxweb-service
 }

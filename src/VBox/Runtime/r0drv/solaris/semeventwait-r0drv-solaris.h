@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semeventwait-r0drv-solaris.h 90789 2021-08-23 10:27:29Z vboxsync $ */
 /** @file
  * IPRT - Solaris Ring-0 Driver Helpers for Event Semaphore Waits.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___r0drv_solaris_semeventwait_r0drv_solaris_h
-#define ___r0drv_solaris_semeventwait_r0drv_solaris_h
+#ifndef IPRT_INCLUDED_SRC_r0drv_solaris_semeventwait_r0drv_solaris_h
+#define IPRT_INCLUDED_SRC_r0drv_solaris_semeventwait_r0drv_solaris_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "the-solaris-kernel.h"
 
@@ -198,7 +200,7 @@ static void rtR0SemSolWaitHighResTimeout(void *pvUser)
     PRTR0SEMSOLWAIT pWait   = (PRTR0SEMSOLWAIT)pvUser;
     kthread_t      *pThread = pWait->pThread;
     kmutex_t       *pMtx    = (kmutex_t *)ASMAtomicReadPtr(&pWait->pvMtx);
-    if (VALID_PTR(pMtx))
+    if (RT_VALID_PTR(pMtx))
     {
         /* Enter the mutex here to make sure the thread has gone to sleep
            before we wake it up.
@@ -231,7 +233,7 @@ static void rtR0SemSolWaitTimeout(void *pvUser)
     PRTR0SEMSOLWAIT pWait   = (PRTR0SEMSOLWAIT)pvUser;
     kthread_t      *pThread = pWait->pThread;
     kmutex_t       *pMtx    = (kmutex_t *)ASMAtomicReadPtr((void * volatile *)&pWait->pvMtx);
-    if (VALID_PTR(pMtx))
+    if (RT_VALID_PTR(pMtx))
     {
         /* Enter the mutex here to make sure the thread has gone to sleep
            before we wake it up. */
@@ -490,5 +492,5 @@ DECLINLINE(uint32_t) rtR0SemSolWaitGetResolution(void)
          : cyclic_getres();
 }
 
-#endif /* !___r0drv_solaris_semeventwait_r0drv_solaris_h */
+#endif /* !IPRT_INCLUDED_SRC_r0drv_solaris_semeventwait_r0drv_solaris_h */
 

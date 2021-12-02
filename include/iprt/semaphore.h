@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_semaphore_h
-#define ___iprt_semaphore_h
+#ifndef IPRT_INCLUDED_semaphore_h
+#define IPRT_INCLUDED_semaphore_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -163,8 +166,24 @@ RTDECL(int)  RTSemEventDestroy(RTSEMEVENT hEventSem);
  * @remarks ring-0: This works when preemption is disabled.  However it is
  *          system specific whether it works in interrupt context or with
  *          interrupts disabled.
+ *
+ *          ring-0/Darwin: This works when interrupts are disabled and thereby
+ *          in interrupt context, except it cannot race semaphore destruction as
+ *          the allocator does not work under these circumstances.
  */
 RTDECL(int)  RTSemEventSignal(RTSEMEVENT hEventSem);
+
+/**
+ * Whether RTSemEventSignal can be safely called w/o risk of preemption.
+ *
+ * Checks whether the caller can safely signal a single release semaphore
+ * without any risk of getting preempted on locks or similar while doing so.
+ * This also checks whether the context is suitable in general.
+ *
+ * @returns true if safe, false if not.
+ * @remarks Only ring-0.
+ */
+RTR0DECL(bool) RTSemEventIsSignalSafe(void);
 
 /**
  * Wait for the event semaphore to be signaled, resume on interruption.
@@ -324,8 +343,24 @@ RTDECL(int)  RTSemEventMultiDestroy(RTSEMEVENTMULTI hEventMultiSem);
  * @remarks ring-0: This works when preemption is disabled.  However it is
  *          system specific whether it works in interrupt context or with
  *          interrupts disabled.
+ *
+ *          ring-0/Darwin: This works when interrupts are disabled and thereby
+ *          in interrupt context, except it cannot race semaphore destruction as
+ *          the allocator does not work under these circumstances.
  */
 RTDECL(int)  RTSemEventMultiSignal(RTSEMEVENTMULTI hEventMultiSem);
+
+/**
+ * Whether RTSemEventMultiSignal can be safely called w/o risk of preemption.
+ *
+ * Checks whether the caller can safely signal a multiple release semaphore
+ * without any risk of getting preempted on locks or similar while doing so.
+ * This also checks whether the context is suitable in general.
+ *
+ * @returns true if safe, false if not.
+ * @remarks Only ring-0.
+ */
+RTR0DECL(bool) RTSemEventMultiIsSignalSafe(void);
 
 /**
  * Resets an event multi semaphore to non-signaled state.
@@ -621,7 +656,7 @@ RTDECL(bool) RTSemMutexIsOwned(RTSEMMUTEX hMutexSem);
 
 /* Strict build: Remap the two request calls to the debug versions. */
 #if   defined(RT_STRICT) && !defined(RTSEMMUTEX_WITHOUT_REMAPPING) && !defined(RT_WITH_MANGLING)
-# ifdef ___iprt_asm_h
+# ifdef IPRT_INCLUDED_asm_h
 #  define RTSemMutexRequest(hMutexSem, cMillies)            RTSemMutexRequestDebug((hMutexSem), (cMillies), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 #  define RTSemMutexRequestNoResume(hMutexSem, cMillies)    RTSemMutexRequestNoResumeDebug((hMutexSem), (cMillies), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 #  define RTSemMutexRequestEx(hMutexSem, fFlags, uTimeout)  RTSemMutexRequestExDebug((hMutexSem), (fFlags), (uTimeout), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
@@ -651,7 +686,7 @@ RTDECL(bool) RTSemMutexIsOwned(RTSEMMUTEX hMutexSem);
  * sections).  Unlike critical sections however, they are *not* recursive.
  *
  * @remarks The fast mutexes has sideeffects on IRQL on Windows hosts.  So use
- *          with care and test on windows with driver verifier.
+ *          with care and test on windows with the driver verifier enabled.
  *
  * @{ */
 
@@ -677,10 +712,6 @@ RTDECL(int)  RTSemFastMutexDestroy(RTSEMFASTMUTEX hFastMtx);
 
 /**
  * Request ownership of a fast mutex semaphore.
- *
- * The same thread may request a mutex semaphore multiple times,
- * a nested counter is kept to make sure it's released on the right
- * RTSemMutexRelease() call.
  *
  * @returns iprt status code.
  * @param   hFastMtx            Handle to the fast mutex semaphore.
@@ -1131,7 +1162,7 @@ RTDECL(uint32_t) RTSemRWGetReadCount(RTSEMRW hRWSem);
 
 /* Strict build: Remap the four request calls to the debug versions. */
 #if defined(RT_STRICT) && !defined(RTSEMRW_WITHOUT_REMAPPING) && !defined(RT_WITH_MANGLING)
-# ifdef ___iprt_asm_h
+# ifdef IPRT_INCLUDED_asm_h
 #  define RTSemRWRequestRead(hRWSem, cMillies)              RTSemRWRequestReadDebug((hRWSem), (cMillies), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 #  define RTSemRWRequestReadNoResume(hRWSem, cMillies)      RTSemRWRequestReadNoResumeDebug((hRWSem), (cMillies), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 #  define RTSemRWRequestWrite(hRWSem, cMillies)             RTSemRWRequestWriteDebug((hRWSem), (cMillies), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
@@ -1405,5 +1436,5 @@ RTDECL(int) RTSemXRoadsEWLeave(RTSEMXROADS hXRoads);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_semaphore_h */
 

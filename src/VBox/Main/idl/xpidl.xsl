@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
-<!-- $Id$ -->
+<!-- $Id: xpidl.xsl 82969 2020-02-04 10:54:12Z vboxsync $ -->
 
 <!--
  *  A template to generate a XPCOM IDL compatible interface definition file
  *  from the generic interface definition expressed in XML.
 
-    Copyright (C) 2006-2016 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -22,6 +22,21 @@
 <xsl:strip-space elements="*"/>
 
 <xsl:include href="typemap-shared.inc.xsl"/>
+
+
+<!-- - - - - - - - - - - - - - - - - - - - - - -
+   XSLT parameters
+ - - - - - - - - - - - - - - - - - - - - - - -->
+
+<!-- xpidl doesn't support enums. This parameter performs certain hacks that helps
+     us bridge the gap and get similar behaviour as msidl.
+
+     The https://bugzilla.mozilla.org/show_bug.cgi?id=8781 bug discusses why xpidl
+     doesn't do enums.  It boils down to the gcc short-enum option and similar
+     portability concerns.
+ -->
+<xsl:param name="g_fHackEnumsOntoCppEnums" select="'yes'"/>
+
 
 <!--
 //  templates
@@ -147,21 +162,34 @@
   <xsl:text>#endif // !VBOX_EXTERN_C&#x0A;</xsl:text>
   <!-- result codes -->
   <xsl:text>// result codes declared in API spec&#x0A;</xsl:text>
-  <xsl:for-each select="result">
+  <xsl:for-each select="application/result">
     <xsl:apply-templates select="."/>
   </xsl:for-each>
   <xsl:text>%}&#x0A;&#x0A;</xsl:text>
   <!-- forward declarations -->
-  <xsl:apply-templates select="if | interface" mode="forward"/>
+  <xsl:apply-templates select="application/if | application/interface" mode="forward"/>
   <xsl:text>&#x0A;</xsl:text>
   <!-- all enums go first -->
-  <xsl:apply-templates select="enum | if/enum"/>
-  <!-- everything else but result codes and enums -->
-  <xsl:apply-templates select="*[not(self::result or self::enum) and
-                                 not(self::if[result] or self::if[enum])]"/>
+  <xsl:apply-templates select="application/enum | application/if/enum"/>
+  <!-- everything else but result codes and enums
+  <xsl:apply-templates select="*[not(self::application/result or self::application/enum) and
+                                 not(self::application[result] or self::application/if[enum])]"/> -->
+  <!-- the modules (i.e. everything else) -->
+  <xsl:apply-templates select="application/interface | application/if[interface]
+                                   | application/module | application/if[module]"/>
   <!-- -->
 </xsl:template>
 
+
+ <!--
+ *  applications
+-->
+<xsl:template match="application">
+  <xsl:apply-templates/>
+</xsl:template>
+<xsl:template match="application" mode="forward">
+  <xsl:apply-templates mode="forward"/>
+</xsl:template>
 
 <!--
  *  result codes
@@ -687,20 +715,56 @@
     <xsl:text>;&#x0A;</xsl:text>
   </xsl:for-each>
   <xsl:text>};&#x0A;&#x0A;</xsl:text>
-  <!-- -->
-  <xsl:value-of select="concat('/* cross-platform type name for ', @name, ' */&#x0A;')"/>
-  <xsl:text>%{C++&#x0A;</xsl:text>
-  <xsl:value-of select="concat('#define ', @name, '_T', ' ',
-                               'PRUint32&#x0A;')"/>
-  <xsl:text>%}&#x0A;&#x0A;</xsl:text>
-  <!-- -->
-  <xsl:value-of select="concat('/* cross-platform constants for ', @name, ' */&#x0A;')"/>
-  <xsl:text>%{C++&#x0A;</xsl:text>
-  <xsl:for-each select="const">
-    <xsl:value-of select="concat('#define ', ../@name, '_', @name, ' ',
-                                 ../@name, '::', @name, '&#x0A;')"/>
-  </xsl:for-each>
-  <xsl:text>%}&#x0A;&#x0A;</xsl:text>
+  <xsl:choose>
+
+    <xsl:when test="$g_fHackEnumsOntoCppEnums = 'yes'">
+      <xsl:text>
+/* IDL typedef for enum </xsl:text><xsl:value-of select="@name" /><xsl:text> and C++ mappings. */
+%{C++
+#ifndef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+%}
+typedef PRUint32 </xsl:text><xsl:value-of select="concat(@name, '_T')" /><xsl:text>;
+%{C++
+</xsl:text>
+      <xsl:for-each select="const">
+        <xsl:value-of select="concat('# define ', ../@name, '_', @name, ' ', ../@name, '::', @name, '&#x0A;')"/>
+      </xsl:for-each>
+      <xsl:text>#else /* VBOX_WITH_XPCOM_CPP_ENUM_HACK */
+typedef enum </xsl:text>
+      <xsl:value-of select="concat(@name, '_T')" />
+      <xsl:text> {
+</xsl:text>
+      <xsl:for-each select="const">
+        <xsl:value-of select="concat('    ', ../@name, '_', @name, ' = ', ../@name, '::', @name, ',&#x0A;')"/>
+      </xsl:for-each>
+      <xsl:value-of select="concat('    ', @name, '_32BitHack = 0x7fffffff', '&#x0A;')"/>
+      <xsl:text>} </xsl:text><xsl:value-of select="concat(@name, '_T')"/><xsl:text>;
+# ifdef AssertCompileSize
+AssertCompileSize(</xsl:text><xsl:value-of select="concat(@name, '_T')"/><xsl:text>, sizeof(PRUint32));
+# endif
+#endif /* VBOX_WITH_XPCOM_CPP_ENUM_HACK */
+%}
+
+</xsl:text>
+    </xsl:when>
+
+    <xsl:otherwise>
+      <!-- -->
+      <xsl:value-of select="concat('/* cross-platform type name for ', @name, ' */&#x0A;')"/>
+      <xsl:text>%{C++&#x0A;</xsl:text>
+      <xsl:value-of select="concat('#define ', @name, '_T', ' ',
+                                   'PRUint32&#x0A;')"/>
+      <xsl:text>%}&#x0A;&#x0A;</xsl:text>
+      <!-- -->
+      <xsl:value-of select="concat('/* cross-platform constants for ', @name, ' */&#x0A;')"/>
+      <xsl:text>%{C++&#x0A;</xsl:text>
+      <xsl:for-each select="const">
+        <xsl:value-of select="concat('#define ', ../@name, '_', @name, ' ',
+                                     ../@name, '::', @name, '&#x0A;')"/>
+      </xsl:for-each>
+      <xsl:text>%}&#x0A;&#x0A;</xsl:text>
+    </xsl:otherwise>
+  </xsl:choose>
 </xsl:template>
 
 
@@ -885,15 +949,22 @@
           <xsl:choose>
             <!-- enum types -->
             <xsl:when test="
-              (ancestor::library/enum[@name=current()]) or
-              (ancestor::library/if[@target=$self_target]/enum[@name=current()])
+              (ancestor::library/application/enum[@name=current()]) or
+              (ancestor::library/application/if[@target=$self_target]/enum[@name=current()])
             ">
-              <xsl:text>PRUint32</xsl:text>
+              <xsl:choose>
+                <xsl:when test="$g_fHackEnumsOntoCppEnums = 'yes'">
+                  <xsl:value-of select="concat(., '_T')" />
+                </xsl:when>
+                <xsl:otherwise>
+                  <xsl:text>PRUint32</xsl:text>
+                </xsl:otherwise>
+              </xsl:choose>
             </xsl:when>
             <!-- custom interface types -->
             <xsl:when test="
-              (ancestor::library/interface[@name=current()]) or
-               (ancestor::library/if[@target=$self_target]/interface[@name=current()])
+              (ancestor::library/application/interface[@name=current()]) or
+               (ancestor::library/application/if[@target=$self_target]/interface[@name=current()])
             ">
               <xsl:value-of select="."/>
             </xsl:when>
@@ -1007,15 +1078,15 @@
           <xsl:choose>
             <!-- enum types -->
             <xsl:when test="
-              (ancestor::library/enum[@name=current()]) or
-              (ancestor::library/if[@target=$self_target]/enum[@name=current()])
+              (ancestor::library/application/enum[@name=current()]) or
+              (ancestor::library/application/if[@target=$self_target]/enum[@name=current()])
             ">
               <xsl:text>PRUint32</xsl:text>
             </xsl:when>
             <!-- custom interface types -->
             <xsl:when test="
-              (ancestor::library/interface[@name=current()]) or
-              (ancestor::library/if[@target=$self_target]/interface[@name=current()])
+              (ancestor::library/application/interface[@name=current()]) or
+              (ancestor::library/application/if[@target=$self_target]/interface[@name=current()])
             ">
               <xsl:value-of select="."/>
               <xsl:text> *</xsl:text>
@@ -1027,6 +1098,16 @@
     </xsl:otherwise>
   </xsl:choose>
 </xsl:template>
+
+<!-- Filters for switch off VBoxSDS definitions -->
+
+<xsl:template match="application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']//module/class" />
+
+<xsl:template match="application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']/if//interface
+| application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']//interface" />
+
+<xsl:template match="application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']//interface" mode="forward" />
+
 
 </xsl:stylesheet>
 

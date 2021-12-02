@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VSCSIIoReq.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual SCSI driver: I/O request handling.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,7 +16,7 @@
  */
 #define LOG_GROUP LOG_GROUP_VSCSI
 #include <VBox/log.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/types.h>
 #include <VBox/vscsi.h>
 #include <iprt/assert.h>
@@ -76,6 +76,41 @@ int vscsiIoReqTransferEnqueue(PVSCSILUNINT pVScsiLun, PVSCSIREQINT pVScsiReq,
         pVScsiIoReq->u.Io.cbTransfer = cbTransfer;
         pVScsiIoReq->u.Io.paSeg      = pVScsiReq->SgBuf.paSegs;
         pVScsiIoReq->u.Io.cSeg       = pVScsiReq->SgBuf.cSegs;
+
+        ASMAtomicIncU32(&pVScsiLun->IoReq.cReqOutstanding);
+
+        rc = vscsiLunReqTransferEnqueue(pVScsiLun, pVScsiIoReq);
+        if (RT_FAILURE(rc))
+        {
+            ASMAtomicDecU32(&pVScsiLun->IoReq.cReqOutstanding);
+            vscsiLunReqFree(pVScsiLun, pVScsiIoReq);
+        }
+    }
+
+    return rc;
+}
+
+
+int vscsiIoReqTransferEnqueueEx(PVSCSILUNINT pVScsiLun, PVSCSIREQINT pVScsiReq,
+                                VSCSIIOREQTXDIR enmTxDir, uint64_t uOffset,
+                                PCRTSGSEG paSegs, unsigned cSegs, size_t cbTransfer)
+{
+    int rc = VINF_SUCCESS;
+    PVSCSIIOREQINT pVScsiIoReq = NULL;
+
+    LogFlowFunc(("pVScsiLun=%#p pVScsiReq=%#p enmTxDir=%u uOffset=%llu cbTransfer=%u\n",
+                 pVScsiLun, pVScsiReq, enmTxDir, uOffset, cbTransfer));
+
+    rc = vscsiLunReqAlloc(pVScsiLun, (uintptr_t)pVScsiReq, &pVScsiIoReq);
+    if (RT_SUCCESS(rc))
+    {
+        pVScsiIoReq->pVScsiReq       = pVScsiReq;
+        pVScsiIoReq->pVScsiLun       = pVScsiLun;
+        pVScsiIoReq->enmTxDir        = enmTxDir;
+        pVScsiIoReq->u.Io.uOffset    = uOffset;
+        pVScsiIoReq->u.Io.cbTransfer = cbTransfer;
+        pVScsiIoReq->u.Io.paSeg      = paSegs;
+        pVScsiIoReq->u.Io.cSeg       = cSegs;
 
         ASMAtomicIncU32(&pVScsiLun->IoReq.cReqOutstanding);
 

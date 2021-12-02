@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DynLoadLibSolaris.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Dynamically loaded libraries for Solaris hosts, Internal header.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_DYN_LOAD_LIB_SOLARIS
-#define ____H_DYN_LOAD_LIB_SOLARIS
+#ifndef MAIN_INCLUDED_SRC_src_server_solaris_DynLoadLibSolaris_h
+#define MAIN_INCLUDED_SRC_src_server_solaris_DynLoadLibSolaris_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #define LIB_DLPI "libdlpi.so.1"
 #ifdef RT_OS_SOLARIS_10
@@ -33,5 +36,5 @@ extern void (*g_pfnLibDlpiClose)(dlpi_handle_t);
 
 extern bool VBoxSolarisLibDlpiFound(void);
 
-#endif /*  ____H_DYN_LOAD_LIB_SOLARIS */
+#endif /* !MAIN_INCLUDED_SRC_src_server_solaris_DynLoadLibSolaris_h */
 

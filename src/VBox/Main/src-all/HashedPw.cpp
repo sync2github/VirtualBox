@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HashedPw.cpp 85238 2020-07-11 16:37:56Z vboxsync $ */
 /** @file
  * Main - Password Hashing
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -95,7 +95,7 @@ void VBoxHashPassword(RTCString *a_pstrPassword)
         /* hash */
         uint8_t abHash[RTSHA512_HASH_SIZE];
         RTSha512(a_pstrPassword->c_str(), a_pstrPassword->length(), abHash);
-        int rc = RTSha512ToString(abHash, pszHashedPw, sizeof(szHashedPw) - (pszHashedPw - &szHashedPw[0]));
+        int rc = RTSha512ToString(abHash, pszHashedPw, sizeof(szHashedPw) - (size_t)(pszHashedPw - &szHashedPw[0]));
         AssertReleaseRC(rc);
     }
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PGMPool.cpp 92162 2021-10-31 23:34:31Z vboxsync $ */
 /** @file
  * PGM Shadow Page Pool.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -96,6 +96,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_PGM_POOL
+#define VBOX_WITHOUT_PAGING_BIT_FIELDS /* 64-bit bitfields are just asking for trouble. See @bugref{9841} and others. */
 #include <VBox/vmm/pgm.h>
 #include <VBox/vmm/mm.h>
 #include "PGMInternal.h"
@@ -169,7 +170,9 @@ int pgmR3PoolInit(PVM pVM)
     AssertLogRelRCReturn(rc, rc);
     AssertLogRelMsgReturn(cMaxPages <= PGMPOOL_IDX_LAST && cMaxPages >= RT_ALIGN(PGMPOOL_IDX_FIRST, 16),
                           ("cMaxPages=%u (%#x)\n", cMaxPages, cMaxPages), VERR_INVALID_PARAMETER);
-    cMaxPages = RT_ALIGN(cMaxPages, 16);
+    AssertCompile(RT_IS_POWER_OF_TWO(PGMPOOL_CFG_MAX_GROW));
+    if (cMaxPages < PGMPOOL_IDX_LAST)
+        cMaxPages = RT_ALIGN(cMaxPages, PGMPOOL_CFG_MAX_GROW / 2);
     if (cMaxPages > PGMPOOL_IDX_LAST)
         cMaxPages = PGMPOOL_IDX_LAST;
     LogRel(("PGM: PGMPool: cMaxPages=%u (u64MaxPages=%llu)\n", cMaxPages, u64MaxPages));
@@ -224,7 +227,7 @@ int pgmR3PoolInit(PVM pVM)
     /*
      * Allocate the data structures.
      */
-    uint32_t cb = RT_OFFSETOF(PGMPOOL, aPages[cMaxPages]);
+    uint32_t cb = RT_UOFFSETOF_DYN(PGMPOOL, aPages[cMaxPages]);
     cb += cMaxUsers * sizeof(PGMPOOLUSER);
     cb += cMaxPhysExts * sizeof(PGMPOOLPHYSEXT);
     PPGMPOOL pPool;
@@ -233,14 +236,12 @@ int pgmR3PoolInit(PVM pVM)
         return rc;
     pVM->pgm.s.pPoolR3 = pPool;
     pVM->pgm.s.pPoolR0 = MMHyperR3ToR0(pVM, pPool);
-    pVM->pgm.s.pPoolRC = MMHyperR3ToRC(pVM, pPool);
 
     /*
      * Initialize it.
      */
     pPool->pVMR3     = pVM;
-    pPool->pVMR0     = pVM->pVMR0;
-    pPool->pVMRC     = pVM->pVMRC;
+    pPool->pVMR0     = pVM->pVMR0ForCall;
     pPool->cMaxPages = cMaxPages;
     pPool->cCurPages = PGMPOOL_IDX_FIRST;
     pPool->iUserFreeHead = 0;
@@ -248,7 +249,6 @@ int pgmR3PoolInit(PVM pVM)
     PPGMPOOLUSER paUsers = (PPGMPOOLUSER)&pPool->aPages[pPool->cMaxPages];
     pPool->paUsersR3 = paUsers;
     pPool->paUsersR0 = MMHyperR3ToR0(pVM, paUsers);
-    pPool->paUsersRC = MMHyperR3ToRC(pVM, paUsers);
     for (unsigned i = 0; i < cMaxUsers; i++)
     {
         paUsers[i].iNext = i + 1;
@@ -261,7 +261,6 @@ int pgmR3PoolInit(PVM pVM)
     PPGMPOOLPHYSEXT paPhysExts = (PPGMPOOLPHYSEXT)&paUsers[cMaxUsers];
     pPool->paPhysExtsR3 = paPhysExts;
     pPool->paPhysExtsR0 = MMHyperR3ToR0(pVM, paPhysExts);
-    pPool->paPhysExtsRC = MMHyperR3ToRC(pVM, paPhysExts);
     for (unsigned i = 0; i < cMaxPhysExts; i++)
     {
         paPhysExts[i].iNext = i + 1;
@@ -280,10 +279,10 @@ int pgmR3PoolInit(PVM pVM)
     pPool->fCacheEnabled = fCacheEnabled;
 
     pPool->hAccessHandlerType = NIL_PGMPHYSHANDLERTYPE;
-    rc = PGMR3HandlerPhysicalTypeRegister(pVM, PGMPHYSHANDLERKIND_WRITE,
+    rc = PGMR3HandlerPhysicalTypeRegister(pVM, PGMPHYSHANDLERKIND_WRITE, true /*fKeepPgmLock*/,
                                           pgmPoolAccessHandler,
-                                          NULL, "pgmPoolAccessHandler", "pgmPoolAccessPfHandler",
-                                          NULL, "pgmPoolAccessHandler", "pgmPoolAccessPfHandler",
+                                          NULL, "pgmPoolAccessHandler", "pgmRZPoolAccessPfHandler",
+                                          NULL, "pgmPoolAccessHandler", "pgmRZPoolAccessPfHandler",
                                           "Guest Paging Access Handler",
                                           &pPool->hAccessHandlerType);
     AssertLogRelRCReturn(rc, rc);
@@ -317,10 +316,11 @@ int pgmR3PoolInit(PVM pVM)
     Assert(!pPool->aPages[NIL_PGMPOOL_IDX].fZeroed);
     Assert(!pPool->aPages[NIL_PGMPOOL_IDX].fReusedFlushPending);
 
-#ifdef VBOX_WITH_STATISTICS
     /*
      * Register statistics.
      */
+    STAM_REL_REG(pVM, &pPool->StatGrow,                 STAMTYPE_PROFILE,   "/PGM/Pool/Grow",           STAMUNIT_TICKS, "Profiling PGMR0PoolGrow");
+#ifdef VBOX_WITH_STATISTICS
     STAM_REG(pVM, &pPool->cCurPages,                    STAMTYPE_U16,       "/PGM/Pool/cCurPages",      STAMUNIT_PAGES,             "Current pool size.");
     STAM_REG(pVM, &pPool->cMaxPages,                    STAMTYPE_U16,       "/PGM/Pool/cMaxPages",      STAMUNIT_PAGES,             "Max pool size.");
     STAM_REG(pVM, &pPool->cUsedPages,                   STAMTYPE_U16,       "/PGM/Pool/cUsedPages",     STAMUNIT_PAGES,             "The number of pages currently in use.");
@@ -346,35 +346,87 @@ int pgmR3PoolInit(PVM pVM)
     STAM_REG(pVM, &pPool->StatTrackDerefGCPhys,         STAMTYPE_PROFILE,   "/PGM/Pool/Track/DrefGCPhys",           STAMUNIT_TICKS_PER_CALL, "Profiling deref activity related tracking GC physical pages.");
     STAM_REG(pVM, &pPool->StatTrackLinearRamSearches,   STAMTYPE_COUNTER,   "/PGM/Pool/Track/LinearRamSearches",    STAMUNIT_OCCURENCES, "The number of times we had to do linear ram searches.");
     STAM_REG(pVM, &pPool->StamTrackPhysExtAllocFailures,STAMTYPE_COUNTER,   "/PGM/Pool/Track/PhysExtAllocFailures", STAMUNIT_OCCURENCES, "The number of failing pgmPoolTrackPhysExtAlloc calls.");
-    STAM_REG(pVM, &pPool->StatMonitorRZ,                STAMTYPE_PROFILE,   "/PGM/Pool/Monitor/RZ",                 STAMUNIT_TICKS_PER_CALL, "Profiling the RC/R0 access handler.");
-    STAM_REG(pVM, &pPool->StatMonitorRZEmulateInstr,    STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/EmulateInstr",    STAMUNIT_OCCURENCES,     "Times we've failed interpreting the instruction.");
-    STAM_REG(pVM, &pPool->StatMonitorRZFlushPage,       STAMTYPE_PROFILE,   "/PGM/Pool/Monitor/RZ/FlushPage",       STAMUNIT_TICKS_PER_CALL, "Profiling the pgmPoolFlushPage calls made from the RC/R0 access handler.");
-    STAM_REG(pVM, &pPool->StatMonitorRZFlushReinit,     STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/FlushReinit",     STAMUNIT_OCCURENCES,     "Times we've detected a page table reinit.");
-    STAM_REG(pVM, &pPool->StatMonitorRZFlushModOverflow,STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/FlushOverflow",   STAMUNIT_OCCURENCES,     "Counting flushes for pages that are modified too often.");
-    STAM_REG(pVM, &pPool->StatMonitorRZFork,            STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/Fork",            STAMUNIT_OCCURENCES,     "Times we've detected fork().");
-    STAM_REG(pVM, &pPool->StatMonitorRZHandled,         STAMTYPE_PROFILE,   "/PGM/Pool/Monitor/RZ/Handled",         STAMUNIT_TICKS_PER_CALL, "Profiling the RC/R0 access we've handled (except REP STOSD).");
-    STAM_REG(pVM, &pPool->StatMonitorRZIntrFailPatch1,  STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/IntrFailPatch1",  STAMUNIT_OCCURENCES,     "Times we've failed interpreting a patch code instruction.");
-    STAM_REG(pVM, &pPool->StatMonitorRZIntrFailPatch2,  STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/IntrFailPatch2",  STAMUNIT_OCCURENCES,     "Times we've failed interpreting a patch code instruction during flushing.");
-    STAM_REG(pVM, &pPool->StatMonitorRZRepPrefix,       STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/RepPrefix",       STAMUNIT_OCCURENCES,     "The number of times we've seen rep prefixes we can't handle.");
-    STAM_REG(pVM, &pPool->StatMonitorRZRepStosd,        STAMTYPE_PROFILE,   "/PGM/Pool/Monitor/RZ/RepStosd",        STAMUNIT_TICKS_PER_CALL, "Profiling the REP STOSD cases we've handled.");
-    STAM_REG(pVM, &pPool->StatMonitorRZFaultPT,         STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/Fault/PT",        STAMUNIT_OCCURENCES,     "Nr of handled PT faults.");
-    STAM_REG(pVM, &pPool->StatMonitorRZFaultPD,         STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/Fault/PD",        STAMUNIT_OCCURENCES,     "Nr of handled PD faults.");
-    STAM_REG(pVM, &pPool->StatMonitorRZFaultPDPT,       STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/Fault/PDPT",      STAMUNIT_OCCURENCES,     "Nr of handled PDPT faults.");
-    STAM_REG(pVM, &pPool->StatMonitorRZFaultPML4,       STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/RZ/Fault/PML4",      STAMUNIT_OCCURENCES,     "Nr of handled PML4 faults.");
-    STAM_REG(pVM, &pPool->StatMonitorR3,                STAMTYPE_PROFILE,   "/PGM/Pool/Monitor/R3",                 STAMUNIT_TICKS_PER_CALL, "Profiling the R3 access handler.");
-    STAM_REG(pVM, &pPool->StatMonitorR3EmulateInstr,    STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/EmulateInstr",    STAMUNIT_OCCURENCES,     "Times we've failed interpreting the instruction.");
-    STAM_REG(pVM, &pPool->StatMonitorR3FlushPage,       STAMTYPE_PROFILE,   "/PGM/Pool/Monitor/R3/FlushPage",       STAMUNIT_TICKS_PER_CALL, "Profiling the pgmPoolFlushPage calls made from the R3 access handler.");
-    STAM_REG(pVM, &pPool->StatMonitorR3FlushReinit,     STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/FlushReinit",     STAMUNIT_OCCURENCES,     "Times we've detected a page table reinit.");
-    STAM_REG(pVM, &pPool->StatMonitorR3FlushModOverflow,STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/FlushOverflow",   STAMUNIT_OCCURENCES,     "Counting flushes for pages that are modified too often.");
-    STAM_REG(pVM, &pPool->StatMonitorR3Fork,            STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/Fork",            STAMUNIT_OCCURENCES,     "Times we've detected fork().");
-    STAM_REG(pVM, &pPool->StatMonitorR3Handled,         STAMTYPE_PROFILE,   "/PGM/Pool/Monitor/R3/Handled",         STAMUNIT_TICKS_PER_CALL, "Profiling the R3 access we've handled (except REP STOSD).");
-    STAM_REG(pVM, &pPool->StatMonitorR3RepPrefix,       STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/RepPrefix",       STAMUNIT_OCCURENCES,     "The number of times we've seen rep prefixes we can't handle.");
-    STAM_REG(pVM, &pPool->StatMonitorR3RepStosd,        STAMTYPE_PROFILE,   "/PGM/Pool/Monitor/R3/RepStosd",        STAMUNIT_TICKS_PER_CALL, "Profiling the REP STOSD cases we've handled.");
+
+    STAM_REG(pVM, &pPool->StatMonitorPfRZ,                STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/#PF",                 STAMUNIT_TICKS_PER_CALL, "Profiling the RC/R0 #PF access handler.");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZEmulateInstr,    STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/#PF/EmulateInstr",    STAMUNIT_OCCURENCES,     "Times we've failed interpreting the instruction.");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZFlushPage,       STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/#PF/FlushPage",       STAMUNIT_TICKS_PER_CALL, "Profiling the pgmPoolFlushPage calls made from the RC/R0 access handler.");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZFlushReinit,     STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/#PF/FlushReinit",     STAMUNIT_OCCURENCES,     "Times we've detected a page table reinit.");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZFlushModOverflow,STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/#PF/FlushOverflow",   STAMUNIT_OCCURENCES,     "Counting flushes for pages that are modified too often.");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZFork,            STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/#PF/Fork",            STAMUNIT_OCCURENCES,     "Times we've detected fork().");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZHandled,         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/#PF/Handled",         STAMUNIT_TICKS_PER_CALL, "Profiling the RC/R0 #PF access we've handled (except REP STOSD).");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZIntrFailPatch1,  STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/#PF/IntrFailPatch1",  STAMUNIT_OCCURENCES,     "Times we've failed interpreting a patch code instruction.");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZIntrFailPatch2,  STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/#PF/IntrFailPatch2",  STAMUNIT_OCCURENCES,     "Times we've failed interpreting a patch code instruction during flushing.");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZRepPrefix,       STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/#PF/RepPrefix",       STAMUNIT_OCCURENCES,     "The number of times we've seen rep prefixes we can't handle.");
+    STAM_REG(pVM, &pPool->StatMonitorPfRZRepStosd,        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/#PF/RepStosd",        STAMUNIT_TICKS_PER_CALL, "Profiling the REP STOSD cases we've handled.");
+
+    STAM_REG(pVM, &pPool->StatMonitorRZ,                  STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM",                 STAMUNIT_TICKS_PER_CALL, "Profiling the regular access handler.");
+    STAM_REG(pVM, &pPool->StatMonitorRZFlushPage,         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/FlushPage",       STAMUNIT_TICKS_PER_CALL, "Profiling the pgmPoolFlushPage calls made from the regular access handler.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[0],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size01",          STAMUNIT_OCCURENCES,     "Number of 1 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[1],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size02",          STAMUNIT_OCCURENCES,     "Number of 2 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[2],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size03",          STAMUNIT_OCCURENCES,     "Number of 3 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[3],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size04",          STAMUNIT_OCCURENCES,     "Number of 4 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[4],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size05",          STAMUNIT_OCCURENCES,     "Number of 5 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[5],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size06",          STAMUNIT_OCCURENCES,     "Number of 6 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[6],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size07",          STAMUNIT_OCCURENCES,     "Number of 7 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[7],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size08",          STAMUNIT_OCCURENCES,     "Number of 8 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[8],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size09",          STAMUNIT_OCCURENCES,     "Number of 9 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[9],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size0a",          STAMUNIT_OCCURENCES,     "Number of 10 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[10],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size0b",          STAMUNIT_OCCURENCES,     "Number of 11 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[11],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size0c",          STAMUNIT_OCCURENCES,     "Number of 12 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[12],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size0d",          STAMUNIT_OCCURENCES,     "Number of 13 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[13],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size0e",          STAMUNIT_OCCURENCES,     "Number of 14 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[14],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size0f",          STAMUNIT_OCCURENCES,     "Number of 15 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[15],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size10",          STAMUNIT_OCCURENCES,     "Number of 16 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[16],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size11-2f",       STAMUNIT_OCCURENCES,     "Number of 17-31 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[17],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size20-3f",       STAMUNIT_OCCURENCES,     "Number of 32-63 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZSizes[18],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Size40+",         STAMUNIT_OCCURENCES,     "Number of 64+ byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZMisaligned[0],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Misaligned1",     STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 1.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZMisaligned[1],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Misaligned2",     STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 2.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZMisaligned[2],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Misaligned3",     STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 3.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZMisaligned[3],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Misaligned4",     STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 4.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZMisaligned[4],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Misaligned5",     STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 5.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZMisaligned[5],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Misaligned6",     STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 6.");
+    STAM_REG(pVM, &pPool->aStatMonitorRZMisaligned[6],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/RZ/IEM/Misaligned7",     STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 7.");
+
+    STAM_REG(pVM, &pPool->StatMonitorRZFaultPT,           STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/Fault/PT",            STAMUNIT_OCCURENCES,     "Nr of handled PT faults.");
+    STAM_REG(pVM, &pPool->StatMonitorRZFaultPD,           STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/Fault/PD",            STAMUNIT_OCCURENCES,     "Nr of handled PD faults.");
+    STAM_REG(pVM, &pPool->StatMonitorRZFaultPDPT,         STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/Fault/PDPT",          STAMUNIT_OCCURENCES,     "Nr of handled PDPT faults.");
+    STAM_REG(pVM, &pPool->StatMonitorRZFaultPML4,         STAMTYPE_COUNTER, "/PGM/Pool/Monitor/RZ/Fault/PML4",          STAMUNIT_OCCURENCES,     "Nr of handled PML4 faults.");
+
+    STAM_REG(pVM, &pPool->StatMonitorR3,                  STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3",                     STAMUNIT_TICKS_PER_CALL, "Profiling the R3 access handler.");
+    STAM_REG(pVM, &pPool->StatMonitorR3FlushPage,         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/FlushPage",           STAMUNIT_TICKS_PER_CALL, "Profiling the pgmPoolFlushPage calls made from the R3 access handler.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[0],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size01",              STAMUNIT_OCCURENCES,     "Number of 1 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[1],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size02",              STAMUNIT_OCCURENCES,     "Number of 2 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[2],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size03",              STAMUNIT_OCCURENCES,     "Number of 3 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[3],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size04",              STAMUNIT_OCCURENCES,     "Number of 4 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[4],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size05",              STAMUNIT_OCCURENCES,     "Number of 5 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[5],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size06",              STAMUNIT_OCCURENCES,     "Number of 6 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[6],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size07",              STAMUNIT_OCCURENCES,     "Number of 7 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[7],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size08",              STAMUNIT_OCCURENCES,     "Number of 8 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[8],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size09",              STAMUNIT_OCCURENCES,     "Number of 9 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[9],         STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size0a",              STAMUNIT_OCCURENCES,     "Number of 10 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[10],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size0b",              STAMUNIT_OCCURENCES,     "Number of 11 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[11],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size0c",              STAMUNIT_OCCURENCES,     "Number of 12 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[12],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size0d",              STAMUNIT_OCCURENCES,     "Number of 13 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[13],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size0e",              STAMUNIT_OCCURENCES,     "Number of 14 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[14],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size0f",              STAMUNIT_OCCURENCES,     "Number of 15 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[15],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size10",              STAMUNIT_OCCURENCES,     "Number of 16 byte accesses (R3).");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[16],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size11-2f",           STAMUNIT_OCCURENCES,     "Number of 17-31 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[17],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size20-3f",           STAMUNIT_OCCURENCES,     "Number of 32-63 byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Sizes[18],        STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Size40+",             STAMUNIT_OCCURENCES,     "Number of 64+ byte accesses.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Misaligned[0],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Misaligned1",         STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 1 in R3.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Misaligned[1],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Misaligned2",         STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 2 in R3.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Misaligned[2],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Misaligned3",         STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 3 in R3.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Misaligned[3],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Misaligned4",         STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 4 in R3.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Misaligned[4],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Misaligned5",         STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 5 in R3.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Misaligned[5],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Misaligned6",         STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 6 in R3.");
+    STAM_REG(pVM, &pPool->aStatMonitorR3Misaligned[6],    STAMTYPE_PROFILE, "/PGM/Pool/Monitor/R3/Misaligned7",         STAMUNIT_OCCURENCES,     "Number of misaligned access with offset 7 in R3.");
+
     STAM_REG(pVM, &pPool->StatMonitorR3FaultPT,         STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/Fault/PT",        STAMUNIT_OCCURENCES,     "Nr of handled PT faults.");
     STAM_REG(pVM, &pPool->StatMonitorR3FaultPD,         STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/Fault/PD",        STAMUNIT_OCCURENCES,     "Nr of handled PD faults.");
     STAM_REG(pVM, &pPool->StatMonitorR3FaultPDPT,       STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/Fault/PDPT",      STAMUNIT_OCCURENCES,     "Nr of handled PDPT faults.");
     STAM_REG(pVM, &pPool->StatMonitorR3FaultPML4,       STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/Fault/PML4",      STAMUNIT_OCCURENCES,     "Nr of handled PML4 faults.");
-    STAM_REG(pVM, &pPool->StatMonitorR3Async,           STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/R3/Async",           STAMUNIT_OCCURENCES,     "Times we're called in an async thread and need to flush.");
+
     STAM_REG(pVM, &pPool->cModifiedPages,               STAMTYPE_U16,       "/PGM/Pool/Monitor/cModifiedPages",     STAMUNIT_PAGES,          "The current cModifiedPages value.");
     STAM_REG(pVM, &pPool->cModifiedPagesHigh,           STAMTYPE_U16_RESET, "/PGM/Pool/Monitor/cModifiedPagesHigh", STAMUNIT_PAGES,          "The high watermark for cModifiedPages.");
     STAM_REG(pVM, &pPool->StatResetDirtyPages,          STAMTYPE_COUNTER,   "/PGM/Pool/Monitor/Dirty/Resets",       STAMUNIT_OCCURENCES,     "Times we've called pgmPoolResetDirtyPages (and there were dirty page).");
@@ -413,10 +465,7 @@ int pgmR3PoolInit(PVM pVM)
  */
 void pgmR3PoolRelocate(PVM pVM)
 {
-    pVM->pgm.s.pPoolRC = MMHyperR3ToRC(pVM, pVM->pgm.s.pPoolR3);
-    pVM->pgm.s.pPoolR3->pVMRC = pVM->pVMRC;
-    pVM->pgm.s.pPoolR3->paUsersRC = MMHyperR3ToRC(pVM, pVM->pgm.s.pPoolR3->paUsersR3);
-    pVM->pgm.s.pPoolR3->paPhysExtsRC = MMHyperR3ToRC(pVM, pVM->pgm.s.pPoolR3->paPhysExtsR3);
+    RT_NOREF(pVM);
 }
 
 
@@ -427,65 +476,20 @@ void pgmR3PoolRelocate(PVM pVM)
  *
  * @returns VBox status code.
  * @param   pVM     The cross context VM structure.
+ * @param   pVCpu   The cross context virtual CPU structure of the calling EMT.
  */
-VMMR3DECL(int) PGMR3PoolGrow(PVM pVM)
+VMMR3_INT_DECL(int) PGMR3PoolGrow(PVM pVM, PVMCPU pVCpu)
 {
-    PPGMPOOL pPool = pVM->pgm.s.pPoolR3;
-    AssertReturn(pPool->cCurPages < pPool->cMaxPages, VERR_PGM_POOL_MAXED_OUT_ALREADY);
-
-    /* With 32-bit guests and no EPT, the CR3 limits the root pages to low
-       (below 4 GB) memory. */
-    /** @todo change the pool to handle ROOT page allocations specially when
-     *        required. */
-    bool fCanUseHighMemory = HMIsNestedPagingActive(pVM)
-                          && HMGetShwPagingMode(pVM) == PGMMODE_EPT;
-
-    pgmLock(pVM);
-
-    /*
-     * How much to grow it by?
-     */
-    uint32_t cPages = pPool->cMaxPages - pPool->cCurPages;
-    cPages = RT_MIN(PGMPOOL_CFG_MAX_GROW, cPages);
-    LogFlow(("PGMR3PoolGrow: Growing the pool by %d (%#x) pages. fCanUseHighMemory=%RTbool\n", cPages, cPages, fCanUseHighMemory));
-
-    for (unsigned i = pPool->cCurPages; cPages-- > 0; i++)
-    {
-        PPGMPOOLPAGE pPage = &pPool->aPages[i];
-
-        if (fCanUseHighMemory)
-            pPage->pvPageR3 = MMR3PageAlloc(pVM);
-        else
-            pPage->pvPageR3 = MMR3PageAllocLow(pVM);
-        if (!pPage->pvPageR3)
-        {
-            Log(("We're out of memory!! i=%d fCanUseHighMemory=%RTbool\n", i, fCanUseHighMemory));
-            pgmUnlock(pVM);
-            return i ? VINF_SUCCESS : VERR_NO_PAGE_MEMORY;
-        }
-        pPage->Core.Key  = MMPage2Phys(pVM, pPage->pvPageR3);
-        AssertFatal(pPage->Core.Key < _4G || fCanUseHighMemory);
-        pPage->GCPhys    = NIL_RTGCPHYS;
-        pPage->enmKind   = PGMPOOLKIND_FREE;
-        pPage->idx       = pPage - &pPool->aPages[0];
-        LogFlow(("PGMR3PoolGrow: insert page #%#x - %RHp\n", pPage->idx, pPage->Core.Key));
-        pPage->iNext     = pPool->iFreeHead;
-        pPage->iUserHead = NIL_PGMPOOL_USER_INDEX;
-        pPage->iModifiedNext  = NIL_PGMPOOL_IDX;
-        pPage->iModifiedPrev  = NIL_PGMPOOL_IDX;
-        pPage->iMonitoredNext = NIL_PGMPOOL_IDX;
-        pPage->iMonitoredPrev = NIL_PGMPOOL_IDX;
-        pPage->iAgeNext  = NIL_PGMPOOL_IDX;
-        pPage->iAgePrev  = NIL_PGMPOOL_IDX;
-        /* commit it */
-        bool fRc = RTAvloHCPhysInsert(&pPool->HCPhysTree, &pPage->Core); Assert(fRc); NOREF(fRc);
-        pPool->iFreeHead = i;
-        pPool->cCurPages = i + 1;
-    }
-
-    pgmUnlock(pVM);
-    Assert(pPool->cCurPages <= pPool->cMaxPages);
-    return VINF_SUCCESS;
+    /* This used to do a lot of stuff, but it has moved to ring-0 (PGMR0PoolGrow). */
+    AssertReturn(pVM->pgm.s.pPoolR3->cCurPages < pVM->pgm.s.pPoolR3->cMaxPages, VERR_PGM_POOL_MAXED_OUT_ALREADY);
+    int rc = VMMR3CallR0Emt(pVM, pVCpu, VMMR0_DO_PGM_POOL_GROW, 0, NULL);
+    if (rc == VINF_SUCCESS)
+        return rc;
+    LogRel(("PGMR3PoolGrow: rc=%Rrc cCurPages=%#x cMaxPages=%#x\n",
+            rc, pVM->pgm.s.pPoolR3->cCurPages, pVM->pgm.s.pPoolR3->cMaxPages));
+    if (pVM->pgm.s.pPoolR3->cCurPages > 128 && RT_FAILURE_NP(rc))
+        return -rc;
+    return rc;
 }
 
 
@@ -509,7 +513,7 @@ DECLCALLBACK(VBOXSTRICTRC) pgmR3PoolClearAllRendezvous(PVM pVM, PVMCPU pVCpu, vo
     STAM_PROFILE_START(&pPool->StatClearAll, c);
     NOREF(pVCpu);
 
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     Log(("pgmR3PoolClearAllRendezvous: cUsedPages=%d fpvFlushRemTlb=%RTbool\n", pPool->cUsedPages, !!fpvFlushRemTlb));
 
     /*
@@ -530,16 +534,15 @@ DECLCALLBACK(VBOXSTRICTRC) pgmR3PoolClearAllRendezvous(PVM pVM, PVMCPU pVCpu, vo
                  * We only care about shadow page tables that reference physical memory
                  */
 #ifdef PGM_WITH_LARGE_PAGES
-                case PGMPOOLKIND_EPT_PD_FOR_PHYS: /* Large pages reference 2 MB of physical memory, so we must clear them. */
+                case PGMPOOLKIND_PAE_PD_PHYS:   /* Large pages reference 2 MB of physical memory, so we must clear them. */
                     if (pPage->cPresent)
                     {
                         PX86PDPAE pShwPD = (PX86PDPAE)PGMPOOL_PAGE_2_PTR_V2(pPool->CTX_SUFF(pVM), pVCpu, pPage);
                         for (unsigned i = 0; i < RT_ELEMENTS(pShwPD->a); i++)
                         {
-                            if (    pShwPD->a[i].n.u1Present
-                                &&  pShwPD->a[i].b.u1Size)
+                            //Assert((pShwPD->a[i].u & UINT64_C(0xfff0000000000f80)) == 0); - bogus, includes X86_PDE_PS.
+                            if ((pShwPD->a[i].u & (X86_PDE_P | X86_PDE_PS)) == (X86_PDE_P | X86_PDE_PS))
                             {
-                                Assert(!(pShwPD->a[i].u & PGM_PDFLAGS_MAPPING));
                                 pShwPD->a[i].u = 0;
                                 Assert(pPage->cPresent);
                                 pPage->cPresent--;
@@ -550,17 +553,14 @@ DECLCALLBACK(VBOXSTRICTRC) pgmR3PoolClearAllRendezvous(PVM pVM, PVMCPU pVCpu, vo
                     }
                     goto default_case;
 
-                case PGMPOOLKIND_PAE_PD_PHYS:   /* Large pages reference 2 MB of physical memory, so we must clear them. */
+                case PGMPOOLKIND_EPT_PD_FOR_PHYS: /* Large pages reference 2 MB of physical memory, so we must clear them. */
                     if (pPage->cPresent)
                     {
                         PEPTPD pShwPD = (PEPTPD)PGMPOOL_PAGE_2_PTR_V2(pPool->CTX_SUFF(pVM), pVCpu, pPage);
                         for (unsigned i = 0; i < RT_ELEMENTS(pShwPD->a); i++)
                         {
-                            Assert((pShwPD->a[i].u & UINT64_C(0xfff0000000000f80)) == 0);
-                            if (    pShwPD->a[i].n.u1Present
-                                &&  pShwPD->a[i].b.u1Size)
+                            if ((pShwPD->a[i].u & (EPT_E_READ | EPT_E_LEAF)) == (EPT_E_READ | EPT_E_LEAF))
                             {
-                                Assert(!(pShwPD->a[i].u & PGM_PDFLAGS_MAPPING));
                                 pShwPD->a[i].u = 0;
                                 Assert(pPage->cPresent);
                                 pPage->cPresent--;
@@ -630,12 +630,11 @@ DECLCALLBACK(VBOXSTRICTRC) pgmR3PoolClearAllRendezvous(PVM pVM, PVMCPU pVCpu, vo
                         pPage->iFirstPresent = NIL_PGMPOOL_PRESENT_INDEX;
                     }
                 }
-                /* fall thru */
-
+                RT_FALL_THRU();
+                default:
 #ifdef PGM_WITH_LARGE_PAGES
                 default_case:
 #endif
-                default:
                     Assert(!pPage->cModifications || ++cModifiedPages);
                     Assert(pPage->iModifiedNext == NIL_PGMPOOL_IDX || pPage->cModifications);
                     Assert(pPage->iModifiedPrev == NIL_PGMPOOL_IDX || pPage->cModifications);
@@ -691,15 +690,11 @@ DECLCALLBACK(VBOXSTRICTRC) pgmR3PoolClearAllRendezvous(PVM pVM, PVMCPU pVCpu, vo
      */
     for (unsigned i = 0; i < RT_ELEMENTS(pPool->aDirtyPages); i++)
     {
-        PPGMPOOLPAGE pPage;
-        unsigned     idxPage;
-
-        if (pPool->aDirtyPages[i].uIdx == NIL_PGMPOOL_IDX)
+        unsigned idxPage = pPool->aidxDirtyPages[i];
+        if (idxPage == NIL_PGMPOOL_IDX)
             continue;
 
-        idxPage = pPool->aDirtyPages[i].uIdx;
-        AssertRelease(idxPage != NIL_PGMPOOL_IDX);
-        pPage = &pPool->aPages[idxPage];
+        PPGMPOOLPAGE pPage = &pPool->aPages[idxPage];
         Assert(pPage->idx == idxPage);
         Assert(pPage->iMonitoredNext == NIL_PGMPOOL_IDX && pPage->iMonitoredPrev == NIL_PGMPOOL_IDX);
 
@@ -712,7 +707,7 @@ DECLCALLBACK(VBOXSTRICTRC) pgmR3PoolClearAllRendezvous(PVM pVM, PVMCPU pVCpu, vo
         AssertRCSuccess(rc);
         pPage->fDirty = false;
 
-        pPool->aDirtyPages[i].uIdx = NIL_PGMPOOL_IDX;
+        pPool->aidxDirtyPages[i] = NIL_PGMPOOL_IDX;
     }
 
     /* Clear all dirty pages. */
@@ -722,18 +717,18 @@ DECLCALLBACK(VBOXSTRICTRC) pgmR3PoolClearAllRendezvous(PVM pVM, PVMCPU pVCpu, vo
 
     /* Clear the PGM_SYNC_CLEAR_PGM_POOL flag on all VCPUs to prevent redundant flushes. */
     for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
-        pVM->aCpus[idCpu].pgm.s.fSyncFlags &= ~PGM_SYNC_CLEAR_PGM_POOL;
+        pVM->apCpusR3[idCpu]->pgm.s.fSyncFlags &= ~PGM_SYNC_CLEAR_PGM_POOL;
 
     /* Flush job finished. */
     VM_FF_CLEAR(pVM, VM_FF_PGM_POOL_FLUSH_PENDING);
     pPool->cPresent = 0;
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     PGM_INVL_ALL_VCPU_TLBS(pVM);
 
     if (fpvFlushRemTlb)
         for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
-            CPUMSetChangedFlags(&pVM->aCpus[idCpu], CPUM_CHANGED_GLOBAL_TLB_FLUSH);
+            CPUMSetChangedFlags(pVM->apCpusR3[idCpu], CPUM_CHANGED_GLOBAL_TLB_FLUSH);
 
     STAM_PROFILE_STOP(&pPool->StatClearAll, c);
     return VINF_SUCCESS;
@@ -791,10 +786,8 @@ void pgmR3PoolWriteProtectPages(PVM pVM)
                 case PGMPOOLKIND_32BIT_PT_FOR_32BIT_4MB:
                 case PGMPOOLKIND_32BIT_PT_FOR_PHYS:
                     for (unsigned iShw = 0; iShw < RT_ELEMENTS(uShw.pPT->a); iShw++)
-                    {
-                        if (uShw.pPT->a[iShw].n.u1Present)
-                            uShw.pPT->a[iShw].n.u1Write = 0;
-                    }
+                        if (uShw.pPT->a[iShw].u & X86_PTE_P)
+                            uShw.pPT->a[iShw].u = ~(X86PGUINT)X86_PTE_RW;
                     break;
 
                 case PGMPOOLKIND_PAE_PT_FOR_32BIT_PT:
@@ -803,18 +796,14 @@ void pgmR3PoolWriteProtectPages(PVM pVM)
                 case PGMPOOLKIND_PAE_PT_FOR_PAE_2MB:
                 case PGMPOOLKIND_PAE_PT_FOR_PHYS:
                     for (unsigned iShw = 0; iShw < RT_ELEMENTS(uShw.pPTPae->a); iShw++)
-                    {
                         if (PGMSHWPTEPAE_IS_P(uShw.pPTPae->a[iShw]))
                             PGMSHWPTEPAE_SET_RO(uShw.pPTPae->a[iShw]);
-                    }
                     break;
 
                 case PGMPOOLKIND_EPT_PT_FOR_PHYS:
                     for (unsigned iShw = 0; iShw < RT_ELEMENTS(uShw.pPTEpt->a); iShw++)
-                    {
-                        if (uShw.pPTEpt->a[iShw].n.u1Present)
-                            uShw.pPTEpt->a[iShw].n.u1Write = 0;
-                    }
+                        if (uShw.pPTEpt->a[iShw].u & EPT_E_READ)
+                            uShw.pPTEpt->a[iShw].u &= ~(X86PGPAEUINT)EPT_E_WRITE;
                     break;
 
                 default:
@@ -873,7 +862,7 @@ static DECLCALLBACK(int) pgmR3PoolCmdCheck(PCDBGCCMD pCmd, PDBGCCMDHLP pCmdHlp, 
                             cErrors++;
                         }
                         else if (   PGMSHWPTEPAE_IS_RW(pShwPT->a[j])
-                                 && !pGstPT->a[j].n.u1Write)
+                                 && !(pGstPT->a[j].u & X86_PTE_RW))
                         {
                             if (fFirstMsg)
                             {

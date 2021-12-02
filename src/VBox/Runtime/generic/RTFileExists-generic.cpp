@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTFileExists-generic.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTFileExists, generic implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include "internal/iprt.h"
 
 #include <iprt/file.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
 #include <iprt/path.h>
 

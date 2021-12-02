@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: KeyboardImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_KEYBOARDIMPL
-#define ____H_KEYBOARDIMPL
+#ifndef MAIN_INCLUDED_KeyboardImpl_h
+#define MAIN_INCLUDED_KeyboardImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "KeyboardWrap.h"
 #include "EventImpl.h"
@@ -45,7 +48,7 @@ class ATL_NO_VTABLE Keyboard :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(Keyboard)
+    DECLARE_COMMON_CLASS_METHODS(Keyboard)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -73,6 +76,7 @@ private:
                          ULONG *aCodesStored);
     HRESULT putCAD();
     HRESULT releaseKeys();
+    HRESULT putUsageCode(LONG aUsageCode, LONG aUsagePage, BOOL fKeyRelease);
 
     static DECLCALLBACK(void)   i_keyboardLedStatusChange(PPDMIKEYBOARDCONNECTOR pInterface, PDMKEYBLEDS enmLeds);
     static DECLCALLBACK(void)   i_keyboardSetActive(PPDMIKEYBOARDCONNECTOR pInterface, bool fActive);
@@ -85,10 +89,6 @@ private:
     Console * const         mParent;
     /** Pointer to the associated keyboard driver(s). */
     struct DRVMAINKEYBOARD *mpDrv[KEYBOARD_MAX_DEVICES];
-    /** Pointer to the device instance for the VMM Device. */
-    PPDMDEVINS              mpVMMDev;
-    /** Set after the first attempt to find the VMM Device. */
-    bool                    mfVMMDevInited;
 
     /* The current guest keyboard LED status. */
     PDMKEYBLEDS menmLeds;
@@ -96,5 +96,5 @@ private:
     const ComObjPtr<EventSource> mEventSource;
 };
 
-#endif // !____H_KEYBOARDIMPL
+#endif /* !MAIN_INCLUDED_KeyboardImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMLdr.cpp 91939 2021-10-21 12:43:45Z vboxsync $ */
 /** @file
  * PDM - Pluggable Device Manager, module loader.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -64,7 +64,7 @@ typedef struct PDMGETIMPORTARGS
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
 *********************************************************************************************************************************/
-#ifdef VBOX_WITH_RAW_MODE
+#ifdef VBOX_WITH_RAW_MODE_KEEP
 static DECLCALLBACK(int) pdmR3GetImportRC(RTLDRMOD hLdrMod, const char *pszModule, const char *pszSymbol, unsigned uSymbol, RTUINTPTR *pValue, void *pvUser);
 static char    *pdmR3FileRC(const char *pszFile, const char *pszSearchPath);
 #endif
@@ -97,12 +97,12 @@ VMMR3_INT_DECL(int) PDMR3LdrLoadVMMR0U(PUVM pUVM)
  */
 int pdmR3LdrInitU(PUVM pUVM)
 {
-#if !defined(PDMLDR_FAKE_MODE) && defined(VBOX_WITH_RAW_MODE)
+#if !defined(PDMLDR_FAKE_MODE) && defined(VBOX_WITH_RAW_MODE_KEEP)
     /*
      * Load the mandatory RC module, the VMMR0.r0 is loaded before VM creation.
      */
     PVM pVM = pUVM->pVM; AssertPtr(pVM);
-    if (!HMIsEnabled(pVM))
+    if (VM_IS_RAW_MODE_ENABLED(pVM))
     {
         int rc = PDMR3LdrLoadRC(pVM, NULL, VMMRC_MAIN_MODULE_NAME);
         if (RT_FAILURE(rc))
@@ -121,10 +121,12 @@ int pdmR3LdrInitU(PUVM pUVM)
  * This will unload and free all modules.
  *
  * @param   pUVM        The user mode VM structure.
+ * @param   fFinal      This is clear when in the PDMR3Term/vmR3Destroy call
+ *                      chain, and set when called from PDMR3TermUVM.
  *
  * @remarks This is normally called twice during termination.
  */
-void pdmR3LdrTermU(PUVM pUVM)
+void pdmR3LdrTermU(PUVM pUVM, bool fFinal)
 {
     /*
      * Free the modules.
@@ -132,6 +134,7 @@ void pdmR3LdrTermU(PUVM pUVM)
     RTCritSectEnter(&pUVM->pdm.s.ListCritSect);
     PPDMMOD pModule = pUVM->pdm.s.pModules;
     pUVM->pdm.s.pModules = NULL;
+    PPDMMOD *ppNext = &pUVM->pdm.s.pModules;
     while (pModule)
     {
         /* free loader item. */
@@ -147,14 +150,28 @@ void pdmR3LdrTermU(PUVM pUVM)
         {
             case PDMMOD_TYPE_R0:
             {
-                Assert(pModule->ImageBase);
-                int rc2 = SUPR3FreeModule((void *)(uintptr_t)pModule->ImageBase);
-                AssertRC(rc2);
-                pModule->ImageBase = 0;
-                break;
+                if (fFinal)
+                {
+                    Assert(pModule->ImageBase);
+                    int rc2 = SUPR3FreeModule((void *)(uintptr_t)pModule->ImageBase);
+                    AssertRC(rc2);
+                    pModule->ImageBase = 0;
+                    break;
+                }
+
+                /* Postpone ring-0 module till the PDMR3TermUVM() phase as VMMR0.r0 is still
+                   busy when we're called the first time very very early in vmR3Destroy().  */
+                PPDMMOD pNextModule = pModule->pNext;
+
+                pModule->pNext = NULL;
+                *ppNext = pModule;
+                ppNext = &pModule->pNext;
+
+                pModule = pNextModule;
+                continue;
             }
 
-#ifdef VBOX_WITH_RAW_MODE
+#ifdef VBOX_WITH_RAW_MODE_KEEP
             case PDMMOD_TYPE_RC:
 #endif
             case PDMMOD_TYPE_R3:
@@ -186,7 +203,7 @@ void pdmR3LdrTermU(PUVM pUVM)
  */
 VMMR3_INT_DECL(void) PDMR3LdrRelocateU(PUVM pUVM, RTGCINTPTR offDelta)
 {
-#ifdef VBOX_WITH_RAW_MODE
+#ifdef VBOX_WITH_RAW_MODE_KEEP
     LogFlow(("PDMR3LdrRelocate: offDelta=%RGv\n", offDelta));
     RT_NOREF1(offDelta);
 
@@ -293,7 +310,7 @@ int pdmR3LoadR3U(PUVM pUVM, const char *pszFilename, const char *pszName)
      */
     const char *pszSuff = RTLdrGetSuff();
     size_t      cchSuff = RTPathHasSuffix(pszFilename) ? 0 : strlen(pszSuff);
-    PPDMMOD     pModule = (PPDMMOD)RTMemAllocZ(RT_OFFSETOF(PDMMOD, szFilename[cchFilename + cchSuff + 1]));
+    PPDMMOD     pModule = (PPDMMOD)RTMemAllocZ(RT_UOFFSETOF_DYN(PDMMOD, szFilename[cchFilename + cchSuff + 1]));
     if (pModule)
     {
         pModule->eType = PDMMOD_TYPE_R3;
@@ -327,7 +344,7 @@ int pdmR3LoadR3U(PUVM pUVM, const char *pszFilename, const char *pszName)
     return rc;
 }
 
-#ifdef VBOX_WITH_RAW_MODE
+#ifdef VBOX_WITH_RAW_MODE_KEEP
 
 /**
  * Resolve an external symbol during RTLdrGetBits() of a RC module.
@@ -361,6 +378,8 @@ static DECLCALLBACK(int) pdmR3GetImportRC(RTLDRMOD hLdrMod, const char *pszModul
         int rc = VINF_SUCCESS;
         if (!strcmp(pszSymbol, "g_VM"))
             *pValue = pVM->pVMRC;
+        else if (!strcmp(pszSymbol, "g_VCpu0"))
+            *pValue = pVM->pVMRC + pVM->offVMCPU;
         else if (!strcmp(pszSymbol, "g_CPUM"))
             *pValue = VM_RC_ADDR(pVM, &pVM->cpum);
         else if (   !strncmp(pszSymbol, "g_TRPM", 6)
@@ -378,14 +397,6 @@ static DECLCALLBACK(int) pdmR3GetImportRC(RTLDRMOD hLdrMod, const char *pszModul
         {
             RTRCPTR RCPtr = 0;
             rc = VMMR3GetImportRC(pVM, pszSymbol, &RCPtr);
-            if (RT_SUCCESS(rc))
-                *pValue = RCPtr;
-        }
-        else if (   !strncmp(pszSymbol, "TM", 2)
-                 || !strcmp(pszSymbol, "g_pSUPGlobalInfoPage"))
-        {
-            RTRCPTR RCPtr = 0;
-            rc = TMR3GetImportRC(pVM, pszSymbol, &RCPtr);
             if (RT_SUCCESS(rc))
                 *pValue = RCPtr;
         }
@@ -464,7 +475,7 @@ VMMR3DECL(int) PDMR3LdrLoadRC(PVM pVM, const char *pszFilename, const char *pszN
      * Validate input.
      */
     AssertMsg(MMR3IsInitialized(pVM), ("bad init order!\n"));
-    AssertReturn(!HMIsEnabled(pVM), VERR_PDM_HM_IPE);
+    AssertReturn(VM_IS_RAW_MODE_ENABLED(pVM), VERR_PDM_HM_IPE);
 
     /*
      * Find the file if not specified.
@@ -545,11 +556,10 @@ VMMR3DECL(int) PDMR3LdrLoadRC(PVM pVM, const char *pszFilename, const char *pszN
                 if (RT_SUCCESS(rc))
                 {
                     RTGCPTR GCPtr;
-                    rc = MMR3HyperMapPages(pVM, pModule->pvBits, NIL_RTR0PTR,
-                                           cPages, paPages, pModule->szName, &GCPtr);
+                    rc = VERR_NOT_IMPLEMENTED; //MMR3HyperMapPages(pVM, pModule->pvBits, NIL_RTR0PTR, cPages, paPages, pModule->szName, &GCPtr);
                     if (RT_SUCCESS(rc))
                     {
-                        MMR3HyperReserve(pVM, PAGE_SIZE, "fence", NULL);
+                        //MMR3HyperReserveFence(pVM);
 
                         /*
                          * Get relocated image bits.
@@ -636,7 +646,7 @@ VMMR3DECL(int) PDMR3LdrLoadRC(PVM pVM, const char *pszFilename, const char *pszN
     return rc;
 }
 
-#endif /* VBOX_WITH_RAW_MODE */
+#endif /* VBOX_WITH_RAW_MODE_KEEP */
 
 /**
  * Loads a module into the ring-0 context.
@@ -734,6 +744,38 @@ static int pdmR3LoadR0U(PUVM pUVM, const char *pszFilename, const char *pszName,
     return rc;
 }
 
+
+/**
+ * Makes sure a ring-0 module is loaded.
+ *
+ * @returns VBox status code.
+ * @param   pUVM            Pointer to the user mode VM structure.
+ * @param   pszModule       Module name (no path).
+ * @param   pszSearchPath   List of directories to search for the module
+ *                          (assumes @a pszModule is also a filename).
+ */
+VMMR3_INT_DECL(int) PDMR3LdrLoadR0(PUVM pUVM, const char *pszModule, const char *pszSearchPath)
+{
+    /*
+     * Find the module.
+     */
+    RTCritSectEnter(&pUVM->pdm.s.ListCritSect);
+    for (PPDMMOD pModule = pUVM->pdm.s.pModules; pModule; pModule = pModule->pNext)
+    {
+        if (   pModule->eType == PDMMOD_TYPE_R0
+            && !strcmp(pModule->szName, pszModule))
+        {
+            RTCritSectLeave(&pUVM->pdm.s.ListCritSect);
+            return VINF_SUCCESS;
+        }
+    }
+    RTCritSectLeave(&pUVM->pdm.s.ListCritSect);
+
+    /*
+     * Okay, load it.
+     */
+    return pdmR3LoadR0U(pUVM, NULL, pszModule, pszSearchPath);
+}
 
 
 /**
@@ -912,9 +954,9 @@ VMMR3DECL(int) PDMR3LdrGetSymbolR0Lazy(PVM pVM, const char *pszModule, const cha
  */
 VMMR3DECL(int) PDMR3LdrGetSymbolRC(PVM pVM, const char *pszModule, const char *pszSymbol, PRTRCPTR pRCPtrValue)
 {
-#if defined(PDMLDR_FAKE_MODE) || !defined(VBOX_WITH_RAW_MODE)
+#if defined(PDMLDR_FAKE_MODE) || !defined(VBOX_WITH_RAW_MODE_KEEP)
     RT_NOREF(pVM, pszModule, pszSymbol);
-    Assert(!HMIsEnabled(pVM));
+    Assert(VM_IS_RAW_MODE_ENABLED(pVM));
     *pRCPtrValue = NIL_RTRCPTR;
     return VINF_SUCCESS;
 
@@ -982,9 +1024,9 @@ VMMR3DECL(int) PDMR3LdrGetSymbolRC(PVM pVM, const char *pszModule, const char *p
 VMMR3DECL(int) PDMR3LdrGetSymbolRCLazy(PVM pVM, const char *pszModule, const char *pszSearchPath, const char *pszSymbol,
                                        PRTRCPTR pRCPtrValue)
 {
-#if defined(PDMLDR_FAKE_MODE) || !defined(VBOX_WITH_RAW_MODE)
+#if defined(PDMLDR_FAKE_MODE) || !defined(VBOX_WITH_RAW_MODE_KEEP)
     RT_NOREF(pVM, pszModule, pszSearchPath, pszSymbol);
-    Assert(!HMIsEnabled(pVM));
+    Assert(VM_IS_RAW_MODE_ENABLED(pVM));
     *pRCPtrValue = NIL_RTRCPTR;
     return VINF_SUCCESS;
 
@@ -1524,7 +1566,7 @@ static PPDMMOD pdmR3LdrFindModule(PUVM pUVM, const char *pszModule, PDMMODTYPE e
     {
         switch (enmType)
         {
-#ifdef VBOX_WITH_RAW_MODE
+#ifdef VBOX_WITH_RAW_MODE_KEEP
             case PDMMOD_TYPE_RC:
             {
                 char *pszFilename = pdmR3FileRC(pszModule, pszSearchPath);
@@ -1597,7 +1639,7 @@ VMMR3_INT_DECL(int) PDMR3LdrGetInterfaceSymbols(PVM pVM, void *pvInterface, size
                                                 const char *pszSymPrefix, const char *pszSymList,
                                                 bool fRing0)
 {
-    bool const fNullRun = !fRing0 && HMIsEnabled(pVM);
+    bool const fNullRun = !fRing0 && !VM_IS_RAW_MODE_ENABLED(pVM);
 
     /*
      * Find the module.

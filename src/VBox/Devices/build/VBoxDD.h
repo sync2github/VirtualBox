@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDD.h 91416 2021-09-28 06:15:49Z vboxsync $ */
 /** @file
  * Built-in drivers & devices (part 1) header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___build_VBoxDD_h
-#define ___build_VBoxDD_h
+#ifndef VBOX_INCLUDED_SRC_build_VBoxDD_h
+#define VBOX_INCLUDED_SRC_build_VBoxDD_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vmm/pdm.h>
 
@@ -34,14 +37,13 @@ extern const PDMDEVREG g_DevicePCI;
 extern const PDMDEVREG g_DevicePciIch9;
 extern const PDMDEVREG g_DevicePcArch;
 extern const PDMDEVREG g_DevicePcBios;
-#ifdef VBOX_WITH_NEW_IOAPIC
 extern const PDMDEVREG g_DeviceIOAPIC;
-#endif
 extern const PDMDEVREG g_DevicePS2KeyboardMouse;
 extern const PDMDEVREG g_DeviceI8254;
 extern const PDMDEVREG g_DeviceI8259;
 extern const PDMDEVREG g_DeviceHPET;
 extern const PDMDEVREG g_DeviceSmc;
+extern const PDMDEVREG g_DeviceFlash;
 extern const PDMDEVREG g_DeviceMC146818;
 extern const PDMDEVREG g_DevicePIIX3IDE;
 extern const PDMDEVREG g_DeviceFloppyController;
@@ -53,6 +55,9 @@ extern const PDMDEVREG g_DeviceE1000;
 #endif
 #ifdef VBOX_WITH_VIRTIO
 extern const PDMDEVREG g_DeviceVirtioNet;
+#endif
+#ifdef VBOX_WITH_VIRTIO_NET_1_0
+extern const PDMDEVREG g_DeviceVirtioNet_1_0;
 #endif
 #ifdef VBOX_WITH_INIP
 extern const PDMDEVREG g_DeviceINIP;
@@ -67,6 +72,7 @@ extern const PDMDEVREG g_DeviceACPI;
 extern const PDMDEVREG g_DeviceDMA;
 extern const PDMDEVREG g_DeviceFloppyController;
 extern const PDMDEVREG g_DeviceSerialPort;
+extern const PDMDEVREG g_DeviceOxPcie958;
 extern const PDMDEVREG g_DeviceParallelPort;
 #ifdef VBOX_WITH_AHCI
 extern const PDMDEVREG g_DeviceAHCI;
@@ -83,6 +89,9 @@ extern const PDMDEVREG g_DeviceLsiLogicSAS;
 #ifdef VBOX_WITH_NVME_IMPL
 extern const PDMDEVREG g_DeviceNVMe;
 #endif
+#ifdef VBOX_WITH_VIRTIO_SCSI
+extern const PDMDEVREG g_DeviceVirtioSCSI;
+#endif
 #ifdef VBOX_WITH_EFI
 extern const PDMDEVREG g_DeviceEFI;
 #endif
@@ -90,8 +99,13 @@ extern const PDMDEVREG g_DeviceEFI;
 extern const PDMDEVREG g_DevicePciRaw;
 #endif
 extern const PDMDEVREG g_DeviceGIMDev;
+extern const PDMDEVREG g_DeviceLPC;
 #ifdef VBOX_WITH_VIRTUALKD
 extern const PDMDEVREG g_DeviceVirtualKD;
+#endif
+extern const PDMDEVREG g_DeviceQemuFwCfg;
+#ifdef VBOX_WITH_TPM
+extern const PDMDEVREG g_DeviceTpm;
 #endif
 
 extern const PDMDRVREG g_DrvMouseQueue;
@@ -117,6 +131,9 @@ extern const PDMDRVREG g_DrvNAT;
 #ifdef VBOX_WITH_NETSHAPER
 extern const PDMDRVREG g_DrvNetShaper;
 #endif /* VBOX_WITH_NETSHAPER */
+#ifdef VBOX_WITH_VMNET
+extern const PDMDRVREG g_DrvVMNet;
+#endif /* VBOX_WITH_VMNET */
 extern const PDMDRVREG g_DrvNetSniffer;
 extern const PDMDRVREG g_DrvAUDIO;
 #ifdef VBOX_WITH_AUDIO_DEBUG
@@ -126,8 +143,10 @@ extern const PDMDRVREG g_DrvHostDebugAudio;
 extern const PDMDRVREG g_DrvHostValidationKitAudio;
 #endif
 extern const PDMDRVREG g_DrvHostNullAudio;
+extern DECL_HIDDEN_DATA(struct PDMIHOSTAUDIO) const g_DrvHostAudioNull;
 #if defined(RT_OS_WINDOWS)
 extern const PDMDRVREG g_DrvHostDSound;
+extern const PDMDRVREG g_DrvHostAudioWas;
 #endif
 #if defined(RT_OS_DARWIN)
 extern const PDMDRVREG g_DrvHostCoreAudio;
@@ -177,11 +196,25 @@ extern const PDMUSBREG g_DevWebcam;
 
 #ifdef VBOX_WITH_SCSI
 extern const PDMDRVREG g_DrvSCSI;
-# if defined(RT_OS_LINUX)
-extern const PDMDRVREG g_DrvSCSIHost;
+#endif
+
+extern const PDMDRVREG g_DrvIfTrace;
+#ifdef VBOX_WITH_TPM
+extern const PDMDRVREG g_DrvTpmEmu;
+# ifdef RT_OS_LINUX
+extern const PDMDRVREG g_DrvTpmHost;
+# endif
+# ifdef VBOX_WITH_LIBTPMS
+extern const PDMDRVREG g_DrvTpmEmuTpms;
 # endif
 #endif
 
+#ifdef VBOX_WITH_IOMMU_AMD
+extern const PDMDEVREG g_DeviceIommuAmd;
+#endif
+#ifdef VBOX_WITH_IOMMU_INTEL
+extern const PDMDEVREG g_DeviceIommuIntel;
+#endif
 
 /* VBoxAcpi.cpp */
 int acpiPrepareDsdt(PPDMDEVINS pDevIns, void **ppvPtr, size_t *pcbDsdt);
@@ -189,7 +222,12 @@ int acpiCleanupDsdt(PPDMDEVINS pDevIns, void *pvPtr);
 int acpiPrepareSsdt(PPDMDEVINS pDevIns, void **ppvPtr, size_t *pcbSsdt);
 int acpiCleanupSsdt(PPDMDEVINS pDevIns, void *pvPtr);
 
+#ifdef VBOX_WITH_TPM
+int acpiPrepareTpmSsdt(PPDMDEVINS pDevIns, void **ppvPtr, size_t *pcbSsdt);
+int acpiCleanupTpmSsdt(PPDMDEVINS pDevIns, void *pvPtr);
+#endif
+
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_build_VBoxDD_h */
 

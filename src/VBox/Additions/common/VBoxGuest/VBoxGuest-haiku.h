@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxGuest-haiku.h 92181 2021-11-02 21:46:04Z vboxsync $ */
 /** @file
  * VBoxGuest kernel module, Haiku Guest Additions, header.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 /*
@@ -20,7 +29,7 @@
  *
  * VirtualBox Guest Additions for Haiku.
  * Copyright (c) 2011 Mike Smith <mike@scgtrp.net>
- *                    François Revol <revol@free.fr>
+ *                    FranÃ§ois Revol <revol@free.fr>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -44,9 +53,11 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
-#ifndef ___VBoxGuest_haiku_h
-#define ___VBoxGuest_haiku_h
+#ifndef GA_INCLUDED_SRC_common_VBoxGuest_VBoxGuest_haiku_h
+#define GA_INCLUDED_SRC_common_VBoxGuest_VBoxGuest_haiku_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <OS.h>
 #include <Drivers.h>
@@ -185,7 +196,7 @@ struct vboxguest_module_info
     int (*_RTErrConvertToErrno)(int iErr);
     int (*_VGDrvCommonIoCtl)(unsigned iFunction, PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession,
                              void *pvData, size_t cbData, size_t *pcbDataReturned);
-    int (*_VGDrvCommonCreateUserSession)(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION *ppSession);
+    int (*_VGDrvCommonCreateUserSession)(PVBOXGUESTDEVEXT pDevExt, uint32_t fRequestor, PVBOXGUESTSESSION *ppSession);
     void (*_VGDrvCommonCloseSession)(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession);
     void* (*_VBoxGuestIDCOpen)(uint32_t *pu32Version);
     int (*_VBoxGuestIDCClose)(void *pvSession);
@@ -223,5 +234,5 @@ struct vboxguest_module_info
 extern struct vboxguest_module_info *g_VBoxGuest;
 #endif
 
-#endif /* !___VBoxGuest_haiku_h */
+#endif /* !GA_INCLUDED_SRC_common_VBoxGuest_VBoxGuest_haiku_h */
 

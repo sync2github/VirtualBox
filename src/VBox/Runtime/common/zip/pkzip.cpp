@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pkzip.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - PKZIP archive I/O.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,9 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <iprt/zip.h>
+
 #include <iprt/file.h>
+#include <iprt/err.h>
 #include <iprt/fs.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
@@ -220,7 +222,7 @@ RTDECL(int) RTZipPkzipMemDecompress(void **ppvDst, size_t *pcbDst, const void *p
                         if (pv)
                         {
                             RTVFSIOSTREAM hVfsIosObj = RTVfsObjToIoStream(hVfsObj);
-                            if (hVfsIos)
+                            if (hVfsIos != NIL_RTVFSIOSTREAM)
                             {
                                 rc = RTVfsIoStrmRead(hVfsIosObj, pv, cb, true /*fBlocking*/, NULL);
                                 if (RT_SUCCESS(rc))
@@ -228,9 +230,11 @@ RTDECL(int) RTZipPkzipMemDecompress(void **ppvDst, size_t *pcbDst, const void *p
                                     *ppvDst = pv;
                                     *pcbDst = cb;
                                 }
-                                else
-                                    RTMemFree(pv);
                             }
+                            else
+                                rc = VERR_INTERNAL_ERROR_4;
+                            if (RT_FAILURE(rc))
+                                RTMemFree(pv);
                         }
                     }
                 }

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPCm.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox WDDM Miniport driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,8 @@ typedef enum
     VBOXVIDEOCM_CMD_CTL_KM_TYPE_DUMMY_32BIT = 0x7fffffff
 } VBOXVIDEOCM_CMD_CTL_KM_TYPE;
 
-typedef DECLCALLBACK(VOID) FNVBOXVIDEOCM_CMD_CB(PVBOXVIDEOCM_CTX pContext, struct VBOXVIDEOCM_CMD_CTL_KM *pCmd, PVOID pvContext);
+typedef DECLCALLBACKTYPE(VOID, FNVBOXVIDEOCM_CMD_CB,(PVBOXVIDEOCM_CTX pContext, struct VBOXVIDEOCM_CMD_CTL_KM *pCmd,
+                                                     PVOID pvContext));
 typedef FNVBOXVIDEOCM_CMD_CB *PFNVBOXVIDEOCM_CMD_CB;
 
 typedef struct VBOXVIDEOCM_CMD_CTL_KM
@@ -75,7 +76,7 @@ typedef struct VBOXVIDEOCM_SESSION
     bool bEventNeeded;
 } VBOXVIDEOCM_SESSION, *PVBOXVIDEOCM_SESSION;
 
-#define VBOXCMENTRY_2_CMD(_pE) ((PVBOXVIDEOCM_CMD_DR)((uint8_t*)(_pE) - RT_OFFSETOF(VBOXVIDEOCM_CMD_DR, QueueList)))
+#define VBOXCMENTRY_2_CMD(_pE) ((PVBOXVIDEOCM_CMD_DR)((uint8_t*)(_pE) - RT_UOFFSETOF(VBOXVIDEOCM_CMD_DR, QueueList)))
 
 void* vboxVideoCmCmdReinitForContext(void *pvCmd, PVBOXVIDEOCM_CTX pContext)
 {
@@ -426,7 +427,7 @@ NTSTATUS vboxVideoCmSessionCreateLocked(PVBOXVIDEOCM_MGR pMgr, PVBOXVIDEOCM_SESS
     return Status;
 }
 
-#define VBOXCMENTRY_2_SESSION(_pE) ((PVBOXVIDEOCM_SESSION)((uint8_t*)(_pE) - RT_OFFSETOF(VBOXVIDEOCM_SESSION, QueueEntry)))
+#define VBOXCMENTRY_2_SESSION(_pE) ((PVBOXVIDEOCM_SESSION)((uint8_t*)(_pE) - RT_UOFFSETOF(VBOXVIDEOCM_SESSION, QueueEntry)))
 
 NTSTATUS vboxVideoCmCtxAdd(PVBOXVIDEOCM_MGR pMgr, PVBOXVIDEOCM_CTX pContext, HANDLE hUmEvent, uint64_t u64UmData)
 {

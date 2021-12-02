@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIPopupCenter.cpp 90695 2021-08-16 13:09:37Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIPopupCenter class implementation.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,65 +15,67 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* GUI includes: */
-# include "UIPopupCenter.h"
-# include "UIPopupStack.h"
-# include "UIMachineWindow.h"
-# include "QIMessageBox.h"
-# include "VBoxGlobal.h"
-# include "UIHostComboEditor.h"
-# include "UIExtraDataManager.h"
+#include "QIMessageBox.h"
+#include "UICommon.h"
+#include "UIErrorString.h"
+#include "UIExtraDataManager.h"
+#include "UIHostComboEditor.h"
+#include "UIPopupCenter.h"
+#include "UIPopupStack.h"
+
+/* COM includes: */
+#include "CAudioAdapter.h"
+#include "CConsole.h"
+#include "CEmulatedUSB.h"
+#include "CMachine.h"
+#include "CNetworkAdapter.h"
+#include "CVRDEServer.h"
 
 /* Other VBox includes: */
-# include <VBox/sup.h>
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include <VBox/sup.h>
 
 
 /* static */
-UIPopupCenter* UIPopupCenter::m_spInstance = 0;
-UIPopupCenter* UIPopupCenter::instance() { return m_spInstance; }
+UIPopupCenter* UIPopupCenter::s_pInstance = 0;
+UIPopupCenter* UIPopupCenter::instance() { return s_pInstance; }
 
 /* static */
 void UIPopupCenter::create()
 {
     /* Make sure instance is NOT created yet: */
-    if (m_spInstance)
+    if (s_pInstance)
         return;
 
     /* Create instance: */
     new UIPopupCenter;
     /* Prepare instance: */
-    m_spInstance->prepare();
+    s_pInstance->prepare();
 }
 
 /* static */
 void UIPopupCenter::destroy()
 {
     /* Make sure instance is NOT destroyed yet: */
-    if (!m_spInstance)
+    if (!s_pInstance)
         return;
 
     /* Cleanup instance: */
-    m_spInstance->cleanup();
+    s_pInstance->cleanup();
     /* Destroy instance: */
-    delete m_spInstance;
+    delete s_pInstance;
 }
 
 UIPopupCenter::UIPopupCenter()
 {
     /* Assign instance: */
-    m_spInstance = this;
+    s_pInstance = this;
 }
 
 UIPopupCenter::~UIPopupCenter()
 {
     /* Unassign instance: */
-    m_spInstance = 0;
+    s_pInstance = 0;
 }
 
 void UIPopupCenter::prepare()
@@ -83,13 +85,13 @@ void UIPopupCenter::prepare()
 void UIPopupCenter::cleanup()
 {
     /* Make sure all the popup-stack types destroyed: */
-    foreach (const QString &strPopupStackTypeID, m_stackTypes.keys())
-        m_stackTypes.remove(strPopupStackTypeID);
+    foreach (const QString &strTypeID, m_stackTypes.keys())
+        m_stackTypes.remove(strTypeID);
     /* Make sure all the popup-stacks destroyed: */
-    foreach (const QString &strPopupStackID, m_stacks.keys())
+    foreach (const QString &strID, m_stacks.keys())
     {
-        delete m_stacks[strPopupStackID];
-        m_stacks.remove(strPopupStackID);
+        delete m_stacks[strID];
+        m_stacks.remove(strID);
     }
 }
 
@@ -125,7 +127,7 @@ void UIPopupCenter::hidePopupStack(QWidget *pParent)
     unassignPopupStackParent(pPopupStack, pParent);
 }
 
-void UIPopupCenter::setPopupStackType(QWidget *pParent, UIPopupStackType newStackType)
+void UIPopupCenter::setPopupStackType(QWidget *pParent, UIPopupStackType enmType)
 {
     /* Make sure parent is set! */
     AssertPtrReturnVoid(pParent);
@@ -134,18 +136,18 @@ void UIPopupCenter::setPopupStackType(QWidget *pParent, UIPopupStackType newStac
     const QString strPopupStackID(popupStackID(pParent));
 
     /* Looking for current popup-stack type, create if it doesn't exists: */
-    UIPopupStackType &stackType = m_stackTypes[strPopupStackID];
+    UIPopupStackType &enmCurrentType = m_stackTypes[strPopupStackID];
 
     /* Make sure stack-type has changed: */
-    if (stackType == newStackType)
+    if (enmCurrentType == enmType)
         return;
 
     /* Remember new stack type: */
     LogRelFlow(("UIPopupCenter::setPopupStackType: Changing type of popup-stack with ID = '%s' from '%s' to '%s'.\n",
                 strPopupStackID.toLatin1().constData(),
-                stackType == UIPopupStackType_Separate ? "separate window" : "embedded widget",
-                newStackType == UIPopupStackType_Separate ? "separate window" : "embedded widget"));
-    stackType = newStackType;
+                enmCurrentType == UIPopupStackType_Separate ? "separate window" : "embedded widget",
+                enmType == UIPopupStackType_Separate ? "separate window" : "embedded widget"));
+    enmCurrentType = enmType;
 }
 
 void UIPopupCenter::setPopupStackOrientation(QWidget *pParent, UIPopupStackOrientation newStackOrientation)
@@ -175,54 +177,65 @@ void UIPopupCenter::setPopupStackOrientation(QWidget *pParent, UIPopupStackOrien
         m_stacks[strPopupStackID]->setOrientation(stackOrientation);
 }
 
-void UIPopupCenter::message(QWidget *pParent, const QString &strPopupPaneID,
+void UIPopupCenter::message(QWidget *pParent, const QString &strID,
                             const QString &strMessage, const QString &strDetails,
-                            const QString &strButtonText1 /* = QString()*/,
-                            const QString &strButtonText2 /* = QString()*/,
-                            bool fProposeAutoConfirmation /* = false*/)
+                            const QString &strButtonText1 /* = QString() */,
+                            const QString &strButtonText2 /* = QString() */,
+                            bool fProposeAutoConfirmation /* = false */)
 {
-    showPopupPane(pParent, strPopupPaneID,
+    showPopupPane(pParent, strID,
                   strMessage, strDetails,
                   strButtonText1, strButtonText2,
                   fProposeAutoConfirmation);
 }
 
-void UIPopupCenter::popup(QWidget *pParent, const QString &strPopupPaneID,
+void UIPopupCenter::popup(QWidget *pParent, const QString &strID,
                           const QString &strMessage)
 {
-    message(pParent, strPopupPaneID, strMessage, QString());
+    message(pParent, strID, strMessage, QString());
 }
 
-void UIPopupCenter::alert(QWidget *pParent, const QString &strPopupPaneID,
+void UIPopupCenter::alert(QWidget *pParent, const QString &strID,
                           const QString &strMessage,
-                          bool fProposeAutoConfirmation /* = false*/)
+                          bool fProposeAutoConfirmation /* = false */)
 {
-    message(pParent, strPopupPaneID, strMessage, QString(),
+    message(pParent, strID, strMessage, QString(),
             QApplication::translate("UIMessageCenter", "Close") /* 1st button text */,
             QString() /* 2nd button text */,
             fProposeAutoConfirmation);
 }
 
-void UIPopupCenter::question(QWidget *pParent, const QString &strPopupPaneID,
-                             const QString &strMessage,
-                             const QString &strButtonText1 /* = QString()*/,
-                             const QString &strButtonText2 /* = QString()*/,
-                             bool fProposeAutoConfirmation /* = false*/)
+void UIPopupCenter::alertWithDetails(QWidget *pParent, const QString &strID,
+                                     const QString &strMessage,
+                                     const QString &strDetails,
+                                     bool fProposeAutoConfirmation /* = false */)
 {
-    message(pParent, strPopupPaneID, strMessage, QString(),
+    message(pParent, strID, strMessage, strDetails,
+            QApplication::translate("UIMessageCenter", "Close") /* 1st button text */,
+            QString() /* 2nd button text */,
+            fProposeAutoConfirmation);
+}
+
+void UIPopupCenter::question(QWidget *pParent, const QString &strID,
+                             const QString &strMessage,
+                             const QString &strButtonText1 /* = QString() */,
+                             const QString &strButtonText2 /* = QString() */,
+                             bool fProposeAutoConfirmation /* = false */)
+{
+    message(pParent, strID, strMessage, QString(),
             strButtonText1, strButtonText2,
             fProposeAutoConfirmation);
 }
 
-void UIPopupCenter::recall(QWidget *pParent, const QString &strPopupPaneID)
+void UIPopupCenter::recall(QWidget *pParent, const QString &strID)
 {
-    hidePopupPane(pParent, strPopupPaneID);
+    hidePopupPane(pParent, strID);
 }
 
-void UIPopupCenter::showPopupPane(QWidget *pParent, const QString &strPopupPaneID,
+void UIPopupCenter::showPopupPane(QWidget *pParent, const QString &strID,
                                   const QString &strMessage, const QString &strDetails,
-                                  QString strButtonText1 /* = QString()*/, QString strButtonText2 /* = QString()*/,
-                                  bool fProposeAutoConfirmation /* = false*/)
+                                  QString strButtonText1 /* = QString() */, QString strButtonText2 /* = QString() */,
+                                  bool fProposeAutoConfirmation /* = false */)
 {
     /* Make sure parent is set! */
     AssertPtrReturnVoid(pParent);
@@ -252,7 +265,7 @@ void UIPopupCenter::showPopupPane(QWidget *pParent, const QString &strPopupPaneI
     if ((iButton1 || iButton2) && fProposeAutoConfirmation)
     {
         const QStringList confirmedPopupList = gEDataManager->suppressedMessages();
-        if (   confirmedPopupList.contains(strPopupPaneID)
+        if (   confirmedPopupList.contains(strID)
             || confirmedPopupList.contains("allPopupPanes")
             || confirmedPopupList.contains("all") )
         {
@@ -261,7 +274,7 @@ void UIPopupCenter::showPopupPane(QWidget *pParent, const QString &strPopupPaneI
                 iResultCode |= (iButton1 & AlertButtonMask);
             else if (iButton2 & AlertButtonOption_Default)
                 iResultCode |= (iButton2 & AlertButtonMask);
-            emit sigPopupPaneDone(strPopupPaneID, iResultCode);
+            emit sigPopupPaneDone(strID, iResultCode);
             return;
         }
     }
@@ -281,15 +294,15 @@ void UIPopupCenter::showPopupPane(QWidget *pParent, const QString &strPopupPaneI
         /* Create new one: */
         pPopupStack = m_stacks[strPopupStackID] = new UIPopupStack(strPopupStackID, m_stackOrientations[strPopupStackID]);
         /* Attach popup-stack connections: */
-        connect(pPopupStack, SIGNAL(sigPopupPaneDone(QString, int)), this, SLOT(sltPopupPaneDone(QString, int)));
-        connect(pPopupStack, SIGNAL(sigRemove(QString)), this, SLOT(sltRemovePopupStack(QString)));
+        connect(pPopupStack, &UIPopupStack::sigPopupPaneDone, this, &UIPopupCenter::sltPopupPaneDone);
+        connect(pPopupStack, &UIPopupStack::sigRemove,        this, &UIPopupCenter::sltRemovePopupStack);
     }
 
     /* If there is already popup-pane with such ID: */
-    if (pPopupStack->exists(strPopupPaneID))
+    if (pPopupStack->exists(strID))
     {
         /* Just update existing one: */
-        pPopupStack->updatePopupPane(strPopupPaneID, strMessage, strDetails);
+        pPopupStack->updatePopupPane(strID, strMessage, strDetails);
     }
     /* If there is no popup-pane with such ID: */
     else
@@ -303,14 +316,14 @@ void UIPopupCenter::showPopupPane(QWidget *pParent, const QString &strPopupPaneI
         if (fProposeAutoConfirmation)
             buttonDescriptions[AlertButton_Cancel | AlertOption_AutoConfirmed] = QString();
         /* Create new one: */
-        pPopupStack->createPopupPane(strPopupPaneID, strMessage, strDetails, buttonDescriptions);
+        pPopupStack->createPopupPane(strID, strMessage, strDetails, buttonDescriptions);
     }
 
     /* Show popup-stack: */
     showPopupStack(pParent);
 }
 
-void UIPopupCenter::hidePopupPane(QWidget *pParent, const QString &strPopupPaneID)
+void UIPopupCenter::hidePopupPane(QWidget *pParent, const QString &strID)
 {
     /* Make sure parent is set! */
     AssertPtrReturnVoid(pParent);
@@ -322,27 +335,27 @@ void UIPopupCenter::hidePopupPane(QWidget *pParent, const QString &strPopupPaneI
 
     /* Make sure corresponding popup-pane *exists*: */
     UIPopupStack *pPopupStack = m_stacks[strPopupStackID];
-    if (!pPopupStack->exists(strPopupPaneID))
+    if (!pPopupStack->exists(strID))
         return;
 
     /* Recall corresponding popup-pane: */
-    pPopupStack->recallPopupPane(strPopupPaneID);
+    pPopupStack->recallPopupPane(strID);
 }
 
-void UIPopupCenter::sltPopupPaneDone(QString strPopupPaneID, int iResultCode)
+void UIPopupCenter::sltPopupPaneDone(QString strID, int iResultCode)
 {
     /* Remember auto-confirmation fact (if necessary): */
     if (iResultCode & AlertOption_AutoConfirmed)
-        gEDataManager->setSuppressedMessages(gEDataManager->suppressedMessages() << strPopupPaneID);
+        gEDataManager->setSuppressedMessages(gEDataManager->suppressedMessages() << strID);
 
     /* Notify listeners: */
-    emit sigPopupPaneDone(strPopupPaneID, iResultCode);
+    emit sigPopupPaneDone(strID, iResultCode);
 }
 
-void UIPopupCenter::sltRemovePopupStack(QString strPopupStackID)
+void UIPopupCenter::sltRemovePopupStack(QString strID)
 {
     /* Make sure corresponding popup-stack *exists*: */
-    if (!m_stacks.contains(strPopupStackID))
+    if (!m_stacks.contains(strID))
     {
         AssertMsgFailed(("Popup-stack already destroyed!\n"));
         return;
@@ -350,8 +363,8 @@ void UIPopupCenter::sltRemovePopupStack(QString strPopupStackID)
 
     /* Delete popup-stack asyncronously.
      * To avoid issues with events which already posted: */
-    UIPopupStack *pPopupStack = m_stacks[strPopupStackID];
-    m_stacks.remove(strPopupStackID);
+    UIPopupStack *pPopupStack = m_stacks[strID];
+    m_stacks.remove(strID);
     pPopupStack->deleteLater();
 }
 
@@ -362,7 +375,7 @@ QString UIPopupCenter::popupStackID(QWidget *pParent)
     AssertPtrReturn(pParent, QString());
 
     /* Special handling for Runtime UI: */
-    if (qobject_cast<UIMachineWindow*>(pParent))
+    if (pParent->inherits("UIMachineWindow"))
         return QString("UIMachineWindow");
 
     /* Common handling for other cases: */
@@ -370,7 +383,7 @@ QString UIPopupCenter::popupStackID(QWidget *pParent)
 }
 
 /* static */
-void UIPopupCenter::assignPopupStackParent(UIPopupStack *pPopupStack, QWidget *pParent, UIPopupStackType stackType)
+void UIPopupCenter::assignPopupStackParent(UIPopupStack *pPopupStack, QWidget *pParent, UIPopupStackType enmStackType)
 {
     /* Make sure parent is set! */
     AssertPtrReturnVoid(pParent);
@@ -379,7 +392,7 @@ void UIPopupCenter::assignPopupStackParent(UIPopupStack *pPopupStack, QWidget *p
     pParent->window()->installEventFilter(pPopupStack);
 
     /* Assign parent depending on passed *stack* type: */
-    switch (stackType)
+    switch (enmStackType)
     {
         case UIPopupStackType_Embedded:
         {
@@ -407,88 +420,3 @@ void UIPopupCenter::unassignPopupStackParent(UIPopupStack *pPopupStack, QWidget 
     /* Unassign event-filter: */
     pParent->window()->removeEventFilter(pPopupStack);
 }
-
-void UIPopupCenter::cannotSendACPIToMachine(QWidget *pParent)
-{
-    alert(pParent, "cannotSendACPIToMachine",
-          QApplication::translate("UIMessageCenter", "You are trying to shut down the guest with the ACPI power button. "
-                                                     "This is currently not possible because the guest does not support software shutdown."));
-}
-
-void UIPopupCenter::remindAboutAutoCapture(QWidget *pParent)
-{
-    alert(pParent, "remindAboutAutoCapture",
-          QApplication::translate("UIMessageCenter", "<p>You have the <b>Auto capture keyboard</b> option turned on. "
-                                                     "This will cause the Virtual Machine to automatically <b>capture</b> "
-                                                     "the keyboard every time the VM window is activated and make it "
-                                                     "unavailable to other applications running on your host machine: "
-                                                     "when the keyboard is captured, all keystrokes (including system ones "
-                                                     "like Alt-Tab) will be directed to the VM.</p>"
-                                                     "<p>You can press the <b>host key</b> at any time to <b>uncapture</b> the "
-                                                     "keyboard and mouse (if it is captured) and return them to normal "
-                                                     "operation. The currently assigned host key is shown on the status bar "
-                                                     "at the bottom of the Virtual Machine window, next to the&nbsp;"
-                                                     "<img src=:/hostkey_16px.png/>&nbsp;icon. This icon, together "
-                                                     "with the mouse icon placed nearby, indicate the current keyboard "
-                                                     "and mouse capture state.</p>") +
-          QApplication::translate("UIMessageCenter", "<p>The host key is currently defined as <b>%1</b>.</p>",
-                                                     "additional message box paragraph")
-                                                     .arg(UIHostCombo::toReadableString(vboxGlobal().settings().hostCombo())),
-          true);
-}
-
-void UIPopupCenter::remindAboutMouseIntegration(QWidget *pParent, bool fSupportsAbsolute)
-{
-    if (fSupportsAbsolute)
-    {
-        alert(pParent, "remindAboutMouseIntegration",
-              QApplication::translate("UIMessageCenter", "<p>The Virtual Machine reports that the guest OS supports <b>mouse pointer integration</b>. "
-                                                         "This means that you do not need to <i>capture</i> the mouse pointer to be able to use it in your guest OS -- "
-                                                         "all mouse actions you perform when the mouse pointer is over the Virtual Machine's display "
-                                                         "are directly sent to the guest OS. If the mouse is currently captured, it will be automatically uncaptured.</p>"
-                                                         "<p>The mouse icon on the status bar will look like&nbsp;<img src=:/mouse_seamless_16px.png/>&nbsp;to inform you "
-                                                         "that mouse pointer integration is supported by the guest OS and is currently turned on.</p>"
-                                                         "<p><b>Note</b>: Some applications may behave incorrectly in mouse pointer integration mode. "
-                                                         "You can always disable it for the current session (and enable it again) "
-                                                         "by selecting the corresponding action from the menu bar.</p>"),
-              true);
-    }
-    else
-    {
-        alert(pParent, "remindAboutMouseIntegration",
-              QApplication::translate("UIMessageCenter", "<p>The Virtual Machine reports that the guest OS does not support <b>mouse pointer integration</b> "
-                                                         "in the current video mode. You need to capture the mouse (by clicking over the VM display "
-                                                         "or pressing the host key) in order to use the mouse inside the guest OS.</p>"),
-              true);
-    }
-}
-
-void UIPopupCenter::remindAboutPausedVMInput(QWidget *pParent)
-{
-    alert(pParent, "remindAboutPausedVMInput",
-          QApplication::translate("UIMessageCenter", "<p>The Virtual Machine is currently in the <b>Paused</b> state and not able to see any keyboard or mouse input. "
-                                                     "If you want to continue to work inside the VM, you need to resume it by selecting the corresponding action "
-                                                     "from the menu bar.</p>"),
-          true);
-}
-
-void UIPopupCenter::forgetAboutPausedVMInput(QWidget *pParent)
-{
-    recall(pParent, "remindAboutPausedVMInput");
-}
-
-void UIPopupCenter::remindAboutWrongColorDepth(QWidget *pParent, ulong uRealBPP, ulong uWantedBPP)
-{
-    alert(pParent, "remindAboutWrongColorDepth",
-          QApplication::translate("UIMessageCenter", "<p>The virtual screen is currently set to a <b>%1&nbsp;bit</b> color mode. For better "
-                                                     "performance please change this to <b>%2&nbsp;bit</b>. This can usually be done from the"
-                                                     " <b>Display</b> section of the guest operating system's Control Panel or System Settings.</p>")
-                                                     .arg(uRealBPP).arg(uWantedBPP),
-          true);
-}
-
-void UIPopupCenter::forgetAboutWrongColorDepth(QWidget *pParent)
-{
-    recall(pParent, "remindAboutWrongColorDepth");
-}
-

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTPathUserDocuments-posix.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTPathUserDocuments, posix ring-3.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <iprt/path.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/assert.h>
 
 RTDECL(int) RTPathUserDocuments(char *pszPath, size_t cchPath)

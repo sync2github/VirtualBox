@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMInline.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * PDM - Internal header file containing the inlined functions.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,7 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-
+#ifndef VMM_INCLUDED_SRC_include_PDMInline_h
+#define VMM_INCLUDED_SRC_include_PDMInline_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 /**
@@ -33,4 +37,6 @@ DECLINLINE(uint32_t) pdmCalcIrqTag(PVM pVM, uint32_t idTracer)
     pVM->pdm.s.uIrqTag = uTag |= (idTracer << 16);
     return uTag;
 }
+
+#endif /* !VMM_INCLUDED_SRC_include_PDMInline_h */
 

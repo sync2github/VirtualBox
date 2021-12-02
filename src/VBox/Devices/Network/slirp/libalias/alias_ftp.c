@@ -340,6 +340,7 @@ ParseFtpPortCommand(struct libalias *la, char *sptr, int dlen)
                 break;
             else
                 state++;
+            RT_FALL_THRU();
         case 1:
         case 3:
         case 5:

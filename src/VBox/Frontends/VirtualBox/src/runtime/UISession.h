@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UISession.h 91713 2021-10-13 12:13:47Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UISession class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,18 +15,23 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UISession_h___
-#define ___UISession_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_UISession_h
+#define FEQT_INCLUDED_SRC_runtime_UISession_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QObject>
 #include <QCursor>
 #include <QEvent>
 #include <QMap>
+#include <QPixmap>
 
 /* GUI includes: */
 #include "UIExtraDataDefs.h"
 #include "UIMediumDefs.h"
+#include "UIMousePointerShapeData.h"
 
 /* COM includes: */
 #include "COMEnums.h"
@@ -38,12 +43,14 @@
 #include "CMouse.h"
 #include "CKeyboard.h"
 #include "CMachineDebugger.h"
+#include "CMedium.h"
 
 /* Forward declarations: */
 class QMenu;
 class UIFrameBuffer;
 class UIMachine;
 class UIMachineLogic;
+class UIMachineWindow;
 class UIActionPool;
 class CUSBDevice;
 class CNetworkAdapter;
@@ -53,31 +60,6 @@ class QMenuBar;
 #else /* !VBOX_WS_MAC */
 class QIcon;
 #endif /* !VBOX_WS_MAC */
-
-/* CConsole callback event types: */
-enum UIConsoleEventType
-{
-    UIConsoleEventType_MousePointerShapeChange = QEvent::User + 1,
-    UIConsoleEventType_MouseCapabilityChange,
-    UIConsoleEventType_KeyboardLedsChange,
-    UIConsoleEventType_StateChange,
-    UIConsoleEventType_AdditionsStateChange,
-    UIConsoleEventType_NetworkAdapterChange,
-    /* Not used: UIConsoleEventType_SerialPortChange, */
-    /* Not used: UIConsoleEventType_ParallelPortChange, */
-    /* Not used: UIConsoleEventType_StorageControllerChange, */
-    UIConsoleEventType_MediumChange,
-    /* Not used: UIConsoleEventType_CPUChange, */
-    UIConsoleEventType_VRDEServerChange,
-    UIConsoleEventType_VRDEServerInfoChange,
-    UIConsoleEventType_USBControllerChange,
-    UIConsoleEventType_USBDeviceStateChange,
-    UIConsoleEventType_SharedFolderChange,
-    UIConsoleEventType_RuntimeError,
-    UIConsoleEventType_CanShowWindow,
-    UIConsoleEventType_ShowWindow,
-    UIConsoleEventType_MAX
-};
 
 class UISession : public QObject
 {
@@ -92,12 +74,16 @@ public:
 
     /* API: Runtime UI stuff: */
     bool initialize();
+    /** Powers VM up. */
     bool powerUp();
-    bool detach();
-    bool saveState();
-    bool shutdown();
-    bool powerOff(bool fIncludingDiscard, bool &fServerCrashed);
-    bool restoreCurrentSnapshot();
+    /** Detaches and closes Runtime UI. */
+    void detachUi();
+    /** Saves VM state, then closes Runtime UI. */
+    void saveState();
+    /** Calls for guest shutdown to close Runtime UI. */
+    void shutdown();
+    /** Powers VM off, then closes Runtime UI. */
+    void powerOff(bool fIncludingDiscard);
 
     /** Returns the session instance. */
     CSession& session() { return m_session; }
@@ -125,17 +111,28 @@ public:
     UIMachineLogic* machineLogic() const;
     QWidget* mainMachineWindow() const;
     WId mainMachineWindowId() const;
-    QCursor cursor() const { return m_cursor; }
+    UIMachineWindow *activeMachineWindow() const;
 
-#ifndef VBOX_WS_MAC
+    /** Returns currently cached mouse cursor shape pixmap. */
+    QPixmap cursorShapePixmap() const { return m_cursorShapePixmap; }
+    /** Returns currently cached mouse cursor mask pixmap. */
+    QPixmap cursorMaskPixmap() const { return m_cursorMaskPixmap; }
+    /** Returns currently cached mouse cursor size. */
+    QSize cursorSize() const { return m_cursorSize; }
+    /** Returns currently cached mouse cursor hotspot. */
+    QPoint cursorHotspot() const { return m_cursorHotspot; }
+    /** Returns currently cached mouse cursor position. */
+    QPoint cursorPosition() const { return m_cursorPosition; }
+
     /** @name Branding stuff.
      ** @{ */
-    /** Returns redefined machine-window icon. */
-    QIcon* machineWindowIcon() const { return m_pMachineWindowIcon; }
+    /** Returns the cached machine-window icon. */
+    QIcon *machineWindowIcon() const { return m_pMachineWindowIcon; }
+#ifndef VBOX_WS_MAC
     /** Returns redefined machine-window name postfix. */
     QString machineWindowNamePostfix() const { return m_strMachineWindowNamePostfix; }
+#endif
     /** @} */
-#endif /* !VBOX_WS_MAC */
 
     /** @name Host-screen configuration variables.
      ** @{ */
@@ -160,15 +157,17 @@ public:
     /** Requests visual-state change. */
     void changeVisualState(UIVisualStateType visualStateType);
     /** Requests visual-state to be entered when possible. */
-    void setRequestedVisualState(UIVisualStateType visualStateType) { m_requestedVisualStateType = visualStateType; }
+    void setRequestedVisualState(UIVisualStateType visualStateType);
     /** Returns requested visual-state to be entered when possible. */
-    UIVisualStateType requestedVisualState() const { return m_requestedVisualStateType; }
+    UIVisualStateType requestedVisualState() const;
 
-    bool isSaved() const { return machineState() == KMachineState_Saved; }
+    bool isSaved() const { return machineState() == KMachineState_Saved ||
+                                  machineState() == KMachineState_AbortedSaved; }
     bool isTurnedOff() const { return machineState() == KMachineState_PoweredOff ||
                                       machineState() == KMachineState_Saved ||
                                       machineState() == KMachineState_Teleported ||
-                                      machineState() == KMachineState_Aborted; }
+                                      machineState() == KMachineState_Aborted ||
+                                      machineState() == KMachineState_AbortedSaved; }
     bool isPaused() const { return machineState() == KMachineState_Paused ||
                                    machineState() == KMachineState_TeleportingPausedVM; }
     bool isRunning() const { return machineState() == KMachineState_Running ||
@@ -178,9 +177,15 @@ public:
     bool wasPaused() const { return machineStatePrevious() == KMachineState_Paused ||
                                     machineStatePrevious() == KMachineState_TeleportingPausedVM; }
     bool isInitialized() const { return m_fInitialized; }
-    bool isFirstTimeStarted() const { return m_fIsFirstTimeStarted; }
     bool isGuestResizeIgnored() const { return m_fIsGuestResizeIgnored; }
     bool isAutoCaptureDisabled() const { return m_fIsAutoCaptureDisabled; }
+
+    /** Returns whether VM is in 'manual-override' mode.
+      * @note S.a. #m_fIsManualOverride description for more information. */
+    bool isManualOverrideMode() const { return m_fIsManualOverride; }
+    /** Defines whether VM is in 'manual-override' mode.
+      * @note S.a. #m_fIsManualOverride description for more information. */
+    void setManualOverrideMode(bool fIsManualOverride) { m_fIsManualOverride = fIsManualOverride; }
 
     /* Guest additions state getters: */
     bool isGuestAdditionsActive() const { return (m_ulGuestAdditionsRunLevel > KAdditionsRunLevelType_None); }
@@ -209,6 +214,8 @@ public:
     bool isMouseIntegrated() const { return m_fIsMouseIntegrated; }
     bool isValidPointerShapePresent() const { return m_fIsValidPointerShapePresent; }
     bool isHidingHostPointer() const { return m_fIsHidingHostPointer; }
+    /** Returns whether the @a cursorPosition() is valid and could be used by the GUI now. */
+    bool isValidCursorPositionPresent() const { return m_fIsValidCursorPositionPresent; }
 
     /* Common setters: */
     bool pause() { return setPause(true); }
@@ -254,13 +261,17 @@ public:
 
     /** Updates VRDE Server action state. */
     void updateStatusVRDE() { sltVRDEChange(); }
-    /** Updates Video Capture action state. */
-    void updateStatusVideoCapture() { sltVideoCaptureChange(); }
+    /** Updates Recording action state. */
+    void updateStatusRecording() { sltRecordingChange(); }
+    /** Updates Audio output action state. */
+    void updateAudioOutput() { sltAudioAdapterChange(); }
+    /** Updates Audio input action state. */
+    void updateAudioInput() { sltAudioAdapterChange(); }
 
     /** @name CPU hardware virtualization features for VM.
      ** @{ */
     /** Returns whether CPU hardware virtualization extension is enabled. */
-    bool isHWVirtExEnabled() const { return m_fIsHWVirtExEnabled; }
+    KVMExecutionEngine getVMExecutionEngine() const { return m_enmVMExecutionEngine; }
     /** Returns whether nested-paging CPU hardware virtualization extension is enabled. */
     bool isHWVirtExNestedPagingEnabled() const { return m_fIsHWVirtExNestedPagingEnabled; }
     /** Returns whether the VM is currently making use of the unrestricted execution feature of VT-x. */
@@ -269,6 +280,12 @@ public:
 
     /** Returns VM's effective paravirtualization provider. */
     KParavirtProvider paraVirtProvider() const { return m_paraVirtProvider; }
+
+    /** Returns the list of visible guest windows. */
+    QList<int> listOfVisibleWindows() const;
+
+    /** Returns a vector of media attached to the machine. */
+    CMediumVector machineMedia() const;
 
 signals:
 
@@ -280,8 +297,12 @@ signals:
     void sigKeyboardStateChange(int iState);
     /** Notifies listeners about mouse state-change. */
     void sigMouseStateChange(int iState);
+    /** Notifies listeners about mouse pointer shape change. */
     void sigMousePointerShapeChange();
+    /** Notifies listeners about mouse capability change. */
     void sigMouseCapabilityChange();
+    /** Notifies listeners about cursor position change. */
+    void sigCursorPositionChange();
     void sigKeyboardLedsChange();
     void sigMachineStateChange();
     void sigAdditionsStateChange();
@@ -291,7 +312,7 @@ signals:
     void sigStorageDeviceChange(const CMediumAttachment &attachment, bool fRemoved, bool fSilent);
     void sigMediumChange(const CMediumAttachment &mediumAttachment);
     void sigVRDEChange();
-    void sigVideoCaptureChange();
+    void sigRecordingChange();
     void sigUSBControllerChange();
     void sigUSBDeviceStateChange(const CUSBDevice &device, bool bIsAttached, const CVirtualBoxErrorInfo &error);
     void sigSharedFolderChange();
@@ -301,6 +322,9 @@ signals:
 #endif /* RT_OS_DARWIN */
     void sigCPUExecutionCapChange();
     void sigGuestMonitorChange(KGuestMonitorChangedEventType changeType, ulong uScreenId, QRect screenGeo);
+    void sigAudioAdapterChange();
+    void sigClipboardModeChange(KClipboardMode enmMode);
+    void sigDnDModeChange(KDnDMode enmMode);
 
     /** Notifies about host-screen count change. */
     void sigHostScreenCountChange();
@@ -314,7 +338,12 @@ signals:
 
 public slots:
 
+    /** Handles request to install guest additions image.
+      * @param  strSource  Brings the source of image being installed. */
     void sltInstallGuestAdditionsFrom(const QString &strSource);
+    /** Mounts DVD adhoc.
+      * @param  strSource  Brings the source of image being mounted. */
+    void sltMountDVDAdHoc(const QString &strSource);
 
     /** Defines @a iKeyboardState. */
     void setKeyboardState(int iKeyboardState) { m_iKeyboardState = iKeyboardState; emit sigKeyboardStateChange(m_iKeyboardState); }
@@ -322,30 +351,41 @@ public slots:
     /** Defines @a iMouseState. */
     void setMouseState(int iMouseState) { m_iMouseState = iMouseState; emit sigMouseStateChange(m_iMouseState); }
 
+    /** Closes Runtime UI. */
+    void closeRuntimeUI();
+
 private slots:
 
-    /** Marks machine started. */
-    void sltMarkInitialized() { m_fInitialized = true; }
-
-    /** Close Runtime UI. */
-    void sltCloseRuntimeUI();
+    /** Detaches COM. */
+    void sltDetachCOM();
 
 #ifdef RT_OS_DARWIN
     /** Mac OS X: Handles menu-bar configuration-change. */
-    void sltHandleMenuBarConfigurationChange(const QString &strMachineID);
+    void sltHandleMenuBarConfigurationChange(const QUuid &uMachineID);
 #endif /* RT_OS_DARWIN */
 
     /* Console events slots */
-    void sltMousePointerShapeChange(bool fVisible, bool fAlpha, QPoint hotCorner, QSize size, QVector<uint8_t> shape);
+    /** Handles signal about mouse pointer @a shapeData change. */
+    void sltMousePointerShapeChange(const UIMousePointerShapeData &shapeData);
+    /** Handles signal about mouse capability change to @a fSupportsAbsolute, @a fSupportsRelative, @a fSupportsMultiTouch and @a fNeedsHostCursor. */
     void sltMouseCapabilityChange(bool fSupportsAbsolute, bool fSupportsRelative, bool fSupportsMultiTouch, bool fNeedsHostCursor);
+    /** Handles signal about guest request to change the cursor position to @a uX * @a uY.
+      * @param  fContainsData  Brings whether the @a uX and @a uY values are valid and could be used by the GUI now. */
+    void sltCursorPositionChange(bool fContainsData, unsigned long uX, unsigned long uY);
     void sltKeyboardLedsChangeEvent(bool fNumLock, bool fCapsLock, bool fScrollLock);
     void sltStateChange(KMachineState state);
     void sltAdditionsChange();
     void sltVRDEChange();
-    void sltVideoCaptureChange();
+    void sltRecordingChange();
     void sltGuestMonitorChange(KGuestMonitorChangedEventType changeType, ulong uScreenId, QRect screenGeo);
     /** Handles storage device change for @a attachment, which was @a fRemoved and it was @a fSilent for guest. */
     void sltHandleStorageDeviceChange(const CMediumAttachment &attachment, bool fRemoved, bool fSilent);
+    /** Handles audio adapter change. */
+    void sltAudioAdapterChange();
+    /** Handles clip board mode change. */
+    void sltClipboardModeChange(KClipboardMode enmMode);
+    /** Handles drag and drop mode change. */
+    void sltDnDModeChange(KDnDMode enmMode);
 
     /* Handlers: Display reconfiguration stuff: */
 #ifdef RT_OS_DARWIN
@@ -360,6 +400,17 @@ private slots:
     /** Handles host-screen available-area change. */
     void sltHandleHostScreenAvailableAreaChange();
 
+    /** Handles signal about machine state saved.
+      * @param  fSuccess  Brings whether state was saved successfully. */
+    void sltHandleMachineStateSaved(bool fSuccess);
+    /** Handles signal about machine powered off.
+      * @param  fSuccess           Brings whether machine was powered off successfully.
+      * @param  fIncludingDiscard  Brings whether machine state should be discarded. */
+    void sltHandleMachinePoweredOff(bool fSuccess, bool fIncludingDiscard);
+    /** Handles signal about snapshot restored.
+      * @param  fSuccess  Brings whether machine was powered off successfully. */
+    void sltHandleSnapshotRestored(bool fSuccess);
+
 private:
 
     /** Constructor. */
@@ -373,20 +424,27 @@ private:
     /* Prepare helpers: */
     bool prepare();
     bool prepareSession();
+    void prepareNotificationCenter();
+    void prepareConsoleEventHandlers();
+    void prepareFramebuffers();
     void prepareActions();
     void prepareConnections();
-    void prepareConsoleEventHandlers();
+    void prepareMachineWindowIcon();
     void prepareScreens();
-    void prepareFramebuffers();
+    void prepareSignalHandling();
+
+    /* Settings stuff: */
     void loadSessionSettings();
 
     /* Cleanup helpers: */
-    void saveSessionSettings();
-    void cleanupFramebuffers();
+    //void cleanupSignalHandling();
     //void cleanupScreens() {}
-    void cleanupConsoleEventHandlers();
+    void cleanupMachineWindowIcon();
     void cleanupConnections();
     void cleanupActions();
+    void cleanupFramebuffers();
+    void cleanupConsoleEventHandlers();
+    void cleanupNotificationCenter();
     void cleanupSession();
     void cleanup();
 
@@ -395,10 +453,12 @@ private:
     void updateMenu();
 #endif /* VBOX_WS_MAC */
 
+    /** Updates mouse pointer shape. */
+    void updateMousePointerShape();
+
     /* Common helpers: */
-    void setPointerShape(const uchar *pShapeData, bool fHasAlpha, uint uXHot, uint uYHot, uint uWidth, uint uHeight);
     bool preprocessInitialization();
-    bool mountAdHocImage(KDeviceType enmDeviceType, UIMediumType enmMediumType, const QString &strImage);
+    bool mountAdHocImage(KDeviceType enmDeviceType, UIMediumDeviceType enmMediumType, const QString &strMediumName);
     bool postprocessInitialization();
     int countOfVisibleWindows();
     /** Loads VM settings. */
@@ -456,27 +516,27 @@ private:
     /* Common variables: */
     KMachineState m_machineStatePrevious;
     KMachineState m_machineState;
-    QCursor m_cursor;
 
-#ifndef VBOX_WS_MAC
+    /** Holds cached mouse cursor shape pixmap. */
+    QPixmap  m_cursorShapePixmap;
+    /** Holds cached mouse cursor mask pixmap. */
+    QPixmap  m_cursorMaskPixmap;
+    /** Holds cached mouse cursor size. */
+    QSize    m_cursorSize;
+    /** Holds cached mouse cursor hotspot. */
+    QPoint   m_cursorHotspot;
+    /** Holds cached mouse cursor position. */
+    QPoint   m_cursorPosition;
+
     /** @name Branding variables.
      ** @{ */
-    /** Holds redefined machine-window icon. */
+    /** Holds the cached machine-window icon. */
     QIcon *m_pMachineWindowIcon;
+#ifndef VBOX_WS_MAC
     /** Holds redefined machine-window name postfix. */
     QString m_strMachineWindowNamePostfix;
-    /** @} */
-#endif /* !VBOX_WS_MAC */
-
-    /** @name Visual-state configuration variables.
-     ** @{ */
-    /** Determines which visual-state should be entered when possible. */
-    UIVisualStateType m_requestedVisualStateType;
-    /** @} */
-
-#if defined(VBOX_WS_WIN)
-    HCURSOR m_alphaCursor;
 #endif
+    /** @} */
 
     /** @name Host-screen configuration variables.
      * @{ */
@@ -500,9 +560,12 @@ private:
 
     /* Common flags: */
     bool m_fInitialized : 1;
-    bool m_fIsFirstTimeStarted : 1;
     bool m_fIsGuestResizeIgnored : 1;
     bool m_fIsAutoCaptureDisabled : 1;
+    /** Holds whether VM is in 'manual-override' mode
+      * which means there will be no automatic UI shutdowns,
+      * visual representation mode changes and other stuff. */
+    bool m_fIsManualOverride : 1;
 
     /* Guest additions flags: */
     ULONG m_ulGuestAdditionsRunLevel;
@@ -529,11 +592,16 @@ private:
     bool m_fIsMouseIntegrated : 1;
     bool m_fIsValidPointerShapePresent : 1;
     bool m_fIsHidingHostPointer : 1;
+    /** Holds whether the @a m_cursorPosition is valid and could be used by the GUI now. */
+    bool m_fIsValidCursorPositionPresent : 1;
+    /** Holds the mouse pointer shape data. */
+    UIMousePointerShapeData  m_shapeData;
+
+    /** Copy of IMachineDebugger::ExecutionEngine */
+    KVMExecutionEngine m_enmVMExecutionEngine;
 
     /** @name CPU hardware virtualization features for VM.
      ** @{ */
-    /** Holds whether CPU hardware virtualization extension is enabled. */
-    bool m_fIsHWVirtExEnabled;
     /** Holds whether nested-paging CPU hardware virtualization extension is enabled. */
     bool m_fIsHWVirtExNestedPagingEnabled;
     /** Holds whether the VM is currently making use of the unrestricted execution feature of VT-x. */
@@ -544,5 +612,4 @@ private:
     KParavirtProvider m_paraVirtProvider;
 };
 
-#endif /* !___UISession_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_runtime_UISession_h */

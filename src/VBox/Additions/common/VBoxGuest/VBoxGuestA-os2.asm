@@ -1,10 +1,10 @@
-; $Id$
+; $Id: VBoxGuestA-os2.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; VBoxGuest - OS/2 assembly file, the first file in the link.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -14,9 +14,16 @@
 ; VirtualBox OSE distribution. VirtualBox OSE is distributed in the
 ; hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 ;
-; --------------------------------------------------------------------
-; 
-; This code is based on: 
+; The contents of this file may alternatively be used under the terms
+; of the Common Development and Distribution License Version 1.0
+; (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+; VirtualBox OSE distribution, in which case the provisions of the
+; CDDL are applicable instead of those of the GPL.
+;
+; You may elect to license modified versions of this file under the
+; terms and conditions of either the GPL or the CDDL or both.
+;-----------------------------------------------------------------------------
+; This code is based on:
 ;
 ; VBoxDrv - OS/2 assembly file, the first file in the link.
 ;
@@ -178,12 +185,12 @@ endstruc
 ; Some dhcalls.h stuff.
 %define DevHlp_VirtToLin        05bh
 %define DevHlp_SAVE_MESSAGE     03dh
-%define DevHlp_EIO              031h
+%define DevHlp_EOI              031h
 %define DevHlp_SetIRQ           01bh
 %define DevHlp_PhysToVirt       015h
 
 ; Fast IOCtl category, also defined in VBoxGuest.h
-%define VBOXGUEST_IOCTL_CATEGORY_FAST   0c3h
+%define VBGL_IOCTL_CATEGORY_FAST    0c3h
 
 ;;
 ; Got some nasm/link trouble, so emit the stuff ourselves.
@@ -298,7 +305,7 @@ GLOBALNAME g_bPciBusNo
 GLOBALNAME g_bPciDevFunNo
     db 0
 ;; Flag that is set by the vboxgst$ init routine if VMMDev was found.
-; Both init routines must refuse loading the driver if the 
+; Both init routines must refuse loading the driver if the
 ; device cannot be located.
 GLOBALNAME g_fFoundAdapter
     db 0
@@ -400,7 +407,7 @@ BEGINPROC VGDrvOS2Entrypoint
 vgdrvOS2EP_GenIOCtl:
 
     ; Fast IOCtl?
-    cmp     byte [es:bx + PKTIOCTL.cat], VBOXGUEST_IOCTL_CATEGORY_FAST
+    cmp     byte [es:bx + PKTIOCTL.cat], VBGL_IOCTL_CATEGORY_FAST
     jne     vgdrvOS2EP_GenIOCtl_Other
 
     ;
@@ -785,7 +792,7 @@ GLOBALNAME vgdrvOS2InitEntrypoint
 ;;
 ; The OS/2 IDC entry point.
 ;
-; This is only used to setup connection, the returned structure 
+; This is only used to setup connection, the returned structure
 ; will provide the entry points that we'll be using.
 ;
 ; @cproto  void far __cdecl VGDrvOS2IDC(VBOXGUESTOS2IDCCONNECT far *fpConnectInfo);
@@ -794,7 +801,7 @@ GLOBALNAME vgdrvOS2InitEntrypoint
 ;
 GLOBALNAME VGDrvOS2IDC
     push    ebp                         ; bp -  0h
-    mov     ebp, esp                    
+    mov     ebp, esp
     ; save everything we might touch.
     push    es                          ; bp -  2h
     push    ds                          ; bp -  4h
@@ -825,13 +832,13 @@ GLOBALNAME VGDrvOS2IDC_32
     mov     ds, cx
     movzx   ebx, word [ebp + 08h]
 
-    mov     dword [ebx + VBGOS2IDC.u32Version       ], VMMDEV_VERSION
-    mov     dword [ebx + VBGOS2IDC.u32Session       ], eax
-    mov     dword [ebx + VBGOS2IDC.pfnServiceEP     ], NAME(VGDrvOS2IDCService)
-    mov     word  [ebx + VBGOS2IDC.fpfnServiceEP    ], NAME(VGDrvOS2IDCService16) wrt CODE16
-    mov     word  [ebx + VBGOS2IDC.fpfnServiceEP + 2], CODE16
-    mov     word  [ebx + VBGOS2IDC.fpfnServiceAsmEP ], NAME(VGDrvOS2IDCService16Asm) wrt CODE16
-    mov     word  [ebx + VBGOS2IDC.fpfnServiceAsmEP+2],CODE16
+    mov     dword [ebx + VBGLOS2ATTACHDD.u32Version       ], VBGL_IOC_VERSION
+    mov     dword [ebx + VBGLOS2ATTACHDD.u32Session       ], eax
+    mov     dword [ebx + VBGLOS2ATTACHDD.pfnServiceEP     ], NAME(VGDrvOS2IDCService)
+    mov     word  [ebx + VBGLOS2ATTACHDD.fpfnServiceEP    ], NAME(VGDrvOS2IDCService16) wrt CODE16
+    mov     word  [ebx + VBGLOS2ATTACHDD.fpfnServiceEP + 2], CODE16
+    mov     word  [ebx + VBGLOS2ATTACHDD.fpfnServiceAsmEP ], NAME(VGDrvOS2IDCService16Asm) wrt CODE16
+    mov     word  [ebx + VBGLOS2ATTACHDD.fpfnServiceAsmEP+2],CODE16
 
     mov     ax, DATA32 wrt FLAT
     mov     ds, ax
@@ -859,26 +866,24 @@ ENDPROC VGDrvOS2IDC
 ;;
 ; The 16-bit IDC entry point, cdecl.
 ;
-; All this does is thunking the request into something that fits 
-; the 32-bit IDC service routine. 
+; All this does is thunking the request into something that fits
+; the 32-bit IDC service routine.
 ;
 ;
 ; @returns VBox status code.
 ; @param   u32Session          bp +  8h - The above session handle.
 ; @param   iFunction           bp + 0ch - The requested function.
-; @param   pvData              bp + 0eh - The input/output data buffer. The caller ensures that this
+; @param   fpReqHdr            bp + 0eh - The input/output data buffer. The caller ensures that this
 ;                                         cannot be swapped out, or that it's acceptable to take a
 ;                                         page in fault in the current context. If the request doesn't
 ;                                         take input or produces output, passing NULL is okay.
-; @param   cbData              bp + 12h - The size of the data buffer.
-; @param   pcbDataReturned     bp + 14h - Where to store the amount of data that's returned.
-;                                         This can be NULL if pvData is NULL.
+; @param   cbReq               bp + 12h - The size of the data buffer.
 ;
-; @cproto long far __cdecl VGDrvOS2IDCService16(uint32_t u32Session, uint16_t iFunction, void far *fpvData, uint16_t cbData, uint16_t far *pcbDataReturned);
+; @cproto long far __cdecl VGDrvOS2IDCService16(uint32_t u32Session, uint16_t iFunction, void far *fpReqHdr, uint16_t cbReq);
 ;
 GLOBALNAME VGDrvOS2IDCService16
     push    ebp                         ; bp -  0h
-    mov     ebp, esp                    
+    mov     ebp, esp
     push    es                          ; bp -  2h
     push    ds                          ; bp -  4h
     push    ecx                         ; bp -  8h
@@ -888,7 +893,7 @@ GLOBALNAME VGDrvOS2IDCService16
 
     ; locals
     push    dword 0                     ; esp + 18h (dd): cbDataReturned
-    
+
     ; load our ds (for g_fpfnDevHlp).
     mov     ax, DATA16
     mov     ds, ax
@@ -896,8 +901,7 @@ GLOBALNAME VGDrvOS2IDCService16
     ;
     ; Create the call frame before switching.
     ;
-    push    dword 0                     ; esp + 14h:    &cbDataReturned (filled in after stack switch)
-    movzx   ecx, word [bp + 12h]         
+    movzx   ecx, word [bp + 12h]
     push    ecx                         ; esp + 10h:    cbData
 
     ; thunk data argument if present.
@@ -913,9 +917,9 @@ GLOBALNAME VGDrvOS2IDCService16
     xor     eax, eax
 .finish_data:
     push    eax                         ; esp + 08h:    pvData
-    movzx   edx, word [bp + 0ch]        
+    movzx   edx, word [bp + 0ch]
     push    edx                         ; esp + 04h:    iFunction
-    mov     ecx, [bp + 08h]               
+    mov     ecx, [bp + 08h]
     push    ecx                         ; esp + 00h:    u32Session
 
     JMP16TO32 VGDrvOS2IDCService16_32
@@ -928,10 +932,6 @@ GLOBALNAME VGDrvOS2IDCService16_32
     mov     es, ax
     call    KernThunkStackTo32
 
-    ; update the cbDataReturned pointer
-    lea     eax, [esp + 18h]
-    mov     [esp + 14h], eax
-
     ; call the C code (don't cleanup the stack).
     call    NAME(VGDrvOS2IDCService)
 
@@ -943,16 +943,6 @@ GLOBALNAME VGDrvOS2IDCService16_32
     JMP32TO16 VGDrvOS2IDCService16_16
 segment CODE16
 GLOBALNAME VGDrvOS2IDCService16_16
-
-    ; Set *pcbDataReturned.
-    cmp     word [bp + 14h + 2], 3
-    jbe     .no_pcbDataReturned
-    xchg    dx, bx
-    mov     cx, [esp + 18h]
-    les     bx, [bp + 14h]
-    mov     word [es:bx], cx
-    xchg    dx, bx
-.no_pcbDataReturned:
 
 VGDrvOS2IDCService16_Done:
     lea     sp, [bp - 10h]
@@ -977,7 +967,7 @@ ENDPROC VGDrvOS2IDCService16
 ; calls from 16-bit assembly code.
 ;
 ; @returns ax: VBox status code; cx: The amount of data returned.
-;            
+;
 ; @param   u32Session          eax   - The above session handle.
 ; @param   iFunction           dl    - The requested function.
 ; @param   pvData              es:bx - The input/output data buffer.
@@ -987,26 +977,15 @@ GLOBALNAME VGDrvOS2IDCService16Asm
     push    ebp                         ; bp - 0h
     mov     ebp, esp
     push    edx                         ; bp - 4h
-    lea     sp, [bp - 18h]              ; allocate the call frame.
 
-                                        ; bp - 06h (dw): oops...
-    mov     [bp - 08h], word 0          ; bp - 08h (dw): cbDataReturned
-
-    mov     [bp - 0eh], cx              ; bp - 0eh (dw): cbData     (NOTE: out of order to free up CX)
-    lea     cx, [bp - 08h]              ; bp - 0ch (dd): &cbDataReturned
-    mov     [bp - 0ah], cx
-    mov     cx, ss
-    mov     [bp - 0ch], cx
-    mov     [bp - 10h], bx              ; bp - 10h (dd): pvData
-    mov     cx, es
-    mov     [bp - 12h], cx
-    mov     [bp - 14h], dl              ; bp - 14h (dw): iFunction
-    mov     [bp - 13h], byte 0
-    mov     [bp - 18h], eax             ; bp - 18h (dd): u32Session
-
+    push    cx                          ; cbData
+    push    es
+    xor     dh, dh
+    push    dx
+    push    eax
     call    NAME(VGDrvOS2IDCService16)
 
-    mov     cx, [bp - 08h]              ; cbDataReturned.
+    mov     cx, [es:bx + VBGLREQHDR.cbOut]
 
     mov     edx, [bp - 4]
     mov     esp, ebp
@@ -1019,10 +998,10 @@ ENDPROC VGDrvOS2IDCService16Asm
 ;;
 ; The 16-bit interrupt service routine.
 ;
-; OS/2 saves all registers according to the docs, although it doesn't say whether 
+; OS/2 saves all registers according to the docs, although it doesn't say whether
 ; this includes the 32-bit parts. Since it doesn't cost much to be careful, save
 ; everything.
-; 
+;
 ; @returns  CF=0 if it's our interrupt, CF=1 it it isn't.
 ;
 ;
@@ -1030,7 +1009,7 @@ GLOBALNAME vgdrvOS2ISR16
     push    ebp
     mov     ebp, esp
     pushf                               ; bp - 02h
-    cli                                 
+    cli
     push    eax                         ; bp - 06h
     push    edx                         ; bp - 0ah
     push    ebx                         ; bp - 0eh
@@ -1082,7 +1061,7 @@ GLOBALNAME vgdrvOS2ISR16_16
     ;
 .our:
     mov     al, [NAME(g_bInterruptLine)]
-    mov     dl, DevHlp_EIO
+    mov     dl, DevHlp_EOI
     call far [NAME(g_fpfnDevHlp)]
 
     pop     ebx
@@ -1417,12 +1396,12 @@ g_szOemHlpDevName:
 ;;
 ; Talks to OEMHLP$ about finding the VMMDev PCI adapter.
 ;
-; On success g_fFoundAdapter is set to 1, and g_cbMMIO, 
-; g_PhysMMIOBase and g_IOPortBase are initialized with 
+; On success g_fFoundAdapter is set to 1, and g_cbMMIO,
+; g_PhysMMIOBase and g_IOPortBase are initialized with
 ; the PCI data.
 ;
 ; @returns  0 on success, non-zero on failure. (eax)
-; 
+;
 ; @remark   ASSUMES DS:DATA16.
 ; @uses     nothing.
 ;
@@ -1550,10 +1529,10 @@ BEGINPROC vgdrvFindAdapter
     call .NestedReadReg
     mov     di, '4'
     test    al, 1h                                  ; Test that it's an I/O space address.
-    jz      .done_err_close                               
+    jz      .done_err_close
     mov     di, '5'
     test    eax, 0ffff0002h                         ; These shall all be 0 according to the specs.
-    jnz     .done_err_close                               
+    jnz     .done_err_close
     and     ax, 0fffeh
     mov     [NAME(g_IOPortBase)], ax
 
@@ -1571,7 +1550,7 @@ BEGINPROC vgdrvFindAdapter
 
     ;or      eax, eax
     ;jz      .done_success                             ; No memory region.
-    ;; @todo If there is a simple way of determining the size do that, if 
+    ;; @todo If there is a simple way of determining the size do that, if
     ;        not we can easily handle it the code that does the actual mapping.
 
 
@@ -1579,7 +1558,7 @@ BEGINPROC vgdrvFindAdapter
     ; Ok, we're good!
     ;
 .done_success:
-    or      [NAME(g_fFoundAdapter)], byte 1     
+    or      [NAME(g_fFoundAdapter)], byte 1
     jmp     .done_close
 
     ;
@@ -1687,5 +1666,4 @@ ENDPROC vgdrvFindAdapter
 segment DATA32
 g_pfnDos16Write:
     dd  DOS16WRITE  ; flat
-
 

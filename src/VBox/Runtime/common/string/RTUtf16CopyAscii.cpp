@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTUtf16CopyAscii.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTUtf16CopyAscii.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,8 +28,10 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#include <iprt/string.h>
+#include <iprt/utf16.h>
 #include "internal/iprt.h"
+
+#include <iprt/errcore.h>
 
 
 RTDECL(int) RTUtf16CopyAscii(PRTUTF16 pwszDst, size_t cwcDst, const char *pszSrc)

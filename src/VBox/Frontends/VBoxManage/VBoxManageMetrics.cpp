@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManageMetrics.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxManage - The 'metrics' command.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -364,7 +364,7 @@ static bool volatile g_fKeepGoing = true;
  *
  * @remarks This is called on a new thread.
  */
-static BOOL WINAPI ctrlHandler(DWORD dwCtrlType)
+static BOOL WINAPI ctrlHandler(DWORD dwCtrlType) RT_NOTHROW_DEF
 {
     switch (dwCtrlType)
     {

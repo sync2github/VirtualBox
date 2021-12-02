@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # Sub-Makefile for the X86 and AMD64 Instruction Tests.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -22,14 +22,14 @@ include $(KBUILD_PATH)/subheader.kmk
 # Python linting (can't live without pylint!).
 #
 ifdef VBOX_WITH_PYLINT
- TESTING +=
+TESTING +=
 endif
 BLDDIRS += $(PATH_TARGET)/pylint
 
 define def_vbox_instructions_py_check
 $(eval name:=$(basename $(notdir $(py))))
 
-pylint::   $(name)-py-phony.o
+pylint:    $(name)-py-phony.o
 $(name).o: $(name)-py-phony.o
 $(PATH_TARGET)/pylint/$(name).o $(name)-py-phony.o:: $(py) | $(PATH_TARGET)/pylint/
 ifdef VBOX_WITH_PYLINT

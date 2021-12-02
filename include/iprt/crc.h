@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_crc_h
-#define ___iprt_crc_h
+#ifndef IPRT_INCLUDED_crc_h
+#define IPRT_INCLUDED_crc_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -191,9 +194,47 @@ RTDECL(uint32_t)    RTCrc32CFinish(uint32_t uCRC32);
 
 /** @} */
 
+
+/** @defgroup grp_rt_crc16ccitt  CRC-16-CCITT
+ * @{ */
+/**
+ * Calculate CRC-16-CCITT for a memory block.
+ *
+ * @returns CRC-16-CCITT for the memory block.
+ * @param   pv      Pointer to the memory block.
+ * @param   cb      Size of the memory block in bytes.
+ */
+RTDECL(uint16_t)    RTCrc16Ccitt(const void *pv, size_t cb);
+
+/**
+ * Start a multiblock CRC-16-CCITT calculation.
+ *
+ * @returns Start CRC-16-CCITT.
+ */
+RTDECL(uint16_t)    RTCrc16CcittStart(void);
+
+/**
+ * Processes a multiblock of a CRC-16-CCITT calculation.
+ *
+ * @returns Intermediate CRC-16-CCITT value.
+ * @param   uCrc    Current CRC-16-CCITT intermediate value.
+ * @param   pv      The data block to process.
+ * @param   cb      The size of the data block in bytes.
+ */
+RTDECL(uint16_t)    RTCrc16CcittProcess(uint16_t uCrc, const void *pv, size_t cb);
+
+/**
+ * Complete a multiblock CRC-16-CCITT calculation.
+ *
+ * @returns CRC-16-CCITT value.
+ * @param   uCrc    Current CRC-16-CCITT intermediate value.
+ */
+RTDECL(uint16_t)    RTCrc16CcittFinish(uint16_t uCrc);
+/** @} */
+
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_crc_h */
 

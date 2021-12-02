@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MouseImpl.cpp 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,27 +15,28 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_MOUSE
+#include "LoggingNew.h"
+
 #include <iprt/cpp/utils.h>
 
 #include "MouseImpl.h"
 #include "DisplayImpl.h"
 #include "VMMDev.h"
 #include "MousePointerShapeWrap.h"
-
-#include "AutoCaller.h"
-#include "Logging.h"
+#include "VBoxEvents.h"
 
 #include <VBox/vmm/pdmdrv.h>
 #include <VBox/VMMDev.h>
+#include <VBox/err.h>
 
-#include <iprt/asm.h>
 
 class ATL_NO_VTABLE MousePointerShape:
     public MousePointerShapeWrap
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(MousePointerShape)
+    DECLARE_COMMON_CLASS_METHODS(MousePointerShape)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -265,8 +266,12 @@ HRESULT Mouse::init (ConsoleMouseInterface *parent)
     unconst(mEventSource).createObject();
     HRESULT rc = mEventSource->init();
     AssertComRCReturnRC(rc);
-    mMouseEvent.init(mEventSource, VBoxEventType_OnGuestMouse,
-                     0, 0, 0, 0, 0, 0);
+
+    ComPtr<IEvent> ptrEvent;
+    rc = ::CreateGuestMouseEvent(ptrEvent.asOutParam(), mEventSource,
+                                 (GuestMouseEventMode_T)0, 0 /*x*/, 0 /*y*/, 0 /*z*/, 0 /*w*/, 0 /*buttons*/);
+    AssertComRCReturnRC(rc);
+    mMouseEvent.init(ptrEvent, mEventSource);
 
     /* Confirm a successful initialization */
     autoInitSpan.setSucceeded();
@@ -366,7 +371,7 @@ HRESULT Mouse::i_updateVMMDevMouseCaps(uint32_t fCapsAdded,
  * mouse events.
  *
  * @returns COM status code
- * @param absoluteSupported address of result variable
+ * @param aAbsoluteSupported address of result variable
  */
 HRESULT Mouse::getAbsoluteSupported(BOOL *aAbsoluteSupported)
 {
@@ -379,7 +384,7 @@ HRESULT Mouse::getAbsoluteSupported(BOOL *aAbsoluteSupported)
  * mouse events.
  *
  * @returns COM status code
- * @param relativeSupported address of result variable
+ * @param aRelativeSupported address of result variable
  */
 HRESULT Mouse::getRelativeSupported(BOOL *aRelativeSupported)
 {
@@ -392,7 +397,7 @@ HRESULT Mouse::getRelativeSupported(BOOL *aRelativeSupported)
  * mouse events.
  *
  * @returns COM status code
- * @param multiTouchSupported address of result variable
+ * @param aMultiTouchSupported address of result variable
  */
 HRESULT Mouse::getMultiTouchSupported(BOOL *aMultiTouchSupported)
 {
@@ -405,7 +410,7 @@ HRESULT Mouse::getMultiTouchSupported(BOOL *aMultiTouchSupported)
  * itself if it is asked to by the front-end.
  *
  * @returns COM status code
- * @param pfNeedsHostCursor address of result variable
+ * @param aNeedsHostCursor address of result variable
  */
 HRESULT Mouse::getNeedsHostCursor(BOOL *aNeedsHostCursor)
 {
@@ -501,9 +506,9 @@ HRESULT Mouse::i_reportRelEventToMouseDev(int32_t dx, int32_t dy, int32_t dz,
         int vrc = pUpPort->pfnPutEvent(pUpPort, dx, dy, dz, dw, fButtons);
 
         if (RT_FAILURE(vrc))
-            return setError(VBOX_E_IPRT_ERROR,
-                            tr("Could not send the mouse event to the virtual mouse (%Rrc)"),
-                            vrc);
+            return setErrorBoth(VBOX_E_IPRT_ERROR, vrc,
+                                tr("Could not send the mouse event to the virtual mouse (%Rrc)"),
+                                vrc);
         mfLastButtons = fButtons;
     }
     return S_OK;
@@ -544,9 +549,9 @@ HRESULT Mouse::i_reportAbsEventToMouseDev(int32_t x, int32_t y,
         int vrc = pUpPort->pfnPutEventAbs(pUpPort, x, y, dz,
                                           dw, fButtons);
         if (RT_FAILURE(vrc))
-            return setError(VBOX_E_IPRT_ERROR,
-                            tr("Could not send the mouse event to the virtual mouse (%Rrc)"),
-                            vrc);
+            return setErrorBoth(VBOX_E_IPRT_ERROR, vrc,
+                                tr("Could not send the mouse event to the virtual mouse (%Rrc)"),
+                                vrc);
         mfLastButtons = fButtons;
 
     }
@@ -579,9 +584,9 @@ HRESULT Mouse::i_reportMultiTouchEventToDevice(uint8_t cContacts,
     {
         int vrc = pUpPort->pfnPutEventMultiTouch(pUpPort, cContacts, pau64Contacts, u32ScanTime);
         if (RT_FAILURE(vrc))
-            hrc = setError(VBOX_E_IPRT_ERROR,
-                           tr("Could not send the multi-touch event to the virtual device (%Rrc)"),
-                           vrc);
+            hrc = setErrorBoth(VBOX_E_IPRT_ERROR, vrc,
+                               tr("Could not send the multi-touch event to the virtual device (%Rrc)"),
+                               vrc);
     }
     else
     {
@@ -610,9 +615,9 @@ HRESULT Mouse::i_reportAbsEventToVMMDev(int32_t x, int32_t y)
         int vrc = pVMMDevPort->pfnSetAbsoluteMouse(pVMMDevPort,
                                                    x, y);
         if (RT_FAILURE(vrc))
-            return setError(VBOX_E_IPRT_ERROR,
-                            tr("Could not send the mouse event to the virtual mouse (%Rrc)"),
-                            vrc);
+            return setErrorBoth(VBOX_E_IPRT_ERROR, vrc,
+                                tr("Could not send the mouse event to the virtual mouse (%Rrc)"),
+                                vrc);
     }
     return S_OK;
 }
@@ -669,7 +674,7 @@ HRESULT Mouse::i_reportAbsEventToDisplayDevice(int32_t x, int32_t y)
 
     if (x != mcLastX || y != mcLastY)
     {
-        pDisplay->i_reportHostCursorPosition(x - 1, y - 1);
+        pDisplay->i_reportHostCursorPosition(x - 1, y - 1, false);
     }
     return S_OK;
 }
@@ -687,16 +692,12 @@ void Mouse::i_fireMouseEvent(bool fAbsolute, LONG x, LONG y, LONG dz, LONG dw,
         mode = GuestMouseEventMode_Relative;
 
     if (fButtons != 0)
-    {
-        VBoxEventDesc evDesc;
-        evDesc.init(mEventSource, VBoxEventType_OnGuestMouse, mode, x, y,
-                    dz, dw, fButtons);
-        evDesc.fire(0);
-    }
+        ::FireGuestMouseEvent(mEventSource, mode, x, y, dz, dw, fButtons);
     else
     {
-        mMouseEvent.reinit(VBoxEventType_OnGuestMouse, mode, x, y, dz, dw,
-                           fButtons);
+        ComPtr<IEvent> ptrEvent;
+        mMouseEvent.getEvent(ptrEvent.asOutParam());
+        ReinitGuestMouseEvent(ptrEvent, mode, x, y, dz, dw, fButtons);
         mMouseEvent.fire(0);
     }
 }
@@ -721,11 +722,8 @@ void Mouse::i_fireMultiTouchEvent(uint8_t cContacts,
         contactFlags[i] = RT_BYTE2(u32Hi);
     }
 
-    VBoxEventDesc evDesc;
-    evDesc.init(mEventSource, VBoxEventType_OnGuestMultiTouch,
-                cContacts, ComSafeArrayAsInParam(xPositions), ComSafeArrayAsInParam(yPositions),
-                ComSafeArrayAsInParam(contactIds), ComSafeArrayAsInParam(contactFlags), u32ScanTime);
-    evDesc.fire(0);
+    ::FireGuestMultiTouchEvent(mEventSource, cContacts, ComSafeArrayAsInParam(xPositions), ComSafeArrayAsInParam(yPositions),
+                               ComSafeArrayAsInParam(contactIds), ComSafeArrayAsInParam(contactFlags), u32ScanTime);
 }
 
 /**
@@ -735,10 +733,11 @@ void Mouse::i_fireMultiTouchEvent(uint8_t cContacts,
  *       arrival of new absolute pointer data
  *
  * @returns COM status code
- * @param dx          X movement
- * @param dy          Y movement
- * @param dz          Z movement
- * @param fButtons    The mouse button state
+ * @param dx            X movement.
+ * @param dy            Y movement.
+ * @param dz            Z movement.
+ * @param dw            Mouse wheel movement.
+ * @param aButtonState  The mouse button state.
  */
 HRESULT Mouse::putMouseEvent(LONG dx, LONG dy, LONG dz, LONG dw,
                              LONG aButtonState)
@@ -836,10 +835,11 @@ HRESULT Mouse::i_convertDisplayRes(LONG x, LONG y, int32_t *pxAdj, int32_t *pyAd
  * @note all calls out of this object are made with no locks held!
  *
  * @returns COM status code
- * @param x          X position (pixel), starting from 1
- * @param y          Y position (pixel), starting from 1
- * @param dz         Z movement
- * @param fButtons   The mouse button state
+ * @param x         X position (pixel), starting from 1
+ * @param y         Y position (pixel), starting from 1
+ * @param dz        Z movement
+ * @param dw        mouse wheel movement
+ * @param aButtonState The mouse button state
  */
 HRESULT Mouse::putMouseEventAbsolute(LONG x, LONG y, LONG dz, LONG dw,
                                      LONG aButtonState)
@@ -847,10 +847,27 @@ HRESULT Mouse::putMouseEventAbsolute(LONG x, LONG y, LONG dz, LONG dw,
     LogRel3(("%s: x=%d, y=%d, dz=%d, dw=%d, fButtons=0x%x\n",
              __PRETTY_FUNCTION__, x, y, dz, dw, aButtonState));
 
+    DisplayMouseInterface *pDisplay = mParent->i_getDisplayMouseInterface();
+    ComAssertRet(pDisplay, E_FAIL);
     int32_t xAdj, yAdj;
     uint32_t fButtonsAdj;
     bool fValid;
 
+    /* If we are doing old-style (IRQ-less) absolute reporting to the VMM
+     * device then make sure the guest is aware of it, so that it knows to
+     * ignore relative movement on the PS/2 device. */
+    i_updateVMMDevMouseCaps(VMMDEV_MOUSE_HOST_WANTS_ABSOLUTE, 0);
+    /* Detect out-of-range. */
+    if (x == 0x7FFFFFFF && y == 0x7FFFFFFF)
+    {
+        pDisplay->i_reportHostCursorPosition(0, 0, true);
+        return S_OK;
+    }
+    /* Detect "report-only" (-1, -1).  This is not ideal, as in theory the
+     * front-end could be sending negative values relative to the primary
+     * screen. */
+    if (x == -1 && y == -1)
+        return S_OK;
     /** @todo the front end should do this conversion to avoid races */
     /** @note Or maybe not... races are pretty inherent in everything done in
      *        this object and not really bad as far as I can see. */
@@ -858,10 +875,6 @@ HRESULT Mouse::putMouseEventAbsolute(LONG x, LONG y, LONG dz, LONG dw,
     if (FAILED(rc)) return rc;
 
     fButtonsAdj = i_mouseButtonsToPDM(aButtonState);
-    /* If we are doing old-style (IRQ-less) absolute reporting to the VMM
-     * device then make sure the guest is aware of it, so that it knows to
-     * ignore relative movement on the PS/2 device. */
-    i_updateVMMDevMouseCaps(VMMDEV_MOUSE_HOST_WANTS_ABSOLUTE, 0);
     if (fValid)
     {
         rc = i_reportAbsEventToInputDevices(xAdj, yAdj, dz, dw, fButtonsAdj,
@@ -1047,7 +1060,12 @@ bool Mouse::i_guestNeedsHostCursor(void)
 
 
 /** Check what sort of reporting can be done using the devices currently
- * enabled.  Does not consider the VMM device. */
+ * enabled.  Does not consider the VMM device.
+ *
+ * @param   pfAbs   supports absolute mouse coordinates.
+ * @param   pfRel   supports relative mouse coordinates.
+ * @param   pfMT    supports multitouch.
+ */
 void Mouse::i_getDeviceCaps(bool *pfAbs, bool *pfRel, bool *pfMT)
 {
     bool fAbsDev = false;
@@ -1148,18 +1166,19 @@ void Mouse::i_sendMouseCapsNotifications(void)
  * @interface_method_impl{PDMIMOUSECONNECTOR,pfnReportModes}
  * A virtual device is notifying us about its current state and capabilities
  */
-DECLCALLBACK(void) Mouse::i_mouseReportModes(PPDMIMOUSECONNECTOR pInterface, bool fRel, bool fAbs, bool fMT)
+DECLCALLBACK(void) Mouse::i_mouseReportModes(PPDMIMOUSECONNECTOR pInterface, bool fRelative,
+                                             bool fAbsolute, bool fMultiTouch)
 {
     PDRVMAINMOUSE pDrv = RT_FROM_MEMBER(pInterface, DRVMAINMOUSE, IConnector);
-    if (fRel)
+    if (fRelative)
         pDrv->u32DevCaps |= MOUSE_DEVCAP_RELATIVE;
     else
         pDrv->u32DevCaps &= ~MOUSE_DEVCAP_RELATIVE;
-    if (fAbs)
+    if (fAbsolute)
         pDrv->u32DevCaps |= MOUSE_DEVCAP_ABSOLUTE;
     else
         pDrv->u32DevCaps &= ~MOUSE_DEVCAP_ABSOLUTE;
-    if (fMT)
+    if (fMultiTouch)
         pDrv->u32DevCaps |= MOUSE_DEVCAP_MULTI_TOUCH;
     else
         pDrv->u32DevCaps &= ~MOUSE_DEVCAP_MULTI_TOUCH;
@@ -1222,7 +1241,7 @@ DECLCALLBACK(int) Mouse::i_drvConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint
     /*
      * Validate configuration.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "Object\0"))
+    if (!CFGMR3AreValuesValid(pCfg, ""))
         return VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES;
     AssertMsgReturn(PDMDrvHlpNoAttach(pDrvIns) == VERR_PDM_NO_ATTACHED_DRIVER,
                     ("Configuration error: Not possible to attach anything to this driver!\n"),
@@ -1248,14 +1267,15 @@ DECLCALLBACK(int) Mouse::i_drvConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint
     /*
      * Get the Mouse object pointer and update the mpDrv member.
      */
-    void *pv;
-    int rc = CFGMR3QueryPtr(pCfg, "Object", &pv);
-    if (RT_FAILURE(rc))
+    com::Guid uuid(COM_IIDOF(IMouse));
+    IMouse *pIMouse = (IMouse *)PDMDrvHlpQueryGenericUserObject(pDrvIns, uuid.raw());
+    if (!pIMouse)
     {
-        AssertMsgFailed(("Configuration error: No/bad \"Object\" value! rc=%Rrc\n", rc));
-        return rc;
+        AssertMsgFailed(("Configuration error: No/bad Mouse object!\n"));
+        return VERR_NOT_FOUND;
     }
-    pThis->pMouse = (Mouse *)pv;        /** @todo Check this cast! */
+    pThis->pMouse = static_cast<Mouse *>(pIMouse);
+
     unsigned cDev;
     {
         AutoWriteLock mouseLock(pThis->pMouse COMMA_LOCKVAL_SRC_POS);

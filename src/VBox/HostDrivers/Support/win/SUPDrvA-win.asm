@@ -1,10 +1,10 @@
-; $Id$
+; $Id: SUPDrvA-win.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; VirtualBox Support Driver - Windows NT specific assembly parts.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -30,20 +30,6 @@
 %include "iprt/asmdefs.mac"
 
 BEGINCODE
-%ifdef RT_ARCH_AMD64
- %define _DbgPrint DbgPrint
-%endif
-extern _DbgPrint
-
-%if 1 ; see alternative in SUPDrv-win.cpp
-;;
-; Kind of alias for DbgPrint
-export NAME(SUPR0Printf)
-BEGINPROC SUPR0Printf
-        jmp     _DbgPrint
-ENDPROC SUPR0Printf
-%endif
-
 
 %ifdef VBOX_WITH_HARDENING
 

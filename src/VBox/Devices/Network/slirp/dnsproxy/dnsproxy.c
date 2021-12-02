@@ -1,7 +1,7 @@
-/* $Id$ */
+/* $Id: dnsproxy.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -614,7 +614,7 @@ main(int argc, char *argv[])
         case 'V':
             fprintf(stderr, PACKAGE_STRING "\n");
             exit(0);
-        /* FALLTHROUGH */
+        RT_FALL_THRU();
         case 'h':
         default:
             fprintf(stderr,

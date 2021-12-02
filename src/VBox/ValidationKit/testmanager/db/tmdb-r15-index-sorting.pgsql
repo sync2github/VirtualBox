@@ -1,10 +1,10 @@
--- $Id$
+-- $Id: tmdb-r15-index-sorting.pgsql 82968 2020-02-04 10:35:17Z vboxsync $
 --- @file
 -- VBox Test Manager Database - Index tuning effort.
 --
 
 --
--- Copyright (C) 2015 Oracle Corporation
+-- Copyright (C) 2015-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;
@@ -60,7 +60,7 @@ ANALYZE VERBOSE TestBoxes;
 
 
 DROP INDEX IF EXISTS BuildBlacklistIdx;
-CREATE INDEX BuildBlacklistIdx ON BuildBlacklist (iLastRevision DESC, iFirstRevision ASC, sProduct, sBranch, 
+CREATE INDEX BuildBlacklistIdx ON BuildBlacklist (iLastRevision DESC, iFirstRevision ASC, sProduct, sBranch,
                                                   tsExpire DESC, tsEffective ASC);
 \d BuildBlacklist;
 ANALYZE VERBOSE BuildBlacklist;

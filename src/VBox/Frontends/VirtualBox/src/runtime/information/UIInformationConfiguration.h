@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIInformationConfiguration.h 85893 2020-08-26 17:26:53Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIInformationConfiguration class declaration.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,26 +15,33 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIInformationConfiguration_h___
-#define ___UIInformationConfiguration_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_information_UIInformationConfiguration_h
+#define FEQT_INCLUDED_SRC_runtime_information_UIInformationConfiguration_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QWidget>
-#include <QListView>
 
 /* COM includes: */
 #include "COMEnums.h"
+#include "CGuest.h"
 #include "CMachine.h"
 #include "CConsole.h"
 
-/* Forward declarations: */
-class QVBoxLayout;
-class UIInformationView;
-class UIInformationModel;
+/* GUI includes: */
+#include "QIWithRetranslateUI.h"
+#include "UITextTable.h"
 
-/** QWidget extension
-  * providing GUI with configuration-information tab in session-information window. */
-class UIInformationConfiguration : public QWidget
+
+/* Forward declarations: */
+class QTableWidget;
+class QTableWidgetItem;
+class QTextDocument;
+class QVBoxLayout;
+
+class UIInformationConfiguration : public QIWithRetranslateUI<QWidget>
 {
     Q_OBJECT;
 
@@ -45,28 +52,53 @@ public:
       * @param console is machine console reference. */
     UIInformationConfiguration(QWidget *pParent, const CMachine &machine, const CConsole &console);
 
+protected:
+
+    void retranslateUi() /* override */;
+
+private slots:
+
+    void sltMachineDataChanged();
+    void sltHandleTableContextMenuRequest(const QPoint &position);
+    void sltCopyTableToClipboard();
+
 private:
 
-    /** Prepares main-layout. */
-    void prepareMainLayout();
+    void createTableItems();
+    void prepareObjects();
+    void insertTitleRow(const QString &strTitle, const QIcon &icon, const QFontMetrics &fontMetrics);
+    void insertInfoRows(const UITextTable &table, const QFontMetrics &fontMetrics, int &iMaxColumn1Length);
+    void insertInfoRow(const QString strText1, const QString &strText2,
+                       const QFontMetrics &fontMetrics, int &iMaxColumn1Length);
+    void resetTable();
+    QString removeHtmlFromString(const QString &strOriginal);
+    QString tableData() const;
 
-    /** Prepares model. */
-    void prepareModel();
-
-    /** Prepares view. */
-    void prepareView();
-
-    /** Holds the machine instance. */
     CMachine m_machine;
-    /** Holds the console instance. */
     CConsole m_console;
-    /** Holds the instance of main-layout we create. */
     QVBoxLayout *m_pMainLayout;
-    /** Holds the instance of model we create. */
-    UIInformationModel *m_pModel;
-    /** Holds the instance of view we create. */
-    UIInformationView *m_pView;
+    QTableWidget *m_pTableWidget;
+    QAction *m_pCopyWholeTableAction;
+
+    const int m_iColumCount;
+    const int m_iRowLeftMargin;
+    const int m_iRowTopMargin;
+    const int m_iRowRightMargin;
+    const int m_iRowBottomMargin;
+
+
+   /** @name Cached translated string.
+      * @{ */
+        QString m_strGeneralTitle;
+        QString m_strSystemTitle;
+        QString m_strDisplayTitle;
+        QString m_strStorageTitle;
+        QString m_strAudioTitle;
+        QString m_strNetworkTitle;
+        QString m_strSerialPortsTitle;
+        QString m_strUSBTitle;
+        QString m_strSharedFoldersTitle;
+    /** @} */
 };
 
-#endif /* !___UIInformationConfiguration_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_runtime_information_UIInformationConfiguration_h */

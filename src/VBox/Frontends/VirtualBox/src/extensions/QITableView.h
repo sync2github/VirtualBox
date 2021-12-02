@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QITableView.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Qt extensions: QITableView class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,11 +15,17 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___QITableView_h___
-#define ___QITableView_h___
+#ifndef FEQT_INCLUDED_SRC_extensions_QITableView_h
+#define FEQT_INCLUDED_SRC_extensions_QITableView_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QTableView>
+
+/* GUI includes: */
+#include "UILibraryDefs.h"
 
 /* Forward declarations: */
 class QITableViewCell;
@@ -28,7 +34,7 @@ class QITableView;
 
 
 /** OObject subclass used as cell for the QITableView. */
-class QITableViewCell : public QObject
+class SHARED_LIBRARY_STUFF QITableViewCell : public QObject
 {
     Q_OBJECT;
 
@@ -55,7 +61,7 @@ private:
 
 
 /** OObject subclass used as row for the QITableView. */
-class QITableViewRow : public QObject
+class SHARED_LIBRARY_STUFF QITableViewRow : public QObject
 {
     Q_OBJECT;
 
@@ -84,7 +90,7 @@ private:
 
 
 /** QTableView subclass extending standard functionality. */
-class QITableView : public QTableView
+class SHARED_LIBRARY_STUFF QITableView : public QTableView
 {
     Q_OBJECT;
 
@@ -97,6 +103,8 @@ public:
 
     /** Constructs table-view passing @a pParent to the base-class. */
     QITableView(QWidget *pParent = 0);
+    /** Destructs table-view. */
+    virtual ~QITableView() /* override */;
 
     /** Returns the number of children. */
     virtual int childCount() const { return 0; }
@@ -122,10 +130,12 @@ private:
 
     /** Prepares all. */
     void prepare();
+    /** Cleanups all. */
+    void cleanup();
 
     /** Holds the map of editors stored for passed indexes. */
     QMap<QModelIndex, QObject*> m_editors;
 };
 
-#endif /* !___QITableView_h___ */
 
+#endif /* !FEQT_INCLUDED_SRC_extensions_QITableView_h */

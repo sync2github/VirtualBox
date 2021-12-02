@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-first-dosexe.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - First Object for DOS executables, defines segments only.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -30,5 +30,4 @@
 ; Defines the entry point 'start' as well, leaving us in BS3TEXT16.
 ;
 %include "bs3-first-common.mac"
-
 

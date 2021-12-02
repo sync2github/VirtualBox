@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCAPI.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file VBoxCAPI.cpp
  * Utility functions to use with the C API binding.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,11 +27,13 @@
 # include <stdlib.h>
 #endif /* VBOX_WITH_XPCOM */
 
-#include <iprt/initterm.h>
-#include <iprt/string.h>
-#include <iprt/uuid.h>
 #include <iprt/env.h>
+#include <iprt/err.h>
+#include <iprt/initterm.h>
 #include <iprt/mem.h>
+#include <iprt/string.h>
+#include <iprt/utf16.h>
+#include <iprt/uuid.h>
 #include <VBox/log.h>
 #include <VBox/version.h>
 
@@ -391,7 +393,7 @@ VBoxComInitialize(const char *pszVirtualBoxIID, IVirtualBox **ppVirtualBox,
     else
         sessionIID = IID_ISession;
 
-    HRESULT rc = com::Initialize();
+    HRESULT rc = com::Initialize(VBOX_COM_INIT_F_DEFAULT | VBOX_COM_INIT_F_NO_COM_PATCHING);
     if (FAILED(rc))
     {
         Log(("Cbinding: COM/XPCOM could not be initialized! rc=%Rhrc\n", rc));
@@ -666,7 +668,7 @@ VBoxClientInitialize(const char *pszVirtualBoxClientIID, IVirtualBoxClient **ppV
     else
         virtualBoxClientIID = IID_IVirtualBoxClient;
 
-    HRESULT rc = com::Initialize();
+    HRESULT rc = com::Initialize(VBOX_COM_INIT_F_DEFAULT | VBOX_COM_INIT_F_NO_COM_PATCHING);
     if (FAILED(rc))
     {
         Log(("Cbinding: COM/XPCOM could not be initialized! rc=%Rhrc\n", rc));
@@ -725,7 +727,7 @@ VBoxClientInitialize(const char *pszVirtualBoxClientIID, IVirtualBoxClient **ppV
 static HRESULT
 VBoxClientThreadInitialize(void)
 {
-    return com::Initialize();
+    return com::Initialize(VBOX_COM_INIT_F_DEFAULT | VBOX_COM_INIT_F_NO_COM_PATCHING);
 }
 
 static HRESULT

@@ -1,10 +1,10 @@
-/* $Id$*/
+/* $Id: precomp_vcc.h 88070 2021-03-10 14:56:16Z vboxsync $*/
 /** @file
  * VBox Qt GUI - Precompiled header for Visual C++.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -41,14 +41,18 @@
 #include <qalgorithms.h>
 #include <qarraydata.h>
 #include <qatomic.h>
-#include <qatomic_msvc.h>
+#if _MSC_VER < 1910 /* Conflicts with qatomic_cxx11.h which is dragged in above somewhere. */
+# include <qatomic_msvc.h>
+#endif
 #include <qbasicatomic.h>
 #include <qbytearray.h>
 #include <qchar.h>
 #include <qcompilerdetection.h>
 #include <qconfig.h>
 #include <qcontainerfwd.h>
-#include <qfeatures.h>
+#if QT_VERSION < QT_VERSION_CHECK(5, 8, 0)
+# include <qfeatures.h>
+#endif
 #include <qflags.h>
 #include <qgenericatomic.h>
 #include <qglobalstatic.h>

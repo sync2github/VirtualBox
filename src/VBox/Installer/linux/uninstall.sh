@@ -4,7 +4,7 @@
 # VirtualBox linux uninstallation script
 
 #
-# Copyright (C) 2009-2015 Oracle Corporation
+# Copyright (C) 2009-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -65,11 +65,13 @@ fi
 # Remove symlinks
 rm -f \
   /usr/bin/VirtualBox \
+  /usr/bin/VirtualBoxVM \
   /usr/bin/VBoxManage \
   /usr/bin/VBoxSDL \
   /usr/bin/VBoxVRDP \
   /usr/bin/VBoxHeadless \
   /usr/bin/VBoxDTrace \
+  /usr/bin/VBoxAudioTest \
   /usr/bin/VBoxBugReport \
   /usr/bin/VBoxBalloonCtrl \
   /usr/bin/VBoxAutostart \
@@ -77,13 +79,16 @@ rm -f \
   /usr/bin/VBoxNetNAT \
   /usr/bin/vboxwebsrv \
   /usr/bin/vbox-img \
+  /usr/bin/vboximg-mount \
   /usr/bin/VBoxAddIF \
   /usr/bin/VBoxDeleteIf \
   /usr/bin/VBoxTunctl \
   /usr/bin/virtualbox \
+  /usr/bin/virtualboxvm \
   /usr/share/pixmaps/VBox.png \
   /usr/share/pixmaps/virtualbox.png \
   /usr/share/applications/virtualbox.desktop \
+  /usr/share/applications/virtualboxvm.desktop \
   /usr/share/mime/packages/virtualbox.xml \
   /usr/bin/rdesktop-vrdp \
   /usr/bin/virtualbox \
@@ -91,12 +96,16 @@ rm -f \
   /usr/bin/vboxsdl \
   /usr/bin/vboxheadless \
   /usr/bin/vboxdtrace \
+  /usr/bin/vboxaudiotest \
   /usr/bin/vboxbugreport \
   $PREV_INSTALLATION/components/VBoxVMM.so \
   $PREV_INSTALLATION/components/VBoxREM.so \
   $PREV_INSTALLATION/components/VBoxRT.so \
   $PREV_INSTALLATION/components/VBoxDDU.so \
   $PREV_INSTALLATION/components/VBoxXPCOM.so \
+  $PREV_INSTALLATION/VBoxREM.so \
+  $PREV_INSTALLATION/VBoxVRDP \
+  $PREV_INSTALLATION/VBoxVRDP.so \
   2> /dev/null
 
 cwd=`pwd`

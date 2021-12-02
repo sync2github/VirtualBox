@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_stream_h
-#define ___iprt_stream_h
+#ifndef IPRT_INCLUDED_stream_h
+#define IPRT_INCLUDED_stream_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -37,8 +40,10 @@ RT_C_DECLS_BEGIN
  * @{
  */
 
+#ifndef IPRT_INCLUDED_message_h
 /** Pointer to a stream. */
 typedef struct RTSTREAM *PRTSTREAM;
+#endif
 
 /** Pointer to the standard input stream. */
 extern RTDATADECL(PRTSTREAM)    g_pStdIn;
@@ -147,6 +152,25 @@ RTR3DECL(int) RTStrmInputGetEchoChars(PRTSTREAM pStream, bool *pfEchoChars);
 RTR3DECL(int) RTStrmInputSetEchoChars(PRTSTREAM pStream, bool fEchoChars);
 
 /**
+ * Checks if this is a terminal (TTY) or not.
+ *
+ * @returns true if it is, false if it isn't or the stream isn't valid.
+ * @param   pStream         The stream.
+ */
+RTR3DECL(bool) RTStrmIsTerminal(PRTSTREAM pStream);
+
+/**
+ * Gets the width of the terminal the stream is associated with.
+ *
+ * @returns IPRT status code.
+ * @retval  VERR_INVALID_FUNCTION if not connected to a terminal.
+ * @param   pStream         The stream.
+ * @param   pcchWidth       Where to return the width.  This will never be zero
+ *                          and always be set, even on error.
+ */
+RTR3DECL(int) RTStrmQueryTerminalWidth(PRTSTREAM pStream, uint32_t *pcchWidth);
+
+/**
  * Rewinds the stream.
  *
  * Stream errors will be reset on success.
@@ -236,7 +260,7 @@ RTR3DECL(int) RTStrmPutCh(PRTSTREAM pStream, int ch);
  * @returns iprt status code.
  * @param   pStream         The stream.
  * @param   pszString       The string to write.
- *                          No newlines or anything is appended or prepended.
+ *                          No newlines or anything are appended or prepended.
  *                          The terminating '\\0' is not written, of course.
  */
 RTR3DECL(int) RTStrmPutStr(PRTSTREAM pStream, const char *pszString);
@@ -318,5 +342,5 @@ RTR3DECL(int) RTPrintfV(const char *pszFormat, va_list args) RT_IPRT_FORMAT_ATTR
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_stream_h */
 

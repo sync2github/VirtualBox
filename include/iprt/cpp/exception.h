@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,11 +23,20 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_cpp_exception_h
-#define ___iprt_cpp_exception_h
+#ifndef IPRT_INCLUDED_cpp_exception_h
+#define IPRT_INCLUDED_cpp_exception_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cpp/ministring.h>
 #include <exception>
+
+#if RT_MSC_PREREQ(RT_MSC_VER_VC140)
+# pragma warning(push)
+# pragma warning(disable:4275) /* non dll-interface class 'std::exception' used as base for dll-interface class 'RTCError' */
+#endif
+
 
 /** @defgroup grp_rt_cpp_exceptions     C++ Exceptions
  * @ingroup grp_rt_cpp
@@ -85,11 +94,15 @@ private:
      */
     RTCError();
 
+protected:
     /** The exception message. */
     RTCString m_strMsg;
 };
 
 /** @} */
 
+#if RT_MSC_PREREQ(RT_MSC_VER_VC140)
+# pragma warning(pop)
 #endif
+#endif /* !IPRT_INCLUDED_cpp_exception_h */
 

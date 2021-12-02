@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GIMAll.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * GIM - Guest Interface Manager - All Contexts.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,10 +23,11 @@
 #include <VBox/vmm/gim.h>
 #include <VBox/vmm/em.h>    /* For EMInterpretDisasCurrent */
 #include "GIMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 
 #include <VBox/dis.h>       /* For DISCPUSTATE */
 #include <VBox/err.h>
+#include <iprt/string.h>
 
 /* Include all the providers. */
 #include "GIMHvInternal.h"
@@ -60,12 +61,43 @@ VMMDECL(GIMPROVIDERID) GIMGetProvider(PVM pVM)
 
 
 /**
+ * Returns the array of MMIO2 regions that are expected to be registered and
+ * later mapped into the guest-physical address space for the GIM provider
+ * configured for the VM.
+ *
+ * @returns Pointer to an array of GIM MMIO2 regions, may return NULL.
+ * @param   pVM         The cross context VM structure.
+ * @param   pcRegions   Where to store the number of items in the array.
+ *
+ * @remarks The caller does not own and therefore must -NOT- try to free the
+ *          returned pointer.
+ */
+VMMDECL(PGIMMMIO2REGION) GIMGetMmio2Regions(PVMCC pVM, uint32_t *pcRegions)
+{
+    Assert(pVM);
+    Assert(pcRegions);
+
+    *pcRegions = 0;
+    switch (pVM->gim.s.enmProviderId)
+    {
+        case GIMPROVIDERID_HYPERV:
+            return gimHvGetMmio2Regions(pVM, pcRegions);
+
+        default:
+            break;
+    }
+
+    return NULL;
+}
+
+
+/**
  * Returns whether the guest has configured and enabled calls to the hypervisor.
  *
  * @returns true if hypercalls are enabled and usable, false otherwise.
  * @param   pVCpu           The cross context virtual CPU structure.
  */
-VMM_INT_DECL(bool) GIMAreHypercallsEnabled(PVMCPU pVCpu)
+VMM_INT_DECL(bool) GIMAreHypercallsEnabled(PVMCPUCC pVCpu)
 {
     PVM pVM = pVCpu->CTX_SUFF(pVM);
     if (!GIMIsEnabled(pVM))
@@ -74,7 +106,7 @@ VMM_INT_DECL(bool) GIMAreHypercallsEnabled(PVMCPU pVCpu)
     switch (pVM->gim.s.enmProviderId)
     {
         case GIMPROVIDERID_HYPERV:
-            return gimHvAreHypercallsEnabled(pVCpu);
+            return gimHvAreHypercallsEnabled(pVM);
 
         case GIMPROVIDERID_KVM:
             return gimKvmAreHypercallsEnabled(pVCpu);
@@ -91,6 +123,8 @@ VMM_INT_DECL(bool) GIMAreHypercallsEnabled(PVMCPU pVCpu)
  * @returns Strict VBox status code.
  * @retval  VINF_SUCCESS if the hypercall succeeded (even if its operation
  *          failed).
+ * @retval  VINF_GIM_HYPERCALL_CONTINUING continue hypercall without updating
+ *          RIP.
  * @retval  VINF_GIM_R3_HYPERCALL re-start the hypercall from ring-3.
  * @retval  VERR_GIM_HYPERCALL_ACCESS_DENIED CPL is insufficient.
  * @retval  VERR_GIM_HYPERCALLS_NOT_AVAILABLE hypercalls unavailable.
@@ -103,11 +137,12 @@ VMM_INT_DECL(bool) GIMAreHypercallsEnabled(PVMCPU pVCpu)
  * @param   pVCpu       The cross context virtual CPU structure.
  * @param   pCtx        Pointer to the guest-CPU context.
  *
+ * @remarks The caller of this function needs to advance RIP as required.
  * @thread  EMT.
  */
-VMM_INT_DECL(VBOXSTRICTRC) GIMHypercall(PVMCPU pVCpu, PCPUMCTX pCtx)
+VMM_INT_DECL(VBOXSTRICTRC) GIMHypercall(PVMCPUCC pVCpu, PCPUMCTX pCtx)
 {
-    PVM pVM = pVCpu->CTX_SUFF(pVM);
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
     VMCPU_ASSERT_EMT(pVCpu);
 
     if (RT_UNLIKELY(!GIMIsEnabled(pVM)))
@@ -129,6 +164,56 @@ VMM_INT_DECL(VBOXSTRICTRC) GIMHypercall(PVMCPU pVCpu, PCPUMCTX pCtx)
 
 
 /**
+ * Same as GIMHypercall, except with disassembler opcode and instruction length.
+ *
+ * This is the interface used by IEM.
+ *
+ * @returns Strict VBox status code.
+ * @retval  VINF_SUCCESS if the hypercall succeeded (even if its operation
+ *          failed).
+ * @retval  VINF_GIM_HYPERCALL_CONTINUING continue hypercall without updating
+ *          RIP.
+ * @retval  VINF_GIM_R3_HYPERCALL re-start the hypercall from ring-3.
+ * @retval  VERR_GIM_HYPERCALL_ACCESS_DENIED CPL is insufficient.
+ * @retval  VERR_GIM_HYPERCALLS_NOT_AVAILABLE hypercalls unavailable.
+ * @retval  VERR_GIM_NOT_ENABLED GIM is not enabled (shouldn't really happen)
+ * @retval  VERR_GIM_HYPERCALL_MEMORY_READ_FAILED hypercall failed while reading
+ *          memory.
+ * @retval  VERR_GIM_HYPERCALL_MEMORY_WRITE_FAILED hypercall failed while
+ *          writing memory.
+ * @retval  VERR_GIM_INVALID_HYPERCALL_INSTR if uDisOpcode is the wrong one; raise \#UD.
+ *
+ * @param   pVCpu       The cross context virtual CPU structure.
+ * @param   pCtx        Pointer to the guest-CPU context.
+ * @param   uDisOpcode  The disassembler opcode.
+ * @param   cbInstr     The instruction length.
+ *
+ * @remarks The caller of this function needs to advance RIP as required.
+ * @thread  EMT.
+ */
+VMM_INT_DECL(VBOXSTRICTRC) GIMHypercallEx(PVMCPUCC pVCpu, PCPUMCTX pCtx, unsigned uDisOpcode, uint8_t cbInstr)
+{
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
+    VMCPU_ASSERT_EMT(pVCpu);
+
+    if (RT_UNLIKELY(!GIMIsEnabled(pVM)))
+        return VERR_GIM_NOT_ENABLED;
+
+    switch (pVM->gim.s.enmProviderId)
+    {
+        case GIMPROVIDERID_HYPERV:
+            return gimHvHypercallEx(pVCpu, pCtx, uDisOpcode, cbInstr);
+
+        case GIMPROVIDERID_KVM:
+            return gimKvmHypercallEx(pVCpu, pCtx, uDisOpcode, cbInstr);
+
+        default:
+            AssertMsgFailedReturn(("enmProviderId=%u\n", pVM->gim.s.enmProviderId), VERR_GIM_HYPERCALLS_NOT_AVAILABLE);
+    }
+}
+
+
+/**
  * Disassembles the instruction at RIP and if it's a hypercall
  * instruction, performs the hypercall.
  *
@@ -141,9 +226,9 @@ VMM_INT_DECL(VBOXSTRICTRC) GIMHypercall(PVMCPU pVCpu, PCPUMCTX pCtx)
  *          handle VMCALL/VMMCALL instructions to call into GIM when
  *          required. See @bugref{7270#c168}.
  */
-VMM_INT_DECL(VBOXSTRICTRC) GIMExecHypercallInstr(PVMCPU pVCpu, PCPUMCTX pCtx, uint8_t *pcbInstr)
+VMM_INT_DECL(VBOXSTRICTRC) GIMExecHypercallInstr(PVMCPUCC pVCpu, PCPUMCTX pCtx, uint8_t *pcbInstr)
 {
-    PVM pVM = pVCpu->CTX_SUFF(pVM);
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
     VMCPU_ASSERT_EMT(pVCpu);
 
     if (RT_UNLIKELY(!GIMIsEnabled(pVM)))
@@ -159,10 +244,10 @@ VMM_INT_DECL(VBOXSTRICTRC) GIMExecHypercallInstr(PVMCPU pVCpu, PCPUMCTX pCtx, ui
         switch (pVM->gim.s.enmProviderId)
         {
             case GIMPROVIDERID_HYPERV:
-                return gimHvExecHypercallInstr(pVCpu, pCtx, &Dis);
+                return gimHvHypercallEx(pVCpu, pCtx, Dis.pCurInstr->uOpcode, Dis.cbInstr);
 
             case GIMPROVIDERID_KVM:
-                return gimKvmExecHypercallInstr(pVCpu, pCtx, &Dis);
+                return gimKvmHypercallEx(pVCpu, pCtx, Dis.pCurInstr->uOpcode, Dis.cbInstr);
 
             default:
                 AssertMsgFailed(("GIMExecHypercallInstr: for provider %u not available/implemented\n", pVM->gim.s.enmProviderId));
@@ -185,7 +270,7 @@ VMM_INT_DECL(VBOXSTRICTRC) GIMExecHypercallInstr(PVMCPU pVCpu, PCPUMCTX pCtx, ui
  * @returns true if enabled and usable, false otherwise.
  * @param   pVM         The cross context VM structure.
  */
-VMM_INT_DECL(bool) GIMIsParavirtTscEnabled(PVM pVM)
+VMM_INT_DECL(bool) GIMIsParavirtTscEnabled(PVMCC pVM)
 {
     switch (pVM->gim.s.enmProviderId)
     {
@@ -214,7 +299,7 @@ VMM_INT_DECL(bool) GIMIsParavirtTscEnabled(PVM pVM)
  * @returns true if needed, false otherwise.
  * @param   pVCpu       The cross context virtual CPU structure.
  */
-VMM_INT_DECL(bool) GIMShouldTrapXcptUD(PVMCPU pVCpu)
+VMM_INT_DECL(bool) GIMShouldTrapXcptUD(PVMCPUCC pVCpu)
 {
     PVM pVM = pVCpu->CTX_SUFF(pVM);
     if (!GIMIsEnabled(pVM))
@@ -223,7 +308,7 @@ VMM_INT_DECL(bool) GIMShouldTrapXcptUD(PVMCPU pVCpu)
     switch (pVM->gim.s.enmProviderId)
     {
         case GIMPROVIDERID_KVM:
-            return gimKvmShouldTrapXcptUD(pVCpu);
+            return gimKvmShouldTrapXcptUD(pVM);
 
         case GIMPROVIDERID_HYPERV:
             return gimHvShouldTrapXcptUD(pVCpu);
@@ -258,16 +343,16 @@ VMM_INT_DECL(bool) GIMShouldTrapXcptUD(PVMCPU pVCpu)
  *
  * @thread  EMT(pVCpu).
  */
-VMM_INT_DECL(VBOXSTRICTRC) GIMXcptUD(PVMCPU pVCpu, PCPUMCTX pCtx, PDISCPUSTATE pDis, uint8_t *pcbInstr)
+VMM_INT_DECL(VBOXSTRICTRC) GIMXcptUD(PVMCPUCC pVCpu, PCPUMCTX pCtx, PDISCPUSTATE pDis, uint8_t *pcbInstr)
 {
-    PVM pVM = pVCpu->CTX_SUFF(pVM);
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
     Assert(GIMIsEnabled(pVM));
     Assert(pDis || pcbInstr);
 
     switch (pVM->gim.s.enmProviderId)
     {
         case GIMPROVIDERID_KVM:
-            return gimKvmXcptUD(pVCpu, pCtx, pDis, pcbInstr);
+            return gimKvmXcptUD(pVM, pVCpu, pCtx, pDis, pcbInstr);
 
         case GIMPROVIDERID_HYPERV:
             return gimHvXcptUD(pVCpu, pCtx, pDis, pcbInstr);
@@ -290,10 +375,10 @@ VMM_INT_DECL(VBOXSTRICTRC) GIMXcptUD(PVMCPU pVCpu, PCPUMCTX pCtx, PDISCPUSTATE p
  * @param   pRange      The range this MSR belongs to.
  * @param   puValue     Where to store the MSR value read.
  */
-VMM_INT_DECL(VBOXSTRICTRC) GIMReadMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t *puValue)
+VMM_INT_DECL(VBOXSTRICTRC) GIMReadMsr(PVMCPUCC pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t *puValue)
 {
     Assert(pVCpu);
-    PVM pVM = pVCpu->CTX_SUFF(pVM);
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
     Assert(GIMIsEnabled(pVM));
     VMCPU_ASSERT_EMT(pVCpu);
 
@@ -325,12 +410,12 @@ VMM_INT_DECL(VBOXSTRICTRC) GIMReadMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRRAN
  * @param   uValue      The value to set, ignored bits masked.
  * @param   uRawValue   The raw value with the ignored bits not masked.
  */
-VMM_INT_DECL(VBOXSTRICTRC) GIMWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t uValue, uint64_t uRawValue)
+VMM_INT_DECL(VBOXSTRICTRC) GIMWriteMsr(PVMCPUCC pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t uValue, uint64_t uRawValue)
 {
     AssertPtr(pVCpu);
     NOREF(uValue);
 
-    PVM pVM = pVCpu->CTX_SUFF(pVM);
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
     Assert(GIMIsEnabled(pVM));
     VMCPU_ASSERT_EMT(pVCpu);
 
@@ -346,5 +431,62 @@ VMM_INT_DECL(VBOXSTRICTRC) GIMWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRRA
             AssertMsgFailed(("GIMWriteMsr: for unknown provider %u idMsr=%#RX32 -> #GP(0)", pVM->gim.s.enmProviderId, idMsr));
             return VERR_CPUM_RAISE_GP_0;
     }
+}
+
+
+/**
+ * Queries the opcode bytes for a native hypercall.
+ *
+ * @returns VBox status code.
+ * @param   pVM         The cross context VM structure.
+ * @param   pvBuf       The destination buffer.
+ * @param   cbBuf       The size of the buffer.
+ * @param   pcbWritten  Where to return the number of bytes written.  This is
+ *                      reliably updated only on successful return.  Optional.
+ * @param   puDisOpcode Where to return the disassembler opcode.  Optional.
+ */
+VMM_INT_DECL(int) GIMQueryHypercallOpcodeBytes(PVM pVM, void *pvBuf, size_t cbBuf, size_t *pcbWritten, uint16_t *puDisOpcode)
+{
+    AssertPtrReturn(pvBuf, VERR_INVALID_POINTER);
+
+    CPUMCPUVENDOR  enmHostCpu = CPUMGetHostCpuVendor(pVM);
+    uint8_t const *pbSrc;
+    size_t         cbSrc;
+    switch (enmHostCpu)
+    {
+        case CPUMCPUVENDOR_AMD:
+        case CPUMCPUVENDOR_HYGON:
+        {
+            if (puDisOpcode)
+                *puDisOpcode = OP_VMMCALL;
+            static uint8_t const s_abHypercall[] = { 0x0F, 0x01, 0xD9 };   /* VMMCALL */
+            pbSrc = s_abHypercall;
+            cbSrc = sizeof(s_abHypercall);
+            break;
+        }
+
+        case CPUMCPUVENDOR_INTEL:
+        case CPUMCPUVENDOR_VIA:
+        case CPUMCPUVENDOR_SHANGHAI:
+        {
+            if (puDisOpcode)
+                *puDisOpcode = OP_VMCALL;
+            static uint8_t const s_abHypercall[] = { 0x0F, 0x01, 0xC1 };   /* VMCALL */
+            pbSrc = s_abHypercall;
+            cbSrc = sizeof(s_abHypercall);
+            break;
+        }
+
+        default:
+            AssertMsgFailedReturn(("%d\n", enmHostCpu), VERR_UNSUPPORTED_CPU);
+    }
+    if (RT_LIKELY(cbBuf >= cbSrc))
+    {
+        memcpy(pvBuf, pbSrc, cbSrc);
+        if (pcbWritten)
+            *pcbWritten = cbSrc;
+        return VINF_SUCCESS;
+    }
+    return VERR_BUFFER_OVERFLOW;
 }
 

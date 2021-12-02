@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_dbggui_h
-#define ___VBox_dbggui_h
+#ifndef VBOX_INCLUDED_dbggui_h
+#define VBOX_INCLUDED_dbggui_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 
@@ -51,17 +54,17 @@ typedef struct DBGGUIVT
     /** The version. (DBGGUIVT_VERSION) */
     uint32_t u32Version;
     /** @copydoc DBGGuiDestroy */
-    DECLCALLBACKMEMBER(int,  pfnDestroy)(PDBGGUI pGui);
+    DECLCALLBACKMEMBER(int, pfnDestroy,(PDBGGUI pGui));
     /** @copydoc DBGGuiAdjustRelativePos */
-    DECLCALLBACKMEMBER(void, pfnAdjustRelativePos)(PDBGGUI pGui, int x, int y, unsigned cx, unsigned cy);
+    DECLCALLBACKMEMBER(void, pfnAdjustRelativePos,(PDBGGUI pGui, int x, int y, unsigned cx, unsigned cy));
     /** @copydoc DBGGuiShowStatistics */
-    DECLCALLBACKMEMBER(int,  pfnShowStatistics)(PDBGGUI pGui);
+    DECLCALLBACKMEMBER(int, pfnShowStatistics,(PDBGGUI pGui, const char *pszFilter, const char *pszExpand));
     /** @copydoc DBGGuiShowCommandLine */
-    DECLCALLBACKMEMBER(int,  pfnShowCommandLine)(PDBGGUI pGui);
+    DECLCALLBACKMEMBER(int, pfnShowCommandLine,(PDBGGUI pGui));
     /** @copydoc DBGGuiSetParent */
-    DECLCALLBACKMEMBER(void, pfnSetParent)(PDBGGUI pGui, void *pvParent);
+    DECLCALLBACKMEMBER(void, pfnSetParent,(PDBGGUI pGui, void *pvParent));
     /** @copydoc DBGGuiSetMenu */
-    DECLCALLBACKMEMBER(void, pfnSetMenu)(PDBGGUI pGui, void *pvMenu);
+    DECLCALLBACKMEMBER(void, pfnSetMenu,(PDBGGUI pGui, void *pvMenu));
     /** The end version. (DBGGUIVT_VERSION) */
     uint32_t u32EndVersion;
 } DBGGUIVT;
@@ -70,7 +73,7 @@ typedef DBGGUIVT const *PCDBGGUIVT;
 /** The u32Version value.
  * The first byte is the minor version, the 2nd byte is major version number.
  * The high 16-bit word is a magic.  */
-#define DBGGUIVT_VERSION    UINT32_C(0xbead0100)
+#define DBGGUIVT_VERSION    UINT32_C(0xbead0200)
 /** Macro for determining whether two versions are compatible or not.
  * @returns boolean result.
  * @param   uVer1   The first version number.
@@ -91,7 +94,7 @@ typedef DBGGUIVT const *PCDBGGUIVT;
  */
 DBGDECL(int) DBGGuiCreate(ISession *pSession, PDBGGUI *ppGui, PCDBGGUIVT *ppGuiVT);
 /** @copydoc DBGGuiCreate */
-typedef DECLCALLBACK(int) FNDBGGUICREATE(ISession *pSession, PDBGGUI *ppGui, PCDBGGUIVT *ppGuiVT);
+typedef DECLCALLBACKTYPE(int, FNDBGGUICREATE,(ISession *pSession, PDBGGUI *ppGui, PCDBGGUIVT *ppGuiVT));
 /** Pointer to DBGGuiCreate. */
 typedef FNDBGGUICREATE *PFNDBGGUICREATE;
 
@@ -106,7 +109,7 @@ typedef FNDBGGUICREATE *PFNDBGGUICREATE;
  */
 DBGDECL(int) DBGGuiCreateForVM(PUVM pUVM, PDBGGUI *ppGui, PCDBGGUIVT *ppGuiVT);
 /** @copydoc DBGGuiCreateForVM */
-typedef DECLCALLBACK(int) FNDBGGUICREATEFORVM(PUVM pUVM, PDBGGUI *ppGui, PCDBGGUIVT *ppGuiVT);
+typedef DECLCALLBACKTYPE(int, FNDBGGUICREATEFORVM,(PUVM pUVM, PDBGGUI *ppGui, PCDBGGUIVT *ppGuiVT));
 /** Pointer to DBGGuiCreateForVM. */
 typedef FNDBGGUICREATEFORVM *PFNDBGGUICREATEFORVM;
 
@@ -135,8 +138,10 @@ DBGDECL(void) DBGGuiAdjustRelativePos(PDBGGUI pGui, int x, int y, unsigned cx, u
  *
  * @returns VBox status code.
  * @param   pGui        The instance returned by DBGGuiCreate().
+ * @param   pszFilter   Filter pattern.
+ * @param   pszExpand   Expand pattern.
  */
-DBGDECL(int) DBGGuiShowStatistics(PDBGGUI pGui);
+DBGDECL(int) DBGGuiShowStatistics(PDBGGUI pGui, const char *pszFilter, const char *pszExpand);
 
 /**
  * Shows the default command line window.
@@ -171,5 +176,5 @@ DBGDECL(void) DBGGuiSetMenu(PDBGGUI pGui, void *pvMenu);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_dbggui_h */
 

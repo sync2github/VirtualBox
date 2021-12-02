@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxNetFlt-freebsd.c 77124 2019-02-01 15:35:59Z vboxsync $ */
 /** @file
  * VBoxNetFlt - Network Filter Driver (Host), FreeBSD Specific Code.
  */
@@ -370,7 +370,11 @@ static int ng_vboxnetflt_rcvdata(hook_p hook, item_p item)
         mtx_lock_spin(&pThis->u.s.inq.ifq_mtx);
         _IF_ENQUEUE(&pThis->u.s.inq, m);
         mtx_unlock_spin(&pThis->u.s.inq.ifq_mtx);
+#if __FreeBSD_version > 1100100
+        taskqueue_enqueue(taskqueue_fast, &pThis->u.s.tskin);
+#else
         taskqueue_enqueue_fast(taskqueue_fast, &pThis->u.s.tskin);
+#endif
     }
     /*
      * Handle mbufs on the outgoing hook, frames going to the interface
@@ -388,7 +392,11 @@ static int ng_vboxnetflt_rcvdata(hook_p hook, item_p item)
         mtx_lock_spin(&pThis->u.s.outq.ifq_mtx);
         _IF_ENQUEUE(&pThis->u.s.outq, m);
         mtx_unlock_spin(&pThis->u.s.outq.ifq_mtx);
+#if __FreeBSD_version > 1100100
+        taskqueue_enqueue(taskqueue_fast, &pThis->u.s.tskout);
+#else
         taskqueue_enqueue_fast(taskqueue_fast, &pThis->u.s.tskout);
+#endif
     }
     else
     {
@@ -450,7 +458,7 @@ static void vboxNetFltFreeBSDinput(void *arg, int pending)
 #endif
 
         /* Create a copy and deliver to the virtual switch */
-        pSG = RTMemTmpAlloc(RT_OFFSETOF(INTNETSG, aSegs[cSegs]));
+        pSG = RTMemTmpAlloc(RT_UOFFSETOF_DYN(INTNETSG, aSegs[cSegs]));
         vboxNetFltFreeBSDMBufToSG(pThis, m, pSG, cSegs, 0);
         fDropIt = pThis->pSwitchPort->pfnRecv(pThis->pSwitchPort, NULL /* pvIf */, pSG, INTNETTRUNKDIR_WIRE);
         RTMemTmpFree(pSG);
@@ -494,7 +502,7 @@ static void vboxNetFltFreeBSDoutput(void *arg, int pending)
             cSegs++;
 #endif
         /* Create a copy and deliver to the virtual switch */
-        pSG = RTMemTmpAlloc(RT_OFFSETOF(INTNETSG, aSegs[cSegs]));
+        pSG = RTMemTmpAlloc(RT_UOFFSETOF_DYN(INTNETSG, aSegs[cSegs]));
         vboxNetFltFreeBSDMBufToSG(pThis, m, pSG, cSegs, 0);
         fDropIt = pThis->pSwitchPort->pfnRecv(pThis->pSwitchPort, NULL /* pvIf */, pSG, INTNETTRUNKDIR_HOST);
         RTMemTmpFree(pSG);

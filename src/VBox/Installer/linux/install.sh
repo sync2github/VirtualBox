@@ -4,7 +4,7 @@
 # VirtualBox linux installation script
 
 #
-# Copyright (C) 2007-2015 Oracle Corporation
+# Copyright (C) 2007-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,13 @@
 # VirtualBox OSE distribution. VirtualBox OSE is distributed in the
 # hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 #
+
+# Testing:
+# * After successful installation, 0 is returned if the vboxdrv module version
+#   built matches the one loaded.
+# * If the kernel modules cannot be built (run the installer with KERN_VER=none)
+#   or loaded (run with KERN_VER=<installed non-current version>)
+#   then 1 is returned.
 
 PATH=$PATH:/bin:/sbin:/usr/sbin
 
@@ -28,7 +35,7 @@ ARCH="_ARCH_"
 HARDENED="_HARDENED_"
 # The "BUILD_" prefixes prevent the variables from being overwritten when we
 # read the configuration from the previous installation.
-BUILD_BUILDTYPE="_BUILDTYPE_"
+BUILD_VBOX_KBUILD_TYPE="_BUILDTYPE_"
 BUILD_USERNAME="_USERNAME_"
 CONFIG_DIR="/etc/vbox"
 CONFIG="vbox.cfg"
@@ -51,6 +58,9 @@ else
 fi
 VBOXUSB_MODE=0664
 VBOXUSB_GRP=$GROUPNAME
+
+## Were we able to stop any previously running Additions kernel modules?
+MODULES_STOPPED=1
 
 
 ##############################################################################
@@ -112,6 +122,7 @@ check_previous() {
     check_binary "/usr/bin/VBoxAutostart" "$install_dir" &&
     check_binary "/usr/bin/vboxwebsrv" "$install_dir" &&
     check_binary "/usr/bin/vbox-img" "$install_dir" &&
+    check_binary "/usr/bin/vboximg-mount" "$install_dir" &&
     check_binary "/sbin/rcvboxdrv" "$install_dir"
 }
 
@@ -151,6 +162,7 @@ fi
 # Sensible default actions
 ACTION="install"
 BUILD_MODULE="true"
+unset FORCE_UPGRADE
 while true
 do
     if [ "$2" = "" ]; then
@@ -158,21 +170,21 @@ do
     fi
     shift
     case "$1" in
-        install)
+        install|--install)
             ACTION="install"
             ;;
 
-        uninstall)
+        uninstall|--uninstall)
             ACTION="uninstall"
             ;;
 
-        force)
+        force|--force)
             FORCE_UPGRADE=1
             ;;
-        license_accepted_unconditionally)
+        license_accepted_unconditionally|--license_accepted_unconditionally)
             # Legacy option
             ;;
-        no_module)
+        no_module|--no_module)
             BUILD_MODULE=""
             ;;
         *)
@@ -194,7 +206,7 @@ if [ "$ACTION" = "install" ]; then
         . $CONFIG_DIR/$CONFIG
         PREV_INSTALLATION=$INSTALL_DIR
     fi
-    if ! check_previous $INSTALL_DIR
+    if ! check_previous $INSTALL_DIR && test -z "$FORCE_UPGRADE"
     then
         info
         info "You appear to have a version of VirtualBox on your system which was installed"
@@ -267,7 +279,11 @@ if [ "$ACTION" = "install" ]; then
     #                 create symlinks for working around unsupported $ORIGIN/.. in VBoxC.so (setuid),
     #                 and finally make sure the directory is only writable by the user (paranoid).
     if [ -n "$HARDENED" ]; then
-        test -e $INSTALLATION_DIR/VirtualBox     && chmod 4511 $INSTALLATION_DIR/VirtualBox
+        if [ -f $INSTALLATION_DIR/VirtualBoxVM ]; then
+            test -e $INSTALLATION_DIR/VirtualBoxVM   && chmod 4511 $INSTALLATION_DIR/VirtualBoxVM
+        else
+            test -e $INSTALLATION_DIR/VirtualBox     && chmod 4511 $INSTALLATION_DIR/VirtualBox
+        fi
         test -e $INSTALLATION_DIR/VBoxSDL        && chmod 4511 $INSTALLATION_DIR/VBoxSDL
         test -e $INSTALLATION_DIR/VBoxHeadless   && chmod 4511 $INSTALLATION_DIR/VBoxHeadless
         test -e $INSTALLATION_DIR/VBoxNetDHCP    && chmod 4511 $INSTALLATION_DIR/VBoxNetDHCP
@@ -291,7 +307,7 @@ if [ "$ACTION" = "install" ]; then
     echo "INSTALL_VER='$VERSION'" >> $CONFIG_DIR/$CONFIG
     echo "INSTALL_REV='$SVNREV'" >> $CONFIG_DIR/$CONFIG
     echo "# Build type and user name for logging purposes" >> $CONFIG_DIR/$CONFIG
-    echo "BUILD_TYPE='$BUILD_BUILDTYPE'" >> $CONFIG_DIR/$CONFIG
+    echo "VBOX_KBUILD_TYPE='$BUILD_VBOX_KBUILD_TYPE'" >> $CONFIG_DIR/$CONFIG
     echo "USERNAME='$BUILD_USERNAME'" >> $CONFIG_DIR/$CONFIG
 
     # Create users group
@@ -299,6 +315,9 @@ if [ "$ACTION" = "install" ]; then
 
     # Create symlinks to start binaries
     ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/VirtualBox
+    if [ -f $INSTALLATION_DIR/VirtualBoxVM ]; then
+        ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/VirtualBoxVM
+    fi
     ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/VBoxManage
     ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/VBoxSDL
     ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/VBoxVRDP
@@ -308,19 +327,27 @@ if [ "$ACTION" = "install" ]; then
     ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/VBoxAutostart
     ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/vboxwebsrv
     ln -sf $INSTALLATION_DIR/vbox-img /usr/bin/vbox-img
+    ln -sf $INSTALLATION_DIR/vboximg-mount /usr/bin/vboximg-mount
     ln -sf $INSTALLATION_DIR/VBox.png /usr/share/pixmaps/VBox.png
     if [ -f $INSTALLATION_DIR/VBoxDTrace ]; then
         ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/VBoxDTrace
     fi
+    if [ -f $INSTALLATION_DIR/VBoxAudioTest ]; then
+        ln -sf $INSTALLATION_DIR/VBox.sh /usr/bin/VBoxAudioTest
+    fi
     # Unity and Nautilus seem to look here for their icons
     ln -sf $INSTALLATION_DIR/icons/128x128/virtualbox.png /usr/share/pixmaps/virtualbox.png
     ln -sf $INSTALLATION_DIR/virtualbox.desktop /usr/share/applications/virtualbox.desktop
+    ln -sf $INSTALLATION_DIR/virtualboxvm.desktop /usr/share/applications/virtualboxvm.desktop
     ln -sf $INSTALLATION_DIR/virtualbox.xml /usr/share/mime/packages/virtualbox.xml
     ln -sf $INSTALLATION_DIR/rdesktop-vrdp /usr/bin/rdesktop-vrdp
     ln -sf $INSTALLATION_DIR/src/vboxhost /usr/src/vboxhost-_VERSION_
 
     # Convenience symlinks. The creation fails if the FS is not case sensitive
     ln -sf VirtualBox /usr/bin/virtualbox > /dev/null 2>&1
+    if [ -f $INSTALLATION_DIR/VirtualBoxVM ]; then
+        ln -sf VirtualBoxVM /usr/bin/virtualboxvm > /dev/null 2>&1
+    fi
     ln -sf VBoxManage /usr/bin/vboxmanage > /dev/null 2>&1
     ln -sf VBoxSDL /usr/bin/vboxsdl > /dev/null 2>&1
     ln -sf VBoxHeadless /usr/bin/vboxheadless > /dev/null 2>&1
@@ -328,15 +355,8 @@ if [ "$ACTION" = "install" ]; then
     if [ -f $INSTALLATION_DIR/VBoxDTrace ]; then
         ln -sf VBoxDTrace /usr/bin/vboxdtrace > /dev/null 2>&1
     fi
-
-    # Create legacy symlinks if necesary for Qt5/xcb stuff.
-    if [ -d $INSTALLATION_DIR/legacy ]; then
-        if ! /sbin/ldconfig -p | grep -q "\<libxcb\.so\.1\>"; then
-            for f in `ls -1 $INSTALLATION_DIR/legacy/`; do
-                ln -s $INSTALLATION_DIR/legacy/$f $INSTALLATION_DIR/$f
-                echo $INSTALLATION_DIR/$f >> $CONFIG_DIR/$CONFIG_FILES
-            done
-        fi
+    if [ -f $INSTALLATION_DIR/VBoxAudioTest ]; then
+        ln -sf VBoxAudioTest /usr/bin/vboxaudiotest > /dev/null 2>&1
     fi
 
     # Icons
@@ -380,6 +400,10 @@ if [ "$ACTION" = "install" ]; then
       START_SERVICES="--nostart"
     fi
     "${INSTALLATION_DIR}/prerm-common.sh" >> "${LOG}"
+
+    # Now check whether the kernel modules were stopped.
+    lsmod | grep -q vboxdrv && MODULES_STOPPED=
+
     "${INSTALLATION_DIR}/postinst-common.sh" ${START_SERVICES} >> "${LOG}"
 
     info ""
@@ -392,6 +416,14 @@ if [ "$ACTION" = "install" ]; then
     info ""
     info "We hope that you enjoy using VirtualBox."
     info ""
+
+    # And do a final test as to whether the kernel modules were properly created
+    # and loaded.  Return 0 if both are true, 1 if not.
+    test -n "${MODULES_STOPPED}" &&
+        modinfo vboxdrv >/dev/null 2>&1 &&
+        lsmod | grep -q vboxdrv ||
+        abort "The installation log file is at ${LOG}."
+
     log "Installation successful"
 elif [ "$ACTION" = "uninstall" ]; then
     . ./uninstall.sh

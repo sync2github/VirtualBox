@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: UIDnDDropSource_win.cpp 83801 2020-04-18 18:02:55Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIDnDDropSource class implementation for Windows. This implements
  * the IDropSource interface.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,9 +35,9 @@
 #include "UIDnDDataObject_win.h"
 
 UIDnDDropSource::UIDnDDropSource(QWidget *pParent, UIDnDDataObject *pDataObject)
-    : m_cRefCount(1)
-    , m_pParent(pParent)
+    : m_pParent(pParent)
     , m_pDataObject(pDataObject)
+    , m_cRefCount(1)
     , m_dwCurEffect(DROPEFFECT_NONE)
     , m_uCurAction(Qt::IgnoreAction)
 {

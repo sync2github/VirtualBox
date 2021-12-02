@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: elf.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * ELF types, current architecture.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___iprt_formats_elf_h
-#define ___iprt_formats_elf_h
+#ifndef IPRT_INCLUDED_formats_elf_h
+#define IPRT_INCLUDED_formats_elf_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #if defined(RT_ARCH_AMD64)
 # include "elf64.h"
@@ -82,5 +84,5 @@ typedef Elf32_Sym           Elf_Sym;
 # error Unknown arch!
 #endif
 
-#endif
+#endif /* !IPRT_INCLUDED_formats_elf_h */
 

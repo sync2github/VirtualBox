@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: thread-r0drv-nt.cpp 90417 2021-07-29 21:29:10Z vboxsync $ */
 /** @file
  * IPRT - Threads, Ring-0 Driver, NT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -40,10 +40,6 @@
 #include <iprt/mp.h>
 #include "internal-r0drv-nt.h"
 
-
-RT_C_DECLS_BEGIN
-NTSTATUS NTAPI ZwYieldExecution(void);
-RT_C_DECLS_END
 
 
 RTDECL(RTNATIVETHREAD) RTThreadNativeSelf(void)
@@ -99,6 +95,30 @@ RTDECL(bool) RTThreadPreemptIsPending(RTTHREAD hThread)
     Assert(hThread == NIL_RTTHREAD); RT_NOREF1(hThread);
 
     /*
+     * The KeShouldYieldProcessor API introduced in Windows 10 looks like exactly
+     * what we want.  But of course there is a snag.  It may return with interrupts
+     * enabled when called with them disabled.  Let's just hope it doesn't get upset
+     * by disabled interrupts in other ways...
+     */
+    if (g_pfnrtKeShouldYieldProcessor)
+    {
+        RTCCUINTREG fSavedFlags = ASMGetFlags();
+        bool fReturn = g_pfnrtKeShouldYieldProcessor() != FALSE;
+        ASMSetFlags(fSavedFlags);
+        return fReturn;
+    }
+
+    /*
+     * Fallback approach for pre W10 kernels.
+     *
+     * If W10 is anything to go by, we should also check and yield when:
+     *      - pPrcb->NextThread != NULL && pPrcb->NextThread != pPrcb->CurrentThread
+     *        when QuantumEnd is zero.
+     *      - pPrcb->DpcRequestSummary & 1
+     *      - pPrcb->DpcRequestSummary & 0x1e
+     */
+
+    /*
      * Read the globals and check if they are useful.
      */
 /** @todo Should we check KPRCB.InterruptRequest and KPRCB.DpcInterruptRequested (older kernels).  */
@@ -116,12 +136,12 @@ RTDECL(bool) RTThreadPreemptIsPending(RTTHREAD hThread)
     RTCCUINTREG     fSavedFlags  = ASMIntDisableFlags();
 
 #ifdef RT_ARCH_X86
-    PKPCR       pPcr   = (PKPCR)__readfsdword(RT_OFFSETOF(KPCR,SelfPcr));
+    PKPCR       pPcr   = (PKPCR)__readfsdword(RT_UOFFSETOF(KPCR,SelfPcr));
     uint8_t    *pbPrcb = (uint8_t *)pPcr->Prcb;
 
 #elif defined(RT_ARCH_AMD64)
     /* HACK ALERT! The offset is from windbg/vista64. */
-    PKPCR       pPcr   = (PKPCR)__readgsqword(RT_OFFSETOF(KPCR,Self));
+    PKPCR       pPcr   = (PKPCR)__readgsqword(RT_UOFFSETOF(KPCR,Self));
     uint8_t    *pbPrcb = (uint8_t *)pPcr->CurrentPrcb;
 
 #else
@@ -157,6 +177,8 @@ RTDECL(bool) RTThreadPreemptIsPending(RTTHREAD hThread)
 
 RTDECL(bool) RTThreadPreemptIsPendingTrusty(void)
 {
+    if (g_pfnrtKeShouldYieldProcessor)
+        return true;
 #if 0 /** @todo RTThreadPreemptIsPending isn't good enough on w7 and possibly elsewhere. */
     /* RTThreadPreemptIsPending is only reliable if we've got both offsets and size. */
     return g_offrtNtPbQuantumEnd    != 0
@@ -202,5 +224,17 @@ RTDECL(bool) RTThreadIsInInterrupt(RTTHREAD hThread)
 
     KIRQL CurIrql = KeGetCurrentIrql();
     return CurIrql > PASSIVE_LEVEL; /** @todo Is there a more correct way? */
+}
+
+
+RTDECL(int) RTThreadQueryTerminationStatus(RTTHREAD hThread)
+{
+    AssertReturn(hThread == NIL_RTTHREAD, VERR_INVALID_HANDLE);
+    if (RT_LIKELY(g_pfnrtPsIsThreadTerminating))
+    {
+        BOOLEAN fRc = g_pfnrtPsIsThreadTerminating(PsGetCurrentThread());
+        return !fRc ? VINF_SUCCESS : VINF_THREAD_IS_TERMINATING;
+    }
+    return VERR_NOT_SUPPORTED;
 }
 

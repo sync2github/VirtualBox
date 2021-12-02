@@ -1,11 +1,10 @@
-/* $Id: $ */
+/* $Id: vboxweb.h 83794 2020-04-18 13:25:05Z vboxsync $ */
 /** @file
  * vboxweb.h - header file for "real" web server code.
  */
 
 /*
- *
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+#ifndef MAIN_INCLUDED_SRC_webservice_vboxweb_h
+#define MAIN_INCLUDED_SRC_webservice_vboxweb_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #define LOG_GROUP LOG_GROUP_WEBSERVICE
 #include <VBox/log.h>
@@ -26,7 +31,7 @@
 
 #include <iprt/asm.h>
 
-#include <string>
+#include <iprt/sanitized/string>
 
 /****************************************************************************
  *
@@ -192,7 +197,8 @@ class ManagedObjectRef
         /**
          * Returns the contained COM pointer and the UUID of the COM interface
          * which it supports.
-         * @param
+         * @param   ppobjInterface
+         * @param   ppobjUnknown
          * @return
          */
         const com::Guid& getPtr(void **ppobjInterface,
@@ -316,6 +322,7 @@ int findComPtrFromId(struct soap *soap,
  *
  * @param idParent managed object reference of calling object; used to extract
  *              websession ID
+ * @param pcszInterface
  * @param pc COM object for which to create a reference
  * @return existing or new managed object reference
  */
@@ -354,3 +361,6 @@ const WSDLT_ID& createOrFindRefFromComPtr(const WSDLT_ID &idParent,
     // new reference which couldn't be used anyway.
     return g_EmptyWSDLID;
 }
+
+#endif /* !MAIN_INCLUDED_SRC_webservice_vboxweb_h */
+

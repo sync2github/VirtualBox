@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBox-doc.c 89790 2021-06-19 14:14:59Z vboxsync $ */
 /** @file
  * VirtualBox Top Level Documentation File.
  */
 
 /*
- * Copyright (C) 2006-2012 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,6 @@
  *    Monitor.
  *      - @ref pg_cfgm
  *      - @ref pg_cpum
- *      - @ref pg_csam
  *      - @ref pg_dbgf
  *          - @ref pg_dbgf_addr_space
  *          - @ref pg_dbgf_vmcore
@@ -37,9 +36,8 @@
  *      - @ref pg_em
  *      - @ref pg_gim
  *      - @ref pg_hm
- *      - @ref pg_rem
- *          - @ref pg_vboxrem_amd64
  *      - @ref pg_iem
+ *      - @ref pg_nem
  *      - @ref pg_gmm
  *          - @ref pg_mm
  *          - @ref pg_pgm
@@ -47,7 +45,6 @@
  *              - @ref pg_pgm_pool
  *          - @ref pg_selm
  *      - @ref pg_iom
- *      - @ref pg_patm
  *      - @ref pg_pdm
  *          - Devices / USB Devices, Drivers and their public interfaces.
  *          - Async I/O Completion API.
@@ -74,6 +71,21 @@
  *      - DevPCI - Peripheral Component Interface (Bus).
  *      - VBoxDev - Special PCI Device which serves as an interface between
  *                  the VMM and the guest OS for the additions.
+ *      - @ref pg_pdm_audio "Audio":
+ *          - DevHda - Intel High Definition Audio Device Emulation.
+ *          - DevIchAc97 - ICH AC'97 Device Emulation.
+ *          - DevSB16 - SoundBlaster 16 Device Emulation.
+ *          - DrvAudio - Intermediate driver.
+ *          - DrvHostAudioAlsa - ALSA Host Audio Driver (Linux).
+ *          - DrvHostAudioCoreAudio - Core Audio Host Audio Driver (macOS).
+ *          - DrvHostAudioDebug - Debug Backend Driver.
+ *          - DrvHostAudioDSound - DirectSound Host Audio Driver (Windows).
+ *          - DrvHostAudioNull - NULL Backend Driver.
+ *          - DrvHostAudioOss - Open Sound System Host Audio Driver (Linux,
+ *            Solaris, ++).
+ *          - DrvHostAudioPulseAudio - PulseAudio Host Audio Driver (Linux).
+ *          - DrvHostAudioValidationKit - Validation Kit Test Driver.
+ *          - DrvHostAudioWasApi - Windows Audio Session API Host Audio Driver.
  *      - Networking:
  *          - DevPCNet - AMD PCNet Device Emulation.
  *          - DevE1000 - Intel E1000 Device Emulation.
@@ -112,10 +124,8 @@
  *      - @ref pg_netflt
  *      - @ref pg_rawpci
  *  - Host Services.
- *      - @ref pg_hostclip Shared Clipboard.
+ *      - @ref pg_hostclip
  *      - Shared Folders.
- *      - Shared OpenGL. See PDF. (TODO: translate PDF to doxygen)
- *          - @ref pg_opengl_cocoa
  *      - @ref pg_svc_guest_properties
  *      - @ref pg_svc_guest_control
  *  - Guest Additions.
@@ -144,7 +154,7 @@
  *      - @ref pg_main_events
  *      - @ref pg_vrdb_usb
  *  - Frontends:
- *      - VirtualBox - The default Qt4 based GUI.
+ *      - VirtualBox - The default Qt-based GUI.
  *      - VBoxHeadless - The headless frontend.
  *      - VBoxManage - The CLI.
  *      - VBoxShell - An interactive shell written in python.
@@ -155,6 +165,7 @@
  *  - Validation Kit:
  *      - @ref pg_validationkit_guideline
  *      - @ref pg_bs3kit
+ *  - @ref pg_vbox_guideline
  *
  * @todo Make links to the components.
  *

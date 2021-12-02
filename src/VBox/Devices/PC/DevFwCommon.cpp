@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DevFwCommon.cpp 91968 2021-10-21 15:52:28Z vboxsync $ */
 /** @file
  * FwCommon - Shared firmware code (used by DevPcBios & DevEFI).
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -117,6 +117,8 @@ typedef struct DMIMAINHDR
     uint8_t         u8TableVersion;
 } *DMIMAINHDRPTR;
 AssertCompileSize(DMIMAINHDR, 15);
+
+AssertCompile(sizeof(SMBIOSHDR) + sizeof(DMIMAINHDR) <= VBOX_DMI_HDR_SIZE);
 
 /** DMI header */
 typedef struct DMIHDR
@@ -287,8 +289,11 @@ typedef struct DMIMEMORYDEV
     uint8_t         u8PartNumber;
     /* v2.6+ */
     uint8_t         u8Attributes;
+    /* v2.7+ */
+    uint32_t        u32ExtendedSize;
+    uint16_t        u16CfgSpeed;    /* Configured speed in MT/sec. */
 } *PDMIMEMORYDEV;
-AssertCompileSize(DMIMEMORYDEV, 28);
+AssertCompileSize(DMIMEMORYDEV, 34);
 
 /** MPS floating pointer structure */
 typedef struct MPSFLOATPTR
@@ -430,10 +435,14 @@ static void fwCommonUseHostDMIStrings(void)
  * @param   pCfg                The handle to our config node.
  * @param   cCpus               Number of VCPUs.
  * @param   pcbDmiTables        Size of DMI data in bytes.
- * @param   pcNumDmiTables      Number of DMI tables.
+ * @param   pcDmiTables         Number of DMI tables.
+ * @param   fUefi               Flag whether the UEFI specification is supported.
  */
-int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, PCRTUUID pUuid, PCFGMNODE pCfg, uint16_t cCpus, uint16_t *pcbDmiTables, uint16_t *pcNumDmiTables)
+int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, PCRTUUID pUuid, PCFGMNODE pCfg, uint16_t cCpus,
+                          uint16_t *pcbDmiTables, uint16_t *pcDmiTables, bool fUefi)
 {
+    PCPDMDEVHLPR3 pHlp = pDevIns->pHlpR3;
+
     /*
      * CFGM Hint!
      *
@@ -468,7 +477,7 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
             pszTmp = default_value; \
         else \
         { \
-            rc = CFGMR3QueryStringDef(pCfg, name, szBuf, sizeof(szBuf), default_value); \
+            rc = pHlp->pfnCFGMQueryStringDef(pCfg, name, szBuf, sizeof(szBuf), default_value); \
             if (RT_FAILURE(rc)) \
             { \
                 if (fHideErrors) \
@@ -505,7 +514,7 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
             variable = g_iDef ## name; \
         else \
         { \
-            rc = CFGMR3QueryS32Def(pCfg, # name, & variable, g_iDef ## name); \
+            rc = pHlp->pfnCFGMQueryS32Def(pCfg, # name, & variable, g_iDef ## name); \
             if (RT_FAILURE(rc)) \
             { \
                 if (fHideErrors) \
@@ -547,25 +556,22 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
 #endif
 
     uint8_t fDmiUseHostInfo;
-    int rc = CFGMR3QueryU8Def(pCfg, "DmiUseHostInfo", &fDmiUseHostInfo, 0);
+    int rc = pHlp->pfnCFGMQueryU8Def(pCfg, "DmiUseHostInfo", &fDmiUseHostInfo, 0);
     if (RT_FAILURE (rc))
-        return PDMDEV_SET_ERROR(pDevIns, rc,
-                                N_("Configuration error: Failed to read \"DmiUseHostInfo\""));
+        return PDMDEV_SET_ERROR(pDevIns, rc, N_("Configuration error: Failed to read \"DmiUseHostInfo\""));
 
     /* Sync up with host default DMI values */
     if (fDmiUseHostInfo)
         fwCommonUseHostDMIStrings();
 
     uint8_t fDmiExposeMemoryTable;
-    rc = CFGMR3QueryU8Def(pCfg, "DmiExposeMemoryTable", &fDmiExposeMemoryTable, 0);
+    rc = pHlp->pfnCFGMQueryU8Def(pCfg, "DmiExposeMemoryTable", &fDmiExposeMemoryTable, 0);
     if (RT_FAILURE (rc))
-        return PDMDEV_SET_ERROR(pDevIns, rc,
-                                N_("Configuration error: Failed to read \"DmiExposeMemoryTable\""));
+        return PDMDEV_SET_ERROR(pDevIns, rc, N_("Configuration error: Failed to read \"DmiExposeMemoryTable\""));
     uint8_t fDmiExposeProcessorInf;
-    rc = CFGMR3QueryU8Def(pCfg, "DmiExposeProcInf", &fDmiExposeProcessorInf, 0);
+    rc = pHlp->pfnCFGMQueryU8Def(pCfg, "DmiExposeProcInf", &fDmiExposeProcessorInf, 0);
     if (RT_FAILURE (rc))
-        return PDMDEV_SET_ERROR(pDevIns, rc,
-                                N_("Configuration error: Failed to read \"DmiExposeProcInf\""));
+        return PDMDEV_SET_ERROR(pDevIns, rc, N_("Configuration error: Failed to read \"DmiExposeProcInf\""));
 
     for  (;; fForceDefault = true, fHideErrors = false)
     {
@@ -580,7 +586,7 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
             pszDmiSystemUuid = NULL;
         else
         {
-            rc = CFGMR3QueryString(pCfg, "DmiSystemUuid", szDmiSystemUuid, sizeof(szDmiSystemUuid));
+            rc = pHlp->pfnCFGMQueryString(pCfg, "DmiSystemUuid", szDmiSystemUuid, sizeof(szDmiSystemUuid));
             if (rc == VERR_CFGM_VALUE_NOT_FOUND)
                 pszDmiSystemUuid = NULL;
             else if (RT_FAILURE(rc))
@@ -648,7 +654,7 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
         pBIOSInf->u8CharacteristicsByte1 = RT_BIT(0)   /* ACPI is supported */
                                          /* any more?? */
                                          ;
-        pBIOSInf->u8CharacteristicsByte2 = 0
+        pBIOSInf->u8CharacteristicsByte2 = fUefi ? RT_BIT(3) : 0
                                          /* any more?? */
                                          ;
         DMI_TERM_STRUCT;
@@ -819,11 +825,7 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
         /***************************************
          * DMI Physical Memory Array (Type 16) *
          ***************************************/
-        uint64_t u64RamSize;
-        rc = CFGMR3QueryU64(pCfg, "RamSize", &u64RamSize);
-        if (RT_FAILURE (rc))
-            return PDMDEV_SET_ERROR(pDevIns, rc,
-                                    N_("Configuration error: Failed to read \"RamSize\""));
+        uint64_t const  cbRamSize = PDMDevHlpMMPhysGetRamSize(pDevIns);
 
         PDMIRAMARRAY pMemArray = (PDMIRAMARRAY)pszStr;
         DMI_CHECK_SIZE(sizeof(*pMemArray));
@@ -837,7 +839,16 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
         pMemArray->u8Location            = 0x03;   /* Motherboard */
         pMemArray->u8Use                 = 0x03;   /* System memory */
         pMemArray->u8MemErrorCorrection  = 0x01;   /* Other */
-        pMemArray->u32MaxCapacity        = (uint32_t)(u64RamSize / _1K); /* RAM size in K */
+        if (cbRamSize / _1K > INT32_MAX)
+        {
+            /** @todo 2TB-1K limit. In such cases we probably need to provide multiple type-16 descriptors.
+             * Or use 0x8000'0000 = 'capacity unknown'? */
+            AssertLogRelMsgFailed(("DMI: RAM size %#RX64 does not fit into type-16 descriptor, clipping to %#RX64\n",
+                                   cbRamSize, (uint64_t)INT32_MAX * _1K));
+            pMemArray->u32MaxCapacity    = INT32_MAX;
+        }
+        else
+            pMemArray->u32MaxCapacity    = (int32_t)(cbRamSize / _1K); /* RAM size in K */
         pMemArray->u16MemErrorHandle     = 0xfffe; /* No error info structure */
         pMemArray->u16NumberOfMemDevices = 1;
         DMI_TERM_STRUCT;
@@ -858,10 +869,33 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
         pMemDev->u16MemErrHandle         = 0xfffe; /* system doesn't provide this information */
         pMemDev->u16TotalWidth           = 0xffff; /* Unknown */
         pMemDev->u16DataWidth            = 0xffff; /* Unknown */
-        int16_t u16RamSizeM = (uint16_t)(u64RamSize / _1M);
+        int16_t u16RamSizeM;
+        int32_t u32ExtRamSizeM = 0;
+        if (cbRamSize / _1M > INT16_MAX)
+        {
+            /* The highest bit of u16Size must be 0 to specify 'MB' units / 1 would be 'KB'.
+             * SMBIOS 2.7 intruduced a 32-bit extended size. If module size is 32GB or greater,
+             * the old u16Size is set to 7FFFh; old parsers will see 32GB-1MB, new parsers will
+             * look at new u32ExtendedSize which can represent at least 128TB. OS X 10.14+ looks
+             * at the extended size.
+             */
+            LogRel(("DMI: RAM size %#RX64 too big for one type-17 descriptor, clipping to %#RX64\n",
+                    cbRamSize, (uint64_t)INT16_MAX * _1M));
+            u16RamSizeM = INT16_MAX;
+            if (cbRamSize / _1M >= 0x8000000) {
+                AssertLogRelMsgFailed(("DMI: RAM size %#RX64 too big for one type-17 descriptor, clipping to %#RX64\n",
+                                       cbRamSize, (uint64_t)INT32_MAX * _1M));
+                u32ExtRamSizeM = 0x8000000; /* 128TB */
+            }
+            else
+                u32ExtRamSizeM = cbRamSize / _1M;
+        }
+        else
+            u16RamSizeM = (uint16_t)(cbRamSize / _1M);
         if (u16RamSizeM == 0)
             u16RamSizeM = 0x400; /* 1G */
         pMemDev->u16Size                 = u16RamSizeM; /* RAM size */
+        pMemDev->u32ExtendedSize         = u32ExtRamSizeM;
         pMemDev->u8FormFactor            = 0x09; /* DIMM */
         pMemDev->u8DeviceSet             = 0x00; /* Not part of a device set */
         DMI_READ_CFG_STR_DEF(pMemDev->u8DeviceLocator, " ", "DIMM 0");
@@ -908,7 +942,7 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
         pOEMSpecific->header.u8Type    = 0x80; /* OEM specific */
         pOEMSpecific->header.u8Length  = sizeof(*pOEMSpecific);
         pOEMSpecific->header.u16Handle = 0x0008; /* Just next free handle */
-        pOEMSpecific->u32CpuFreqKHz    = RT_H2LE_U32((uint32_t)((uint64_t)TMCpuTicksPerSecond(PDMDevHlpGetVM(pDevIns)) / 1000));
+        pOEMSpecific->u32CpuFreqKHz    = RT_H2LE_U32((uint32_t)((uint64_t)PDMDevHlpTMCpuTicksPerSecond(pDevIns) / 1000));
         DMI_TERM_STRUCT;
 
         /* End-of-table marker - includes padding to account for fixed table size. */
@@ -921,7 +955,7 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
         *pcbDmiTables = ((uintptr_t)pszStr - (uintptr_t)pTable) + 2;
 
         /* We currently plant 10 DMI tables. Update this if tables number changed. */
-        *pcNumDmiTables = 10;
+        *pcDmiTables = 10;
 
         /* If more fields are added here, fix the size check in DMI_READ_CFG_STR */
 
@@ -940,11 +974,14 @@ int FwCommonPlantDMITable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, P
  * reset.
  *
  * @param   pDevIns         The device instance data.
+ * @param   pHdr            Pointer to the header destination.
  * @param   cbDmiTables     Size of all DMI tables planted in bytes.
  * @param   cNumDmiTables   Number of DMI tables planted.
  */
-void FwCommonPlantSmbiosAndDmiHdrs(PPDMDEVINS pDevIns, uint16_t cbDmiTables, uint16_t cNumDmiTables)
+void FwCommonPlantSmbiosAndDmiHdrs(PPDMDEVINS pDevIns, uint8_t *pHdr, uint16_t cbDmiTables, uint16_t cNumDmiTables)
 {
+    RT_NOREF(pDevIns);
+
     struct
     {
         struct SMBIOSHDR     smbios;
@@ -976,10 +1013,14 @@ void FwCommonPlantSmbiosAndDmiHdrs(PPDMDEVINS pDevIns, uint16_t cbDmiTables, uin
 
     aBiosHeaders.dmi.u16TablesLength = cbDmiTables;
     aBiosHeaders.dmi.u16TableEntries = cNumDmiTables;
+    /* NB: The _SM_ table checksum technically covers both the _SM_ part (16 bytes) and the _DMI_ part
+     * (further 15 bytes). However, because the _DMI_ checksum must be zero, the _SM_ checksum can
+     * be calculated independently.
+     */
     aBiosHeaders.smbios.u8Checksum   = fwCommonChecksum((uint8_t*)&aBiosHeaders.smbios, sizeof(aBiosHeaders.smbios));
     aBiosHeaders.dmi.u8Checksum      = fwCommonChecksum((uint8_t*)&aBiosHeaders.dmi,    sizeof(aBiosHeaders.dmi));
 
-    PDMDevHlpPhysWrite(pDevIns, 0xfe300, &aBiosHeaders, sizeof(aBiosHeaders));
+    memcpy(pHdr, &aBiosHeaders, sizeof(aBiosHeaders));
 }
 
 /**
@@ -1148,16 +1189,17 @@ void FwCommonPlantMpsTable(PPDMDEVINS pDevIns, uint8_t *pTable, unsigned cbMax, 
  *
  * Only applicable if IOAPIC is active!
  *
- * @param   pDevIns    The device instance data.
+ * @param   pDevIns         The device instance data.
+ * @param   u32MpTableAddr  The MP table physical address.
  */
-void FwCommonPlantMpsFloatPtr(PPDMDEVINS pDevIns)
+void FwCommonPlantMpsFloatPtr(PPDMDEVINS pDevIns, uint32_t u32MpTableAddr)
 {
     MPSFLOATPTR floatPtr;
     floatPtr.au8Signature[0]       = '_';
     floatPtr.au8Signature[1]       = 'M';
     floatPtr.au8Signature[2]       = 'P';
     floatPtr.au8Signature[3]       = '_';
-    floatPtr.u32MPSAddr            = VBOX_MPS_TABLE_BASE;
+    floatPtr.u32MPSAddr            = u32MpTableAddr;
     floatPtr.u8Length              = 1; /* structure size in paragraphs */
     floatPtr.u8SpecRev             = 4; /* MPS revision 1.4 */
     floatPtr.u8Checksum            = 0;

@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: Intel_80186.h 85573 2020-07-31 12:41:14Z vboxsync $ */
 /** @file
  * CPU database entry "Intel 80186".
  * Handcrafted.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOX_CPUDB_Intel_80186
-#define VBOX_CPUDB_Intel_80186
+#ifndef VBOX_CPUDB_Intel_80186_h
+#define VBOX_CPUDB_Intel_80186_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifndef CPUM_DB_STANDALONE
 /**
@@ -56,8 +59,9 @@ static CPUMDBENTRY const g_Entry_Intel_80186 =
     /*.uStepping        = */ 0,
     /*.enmMicroarch     = */ kCpumMicroarch_Intel_80186,
     /*.uScalableBusFreq = */ CPUM_SBUSFREQ_UNKNOWN,
-    /*.fFlags           = */ CPUDB_F_EXECUTE_ALL_IN_IEM,
+    /*.fFlags           = */ CPUMDB_F_EXECUTE_ALL_IN_IEM,
     /*.cMaxPhysAddrWidth= */ 20,
+    /*.fMxCsrMask       = */ 0,
     /*.paCpuIdLeaves    = */ NULL_ALONE(g_aCpuIdLeaves_Intel_80186),
     /*.cCpuIdLeaves     = */ ZERO_ALONE(RT_ELEMENTS(g_aCpuIdLeaves_Intel_80186)),
     /*.enmUnknownCpuId  = */ CPUMUNKNOWNCPUID_DEFAULTS,
@@ -67,5 +71,5 @@ static CPUMDBENTRY const g_Entry_Intel_80186 =
     /*.paMsrRanges      = */ NULL,
 };
 
-#endif /* !VBOX_CPUDB_Intel_80186 */
+#endif /* !VBOX_CPUDB_Intel_80186_h */
 

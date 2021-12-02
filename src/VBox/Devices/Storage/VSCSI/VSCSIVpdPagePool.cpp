@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VSCSIVpdPagePool.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual SCSI driver: VPD page pool
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -83,7 +83,7 @@ int vscsiVpdPagePoolAllocNewPage(PVSCSIVPDPOOL pVScsiVpdPool, uint8_t uPage, siz
             return VERR_ALREADY_EXISTS;
     }
 
-    pPage = (PVSCSIVPDPAGE)RTMemAllocZ(RT_OFFSETOF(VSCSIVPDPAGE, abPage[cbPage]));
+    pPage = (PVSCSIVPDPAGE)RTMemAllocZ(RT_UOFFSETOF_DYN(VSCSIVPDPAGE, abPage[cbPage]));
     if (pPage)
     {
         pPage->cbPage    = cbPage;
@@ -107,6 +107,7 @@ int vscsiVpdPagePoolQueryPage(PVSCSIVPDPOOL pVScsiVpdPool, PVSCSIREQINT pVScsiRe
     {
         if (pPage->abPage[1] == uPage)
         {
+            vscsiReqSetXferSize(pVScsiReq, pPage->cbPage);
             RTSgBufCopyFromBuf(&pVScsiReq->SgBuf, &pPage->abPage[0], pPage->cbPage);
             return VINF_SUCCESS;
         }

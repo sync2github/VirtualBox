@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: wuimain.py 83432 2020-03-25 20:19:30Z vboxsync $
 
 """
 Test Manager Core - WUI - The Main page.
@@ -7,7 +7,7 @@ Test Manager Core - WUI - The Main page.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 83432 $"
 
 # Standard Python imports.
 
@@ -79,7 +79,7 @@ class WuiMain(WuiDispatcherBase):
     ksActionReportTestBoxFailures       = 'ReportTestBoxFailures';
     ksActionReportFailureReasons        = 'ReportFailureReasons';
     ksActionGraphWiz                    = 'GraphWiz';
-    ksActionVcsHistoryTooltip           = 'VcsHistoryTooltip';
+    ksActionVcsHistoryTooltip           = 'VcsHistoryTooltip';  ##< Hardcoded in common.js.
     ## @}
 
     ## @name Standard report parameters
@@ -263,55 +263,55 @@ class WuiMain(WuiDispatcherBase):
                 'Sheriff',     sActUrlBase + self.ksActionResultsUnGrouped + sSheriff,
                 [
                     [ 'Grouped by',        None ],
-                    [ 'Ungrouped',          sActUrlBase + self.ksActionResultsUnGrouped           + sSheriff ],
-                    [ 'Sched group',        sActUrlBase + self.ksActionResultsGroupedBySchedGroup + sSheriff ],
-                    [ 'Test group',         sActUrlBase + self.ksActionResultsGroupedByTestGroup  + sSheriff ],
-                    [ 'Test case',          sActUrlBase + self.ksActionResultsGroupedByTestCase   + sSheriff ],
-                    [ 'Testbox',            sActUrlBase + self.ksActionResultsGroupedByTestBox    + sSheriff ],
-                    [ 'OS',                 sActUrlBase + self.ksActionResultsGroupedByOS         + sSheriff ],
-                    [ 'Architecture',       sActUrlBase + self.ksActionResultsGroupedByArch       + sSheriff ],
-                    [ 'Revision',           sActUrlBase + self.ksActionResultsGroupedByBuildRev   + sSheriff ],
-                    [ 'Build category',     sActUrlBase + self.ksActionResultsGroupedByBuildCat   + sSheriff ],
+                    [ 'Ungrouped',          sActUrlBase + self.ksActionResultsUnGrouped           + sSheriff, False ],
+                    [ 'Sched group',        sActUrlBase + self.ksActionResultsGroupedBySchedGroup + sSheriff, False ],
+                    [ 'Test group',         sActUrlBase + self.ksActionResultsGroupedByTestGroup  + sSheriff, False ],
+                    [ 'Test case',          sActUrlBase + self.ksActionResultsGroupedByTestCase   + sSheriff, False ],
+                    [ 'Testbox',            sActUrlBase + self.ksActionResultsGroupedByTestBox    + sSheriff, False ],
+                    [ 'OS',                 sActUrlBase + self.ksActionResultsGroupedByOS         + sSheriff, False ],
+                    [ 'Architecture',       sActUrlBase + self.ksActionResultsGroupedByArch       + sSheriff, False ],
+                    [ 'Revision',           sActUrlBase + self.ksActionResultsGroupedByBuildRev   + sSheriff, False ],
+                    [ 'Build category',     sActUrlBase + self.ksActionResultsGroupedByBuildCat   + sSheriff, False ],
                 ]
             ],
             [
                 'Reports',          sActUrlBase + self.ksActionReportSummary,
                 [
-                    [ 'Summary',                  sActUrlBase + self.ksActionReportSummary                 + sExtraReports ],
-                    [ 'Success rate',             sActUrlBase + self.ksActionReportRate                    + sExtraReports ],
-                    [ 'Test case failures',       sActUrlBase + self.ksActionReportTestCaseFailures        + sExtraReports ],
-                    [ 'Testbox failures',         sActUrlBase + self.ksActionReportTestBoxFailures         + sExtraReports ],
-                    [ 'Failure reasons',          sActUrlBase + self.ksActionReportFailureReasons          + sExtraReports ],
+                    [ 'Summary',                  sActUrlBase + self.ksActionReportSummary          + sExtraReports, False ],
+                    [ 'Success rate',             sActUrlBase + self.ksActionReportRate             + sExtraReports, False ],
+                    [ 'Test case failures',       sActUrlBase + self.ksActionReportTestCaseFailures + sExtraReports, False ],
+                    [ 'Testbox failures',         sActUrlBase + self.ksActionReportTestBoxFailures  + sExtraReports, False ],
+                    [ 'Failure reasons',          sActUrlBase + self.ksActionReportFailureReasons   + sExtraReports, False ],
                 ]
             ],
             [
                 'Test Results',     sActUrlBase + self.ksActionResultsUnGrouped + sExtraTimeNav,
                 [
                     [ 'Grouped by',        None ],
-                    [ 'Ungrouped',          sActUrlBase + self.ksActionResultsUnGrouped           + sExtraTimeNav ],
-                    [ 'Sched group',        sActUrlBase + self.ksActionResultsGroupedBySchedGroup + sExtraTimeNav ],
-                    [ 'Test group',         sActUrlBase + self.ksActionResultsGroupedByTestGroup  + sExtraTimeNav ],
-                    [ 'Test case',          sActUrlBase + self.ksActionResultsGroupedByTestCase   + sExtraTimeNav ],
-                    [ 'Testbox',            sActUrlBase + self.ksActionResultsGroupedByTestBox    + sExtraTimeNav ],
-                    [ 'OS',                 sActUrlBase + self.ksActionResultsGroupedByOS         + sExtraTimeNav ],
-                    [ 'Architecture',       sActUrlBase + self.ksActionResultsGroupedByArch       + sExtraTimeNav ],
-                    [ 'Revision',           sActUrlBase + self.ksActionResultsGroupedByBuildRev   + sExtraTimeNav ],
-                    [ 'Build category',     sActUrlBase + self.ksActionResultsGroupedByBuildCat   + sExtraTimeNav ],
+                    [ 'Ungrouped',          sActUrlBase + self.ksActionResultsUnGrouped           + sExtraTimeNav, False ],
+                    [ 'Sched group',        sActUrlBase + self.ksActionResultsGroupedBySchedGroup + sExtraTimeNav, False ],
+                    [ 'Test group',         sActUrlBase + self.ksActionResultsGroupedByTestGroup  + sExtraTimeNav, False ],
+                    [ 'Test case',          sActUrlBase + self.ksActionResultsGroupedByTestCase   + sExtraTimeNav, False ],
+                    [ 'Testbox',            sActUrlBase + self.ksActionResultsGroupedByTestBox    + sExtraTimeNav, False ],
+                    [ 'OS',                 sActUrlBase + self.ksActionResultsGroupedByOS         + sExtraTimeNav, False ],
+                    [ 'Architecture',       sActUrlBase + self.ksActionResultsGroupedByArch       + sExtraTimeNav, False ],
+                    [ 'Revision',           sActUrlBase + self.ksActionResultsGroupedByBuildRev   + sExtraTimeNav, False ],
+                    [ 'Build category',     sActUrlBase + self.ksActionResultsGroupedByBuildCat   + sExtraTimeNav, False ],
                 ]
             ],
             [
                 'Test Failures',     sActUrlBase + self.ksActionResultsUnGrouped + sOnlyFailures,
                 [
                     [ 'Grouped by',        None ],
-                    [ 'Ungrouped',          sActUrlBase + self.ksActionResultsUnGrouped           + sOnlyFailures ],
-                    [ 'Sched group',        sActUrlBase + self.ksActionResultsGroupedBySchedGroup + sOnlyFailures ],
-                    [ 'Test group',         sActUrlBase + self.ksActionResultsGroupedByTestGroup  + sOnlyFailures ],
-                    [ 'Test case',          sActUrlBase + self.ksActionResultsGroupedByTestCase   + sOnlyFailures ],
-                    [ 'Testbox',            sActUrlBase + self.ksActionResultsGroupedByTestBox    + sOnlyFailures ],
-                    [ 'OS',                 sActUrlBase + self.ksActionResultsGroupedByOS         + sOnlyFailures ],
-                    [ 'Architecture',       sActUrlBase + self.ksActionResultsGroupedByArch       + sOnlyFailures ],
-                    [ 'Revision',           sActUrlBase + self.ksActionResultsGroupedByBuildRev   + sOnlyFailures ],
-                    [ 'Build category',     sActUrlBase + self.ksActionResultsGroupedByBuildCat   + sOnlyFailures ],
+                    [ 'Ungrouped',          sActUrlBase + self.ksActionResultsUnGrouped           + sOnlyFailures, False ],
+                    [ 'Sched group',        sActUrlBase + self.ksActionResultsGroupedBySchedGroup + sOnlyFailures, False ],
+                    [ 'Test group',         sActUrlBase + self.ksActionResultsGroupedByTestGroup  + sOnlyFailures, False ],
+                    [ 'Test case',          sActUrlBase + self.ksActionResultsGroupedByTestCase   + sOnlyFailures, False ],
+                    [ 'Testbox',            sActUrlBase + self.ksActionResultsGroupedByTestBox    + sOnlyFailures, False ],
+                    [ 'OS',                 sActUrlBase + self.ksActionResultsGroupedByOS         + sOnlyFailures, False ],
+                    [ 'Architecture',       sActUrlBase + self.ksActionResultsGroupedByArch       + sOnlyFailures, False ],
+                    [ 'Revision',           sActUrlBase + self.ksActionResultsGroupedByBuildRev   + sOnlyFailures, False ],
+                    [ 'Build category',     sActUrlBase + self.ksActionResultsGroupedByBuildCat   + sOnlyFailures, False ],
                 ]
             ],
             [
@@ -334,11 +334,10 @@ class WuiMain(WuiDispatcherBase):
     def _actionDefault(self):
         """Show the default admin page."""
         from testmanager.webui.wuitestresult import WuiGroupedResultList;
-        from testmanager.core.testresults    import TestResultLogic;
+        from testmanager.core.testresults    import TestResultLogic, TestResultFilter;
         self._sAction = self.ksActionResultsUnGrouped
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeNone,
-                                                 TestResultLogic,
-                                                 WuiGroupedResultList)
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _isMenuMatch(self, sMenuUrl, sActionParam):
         if super(WuiMain, self)._isMenuMatch(sMenuUrl, sActionParam):
@@ -393,69 +392,6 @@ class WuiMain(WuiDispatcherBase):
         return WuiTmLink('Show all results' if fOnlyFailures else 'Only show failed tests', '', dParams,
                          fBracketed = False).toHtml();
 
-    def _generateTimeSelector(self, dParams, sPreamble, sPostamble):
-        """
-        Generate HTML code for time selector.
-        """
-
-        if WuiDispatcherBase.ksParamEffectiveDate in dParams:
-            tsEffective = dParams[WuiDispatcherBase.ksParamEffectiveDate]
-            del dParams[WuiDispatcherBase.ksParamEffectiveDate]
-        else:
-            tsEffective = ''
-
-        # Forget about page No when changing a period
-        if WuiDispatcherBase.ksParamPageNo in dParams:
-            del dParams[WuiDispatcherBase.ksParamPageNo]
-
-        sHtmlTimeSelector  = '<form name="TimeForm" method="GET">\n'
-        sHtmlTimeSelector += sPreamble;
-        sHtmlTimeSelector += '\n  <select name="%s" onchange="window.location=' % WuiDispatcherBase.ksParamEffectiveDate
-        sHtmlTimeSelector += '\'?%s&%s=\' + ' % (webutils.encodeUrlParams(dParams), WuiDispatcherBase.ksParamEffectiveDate)
-        sHtmlTimeSelector += 'this.options[this.selectedIndex].value;" title="Effective date">\n'
-
-        aoWayBackPoints = [
-            ('+0000-00-00 00:00:00.00', 'Now', ' title="Present Day. Present Time."'), # lain :)
-
-            ('-0000-00-00 01:00:00.00', '1 hour ago', ''),
-            ('-0000-00-00 02:00:00.00', '2 hours ago', ''),
-            ('-0000-00-00 03:00:00.00', '3 hours ago', ''),
-
-            ('-0000-00-01 00:00:00.00', '1 day ago', ''),
-            ('-0000-00-02 00:00:00.00', '2 days ago', ''),
-            ('-0000-00-03 00:00:00.00', '3 days ago', ''),
-
-            ('-0000-00-07 00:00:00.00', '1 week ago', ''),
-            ('-0000-00-14 00:00:00.00', '2 weeks ago', ''),
-            ('-0000-00-21 00:00:00.00', '3 weeks ago', ''),
-
-            ('-0000-01-00 00:00:00.00', '1 month ago', ''),
-            ('-0000-02-00 00:00:00.00', '2 months ago', ''),
-            ('-0000-03-00 00:00:00.00', '3 months ago', ''),
-            ('-0000-04-00 00:00:00.00', '4 months ago', ''),
-            ('-0000-05-00 00:00:00.00', '5 months ago', ''),
-            ('-0000-06-00 00:00:00.00', 'Half a year ago', ''),
-
-            ('-0001-00-00 00:00:00.00', '1 year ago', ''),
-        ]
-        fSelected = False;
-        for sTimestamp, sWayBackPointCaption, sExtraAttrs in aoWayBackPoints:
-            if sTimestamp == tsEffective:
-                fSelected = True;
-            sHtmlTimeSelector += '    <option value="%s"%s%s>%s</option>\n' \
-                              % (webutils.quoteUrl(sTimestamp),
-                                 ' selected="selected"' if sTimestamp == tsEffective else '',
-                                 sExtraAttrs, sWayBackPointCaption)
-        if not fSelected and tsEffective != '':
-            sHtmlTimeSelector += '    <option value="%s" selected>%s</option>\n' \
-                              % (webutils.quoteUrl(tsEffective), tsEffective)
-
-        sHtmlTimeSelector += '  </select>\n';
-        sHtmlTimeSelector += sPostamble;
-        sHtmlTimeSelector += '\n</form>\n'
-
-        return sHtmlTimeSelector
-
     def _generateTimeWalker(self, dParams, tsEffective, sCurPeriod):
         """
         Generates HTML code for walking back and forth in time.
@@ -487,7 +423,9 @@ class WuiMain(WuiDispatcherBase):
         else:
             sNext = '&nbsp;&nbsp;&gt;&gt;';
 
-        return self._generateTimeSelector(self.getParameters(), sPrev, sNext);
+        from testmanager.webui.wuicontentbase import WuiListContentBase; ## @todo move to better place.
+        return WuiListContentBase.generateTimeNavigation('top', self.getParameters(), self.getEffectiveDateParam(),
+                                                         sPrev, sNext, False);
 
     def _generateResultPeriodSelector(self, dParams, sCurPeriod):
         """
@@ -564,9 +502,9 @@ class WuiMain(WuiDispatcherBase):
                                             WuiDispatcherBase.ksParamPageNo)
         sHrefPtr   += '%d">%s</a>'
 
-        cNumOfPages      = (cItems + cItemsPerPage - 1) / cItemsPerPage;
+        cNumOfPages      = (cItems + cItemsPerPage - 1) // cItemsPerPage;
         cPagesToDisplay  = 10
-        cPagesRangeStart = iPage - cPagesToDisplay / 2 \
+        cPagesRangeStart = iPage - cPagesToDisplay // 2 \
                            if not iPage - cPagesToDisplay / 2 < 0 else 0
         cPagesRangeEnd   = cPagesRangeStart + cPagesToDisplay \
                            if not cPagesRangeStart + cPagesToDisplay > cNumOfPages else cNumOfPages
@@ -603,30 +541,11 @@ class WuiMain(WuiDispatcherBase):
     def _generateItemPerPageSelector(self, dParams, cItemsPerPage):
         """
         Generate HTML code for items per page selector
+        Note! Modifies dParams!
         """
 
-        if WuiDispatcherBase.ksParamItemsPerPage in dParams:
-            del dParams[WuiDispatcherBase.ksParamItemsPerPage]
-
-        # Forced reset of the page number
-        dParams[WuiDispatcherBase.ksParamPageNo] = 0
-        sHtmlItemsPerPageSelector  = '<form name="AgesPerPageForm" method="GET">\n' \
-                                     '  Max <select name="%s" onchange="window.location=\'?%s&%s=\' + ' \
-                                     'this.options[this.selectedIndex].value;" title="Max items per page">\n' \
-                                   % (WuiDispatcherBase.ksParamItemsPerPage,
-                                      webutils.encodeUrlParams(dParams),
-                                      WuiDispatcherBase.ksParamItemsPerPage)
-
-        aiItemsPerPage = [16, 32, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096];
-        for iItemsPerPage in aiItemsPerPage:
-            sHtmlItemsPerPageSelector += '    <option value="%d" %s>%d</option>\n' \
-                                       % (iItemsPerPage,
-                                          'selected="selected"' if iItemsPerPage == cItemsPerPage else '',
-                                          iItemsPerPage)
-        sHtmlItemsPerPageSelector += '  </select> items per page\n' \
-                                     '</form>\n'
-
-        return sHtmlItemsPerPageSelector
+        from testmanager.webui.wuicontentbase import WuiListContentBase; ## @todo move to better place.
+        return WuiListContentBase.generateItemPerPageSelector('top', dParams, cItemsPerPage);
 
     def _generateResultNavigation(self, cItems, cItemsPerPage, iPage, tsEffective, sCurPeriod, fOnlyFailures,
                                   sHtmlMemberSelector):
@@ -717,16 +636,18 @@ class WuiMain(WuiDispatcherBase):
     # The rest of stuff
     #
 
-    def _actionGroupedResultsListing( #pylint: disable=R0914
+    def _actionGroupedResultsListing( #pylint: disable=too-many-locals
             self,
             enmResultsGroupingType,
             oResultsLogicType,
+            oResultFilterType,
             oResultsListContentType):
         """
         Override generic listing action.
 
-        oLogicType implements fetchForListing.
-        oListContentType is a child of WuiListContentBase.
+        oResultsLogicType implements getEntriesCount, fetchResultsForListing and more.
+        oResultFilterType is a child of ModelFilterBase.
+        oResultsListContentType is a child of WuiListContentBase.
         """
         from testmanager.core.testresults    import TestResultLogic;
 
@@ -739,6 +660,7 @@ class WuiMain(WuiDispatcherBase):
         enmResultSortBy     = self.getStringParam(self.ksParamTestResultsSortBy,
                                                   asValidValues = TestResultLogic.kasResultsSortBy,
                                                   sDefault = TestResultLogic.ksResultsSortByRunningAndStart);
+        oFilter = oResultFilterType().initFromParams(self);
 
         # Get testing results period and validate it
         asValidValues       = [x for (x, _, _) in self.kaoResultPeriods]
@@ -756,10 +678,9 @@ class WuiMain(WuiDispatcherBase):
         #
         oTrLogic = TestResultLogic(self._oDb);
         sAltSelectorAction = None;
-        if   enmResultsGroupingType == TestResultLogic.ksResultsGroupingTypeNone \
-          or enmResultsGroupingType == TestResultLogic.ksResultsGroupingTypeTestBox:
+        if enmResultsGroupingType in (TestResultLogic.ksResultsGroupingTypeNone, TestResultLogic.ksResultsGroupingTypeTestBox,):
             aoTmp = oTrLogic.getTestBoxes(tsNow = tsEffective, sPeriod = sCurPeriod)
-            aoGroupMembers = sorted(list(set([ (x.idTestBox, '%s (%s)' % (x.sName, str(x.ip))) for x in aoTmp ])),
+            aoGroupMembers = sorted(list({(x.idTestBox, '%s (%s)' % (x.sName, str(x.ip))) for x in aoTmp }),
                                     reverse = False, key = lambda asData: asData[1])
 
             if enmResultsGroupingType == TestResultLogic.ksResultsGroupingTypeTestBox:
@@ -771,27 +692,27 @@ class WuiMain(WuiDispatcherBase):
 
         elif enmResultsGroupingType == TestResultLogic.ksResultsGroupingTypeTestGroup:
             aoTmp = oTrLogic.getTestGroups(tsNow = tsEffective, sPeriod = sCurPeriod);
-            aoGroupMembers = sorted(list(set([ (x.idTestGroup, x.sName ) for x in aoTmp ])),
+            aoGroupMembers = sorted(list({ (x.idTestGroup, x.sName ) for x in aoTmp }),
                                     reverse = False, key = lambda asData: asData[1])
             self._sPageTitle = 'Grouped by Test Group'
 
         elif enmResultsGroupingType == TestResultLogic.ksResultsGroupingTypeBuildRev:
             aoTmp = oTrLogic.getBuilds(tsNow = tsEffective, sPeriod = sCurPeriod)
-            aoGroupMembers = sorted(list(set([ (x.iRevision, '%s.%d' % (x.oCat.sBranch, x.iRevision)) for x in aoTmp ])),
+            aoGroupMembers = sorted(list({ (x.iRevision, '%s.%d' % (x.oCat.sBranch, x.iRevision)) for x in aoTmp }),
                                     reverse = True, key = lambda asData: asData[0])
             self._sPageTitle = 'Grouped by Build'
 
         elif enmResultsGroupingType == TestResultLogic.ksResultsGroupingTypeBuildCat:
             aoTmp = oTrLogic.getBuildCategories(tsNow = tsEffective, sPeriod = sCurPeriod)
-            aoGroupMembers = sorted(list(set([ ( x.idBuildCategory, '%s / %s / %s / %s'
-                                                 % ( x.sProduct, x.sBranch, ', '.join(x.asOsArches), x.sType) )
-                                               for x in aoTmp ])),
+            aoGroupMembers = sorted(list({ (x.idBuildCategory,
+                                            '%s / %s / %s / %s' % ( x.sProduct, x.sBranch, ', '.join(x.asOsArches), x.sType) )
+                                           for x in aoTmp }),
                                     reverse = True, key = lambda asData: asData[1]);
             self._sPageTitle = 'Grouped by Build Category'
 
         elif enmResultsGroupingType == TestResultLogic.ksResultsGroupingTypeTestCase:
             aoTmp = oTrLogic.getTestCases(tsNow = tsEffective, sPeriod = sCurPeriod)
-            aoGroupMembers = sorted(list(set([ (x.idTestCase, '%s' % x.sName) for x in aoTmp ])),
+            aoGroupMembers = sorted(list({ (x.idTestCase, '%s' % x.sName) for x in aoTmp }),
                                     reverse = False, key = lambda asData: asData[1])
             self._sPageTitle = 'Grouped by Test Case'
 
@@ -807,7 +728,7 @@ class WuiMain(WuiDispatcherBase):
 
         elif enmResultsGroupingType == TestResultLogic.ksResultsGroupingTypeSchedGroup:
             aoTmp = oTrLogic.getSchedGroups(tsNow = tsEffective, sPeriod = sCurPeriod)
-            aoGroupMembers = sorted(list(set([ (x.idSchedGroup, '%s' % x.sName) for x in aoTmp ])),
+            aoGroupMembers = sorted(list({ (x.idSchedGroup, '%s' % x.sName) for x in aoTmp }),
                                     reverse = False, key = lambda asData: asData[1])
             self._sPageTitle = 'Grouped by Scheduling Group'
 
@@ -832,6 +753,7 @@ class WuiMain(WuiDispatcherBase):
 
             cEntries = oResultLogic.getEntriesCount(tsNow = tsEffective,
                                                     sInterval = sCurPeriod,
+                                                    oFilter = oFilter,
                                                     enmResultsGroupingType = enmResultsGroupingType,
                                                     iResultsGroupingValue = idMember,
                                                     fOnlyFailures = fOnlyFailures,
@@ -842,6 +764,7 @@ class WuiMain(WuiDispatcherBase):
                                                             cItemsPerPage,
                                                             tsNow = tsEffective,
                                                             sInterval = sCurPeriod,
+                                                            oFilter = oFilter,
                                                             enmResultSortBy = enmResultSortBy,
                                                             enmResultsGroupingType = enmResultsGroupingType,
                                                             iResultsGroupingValue = idMember,
@@ -889,98 +812,190 @@ class WuiMain(WuiDispatcherBase):
         #
         # Now, generate a filter control panel for the side bar.
         #
-        self._sPageFilter = self._generateResultFilter(oResultLogic,
-                                                       tsNow = tsEffective,
-                                                       sInterval = sCurPeriod,
+        if hasattr(oFilter, 'kiBranches'):
+            oFilter.aCriteria[oFilter.kiBranches].fExpanded = True;
+        if hasattr(oFilter, 'kiTestStatus'):
+            oFilter.aCriteria[oFilter.kiTestStatus].fExpanded = True;
+        self._sPageFilter = self._generateResultFilter(oFilter, oResultLogic, tsEffective, sCurPeriod,
                                                        enmResultsGroupingType = enmResultsGroupingType,
                                                        aoGroupMembers = aoGroupMembers,
                                                        fOnlyFailures = fOnlyFailures,
                                                        fOnlyNeedingReason = fOnlyNeedingReason);
         return True;
 
-    def _generateResultFilter(self, oResultLogic, tsNow, sInterval, enmResultsGroupingType, aoGroupMembers,
-                              fOnlyFailures, fOnlyNeedingReason):
+    def _generateResultFilter(self, oFilter, oResultLogic, tsNow, sPeriod, enmResultsGroupingType = None, aoGroupMembers = None,
+                              fOnlyFailures = False, fOnlyNeedingReason = False):
         """
         Generates the result filter for the left hand side.
         """
-        sHtml  = u'<div id="side-filters">\n' \
-                 u' <p>Filters</p>\n' \
-                 u' <dl>\n';
+        _ = enmResultsGroupingType; _ = aoGroupMembers; _ = fOnlyFailures; _ = fOnlyNeedingReason;
+        oResultLogic.fetchPossibleFilterOptions(oFilter, tsNow, sPeriod)
 
-        sHtml += u'  <dt class="sf-collapsable"><a href="javascript:void(0)" onclick="toggleCollapsableDtDd(this);">&#9660; Test filter 1</a></dd>\n';
-        sHtml += u'  <dd class="sf-collapsable"><ul><li>stuff 1</li><li>stuff 2</li><ul></dd>\n'
+        # Add non-filter parameters as hidden fields so we can use 'GET' and have URLs to bookmark.
+        self._dSideMenuFormAttrs['method'] = 'GET';
+        sHtml = u'';
+        for sKey, oValue in self._oSrvGlue.getParameters().items():
+            if len(sKey) > 3:
+                if hasattr(oValue, 'startswith'):
+                    sHtml += u'<input type="hidden" name="%s" value="%s"/>\n' \
+                           % (webutils.escapeAttr(sKey), webutils.escapeAttr(oValue),);
+                else:
+                    for oSubValue in oValue:
+                        sHtml += u'<input type="hidden" name="%s" value="%s"/>\n' \
+                               % (webutils.escapeAttr(sKey), webutils.escapeAttr(oSubValue),);
 
-        sHtml += u'  <dt class="sf-expandable"><a href="javascript:void(0)" onclick="toggleCollapsableDtDd(this);">&#9654; Test filter 2</a></dd>\n';
-        sHtml += u'  <dd class="sf-expandable"><ul><li>stuff 3</li><li>stuff 4</li><ul></dd>\n'
+        # Generate the filter panel.
+        sHtml += u'<div id="side-filters">\n' \
+                 u' <p>Filters' \
+                 u' <span class="tm-side-filter-title-buttons"><input type="submit" value="Apply" />\n' \
+                 u' <a href="javascript:toggleSidebarSize();" class="tm-sidebar-size-link">&#x00bb;&#x00bb;</a></span></p>\n';
+        sHtml += u' <dl>\n';
+        for oCrit in oFilter.aCriteria:
+            if oCrit.aoPossible or oCrit.sType == oCrit.ksType_Ranges:
+                if   (    oCrit.oSub is None \
+                      and (   oCrit.sState == oCrit.ksState_Selected \
+                           or (len(oCrit.aoPossible) <= 2 and oCrit.sType != oCrit.ksType_Ranges))) \
+                  or (    oCrit.oSub is not None \
+                      and (   oCrit.sState == oCrit.ksState_Selected \
+                           or oCrit.oSub.sState == oCrit.ksState_Selected \
+                           or (len(oCrit.aoPossible) <= 2 and len(oCrit.oSub.aoPossible) <= 2))) \
+                  or oCrit.fExpanded is True:
+                    sClass = 'sf-collapsible';
+                    sChar  = '&#9660;';
+                else:
+                    sClass = 'sf-expandable';
+                    sChar  = '&#9654;';
 
+                sHtml += u'  <dt class="%s"><a href="javascript:void(0)" onclick="toggleCollapsibleDtDd(this);">%s %s</a> ' \
+                       % (sClass, sChar, webutils.escapeElem(oCrit.sName),);
+                sHtml += u'<span class="tm-side-filter-dt-buttons">';
+                if oCrit.sInvVarNm is not None:
+                    sHtml += u'<input  id="sf-union-%s" class="tm-side-filter-union-input" ' \
+                             u'name="%s" value="1" type="checkbox"%s />' \
+                             u'<label for="sf-union-%s" class="tm-side-filter-union-input"></label>' \
+                           % ( oCrit.sInvVarNm, oCrit.sInvVarNm, ' checked' if oCrit.fInverted else '', oCrit.sInvVarNm,);
+                sHtml += u' <input type="submit" value="Apply" />';
+                sHtml += u'</span>';
+                sHtml += u'</dt>\n' \
+                         u'  <dd class="%s">\n' \
+                         u'   <ul>\n' \
+                         % (sClass);
 
-        sHtml += u' </dl>\n' \
-                 u'</div>\n';
+                if oCrit.sType == oCrit.ksType_Ranges:
+                    assert not oCrit.oSub;
+                    assert not oCrit.aoPossible;
+                    asValues = [];
+                    for tRange in oCrit.aoSelected:
+                        if tRange[0] == tRange[1]:
+                            asValues.append('%s' % (tRange[0],));
+                        else:
+                            asValues.append('%s-%s' % (tRange[0] if tRange[0] is not None else 'inf',
+                                                       tRange[1] if tRange[1] is not None else 'inf'));
+                    sHtml += u'    <li title="%s"><input type="text" name="%s" value="%s"/></li>\n' \
+                           % ( webutils.escapeAttr('comma separate list of numerical ranges'), oCrit.sVarNm,
+                               ', '.join(asValues), );
+                else:
+                    for oDesc in oCrit.aoPossible:
+                        fChecked = oDesc.oValue in oCrit.aoSelected;
+                        sHtml += u'    <li%s%s><label><input type="checkbox" name="%s" value="%s"%s%s/>%s%s</label>\n' \
+                               % ( ' class="side-filter-irrelevant"' if oDesc.fIrrelevant else '',
+                                   (' title="%s"' % (webutils.escapeAttr(oDesc.sHover,)) if oDesc.sHover is not None else ''),
+                                   oCrit.sVarNm,
+                                   oDesc.oValue,
+                                   ' checked' if fChecked else '',
+                                   ' onclick="toggleCollapsibleCheckbox(this);"' if oDesc.aoSubs is not None else '',
+                                   webutils.escapeElem(oDesc.sDesc),
+                                   '<span class="side-filter-count"> [%u]</span>' % (oDesc.cTimes) if oDesc.cTimes is not None
+                                   else '', );
+                        if oDesc.aoSubs is not None:
+                            sHtml += u'     <ul class="sf-checkbox-%s">\n' % ('collapsible' if fChecked else 'expandable', );
+                            for oSubDesc in oDesc.aoSubs:
+                                fSubChecked = oSubDesc.oValue in oCrit.oSub.aoSelected;
+                                sHtml += u'     <li%s%s><label><input type="checkbox" name="%s" value="%s"%s/>%s%s</label>\n' \
+                                       % ( ' class="side-filter-irrelevant"' if oSubDesc.fIrrelevant else '',
+                                           ' title="%s"' % ( webutils.escapeAttr(oSubDesc.sHover,) if oSubDesc.sHover is not None
+                                                             else ''),
+                                           oCrit.oSub.sVarNm, oSubDesc.oValue, ' checked' if fSubChecked else '',
+                                           webutils.escapeElem(oSubDesc.sDesc),
+                                           '<span class="side-filter-count"> [%u]</span>' % (oSubDesc.cTimes)
+                                           if oSubDesc.cTimes is not None else '', );
+
+                            sHtml += u'     </ul>\n';
+                        sHtml += u'    </li>';
+
+                sHtml += u'   </ul>\n' \
+                         u'  </dd>\n';
+
+        sHtml += u' </dl>\n';
+        sHtml += u' <input type="submit" value="Apply"/>\n';
+        sHtml += u' <input type="reset" value="Reset"/>\n';
+        sHtml += u' <button type="button" onclick="clearForm(\'side-menu-form\');">Clear</button>\n';
+        sHtml += u'</div>\n';
         return sHtml;
 
     def _actionResultsUnGrouped(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         #return self._actionResultsListing(TestResultLogic, WuiGroupedResultList)?
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeNone,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _actionResultsGroupedByTestGroup(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeTestGroup,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _actionResultsGroupedByBuildRev(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeBuildRev,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _actionResultsGroupedByBuildCat(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeBuildCat,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _actionResultsGroupedByTestBox(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeTestBox,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _actionResultsGroupedByTestCase(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeTestCase,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _actionResultsGroupedByOS(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeOS,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _actionResultsGroupedByArch(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeArch,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
     def _actionResultsGroupedBySchedGroup(self):
         """ Action wrapper. """
         from testmanager.webui.wuitestresult        import WuiGroupedResultList;
-        from testmanager.core.testresults           import TestResultLogic;
+        from testmanager.core.testresults           import TestResultLogic, TestResultFilter;
         return self._actionGroupedResultsListing(TestResultLogic.ksResultsGroupingTypeSchedGroup,
-                                                 TestResultLogic, WuiGroupedResultList);
+                                                 TestResultLogic, TestResultFilter, WuiGroupedResultList);
 
 
     def _actionTestSetDetailsCommon(self, idTestSet):
@@ -1149,15 +1164,16 @@ class WuiMain(WuiDispatcherBase):
                                           % (idTestSet, oTestFile.sFile,));
         while True:
             abChunk = oFile.read(262144);
-            if len(abChunk) == 0:
+            if not abChunk:
                 break;
             self._oSrvGlue.writeRaw(abChunk);
         return self.ksDispatchRcAllDone;
 
-    def _actionGenericReport(self, oModelType, oReportType):
+    def _actionGenericReport(self, oModelType, oFilterType, oReportType):
         """
         Generic report action.
         oReportType is a child of WuiReportContentBase.
+        oFilterType is a child of ModelFilterBase.
         oModelType is a child of ReportModelBase.
         """
         from testmanager.core.report                import ReportModelBase;
@@ -1173,6 +1189,16 @@ class WuiMain(WuiDispatcherBase):
             aidSubjects = self.getListOfIntParams(self.ksParamReportSubjectIds, iMin = 1);
             if aidSubjects is None:
                 raise WuiException('Missing parameter %s' % (self.ksParamReportSubjectIds,));
+
+        aiSortColumnsDup = self.getListOfIntParams(self.ksParamSortColumns,
+                                                   iMin = -getattr(oReportType, 'kcMaxSortColumns', cPeriods) + 1,
+                                                   iMax = getattr(oReportType, 'kcMaxSortColumns', cPeriods), aiDefaults = []);
+        aiSortColumns   = [];
+        for iSortColumn in aiSortColumnsDup:
+            if iSortColumn not in aiSortColumns:
+                aiSortColumns.append(iSortColumn);
+
+        oFilter = oFilterType().initFromParams(self);
         self._checkForUnknownParameters();
 
         dParams = \
@@ -1183,37 +1209,43 @@ class WuiMain(WuiDispatcherBase):
             self.ksParamReportSubject:          sSubject,
             self.ksParamReportSubjectIds:       aidSubjects,
         };
+        ## @todo oFilter.
 
-        oModel   = oModelType(self._oDb, tsEffective, cPeriods, cHoursPerPeriod, sSubject, aidSubjects);
-        oContent = oReportType(oModel, dParams, fSubReport = False, fnDPrint = self._oSrvGlue.dprint, oDisp = self);
+        oModel   = oModelType(self._oDb, tsEffective, cPeriods, cHoursPerPeriod, sSubject, aidSubjects, oFilter);
+        oContent = oReportType(oModel, dParams, fSubReport = False, aiSortColumns = aiSortColumns,
+                               fnDPrint = self._oSrvGlue.dprint, oDisp = self);
         (self._sPageTitle, self._sPageBody) = oContent.show();
         sNavi = self._generateReportNavigation(tsEffective, cHoursPerPeriod, cPeriods);
         self._sPageBody = sNavi + self._sPageBody;
+
+        if hasattr(oFilter, 'kiBranches'):
+            oFilter.aCriteria[oFilter.kiBranches].fExpanded = True;
+        self._sPageFilter = self._generateResultFilter(oFilter, oModel, tsEffective, '%s hours' % (cHoursPerPeriod * cPeriods,));
         return True;
 
     def _actionReportSummary(self):
         """ Action wrapper. """
-        from testmanager.core.report                import ReportLazyModel;
+        from testmanager.core.report                import ReportLazyModel, ReportFilter;
         from testmanager.webui.wuireport            import WuiReportSummary;
-        return self._actionGenericReport(ReportLazyModel, WuiReportSummary);
+        return self._actionGenericReport(ReportLazyModel, ReportFilter, WuiReportSummary);
 
     def _actionReportRate(self):
         """ Action wrapper. """
-        from testmanager.core.report                import ReportLazyModel;
+        from testmanager.core.report                import ReportLazyModel, ReportFilter;
         from testmanager.webui.wuireport            import WuiReportSuccessRate;
-        return self._actionGenericReport(ReportLazyModel, WuiReportSuccessRate);
+        return self._actionGenericReport(ReportLazyModel, ReportFilter, WuiReportSuccessRate);
 
     def _actionReportTestCaseFailures(self):
         """ Action wrapper. """
-        from testmanager.core.report                import ReportLazyModel;
+        from testmanager.core.report                import ReportLazyModel, ReportFilter;
         from testmanager.webui.wuireport            import WuiReportTestCaseFailures;
-        return self._actionGenericReport(ReportLazyModel, WuiReportTestCaseFailures);
+        return self._actionGenericReport(ReportLazyModel, ReportFilter, WuiReportTestCaseFailures);
 
     def _actionReportFailureReasons(self):
         """ Action wrapper. """
-        from testmanager.core.report                import ReportLazyModel;
+        from testmanager.core.report                import ReportLazyModel, ReportFilter;
         from testmanager.webui.wuireport            import WuiReportFailureReasons;
-        return self._actionGenericReport(ReportLazyModel, WuiReportFailureReasons);
+        return self._actionGenericReport(ReportLazyModel, ReportFilter, WuiReportFailureReasons);
 
     def _actionGraphWiz(self):
         """

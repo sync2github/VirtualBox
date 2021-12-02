@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_memcache_h
-#define ___iprt_memcache_h
+#ifndef IPRT_INCLUDED_memcache_h
+#define IPRT_INCLUDED_memcache_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #include <iprt/cdefs.h>
@@ -72,7 +75,7 @@ typedef RTMEMCACHE                             *PRTMEMCACHE;
  *
  * @remarks No serialization is performed.
  */
-typedef DECLCALLBACK(int) FNMEMCACHECTOR(RTMEMCACHE hMemCache, void *pvObj, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNMEMCACHECTOR,(RTMEMCACHE hMemCache, void *pvObj, void *pvUser));
 /** Pointer to an object constructor for the memory cache. */
 typedef FNMEMCACHECTOR *PFNMEMCACHECTOR;
 
@@ -87,7 +90,7 @@ typedef FNMEMCACHECTOR *PFNMEMCACHECTOR;
  *
  * @remarks No serialization is performed.
  */
-typedef DECLCALLBACK(void) FNMEMCACHEDTOR(RTMEMCACHE hMemCache, void *pvObj, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNMEMCACHEDTOR,(RTMEMCACHE hMemCache, void *pvObj, void *pvUser));
 /** Pointer to an object destructor for the memory cache. */
 typedef FNMEMCACHEDTOR *PFNMEMCACHEDTOR;
 
@@ -153,5 +156,5 @@ RTDECL(void)    RTMemCacheFree(RTMEMCACHE hMemCache, void *pvObj);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_memcache_h */
 

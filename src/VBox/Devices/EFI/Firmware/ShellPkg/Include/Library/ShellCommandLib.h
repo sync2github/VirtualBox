@@ -2,17 +2,12 @@
   Provides interface to shell internal functions for shell commands.
 
   This library is for use ONLY by shell commands linked into the shell application.
-  This library will not funciton if it is used for UEFI Shell 2.0 Applications.
+  This library will not function if it is used for UEFI Shell 2.0 Applications.
 
-  (C) Copyright 2013-2014, Hewlett-Packard Development Company, L.P.
-  Copyright (c) 2009 - 2014, Intel Corporation. All rights reserved.<BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php.
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
+  (C) Copyright 2016 Hewlett Packard Enterprise Development LP<BR>
+  (C) Copyright 2013-2014 Hewlett-Packard Development Company, L.P.<BR>
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -20,10 +15,9 @@
 #define _SHELL_COMMAND_LIB_
 
 #include <Uefi.h>
-#include <ShellBase.h>
 
-#include <Protocol/EfiShell.h>
-#include <Protocol/EfiShellParameters.h>
+#include <Protocol/Shell.h>
+#include <Protocol/ShellParameters.h>
 #include <Protocol/UnicodeCollation.h>
 #include <Protocol/SimpleFileSystem.h>
 
@@ -48,7 +42,7 @@ typedef struct {
 /// List of Mappings - DeviceName and Drive Letter(ism).
 extern        SHELL_MAP_LIST                      gShellMapList;
 /// Pointer to node of current directory in the mMapList.
-extern        SHELL_MAP_LIST                      *gShellCurDir;
+extern        SHELL_MAP_LIST                      *gShellCurMapping;
 
 /**
   Returns the help MAN fileName for a given shell command.
@@ -142,7 +136,7 @@ ShellCommandRegisterCommandName (
   IN        UINT32                      ShellMinSupportLevel,
   IN CONST  CHAR16                      *ProfileName,
   IN CONST  BOOLEAN                     CanAffectLE,
-  IN CONST  EFI_HANDLE                  HiiHandle,
+  IN CONST  EFI_HII_HANDLE              HiiHandle,
   IN CONST  EFI_STRING_ID               ManFormatHelp
   );
 
@@ -685,4 +679,120 @@ FreeBufferList (
   IN BUFFER_LIST *List
   );
 
+/**
+  Function printing hex output to the console.
+
+  @param[in] Indent       Number of spaces to indent.
+  @param[in] Offset       Offset to start with.
+  @param[in] DataSize     Length of data.
+  @param[in] UserData     Pointer to some data.
+**/
+VOID
+EFIAPI
+DumpHex (
+  IN UINTN        Indent,
+  IN UINTN        Offset,
+  IN UINTN        DataSize,
+  IN VOID         *UserData
+  );
+
+/**
+  Dump HEX data into buffer.
+
+  @param[in] Buffer     HEX data to be dumped in Buffer.
+  @param[in] Indent     How many spaces to indent the output.
+  @param[in] Offset     The offset of the printing.
+  @param[in] DataSize   The size in bytes of UserData.
+  @param[in] UserData   The data to print out.
+**/
+CHAR16*
+EFIAPI
+CatSDumpHex (
+  IN CHAR16  *Buffer,
+  IN UINTN   Indent,
+  IN UINTN   Offset,
+  IN UINTN   DataSize,
+  IN VOID    *UserData
+  );
+
+//
+// Determines the ordering operation for ShellSortFileList().
+//
+typedef enum {
+  //
+  // Sort the EFI_SHELL_FILE_INFO objects by the FileName field, in increasing
+  // order, using gUnicodeCollation->StriColl().
+  //
+  ShellSortFileListByFileName,
+  //
+  // Sort the EFI_SHELL_FILE_INFO objects by the FullName field, in increasing
+  // order, using gUnicodeCollation->StriColl().
+  //
+  ShellSortFileListByFullName,
+  ShellSortFileListMax
+} SHELL_SORT_FILE_LIST;
+
+/**
+  Sort an EFI_SHELL_FILE_INFO list, optionally moving duplicates to a separate
+  list.
+
+  @param[in,out] FileList  The list of EFI_SHELL_FILE_INFO objects to sort.
+
+                           If FileList is NULL on input, then FileList is
+                           considered an empty, hence already sorted, list.
+
+                           Otherwise, if (*FileList) is NULL on input, then
+                           EFI_INVALID_PARAMETER is returned.
+
+                           Otherwise, the caller is responsible for having
+                           initialized (*FileList)->Link with
+                           InitializeListHead(). No other fields in the
+                           (**FileList) head element are accessed by this
+                           function.
+
+                           On output, (*FileList) is sorted according to Order.
+                           If Duplicates is NULL on input, then duplicate
+                           elements are preserved, sorted stably, on
+                           (*FileList). If Duplicates is not NULL on input,
+                           then duplicates are moved (stably sorted) to the
+                           new, dynamically allocated (*Duplicates) list.
+
+  @param[out] Duplicates   If Duplicates is NULL on input, (*FileList) will be
+                           a monotonically ordered list on output, with
+                           duplicates stably sorted.
+
+                           If Duplicates is not NULL on input, (*FileList) will
+                           be a strictly monotonically oredered list on output,
+                           with duplicates separated (stably sorted) to
+                           (*Duplicates). All fields except Link will be
+                           zero-initialized in the (**Duplicates) head element.
+                           If no duplicates exist, then (*Duplicates) is set to
+                           NULL on output.
+
+  @param[in] Order         Determines the comparison operation between
+                           EFI_SHELL_FILE_INFO objects.
+
+  @retval EFI_INVALID_PARAMETER  (UINTN)Order is greater than or equal to
+                                 (UINTN)ShellSortFileListMax. Neither the
+                                 (*FileList) nor the (*Duplicates) list has
+                                 been modified.
+
+  @retval EFI_INVALID_PARAMETER  (*FileList) was NULL on input. Neither the
+                                 (*FileList) nor the (*Duplicates) list has
+                                 been modified.
+
+  @retval EFI_OUT_OF_RESOURCES   Memory allocation failed. Neither the
+                                 (*FileList) nor the (*Duplicates) list has
+                                 been modified.
+
+  @retval EFI_SUCCESS            Sorting successful, including the case when
+                                 FileList is NULL on input.
+**/
+EFI_STATUS
+EFIAPI
+ShellSortFileList (
+  IN OUT EFI_SHELL_FILE_INFO  **FileList,
+     OUT EFI_SHELL_FILE_INFO  **Duplicates OPTIONAL,
+  IN     SHELL_SORT_FILE_LIST Order
+  );
 #endif //_SHELL_COMMAND_LIB_

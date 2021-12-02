@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxVMMPreload.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxVMMPreload - Preload VBox the ring-0 modules.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,9 +16,9 @@
  */
 
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <iprt/buildconfig.h>
 #include <iprt/getopt.h>
 #include <iprt/initterm.h>
@@ -32,9 +32,9 @@
 #include <VBox/version.h>
 
 
-/*******************************************************************************
-*   Global Variables                                                           *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
+*********************************************************************************************************************************/
 /**
  * Known modules and their associated data (there are only known modules!).
  */
@@ -47,9 +47,6 @@ static struct
 {
     { "VMMR0.r0",       true,  NULL },
     { "VBoxDDR0.r0",    true,  NULL },
-#if !defined(VBOX_WITH_NEW_IOAPIC)
-    { "VBoxDD2R0.r0",   true,  NULL },
-#endif
 };
 
 static uint32_t     g_cVerbose = 1;

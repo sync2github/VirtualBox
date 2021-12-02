@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: strformat.cpp 91789 2021-10-17 18:16:11Z vboxsync $ */
 /** @file
  * IPRT - String Formatter.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -26,14 +26,6 @@
 
 
 /*********************************************************************************************************************************
-*   Defined Constants                                                                                                            *
-*********************************************************************************************************************************/
-#define ISDIGIT(c) ((c) >= '0' && (c) <= '9')
-/*#define MAX(a, b)  ((a) >= (b) ? (a) : (b))
-#define MIN(a, b)  ((a) < (b) ? (a) : (b)) */
-
-
-/*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP RTLOGGROUP_STRING
@@ -43,32 +35,45 @@
 #include <iprt/assert.h>
 #ifdef IN_RING3
 # include <iprt/alloc.h>
-# include <iprt/err.h>
+# include <iprt/errcore.h>
 # include <iprt/uni.h>
+# include <iprt/utf16.h>
 #endif
+#include <iprt/ctype.h>
 #include <iprt/string.h>
 #include <iprt/stdarg.h>
 #include "internal/string.h"
 
-/* Wrappers for converting to iprt facilities. */
-#define SSToDS(ptr)     ptr
-#define kASSERT         Assert
-#define KENDIAN_LITTLE  1
-#define KENDIAN         KENDIAN_LITTLE
-#define KSIZE           size_t
-typedef struct
+
+/**
+ * Deals with bad pointers.
+ */
+DECLHIDDEN(size_t) rtStrFormatBadPointer(size_t cch, PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, int cchWidth,
+                                         unsigned fFlags, void const *pvStr, char szTmp[64], const char *pszTag, int cchTag)
 {
-    uint32_t    ulLo;
-    uint32_t    ulHi;
-} KSIZE64;
+    static char const s_szNull[] = "<NULL>";
+    int               cchStr     = !pvStr ? sizeof(s_szNull) - 1 : 1 + sizeof(void *) * 2 + cchTag + 1;
 
+    if (!(fFlags & RTSTR_F_LEFT))
+        while (--cchWidth >= cchStr)
+            cch += pfnOutput(pvArgOutput, " ", 1);
 
-/*********************************************************************************************************************************
-*   Internal Functions                                                                                                           *
-*********************************************************************************************************************************/
-static unsigned _strnlen(const char *psz, unsigned cchMax);
-static unsigned _strnlenUtf16(PCRTUTF16 pwsz, unsigned cchMax);
-static int rtStrFormatNumber(char *psz, KSIZE64 ullValue, unsigned int uiBase, signed int cchWidth, signed int cchPrecision, unsigned int fFlags);
+    cchWidth -= cchStr;
+    if (!pvStr)
+        cch += pfnOutput(pvArgOutput, s_szNull, sizeof(s_szNull) - 1);
+    else
+    {
+        cch += pfnOutput(pvArgOutput, "<", 1);
+        cchStr = RTStrFormatNumber(&szTmp[0], (uintptr_t)pvStr, 16, sizeof(char *) * 2, 0, RTSTR_F_ZEROPAD);
+        cch += pfnOutput(pvArgOutput, szTmp, cchStr);
+        cch += pfnOutput(pvArgOutput, pszTag, cchTag);
+        cch += pfnOutput(pvArgOutput, ">", 1);
+    }
+
+    while (--cchWidth >= 0)
+        cch += pfnOutput(pvArgOutput, " ", 1);
+    return cch;
+}
 
 
 /**
@@ -139,44 +144,24 @@ static unsigned _strnlenUni(PCRTUNICP pusz, unsigned cchMax)
 /**
  * Formats an integer number according to the parameters.
  *
- * @returns   Length of the formatted number.
- * @param     psz            Pointer to output string buffer of sufficient size.
- * @param     u64Value       Value to format.
+ * @returns   Length of the number.
+ * @param     psz            Pointer to output string.
+ * @param     u64Value       Value.
  * @param     uiBase         Number representation base.
- * @param     cchWidth       Width.
+ * @param     cchWidth       Width
  * @param     cchPrecision   Precision.
  * @param     fFlags         Flags (NTFS_*).
  */
 RTDECL(int) RTStrFormatNumber(char *psz, uint64_t u64Value, unsigned int uiBase, signed int cchWidth, signed int cchPrecision,
                               unsigned int fFlags)
 {
-    return rtStrFormatNumber(psz, *(KSIZE64 *)(void *)&u64Value, uiBase, cchWidth, cchPrecision, fFlags);
-}
-RT_EXPORT_SYMBOL(RTStrFormatNumber);
-
-
-
-/**
- * Formats an integer number according to the parameters.
- *
- * @returns   Length of the number.
- * @param     psz            Pointer to output string.
- * @param     ullValue       Value. Using the high part is optional.
- * @param     uiBase         Number representation base.
- * @param     cchWidth       Width
- * @param     cchPrecision   Precision.
- * @param     fFlags         Flags (NTFS_*).
- */
-static int rtStrFormatNumber(char *psz, KSIZE64 ullValue, unsigned int uiBase, signed int cchWidth, signed int cchPrecision,
-                             unsigned int fFlags)
-{
     const char     *pachDigits = "0123456789abcdef";
     char           *pszStart = psz;
     int             cchMax;
     int             cchValue;
-    unsigned long   ul;
     int             i;
     int             j;
+    char            chSign;
 
     /*
      * Validate and adjust input...
@@ -192,14 +177,25 @@ static int rtStrFormatNumber(char *psz, KSIZE64 ullValue, unsigned int uiBase, s
         fFlags &= ~RTSTR_F_THOUSAND_SEP;
 
     /*
-     * Determine value length
+     * Determine value length and sign.  Converts the u64Value to unsigned.
      */
     cchValue = 0;
-    if (ullValue.ulHi || (fFlags & RTSTR_F_64BIT))
+    chSign = '\0';
+    if ((fFlags & RTSTR_F_64BIT) || (u64Value & UINT64_C(0xffffffff00000000)))
     {
-        uint64_t    u64 = *(uint64_t *)(void *)&ullValue;
-        if ((fFlags & RTSTR_F_VALSIGNED) && (ullValue.ulHi & 0x80000000))
-            u64 = -(int64_t)u64;
+        uint64_t u64;
+        if (!(fFlags & RTSTR_F_VALSIGNED) || !(u64Value & RT_BIT_64(63)))
+            u64 = u64Value;
+        else if (u64Value != RT_BIT_64(63))
+        {
+            chSign = '-';
+            u64 = u64Value = -(int64_t)u64Value;
+        }
+        else
+        {
+            chSign = '-';
+            u64 = u64Value = RT_BIT_64(63);
+        }
         do
         {
             cchValue++;
@@ -208,12 +204,24 @@ static int rtStrFormatNumber(char *psz, KSIZE64 ullValue, unsigned int uiBase, s
     }
     else
     {
-        ul = (fFlags & RTSTR_F_VALSIGNED) && (ullValue.ulLo & 0x80000000) ? -(int32_t)ullValue.ulLo : ullValue.ulLo;
+        uint32_t u32 = (uint32_t)u64Value;
+        if (!(fFlags & RTSTR_F_VALSIGNED) || !(u32 & UINT32_C(0x80000000)))
+        { /* likley */ }
+        else if (u32 != UINT32_C(0x80000000))
+        {
+            chSign = '-';
+            u64Value = u32 = -(int32_t)u32;
+        }
+        else
+        {
+            chSign = '-';
+            u64Value = u32 = UINT32_C(0x80000000);
+        }
         do
         {
             cchValue++;
-            ul /= uiBase;
-        } while (ul);
+            u32 /= uiBase;
+        } while (u32);
     }
     if (fFlags & RTSTR_F_THOUSAND_SEP)
     {
@@ -229,13 +237,8 @@ static int rtStrFormatNumber(char *psz, KSIZE64 ullValue, unsigned int uiBase, s
     i = 0;
     if (fFlags & RTSTR_F_VALSIGNED)
     {
-        if ((ullValue.ulHi || (fFlags & RTSTR_F_64BIT) ? ullValue.ulHi : ullValue.ulLo) & 0x80000000)
-        {
-            ullValue.ulLo = -(int32_t)ullValue.ulLo;
-            if (ullValue.ulHi)
-                ullValue.ulHi = ~ullValue.ulHi;
-            psz[i++] = '-';
-        }
+        if (chSign != '\0')
+            psz[i++] = chSign;
         else if (fFlags & (RTSTR_F_PLUS | RTSTR_F_BLANK))
             psz[i++] = (char)(fFlags & RTSTR_F_PLUS ? '+' : ' ');
     }
@@ -288,9 +291,9 @@ static int rtStrFormatNumber(char *psz, KSIZE64 ullValue, unsigned int uiBase, s
      */
     psz += cchValue;
     i = -1;
-    if (ullValue.ulHi || (fFlags & RTSTR_F_64BIT))
+    if ((fFlags & RTSTR_F_64BIT) || (u64Value & UINT64_C(0xffffffff00000000)))
     {
-        uint64_t    u64 = *(uint64_t *)(void *)&ullValue;
+        uint64_t u64 = u64Value;
         if (fFlags & RTSTR_F_THOUSAND_SEP)
         {
             do
@@ -312,24 +315,24 @@ static int rtStrFormatNumber(char *psz, KSIZE64 ullValue, unsigned int uiBase, s
     }
     else
     {
-        ul = (fFlags & RTSTR_F_VALSIGNED) && (ullValue.ulLo & 0x80000000) ? -(int32_t)ullValue.ulLo : ullValue.ulLo;
+        uint32_t u32 = (uint32_t)u64Value;
         if (fFlags & RTSTR_F_THOUSAND_SEP)
         {
             do
             {
                 if ((-i - 1) % 4 == 3)
                     psz[i--] = ' ';
-                psz[i--] = pachDigits[ul % uiBase];
-                ul /= uiBase;
-            } while (ul);
+                psz[i--] = pachDigits[u32 % uiBase];
+                u32 /= uiBase;
+            } while (u32);
         }
         else
         {
             do
             {
-                psz[i--] = pachDigits[ul % uiBase];
-                ul /= uiBase;
-            } while (ul);
+                psz[i--] = pachDigits[u32 % uiBase];
+                u32 /= uiBase;
+            } while (u32);
         }
     }
 
@@ -343,6 +346,7 @@ static int rtStrFormatNumber(char *psz, KSIZE64 ullValue, unsigned int uiBase, s
     *psz = '\0';
     return (unsigned)(psz - pszStart);
 }
+RT_EXPORT_SYMBOL(RTStrFormatNumber);
 
 
 /**
@@ -365,7 +369,7 @@ RTDECL(size_t) RTStrFormatV(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRF
 {
     char        szTmp[64]; /* Worker functions assumes 64 byte buffer! Ugly but faster. */
     va_list     args;
-    KSIZE       cch = 0;
+    size_t      cch = 0;
     const char *pszStartOutput = pszFormat;
 
     va_copy(args, InArgs); /* make a copy so we can reference it (AMD64 / gcc). */
@@ -407,9 +411,9 @@ RTDECL(size_t) RTStrFormatV(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRF
                 }
 
                 /* width */
-                if (ISDIGIT(*pszFormat))
+                if (RT_C_IS_DIGIT(*pszFormat))
                 {
-                    for (cchWidth = 0; ISDIGIT(*pszFormat); pszFormat++)
+                    for (cchWidth = 0; RT_C_IS_DIGIT(*pszFormat); pszFormat++)
                     {
                         cchWidth *= 10;
                         cchWidth += *pszFormat - '0';
@@ -432,9 +436,9 @@ RTDECL(size_t) RTStrFormatV(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRF
                 if (*pszFormat == '.')
                 {
                     pszFormat++;
-                    if (ISDIGIT(*pszFormat))
+                    if (RT_C_IS_DIGIT(*pszFormat))
                     {
-                        for (cchPrecision = 0; ISDIGIT(*pszFormat); pszFormat++)
+                        for (cchPrecision = 0; RT_C_IS_DIGIT(*pszFormat); pszFormat++)
                         {
                             cchPrecision *= 10;
                             cchPrecision += *pszFormat - '0';
@@ -526,7 +530,7 @@ RTDECL(size_t) RTStrFormatV(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRF
 
                         szTmp[0] = (char)va_arg(args, int);
                         szTmp[1] = '\0';                     /* Some output functions wants terminated strings. */
-                        cch += pfnOutput(pvArgOutput, SSToDS(&szTmp[0]), 1);
+                        cch += pfnOutput(pvArgOutput, &szTmp[0], 1);
 
                         while (--cchWidth > 0)
                             cch += pfnOutput(pvArgOutput, " ", 1);
@@ -539,83 +543,83 @@ RTDECL(size_t) RTStrFormatV(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRF
                         if (chArgSize == 'l')
                         {
                             /* utf-16 -> utf-8 */
-                            int         cchStr;
-                            PCRTUTF16   pwszStr = va_arg(args, PRTUTF16);
-
-                            if (!VALID_PTR(pwszStr))
+                            PCRTUTF16 pwszStr = va_arg(args, PCRTUTF16);
+                            if (RT_VALID_PTR(pwszStr))
                             {
-                                static RTUTF16  s_wszNull[] = {'<', 'N', 'U', 'L', 'L', '>', '\0' };
-                                pwszStr = s_wszNull;
-                            }
-                            cchStr = _strnlenUtf16(pwszStr, (unsigned)cchPrecision);
-                            if (!(fFlags & RTSTR_F_LEFT))
-                                while (--cchWidth >= cchStr)
-                                    cch += pfnOutput(pvArgOutput, " ", 1);
-                            cchWidth -= cchStr;
-                            while (cchStr-- > 0)
-                            {
+                                int cwcStr = _strnlenUtf16(pwszStr, (unsigned)cchPrecision);
+                                if (!(fFlags & RTSTR_F_LEFT))
+                                    while (--cchWidth >= cwcStr)
+                                        cch += pfnOutput(pvArgOutput, " ", 1);
+                                cchWidth -= cwcStr;
+                                while (cwcStr-- > 0)
+                                {
 /** @todo \#ifndef IN_RC*/
 #ifdef IN_RING3
-                                RTUNICP Cp;
-                                RTUtf16GetCpEx(&pwszStr, &Cp);
-                                char *pszEnd = RTStrPutCp(szTmp, Cp);
-                                *pszEnd = '\0';
-                                cch += pfnOutput(pvArgOutput, szTmp, pszEnd - szTmp);
+                                    RTUNICP Cp;
+                                    RTUtf16GetCpEx(&pwszStr, &Cp);
+                                    char *pszEnd = RTStrPutCp(szTmp, Cp);
+                                    *pszEnd = '\0';
+                                    cch += pfnOutput(pvArgOutput, szTmp, pszEnd - szTmp);
 #else
-                                char ch = (char)*pwszStr++;
-                                cch += pfnOutput(pvArgOutput, &ch, 1);
+                                    char ch = (char)*pwszStr++;
+                                    cch += pfnOutput(pvArgOutput, &ch, 1);
 #endif
+                                }
+                                while (--cchWidth >= 0)
+                                    cch += pfnOutput(pvArgOutput, " ", 1);
                             }
-                            while (--cchWidth >= 0)
-                                cch += pfnOutput(pvArgOutput, " ", 1);
+                            else
+                                cch = rtStrFormatBadPointer(cch, pfnOutput, pvArgOutput, cchWidth, fFlags,
+                                                            pwszStr, szTmp, RT_STR_TUPLE("!BadStrW"));
                         }
                         else if (chArgSize == 'L')
                         {
                             /* unicp -> utf8 */
-                            int         cchStr;
-                            PCRTUNICP   puszStr = va_arg(args, PCRTUNICP);
-
-                            if (!VALID_PTR(puszStr))
+                            PCRTUNICP puszStr = va_arg(args, PCRTUNICP);
+                            if (RT_VALID_PTR(puszStr))
                             {
-                                static RTUNICP s_uszNull[] = {'<', 'N', 'U', 'L', 'L', '>', '\0' };
-                                puszStr = s_uszNull;
-                            }
-                            cchStr = _strnlenUni(puszStr, (unsigned)cchPrecision);
-                            if (!(fFlags & RTSTR_F_LEFT))
-                                while (--cchWidth >= cchStr)
-                                    cch += pfnOutput(pvArgOutput, " ", 1);
+                                int cchStr = _strnlenUni(puszStr, (unsigned)cchPrecision);
+                                if (!(fFlags & RTSTR_F_LEFT))
+                                    while (--cchWidth >= cchStr)
+                                        cch += pfnOutput(pvArgOutput, " ", 1);
 
-                            cchWidth -= cchStr;
-                            while (cchStr-- > 0)
-                            {
+                                cchWidth -= cchStr;
+                                while (cchStr-- > 0)
+                                {
 /** @todo \#ifndef IN_RC*/
 #ifdef IN_RING3
-                                char *pszEnd = RTStrPutCp(szTmp, *puszStr++);
-                                cch += pfnOutput(pvArgOutput, szTmp, pszEnd - szTmp);
+                                    char *pszEnd = RTStrPutCp(szTmp, *puszStr++);
+                                    cch += pfnOutput(pvArgOutput, szTmp, pszEnd - szTmp);
 #else
-                                char ch = (char)*puszStr++;
-                                cch += pfnOutput(pvArgOutput, &ch, 1);
+                                    char ch = (char)*puszStr++;
+                                    cch += pfnOutput(pvArgOutput, &ch, 1);
 #endif
+                                }
+                                while (--cchWidth >= 0)
+                                    cch += pfnOutput(pvArgOutput, " ", 1);
                             }
-                            while (--cchWidth >= 0)
-                                cch += pfnOutput(pvArgOutput, " ", 1);
+                            else
+                                cch = rtStrFormatBadPointer(cch, pfnOutput, pvArgOutput, cchWidth, fFlags,
+                                                            puszStr, szTmp, RT_STR_TUPLE("!BadStrU"));
                         }
                         else
                         {
-                            int   cchStr;
-                            const char *pszStr = va_arg(args, char*);
+                            const char *pszStr = va_arg(args, const char *);
+                            if (RT_VALID_PTR(pszStr))
+                            {
+                                int cchStr = _strnlen(pszStr, (unsigned)cchPrecision);
+                                if (!(fFlags & RTSTR_F_LEFT))
+                                    while (--cchWidth >= cchStr)
+                                        cch += pfnOutput(pvArgOutput, " ", 1);
 
-                            if (!VALID_PTR(pszStr))
-                                pszStr = "<NULL>";
-                            cchStr = _strnlen(pszStr, (unsigned)cchPrecision);
-                            if (!(fFlags & RTSTR_F_LEFT))
+                                cch += pfnOutput(pvArgOutput, pszStr, cchStr);
+
                                 while (--cchWidth >= cchStr)
                                     cch += pfnOutput(pvArgOutput, " ", 1);
-
-                            cch += pfnOutput(pvArgOutput, pszStr, cchStr);
-
-                            while (--cchWidth >= cchStr)
-                                cch += pfnOutput(pvArgOutput, " ", 1);
+                            }
+                            else
+                                cch = rtStrFormatBadPointer(cch, pfnOutput, pvArgOutput, cchWidth, fFlags,
+                                                            pszStr, szTmp, RT_STR_TUPLE("!BadStr"));
                         }
                         break;
                     }
@@ -658,6 +662,7 @@ RTDECL(size_t) RTStrFormatV(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRF
 
                             case 'X':
                                 fFlags |= RTSTR_F_CAPITAL;
+                                RT_FALL_THRU();
                             case 'x':
                                 uBase = 16;
                                 break;
@@ -751,8 +756,8 @@ RTDECL(size_t) RTStrFormatV(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRF
                                 fFlags |= RTSTR_GET_BIT_FLAG(unsigned int);
                             }
                         }
-                        cchNum = RTStrFormatNumber((char *)SSToDS(&szTmp), u64Value, uBase, cchWidth, cchPrecision, fFlags);
-                        cch += pfnOutput(pvArgOutput, (char *)SSToDS(&szTmp), cchNum);
+                        cchNum = RTStrFormatNumber(&szTmp[0], u64Value, uBase, cchWidth, cchPrecision, fFlags);
+                        cch += pfnOutput(pvArgOutput, &szTmp[0], cchNum);
                         break;
                     }
 
@@ -826,31 +831,4 @@ RTDECL(size_t) RTStrFormatV(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRF
     return cch;
 }
 RT_EXPORT_SYMBOL(RTStrFormatV);
-
-
-/**
- * Partial implementation of a printf like formatter.
- * It doesn't do everything correct, and there is no floating point support.
- * However, it supports custom formats by the means of a format callback.
- *
- * @returns number of bytes formatted.
- * @param   pfnOutput   Output worker.
- *                      Called in two ways. Normally with a string an it's length.
- *                      For termination, it's called with NULL for string, 0 for length.
- * @param   pvArgOutput Argument to the output worker.
- * @param   pfnFormat   Custom format worker.
- * @param   pvArgFormat Argument to the format worker.
- * @param   pszFormat   Format string.
- * @param   ...         Argument list.
- */
-RTDECL(size_t) RTStrFormat(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, PFNSTRFORMAT pfnFormat, void *pvArgFormat, const char *pszFormat, ...)
-{
-    size_t cch;
-    va_list args;
-    va_start(args, pszFormat);
-    cch = RTStrFormatV(pfnOutput, pvArgOutput, pfnFormat, pvArgFormat, pszFormat, args);
-    va_end(args);
-    return cch;
-}
-RT_EXPORT_SYMBOL(RTStrFormat);
 

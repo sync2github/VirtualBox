@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cpu-basic-2.c 89932 2021-06-28 14:15:23Z vboxsync $ */
 /** @file
  * BS3Kit - bs3-cpu-basic-2, 16-bit C code.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -38,6 +38,7 @@
 BS3TESTMODE_PROTOTYPES_MODE(bs3CpuBasic2_TssGateEsp);
 BS3TESTMODE_PROTOTYPES_MODE(bs3CpuBasic2_RaiseXcpt1);
 
+FNBS3TESTDOMODE             bs3CpuBasic2_RaiseXcpt11_f16;
 FNBS3TESTDOMODE             bs3CpuBasic2_sidt_f16;
 FNBS3TESTDOMODE             bs3CpuBasic2_sgdt_f16;
 FNBS3TESTDOMODE             bs3CpuBasic2_lidt_f16;
@@ -58,11 +59,14 @@ static const BS3TESTMODEENTRY g_aModeTest[] =
 
 static const BS3TESTMODEBYONEENTRY g_aModeByOneTests[] =
 {
+    { "#ac",  bs3CpuBasic2_RaiseXcpt11_f16, 0 },
+#if 1
     { "iret", bs3CpuBasic2_iret_f16, 0 },
     { "sidt", bs3CpuBasic2_sidt_f16, 0 },
     { "sgdt", bs3CpuBasic2_sgdt_f16, 0 },
     { "lidt", bs3CpuBasic2_lidt_f16, 0 },
     { "lgdt", bs3CpuBasic2_lgdt_f16, 0 },
+#endif
 };
 
 
@@ -76,17 +80,18 @@ BS3_DECL(void) Main_rm()
      * Do tests driven from 16-bit code.
      */
     NOREF(g_aModeTest); NOREF(g_aModeByOneTests); /* for when commenting out bits */
-#if 0
     Bs3TestDoModes_rm(g_aModeTest, RT_ELEMENTS(g_aModeTest));
     Bs3TestDoModesByOne_rm(g_aModeByOneTests, RT_ELEMENTS(g_aModeByOneTests), 0);
-#endif
+#if 1
 
     /*
      * Do tests driven from 32-bit code (bs3-cpu-basic-2-32.c32 via assembly).
      */
     Bs3SwitchTo32BitAndCallC_rm(bs3CpuBasic2_Do32BitTests_pe32, 0);
+#endif
 
     Bs3TestTerm();
-//for (;;) { ASMHalt(); }
+    Bs3Shutdown();
+for (;;) { ASMHalt(); }
 }
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIRichTextLabel.h 90251 2021-07-20 09:52:02Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Qt extensions: QIRichTextLabel class declaration.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,52 +15,73 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __QIRichTextLabel_h__
-#define __QIRichTextLabel_h__
+#ifndef FEQT_INCLUDED_SRC_extensions_QIRichTextLabel_h
+#define FEQT_INCLUDED_SRC_extensions_QIRichTextLabel_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/* Global includes: */
-#include <QTextEdit>
+/* Qt includes: */
+#include <QTextBrowser>
 
-/* QLabel analog to reflect rich-text,
- * Based on private QTextEdit functionality: */
-class QIRichTextLabel : public QWidget
+/* GUI includes: */
+#include "UILibraryDefs.h"
+
+/** QLabel analog to reflect rich-text,
+ ** based on private QTextBrowser functionality. */
+class SHARED_LIBRARY_STUFF QIRichTextLabel : public QWidget
 {
     Q_OBJECT;
     Q_PROPERTY(QString text READ text WRITE setText);
 
+signals:
+
+    /** Notifies listeners about @a link clicked. */
+    void sigLinkClicked(const QUrl &link);
+
 public:
 
-    /* Constructor: */
+    /** Constructs rich text-label passing @a pParent to the base-class. */
     QIRichTextLabel(QWidget *pParent = 0);
 
-    /* Text getter: */
+    /** Returns text. */
     QString text() const;
 
-    /* Register image: */
+    /** Registers @a image under a passed @a strName. */
     void registerImage(const QImage &image, const QString &strName);
+    /** Registers @a pixmap under a passed @a strName. */
+    void registerPixmap(const QPixmap &pixmap, const QString &strName);
 
-    /* Word-wrap mode getter/setter: */
+    /** Returns word wrapping policy. */
     QTextOption::WrapMode wordWrapMode() const;
+    /** Defines word wrapping @a policy. */
     void setWordWrapMode(QTextOption::WrapMode policy);
 
-    /* API: Event-filter stuff: */
+    /** Installs event filter for a passed @ pFilterObj. */
     void installEventFilter(QObject *pFilterObj);
+
+    /** Returns browser font. */
+    QFont browserFont() const;
+    /** Defines @a newFont for browser. */
+    void setBrowserFont(const QFont &newFont);
 
 public slots:
 
-    /* Minimum text-width setter: */
+    /** Returns minimum text width. */
+    int minimumTextWidth() const;
+    /** Defines @a iMinimumTextWidth. */
     void setMinimumTextWidth(int iMinimumTextWidth);
 
-    /* Text setter: */
+    /** Defines @a strText. */
     void setText(const QString &strText);
 
 private:
 
-    /* QTextEdit private member: */
-    QTextEdit *m_pTextEdit;
+    /** Holds the text-browser instance. */
+    QTextBrowser *m_pTextBrowser;
 
-    /* Minimum text-width: */
+    /** Holds the minimum text-width. */
     int m_iMinimumTextWidth;
 };
 
-#endif // __QIRichTextLabel_h__
+#endif /* !FEQT_INCLUDED_SRC_extensions_QIRichTextLabel_h */

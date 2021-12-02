@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: tstDeviceStructSizeRC.cpp 89590 2021-06-10 08:43:08Z vboxsync $ */
 /** @file
  * tstDeviceStructSizeGC - Generate structure member and size checks from the RC perspective.
  *
@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,6 +35,32 @@
 *********************************************************************************************************************************/
 #define VBOX_DEVICE_STRUCT_TESTCASE
 #define VBOX_WITH_HGCM                  /* grumble */
+
+/* Check that important preprocessor macros does not get redefined: */
+#include <VBox/cdefs.h>
+#include <VBox/log.h>
+#ifdef DEBUG
+# define VBOX_DEVICE_STRUCT_TESTCASE_CHECK_DEBUG
+#else
+# undef  VBOX_DEVICE_STRUCT_TESTCASE_CHECK_DEBUG
+#endif
+#ifdef LOG_ENABLED
+# define VBOX_DEVICE_STRUCT_TESTCASE_CHECK_LOG_ENABLED
+#else
+# undef  VBOX_DEVICE_STRUCT_TESTCASE_CHECK_LOG_ENABLED
+#endif
+#ifdef VBOX_STRICT
+# define VBOX_DEVICE_STRUCT_TESTCASE_CHECK_VBOX_STRICT
+#else
+# undef  VBOX_DEVICE_STRUCT_TESTCASE_CHECK_VBOX_STRICT
+#endif
+#ifdef RT_STRICT
+# define VBOX_DEVICE_STRUCT_TESTCASE_CHECK_RT_STRICT
+#else
+# undef  VBOX_DEVICE_STRUCT_TESTCASE_CHECK_RT_STRICT
+#endif
+
+/* The structures we're checking: */
 #undef LOG_GROUP
 #include "../Bus/DevPciInternal.h"
 #undef LOG_GROUP
@@ -60,11 +86,9 @@
 # undef LOG_GROUP
 # include "../../VMM/VMMR3/APIC.cpp"
 #undef LOG_GROUP
-#ifdef VBOX_WITH_NEW_IOAPIC
-# include "../PC/DevIoApic.cpp"
-#else
-# include "../PC/DevIoApic_Old.cpp"
-#endif
+#include "../PC/DevIoApic.cpp"
+#undef LOG_GROUP
+#include "../PC/DevDMA.cpp"
 #undef LOG_GROUP
 #include "../Storage/DevATA.cpp"
 #ifdef VBOX_WITH_USB
@@ -85,6 +109,10 @@
 #include "../Parallel/DevParallel.cpp"
 #undef LOG_GROUP
 #include "../Serial/DevSerial.cpp"
+#undef LOG_GROUP
+#include "../Serial/DevOxPcie958.cpp"
+#undef LOG_GROUP
+#include "../Serial/UartCore.h"
 #ifdef VBOX_WITH_AHCI
 # undef LOG_GROUP
 # include "../Storage/DevAHCI.cpp"
@@ -107,14 +135,37 @@
 #endif
 #undef LOG_GROUP
 #include "../PC/DevHPET.cpp"
-# undef LOG_GROUP
-# include "../Audio/DevIchAc97.cpp"
-# undef LOG_GROUP
-# include "../Audio/DevHDA.cpp"
+#undef LOG_GROUP
+#include "../Audio/DevIchAc97.cpp"
+#undef LOG_GROUP
+#include "../Audio/DevHDA.cpp"
 #ifdef VBOX_WITH_NVME_IMPL
 # undef LOG_GROUP
 # include "../Storage/DevNVMe.cpp"
 #endif
+#ifdef VBOX_WITH_IOMMU_AMD
+# undef LOG_GROUP
+# include "../Bus/DevIommuAmd.cpp"
+#endif
+#ifdef VBOX_WITH_IOMMU_INTEL
+# undef LOG_GROUP
+# include "../Bus/DevIommuIntel.cpp"
+#endif
+
+/* Check that important preprocessor macros didn't get redefined: */
+#if defined(DEBUG)       != defined(VBOX_DEVICE_STRUCT_TESTCASE_CHECK_DEBUG)
+# error "DEBUG was modified!  This may throw off structure tests."
+#endif
+#if defined(LOG_ENABLED) != defined(VBOX_DEVICE_STRUCT_TESTCASE_CHECK_LOG_ENABLED)
+# error "LOG_ENABLED was modified!  This may throw off structure tests."
+#endif
+#if defined(RT_STRICT)   != defined(VBOX_DEVICE_STRUCT_TESTCASE_CHECK_RT_STRICT)
+# error "RT_STRICT was modified!  This may throw off structure tests."
+#endif
+#if defined(VBOX_STRICT) != defined(VBOX_DEVICE_STRUCT_TESTCASE_CHECK_VBOX_STRICT)
+# error "VBOX_STRICT was modified!  This may throw off structure tests."
+#endif
+
 
 /* we don't use iprt here because we're pretending to be in GC! */
 #include <stdio.h>
@@ -147,7 +198,7 @@ int main()
     GEN_CHECK_OFF(PDMPCIDEV, abConfig);
     GEN_CHECK_OFF(PDMPCIDEV, uDevFn);
     GEN_CHECK_OFF(PDMPCIDEV, pszNameR3);
-    GEN_CHECK_OFF(PDMPCIDEV, pvReserved);
+    GEN_CHECK_OFF(PDMPCIDEV, pfnRegionLoadChangeHookR3);
     GEN_CHECK_OFF(PDMPCIDEV, Int);
     GEN_CHECK_OFF(PDMPCIDEV, Int.s.aIORegions);
     GEN_CHECK_OFF(PDMPCIDEV, Int.s.aIORegions[1]);
@@ -174,20 +225,11 @@ int main()
     GEN_CHECK_OFF(DEVPCIBUS, cBridges);
     GEN_CHECK_OFF(DEVPCIBUS, apDevices);
     GEN_CHECK_OFF(DEVPCIBUS, apDevices[1]);
-    GEN_CHECK_OFF(DEVPCIBUS, pDevInsR3);
-    GEN_CHECK_OFF(DEVPCIBUS, pPciHlpR3);
     GEN_CHECK_OFF(DEVPCIBUS, papBridgesR3);
-    GEN_CHECK_OFF(DEVPCIBUS, pDevInsR0);
-    GEN_CHECK_OFF(DEVPCIBUS, pPciHlpR0);
-    GEN_CHECK_OFF(DEVPCIBUS, pDevInsRC);
-    GEN_CHECK_OFF(DEVPCIBUS, pPciHlpRC);
     GEN_CHECK_OFF(DEVPCIBUS, PciDev);
     GEN_CHECK_SIZE(PIIX3ISABRIDGE);
     GEN_CHECK_SIZE(DEVPCIROOT);
     GEN_CHECK_OFF(DEVPCIROOT, PciBus);
-    GEN_CHECK_OFF(DEVPCIROOT, pDevInsR3);
-    GEN_CHECK_OFF(DEVPCIROOT, pDevInsR0);
-    GEN_CHECK_OFF(DEVPCIROOT, pDevInsRC);
     GEN_CHECK_OFF(DEVPCIROOT, fUseIoApic);
     GEN_CHECK_OFF(DEVPCIROOT, u64PciConfigMMioAddress);
     GEN_CHECK_OFF(DEVPCIROOT, u64PciConfigMMioLength);
@@ -306,7 +348,7 @@ int main()
 #endif
     GEN_CHECK_OFF(VGASTATE, IBase);
     GEN_CHECK_OFF(VGASTATE, IPort);
-#if defined(VBOX_WITH_HGSMI) && (defined(VBOX_WITH_VIDEOHWACCEL) || defined(VBOX_WITH_CRHGSMI))
+#if defined(VBOX_WITH_HGSMI) && defined(VBOX_WITH_VIDEOHWACCEL)
     GEN_CHECK_OFF(VGASTATE, IVBVACallbacks);
 #endif
     GEN_CHECK_OFF(VGASTATE, pDrvBase);
@@ -314,20 +356,44 @@ int main()
     GEN_CHECK_OFF(VGASTATE, RefreshTimer);
     GEN_CHECK_OFF(VGASTATE, pDevInsR0);
 #ifdef VBOX_WITH_VMSVGA
-    GEN_CHECK_OFF(VGASTATE, svga.u64HostWindowId);
     GEN_CHECK_OFF(VGASTATE, svga.pFIFOR3);
     GEN_CHECK_OFF(VGASTATE, svga.pFIFOR0);
     GEN_CHECK_OFF(VGASTATE, svga.pSvgaR3State);
     GEN_CHECK_OFF(VGASTATE, svga.p3dState);
-    GEN_CHECK_OFF(VGASTATE, svga.pFrameBufferBackup);
+    GEN_CHECK_OFF(VGASTATE, svga.pbVgaFrameBufferR3);
     GEN_CHECK_OFF(VGASTATE, svga.GCPhysFIFO);
     GEN_CHECK_OFF(VGASTATE, svga.cbFIFO);
-    GEN_CHECK_OFF(VGASTATE, svga.BasePort);
+    GEN_CHECK_OFF(VGASTATE, svga.cbFIFOConfig);
+    GEN_CHECK_OFF(VGASTATE, svga.u32SVGAId);
+    GEN_CHECK_OFF(VGASTATE, svga.fConfigured);
+    GEN_CHECK_OFF(VGASTATE, svga.fBusy);
+    GEN_CHECK_OFF(VGASTATE, svga.fTraces);
+    GEN_CHECK_OFF(VGASTATE, svga.u32GuestId);
+    GEN_CHECK_OFF(VGASTATE, svga.cScratchRegion);
+    GEN_CHECK_OFF(VGASTATE, svga.u32IrqStatus);
+    GEN_CHECK_OFF(VGASTATE, svga.u32IrqMask);
+    GEN_CHECK_OFF(VGASTATE, svga.u32PitchLock);
+    GEN_CHECK_OFF(VGASTATE, svga.u32CurrentGMRId);
+    GEN_CHECK_OFF(VGASTATE, svga.u32RegCaps);
+    GEN_CHECK_OFF(VGASTATE, svga.u32IndexReg);
+    GEN_CHECK_OFF(VGASTATE, svga.hFIFORequestSem);
+    GEN_CHECK_OFF(VGASTATE, svga.hFIFOExtCmdSem);
     GEN_CHECK_OFF(VGASTATE, svga.pFIFOIOThread);
     GEN_CHECK_OFF(VGASTATE, svga.uWidth);
+    GEN_CHECK_OFF(VGASTATE, svga.uHeight);
+    GEN_CHECK_OFF(VGASTATE, svga.uBpp);
+    GEN_CHECK_OFF(VGASTATE, svga.cbScanline);
+    GEN_CHECK_OFF(VGASTATE, svga.u32MaxWidth);
+    GEN_CHECK_OFF(VGASTATE, svga.u32MaxHeight);
+    GEN_CHECK_OFF(VGASTATE, svga.viewport);
     GEN_CHECK_OFF(VGASTATE, svga.u32ActionFlags);
     GEN_CHECK_OFF(VGASTATE, svga.f3DEnabled);
     GEN_CHECK_OFF(VGASTATE, svga.fVRAMTracking);
+    GEN_CHECK_OFF(VGASTATE, svga.u8FIFOExtCommand);
+    GEN_CHECK_OFF(VGASTATE, svga.fFifoExtCommandWakeup);
+    GEN_CHECK_OFF(VGASTATE, svga.au32ScratchRegion);
+    GEN_CHECK_OFF(VGASTATE, svga.StatRegBitsPerPixelWr);
+    GEN_CHECK_OFF(VGASTATE, svga.StatRegWriteOnlyRd);
 #endif
     GEN_CHECK_OFF(VGASTATE, cMonitors);
     GEN_CHECK_OFF(VGASTATE, cMilliesRefreshInterval);
@@ -389,13 +455,13 @@ int main()
 #endif
 
     /* Input/pckbd.c */
-    GEN_CHECK_SIZE(KBDState);
-    GEN_CHECK_OFF(KBDState, write_cmd);
-    GEN_CHECK_OFF(KBDState, status);
-    GEN_CHECK_OFF(KBDState, mode);
-    GEN_CHECK_OFF(KBDState, pDevInsR3);
-    GEN_CHECK_OFF(KBDState, pDevInsR0);
-    GEN_CHECK_OFF(KBDState, pDevInsRC);
+    GEN_CHECK_SIZE(KBDSTATE);
+    GEN_CHECK_OFF(KBDSTATE, write_cmd);
+    GEN_CHECK_OFF(KBDSTATE, status);
+    GEN_CHECK_OFF(KBDSTATE, mode);
+    GEN_CHECK_OFF(KBDSTATE, pDevInsR3);
+    GEN_CHECK_OFF(KBDSTATE, pDevInsR0);
+    GEN_CHECK_OFF(KBDSTATE, pDevInsRC);
     GEN_CHECK_SIZE(KbdKeyQ);
     GEN_CHECK_OFF(KbdCmdQ, rpos);
     GEN_CHECK_OFF(KbdCmdQ, wpos);
@@ -408,17 +474,21 @@ int main()
     GEN_CHECK_OFF(PS2K, fScanning);
     GEN_CHECK_OFF(PS2K, fNumLockOn);
     GEN_CHECK_OFF(PS2K, u8ScanSet);
-    GEN_CHECK_OFF(PS2K, u8Typematic);
+    GEN_CHECK_OFF(PS2K, u8TypematicCfg);
     GEN_CHECK_OFF(PS2K, enmTypematicState);
     GEN_CHECK_OFF(PS2K, keyQ);
     GEN_CHECK_OFF(PS2K, cmdQ);
     GEN_CHECK_OFF(PS2K, uTypematicDelay);
+    GEN_CHECK_OFF(PS2K, fThrottleActive);
     GEN_CHECK_OFF(PS2K, pKbdDelayTimerRC);
     GEN_CHECK_OFF(PS2K, pKbdDelayTimerR3);
     GEN_CHECK_OFF(PS2K, pKbdDelayTimerR0);
     GEN_CHECK_OFF(PS2K, pKbdTypematicTimerRC);
     GEN_CHECK_OFF(PS2K, pKbdTypematicTimerR3);
     GEN_CHECK_OFF(PS2K, pKbdTypematicTimerR0);
+    GEN_CHECK_OFF(PS2K, pThrottleTimerRC);
+    GEN_CHECK_OFF(PS2K, pThrottleTimerR3);
+    GEN_CHECK_OFF(PS2K, pThrottleTimerR0);
     GEN_CHECK_OFF(PS2K, pCritSectR3);
     GEN_CHECK_OFF(PS2K, Keyboard.IBase);
     GEN_CHECK_OFF(PS2K, Keyboard.IPort);
@@ -521,8 +591,7 @@ int main()
 #endif
     GEN_CHECK_OFF(PCNETSTATE, fGCEnabled);
     GEN_CHECK_OFF(PCNETSTATE, fR0Enabled);
-    GEN_CHECK_OFF(PCNETSTATE, fAm79C973);
-    GEN_CHECK_OFF(PCNETSTATE, u32LinkSpeed);
+    GEN_CHECK_OFF(PCNETSTATE, uDevType);
     GEN_CHECK_OFF(PCNETSTATE, StatReceiveBytes);
     GEN_CHECK_OFF(PCNETSTATE, StatTransmitBytes);
 #ifdef VBOX_WITH_STATISTICS
@@ -567,6 +636,8 @@ int main()
     GEN_CHECK_OFF(ACPIState, fCpuHotPlug);
     GEN_CHECK_OFF(ACPIState, u32NicPciAddress);
     GEN_CHECK_OFF(ACPIState, u32HbcPciAddress);
+    GEN_CHECK_OFF(ACPIState, u32IommuPciAddress);
+    GEN_CHECK_OFF(ACPIState, u32SbIoApicPciAddress);
     GEN_CHECK_OFF(ACPIState, u64PciConfigMMioAddress);
     GEN_CHECK_OFF(ACPIState, IBase);
     GEN_CHECK_OFF(ACPIState, IACPIPort);
@@ -613,6 +684,16 @@ int main()
     GEN_CHECK_OFF(DEVPIC, StatSetIrqGC);
     GEN_CHECK_OFF(DEVPIC, StatClearedActiveSlaveIRQ);
 #endif
+
+    /* PC/DevPit-i8254.cpp */
+    GEN_CHECK_SIZE(DMAState);
+    GEN_CHECK_OFF(DMAState, DMAC);
+    GEN_CHECK_OFF(DMAState, DMAC[0].ChState[0]);
+    GEN_CHECK_OFF(DMAState, DMAC[0].ChState[1]);
+    GEN_CHECK_OFF(DMAState, DMAC[0].u8Mask);
+    GEN_CHECK_OFF(DMAState, DMAC[1].ChState[0]);
+    GEN_CHECK_OFF(DMAState, DMAC[1].ChState[1]);
+    GEN_CHECK_OFF(DMAState, DMAC[1].u8Mask);
 
     /* PC/DevPit-i8254.cpp */
     GEN_CHECK_SIZE(PITCHANNEL);
@@ -747,7 +828,6 @@ int main()
     GEN_CHECK_OFF(APICCPU, StatIcrFullWrite);
 # endif /* VBOX_WITH_STATISTICS */
 
-#ifdef VBOX_WITH_NEW_IOAPIC
     /* PC/DevIoApic.cpp */
     GEN_CHECK_SIZE(IOAPIC);
     GEN_CHECK_OFF(IOAPIC, pDevInsR3);
@@ -771,34 +851,14 @@ int main()
     GEN_CHECK_OFF(IOAPIC, StatSetEoiRZ);
     GEN_CHECK_OFF(IOAPIC, StatSetEoiR3);
 # endif
-#else
-    /* PC/DevIoApic_Old.cpp */
-    GEN_CHECK_SIZE(IOAPIC);
-    GEN_CHECK_OFF(IOAPIC, id);
-    GEN_CHECK_OFF(IOAPIC, ioregsel);
-    GEN_CHECK_OFF(IOAPIC, irr);
-    GEN_CHECK_OFF(IOAPIC, ioredtbl);
-    GEN_CHECK_OFF(IOAPIC, ioredtbl[1]);
-    GEN_CHECK_OFF(IOAPIC, ioredtbl[IOAPIC_NUM_PINS - 1]);
-    GEN_CHECK_OFF(IOAPIC, pDevInsR3);
-    GEN_CHECK_OFF(IOAPIC, pIoApicHlpR3);
-    GEN_CHECK_OFF(IOAPIC, pDevInsR0);
-    GEN_CHECK_OFF(IOAPIC, pIoApicHlpR0);
-    GEN_CHECK_OFF(IOAPIC, pDevInsRC);
-    GEN_CHECK_OFF(IOAPIC, pIoApicHlpRC);
-# ifdef VBOX_WITH_STATISTICS
-    GEN_CHECK_OFF(IOAPIC, StatMMIOReadGC);
-    GEN_CHECK_OFF(IOAPIC, StatSetIrqHC);
-# endif
-#endif /* VBOX_WITH_NEW_IOAPIC */
 
     /* Storage/DevATA.cpp */
     GEN_CHECK_SIZE(BMDMAState);
     GEN_CHECK_OFF(BMDMAState, u8Cmd);
     GEN_CHECK_OFF(BMDMAState, u8Status);
-    GEN_CHECK_OFF(BMDMAState, pvAddr);
+    GEN_CHECK_OFF(BMDMAState, GCPhysAddr);
     GEN_CHECK_SIZE(BMDMADesc);
-    GEN_CHECK_OFF(BMDMADesc, pBuffer);
+    GEN_CHECK_OFF(BMDMADesc, GCPhysBuffer);
     GEN_CHECK_OFF(BMDMADesc, cbBuffer);
     GEN_CHECK_SIZE(ATADevState);
     GEN_CHECK_OFF(ATADevState, fLBA48);
@@ -884,11 +944,11 @@ int main()
     GEN_CHECK_OFF(ATADevState, szModelNumber);
     GEN_CHECK_OFF(ATADevState, szModelNumber[ATA_MODEL_NUMBER_LENGTH]);
     GEN_CHECK_OFF(ATADevState, szInquiryVendorId);
-    GEN_CHECK_OFF(ATADevState, szInquiryVendorId[ATAPI_INQUIRY_VENDOR_ID_LENGTH]);
+    GEN_CHECK_OFF(ATADevState, szInquiryVendorId[SCSI_INQUIRY_VENDOR_ID_LENGTH]);
     GEN_CHECK_OFF(ATADevState, szInquiryProductId);
-    GEN_CHECK_OFF(ATADevState, szInquiryProductId[ATAPI_INQUIRY_PRODUCT_ID_LENGTH]);
+    GEN_CHECK_OFF(ATADevState, szInquiryProductId[SCSI_INQUIRY_PRODUCT_ID_LENGTH]);
     GEN_CHECK_OFF(ATADevState, szInquiryRevision);
-    GEN_CHECK_OFF(ATADevState, szInquiryRevision[ATAPI_INQUIRY_REVISION_LENGTH]);
+    GEN_CHECK_OFF(ATADevState, szInquiryRevision[SCSI_INQUIRY_REVISION_LENGTH]);
     GEN_CHECK_OFF(ATADevState, pTrackList);
     GEN_CHECK_SIZE(ATATransferRequest);
     GEN_CHECK_OFF(ATATransferRequest, iIf);
@@ -918,9 +978,9 @@ int main()
     GEN_CHECK_OFF(ATACONTROLLER, fRedoIdle);
     GEN_CHECK_OFF(ATACONTROLLER, fRedoDMALastDesc);
     GEN_CHECK_OFF(ATACONTROLLER, BmDma);
-    GEN_CHECK_OFF(ATACONTROLLER, pFirstDMADesc);
-    GEN_CHECK_OFF(ATACONTROLLER, pLastDMADesc);
-    GEN_CHECK_OFF(ATACONTROLLER, pRedoDMABuffer);
+    GEN_CHECK_OFF(ATACONTROLLER, GCPhysFirstDMADesc);
+    GEN_CHECK_OFF(ATACONTROLLER, GCPhysLastDMADesc);
+    GEN_CHECK_OFF(ATACONTROLLER, GCPhysRedoDMABuffer);
     GEN_CHECK_OFF(ATACONTROLLER, cbRedoDMABuffer);
     GEN_CHECK_OFF(ATACONTROLLER, aIfs);
     GEN_CHECK_OFF(ATACONTROLLER, aIfs[1]);
@@ -1050,9 +1110,6 @@ int main()
     GEN_CHECK_SIZE(EHCI);
     GEN_CHECK_OFF(EHCI, PciDev);
     GEN_CHECK_OFF(EHCI, MMIOBase);
-    GEN_CHECK_OFF(EHCI, pEndOfFrameTimerR3);
-    GEN_CHECK_OFF(EHCI, pEndOfFrameTimerR0);
-    GEN_CHECK_OFF(EHCI, pEndOfFrameTimerRC);
     GEN_CHECK_OFF(EHCI, pDevInsR3);
     GEN_CHECK_OFF(EHCI, pDevInsR0);
     GEN_CHECK_OFF(EHCI, pDevInsRC);
@@ -1088,18 +1145,11 @@ int main()
     GEN_CHECK_OFF(EHCI, StatCanceledIsocUrbs);
     GEN_CHECK_OFF(EHCI, StatCanceledGenUrbs);
     GEN_CHECK_OFF(EHCI, StatDroppedUrbs);
-    GEN_CHECK_OFF(EHCI, StatTimer);
 #  endif
     GEN_CHECK_OFF(EHCI, u64TimerHz);
     GEN_CHECK_OFF(EHCI, cIdleCycles);
     GEN_CHECK_OFF(EHCI, uFrameRate);
     GEN_CHECK_OFF(EHCI, fIdle);
-    GEN_CHECK_OFF(EHCI, pEOFTimerSyncR3);
-    GEN_CHECK_OFF(EHCI, pEOFTimerSyncR0);
-    GEN_CHECK_OFF(EHCI, pEOFTimerSyncRC);
-    GEN_CHECK_OFF(EHCI, pEOFTimerNoSyncR3);
-    GEN_CHECK_OFF(EHCI, pEOFTimerNoSyncR0);
-    GEN_CHECK_OFF(EHCI, pEOFTimerNoSyncRC);
     GEN_CHECK_OFF(EHCI, hThreadFrame);
     GEN_CHECK_OFF(EHCI, hSemEventFrame);
     GEN_CHECK_OFF(EHCI, fBusStarted);
@@ -1194,8 +1244,6 @@ int main()
 # endif /* VBOX_WITH_XHCI_IMPL */
 #endif /* VBOX_WITH_USB */
 
-    /* VMMDev/VBoxDev.cpp */
-
     /* Parallel/DevParallel.cpp */
     GEN_CHECK_SIZE(PARALLELPORT);
     GEN_CHECK_OFF(PARALLELPORT, pDevInsR3);
@@ -1224,43 +1272,72 @@ int main()
     GEN_CHECK_OFF(PARALLELPORT, act_fifo_pos_read);
 #endif
 
+    /* Serial/UartCore.cpp */
+    GEN_CHECK_SIZE(UARTCORE);
+    GEN_CHECK_OFF(UARTCORE, CritSect);
+    GEN_CHECK_OFF(UARTCORE, pDevInsR3);
+    GEN_CHECK_OFF(UARTCORE, pDevInsR0);
+    GEN_CHECK_OFF(UARTCORE, pDevInsRC);
+    GEN_CHECK_OFF(UARTCORE, iLUN);
+    GEN_CHECK_OFF(UARTCORE, IBase);
+    GEN_CHECK_OFF(UARTCORE, ISerialPort);
+    GEN_CHECK_OFF(UARTCORE, pDrvBase);
+    GEN_CHECK_OFF(UARTCORE, pDrvSerial);
+    GEN_CHECK_OFF(UARTCORE, fFlags);
+    GEN_CHECK_OFF(UARTCORE, enmType);
+    GEN_CHECK_OFF(UARTCORE, pTimerRcvFifoTimeoutR3);
+    GEN_CHECK_OFF(UARTCORE, pTimerTxUnconnectedR3);
+    GEN_CHECK_OFF(UARTCORE, pfnUartIrqReqR3);
+    GEN_CHECK_OFF(UARTCORE, pTimerRcvFifoTimeoutR0);
+    GEN_CHECK_OFF(UARTCORE, pTimerTxUnconnectedR0);
+    GEN_CHECK_OFF(UARTCORE, pfnUartIrqReqR0);
+    GEN_CHECK_OFF(UARTCORE, pTimerRcvFifoTimeoutRC);
+    GEN_CHECK_OFF(UARTCORE, pTimerTxUnconnectedRC);
+    GEN_CHECK_OFF(UARTCORE, pfnUartIrqReqRC);
+    GEN_CHECK_OFF(UARTCORE, uRegDivisor);
+    GEN_CHECK_OFF(UARTCORE, uRegRbr);
+    GEN_CHECK_OFF(UARTCORE, uRegThr);
+    GEN_CHECK_OFF(UARTCORE, uRegIer);
+    GEN_CHECK_OFF(UARTCORE, uRegIir);
+    GEN_CHECK_OFF(UARTCORE, uRegFcr);
+    GEN_CHECK_OFF(UARTCORE, uRegLcr);
+    GEN_CHECK_OFF(UARTCORE, uRegMcr);
+    GEN_CHECK_OFF(UARTCORE, uRegLsr);
+    GEN_CHECK_OFF(UARTCORE, uRegMsr);
+    GEN_CHECK_OFF(UARTCORE, uRegScr);
+    GEN_CHECK_OFF(UARTCORE, fIrqCtiPending);
+    GEN_CHECK_OFF(UARTCORE, fThreEmptyPending);
+    GEN_CHECK_OFF(UARTCORE, FifoXmit);
+    GEN_CHECK_OFF(UARTCORE, FifoRecv);
+    GEN_CHECK_OFF(UARTCORE, cSymbolXferTicks);
+    GEN_CHECK_OFF(UARTCORE, cbAvailRdr);
+
     /* Serial/DevSerial.cpp */
-    GEN_CHECK_SIZE(SerialState);
-    GEN_CHECK_OFF(SerialState, CritSect);
-    GEN_CHECK_OFF(SerialState, pDevInsR3);
-    GEN_CHECK_OFF(SerialState, pDevInsR0);
-    GEN_CHECK_OFF(SerialState, pDevInsRC);
-    GEN_CHECK_OFF(SerialState, IBase);
-    GEN_CHECK_OFF(SerialState, ICharPort);
-    GEN_CHECK_OFF(SerialState, pDrvBase);
-    GEN_CHECK_OFF(SerialState, pDrvChar);
-    GEN_CHECK_OFF(SerialState, ReceiveSem);
-    GEN_CHECK_OFF(SerialState, base);
-    GEN_CHECK_OFF(SerialState, divider);
-    GEN_CHECK_OFF(SerialState, recv_fifo);
-    GEN_CHECK_OFF(SerialState, xmit_fifo);
-    GEN_CHECK_OFF(SerialState, rbr);
-    GEN_CHECK_OFF(SerialState, thr);
-    GEN_CHECK_OFF(SerialState, tsr);
-    GEN_CHECK_OFF(SerialState, ier);
-    GEN_CHECK_OFF(SerialState, iir);
-    GEN_CHECK_OFF(SerialState, lcr);
-    GEN_CHECK_OFF(SerialState, mcr);
-    GEN_CHECK_OFF(SerialState, lsr);
-    GEN_CHECK_OFF(SerialState, msr);
-    GEN_CHECK_OFF(SerialState, scr);
-    GEN_CHECK_OFF(SerialState, fcr);
-    GEN_CHECK_OFF(SerialState, fcr_vmstate);
-    GEN_CHECK_OFF(SerialState, thr_ipending);
-    GEN_CHECK_OFF(SerialState, timeout_ipending);
-    GEN_CHECK_OFF(SerialState, irq);
-    GEN_CHECK_OFF(SerialState, last_break_enable);
-    GEN_CHECK_OFF(SerialState, tsr_retry);
-    GEN_CHECK_OFF(SerialState, msr_changed);
-    GEN_CHECK_OFF(SerialState, fGCEnabled);
-    GEN_CHECK_OFF(SerialState, fR0Enabled);
-    GEN_CHECK_OFF(SerialState, fYieldOnLSRRead);
-    GEN_CHECK_OFF(SerialState, char_transmit_time);
+    GEN_CHECK_SIZE(DEVSERIAL);
+    GEN_CHECK_OFF(DEVSERIAL, pDevInsR3);
+    GEN_CHECK_OFF(DEVSERIAL, pDevInsR0);
+    GEN_CHECK_OFF(DEVSERIAL, pDevInsRC);
+    GEN_CHECK_OFF(DEVSERIAL, fR0Enabled);
+    GEN_CHECK_OFF(DEVSERIAL, fRCEnabled);
+    GEN_CHECK_OFF(DEVSERIAL, uIrq);
+    GEN_CHECK_OFF(DEVSERIAL, PortBase);
+    GEN_CHECK_OFF(DEVSERIAL, UartCore);
+
+    /* Serial/DevOxPcie958.cpp */
+    GEN_CHECK_SIZE(DEVOX958);
+    GEN_CHECK_OFF(DEVOX958, PciDev);
+    GEN_CHECK_OFF(DEVOX958, pDevInsR3);
+    GEN_CHECK_OFF(DEVOX958, pDevInsR0);
+    GEN_CHECK_OFF(DEVOX958, pDevInsRC);
+    GEN_CHECK_OFF(DEVOX958, fR0Enabled);
+    GEN_CHECK_OFF(DEVOX958, fRCEnabled);
+    GEN_CHECK_OFF(DEVOX958, u32RegIrqStsGlob);
+    GEN_CHECK_OFF(DEVOX958, u32RegIrqEnGlob);
+    GEN_CHECK_OFF(DEVOX958, u32RegIrqEnWake);
+    GEN_CHECK_OFF(DEVOX958, cUarts);
+    GEN_CHECK_OFF(DEVOX958, GCPhysMMIO);
+    GEN_CHECK_OFF(DEVOX958, aUarts);
+    GEN_CHECK_OFF(DEVOX958, aUarts[OX958_UARTS_MAX - 1]);
 
 #ifdef VBOX_WITH_AHCI
     /* Storage/DevAHCI.cpp */
@@ -1291,7 +1368,7 @@ int main()
     GEN_CHECK_OFF(AHCIPort, GCPhysAddrFb);
     GEN_CHECK_OFF(AHCIPort, fPoweredOn);
     GEN_CHECK_OFF(AHCIPort, fSpunUp);
-    GEN_CHECK_OFF(AHCIPort, fFirstD2HFisSend);
+    GEN_CHECK_OFF(AHCIPort, fFirstD2HFisSent);
     GEN_CHECK_OFF(AHCIPort, fATAPI);
     GEN_CHECK_OFF(AHCIPort, fPortReset);
     GEN_CHECK_OFF(AHCIPort, fTrimEnabled);
@@ -1314,6 +1391,7 @@ int main()
     GEN_CHECK_OFF(AHCIPort, pDrvBase);
     GEN_CHECK_OFF(AHCIPort, pDrvMedia);
     GEN_CHECK_OFF(AHCIPort, pDrvMediaEx);
+    GEN_CHECK_OFF(AHCIPort, pszDesc);
     GEN_CHECK_OFF(AHCIPort, IBase);
     GEN_CHECK_OFF(AHCIPort, IPort);
     GEN_CHECK_OFF(AHCIPort, IMediaExPort);
@@ -1329,6 +1407,12 @@ int main()
     GEN_CHECK_OFF(AHCIPort, szFirmwareRevision[AHCI_FIRMWARE_REVISION_LENGTH]); /* One additional byte for the termination.*/
     GEN_CHECK_OFF(AHCIPort, szModelNumber);
     GEN_CHECK_OFF(AHCIPort, szModelNumber[AHCI_MODEL_NUMBER_LENGTH]); /* One additional byte for the termination.*/
+    GEN_CHECK_OFF(AHCIPort, szInquiryVendorId);
+    GEN_CHECK_OFF(AHCIPort, szInquiryVendorId[AHCI_ATAPI_INQUIRY_VENDOR_ID_LENGTH]); /* One additional byte for the termination.*/
+    GEN_CHECK_OFF(AHCIPort, szInquiryProductId);
+    GEN_CHECK_OFF(AHCIPort, szInquiryProductId[AHCI_ATAPI_INQUIRY_PRODUCT_ID_LENGTH]); /* One additional byte for the termination.*/
+    GEN_CHECK_OFF(AHCIPort, szInquiryRevision);
+    GEN_CHECK_OFF(AHCIPort, szInquiryRevision[AHCI_ATAPI_INQUIRY_REVISION_LENGTH]); /* One additional byte for the termination.*/
     GEN_CHECK_OFF(AHCIPort, cErrors);
     GEN_CHECK_OFF(AHCIPort, fRedo);
 
@@ -1521,22 +1605,6 @@ int main()
     GEN_CHECK_OFF(VNETSTATE, hEventMoreRxDescAvail);
 #endif /* VBOX_WITH_VIRTIO */
 
-#ifdef VBOX_WITH_SCSI
-    GEN_CHECK_SIZE(VBOXSCSI);
-    GEN_CHECK_OFF(VBOXSCSI, regIdentify);
-    GEN_CHECK_OFF(VBOXSCSI, uTargetDevice);
-    GEN_CHECK_OFF(VBOXSCSI, uTxDir);
-    GEN_CHECK_OFF(VBOXSCSI, cbCDB);
-    GEN_CHECK_OFF(VBOXSCSI, abCDB);
-    GEN_CHECK_OFF(VBOXSCSI, abCDB[11]);
-    GEN_CHECK_OFF(VBOXSCSI, iCDB);
-    GEN_CHECK_OFF(VBOXSCSI, pbBuf);
-    GEN_CHECK_OFF(VBOXSCSI, cbBuf);
-    GEN_CHECK_OFF(VBOXSCSI, iBuf);
-    GEN_CHECK_OFF(VBOXSCSI, fBusy);
-    GEN_CHECK_OFF(VBOXSCSI, enmState);
-#endif
-
     /* VMMDev*.cpp/h */
     GEN_CHECK_SIZE(VMMDEV);
     GEN_CHECK_OFF(VMMDEV, PciDev);
@@ -1546,7 +1614,9 @@ int main()
     GEN_CHECK_OFF(VMMDEV, mouseXAbs);
     GEN_CHECK_OFF(VMMDEV, mouseYAbs);
     GEN_CHECK_OFF(VMMDEV, fHostCursorRequested);
-    GEN_CHECK_OFF(VMMDEV, pDevIns);
+    GEN_CHECK_OFF(VMMDEV, pDevInsR3);
+    GEN_CHECK_OFF(VMMDEV, pDevInsR0);
+    GEN_CHECK_OFF(VMMDEV, pDevInsRC);
     GEN_CHECK_OFF(VMMDEV, IBase);
     GEN_CHECK_OFF(VMMDEV, IPort);
 #ifdef VBOX_WITH_HGCM
@@ -1566,6 +1636,8 @@ int main()
     GEN_CHECK_OFF(VMMDEV, fNewGuestFilterMask);
     GEN_CHECK_OFF(VMMDEV, GCPhysVMMDevRAM);
     GEN_CHECK_OFF(VMMDEV, pVMMDevRAMR3);
+    GEN_CHECK_OFF(VMMDEV, pVMMDevRAMR0);
+    GEN_CHECK_OFF(VMMDEV, pVMMDevRAMRC);
     GEN_CHECK_OFF(VMMDEV, pVMMDevHeapR3);
     GEN_CHECK_OFF(VMMDEV, GCPhysVMMDevHeap);
     GEN_CHECK_OFF(VMMDEV, guestInfo);
@@ -1593,7 +1665,7 @@ int main()
     GEN_CHECK_OFF(VMMDEV, fKeepCredentials);
     GEN_CHECK_OFF(VMMDEV, fHeapEnabled);
 #ifdef VBOX_WITH_HGCM
-    GEN_CHECK_OFF(VMMDEV, pHGCMCmdList);
+    GEN_CHECK_OFF(VMMDEV, listHGCMCmd);
     GEN_CHECK_OFF(VMMDEV, critsectHGCMCmdList);
     GEN_CHECK_OFF(VMMDEV, u32HGCMEnabled);
 #endif
@@ -1675,7 +1747,6 @@ int main()
     GEN_CHECK_OFF(BUSLOGIC, pNotifierQueueR0);
     GEN_CHECK_OFF(BUSLOGIC, pNotifierQueueRC);
     GEN_CHECK_OFF(BUSLOGIC, CritSectIntr);
-    GEN_CHECK_OFF(BUSLOGIC, VBoxSCSI);
     GEN_CHECK_OFF(BUSLOGIC, aDeviceStates);
     GEN_CHECK_OFF(BUSLOGIC, aDeviceStates[BUSLOGIC_MAX_DEVICES-1]);
     GEN_CHECK_OFF(BUSLOGIC, IBase);
@@ -1684,7 +1755,6 @@ int main()
     GEN_CHECK_OFF(BUSLOGIC, pMediaNotify);
     GEN_CHECK_OFF(BUSLOGIC, fSignalIdle);
     GEN_CHECK_OFF(BUSLOGIC, fWrkThreadSleeping);
-    GEN_CHECK_OFF(BUSLOGIC, fBiosReqPending);
     GEN_CHECK_OFF(BUSLOGIC, pSupDrvSession);
     GEN_CHECK_OFF(BUSLOGIC, hEvtProcess);
     GEN_CHECK_OFF(BUSLOGIC, paGCPhysAddrCCBRedo);
@@ -1755,7 +1825,6 @@ int main()
     GEN_CHECK_OFF(LSILOGICSCSI, uRequestQueueNextAddressRead);
     GEN_CHECK_OFF(LSILOGICSCSI, u16NextHandle);
     GEN_CHECK_OFF(LSILOGICSCSI, enmCtrlType);
-    GEN_CHECK_OFF(LSILOGICSCSI, VBoxSCSI);
     GEN_CHECK_OFF(LSILOGICSCSI, IBase);
     GEN_CHECK_OFF(LSILOGICSCSI, ILeds);
     GEN_CHECK_OFF(LSILOGICSCSI, pLedsConnector);
@@ -1803,7 +1872,7 @@ int main()
     GEN_CHECK_SIZE(AC97DRIVER);
     GEN_CHECK_OFF(AC97DRIVER, Node);
     GEN_CHECK_OFF(AC97DRIVER, pAC97State);
-    GEN_CHECK_OFF(AC97DRIVER, Flags);
+    GEN_CHECK_OFF(AC97DRIVER, fFlags);
     GEN_CHECK_OFF(AC97DRIVER, uLUN);
     GEN_CHECK_OFF(AC97DRIVER, fAttached);
     GEN_CHECK_OFF(AC97DRIVER, pConnector);
@@ -1811,14 +1880,55 @@ int main()
     GEN_CHECK_OFF(AC97DRIVER, MicIn);
     GEN_CHECK_OFF(AC97DRIVER, Out);
 
+    GEN_CHECK_SIZE(AC97STATE);
+    GEN_CHECK_OFF(AC97STATE, CritSect);
+    GEN_CHECK_OFF(AC97STATE, pDevInsR3);
+    GEN_CHECK_OFF(AC97STATE, pDevInsR0);
+    GEN_CHECK_OFF(AC97STATE, pDevInsRC);
+    GEN_CHECK_OFF(AC97STATE, fRZEnabled);
+    GEN_CHECK_OFF(AC97STATE, glob_cnt);
+    GEN_CHECK_OFF(AC97STATE, glob_sta);
+    GEN_CHECK_OFF(AC97STATE, cas);
+    GEN_CHECK_OFF(AC97STATE, last_samp);
+    GEN_CHECK_OFF(AC97STATE, mixer_data);
+    GEN_CHECK_OFF(AC97STATE, aStreams);
+    GEN_CHECK_OFF(AC97STATE, uTimerHz);
+    GEN_CHECK_OFF(AC97STATE, pTimerRC);
+    GEN_CHECK_OFF(AC97STATE, pTimerR3);
+    GEN_CHECK_OFF(AC97STATE, pTimerR0);
+#ifdef VBOX_WITH_STATISTICS
+    GEN_CHECK_OFF(AC97STATE, StatTimer);
+    GEN_CHECK_OFF(AC97STATE, StatIn);
+    GEN_CHECK_OFF(AC97STATE, StatOut);
+    GEN_CHECK_OFF(AC97STATE, StatBytesRead);
+    GEN_CHECK_OFF(AC97STATE, StatBytesWritten);
+#endif
+    GEN_CHECK_OFF(AC97STATE, lstDrv);
+    GEN_CHECK_OFF(AC97STATE, pMixer);
+    GEN_CHECK_OFF(AC97STATE, pSinkOut);
+    GEN_CHECK_OFF(AC97STATE, pSinkLineIn);
+    GEN_CHECK_OFF(AC97STATE, pSinkMicIn);
+    GEN_CHECK_OFF(AC97STATE, silence);
+    GEN_CHECK_OFF(AC97STATE, bup_flag);
+    GEN_CHECK_OFF(AC97STATE, IBase);
+    GEN_CHECK_OFF(AC97STATE, IOPortBase);
+    GEN_CHECK_OFF(AC97STATE, uCodecModel);
+
+    GEN_CHECK_SIZE(AC97STREAM);
+    GEN_CHECK_OFF(AC97STREAM, pAC97State);
+
+    GEN_CHECK_SIZE(AC97STREAMSTATE);
+    GEN_CHECK_OFF(AC97STREAMSTATE, CritSect);
+    GEN_CHECK_OFF(AC97STREAMSTATE, pCircBuf);
+    GEN_CHECK_OFF(AC97STREAMSTATE, tsTransferLast);
+
     GEN_CHECK_SIZE(HDADRIVERSTREAM);
-    GEN_CHECK_OFF(HDADRIVERSTREAM, DestSource);
     GEN_CHECK_OFF(HDADRIVERSTREAM, pMixStrm);
 
     GEN_CHECK_SIZE(HDADRIVER);
     GEN_CHECK_OFF(HDADRIVER, Node);
     GEN_CHECK_OFF(HDADRIVER, pHDAState);
-    GEN_CHECK_OFF(HDADRIVER, Flags);
+    GEN_CHECK_OFF(HDADRIVER, fFlags);
     GEN_CHECK_OFF(HDADRIVER, uLUN);
     GEN_CHECK_OFF(HDADRIVER, fAttached);
     GEN_CHECK_OFF(HDADRIVER, pConnector);
@@ -1838,7 +1948,7 @@ int main()
     GEN_CHECK_OFF(HDABDLESTATE, u32BufOff);
 
     GEN_CHECK_SIZE(HDABDLEDESC);
-    GEN_CHECK_OFF(HDABDLEDESC, u64BufAdr);
+    GEN_CHECK_OFF(HDABDLEDESC, u64BufAddr);
     GEN_CHECK_OFF(HDABDLEDESC, u32BufSize);
     GEN_CHECK_OFF(HDABDLEDESC, fFlags);
 
@@ -1846,13 +1956,19 @@ int main()
     GEN_CHECK_OFF(HDABDLE, Desc);
     GEN_CHECK_OFF(HDABDLE, State);
 
+    GEN_CHECK_SIZE(HDASTREAMMAP);
+
     GEN_CHECK_SIZE(HDASTREAMSTATE);
     GEN_CHECK_OFF(HDASTREAMSTATE, uCurBDLE);
     GEN_CHECK_OFF(HDASTREAMSTATE, fInReset);
-    GEN_CHECK_OFF(HDASTREAMSTATE, CritSect);
     GEN_CHECK_OFF(HDASTREAMSTATE, Mapping);
     GEN_CHECK_OFF(HDASTREAMSTATE, BDLE);
     GEN_CHECK_OFF(HDASTREAMSTATE, pCircBuf);
+
+    GEN_CHECK_SIZE(HDASTREAMDBGINFORT);
+
+    GEN_CHECK_SIZE(HDASTREAMDBGINFO);
+    GEN_CHECK_OFF(HDASTREAMDBGINFO, Runtime);
 
     GEN_CHECK_SIZE(HDASTREAM);
     GEN_CHECK_OFF(HDASTREAM, u8SD);
@@ -1861,6 +1977,8 @@ int main()
     GEN_CHECK_OFF(HDASTREAM, u16FIFOS);
     GEN_CHECK_OFF(HDASTREAM, u16LVI);
     GEN_CHECK_OFF(HDASTREAM, State);
+    GEN_CHECK_OFF(HDASTREAM, Dbg);
+    GEN_CHECK_OFF(HDASTREAM, CritSect);
 
     GEN_CHECK_SIZE(HDASTATE);
     GEN_CHECK_OFF(HDASTATE, PciDev);
@@ -1880,14 +1998,7 @@ int main()
     GEN_CHECK_OFF(HDASTATE, cbCorbBuf);
     GEN_CHECK_OFF(HDASTATE, pu64RirbBuf);
     GEN_CHECK_OFF(HDASTATE, cbRirbBuf);
-    GEN_CHECK_OFF(HDASTATE, fInReset);
-    GEN_CHECK_OFF(HDASTATE, fR0Enabled);
-    GEN_CHECK_OFF(HDASTATE, fRCEnabled);
-#ifndef VBOX_WITH_AUDIO_CALLBACKS
-    GEN_CHECK_OFF(HDASTATE, pTimer);
-    GEN_CHECK_OFF(HDASTATE, cTimerTicks);
-    GEN_CHECK_OFF(HDASTATE, uTimerTS);
-#endif
+    GEN_CHECK_OFF(HDASTATE, fRZEnabled);
 #ifdef VBOX_WITH_STATISTICS
 # ifndef VBOX_WITH_AUDIO_CALLBACKS
     GEN_CHECK_OFF(HDASTATE, StatTimer);
@@ -1907,8 +2018,10 @@ int main()
 #ifdef VBOX_WITH_HDA_MIC_IN
     GEN_CHECK_OFF(HDASTATE, SinkMicIn);
 #endif
-    GEN_CHECK_OFF(HDASTATE, u64BaseTS);
-    GEN_CHECK_OFF(HDASTATE, u8RespIntCnt);
+    GEN_CHECK_OFF(HDASTATE, u64WalClk);
+    GEN_CHECK_OFF(HDASTATE, u16RespIntCnt);
+    GEN_CHECK_OFF(HDASTATE, cPosAdjustFrames);
+    GEN_CHECK_OFF(HDASTATE, u8IRQL);
 
 #ifdef VBOX_WITH_NVME_IMPL
     GEN_CHECK_SIZE(NVMEQUEUEHDR);
@@ -2000,6 +2113,189 @@ int main()
     GEN_CHECK_OFF(NVME, aStatMemXfer[0]);
     GEN_CHECK_OFF(NVME, aStatMemXfer[NVME_CMBSZ_SUPP_BIT_IDX_MAX]);
 # endif
+#endif
+
+#ifdef VBOX_WITH_IOMMU_AMD
+# ifdef IOMMU_WITH_DTE_CACHE
+    GEN_CHECK_SIZE(DTECACHE);
+# endif
+# ifdef IOMMU_WITH_DTE_CACHE
+    GEN_CHECK_SIZE(IRTECACHE);
+# endif
+    GEN_CHECK_SIZE(IOMMU);
+    GEN_CHECK_OFF(IOMMU, idxIommu);
+    GEN_CHECK_OFF(IOMMU, u32Magic);
+    GEN_CHECK_OFF(IOMMU, hMmio);
+    GEN_CHECK_OFF(IOMMU, hEvtCmdThread);
+    GEN_CHECK_OFF(IOMMU, fCmdThreadSignaled);
+# ifdef IOMMU_WITH_DTE_CACHE
+    GEN_CHECK_OFF(IOMMU, CritSectCache);
+    GEN_CHECK_OFF(IOMMU, aDeviceIds);
+    GEN_CHECK_OFF(IOMMU, aDteCache);
+# endif
+# ifdef IOMMU_WITH_IRTE_CACHE
+    GEN_CHECK_OFF(IOMMU, aIrteCache);
+# endif
+    GEN_CHECK_OFF(IOMMU, IommuBar);
+    GEN_CHECK_OFF(IOMMU, aDevTabBaseAddrs);
+    GEN_CHECK_OFF(IOMMU, CmdBufBaseAddr);
+    GEN_CHECK_OFF(IOMMU, EvtLogBaseAddr);
+    GEN_CHECK_OFF(IOMMU, Ctrl);
+    GEN_CHECK_OFF(IOMMU, ExclRangeBaseAddr);
+    GEN_CHECK_OFF(IOMMU, ExclRangeLimit);
+    GEN_CHECK_OFF(IOMMU, ExtFeat);
+    GEN_CHECK_OFF(IOMMU, PprLogBaseAddr);
+    GEN_CHECK_OFF(IOMMU, HwEvtHi);
+    GEN_CHECK_OFF(IOMMU, HwEvtLo);
+    GEN_CHECK_OFF(IOMMU, HwEvtStatus);
+    GEN_CHECK_OFF(IOMMU, GALogBaseAddr);
+    GEN_CHECK_OFF(IOMMU, GALogTailAddr);
+    GEN_CHECK_OFF(IOMMU, PprLogBBaseAddr);
+    GEN_CHECK_OFF(IOMMU, EvtLogBBaseAddr);
+    GEN_CHECK_OFF(IOMMU, DevSpecificFeat);
+    GEN_CHECK_OFF(IOMMU, DevSpecificCtrl);
+    GEN_CHECK_OFF(IOMMU, DevSpecificStatus);
+    GEN_CHECK_OFF(IOMMU, MiscInfo);
+    GEN_CHECK_OFF(IOMMU, PerfOptCtrl);
+    GEN_CHECK_OFF(IOMMU, XtGenIntrCtrl);
+    GEN_CHECK_OFF(IOMMU, XtPprIntrCtrl);
+    GEN_CHECK_OFF(IOMMU, XtGALogIntrCtrl);
+    GEN_CHECK_OFF(IOMMU, aMarcApers);
+    GEN_CHECK_OFF(IOMMU, RsvdReg);
+    GEN_CHECK_OFF(IOMMU, CmdBufHeadPtr);
+    GEN_CHECK_OFF(IOMMU, CmdBufTailPtr);
+    GEN_CHECK_OFF(IOMMU, EvtLogHeadPtr);
+    GEN_CHECK_OFF(IOMMU, EvtLogTailPtr);
+    GEN_CHECK_OFF(IOMMU, Status);
+    GEN_CHECK_OFF(IOMMU, PprLogHeadPtr);
+    GEN_CHECK_OFF(IOMMU, PprLogTailPtr);
+    GEN_CHECK_OFF(IOMMU, GALogHeadPtr);
+    GEN_CHECK_OFF(IOMMU, GALogTailPtr);
+    GEN_CHECK_OFF(IOMMU, PprLogBHeadPtr);
+    GEN_CHECK_OFF(IOMMU, PprLogBTailPtr);
+    GEN_CHECK_OFF(IOMMU, EvtLogBHeadPtr);
+    GEN_CHECK_OFF(IOMMU, EvtLogBTailPtr);
+    GEN_CHECK_OFF(IOMMU, PprLogAutoResp);
+    GEN_CHECK_OFF(IOMMU, PprLogOverflowEarly);
+    GEN_CHECK_OFF(IOMMU, PprLogBOverflowEarly);
+# ifdef VBOX_WITH_STATISTICS
+    GEN_CHECK_OFF(IOMMU, StatMmioReadR3);
+    GEN_CHECK_OFF(IOMMU, StatMmioReadRZ);
+    GEN_CHECK_OFF(IOMMU, StatMmioWriteR3);
+    GEN_CHECK_OFF(IOMMU, StatMmioWriteRZ);
+    GEN_CHECK_OFF(IOMMU, StatMsiRemapR3);
+    GEN_CHECK_OFF(IOMMU, StatMsiRemapRZ);
+    GEN_CHECK_OFF(IOMMU, StatMemReadR3);
+    GEN_CHECK_OFF(IOMMU, StatMemReadRZ);
+    GEN_CHECK_OFF(IOMMU, StatMemWriteR3);
+    GEN_CHECK_OFF(IOMMU, StatMemWriteRZ);
+    GEN_CHECK_OFF(IOMMU, StatMemBulkReadR3);
+    GEN_CHECK_OFF(IOMMU, StatMemBulkReadRZ);
+    GEN_CHECK_OFF(IOMMU, StatMemBulkWriteR3);
+    GEN_CHECK_OFF(IOMMU, StatMemBulkWriteRZ);
+    GEN_CHECK_OFF(IOMMU, StatCmd);
+    GEN_CHECK_OFF(IOMMU, StatCmdCompWait);
+    GEN_CHECK_OFF(IOMMU, StatCmdInvDte);
+    GEN_CHECK_OFF(IOMMU, StatCmdInvIommuPages);
+    GEN_CHECK_OFF(IOMMU, StatCmdInvIotlbPages);
+    GEN_CHECK_OFF(IOMMU, StatCmdInvIntrTable);
+    GEN_CHECK_OFF(IOMMU, StatCmdPrefIommuPages);
+    GEN_CHECK_OFF(IOMMU, StatCmdCompletePprReq);
+    GEN_CHECK_OFF(IOMMU, StatCmdInvIommuAll);
+    GEN_CHECK_OFF(IOMMU, StatIotlbeCached);
+    GEN_CHECK_OFF(IOMMU, StatIotlbeLazyEvictReuse);
+    GEN_CHECK_OFF(IOMMU, StatProfDteLookup);
+    GEN_CHECK_OFF(IOMMU, StatProfIotlbeLookup);
+    GEN_CHECK_OFF(IOMMU, StatProfIrteLookup);
+    GEN_CHECK_OFF(IOMMU, StatProfIrteCacheLookup);
+    GEN_CHECK_OFF(IOMMU, StatAccessCacheHit);
+    GEN_CHECK_OFF(IOMMU, StatAccessCacheHitFull);
+    GEN_CHECK_OFF(IOMMU, StatAccessCacheMiss);
+    GEN_CHECK_OFF(IOMMU, StatAccessCacheNonContig);
+    GEN_CHECK_OFF(IOMMU, StatAccessCachePermDenied);
+    GEN_CHECK_OFF(IOMMU, StatAccessDteNonContig);
+    GEN_CHECK_OFF(IOMMU, StatAccessDtePermDenied);
+    GEN_CHECK_OFF(IOMMU, StatIntrCacheHit);
+    GEN_CHECK_OFF(IOMMU, StatIntrCacheMiss);
+# endif
+#endif
+
+#ifdef VBOX_WITH_IOMMU_INTEL
+    GEN_CHECK_SIZE(DMAR);
+    GEN_CHECK_OFF(DMAR, idxIommu);
+    GEN_CHECK_OFF(DMAR, abRegs0);
+    GEN_CHECK_OFF(DMAR, abRegs1);
+    GEN_CHECK_OFF(DMAR, uIrtaReg);
+    GEN_CHECK_OFF(DMAR, uRtaddrReg);
+    GEN_CHECK_OFF(DMAR, uVerReg);
+    GEN_CHECK_OFF(DMAR, fCapReg);
+    GEN_CHECK_OFF(DMAR, fExtCapReg);
+    GEN_CHECK_OFF(DMAR, fHawBaseMask);
+    GEN_CHECK_OFF(DMAR, fMgawInvMask);
+    GEN_CHECK_OFF(DMAR, cMaxPagingLevel);
+    GEN_CHECK_OFF(DMAR, fPermValidMask);
+    GEN_CHECK_OFF(DMAR, hEvtInvQueue);
+    GEN_CHECK_OFF(DMAR, enmDiag);
+    GEN_CHECK_OFF(DMAR, hMmio);
+# ifdef VBOX_WITH_STATISTICS
+    GEN_CHECK_OFF(DMAR, StatMmioReadR3);
+    GEN_CHECK_OFF(DMAR, StatMmioReadRZ);
+    GEN_CHECK_OFF(DMAR, StatMmioWriteR3);
+    GEN_CHECK_OFF(DMAR, StatMmioWriteRZ);
+    GEN_CHECK_OFF(DMAR, StatMsiRemapCfiR3);
+    GEN_CHECK_OFF(DMAR, StatMsiRemapCfiRZ);
+    GEN_CHECK_OFF(DMAR, StatMsiRemapRfiR3);
+    GEN_CHECK_OFF(DMAR, StatMsiRemapRfiRZ);
+    GEN_CHECK_OFF(DMAR, StatMemReadR3);
+    GEN_CHECK_OFF(DMAR, StatMemReadRZ);
+    GEN_CHECK_OFF(DMAR, StatMemWriteR3);
+    GEN_CHECK_OFF(DMAR, StatMemWriteRZ);
+    GEN_CHECK_OFF(DMAR, StatMemBulkReadR3);
+    GEN_CHECK_OFF(DMAR, StatMemBulkReadRZ);
+    GEN_CHECK_OFF(DMAR, StatMemBulkWriteR3);
+    GEN_CHECK_OFF(DMAR, StatMemBulkWriteRZ);
+    GEN_CHECK_OFF(DMAR, StatCcInvDsc);
+    GEN_CHECK_OFF(DMAR, StatIotlbInvDsc);
+    GEN_CHECK_OFF(DMAR, StatDevtlbInvDsc);
+    GEN_CHECK_OFF(DMAR, StatIecInvDsc);
+    GEN_CHECK_OFF(DMAR, StatInvWaitDsc);
+    GEN_CHECK_OFF(DMAR, StatPasidIotlbInvDsc);
+    GEN_CHECK_OFF(DMAR, StatPasidCacheInvDsc);
+    GEN_CHECK_OFF(DMAR, StatPasidDevtlbInvDsc);
+# endif
+
+    GEN_CHECK_SIZE(DMARIOPAGE);
+    GEN_CHECK_OFF(DMARIOPAGE, GCPhysBase);
+    GEN_CHECK_OFF(DMARIOPAGE, cShift);
+    GEN_CHECK_OFF(DMARIOPAGE, fPerm);
+
+    GEN_CHECK_SIZE(DMARIOADDRRANGE);
+    GEN_CHECK_OFF(DMARIOADDRRANGE, uAddr);
+    GEN_CHECK_OFF(DMARIOADDRRANGE, cb);
+    GEN_CHECK_OFF(DMARIOADDRRANGE, fPerm);
+
+    GEN_CHECK_SIZE(DMARMEMREQIN);
+    GEN_CHECK_OFF(DMARMEMREQIN, AddrRange);
+    GEN_CHECK_OFF(DMARMEMREQIN, idDevice);
+    GEN_CHECK_OFF(DMARMEMREQIN, Pasid);
+    GEN_CHECK_OFF(DMARMEMREQIN, enmAddrType);
+    GEN_CHECK_OFF(DMARMEMREQIN, enmReqType);
+
+    GEN_CHECK_SIZE(DMARMEMREQOUT);
+    GEN_CHECK_OFF(DMARMEMREQOUT, AddrRange);
+    GEN_CHECK_OFF(DMARMEMREQOUT, idDomain);
+
+    GEN_CHECK_SIZE(DMARMEMREQAUX);
+    GEN_CHECK_OFF(DMARMEMREQAUX, fTtm
+    GEN_CHECK_OFF(DMARMEMREQAUX, fFpd);
+    GEN_CHECK_OFF(DMARMEMREQAUX, cPagingLevel);
+    GEN_CHECK_OFF(DMARMEMREQAUX, GCPhysFlPt);
+    GEN_CHECK_OFF(DMARMEMREQAUX, GCPhysSlPt);
+
+    GEN_CHECK_SIZE(DMARMEMREQREMAP);
+    GEN_CHECK_OFF(DMARMEMREQREMAP, In);
+    GEN_CHECK_OFF(DMARMEMREQREMAP, Aux);
+    GEN_CHECK_OFF(DMARMEMREQREMAP, Out);
 #endif
 
     return (0);

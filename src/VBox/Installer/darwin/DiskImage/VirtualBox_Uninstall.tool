@@ -1,11 +1,11 @@
 #!/bin/bash
-# $Id$
+# $Id: VirtualBox_Uninstall.tool 89669 2021-06-14 08:57:18Z vboxsync $
 ## @file
 # VirtualBox Uninstaller Script.
 #
 
 #
-# Copyright (C) 2007-2015 Oracle Corporation
+# Copyright (C) 2007-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -74,6 +74,7 @@ test -d /Library/Extensions/VBoxUSBTiger.kext/     && my_directories+=("/Library
 test -d /Library/Receipts/VBoxKEXTs.pkg/           && my_directories+=("/Library/Receipts/VBoxKEXTs.pkg/")
 
 test -f /usr/bin/VirtualBox                        && my_files+=("/usr/bin/VirtualBox")
+test -f /usr/bin/VirtualBoxVM                      && my_files+=("/usr/bin/VirtualBoxVM")
 test -f /usr/bin/VBoxManage                        && my_files+=("/usr/bin/VBoxManage")
 test -f /usr/bin/VBoxVRDP                          && my_files+=("/usr/bin/VBoxVRDP")
 test -f /usr/bin/VBoxHeadless                      && my_files+=("/usr/bin/VBoxHeadless")
@@ -82,8 +83,10 @@ test -f /usr/bin/VBoxBugReport                     && my_files+=("/usr/bin/VBoxB
 test -f /usr/bin/VBoxBalloonCtrl                   && my_files+=("/usr/bin/VBoxBalloonCtrl")
 test -f /usr/bin/VBoxAutostart                     && my_files+=("/usr/bin/VBoxAutostart")
 test -f /usr/bin/VBoxDTrace                        && my_files+=("/usr/bin/VBoxDTrace")
+test -f /usr/bin/VBoxAudioTest                     && my_files+=("/usr/bin/VBoxAudioTest")
 test -f /usr/bin/vbox-img                          && my_files+=("/usr/bin/vbox-img")
 test -f /usr/local/bin/VirtualBox                  && my_files+=("/usr/local/bin/VirtualBox")
+test -f /usr/local/bin/VirtualBoxVM                && my_files+=("/usr/local/bin/VirtualBoxVM")
 test -f /usr/local/bin/VBoxManage                  && my_files+=("/usr/local/bin/VBoxManage")
 test -f /usr/local/bin/VBoxVRDP                    && my_files+=("/usr/local/bin/VBoxVRDP")
 test -f /usr/local/bin/VBoxHeadless                && my_files+=("/usr/local/bin/VBoxHeadless")
@@ -92,6 +95,7 @@ test -f /usr/local/bin/VBoxBugReport               && my_files+=("/usr/local/bin
 test -f /usr/local/bin/VBoxBalloonCtrl             && my_files+=("/usr/local/bin/VBoxBalloonCtrl")
 test -f /usr/local/bin/VBoxAutostart               && my_files+=("/usr/local/bin/VBoxAutostart")
 test -f /usr/local/bin/VBoxDTrace                  && my_files+=("/usr/local/bin/VBoxDTrace")
+test -f /usr/local/bin/VBoxAudioTest               && my_files+=("/usr/local/bin/VBoxAudioTest")
 test -f /usr/local/bin/vbox-img                    && my_files+=("/usr/local/bin/vbox-img")
 test -d /Library/Receipts/VirtualBoxCLI.pkg/       && my_directories+=("/Library/Receipts/VirtualBoxCLI.pkg/")
 test -f /Library/LaunchDaemons/org.virtualbox.startup.plist && my_files+=("/Library/LaunchDaemons/org.virtualbox.startup.plist")
@@ -199,6 +203,18 @@ if test "$my_default_prompt" != "Yes"; then
     echo ""
 fi
 
+my_fuse_macos_core_uninstall=0
+if test "$my_default_prompt" != "Yes" -a -f "/Library/Filesystems/osxfuse.fs/Contents/Resources/uninstall_osxfuse.app/Contents/Resources/Scripts/uninstall_osxfuse.sh"; then
+    echo "VirtualBox detected the FUSE for macOS core package which might've been installed"
+    echo "by VirtualBox itself for the vboximg-mount utility. Do you wish to uninstall"
+    echo "the FUSE for macOS core package (Yes/No)?"
+    read my_answer
+    if test "$my_answer" == "Yes"  -o  "$my_answer" == "YES"  -o  "$my_answer" == "yes"; then
+        my_fuse_macos_core_uninstall=1;
+    fi
+    echo ""
+fi
+
 #
 # Unregister has to be done before the files are removed.
 #
@@ -225,8 +241,14 @@ if test -n "${my_files[*]}"  -o  -n "${my_directories[*]}"; then
         test -x /bin/rm       || echo "warning: Cannot find /bin/rm or it's not an executable"
         echo ""
         echo "The uninstall failed. Please retry."
+        test "$my_default_prompt" != "Yes" && read -p "Press <ENTER> to exit"
         exit 1;
     fi
+fi
+
+if test "$my_fuse_macos_core_uninstall" != 0; then
+    echo "Uninstalling the FUSE for macOS core package"
+    /usr/bin/sudo -p "Please enter %u's password:" /Library/Filesystems/osxfuse.fs/Contents/Resources/uninstall_osxfuse.app/Contents/Resources/Scripts/uninstall_osxfuse.sh
 fi
 
 my_rc=0
@@ -245,6 +267,7 @@ if test "$my_rc" -eq 0; then
     echo "Successfully unloaded VirtualBox kernel extensions."
 else
     echo "Failed to unload one or more KEXTs, please reboot the machine to complete the uninstall."
+    test "$my_default_prompt" != "Yes" && read -p "Press <ENTER> to exit"
     exit 1;
 fi
 

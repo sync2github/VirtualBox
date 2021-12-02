@@ -4,14 +4,8 @@
   This file defines common data structures, macro definitions and some module
   internal function header files.
 
-  Copyright (c) 2009 - 2013, Intel Corporation. All rights reserved.<BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  Copyright (c) 2009 - 2015, Intel Corporation. All rights reserved.<BR>
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -20,7 +14,6 @@
 
 #include <Uefi.h>
 
-#include <Guid/MemoryOverwriteControl.h>
 #include <Protocol/AtaPassThru.h>
 #include <Protocol/BlockIo.h>
 #include <Protocol/BlockIo2.h>
@@ -84,21 +77,6 @@
 #define ATA_DEVICE_SIGNATURE              SIGNATURE_32 ('A', 'B', 'I', 'D')
 #define ATA_SUB_TASK_SIGNATURE            SIGNATURE_32 ('A', 'S', 'T', 'S')
 #define IS_ALIGNED(addr, size)            (((UINTN) (addr) & (size - 1)) == 0)
-
-#define ROUNDUP512(x) (((x) % 512 == 0) ? (x) : ((x) / 512 + 1) * 512)
-
-#define SECURITY_PROTOCOL_TCG      0x02
-#define SECURITY_PROTOCOL_IEEE1667 0xEE
-
-//
-// ATA Supported Security Protocols List Description.
-// Refer to ATA8-ACS Spec 7.57.6.2 Table 69.
-//
-typedef struct  {
-  UINT8                            Reserved1[6];
-  UINT8                            SupportedSecurityListLength[2];
-  UINT8                            SupportedSecurityProtocol[1];
-} SUPPORTED_SECURITY_PROTOCOLS_PARAMETER_DATA;
 
 //
 // ATA bus data structure for ATA controller
@@ -430,7 +408,7 @@ AtaBusDriverBindingSupported (
   @retval EFI_SUCCESS              The device was started.
   @retval EFI_DEVICE_ERROR         The device could not be started due to a device error.Currently not implemented.
   @retval EFI_OUT_OF_RESOURCES     The request could not be completed due to a lack of resources.
-  @retval Others                   The driver failded to start the device.
+  @retval Others                   The driver failed to start the device.
 
 **/
 EFI_STATUS
@@ -636,7 +614,7 @@ AtaBlockIoReset (
   @retval EFI_SUCCESS           The data was read correctly from the device.
   @retval EFI_DEVICE_ERROR      The device reported an error while performing the read.
   @retval EFI_NO_MEDIA          There is no media in the device.
-  @retval EFI_MEDIA_CHANGED     The MediaId does not matched the current device.
+  @retval EFI_MEDIA_CHANGED     The MediaId does not match the current device.
   @retval EFI_BAD_BUFFER_SIZE   The Buffer was not a multiple of the block size of the device.
   @retval EFI_INVALID_PARAMETER The read request contains LBAs that are not valid,
                                 or the buffer is not on proper alignment.
@@ -667,7 +645,7 @@ AtaBlockIoReadBlocks (
   @retval EFI_WRITE_PROTECTED   The device can not be written to.
   @retval EFI_DEVICE_ERROR      The device reported an error while performing the write.
   @retval EFI_NO_MEDIA          There is no media in the device.
-  @retval EFI_MEDIA_CHNAGED     The MediaId does not matched the current device.
+  @retval EFI_MEDIA_CHANGED     The MediaId does not match the current device.
   @retval EFI_BAD_BUFFER_SIZE   The Buffer was not a multiple of the block size of the device.
   @retval EFI_INVALID_PARAMETER The write request contains LBAs that are not valid,
                                 or the buffer is not on proper alignment.
@@ -701,7 +679,7 @@ AtaBlockIoFlushBlocks (
   );
 
 /**
-  Reset the Block Device throught Block I/O2 protocol.
+  Reset the Block Device through Block I/O2 protocol.
 
   @param[in]  This                 Indicates a pointer to the calling context.
   @param[in]  ExtendedVerification Driver may perform diagnostics on reset.
@@ -771,7 +749,7 @@ AtaBlockIoReadBlocksEx (
   @retval EFI_WRITE_PROTECTED   The device can not be written to.
   @retval EFI_DEVICE_ERROR      The device reported an error while performing the write.
   @retval EFI_NO_MEDIA          There is no media in the device.
-  @retval EFI_MEDIA_CHNAGED     The MediaId does not matched the current device.
+  @retval EFI_MEDIA_CHANGED     The MediaId does not match the current device.
   @retval EFI_BAD_BUFFER_SIZE   The Buffer was not a multiple of the block size of the device.
   @retval EFI_INVALID_PARAMETER The write request contains LBAs that are not valid,
                                 or the buffer is not on proper alignment.
@@ -1083,7 +1061,7 @@ AtaStorageSecuritySendData (
   Typically, there are 2 mechanism for resetting eDrive. They are:
   1. TPer Reset through IEEE 1667 protocol.
   2. TPer Reset through native TCG protocol.
-  This routine will detect what protocol the attached eDrive comform to, TCG or
+  This routine will detect what protocol the attached eDrive conform to, TCG or
   IEEE 1667 protocol. Then send out TPer Reset command separately.
 
   @param[in] AtaDevice    ATA_DEVICE pointer.

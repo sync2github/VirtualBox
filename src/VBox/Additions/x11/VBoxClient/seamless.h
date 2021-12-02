@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: seamless.h 86871 2020-11-12 10:15:18Z vboxsync $ */
 /** @file
  * X11 Guest client - seamless mode, missing proper description while using the
  * potentially confusing word 'host'.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __Additions_client_seamless_host_h
-# define __Additions_client_seamless_host_h
+#ifndef GA_INCLUDED_SRC_x11_VBoxClient_seamless_h
+#define GA_INCLUDED_SRC_x11_VBoxClient_seamless_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/thread.h>
 
@@ -76,35 +79,21 @@ private:
 public:
     SeamlessMain(void);
     virtual ~SeamlessMain();
+#ifdef RT_NEED_NEW_AND_DELETE
+    RTMEM_IMPLEMENT_NEW_AND_DELETE();
+#endif
 
-    /**
-      * Initialise the service.
-      */
+    /** @copydoc VBCLSERVICE::pfnInit */
     int init(void);
 
-    /**
-      * Run the service.
-      * @returns iprt status value
-      */
-    int run(void);
+    /** @copydoc VBCLSERVICE::pfnWorker */
+    int worker(bool volatile *pfShutdown);
 
-    /**
-     * Stops the service.
-     */
-    void stop();
+    /** @copydoc VBCLSERVICE::pfnStop */
+    void stop(void);
 
-    /** Pause the service loop.  This must be safe to call on a different thread
-     * and potentially before @a run is or after it exits.
-     * This is called by the VT monitoring thread to allow the service to disable
-     * itself when the X server is switched out.  If the monitoring functionality
-     * is available then @a pause or @a resume will be called as soon as it starts
-     * up. */
-    int pause();
-    /** Resume after pausing.  The same applies here as for @a pause. */
-    int resume();
-
-    /** Run a few tests to be sure everything is working as intended. */
-    int selfTest();
+    /** @copydoc VBCLSERVICE::pfnTerm */
+    int term(void);
 };
 
-#endif /* __Additions_xclient_seamless_h not defined */
+#endif /* !GA_INCLUDED_SRC_x11_VBoxClient_seamless_h */

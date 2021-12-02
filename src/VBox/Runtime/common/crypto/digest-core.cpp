@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: digest-core.cpp 85614 2020-08-05 13:27:58Z vboxsync $ */
 /** @file
  * IPRT - Crypto - Cryptographic Hash / Message Digest API
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -87,6 +87,29 @@ typedef RTCRDIGESTINT *PRTCRDIGESTINT;
 
 
 
+/**
+ * Used for successful returns which wants to hit at digest security.
+ *
+ * @retval  VINF_SUCCESS
+ * @retval  VINF_CR_DIGEST_DEPRECATED
+ * @retval  VINF_CR_DIGEST_COMPROMISED
+ * @retval  VINF_CR_DIGEST_SEVERELY_COMPROMISED
+ * @param   pDesc               The digest descriptor.
+ */
+DECLINLINE(int) rtCrDigestSuccessWithDigestWarnings(PCRTCRDIGESTDESC pDesc)
+{
+    uint32_t const fFlags = pDesc->fFlags
+                          & (RTCRDIGESTDESC_F_DEPRECATED | RTCRDIGESTDESC_F_COMPROMISED | RTCRDIGESTDESC_F_SERVERELY_COMPROMISED);
+    if (!fFlags)
+        return VINF_SUCCESS;
+    if (fFlags & RTCRDIGESTDESC_F_SERVERELY_COMPROMISED)
+        return VINF_CR_DIGEST_SEVERELY_COMPROMISED;
+    if (fFlags & RTCRDIGESTDESC_F_COMPROMISED)
+        return VINF_CR_DIGEST_COMPROMISED;
+    return VINF_CR_DIGEST_DEPRECATED;
+}
+
+
 RTDECL(int) RTCrDigestCreate(PRTCRDIGEST phDigest, PCRTCRDIGESTDESC pDesc, void *pvOpaque)
 {
     AssertPtrReturn(phDigest, VERR_INVALID_POINTER);
@@ -96,7 +119,7 @@ RTDECL(int) RTCrDigestCreate(PRTCRDIGEST phDigest, PCRTCRDIGESTDESC pDesc, void 
     uint32_t const offHash = RT_ALIGN_32(pDesc->cbState, 8);
     AssertReturn(pDesc->pfnNew || offHash, VERR_INVALID_PARAMETER);
     AssertReturn(!pDesc->pfnNew || (pDesc->pfnFree && pDesc->pfnInit && pDesc->pfnClone), VERR_INVALID_PARAMETER);
-    PRTCRDIGESTINT pThis = (PRTCRDIGESTINT)RTMemAllocZ(RT_OFFSETOF(RTCRDIGESTINT, abState[offHash + pDesc->cbHash]));
+    PRTCRDIGESTINT pThis = (PRTCRDIGESTINT)RTMemAllocZ(RT_UOFFSETOF_DYN(RTCRDIGESTINT, abState[offHash + pDesc->cbHash]));
     if (pThis)
     {
         if (pDesc->pfnNew)
@@ -115,7 +138,7 @@ RTDECL(int) RTCrDigestCreate(PRTCRDIGEST phDigest, PCRTCRDIGESTDESC pDesc, void 
             if (RT_SUCCESS(rc))
             {
                 *phDigest = pThis;
-                return VINF_SUCCESS;
+                return rtCrDigestSuccessWithDigestWarnings(pDesc);
             }
             if (pDesc->pfnFree)
                 pDesc->pfnFree(pThis->pvState);
@@ -139,7 +162,7 @@ RTDECL(int) RTCrDigestClone(PRTCRDIGEST phDigest, RTCRDIGEST hSrc)
 
     int rc = VINF_SUCCESS;
     uint32_t const offHash = hSrc->offHash;
-    PRTCRDIGESTINT pThis = (PRTCRDIGESTINT)RTMemAllocZ(RT_OFFSETOF(RTCRDIGESTINT, abState[offHash + hSrc->pDesc->cbHash]));
+    PRTCRDIGESTINT pThis = (PRTCRDIGESTINT)RTMemAllocZ(RT_UOFFSETOF_DYN(RTCRDIGESTINT, abState[offHash + hSrc->pDesc->cbHash]));
     if (pThis)
     {
         if (hSrc->pDesc->pfnNew)
@@ -165,7 +188,7 @@ RTDECL(int) RTCrDigestClone(PRTCRDIGEST phDigest, RTCRDIGEST hSrc)
             if (RT_SUCCESS(rc))
             {
                 *phDigest = pThis;
-                return VINF_SUCCESS;
+                return rtCrDigestSuccessWithDigestWarnings(pThis->pDesc);
             }
             if (hSrc->pDesc->pfnFree)
                 hSrc->pDesc->pfnFree(pThis->pvState);
@@ -299,7 +322,7 @@ RTDECL(int) RTCrDigestFinal(RTCRDIGEST hDigest, void *pvHash, size_t cbHash)
         }
     }
 
-    return VINF_SUCCESS;
+    return rtCrDigestSuccessWithDigestWarnings(pThis->pDesc);
 }
 
 
@@ -381,6 +404,15 @@ RTDECL(const char *) RTCrDigestGetAlgorithmOid(RTCRDIGEST hDigest)
 }
 
 
+RTDECL(uint32_t) RTCrDigestGetFlags(RTCRDIGEST hDigest)
+{
+    PRTCRDIGESTINT pThis = hDigest;
+    AssertPtrReturn(pThis, UINT32_MAX);
+    AssertReturn(pThis->u32Magic == RTCRDIGESTINT_MAGIC, UINT32_MAX);
+    return pThis->pDesc->fFlags;
+}
+
+
 RTDECL(const char *) RTCrDigestTypeToAlgorithmOid(RTDIGESTTYPE enmDigestType)
 {
     switch (enmDigestType)
@@ -393,6 +425,12 @@ RTDECL(const char *) RTCrDigestTypeToAlgorithmOid(RTDIGESTTYPE enmDigestType)
         case RTDIGESTTYPE_SHA256:       return RTCRX509ALGORITHMIDENTIFIERID_SHA256;
         case RTDIGESTTYPE_SHA384:       return RTCRX509ALGORITHMIDENTIFIERID_SHA384;
         case RTDIGESTTYPE_SHA512:       return RTCRX509ALGORITHMIDENTIFIERID_SHA512;
+        case RTDIGESTTYPE_SHA512T224:   return RTCRX509ALGORITHMIDENTIFIERID_SHA512T224;
+        case RTDIGESTTYPE_SHA512T256:   return RTCRX509ALGORITHMIDENTIFIERID_SHA512T256;
+        case RTDIGESTTYPE_SHA3_224:     return RTCRX509ALGORITHMIDENTIFIERID_SHA3_224;
+        case RTDIGESTTYPE_SHA3_256:     return RTCRX509ALGORITHMIDENTIFIERID_SHA3_256;
+        case RTDIGESTTYPE_SHA3_384:     return RTCRX509ALGORITHMIDENTIFIERID_SHA3_384;
+        case RTDIGESTTYPE_SHA3_512:     return RTCRX509ALGORITHMIDENTIFIERID_SHA3_512;
         default:                        return NULL;
     }
 }
@@ -414,6 +452,10 @@ RTDECL(const char *) RTCrDigestTypeToName(RTDIGESTTYPE enmDigestType)
         case RTDIGESTTYPE_SHA512:       return "SHA-512";
         case RTDIGESTTYPE_SHA512T224:   return "SHA-512/224";
         case RTDIGESTTYPE_SHA512T256:   return "SHA-512/256";
+        case RTDIGESTTYPE_SHA3_224:     return "SHA3-224";
+        case RTDIGESTTYPE_SHA3_256:     return "SHA3-256";
+        case RTDIGESTTYPE_SHA3_384:     return "SHA3-384";
+        case RTDIGESTTYPE_SHA3_512:     return "SHA3-512";
         default:                        return NULL;
     }
 }
@@ -435,6 +477,10 @@ RTDECL(uint32_t) RTCrDigestTypeToHashSize(RTDIGESTTYPE enmDigestType)
         case RTDIGESTTYPE_SHA512:       return 512 / 8;
         case RTDIGESTTYPE_SHA512T224:   return 224 / 8;
         case RTDIGESTTYPE_SHA512T256:   return 256 / 8;
+        case RTDIGESTTYPE_SHA3_224:     return 224 / 8;
+        case RTDIGESTTYPE_SHA3_256:     return 256 / 8;
+        case RTDIGESTTYPE_SHA3_384:     return 384 / 8;
+        case RTDIGESTTYPE_SHA3_512:     return 512 / 8;
         default:
             AssertFailed();
             return 0;

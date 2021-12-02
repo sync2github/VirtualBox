@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: sysfs.h 86579 2020-10-14 20:53:56Z vboxsync $ */
 /** @file
  * IPRT - Linux sysfs access.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_linux_sysfs_h
-#define ___iprt_linux_sysfs_h
+#ifndef IPRT_INCLUDED_linux_sysfs_h
+#define IPRT_INCLUDED_linux_sysfs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -442,9 +445,33 @@ RTDECL(int) RTLinuxCheckDevicePathV(dev_t DevNum, RTFMODE fMode, char *pszBuf, s
 RTDECL(int) RTLinuxCheckDevicePath(dev_t DevNum, RTFMODE fMode, char *pszBuf, size_t cchBuf,
                                    const char *pszPattern, ...) RT_IPRT_FORMAT_ATTR(5, 6);
 
+/**
+ * Constructs the path of a sysfs file from the format parameters passed,
+ * prepending "/sys/" if the path is relative.
+ *
+ * @returns IPRT status code.
+ * @param   pszPath    Where to write the path.
+ * @param   cbPath     The size of the buffer pointed to by @a pszPath.
+ * @param   pszFormat  The name format, either absolute or relative to "/sys/".
+ * @param   va         The format args.
+ */
+RTDECL(int) RTLinuxConstructPathV(char *pszPath, size_t cbPath, const char *pszFormat, va_list va) RT_IPRT_FORMAT_ATTR(3, 0);
+
+/**
+ * Constructs the path of a sysfs file from the format parameters passed,
+ * prepending "/sys/" if the path is relative.
+ *
+ * @returns IPRT status code.
+ * @param   pszPath    Where to write the path.
+ * @param   cbPath     The size of the buffer pointed to by @a pszPath.
+ * @param   pszFormat  The name format, either absolute or relative to "/sys/".
+ * @param   ...        The format args.
+ */
+RTDECL(int) RTLinuxConstructPath(char *pszPath, size_t cbPath, const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(3, 4);
+
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_linux_sysfs_h */
 

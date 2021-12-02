@@ -1,9 +1,10 @@
-; $Id$
+; $Id: IEMAllAImpl.asm 89974 2021-06-30 11:02:04Z vboxsync $
 ;; @file
 ; IEM - Instruction Implementation in Assembly.
 ;
 
-; Copyright (C) 2011-2016 Oracle Corporation
+;
+; Copyright (C) 2011-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -579,38 +580,78 @@ ENDPROC iemAImpl_imul_two_u64
 ; then the pointer to the register.  They all return void.
 ;
 BEGINCODE
-BEGINPROC_FASTCALL iemAImpl_xchg_u8, 8
+BEGINPROC_FASTCALL iemAImpl_xchg_u8_locked, 8
         PROLOGUE_2_ARGS
         mov     T0_8, [A1]
         xchg    [A0], T0_8
         mov     [A1], T0_8
         EPILOGUE_2_ARGS
-ENDPROC iemAImpl_xchg_u8
+ENDPROC iemAImpl_xchg_u8_locked
 
-BEGINPROC_FASTCALL iemAImpl_xchg_u16, 8
+BEGINPROC_FASTCALL iemAImpl_xchg_u16_locked, 8
         PROLOGUE_2_ARGS
         mov     T0_16, [A1]
         xchg    [A0], T0_16
         mov     [A1], T0_16
         EPILOGUE_2_ARGS
-ENDPROC iemAImpl_xchg_u16
+ENDPROC iemAImpl_xchg_u16_locked
 
-BEGINPROC_FASTCALL iemAImpl_xchg_u32, 8
+BEGINPROC_FASTCALL iemAImpl_xchg_u32_locked, 8
         PROLOGUE_2_ARGS
         mov     T0_32, [A1]
         xchg    [A0], T0_32
         mov     [A1], T0_32
         EPILOGUE_2_ARGS
-ENDPROC iemAImpl_xchg_u32
+ENDPROC iemAImpl_xchg_u32_locked
 
 %ifdef RT_ARCH_AMD64
-BEGINPROC_FASTCALL iemAImpl_xchg_u64, 8
+BEGINPROC_FASTCALL iemAImpl_xchg_u64_locked, 8
         PROLOGUE_2_ARGS
         mov     T0, [A1]
         xchg    [A0], T0
         mov     [A1], T0
         EPILOGUE_2_ARGS
-ENDPROC iemAImpl_xchg_u64
+ENDPROC iemAImpl_xchg_u64_locked
+%endif
+
+; Unlocked variants for fDisregardLock mode.
+
+BEGINPROC_FASTCALL iemAImpl_xchg_u8_unlocked, 8
+        PROLOGUE_2_ARGS
+        mov     T0_8, [A1]
+        mov     T1_8, [A0]
+        mov     [A0], T0_8
+        mov     [A1], T1_8
+        EPILOGUE_2_ARGS
+ENDPROC iemAImpl_xchg_u8_unlocked
+
+BEGINPROC_FASTCALL iemAImpl_xchg_u16_unlocked, 8
+        PROLOGUE_2_ARGS
+        mov     T0_16, [A1]
+        mov     T1_16, [A0]
+        mov     [A0], T0_16
+        mov     [A1], T1_16
+        EPILOGUE_2_ARGS
+ENDPROC iemAImpl_xchg_u16_unlocked
+
+BEGINPROC_FASTCALL iemAImpl_xchg_u32_unlocked, 8
+        PROLOGUE_2_ARGS
+        mov     T0_32, [A1]
+        mov     T1_32, [A0]
+        mov     [A0], T0_32
+        mov     [A1], T1_32
+        EPILOGUE_2_ARGS
+ENDPROC iemAImpl_xchg_u32_unlocked
+
+%ifdef RT_ARCH_AMD64
+BEGINPROC_FASTCALL iemAImpl_xchg_u64_unlocked, 8
+        PROLOGUE_2_ARGS
+        mov     T0, [A1]
+        mov     T1, [A0]
+        mov     [A0], T0
+        mov     [A1], T1
+        EPILOGUE_2_ARGS
+ENDPROC iemAImpl_xchg_u64_unlocked
 %endif
 
 
@@ -719,6 +760,8 @@ ENDPROC iemAImpl_xadd_u64_locked
 ; IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg8b,(uint64_t *pu64Dst, PRTUINT64U pu64EaxEdx, PRTUINT64U pu64EbxEcx,
 ;                                             uint32_t *pEFlags));
 ;
+; Note! Identical to iemAImpl_cmpxchg16b.
+;
 BEGINCODE
 BEGINPROC_FASTCALL iemAImpl_cmpxchg8b, 16
 %ifdef RT_ARCH_AMD64
@@ -800,6 +843,74 @@ BEGINPROC_FASTCALL iemAImpl_cmpxchg8b_locked, 16
         jmp     NAME_FASTCALL(iemAImpl_cmpxchg8b,16,$@)
 ENDPROC iemAImpl_cmpxchg8b_locked
 
+%ifdef RT_ARCH_AMD64
+
+;
+; CMPXCHG16B.
+;
+; These are tricky register wise, so the code is duplicated for each calling
+; convention.
+;
+; WARNING! This code make ASSUMPTIONS about which registers T1 and T0 are mapped to!
+;
+; C-proto:
+; IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg16b,(PRTUINT128U pu128Dst, PRTUINT128U pu1284RaxRdx, PRTUINT128U pu128RbxRcx,
+;                                              uint32_t *pEFlags));
+;
+; Note! Identical to iemAImpl_cmpxchg8b.
+;
+BEGINCODE
+BEGINPROC_FASTCALL iemAImpl_cmpxchg16b, 16
+ %ifdef ASM_CALL64_MSC
+        push    rbx
+
+        mov     r11, rdx                ; pu64RaxRdx (is also T1)
+        mov     r10, rcx                ; pu64Dst
+
+        mov     rbx, [r8]
+        mov     rcx, [r8 + 8]
+        IEM_MAYBE_LOAD_FLAGS r9, (X86_EFL_ZF), 0 ; clobbers T0 (eax)
+        mov     rax, [r11]
+        mov     rdx, [r11 + 8]
+
+        lock cmpxchg16b [r10]
+
+        mov     [r11], rax
+        mov     [r11 + 8], rdx
+        IEM_SAVE_FLAGS       r9, (X86_EFL_ZF), 0 ; clobbers T0+T1 (eax, r11)
+
+        pop     rbx
+        ret
+ %else
+        push    rbx
+
+        mov     r10, rcx                ; pEFlags
+        mov     r11, rdx                ; pu64RbxRcx (is also T1)
+
+        mov     rbx, [r11]
+        mov     rcx, [r11 + 8]
+        IEM_MAYBE_LOAD_FLAGS r10, (X86_EFL_ZF), 0 ; clobbers T0 (eax)
+        mov     rax, [rsi]
+        mov     rdx, [rsi + 8]
+
+        lock cmpxchg16b [rdi]
+
+        mov     [rsi], eax
+        mov     [rsi + 8], edx
+        IEM_SAVE_FLAGS       r10, (X86_EFL_ZF), 0 ; clobbers T0+T1 (eax, r11)
+
+        pop     rbx
+        ret
+
+ %endif
+ENDPROC iemAImpl_cmpxchg16b
+
+BEGINPROC_FASTCALL iemAImpl_cmpxchg16b_locked, 16
+        ; Lazy bird always lock prefixes cmpxchg8b.
+        jmp     NAME_FASTCALL(iemAImpl_cmpxchg16b,16,$@)
+ENDPROC iemAImpl_cmpxchg16b_locked
+
+%endif ; RT_ARCH_AMD64
 
 
 ;
@@ -1278,7 +1389,7 @@ BEGINCODE
 ;;
 ; Worker function for negating a 32-bit number in T1:T0
 ; @uses None (T0,T1)
-iemAImpl_negate_T0_T1_u32:
+BEGINPROC   iemAImpl_negate_T0_T1_u32
         push    0
         push    0
         xchg    T0_32, [xSP]
@@ -1287,12 +1398,13 @@ iemAImpl_negate_T0_T1_u32:
         sbb     T1_32, [xSP + xCB]
         add     xSP, xCB*2
         ret
+ENDPROC     iemAImpl_negate_T0_T1_u32
 
 %ifdef RT_ARCH_AMD64
 ;;
 ; Worker function for negating a 64-bit number in T1:T0
 ; @uses None (T0,T1)
-iemAImpl_negate_T0_T1_u64:
+BEGINPROC   iemAImpl_negate_T0_T1_u64
         push    0
         push    0
         xchg    T0, [xSP]
@@ -1301,6 +1413,7 @@ iemAImpl_negate_T0_T1_u64:
         sbb     T1, [xSP + xCB]
         add     xSP, xCB*2
         ret
+ENDPROC     iemAImpl_negate_T0_T1_u64
 %endif
 
 
@@ -1481,7 +1594,7 @@ BEGINPROC_FASTCALL iemAImpl_ %+ %1 %+ _u32, 16
         js      .divisor_negative
         test    T1_32, T1_32
         jns     .both_positive
-        call    iemAImpl_negate_T0_T1_u32
+        call    NAME(iemAImpl_negate_T0_T1_u32)
 .one_of_each:                           ; OK range is 2^(result-with - 1) + (divisor - 1).
         push    T0                      ; Start off like unsigned below.
         shl     T1_32, 1
@@ -1500,7 +1613,7 @@ BEGINPROC_FASTCALL iemAImpl_ %+ %1 %+ _u32, 16
         neg     A2_32
         test    T1_32, T1_32
         jns     .one_of_each
-        call    iemAImpl_negate_T0_T1_u32
+        call    NAME(iemAImpl_negate_T0_T1_u32)
 .both_positive:                         ; Same as unsigned shifted by sign indicator bit.
         shl     T1_32, 1
         shr     T0_32, 31
@@ -1560,7 +1673,7 @@ BEGINPROC_FASTCALL iemAImpl_ %+ %1 %+ _u64, 20
         js      .divisor_negative
         test    T1, T1
         jns     .both_positive
-        call    iemAImpl_negate_T0_T1_u64
+        call    NAME(iemAImpl_negate_T0_T1_u64)
 .one_of_each:                           ; OK range is 2^(result-with - 1) + (divisor - 1).
         push    T0                      ; Start off like unsigned below.
         shl     T1, 1
@@ -1580,7 +1693,7 @@ BEGINPROC_FASTCALL iemAImpl_ %+ %1 %+ _u64, 20
         neg     A2
         test    T1, T1
         jns     .one_of_each
-        call    iemAImpl_negate_T0_T1_u64
+        call    NAME(iemAImpl_negate_T0_T1_u64)
 .both_positive:                         ; Same as unsigned shifted by sign indicator bit.
         shl     T1, 1
         shr     T0, 63
@@ -2482,6 +2595,7 @@ ENDPROC iemAImpl_ %+ %1 %+ _r80_by_r80
 %endmacro
 
 IEMIMPL_FPU_R80_BY_R80_ST1_ST0_POP fpatan
+IEMIMPL_FPU_R80_BY_R80_ST1_ST0_POP fyl2x
 IEMIMPL_FPU_R80_BY_R80_ST1_ST0_POP fyl2xp1
 
 
@@ -2588,7 +2702,6 @@ ENDPROC iemAImpl_ %+ %1 %+ _r80
 IEMIMPL_FPU_R80 fchs
 IEMIMPL_FPU_R80 fabs
 IEMIMPL_FPU_R80 f2xm1
-IEMIMPL_FPU_R80 fyl2x
 IEMIMPL_FPU_R80 fsqrt
 IEMIMPL_FPU_R80 frndint
 IEMIMPL_FPU_R80 fsin

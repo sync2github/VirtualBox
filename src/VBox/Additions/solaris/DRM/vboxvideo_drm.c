@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vboxvideo_drm.c 88189 2021-03-18 11:07:36Z vboxsync $ */
 /** @file
  * vboxvideo_drm - Direct Rendering Module, Solaris Specific Code.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -126,9 +126,6 @@ static drm_driver_t	g_VBoxVideoSolarisDRMDriver = { 0 };
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
-/** Device handle (we support only one instance). */
-static dev_info_t *g_pDip;
-
 /** Soft state. */
 static void *g_pVBoxVideoSolarisState;
 

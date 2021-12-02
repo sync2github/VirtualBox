@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bootsector2-boot-registers-1.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; Bootsector that prints the register status at boot.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -73,5 +73,4 @@ main:
 ;
 BS2_PAD_IMAGE
 the_end:
-
 

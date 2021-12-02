@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMNetShaper.cpp 90348 2021-07-26 21:01:38Z vboxsync $ */
 /** @file
  * PDM Network Shaper - Limit network traffic according to bandwidth group settings.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,9 +23,6 @@
 #include "PDMInternal.h"
 #include <VBox/vmm/pdm.h>
 #include <VBox/vmm/mm.h>
-#ifdef VBOX_WITH_REM
-# include <VBox/vmm/rem.h>
-#endif
 #include <VBox/vmm/vm.h>
 #include <VBox/vmm/uvm.h>
 #include <VBox/err.h>
@@ -155,14 +152,14 @@ static int pdmNsBwGroupCreate(PPDMNETSHAPER pShaper, const char *pszBwGroup, uin
     PPDMNSBWGROUP pBwGroup = pdmNsBwGroupFindById(pShaper, pszBwGroup);
     if (!pBwGroup)
     {
-        rc = MMHyperAlloc(pShaper->pVM, sizeof(PDMNSBWGROUP), 64,
-                          MM_TAG_PDM_NET_SHAPER, (void **)&pBwGroup);
+        PVM const pVM = pShaper->pVM;
+        rc = MMHyperAlloc(pVM, sizeof(PDMNSBWGROUP), 64, MM_TAG_PDM_NET_SHAPER, (void **)&pBwGroup);
         if (RT_SUCCESS(rc))
         {
-            rc = PDMR3CritSectInit(pShaper->pVM, &pBwGroup->Lock, RT_SRC_POS, "BWGRP-%s", pszBwGroup);
+            rc = PDMR3CritSectInit(pVM, &pBwGroup->Lock, RT_SRC_POS, "BWGRP-%s", pszBwGroup);
             if (RT_SUCCESS(rc))
             {
-                pBwGroup->pszNameR3 = MMR3HeapStrDup(pShaper->pVM, MM_TAG_PDM_NET_SHAPER, pszBwGroup);
+                pBwGroup->pszNameR3 = MMR3HeapStrDup(pVM, MM_TAG_PDM_NET_SHAPER, pszBwGroup);
                 if (pBwGroup->pszNameR3)
                 {
                     pBwGroup->pShaperR3             = pShaper;
@@ -178,9 +175,9 @@ static int pdmNsBwGroupCreate(PPDMNETSHAPER pShaper, const char *pszBwGroup, uin
                     pdmNsBwGroupLink(pBwGroup);
                     return VINF_SUCCESS;
                 }
-                PDMR3CritSectDelete(&pBwGroup->Lock);
+                PDMR3CritSectDelete(pVM, &pBwGroup->Lock);
             }
-            MMHyperFree(pShaper->pVM, pBwGroup);
+            MMHyperFree(pVM, pBwGroup);
         }
         else
             rc = VERR_NO_MEMORY;
@@ -193,11 +190,11 @@ static int pdmNsBwGroupCreate(PPDMNETSHAPER pShaper, const char *pszBwGroup, uin
 }
 
 
-static void pdmNsBwGroupTerminate(PPDMNSBWGROUP pBwGroup)
+static void pdmNsBwGroupTerminate(PVM pVM, PPDMNSBWGROUP pBwGroup)
 {
     Assert(pBwGroup->cRefs == 0);
     if (PDMCritSectIsInitialized(&pBwGroup->Lock))
-        PDMR3CritSectDelete(&pBwGroup->Lock);
+        PDMR3CritSectDelete(pVM, &pBwGroup->Lock);
 }
 
 
@@ -251,12 +248,13 @@ static void pdmNsBwGroupXmitPending(PPDMNSBWGROUP pBwGroup)
 static void pdmNsFilterLink(PPDMNSFILTER pFilter)
 {
     PPDMNSBWGROUP pBwGroup = pFilter->pBwGroupR3;
-    int rc = PDMCritSectEnter(&pBwGroup->Lock, VERR_SEM_BUSY); AssertRC(rc);
+    PVM const     pVM      = pBwGroup->pShaperR3->pVM;
+    int rc = PDMCritSectEnter(pVM, &pBwGroup->Lock, VERR_SEM_BUSY); AssertRC(rc);
 
     pFilter->pNextR3 = pBwGroup->pFiltersHeadR3;
     pBwGroup->pFiltersHeadR3 = pFilter;
 
-    rc = PDMCritSectLeave(&pBwGroup->Lock); AssertRC(rc);
+    rc = PDMCritSectLeave(pVM, &pBwGroup->Lock); AssertRC(rc);
 }
 
 
@@ -271,7 +269,8 @@ static void pdmNsFilterUnlink(PPDMNSFILTER pFilter)
     AssertPtr(pBwGroup);
     AssertPtr(pBwGroup->pShaperR3);
     Assert(RTCritSectIsOwner(&pBwGroup->pShaperR3->Lock));
-    int rc = PDMCritSectEnter(&pBwGroup->Lock, VERR_SEM_BUSY); AssertRC(rc);
+    PVM const pVM = pBwGroup->pShaperR3->pVM;
+    int rc = PDMCritSectEnter(pVM, &pBwGroup->Lock, VERR_SEM_BUSY); AssertRC(rc);
 
     if (pFilter == pBwGroup->pFiltersHeadR3)
         pBwGroup->pFiltersHeadR3 = pFilter->pNextR3;
@@ -286,7 +285,7 @@ static void pdmNsFilterUnlink(PPDMNSFILTER pFilter)
         pPrev->pNextR3 = pFilter->pNextR3;
     }
 
-    rc = PDMCritSectLeave(&pBwGroup->Lock); AssertRC(rc);
+    rc = PDMCritSectLeave(pVM, &pBwGroup->Lock); AssertRC(rc);
 }
 
 
@@ -385,7 +384,7 @@ VMMR3DECL(int) PDMR3NsBwGroupSetLimit(PUVM pUVM, const char *pszBwGroup, uint64_
     PPDMNSBWGROUP pBwGroup = pdmNsBwGroupFindById(pShaper, pszBwGroup);
     if (pBwGroup)
     {
-        rc = PDMCritSectEnter(&pBwGroup->Lock, VERR_SEM_BUSY); AssertRC(rc);
+        rc = PDMCritSectEnter(pUVM->pVM, &pBwGroup->Lock, VERR_SEM_BUSY); AssertRC(rc);
         if (RT_SUCCESS(rc))
         {
             pdmNsBwGroupSetLimit(pBwGroup, cbPerSecMax);
@@ -394,7 +393,7 @@ VMMR3DECL(int) PDMR3NsBwGroupSetLimit(PUVM pUVM, const char *pszBwGroup, uint64_
             if (pBwGroup->cbTokensLast > pBwGroup->cbBucket)
                 pBwGroup->cbTokensLast = pBwGroup->cbBucket;
 
-            int rc2 = PDMCritSectLeave(&pBwGroup->Lock); AssertRC(rc2);
+            int rc2 = PDMCritSectLeave(pUVM->pVM, &pBwGroup->Lock); AssertRC(rc2);
         }
     }
     else
@@ -469,12 +468,14 @@ int pdmR3NetShaperTerm(PVM pVM)
     {
         PPDMNSBWGROUP pFree = pBwGroup;
         pBwGroup = pBwGroup->pNextR3;
-        pdmNsBwGroupTerminate(pFree);
+        pdmNsBwGroupTerminate(pVM, pFree);
         MMR3HeapFree(pFree->pszNameR3);
         MMHyperFree(pVM, pFree);
     }
 
     RTCritSectDelete(&pShaper->Lock);
+    MMR3HeapFree(pShaper);
+    pUVM->pdm.s.pNetShaper = NULL;
     return VINF_SUCCESS;
 }
 

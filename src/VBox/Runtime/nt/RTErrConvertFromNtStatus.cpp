@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTErrConvertFromNtStatus.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Convert NT status codes to iprt status codes.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,10 @@
 typedef long NTSTATUS;                  /** @todo figure out which headers to include to get this one typedef... */
 
 #include <iprt/err.h>
+#ifdef VBOX
+# include <VBox/err.h>
+#endif
+#include <iprt/log.h>
 #include <iprt/assert.h>
 
 
@@ -45,6 +49,7 @@ RTDECL(int)  RTErrConvertFromNtStatus(long lNativeCode)
         case STATUS_ALERTED:                return VERR_INTERRUPTED;
         case STATUS_USER_APC:               return VERR_INTERRUPTED;
 
+        case STATUS_INVALID_INFO_CLASS:     return VERR_INVALID_FUNCTION;
         case STATUS_DATATYPE_MISALIGNMENT:  return VERR_INVALID_POINTER;
         case STATUS_NO_MORE_FILES:          return VERR_NO_MORE_FILES;
         case STATUS_NO_MORE_ENTRIES:        return VERR_NO_MORE_FILES;
@@ -76,13 +81,30 @@ RTDECL(int)  RTErrConvertFromNtStatus(long lNativeCode)
         case STATUS_OBJECT_PATH_SYNTAX_BAD: return VERR_INVALID_NAME;
         case STATUS_BAD_NETWORK_PATH:       return VERR_NET_PATH_NOT_FOUND;
         case STATUS_NOT_A_DIRECTORY:        return VERR_NOT_A_DIRECTORY;
+        case STATUS_DIRECTORY_NOT_EMPTY:    return VERR_DIR_NOT_EMPTY;
+        case STATUS_SHARING_VIOLATION:      return VERR_SHARING_VIOLATION;
+        case STATUS_NO_MEDIA_IN_DEVICE:     return VERR_DRIVE_IS_EMPTY;
+        case STATUS_ACCESS_VIOLATION:       return VERR_INVALID_POINTER;
+        case STATUS_FILE_IS_A_DIRECTORY:    return VERR_IS_A_DIRECTORY;
 
+        case STATUS_REPARSE_POINT_NOT_RESOLVED:
+                                            return VERR_TOO_MANY_SYMLINKS;
         case STATUS_UNEXPECTED_NETWORK_ERROR:
                                             return VERR_NET_IO_ERROR;
+        case STATUS_INVALID_IMAGE_HASH:     return VERR_LDR_IMAGE_HASH;
+        case STATUS_LOGON_FAILURE:          return VERR_AUTHENTICATION_FAILURE;
+#ifdef VBOX
+        case STATUS_TRUST_FAILURE:          return VERR_SUPLIB_NT_PROCESS_UNTRUSTED_5;
+#endif
     }
 
     /* unknown error. */
+#ifndef IN_SUP_HARDENED_R3
+    AssertLogRelMsgFailed(("Unhandled error %#lx (%lu)\n", lNativeCode, lNativeCode));
+#else
+    /* hardened main has no LogRel */
     AssertMsgFailed(("Unhandled error %#lx (%lu)\n", lNativeCode, lNativeCode));
+#endif
     return VERR_UNRESOLVED_ERROR;
 }
 

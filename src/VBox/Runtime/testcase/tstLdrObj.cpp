@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: tstLdrObj.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTLdr test object.
  *
@@ -9,7 +9,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -56,8 +56,6 @@ extern "C" DECLIMPORT(int) SomeImportFunction(void);
 
 extern "C" DECLEXPORT(int) Entrypoint(void)
 {
-    g_VM.fRecompileSupervisor = false;
-    g_VM.fRecompileUser       = false;
     g_VM.fGlobalForcedActions = 0;
     strcpy(achBss, szStr2);
     memcpy(achBss, szStr1, sizeof(szStr1));

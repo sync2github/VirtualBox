@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDispVBVA.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox XPDM Display driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,7 +17,8 @@
 
 #include "VBoxDisp.h"
 #include "VBoxDispMini.h"
-#include <VBox/HGSMI/HGSMIChSetup.h>
+#include <HGSMI.h>
+#include <HGSMIChSetup.h>
 
 #ifdef VBOX_VBVA_ADJUST_RECT
 static ULONG vbvaConvertPixel(BYTE *pu8PixelFrom, int cbPixelFrom, int cbPixelTo)
@@ -480,7 +481,7 @@ int VBoxDispVBVAInit(PVBOXDISPDEV pDev)
     return VINF_SUCCESS;
 }
 
-void VBoxDispVBVAHostCommandComplete(PVBOXDISPDEV pDev, VBVAHOSTCMD *pCmd)
+void VBoxDispVBVAHostCommandComplete(PVBOXDISPDEV pDev, VBVAHOSTCMD RT_UNTRUSTED_VOLATILE_HOST *pCmd)
 {
     pDev->hgsmi.mp.pfnCompletionHandler(pDev->hgsmi.mp.hContext, pCmd);
 }

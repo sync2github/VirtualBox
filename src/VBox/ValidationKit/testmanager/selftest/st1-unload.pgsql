@@ -1,10 +1,10 @@
--- $Id$
+-- $Id: st1-unload.pgsql 82968 2020-02-04 10:35:17Z vboxsync $
 --- @file
 -- VBox Test Manager - Self Test #1 Database Unload File.
 --
 
 --
--- Copyright (C) 2012-2015 Oracle Corporation
+-- Copyright (C) 2012-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;
@@ -38,28 +38,28 @@ DELETE FROM SchedGroupMembers   WHERE uidAuthor = 1112223331;
 UPDATE TestBoxes SET idSchedGroup = 1 WHERE idSchedGroup IN ( SELECT idSchedGroup FROM SchedGroups WHERE uidAuthor = 1112223331 );
 DELETE FROM SchedGroups         WHERE uidAuthor = 1112223331 OR sName = 'st1-group';
 
-UPDATE TestSets SET idTestResult = NULL 
+UPDATE TestSets SET idTestResult = NULL
     WHERE idTestCase IN ( SELECT idTestCase FROM TestCases WHERE uidAuthor = 1112223331 );
 
 DELETE FROM TestResultValues
-    WHERE idTestResult IN ( SELECT idTestResult FROM TestResults 
-                            WHERE idTestSet IN (  SELECT idTestSet  FROM TestSets  
-                                                  WHERE idTestCase IN ( SELECT idTestCase FROM TestCases 
+    WHERE idTestResult IN ( SELECT idTestResult FROM TestResults
+                            WHERE idTestSet IN (  SELECT idTestSet  FROM TestSets
+                                                  WHERE idTestCase IN ( SELECT idTestCase FROM TestCases
                                                                         WHERE uidAuthor = 1112223331 ) ) );
 DELETE FROM TestResultFiles
-    WHERE idTestResult IN ( SELECT idTestResult FROM TestResults 
-                            WHERE idTestSet IN (  SELECT idTestSet  FROM TestSets  
-                                                  WHERE idTestCase IN ( SELECT idTestCase FROM TestCases 
+    WHERE idTestResult IN ( SELECT idTestResult FROM TestResults
+                            WHERE idTestSet IN (  SELECT idTestSet  FROM TestSets
+                                                  WHERE idTestCase IN ( SELECT idTestCase FROM TestCases
                                                                         WHERE uidAuthor = 1112223331 ) ) );
 DELETE FROM TestResultMsgs
-    WHERE idTestResult IN ( SELECT idTestResult FROM TestResults 
-                            WHERE idTestSet IN (  SELECT idTestSet  FROM TestSets  
-                                                  WHERE idTestCase IN ( SELECT idTestCase FROM TestCases 
+    WHERE idTestResult IN ( SELECT idTestResult FROM TestResults
+                            WHERE idTestSet IN (  SELECT idTestSet  FROM TestSets
+                                                  WHERE idTestCase IN ( SELECT idTestCase FROM TestCases
                                                                         WHERE uidAuthor = 1112223331 ) ) );
-DELETE FROM TestResults         
-    WHERE idTestSet IN (  SELECT idTestSet  FROM TestSets  
+DELETE FROM TestResults
+    WHERE idTestSet IN (  SELECT idTestSet  FROM TestSets
                           WHERE idTestCase IN ( SELECT idTestCase FROM TestCases WHERE uidAuthor = 1112223331 ) );
-DELETE FROM TestSets            
+DELETE FROM TestSets
     WHERE idTestCase IN ( SELECT idTestCase FROM TestCases WHERE uidAuthor = 1112223331 );
 
 DELETE FROM TestCases           WHERE uidAuthor = 1112223331;

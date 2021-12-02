@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: testboxcommons.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 TestBox Script - Common Functions and Classes.
@@ -10,7 +10,7 @@ the files in this (testbox) directory.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard python imports.
@@ -47,7 +47,7 @@ class TestBoxException(Exception):
     """
     Custom exception class
     """
-    pass
+    pass;                               # pylint: disable=unnecessary-pass
 
 #
 # Logging.
@@ -66,7 +66,7 @@ def log2(sMessage, sCaller = None, sTsPrf = None):
     """
     Debug logging, will later be disabled by default.
     """
-    if True is True:
+    if True is True:                    # pylint: disable=comparison-with-itself
         if sTsPrf is None: sTsPrf = utils.getTimePrefix();
         print('[%s] %s' % (sTsPrf, sMessage,));
         sys.stdout.flush()
@@ -106,7 +106,7 @@ def _logXcptWorker(fnLogger, sPrefix = '', sText = None, cFrames = 1, fnLogger1 
             except:
                 fnLogger1('internal-error: Hit exception #2! %s' % (traceback.format_exc()), sCaller, sTsPrf);
 
-            if len(asInfo) > 0:
+            if asInfo:
                 # Do the logging.
                 for sItem in asInfo:
                     asLines = sItem.splitlines();

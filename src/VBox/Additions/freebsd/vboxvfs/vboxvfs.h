@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vboxvfs.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Description.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBOXVFS_H___
-#define ___VBOXVFS_H___
+#ifndef GA_INCLUDED_SRC_freebsd_vboxvfs_vboxvfs_h
+#define GA_INCLUDED_SRC_freebsd_vboxvfs_vboxvfs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #define VBOXVFS_VFSNAME "vboxvfs"
 #define VBOXVFS_VERSION 1
@@ -88,5 +91,5 @@ struct sf_reg_info {
 
 #endif  /* KERNEL */
 
-#endif /* !___VBOXVFS_H___ */
+#endif /* !GA_INCLUDED_SRC_freebsd_vboxvfs_vboxvfs_h */
 

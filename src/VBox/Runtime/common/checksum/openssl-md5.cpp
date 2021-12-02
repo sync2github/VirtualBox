@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: openssl-md5.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * IPRT - MD5 message digest functions, implemented using OpenSSL.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,9 @@
 *********************************************************************************************************************************/
 #include "internal/iprt.h"
 
+#include "internal/openssl-pre.h"
 #include <openssl/md5.h>
+#include "internal/openssl-post.h"
 
 #define RT_MD5_OPENSSL_PRIVATE_CONTEXT
 #include <iprt/md5.h>

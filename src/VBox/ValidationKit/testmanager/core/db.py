@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: db.py 83396 2020-03-24 20:08:41Z vboxsync $
 
 """
 Test Manager - Database Interface.
@@ -7,7 +7,7 @@ Test Manager - Database Interface.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,15 +26,15 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 83396 $"
 
 
 # Standard python imports.
 import datetime;
 import os;
 import sys;
-import psycopg2;
-import psycopg2.extensions;
+import psycopg2;                            # pylint: disable=import-error
+import psycopg2.extensions;                 # pylint: disable=import-error
 
 # Validation Kit imports.
 from common                             import utils, webutils;
@@ -44,6 +44,9 @@ from testmanager                        import config;
 if sys.version_info[0] < 3:
     psycopg2.extensions.register_type(psycopg2.extensions.UNICODE);
     psycopg2.extensions.register_type(psycopg2.extensions.UNICODEARRAY);
+else:
+    unicode = str;  # pylint: disable=redefined-builtin,invalid-name
+
 
 
 def isDbTimestampInfinity(tsValue):
@@ -62,7 +65,7 @@ def isDbTimestamp(oValue):
     if utils.isString(oValue):
         ## @todo detect strings as well.
         return False;
-    return getattr(oValue, 'pydatetime', None) != None;
+    return getattr(oValue, 'pydatetime', None) is not None;
 
 def dbTimestampToDatetime(oValue):
     """
@@ -71,7 +74,7 @@ def dbTimestampToDatetime(oValue):
     if isinstance(oValue, datetime.datetime):
         return oValue;
     if utils.isString(oValue):
-        raise Exception('TODO');
+        return utils.parseIsoTimestamp(oValue);
     return oValue.pydatetime();
 
 def dbTimestampToZuluDatetime(oValue):
@@ -100,12 +103,31 @@ def dbTimestampPythonNow():
     """
     return dbTimestampToZuluDatetime(datetime.datetime.utcnow());
 
+def dbOneTickIntervalString():
+    """
+    Returns the interval string for one tick.
+
+    Mogrify the return value into the SQL:
+        "... %s::INTERVAL ..."
+    or
+        "INTERVAL %s"
+    The completed SQL will contain the necessary ticks.
+    """
+    return '1 microsecond';
+
 def dbTimestampMinusOneTick(oValue):
     """
     Returns a new timestamp that's one tick before the given one.
     """
     oValue = dbTimestampToZuluDatetime(oValue);
     return oValue - datetime.timedelta(microseconds = 1);
+
+def dbTimestampPlusOneTick(oValue):
+    """
+    Returns a new timestamp that's one tick after the given one.
+    """
+    oValue = dbTimestampToZuluDatetime(oValue);
+    return oValue + datetime.timedelta(microseconds = 1);
 
 def isDbInterval(oValue):
     """
@@ -123,7 +145,7 @@ class TMDatabaseIntegrityException(Exception):
     Do NOT use directly, only thru TMDatabaseConnection.integrityException.
     Otherwise, we won't be able to log the issue.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class TMDatabaseCursor(object):
@@ -210,13 +232,13 @@ class TMDatabaseConnection(object):
             dArgs['host'] = config.g_ksDatabaseAddress;
         if config.g_ksDatabasePort is not None:
             dArgs['port'] = config.g_ksDatabasePort;
-        self._oConn             = psycopg2.connect(**dArgs); # pylint: disable=W0142
+        self._oConn             = psycopg2.connect(**dArgs); # pylint: disable=star-args
         self._oConn.set_client_encoding('UTF-8');
         self._oCursor           = self._oConn.cursor();
         self._oExplainConn      = None;
         self._oExplainCursor    = None;
         if config.g_kfWebUiSqlTraceExplain and config.g_kfWebUiSqlTrace:
-            self._oExplainConn  = psycopg2.connect(**dArgs); # pylint: disable=W0142
+            self._oExplainConn  = psycopg2.connect(**dArgs); # pylint: disable=star-args
             self._oExplainConn.set_client_encoding('UTF-8');
             self._oExplainCursor = self._oExplainConn.cursor();
         self._fTransaction      = False;
@@ -346,7 +368,7 @@ class TMDatabaseConnection(object):
             sBound = unicode(sOperation);
 
         if sys.version_info[0] >= 3 and not isinstance(sBound, str):
-            sBound = sBound.decode('utf-8');
+            sBound = sBound.decode('utf-8'); # pylint: disable=redefined-variable-type
 
         aasExplain = None;
         if self._oExplainCursor is not None and not sBound.startswith('DROP'):
@@ -430,7 +452,7 @@ class TMDatabaseConnection(object):
             if len(asValues) > 256:
                 oRc = self.executeInternal(oCursor, sInsertSql + 'VALUES' + ', '.join(asValues), None, sCallerName);
                 asValues = [];
-        if len(asValues) > 0:
+        if asValues:
             oRc = self.executeInternal(oCursor, sInsertSql + 'VALUES' + ', '.join(asValues), None, sCallerName);
         return oRc
 
@@ -619,10 +641,10 @@ class TMDatabaseConnection(object):
         for aEntry in self._aoTraceBack:
             iEntry += 1;
             sDebug += ' <tr>\n' \
-                      '  <td align="right">%s</td>\n' \
-                      '  <td align="right">%s</td>\n' \
-                      '  <td align="right">%s</td>\n' \
-                      '  <td align="right">%s</td>\n' \
+                      '  <td>%s</td>\n' \
+                      '  <td>%s</td>\n' \
+                      '  <td>%s</td>\n' \
+                      '  <td>%s</td>\n' \
                       '  <td><pre>%s</pre></td>\n' \
                       '  <td>%s</td>\n' \
                       ' </tr>\n' \
@@ -697,7 +719,7 @@ class TMDatabaseConnection(object):
                 dArgs['host'] = config.g_ksDatabaseAddress;
             if config.g_ksDatabasePort is not None:
                 dArgs['port'] = config.g_ksDatabasePort;
-            self._oExplainConn  = psycopg2.connect(**dArgs); # pylint: disable=W0142
+            self._oExplainConn  = psycopg2.connect(**dArgs); # pylint: disable=star-args
             self._oExplainCursor = self._oExplainConn.cursor();
         return True;
 

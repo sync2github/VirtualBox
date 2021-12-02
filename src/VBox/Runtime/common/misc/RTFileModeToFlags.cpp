@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTFileModeToFlags.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTFileModeToFlags.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/file.h>
 #include <iprt/string.h>
 #include "internal/iprt.h"
@@ -219,11 +219,16 @@ RTR3DECL(int) RTFileModeToFlagsEx(const char *pszAccess, const char *pszDisposit
                 fMode |= RTFILE_O_WRITE;
                 break;
 
+            case 'a': /* Append. */
+                fMode |= RTFILE_O_WRITE | RTFILE_O_APPEND;
+                break;
+
             case '+':
             {
                 switch (chPrev)
                 {
                     case 'w':
+                    case 'a':
                         /* Also use read access in write mode. */
                         fMode |= RTFILE_O_READ;
                         break;
@@ -267,24 +272,30 @@ RTR3DECL(int) RTFileModeToFlagsEx(const char *pszAccess, const char *pszDisposit
     pszCur = pszDisposition;
 
     /* Create a new file, always, overwrite an existing file. */
-    if (!RTStrCmp(pszCur, "ca"))
+    if (   !RTStrCmp(pszCur, "ca")
+        || !RTStrCmp(pszCur, "create-replace"))
         fMode |= RTFILE_O_CREATE_REPLACE;
     /* Create a new file if it does not exist, fail if exist. */
-    else if (!RTStrCmp(pszCur, "ce"))
+    else if (   !RTStrCmp(pszCur, "ce")
+             || !RTStrCmp(pszCur, "create"))
         fMode |= RTFILE_O_CREATE;
     /* Open existing file, create file if does not exist. */
-    else if (!RTStrCmp(pszCur, "oc"))
+    else if (   !RTStrCmp(pszCur, "oc")
+             || !RTStrCmp(pszCur, "open-create"))
         fMode |= RTFILE_O_OPEN_CREATE;
-    /* Open existing file and place the file pointer at
-     * the end of the file, if opened with write access.
-     * Create the file if does not exist. */
-    else if (!RTStrCmp(pszCur, "oa"))
+    /* Open existing file and place the file pointer at the end of the file, if
+     * opened with write access. Create the file if does not exist.
+     * Note! This mode is ill conceived as the appending is a accesss mode not open disposition. */
+    else if (   !RTStrCmp(pszCur, "oa")
+             || !RTStrCmp(pszCur, "open-append"))
         fMode |= RTFILE_O_OPEN_CREATE | RTFILE_O_APPEND;
     /* Open existing, fail if does not exist. */
-    else if (!RTStrCmp(pszCur, "oe"))
+    else if (   !RTStrCmp(pszCur, "oe")
+             || !RTStrCmp(pszCur, "open"))
         fMode |= RTFILE_O_OPEN;
     /* Open and truncate existing, fail of not exist. */
-    else if (!RTStrCmp(pszCur, "ot"))
+    else if (   !RTStrCmp(pszCur, "ot")
+             || !RTStrCmp(pszCur, "open-truncate"))
         fMode |= RTFILE_O_OPEN | RTFILE_O_TRUNCATE;
     else
         return VERR_INVALID_PARAMETER;
@@ -293,8 +304,47 @@ RTR3DECL(int) RTFileModeToFlagsEx(const char *pszAccess, const char *pszDisposit
     if ((fMode & RTFILE_O_ACTION_MASK) == 0)
         return VERR_INVALID_PARAMETER;
 
-    /** @todo Handle sharing mode. */
-    fMode |= RTFILE_O_DENY_NONE;
+    /*
+     * Sharing mode.
+     */
+    if (!pszSharing || !*pszSharing)
+        fMode |= RTFILE_O_DENY_NONE;
+    else
+    {
+        do
+        {
+            if (pszSharing[0] == 'n')
+            {
+                if (pszSharing[1] == 'r') /* nr (no other readers) */
+                {
+                    if (pszSharing[2] == 'w') /* nrw (no other readers or writers) */
+                    {
+                        fMode |= RTFILE_O_DENY_READWRITE;
+                        pszSharing += 3;
+                    }
+                    else
+                    {
+                        fMode |= RTFILE_O_DENY_READ;
+                        pszSharing += 2;
+                    }
+                }
+                else if (pszSharing[1] == 'w') /* nw (no other writers) */
+                {
+                    fMode |= RTFILE_O_DENY_WRITE;
+                    pszSharing += 2;
+                }
+                else
+                    return VERR_INVALID_PARAMETER;
+            }
+            else if (pszSharing[0] == 'd') /* d (don't deny delete) */
+            {
+                fMode |= RTFILE_O_DENY_WRITE;
+                pszSharing++;
+            }
+            else
+                return VERR_INVALID_PARAMETER;
+        } while (*pszSharing != '\0');
+    }
 
     /* Return. */
     *pfMode = fMode;

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DevVGA-SVGA3d-savedstate.cpp 91361 2021-09-24 12:48:04Z vboxsync $ */
 /** @file
  * DevSVGA3d - VMWare SVGA device, 3D parts - Saved state and assocated stuff.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -21,14 +21,14 @@
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DEV_VMSVGA
 #include <VBox/vmm/pdmdev.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 
 #include <iprt/assert.h>
 #include <iprt/mem.h>
 
 #include <VBox/vmm/pgm.h> /* required by DevVGA.h */
-#include <VBox/VBoxVideo.h> /* required by DevVGA.h */
+#include <VBoxVideo.h> /* required by DevVGA.h */
 
 /* should go BEFORE any other DevVGA include to make all DevVGA.h config defines be visible */
 #include "DevVGA.h"
@@ -44,10 +44,10 @@
  * Reinitializes an active context.
  *
  * @returns VBox status code.
- * @param   pThis               The VMSVGA device state.
- * @param   pContext            The freshly loaded context to reinitialize.
+ * @param   pThisCC         The VGA/VMSVGA state for ring-3.
+ * @param   pContext        The freshly loaded context to reinitialize.
  */
-static int vmsvga3dLoadReinitContext(PVGASTATE pThis, PVMSVGA3DCONTEXT pContext)
+static int vmsvga3dLoadReinitContext(PVGASTATECC pThisCC, PVMSVGA3DCONTEXT pContext)
 {
     int      rc;
     uint32_t cid = pContext->id;
@@ -64,7 +64,7 @@ static int vmsvga3dLoadReinitContext(PVGASTATE pThis, PVMSVGA3DCONTEXT pContext)
             target.sid      = pContext->state.aRenderTargets[j];
             target.face     = 0;
             target.mipmap   = 0;
-            rc = vmsvga3dSetRenderTarget(pThis, cid, (SVGA3dRenderTargetType)j, target);
+            rc = vmsvga3dSetRenderTarget(pThisCC, cid, (SVGA3dRenderTargetType)j, target);
             AssertRCReturn(rc, rc);
         }
     }
@@ -77,20 +77,20 @@ static int vmsvga3dLoadReinitContext(PVGASTATE pThis, PVMSVGA3DCONTEXT pContext)
         SVGA3dRenderState *pRenderState = &pContext->state.aRenderState[j];
 
         if (pRenderState->state != SVGA3D_RS_INVALID)
-            vmsvga3dSetRenderState(pThis, pContext->id, 1, pRenderState);
+            vmsvga3dSetRenderState(pThisCC, pContext->id, 1, pRenderState);
     }
     Log(("vmsvga3dLoadReinitContext: Recreate render state END\n"));
 
     /* Recreate the texture state */
     Log(("vmsvga3dLoadReinitContext: Recreate texture state BEGIN\n"));
-    for (uint32_t iStage = 0; iStage < SVGA3D_MAX_TEXTURE_STAGE; iStage++)
+    for (uint32_t iStage = 0; iStage < RT_ELEMENTS(pContext->state.aTextureStates); ++iStage)
     {
-        for (uint32_t j = 0; j < SVGA3D_TS_MAX; j++)
+        for (uint32_t j = 0; j < RT_ELEMENTS(pContext->state.aTextureStates[0]); ++j)
         {
-            SVGA3dTextureState *pTextureState = &pContext->state.aTextureState[iStage][j];
+            SVGA3dTextureState *pTextureState = &pContext->state.aTextureStates[iStage][j];
 
             if (pTextureState->name != SVGA3D_TS_INVALID)
-                vmsvga3dSetTextureState(pThis, pContext->id, 1, pTextureState);
+                vmsvga3dSetTextureState(pThisCC, pContext->id, 1, pTextureState);
         }
     }
     Log(("vmsvga3dLoadReinitContext: Recreate texture state END\n"));
@@ -99,16 +99,16 @@ static int vmsvga3dLoadReinitContext(PVGASTATE pThis, PVMSVGA3DCONTEXT pContext)
     for (uint32_t j = 0; j < RT_ELEMENTS(pContext->state.aClipPlane); j++)
     {
         if (pContext->state.aClipPlane[j].fValid == true)
-            vmsvga3dSetClipPlane(pThis, cid, j, pContext->state.aClipPlane[j].plane);
+            vmsvga3dSetClipPlane(pThisCC, cid, j, pContext->state.aClipPlane[j].plane);
     }
 
     /* Reprogram the light data. */
     for (uint32_t j = 0; j < RT_ELEMENTS(pContext->state.aLightData); j++)
     {
         if (pContext->state.aLightData[j].fValidData == true)
-            vmsvga3dSetLightData(pThis, cid, j, &pContext->state.aLightData[j].data);
+            vmsvga3dSetLightData(pThisCC, cid, j, &pContext->state.aLightData[j].data);
         if (pContext->state.aLightData[j].fEnabled)
-            vmsvga3dSetLightEnabled(pThis, cid, j, true);
+            vmsvga3dSetLightEnabled(pThisCC, cid, j, true);
     }
 
     /* Recreate the transform state. */
@@ -117,7 +117,7 @@ static int vmsvga3dLoadReinitContext(PVGASTATE pThis, PVMSVGA3DCONTEXT pContext)
         for (uint32_t j = 0; j < RT_ELEMENTS(pContext->state.aTransformState); j++)
         {
             if (pContext->state.aTransformState[j].fValid == true)
-                vmsvga3dSetTransform(pThis, cid, (SVGA3dTransformType)j, pContext->state.aTransformState[j].matrix);
+                vmsvga3dSetTransform(pThisCC, cid, (SVGA3dTransformType)j, pContext->state.aTransformState[j].matrix);
         }
     }
 
@@ -127,41 +127,101 @@ static int vmsvga3dLoadReinitContext(PVGASTATE pThis, PVMSVGA3DCONTEXT pContext)
         for (uint32_t j = 0; j < RT_ELEMENTS(pContext->state.aMaterial); j++)
         {
             if (pContext->state.aMaterial[j].fValid == true)
-                vmsvga3dSetMaterial(pThis, cid, (SVGA3dFace)j, &pContext->state.aMaterial[j].material);
+                vmsvga3dSetMaterial(pThisCC, cid, (SVGA3dFace)j, &pContext->state.aMaterial[j].material);
         }
     }
 
     if (pContext->state.u32UpdateFlags & VMSVGA3D_UPDATE_SCISSORRECT)
-        vmsvga3dSetScissorRect(pThis, cid, &pContext->state.RectScissor);
+        vmsvga3dSetScissorRect(pThisCC, cid, &pContext->state.RectScissor);
     if (pContext->state.u32UpdateFlags & VMSVGA3D_UPDATE_ZRANGE)
-        vmsvga3dSetZRange(pThis, cid, pContext->state.zRange);
+        vmsvga3dSetZRange(pThisCC, cid, pContext->state.zRange);
     if (pContext->state.u32UpdateFlags & VMSVGA3D_UPDATE_VIEWPORT)
-        vmsvga3dSetViewPort(pThis, cid, &pContext->state.RectViewPort);
+        vmsvga3dSetViewPort(pThisCC, cid, &pContext->state.RectViewPort);
     if (pContext->state.u32UpdateFlags & VMSVGA3D_UPDATE_VERTEXSHADER)
-        vmsvga3dShaderSet(pThis, pContext, cid, SVGA3D_SHADERTYPE_VS, pContext->state.shidVertex);
+        vmsvga3dShaderSet(pThisCC, pContext, cid, SVGA3D_SHADERTYPE_VS, pContext->state.shidVertex);
     if (pContext->state.u32UpdateFlags & VMSVGA3D_UPDATE_PIXELSHADER)
-        vmsvga3dShaderSet(pThis, pContext, cid, SVGA3D_SHADERTYPE_PS, pContext->state.shidPixel);
+        vmsvga3dShaderSet(pThisCC, pContext, cid, SVGA3D_SHADERTYPE_PS, pContext->state.shidPixel);
 
     Log(("vmsvga3dLoadReinitContext: returns [cid=%#x]\n", cid));
     return VINF_SUCCESS;
 }
 
-int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t uPass)
+static int vmsvga3dLoadVMSVGA3DSURFACEPreMipLevels(PPDMDEVINS pDevIns, PSSMHANDLE pSSM, VMSVGA3DSURFACE *pSurface)
 {
-    RT_NOREF(uVersion, uPass);
-    PVMSVGA3DSTATE pState = pThis->svga.p3dState;
+    struct VMSVGA3DSURFACEPreMipLevels
+    {
+        uint32_t            id;
+        uint32_t            idAssociatedContext;
+        uint32_t            surfaceFlags;
+        SVGA3dSurfaceFormat format;
+#ifdef VMSVGA3D_OPENGL
+        GLint               internalFormatGL;
+        GLint               formatGL;
+        GLint               typeGL;
+#endif
+        SVGA3dSurfaceFace   faces[SVGA3D_MAX_SURFACE_FACES];
+        uint32_t            cFaces;
+        uint32_t            multiSampleCount;
+        SVGA3dTextureFilter autogenFilter;
+        uint32_t            cbBlock;
+    };
+
+    static SSMFIELD const s_aVMSVGA3DSURFACEFieldsPreMipLevels[] =
+    {
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, id),
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, idAssociatedContext),
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, surfaceFlags),
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, format),
+#ifdef VMSVGA3D_OPENGL
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, internalFormatGL),
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, formatGL),
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, typeGL),
+#endif
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, faces),
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, cFaces),
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, multiSampleCount),
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, autogenFilter),
+#ifdef VMSVGA3D_DIRECT3D
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, format), /* Yes, the 'format' field is duplicated. */
+#endif
+        SSMFIELD_ENTRY(struct VMSVGA3DSURFACEPreMipLevels, cbBlock),
+        SSMFIELD_ENTRY_TERM()
+    };
+
+    struct VMSVGA3DSURFACEPreMipLevels surfacePreMipLevels;
+    int rc = pDevIns->pHlpR3->pfnSSMGetStructEx(pSSM, &surfacePreMipLevels, sizeof(surfacePreMipLevels), 0, s_aVMSVGA3DSURFACEFieldsPreMipLevels, NULL);
+    if (RT_SUCCESS(rc))
+    {
+        pSurface->id                       = surfacePreMipLevels.id;
+        pSurface->idAssociatedContext      = surfacePreMipLevels.idAssociatedContext;
+        pSurface->surfaceFlags             = surfacePreMipLevels.surfaceFlags;
+        pSurface->format                   = surfacePreMipLevels.format;
+#ifdef VMSVGA3D_OPENGL
+        pSurface->internalFormatGL         = surfacePreMipLevels.internalFormatGL;
+        pSurface->formatGL                 = surfacePreMipLevels.formatGL;
+        pSurface->typeGL                   = surfacePreMipLevels.typeGL;
+#endif
+        pSurface->cLevels                  = surfacePreMipLevels.faces[0].numMipLevels;
+        pSurface->cFaces                   = surfacePreMipLevels.cFaces;
+        pSurface->multiSampleCount         = surfacePreMipLevels.multiSampleCount;
+        pSurface->autogenFilter            = surfacePreMipLevels.autogenFilter;
+        pSurface->cbBlock                  = surfacePreMipLevels.cbBlock;
+    }
+    return rc;
+}
+
+int vmsvga3dLoadExec(PPDMDEVINS pDevIns, PVGASTATE pThis, PVGASTATECC pThisCC, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t uPass)
+{
+    RT_NOREF(pDevIns, pThis, uPass);
+    PVMSVGA3DSTATE  pState = pThisCC->svga.p3dState;
     AssertReturn(pState, VERR_NO_MEMORY);
-    int            rc;
+    PCPDMDEVHLPR3   pHlp = pDevIns->pHlpR3;
+    int             rc;
     uint32_t       cContexts, cSurfaces;
     LogFlow(("vmsvga3dLoadExec:\n"));
 
-#ifndef RT_OS_DARWIN /** @todo r=bird: this is normally done on the EMT, so for DARWIN we do that when loading saved state too now. See DevVGA-SVGA.cpp */
-    /* Must initialize now as the recreation calls below rely on an initialized 3d subsystem. */
-    vmsvga3dPowerOn(pThis);
-#endif
-
     /* Get the generic 3d state first. */
-    rc = SSMR3GetStructEx(pSSM, pState, sizeof(*pState), 0, g_aVMSVGA3DSTATEFields, NULL);
+    rc = pHlp->pfnSSMGetStructEx(pSSM, pState, sizeof(*pState), 0, g_aVMSVGA3DSTATEFields, NULL);
     AssertRCReturn(rc, rc);
 
     cContexts                           = pState->cContexts;
@@ -176,7 +236,7 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
         uint32_t         cid;
 
         /* Get the context id */
-        rc = SSMR3GetU32(pSSM, &cid);
+        rc = pHlp->pfnSSMGetU32(pSSM, &cid);
         AssertRCReturn(rc, rc);
 
         if (cid != SVGA3D_INVALID_ID)
@@ -191,21 +251,22 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
                 pContext = &pState->SharedCtx;
                 if (pContext->id != VMSVGA3D_SHARED_CTX_ID)
                 {
-                    rc = vmsvga3dContextDefineOgl(pThis, VMSVGA3D_SHARED_CTX_ID, VMSVGA3D_DEF_CTX_F_SHARED_CTX);
+                    /** @todo Separate backend */
+                    rc = vmsvga3dContextDefineOgl(pThisCC, VMSVGA3D_SHARED_CTX_ID, VMSVGA3D_DEF_CTX_F_SHARED_CTX);
                     AssertRCReturn(rc, rc);
                 }
             }
             else
 #endif
             {
-                rc = vmsvga3dContextDefine(pThis, cid);
+                rc = vmsvga3dContextDefine(pThisCC, cid);
                 AssertRCReturn(rc, rc);
 
                 pContext = pState->papContexts[i];
             }
             AssertReturn(pContext->id == cid, VERR_INTERNAL_ERROR);
 
-            rc = SSMR3GetStructEx(pSSM, pContext, sizeof(*pContext), 0, g_aVMSVGA3DCONTEXTFields, NULL);
+            rc = pHlp->pfnSSMGetStructEx(pSSM, pContext, sizeof(*pContext), 0, g_aVMSVGA3DCONTEXTFields, NULL);
             AssertRCReturn(rc, rc);
 
             cPixelShaders                       = pContext->cPixelShaders;
@@ -224,7 +285,7 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
                 uint32_t        shid;
 
                 /* Fetch the id first. */
-                rc = SSMR3GetU32(pSSM, &shid);
+                rc = pHlp->pfnSSMGetU32(pSSM, &shid);
                 AssertRCReturn(rc, rc);
 
                 if (shid != SVGA3D_INVALID_ID)
@@ -232,16 +293,16 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
                     uint32_t *pData;
 
                     /* Fetch a copy of the shader struct. */
-                    rc = SSMR3GetStructEx(pSSM, &shader, sizeof(shader), 0, g_aVMSVGA3DSHADERFields, NULL);
+                    rc = pHlp->pfnSSMGetStructEx(pSSM, &shader, sizeof(shader), 0, g_aVMSVGA3DSHADERFields, NULL);
                     AssertRCReturn(rc, rc);
 
                     pData = (uint32_t *)RTMemAlloc(shader.cbData);
                     AssertReturn(pData, VERR_NO_MEMORY);
 
-                    rc = SSMR3GetMem(pSSM, pData, shader.cbData);
+                    rc = pHlp->pfnSSMGetMem(pSSM, pData, shader.cbData);
                     AssertRCReturn(rc, rc);
 
-                    rc = vmsvga3dShaderDefine(pThis, cid, shid, shader.type, shader.cbData, pData);
+                    rc = vmsvga3dShaderDefine(pThisCC, cid, shid, shader.type, shader.cbData, pData);
                     AssertRCReturn(rc, rc);
 
                     RTMemFree(pData);
@@ -255,7 +316,7 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
                 uint32_t        shid;
 
                 /* Fetch the id first. */
-                rc = SSMR3GetU32(pSSM, &shid);
+                rc = pHlp->pfnSSMGetU32(pSSM, &shid);
                 AssertRCReturn(rc, rc);
 
                 if (shid != SVGA3D_INVALID_ID)
@@ -263,16 +324,16 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
                     uint32_t *pData;
 
                     /* Fetch a copy of the shader struct. */
-                    rc = SSMR3GetStructEx(pSSM, &shader, sizeof(shader), 0, g_aVMSVGA3DSHADERFields, NULL);
+                    rc = pHlp->pfnSSMGetStructEx(pSSM, &shader, sizeof(shader), 0, g_aVMSVGA3DSHADERFields, NULL);
                     AssertRCReturn(rc, rc);
 
                     pData = (uint32_t *)RTMemAlloc(shader.cbData);
                     AssertReturn(pData, VERR_NO_MEMORY);
 
-                    rc = SSMR3GetMem(pSSM, pData, shader.cbData);
+                    rc = pHlp->pfnSSMGetMem(pSSM, pData, shader.cbData);
                     AssertRCReturn(rc, rc);
 
-                    rc = vmsvga3dShaderDefine(pThis, cid, shid, shader.type, shader.cbData, pData);
+                    rc = vmsvga3dShaderDefine(pThisCC, cid, shid, shader.type, shader.cbData, pData);
                     AssertRCReturn(rc, rc);
 
                     RTMemFree(pData);
@@ -284,12 +345,12 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
             {
                 VMSVGASHADERCONST ShaderConst;
 
-                rc = SSMR3GetStructEx(pSSM, &ShaderConst, sizeof(ShaderConst), 0, g_aVMSVGASHADERCONSTFields, NULL);
+                rc = pHlp->pfnSSMGetStructEx(pSSM, &ShaderConst, sizeof(ShaderConst), 0, g_aVMSVGASHADERCONSTFields, NULL);
                 AssertRCReturn(rc, rc);
 
                 if (ShaderConst.fValid)
                 {
-                    rc = vmsvga3dShaderSetConst(pThis, cid, j, SVGA3D_SHADERTYPE_PS, ShaderConst.ctype, 1, ShaderConst.value);
+                    rc = vmsvga3dShaderSetConst(pThisCC, cid, j, SVGA3D_SHADERTYPE_PS, ShaderConst.ctype, 1, ShaderConst.value);
                     AssertRCReturn(rc, rc);
                 }
             }
@@ -299,13 +360,87 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
             {
                 VMSVGASHADERCONST ShaderConst;
 
-                rc = SSMR3GetStructEx(pSSM, &ShaderConst, sizeof(ShaderConst), 0, g_aVMSVGASHADERCONSTFields, NULL);
+                rc = pHlp->pfnSSMGetStructEx(pSSM, &ShaderConst, sizeof(ShaderConst), 0, g_aVMSVGASHADERCONSTFields, NULL);
                 AssertRCReturn(rc, rc);
 
                 if (ShaderConst.fValid)
                 {
-                    rc = vmsvga3dShaderSetConst(pThis, cid, j, SVGA3D_SHADERTYPE_VS, ShaderConst.ctype, 1, ShaderConst.value);
+                    rc = vmsvga3dShaderSetConst(pThisCC, cid, j, SVGA3D_SHADERTYPE_VS, ShaderConst.ctype, 1, ShaderConst.value);
                     AssertRCReturn(rc, rc);
+                }
+            }
+
+            if (uVersion >= VGA_SAVEDSTATE_VERSION_VMSVGA_TEX_STAGES)
+            {
+                /* Load texture stage and samplers state. */
+
+                /* Number of stages/samplers. */
+                uint32_t cStages;
+                rc = pHlp->pfnSSMGetU32(pSSM, &cStages);
+                AssertRCReturn(rc, rc);
+
+                /* Number of states. */
+                uint32_t cTextureStates;
+                rc = pHlp->pfnSSMGetU32(pSSM, &cTextureStates);
+                AssertRCReturn(rc, rc);
+
+                for (uint32_t iStage = 0; iStage < cStages; ++iStage)
+                {
+                    for (uint32_t j = 0; j < cTextureStates; ++j)
+                    {
+                        SVGA3dTextureState textureState;
+                        pHlp->pfnSSMGetU32(pSSM, &textureState.stage);
+                        uint32_t u32Name;
+                        pHlp->pfnSSMGetU32(pSSM, &u32Name);
+                        textureState.name = (SVGA3dTextureStateName)u32Name;
+                        rc = pHlp->pfnSSMGetU32(pSSM, &textureState.value);
+                        AssertRCReturn(rc, rc);
+
+                        if (   iStage < RT_ELEMENTS(pContext->state.aTextureStates)
+                            && j < RT_ELEMENTS(pContext->state.aTextureStates[0]))
+                        {
+                            pContext->state.aTextureStates[iStage][j] = textureState;
+                        }
+                    }
+                }
+            }
+
+            if (uVersion >= VGA_SAVEDSTATE_VERSION_VMSVGA)
+            {
+                VMSVGA3DQUERY query;
+                RT_ZERO(query);
+
+                rc = pHlp->pfnSSMGetStructEx(pSSM, &query, sizeof(query), 0, g_aVMSVGA3DQUERYFields, NULL);
+                AssertRCReturn(rc, rc);
+
+                switch (query.enmQueryState)
+                {
+                    case VMSVGA3DQUERYSTATE_BUILDING:
+                        /* Start collecting data. */
+                        vmsvga3dQueryBegin(pThisCC, cid, SVGA3D_QUERYTYPE_OCCLUSION);
+                        /* Partial result. */
+                        pContext->occlusion.u32QueryResult = query.u32QueryResult;
+                        break;
+
+                    case VMSVGA3DQUERYSTATE_ISSUED:
+                        /* Guest ended the query but did not read result. Result is restored. */
+                        query.enmQueryState = VMSVGA3DQUERYSTATE_SIGNALED;
+                        RT_FALL_THRU();
+                    case VMSVGA3DQUERYSTATE_SIGNALED:
+                        /* Create the query object. */
+                        vmsvga3dQueryCreate(pThisCC, cid, SVGA3D_QUERYTYPE_OCCLUSION);
+
+                        /* Update result and state. */
+                        pContext->occlusion.enmQueryState = query.enmQueryState;
+                        pContext->occlusion.u32QueryResult = query.u32QueryResult;
+                        break;
+
+                    default:
+                        AssertFailed();
+                        RT_FALL_THRU();
+                    case VMSVGA3DQUERYSTATE_NULL:
+                        RT_ZERO(pContext->occlusion);
+                        break;
                 }
             }
         }
@@ -323,7 +458,7 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
         uint32_t sid;
 
         /* Fetch the id first. */
-        rc = SSMR3GetU32(pSSM, &sid);
+        rc = pHlp->pfnSSMGetU32(pSSM, &sid);
         AssertRCReturn(rc, rc);
 
         if (sid != SVGA3D_INVALID_ID)
@@ -332,11 +467,14 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
             LogFlow(("vmsvga3dLoadExec: Loading sid=%#x\n", sid));
 
             /* Fetch the surface structure first. */
-            rc = SSMR3GetStructEx(pSSM, &surface, sizeof(surface), 0, g_aVMSVGA3DSURFACEFields, NULL);
+            if (RT_LIKELY(uVersion >= VGA_SAVEDSTATE_VERSION_VMSVGA_MIPLEVELS))
+                rc = pHlp->pfnSSMGetStructEx(pSSM, &surface, sizeof(surface), 0, g_aVMSVGA3DSURFACEFields, NULL);
+            else
+                rc = vmsvga3dLoadVMSVGA3DSURFACEPreMipLevels(pDevIns, pSSM, &surface);
             AssertRCReturn(rc, rc);
 
             {
-                uint32_t             cMipLevels = surface.faces[0].numMipLevels * surface.cFaces;
+                uint32_t             cMipLevels = surface.cLevels * surface.cFaces;
                 PVMSVGA3DMIPMAPLEVEL pMipmapLevel = (PVMSVGA3DMIPMAPLEVEL)RTMemAlloc(cMipLevels * sizeof(VMSVGA3DMIPMAPLEVEL));
                 AssertReturn(pMipmapLevel, VERR_NO_MEMORY);
                 SVGA3dSize *pMipmapLevelSize = (SVGA3dSize *)RTMemAlloc(cMipLevels * sizeof(SVGA3dSize));
@@ -345,18 +483,20 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
                 /* Load the mip map level info. */
                 for (uint32_t face=0; face < surface.cFaces; face++)
                 {
-                    for (uint32_t j = 0; j < surface.faces[0].numMipLevels; j++)
+                    for (uint32_t j = 0; j < surface.cLevels; j++)
                     {
-                        uint32_t idx = j + face * surface.faces[0].numMipLevels;
+                        uint32_t idx = j + face * surface.cLevels;
                         /* Load the mip map level struct. */
-                        rc = SSMR3GetStructEx(pSSM, &pMipmapLevel[idx], sizeof(pMipmapLevel[idx]), 0, g_aVMSVGA3DMIPMAPLEVELFields, NULL);
+                        rc = pHlp->pfnSSMGetStructEx(pSSM, &pMipmapLevel[idx], sizeof(pMipmapLevel[idx]), 0,
+                                                     g_aVMSVGA3DMIPMAPLEVELFields, NULL);
                         AssertRCReturn(rc, rc);
 
-                        pMipmapLevelSize[idx] = pMipmapLevel[idx].size;
+                        pMipmapLevelSize[idx] = pMipmapLevel[idx].mipmapSize;
                     }
                 }
 
-                rc = vmsvga3dSurfaceDefine(pThis, sid, surface.flags, surface.format, surface.faces, surface.multiSampleCount, surface.autogenFilter, cMipLevels, pMipmapLevelSize);
+                rc = vmsvga3dSurfaceDefine(pThisCC, sid, surface.surfaceFlags, surface.format, surface.multiSampleCount,
+                                           surface.autogenFilter, surface.cLevels, &pMipmapLevelSize[0], /* fAllocMipLevels = */ true);
                 AssertRCReturn(rc, rc);
 
                 RTMemFree(pMipmapLevelSize);
@@ -369,24 +509,24 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
             pSurface->fDirty = false;
 
             /* Load the mip map level data. */
-            for (uint32_t j = 0; j < pSurface->faces[0].numMipLevels * pSurface->cFaces; j++)
+            for (uint32_t j = 0; j < pSurface->cLevels * pSurface->cFaces; j++)
             {
-                PVMSVGA3DMIPMAPLEVEL pMipmapLevel = &pSurface->pMipmapLevels[j];
+                PVMSVGA3DMIPMAPLEVEL pMipmapLevel = &pSurface->paMipmapLevels[j];
                 bool fDataPresent = false;
 
+                /* vmsvga3dSurfaceDefine already allocated the surface data buffer. */
                 Assert(pMipmapLevel->cbSurface);
-                pMipmapLevel->pSurfaceData = RTMemAllocZ(pMipmapLevel->cbSurface);
-                AssertReturn(pMipmapLevel->pSurfaceData, VERR_NO_MEMORY);
+                AssertReturn(pMipmapLevel->pSurfaceData, VERR_INTERNAL_ERROR);
 
                 /* Fetch the data present boolean first. */
-                rc = SSMR3GetBool(pSSM, &fDataPresent);
+                rc = pHlp->pfnSSMGetBool(pSSM, &fDataPresent);
                 AssertRCReturn(rc, rc);
 
-                Log(("Surface sid=%x: load mipmap level %d with %x bytes data (present=%d).\n", sid, j, pMipmapLevel->cbSurface, fDataPresent));
+                Log(("Surface sid=%u: load mipmap level %d with %x bytes data (present=%d).\n", sid, j, pMipmapLevel->cbSurface, fDataPresent));
 
                 if (fDataPresent)
                 {
-                    rc = SSMR3GetMem(pSSM, pMipmapLevel->pSurfaceData, pMipmapLevel->cbSurface);
+                    rc = pHlp->pfnSSMGetMem(pSSM, pMipmapLevel->pSurfaceData, pMipmapLevel->cbSurface);
                     AssertRCReturn(rc, rc);
                     pMipmapLevel->fDirty = true;
                     pSurface->fDirty     = true;
@@ -404,7 +544,7 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
     LogFlow(("vmsvga3dLoadExec: pState->SharedCtx.id=%#x\n", pState->SharedCtx.id));
     if (pState->SharedCtx.id == VMSVGA3D_SHARED_CTX_ID)
     {
-        rc = vmsvga3dLoadReinitContext(pThis, &pState->SharedCtx);
+        rc = vmsvga3dLoadReinitContext(pThisCC, &pState->SharedCtx);
         AssertRCReturn(rc, rc);
     }
 #endif
@@ -415,7 +555,7 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
         PVMSVGA3DCONTEXT pContext = pState->papContexts[i];
         if (pContext->id != SVGA3D_INVALID_ID)
         {
-            rc = vmsvga3dLoadReinitContext(pThis, pContext);
+            rc = vmsvga3dLoadReinitContext(pThisCC, pContext);
             AssertRCReturn(rc, rc);
         }
     }
@@ -425,19 +565,18 @@ int vmsvga3dLoadExec(PVGASTATE pThis, PSSMHANDLE pSSM, uint32_t uVersion, uint32
 }
 
 
-static int vmsvga3dSaveContext(PVGASTATE pThis, PSSMHANDLE pSSM, PVMSVGA3DCONTEXT pContext)
+static int vmsvga3dSaveContext(PCPDMDEVHLPR3 pHlp, PVGASTATECC pThisCC, PSSMHANDLE pSSM, PVMSVGA3DCONTEXT pContext)
 {
-    RT_NOREF(pThis);
     uint32_t cid = pContext->id;
 
     /* Save the id first. */
-    int rc = SSMR3PutU32(pSSM, cid);
+    int rc = pHlp->pfnSSMPutU32(pSSM, cid);
     AssertRCReturn(rc, rc);
 
     if (cid != SVGA3D_INVALID_ID)
     {
         /* Save a copy of the context structure first. */
-        rc = SSMR3PutStructEx(pSSM, pContext, sizeof(*pContext), 0, g_aVMSVGA3DCONTEXTFields, NULL);
+        rc = pHlp->pfnSSMPutStructEx(pSSM, pContext, sizeof(*pContext), 0, g_aVMSVGA3DCONTEXTFields, NULL);
         AssertRCReturn(rc, rc);
 
         /* Save all pixel shaders. */
@@ -446,7 +585,7 @@ static int vmsvga3dSaveContext(PVGASTATE pThis, PSSMHANDLE pSSM, PVMSVGA3DCONTEX
             PVMSVGA3DSHADER pShader = &pContext->paPixelShader[j];
 
             /* Save the id first. */
-            rc = SSMR3PutU32(pSSM, pShader->id);
+            rc = pHlp->pfnSSMPutU32(pSSM, pShader->id);
             AssertRCReturn(rc, rc);
 
             if (pShader->id != SVGA3D_INVALID_ID)
@@ -454,11 +593,11 @@ static int vmsvga3dSaveContext(PVGASTATE pThis, PSSMHANDLE pSSM, PVMSVGA3DCONTEX
                 uint32_t cbData = pShader->cbData;
 
                 /* Save a copy of the shader struct. */
-                rc = SSMR3PutStructEx(pSSM, pShader, sizeof(*pShader), 0, g_aVMSVGA3DSHADERFields, NULL);
+                rc = pHlp->pfnSSMPutStructEx(pSSM, pShader, sizeof(*pShader), 0, g_aVMSVGA3DSHADERFields, NULL);
                 AssertRCReturn(rc, rc);
 
                 Log(("Save pixelshader shid=%d with %x bytes code.\n", pShader->id, cbData));
-                rc = SSMR3PutMem(pSSM, pShader->pShaderProgram, cbData);
+                rc = pHlp->pfnSSMPutMem(pSSM, pShader->pShaderProgram, cbData);
                 AssertRCReturn(rc, rc);
             }
         }
@@ -469,7 +608,7 @@ static int vmsvga3dSaveContext(PVGASTATE pThis, PSSMHANDLE pSSM, PVMSVGA3DCONTEX
             PVMSVGA3DSHADER pShader = &pContext->paVertexShader[j];
 
             /* Save the id first. */
-            rc = SSMR3PutU32(pSSM, pShader->id);
+            rc = pHlp->pfnSSMPutU32(pSSM, pShader->id);
             AssertRCReturn(rc, rc);
 
             if (pShader->id != SVGA3D_INVALID_ID)
@@ -477,12 +616,12 @@ static int vmsvga3dSaveContext(PVGASTATE pThis, PSSMHANDLE pSSM, PVMSVGA3DCONTEX
                 uint32_t cbData = pShader->cbData;
 
                 /* Save a copy of the shader struct. */
-                rc = SSMR3PutStructEx(pSSM, pShader, sizeof(*pShader), 0, g_aVMSVGA3DSHADERFields, NULL);
+                rc = pHlp->pfnSSMPutStructEx(pSSM, pShader, sizeof(*pShader), 0, g_aVMSVGA3DSHADERFields, NULL);
                 AssertRCReturn(rc, rc);
 
                 Log(("Save vertex shader shid=%d with %x bytes code.\n", pShader->id, cbData));
                 /* Fetch the shader code and save it. */
-                rc = SSMR3PutMem(pSSM, pShader->pShaderProgram, cbData);
+                rc = pHlp->pfnSSMPutMem(pSSM, pShader->pShaderProgram, cbData);
                 AssertRCReturn(rc, rc);
             }
         }
@@ -490,36 +629,98 @@ static int vmsvga3dSaveContext(PVGASTATE pThis, PSSMHANDLE pSSM, PVMSVGA3DCONTEX
         /* Save pixel shader constants. */
         for (uint32_t j = 0; j < pContext->state.cPixelShaderConst; j++)
         {
-            rc = SSMR3PutStructEx(pSSM, &pContext->state.paPixelShaderConst[j], sizeof(pContext->state.paPixelShaderConst[j]), 0, g_aVMSVGASHADERCONSTFields, NULL);
+            rc = pHlp->pfnSSMPutStructEx(pSSM, &pContext->state.paPixelShaderConst[j], sizeof(pContext->state.paPixelShaderConst[j]), 0, g_aVMSVGASHADERCONSTFields, NULL);
             AssertRCReturn(rc, rc);
         }
 
         /* Save vertex shader constants. */
         for (uint32_t j = 0; j < pContext->state.cVertexShaderConst; j++)
         {
-            rc = SSMR3PutStructEx(pSSM, &pContext->state.paVertexShaderConst[j], sizeof(pContext->state.paVertexShaderConst[j]), 0, g_aVMSVGASHADERCONSTFields, NULL);
+            rc = pHlp->pfnSSMPutStructEx(pSSM, &pContext->state.paVertexShaderConst[j], sizeof(pContext->state.paVertexShaderConst[j]), 0, g_aVMSVGASHADERCONSTFields, NULL);
             AssertRCReturn(rc, rc);
         }
+
+        /* Save texture stage and samplers state. */
+
+        /* Number of stages/samplers. */
+        rc = pHlp->pfnSSMPutU32(pSSM, RT_ELEMENTS(pContext->state.aTextureStates));
+        AssertRCReturn(rc, rc);
+
+        /* Number of texture states. */
+        rc = pHlp->pfnSSMPutU32(pSSM, RT_ELEMENTS(pContext->state.aTextureStates[0]));
+        AssertRCReturn(rc, rc);
+
+        for (uint32_t iStage = 0; iStage < RT_ELEMENTS(pContext->state.aTextureStates); ++iStage)
+        {
+            for (uint32_t j = 0; j < RT_ELEMENTS(pContext->state.aTextureStates[0]); ++j)
+            {
+                SVGA3dTextureState *pTextureState = &pContext->state.aTextureStates[iStage][j];
+
+                pHlp->pfnSSMPutU32(pSSM, pTextureState->stage);
+                pHlp->pfnSSMPutU32(pSSM, pTextureState->name);
+                rc = pHlp->pfnSSMPutU32(pSSM, pTextureState->value);
+                AssertRCReturn(rc, rc);
+            }
+        }
+
+        /* Occlusion query. */
+        if (!VMSVGA3DQUERY_EXISTS(&pContext->occlusion))
+        {
+            pContext->occlusion.enmQueryState = VMSVGA3DQUERYSTATE_NULL;
+        }
+
+        /* Save the current query state, because code below can change it. */
+        VMSVGA3DQUERYSTATE const enmQueryState = pContext->occlusion.enmQueryState;
+        switch (enmQueryState)
+        {
+            case VMSVGA3DQUERYSTATE_BUILDING:
+                /* Stop collecting data. Fetch partial result. Save result. */
+                vmsvga3dQueryEnd(pThisCC, cid, SVGA3D_QUERYTYPE_OCCLUSION);
+                RT_FALL_THRU();
+            case VMSVGA3DQUERYSTATE_ISSUED:
+                /* Fetch result. Save result. */
+                pContext->occlusion.u32QueryResult = 0;
+                vmsvga3dQueryWait(pThisCC, cid, SVGA3D_QUERYTYPE_OCCLUSION, NULL, NULL);
+                RT_FALL_THRU();
+            case VMSVGA3DQUERYSTATE_SIGNALED:
+                /* Save result. Nothing to do here. */
+                break;
+
+            default:
+                AssertFailed();
+                RT_FALL_THRU();
+            case VMSVGA3DQUERYSTATE_NULL:
+                pContext->occlusion.enmQueryState = VMSVGA3DQUERYSTATE_NULL;
+                pContext->occlusion.u32QueryResult = 0;
+                break;
+        }
+
+        /* Restore the current actual state. */
+        pContext->occlusion.enmQueryState = enmQueryState;
+
+        rc = pHlp->pfnSSMPutStructEx(pSSM, &pContext->occlusion, sizeof(pContext->occlusion), 0, g_aVMSVGA3DQUERYFields, NULL);
+        AssertRCReturn(rc, rc);
     }
 
     return VINF_SUCCESS;
 }
 
-int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
+int vmsvga3dSaveExec(PPDMDEVINS pDevIns, PVGASTATECC pThisCC, PSSMHANDLE pSSM)
 {
-    PVMSVGA3DSTATE pState = pThis->svga.p3dState;
+    PVMSVGA3DSTATE  pState = pThisCC->svga.p3dState;
     AssertReturn(pState, VERR_NO_MEMORY);
-    int            rc;
+    PCPDMDEVHLPR3   pHlp   = pDevIns->pHlpR3;
+    int             rc;
 
     /* Save a copy of the generic 3d state first. */
-    rc = SSMR3PutStructEx(pSSM, pState, sizeof(*pState), 0, g_aVMSVGA3DSTATEFields, NULL);
+    rc = pHlp->pfnSSMPutStructEx(pSSM, pState, sizeof(*pState), 0, g_aVMSVGA3DSTATEFields, NULL);
     AssertRCReturn(rc, rc);
 
 #ifdef VMSVGA3D_OPENGL
     /* Save the shared context. */
     if (pState->SharedCtx.id == VMSVGA3D_SHARED_CTX_ID)
     {
-        rc = vmsvga3dSaveContext(pThis, pSSM, &pState->SharedCtx);
+        rc = vmsvga3dSaveContext(pHlp, pThisCC, pSSM, &pState->SharedCtx);
         AssertRCReturn(rc, rc);
     }
 #endif
@@ -527,7 +728,7 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
     /* Save all active contexts. */
     for (uint32_t i = 0; i < pState->cContexts; i++)
     {
-        rc = vmsvga3dSaveContext(pThis, pSSM, pState->papContexts[i]);
+        rc = vmsvga3dSaveContext(pHlp, pThisCC, pSSM, pState->papContexts[i]);
         AssertRCReturn(rc, rc);
     }
 
@@ -537,25 +738,25 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
         PVMSVGA3DSURFACE pSurface = pState->papSurfaces[sid];
 
         /* Save the id first. */
-        rc = SSMR3PutU32(pSSM, pSurface->id);
+        rc = pHlp->pfnSSMPutU32(pSSM, pSurface->id);
         AssertRCReturn(rc, rc);
 
         if (pSurface->id != SVGA3D_INVALID_ID)
         {
             /* Save a copy of the surface structure first. */
-            rc = SSMR3PutStructEx(pSSM, pSurface, sizeof(*pSurface), 0, g_aVMSVGA3DSURFACEFields, NULL);
+            rc = pHlp->pfnSSMPutStructEx(pSSM, pSurface, sizeof(*pSurface), 0, g_aVMSVGA3DSURFACEFields, NULL);
             AssertRCReturn(rc, rc);
 
             /* Save the mip map level info. */
             for (uint32_t face=0; face < pSurface->cFaces; face++)
             {
-                for (uint32_t i = 0; i < pSurface->faces[0].numMipLevels; i++)
+                for (uint32_t i = 0; i < pSurface->cLevels; i++)
                 {
-                    uint32_t idx = i + face * pSurface->faces[0].numMipLevels;
-                    PVMSVGA3DMIPMAPLEVEL pMipmapLevel = &pSurface->pMipmapLevels[idx];
+                    uint32_t idx = i + face * pSurface->cLevels;
+                    PVMSVGA3DMIPMAPLEVEL pMipmapLevel = &pSurface->paMipmapLevels[idx];
 
                     /* Save a copy of the mip map level struct. */
-                    rc = SSMR3PutStructEx(pSSM, pMipmapLevel, sizeof(*pMipmapLevel), 0, g_aVMSVGA3DMIPMAPLEVELFields, NULL);
+                    rc = pHlp->pfnSSMPutStructEx(pSSM, pMipmapLevel, sizeof(*pMipmapLevel), 0, g_aVMSVGA3DMIPMAPLEVELFields, NULL);
                     AssertRCReturn(rc, rc);
                 }
             }
@@ -563,43 +764,38 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
             /* Save the mip map level data. */
             for (uint32_t face=0; face < pSurface->cFaces; face++)
             {
-                for (uint32_t i = 0; i < pSurface->faces[0].numMipLevels; i++)
+                for (uint32_t i = 0; i < pSurface->cLevels; i++)
                 {
-                    uint32_t idx = i + face * pSurface->faces[0].numMipLevels;
-                    PVMSVGA3DMIPMAPLEVEL pMipmapLevel = &pSurface->pMipmapLevels[idx];
+                    uint32_t idx = i + face * pSurface->cLevels;
+                    PVMSVGA3DMIPMAPLEVEL pMipmapLevel = &pSurface->paMipmapLevels[idx];
 
-                    Log(("Surface sid=%d: save mipmap level %d with %x bytes data.\n", sid, i, pMipmapLevel->cbSurface));
+                    Log(("Surface sid=%u: save mipmap level %d with %x bytes data.\n", sid, i, pMipmapLevel->cbSurface));
 
-#ifdef VMSVGA3D_DIRECT3D
-                    if (!pSurface->u.pSurface)
-#else
-                    if (pSurface->oglId.texture == OPENGL_INVALID_ID)
-#endif
+                    if (!VMSVGA3DSURFACE_HAS_HW_SURFACE(pSurface))
                     {
                         if (pMipmapLevel->fDirty)
                         {
                             /* Data follows */
-                            rc = SSMR3PutBool(pSSM, true);
+                            rc = pHlp->pfnSSMPutBool(pSSM, true);
                             AssertRCReturn(rc, rc);
 
                             Assert(pMipmapLevel->cbSurface);
-                            rc = SSMR3PutMem(pSSM, pMipmapLevel->pSurfaceData, pMipmapLevel->cbSurface);
+                            rc = pHlp->pfnSSMPutMem(pSSM, pMipmapLevel->pSurfaceData, pMipmapLevel->cbSurface);
                             AssertRCReturn(rc, rc);
                         }
                         else
                         {
                             /* No data follows */
-                            rc = SSMR3PutBool(pSSM, false);
+                            rc = pHlp->pfnSSMPutBool(pSSM, false);
                             AssertRCReturn(rc, rc);
                         }
                     }
-                    else
+                    else if (vmsvga3dIsLegacyBackend(pThisCC))
                     {
 #ifdef VMSVGA3D_DIRECT3D
                         void            *pData;
                         bool             fRenderTargetTexture = false;
                         bool             fTexture = false;
-                        bool             fVertex = false;
                         bool             fSkipSave = false;
                         HRESULT          hr;
 
@@ -607,21 +803,26 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
                         pData = RTMemAllocZ(pMipmapLevel->cbSurface);
                         AssertReturn(pData, VERR_NO_MEMORY);
 
-                        switch (pSurface->flags & (SVGA3D_SURFACE_HINT_INDEXBUFFER | SVGA3D_SURFACE_HINT_VERTEXBUFFER | SVGA3D_SURFACE_HINT_TEXTURE | SVGA3D_SURFACE_HINT_RENDERTARGET | SVGA3D_SURFACE_HINT_DEPTHSTENCIL | SVGA3D_SURFACE_CUBEMAP))
+                        switch (pSurface->enmD3DResType)
                         {
-                        case SVGA3D_SURFACE_HINT_DEPTHSTENCIL:
-                        case SVGA3D_SURFACE_HINT_DEPTHSTENCIL | SVGA3D_SURFACE_HINT_TEXTURE:
-                            /** @todo unable to easily fetch depth surface data in d3d 9 */
+                        case VMSVGA3D_D3DRESTYPE_CUBE_TEXTURE:
+                        case VMSVGA3D_D3DRESTYPE_VOLUME_TEXTURE:
+                            AssertFailed(); /// @todo
                             fSkipSave = true;
                             break;
-                        case SVGA3D_SURFACE_HINT_TEXTURE | SVGA3D_SURFACE_HINT_RENDERTARGET:
-                            fRenderTargetTexture = true;
-                            /* no break */
-                        case SVGA3D_SURFACE_HINT_TEXTURE:
-                            fTexture = true;
-                            /* no break */
-                        case SVGA3D_SURFACE_HINT_RENDERTARGET:
+                        case VMSVGA3D_D3DRESTYPE_SURFACE:
+                        case VMSVGA3D_D3DRESTYPE_TEXTURE:
                         {
+                            if (pSurface->surfaceFlags & SVGA3D_SURFACE_HINT_DEPTHSTENCIL)
+                            {
+                               /** @todo unable to easily fetch depth surface data in d3d 9 */
+                               fSkipSave = true;
+                               break;
+                            }
+
+                            fTexture = (pSurface->enmD3DResType == VMSVGA3D_D3DRESTYPE_TEXTURE);
+                            fRenderTargetTexture = fTexture && (pSurface->surfaceFlags & SVGA3D_SURFACE_HINT_RENDERTARGET);
+
                             D3DLOCKED_RECT LockedRect;
 
                             if (fTexture)
@@ -636,13 +837,10 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
 
                                         /** @todo stricter checks for associated context */
                                         uint32_t cid = pSurface->idAssociatedContext;
-                                        if (    cid >= pState->cContexts
-                                            ||  pState->papContexts[cid]->id != cid)
-                                        {
-                                            Log(("vmsvga3dSaveExec invalid context id (%x - %x)!\n", cid, (cid >= pState->cContexts) ? -1 : pState->papContexts[cid]->id));
-                                            AssertFailedReturn(VERR_INVALID_PARAMETER);
-                                        }
-                                        PVMSVGA3DCONTEXT pContext = pState->papContexts[cid];
+
+                                        PVMSVGA3DCONTEXT pContext;
+                                        rc = vmsvga3dContextFromCid(pState, cid, &pContext);
+                                        AssertRCReturn(rc, rc);
 
                                         hr = pSurface->bounce.pTexture->GetSurfaceLevel(i, &pDest);
                                         AssertMsgReturn(hr == D3D_OK, ("vmsvga3dSaveExec: GetSurfaceLevel failed with %x\n", hr), VERR_INTERNAL_ERROR);
@@ -675,9 +873,11 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
                             AssertMsgReturn(hr == D3D_OK, ("vmsvga3dSaveExec: LockRect failed with %x\n", hr), VERR_INTERNAL_ERROR);
 
                             /* Copy the data one line at a time in case the internal pitch is different. */
-                            for (uint32_t j = 0; j < pMipmapLevel->size.height; j++)
+                            for (uint32_t j = 0; j < pMipmapLevel->cBlocksY; ++j)
                             {
-                                memcpy((uint8_t *)pData + j * pMipmapLevel->cbSurfacePitch, (uint8_t *)LockedRect.pBits + j * LockedRect.Pitch, pMipmapLevel->cbSurfacePitch);
+                                uint8_t *pu8Dst = (uint8_t *)pData + j * pMipmapLevel->cbSurfacePitch;
+                                const uint8_t *pu8Src = (uint8_t *)LockedRect.pBits + j * LockedRect.Pitch;
+                                memcpy(pu8Dst, pu8Src, pMipmapLevel->cbSurfacePitch);
                             }
 
                             if (fTexture)
@@ -696,12 +896,12 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
                             break;
                         }
 
-                        case SVGA3D_SURFACE_HINT_VERTEXBUFFER:
-                            fVertex = true;
-                            /* no break */
-
-                        case SVGA3D_SURFACE_HINT_INDEXBUFFER:
+                        case VMSVGA3D_D3DRESTYPE_VERTEX_BUFFER:
+                        case VMSVGA3D_D3DRESTYPE_INDEX_BUFFER:
                         {
+                            /* Current type of the buffer. */
+                            const bool fVertex = (pSurface->enmD3DResType == VMSVGA3D_D3DRESTYPE_VERTEX_BUFFER);
+
                             uint8_t *pD3DData;
 
                             if (fVertex)
@@ -728,21 +928,22 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
                         if (!fSkipSave)
                         {
                             /* Data follows */
-                            rc = SSMR3PutBool(pSSM, true);
+                            rc = pHlp->pfnSSMPutBool(pSSM, true);
                             AssertRCReturn(rc, rc);
 
                             /* And write the surface data. */
-                            rc = SSMR3PutMem(pSSM, pData, pMipmapLevel->cbSurface);
+                            rc = pHlp->pfnSSMPutMem(pSSM, pData, pMipmapLevel->cbSurface);
                             AssertRCReturn(rc, rc);
                         }
                         else
                         {
                             /* No data follows */
-                            rc = SSMR3PutBool(pSSM, false);
+                            rc = pHlp->pfnSSMPutBool(pSSM, false);
                             AssertRCReturn(rc, rc);
                         }
 
                         RTMemFree(pData);
+
 #elif defined(VMSVGA3D_OPENGL)
                         void *pData = NULL;
 
@@ -751,22 +952,19 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
 
                         Assert(pMipmapLevel->cbSurface);
 
-                        switch (pSurface->flags & (SVGA3D_SURFACE_HINT_INDEXBUFFER | SVGA3D_SURFACE_HINT_VERTEXBUFFER | SVGA3D_SURFACE_HINT_TEXTURE | SVGA3D_SURFACE_HINT_RENDERTARGET | SVGA3D_SURFACE_HINT_DEPTHSTENCIL | SVGA3D_SURFACE_CUBEMAP))
+                        switch (pSurface->enmOGLResType)
                         {
                         default:
                             AssertFailed();
-                            /* no break */
-                        case SVGA3D_SURFACE_HINT_DEPTHSTENCIL:
-                        case SVGA3D_SURFACE_HINT_DEPTHSTENCIL | SVGA3D_SURFACE_HINT_TEXTURE:
-                            /** @todo fetch data from the renderbuffer */
+                            RT_FALL_THRU();
+                        case VMSVGA3D_OGLRESTYPE_RENDERBUFFER:
+                            /** @todo fetch data from the renderbuffer. Not used currently. */
                             /* No data follows */
-                            rc = SSMR3PutBool(pSSM, false);
+                            rc = pHlp->pfnSSMPutBool(pSSM, false);
                             AssertRCReturn(rc, rc);
                             break;
 
-                        case SVGA3D_SURFACE_HINT_TEXTURE | SVGA3D_SURFACE_HINT_RENDERTARGET:
-                        case SVGA3D_SURFACE_HINT_TEXTURE:
-                        case SVGA3D_SURFACE_HINT_RENDERTARGET:
+                        case VMSVGA3D_OGLRESTYPE_TEXTURE:
                         {
                             GLint activeTexture;
 
@@ -793,11 +991,11 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
                             vmsvga3dOglRestorePackParams(pState, pContext, pSurface, &SavedParams);
 
                             /* Data follows */
-                            rc = SSMR3PutBool(pSSM, true);
+                            rc = pHlp->pfnSSMPutBool(pSSM, true);
                             AssertRCReturn(rc, rc);
 
                             /* And write the surface data. */
-                            rc = SSMR3PutMem(pSSM, pData, pMipmapLevel->cbSurface);
+                            rc = pHlp->pfnSSMPutMem(pSSM, pData, pMipmapLevel->cbSurface);
                             AssertRCReturn(rc, rc);
 
                             /* Restore the old active texture. */
@@ -806,8 +1004,7 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
                             break;
                         }
 
-                        case SVGA3D_SURFACE_HINT_VERTEXBUFFER:
-                        case SVGA3D_SURFACE_HINT_INDEXBUFFER:
+                        case VMSVGA3D_OGLRESTYPE_BUFFER:
                         {
                             uint8_t *pBufferData;
 
@@ -819,11 +1016,11 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
                             Assert(pBufferData);
 
                             /* Data follows */
-                            rc = SSMR3PutBool(pSSM, true);
+                            rc = pHlp->pfnSSMPutBool(pSSM, true);
                             AssertRCReturn(rc, rc);
 
                             /* And write the surface data. */
-                            rc = SSMR3PutMem(pSSM, pBufferData, pMipmapLevel->cbSurface);
+                            rc = pHlp->pfnSSMPutMem(pSSM, pBufferData, pMipmapLevel->cbSurface);
                             AssertRCReturn(rc, rc);
 
                             pState->ext.glUnmapBuffer(GL_ARRAY_BUFFER);
@@ -839,6 +1036,15 @@ int vmsvga3dSaveExec(PVGASTATE pThis, PSSMHANDLE pSSM)
 #else
 #error "Unexpected 3d backend"
 #endif
+                    }
+                    else
+                    {
+                        /** @todo DX backend. */
+                        Assert(!vmsvga3dIsLegacyBackend(pThisCC));
+
+                        /* No data follows */
+                        rc = pHlp->pfnSSMPutBool(pSSM, false);
+                        AssertRCReturn(rc, rc);
                     }
                 }
             }

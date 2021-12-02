@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VUSBSnifferPcapNg.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual USB Sniffer facility - PCAP-NG format writer.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -21,8 +21,9 @@
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DRV_VUSB
 #include <VBox/log.h>
-#include <iprt/mem.h>
 #include <iprt/buildconfig.h>
+#include <iprt/errcore.h>
+#include <iprt/mem.h>
 #include <iprt/string.h>
 #include <iprt/system.h>
 #include <iprt/time.h>
@@ -449,7 +450,7 @@ static int vusbSnifferAddOption(PVUSBSNIFFERFMTINT pThis, uint16_t u16OptionCode
 
 
 /** @interface_method_impl{VUSBSNIFFERFMT,pfnInit} */
-static DECLCALLBACK(int) vusbSnifferFmtPcanNgInit(PVUSBSNIFFERFMTINT pThis, PVUSBSNIFFERSTRM pStrm)
+static DECLCALLBACK(int) vusbSnifferFmtPcapNgInit(PVUSBSNIFFERFMTINT pThis, PVUSBSNIFFERSTRM pStrm)
 {
     pThis->pStrm       = pStrm;
     pThis->cbBlockCur  = 0;
@@ -547,7 +548,7 @@ static DECLCALLBACK(int) vusbSnifferFmtPcanNgInit(PVUSBSNIFFERFMTINT pThis, PVUS
 
 
 /** @interface_method_impl{VUSBSNIFFERFMT,pfnDestroy} */
-static DECLCALLBACK(void) vusbSnifferFmtPcanNgDestroy(PVUSBSNIFFERFMTINT pThis)
+static DECLCALLBACK(void) vusbSnifferFmtPcapNgDestroy(PVUSBSNIFFERFMTINT pThis)
 {
     if (pThis->pbBlockData)
         RTMemFree(pThis->pbBlockData);
@@ -555,7 +556,7 @@ static DECLCALLBACK(void) vusbSnifferFmtPcanNgDestroy(PVUSBSNIFFERFMTINT pThis)
 
 
 /** @interface_method_impl{VUSBSNIFFERFMT,pfnRecordEvent} */
-static DECLCALLBACK(int) vusbSnifferFmtPcanNgRecordEvent(PVUSBSNIFFERFMTINT pThis, PVUSBURB pUrb, VUSBSNIFFEREVENT enmEvent)
+static DECLCALLBACK(int) vusbSnifferFmtPcapNgRecordEvent(PVUSBSNIFFERFMTINT pThis, PVUSBURB pUrb, VUSBSNIFFEREVENT enmEvent)
 {
     DumpFileEpb Epb;
     DumpFileUsbHeaderLnxMmapped UsbHdr;
@@ -642,7 +643,8 @@ static DECLCALLBACK(int) vusbSnifferFmtPcanNgRecordEvent(PVUSBSNIFFERFMTINT pThi
             || pUrb->enmType == VUSBXFERTYPE_MSG)
             cbDataLength = 0;
     }
-    else if (pUrb->enmDir == VUSBDIRECTION_SETUP)
+    else if (   pUrb->enmDir == VUSBDIRECTION_SETUP
+             && cbDataLength >= sizeof(VUSBSETUP))
         cbDataLength -= sizeof(VUSBSETUP);
 
     Epb.u32CapturedLen = cbCapturedLength + cbDataLength;
@@ -720,10 +722,10 @@ const VUSBSNIFFERFMT g_VUsbSnifferFmtPcapNg =
     /** cbFmt */
     sizeof(VUSBSNIFFERFMTINT),
     /** pfnInit */
-    vusbSnifferFmtPcanNgInit,
+    vusbSnifferFmtPcapNgInit,
     /** pfnDestroy */
-    vusbSnifferFmtPcanNgDestroy,
+    vusbSnifferFmtPcapNgDestroy,
     /** pfnRecordEvent */
-    vusbSnifferFmtPcanNgRecordEvent
+    vusbSnifferFmtPcapNgRecordEvent
 };
 

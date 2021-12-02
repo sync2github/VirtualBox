@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_com_array_h
-#define ___VBox_com_array_h
+#ifndef VBOX_INCLUDED_com_array_h
+#define VBOX_INCLUDED_com_array_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 /** @defgroup   grp_com_arrays    COM/XPCOM Arrays
@@ -184,33 +187,43 @@
 #include "VBox/com/assert.h"
 #include "iprt/cpp/list.h"
 
-#ifdef VBOX_WITH_XPCOM
-
-/**
+/** @def ComSafeArrayAsInParam
  * Wraps the given com::SafeArray instance to generate an expression that is
  * suitable for passing it to functions that take input safearray parameters
  * declared using the ComSafeArrayIn macro.
  *
  * @param aArray    com::SafeArray instance to pass as an input parameter.
  */
-#define ComSafeArrayAsInParam(aArray)   \
-    (PRUint32)(aArray).size(), (aArray).__asInParam_Arr((aArray).raw())
 
-/**
+/** @def ComSafeArrayAsOutParam
  * Wraps the given com::SafeArray instance to generate an expression that is
  * suitable for passing it to functions that take output safearray parameters
  * declared using the ComSafeArrayOut macro.
  *
  * @param aArray    com::SafeArray instance to pass as an output parameter.
  */
-#define ComSafeArrayAsOutParam(aArray)  \
+
+/** @def ComSafeArrayNullInParam
+ * Helper for passing a NULL array parameter to a COM / XPCOM method.
+ */
+
+#ifdef VBOX_WITH_XPCOM
+
+# define ComSafeArrayAsInParam(aArray) \
+    (PRUint32)(aArray).size(), (aArray).__asInParam_Arr((aArray).raw())
+
+# define ComSafeArrayAsOutParam(aArray) \
     (aArray).__asOutParam_Size(), (aArray).__asOutParam_Arr()
+
+# define ComSafeArrayNullInParam()      0, NULL
 
 #else /* !VBOX_WITH_XPCOM */
 
-#define ComSafeArrayAsInParam(aArray)   (aArray).__asInParam()
+# define ComSafeArrayAsInParam(aArray)  (aArray).__asInParam()
 
-#define ComSafeArrayAsOutParam(aArray)  (aArray).__asOutParam()
+# define ComSafeArrayAsOutParam(aArray) (aArray).__asOutParam()
+
+# define ComSafeArrayNullInParam()      (NULL)
 
 #endif /* !VBOX_WITH_XPCOM */
 
@@ -219,6 +232,10 @@
  */
 namespace com
 {
+
+/** Used for dummy element access in com::SafeArray, avoiding crashes. */
+extern const char Zeroes[16];
+
 
 #ifdef VBOX_WITH_XPCOM
 
@@ -235,10 +252,10 @@ struct SafeArrayTraits
 protected:
 
     /** Initializes memory for aElem. */
-    static void Init(T &aElem) { aElem = 0; }
+    static void Init(T &aElem) { aElem = (T)0; }
 
     /** Initializes memory occupied by aElem. */
-    static void Uninit(T &aElem) { aElem = 0; }
+    static void Uninit(T &aElem) { RT_NOREF(aElem); }
 
     /** Creates a deep copy of aFrom and stores it in aTo. */
     static void Copy(const T &aFrom, T &aTo) { aTo = aFrom; }
@@ -614,7 +631,7 @@ public:
     /**
      * Creates a null array.
      */
-    SafeArray() {}
+    SafeArray() { }
 
     /**
      * Creates a new array of the given size. All elements of the newly created
@@ -730,7 +747,7 @@ public:
         resize(aMap.size());
         AssertReturnVoid(!isNull());
 
-        int i = 0;
+        size_t i = 0;
         for (typename Map::const_iterator it = aMap.begin();
              it != aMap.end(); ++ it, ++ i)
 #ifdef VBOX_WITH_XPCOM
@@ -931,8 +948,9 @@ public:
 
     /**
      * Array access operator that returns an array element by reference. A bit
-     * safer than #raw(): asserts and returns an invalid reference if this
-     * instance is null or if the index is out of bounds.
+     * safer than #raw(): asserts and returns a reference to a static zero
+     * element (const, i.e. writes will fail) if this instance is null or
+     * if the index is out of bounds.
      *
      * @note For weak instances, this call will succeed but the behavior of
      *       changing the contents of an element of the weak array instance is
@@ -940,12 +958,14 @@ public:
      */
     T &operator[] (size_t aIdx)
     {
-        AssertReturn(m.arr != NULL,  *((T *)NULL));
-        AssertReturn(aIdx < size(), *((T *)NULL));
+        /** @todo r=klaus should do this as a AssertCompile, but cannot find a way which works. */
+        Assert(sizeof(T) <= sizeof(Zeroes));
+        AssertReturn(m.arr != NULL, *(T *)&Zeroes[0]);
+        AssertReturn(aIdx < size(), *(T *)&Zeroes[0]);
 #ifdef VBOX_WITH_XPCOM
         return m.arr[aIdx];
 #else
-        AssertReturn(m.raw != NULL,  *((T *)NULL));
+        AssertReturn(m.raw != NULL, *(T *)&Zeroes[0]);
         return m.raw[aIdx];
 #endif
     }
@@ -955,12 +975,12 @@ public:
      */
     const T operator[] (size_t aIdx) const
     {
-        AssertReturn(m.arr != NULL,  *((T *)1));
-        AssertReturn(aIdx < size(), *((T *)1));
+        AssertReturn(m.arr != NULL, *(const T *)&Zeroes[0]);
+        AssertReturn(aIdx < size(), *(const T *)&Zeroes[0]);
 #ifdef VBOX_WITH_XPCOM
         return m.arr[aIdx];
 #else
-        AssertReturn(m.raw != NULL,  *((T *)NULL));
+        AssertReturn(m.raw != NULL, *(const T *)&Zeroes[0]);
         return m.raw[aIdx];
 #endif
     }
@@ -991,10 +1011,10 @@ public:
         AssertFailedReturn(*this);
     }
 
-    void cloneTo(SafeArray<T>& aOther) const
+    HRESULT cloneTo(SafeArray<T>& aOther) const
     {
         aOther.reset(size());
-        aOther.initFrom(*this);
+        return aOther.initFrom(*this);
     }
 
 
@@ -1067,8 +1087,8 @@ public:
         return list;
     }
 
-    inline void initFrom(const com::SafeArray<T> & aRef);
-    inline void initFrom(const T* aPtr, size_t aSize);
+    inline HRESULT initFrom(const com::SafeArray<T> & aRef);
+    inline HRESULT initFrom(const T* aPtr, size_t aSize);
 
     // Public methods for internal purposes only.
 
@@ -1274,60 +1294,92 @@ protected:
 
 /* Few fast specializations for primitive array types */
 template<>
-inline void com::SafeArray<BYTE>::initFrom(const com::SafeArray<BYTE> & aRef)
+inline HRESULT com::SafeArray<BYTE>::initFrom(const com::SafeArray<BYTE> & aRef)
 {
     size_t sSize = aRef.size();
-    resize(sSize);
-    ::memcpy(raw(), aRef.raw(), sSize);
+    if (resize(sSize))
+    {
+        ::memcpy(raw(), aRef.raw(), sSize);
+        return S_OK;
+    }
+    return E_OUTOFMEMORY;
 }
 template<>
-inline void com::SafeArray<BYTE>::initFrom(const BYTE* aPtr, size_t aSize)
+inline HRESULT com::SafeArray<BYTE>::initFrom(const BYTE *aPtr, size_t aSize)
 {
-    resize(aSize);
-    ::memcpy(raw(), aPtr, aSize);
+    if (resize(aSize))
+    {
+        ::memcpy(raw(), aPtr, aSize);
+        return S_OK;
+    }
+    return E_OUTOFMEMORY;
 }
 
 
 template<>
-inline void com::SafeArray<SHORT>::initFrom(const com::SafeArray<SHORT> & aRef)
+inline HRESULT com::SafeArray<SHORT>::initFrom(const com::SafeArray<SHORT> & aRef)
 {
     size_t sSize = aRef.size();
-    resize(sSize);
-    ::memcpy(raw(), aRef.raw(), sSize * sizeof(SHORT));
+    if (resize(sSize))
+    {
+        ::memcpy(raw(), aRef.raw(), sSize * sizeof(SHORT));
+        return S_OK;
+    }
+    return E_OUTOFMEMORY;
 }
 template<>
-inline void com::SafeArray<SHORT>::initFrom(const SHORT* aPtr, size_t aSize)
+inline HRESULT com::SafeArray<SHORT>::initFrom(const SHORT *aPtr, size_t aSize)
 {
-    resize(aSize);
-    ::memcpy(raw(), aPtr, aSize * sizeof(SHORT));
+    if (resize(aSize))
+    {
+        ::memcpy(raw(), aPtr, aSize * sizeof(SHORT));
+        return S_OK;
+    }
+    return E_OUTOFMEMORY;
 }
 
 template<>
-inline void com::SafeArray<USHORT>::initFrom(const com::SafeArray<USHORT> & aRef)
+inline HRESULT com::SafeArray<USHORT>::initFrom(const com::SafeArray<USHORT> & aRef)
 {
     size_t sSize = aRef.size();
-    resize(sSize);
-    ::memcpy(raw(), aRef.raw(), sSize * sizeof(USHORT));
+    if (resize(sSize))
+    {
+        ::memcpy(raw(), aRef.raw(), sSize * sizeof(USHORT));
+        return S_OK;
+    }
+    return E_OUTOFMEMORY;
 }
 template<>
-inline void com::SafeArray<USHORT>::initFrom(const USHORT* aPtr, size_t aSize)
+inline HRESULT com::SafeArray<USHORT>::initFrom(const USHORT *aPtr, size_t aSize)
 {
-    resize(aSize);
-    ::memcpy(raw(), aPtr, aSize * sizeof(USHORT));
+    if (resize(aSize))
+    {
+        ::memcpy(raw(), aPtr, aSize * sizeof(USHORT));
+        return S_OK;
+    }
+    return E_OUTOFMEMORY;
 }
 
 template<>
-inline void com::SafeArray<LONG>::initFrom(const com::SafeArray<LONG> & aRef)
+inline HRESULT com::SafeArray<LONG>::initFrom(const com::SafeArray<LONG> & aRef)
 {
     size_t sSize = aRef.size();
-    resize(sSize);
-    ::memcpy(raw(), aRef.raw(), sSize * sizeof(LONG));
+    if (resize(sSize))
+    {
+        ::memcpy(raw(), aRef.raw(), sSize * sizeof(LONG));
+        return S_OK;
+    }
+    return E_OUTOFMEMORY;
 }
 template<>
-inline void com::SafeArray<LONG>::initFrom(const LONG* aPtr, size_t aSize)
+inline HRESULT com::SafeArray<LONG>::initFrom(const LONG *aPtr, size_t aSize)
 {
-    resize(aSize);
-    ::memcpy(raw(), aPtr, aSize * sizeof(LONG));
+    if (resize(aSize))
+    {
+        ::memcpy(raw(), aPtr, aSize * sizeof(LONG));
+        return S_OK;
+    }
+    return E_OUTOFMEMORY;
 }
 
 
@@ -1373,12 +1425,12 @@ public:
     {
     public:
 
-        nsIDRef(nsID * &aVal) : mVal(aVal) {}
+        nsIDRef(nsID * &aVal) : mVal(aVal) { AssertCompile(sizeof(nsID) <= sizeof(Zeroes)); }
 
-        operator const nsID &() const { return mVal ? *mVal : *Empty; }
-        operator nsID() const { return mVal ? *mVal : *Empty; }
+        operator const nsID &() const { return mVal ? *mVal : *(const nsID *)&Zeroes[0]; }
+        operator nsID() const { return mVal ? *mVal : *(nsID *)&Zeroes[0]; }
 
-        const nsID *operator&() const { return mVal ? mVal : Empty; }
+        const nsID *operator&() const { return mVal ? mVal : (const nsID *)&Zeroes[0]; }
 
         nsIDRef &operator= (const nsID &aThat)
         {
@@ -1392,8 +1444,6 @@ public:
     private:
 
         nsID * &mVal;
-
-        static const nsID *Empty;
 
         friend class SafeGUIDArray;
     };
@@ -1426,7 +1476,7 @@ public:
     {
         Assert(m.arr != NULL);
         Assert(aIdx < size());
-        return m.arr[aIdx] ? *m.arr[aIdx] : *nsIDRef::Empty;
+        return m.arr[aIdx] ? *m.arr[aIdx] : *(const nsID *)&Zeroes[0];
     }
 };
 
@@ -1444,7 +1494,7 @@ public:
     typedef SafeArray<const nsID *, SafeArrayTraits<nsID *> > Base;
 
     /** See SafeArray<>::SafeArray(). */
-    SafeConstGUIDArray() {}
+    SafeConstGUIDArray() { AssertCompile(sizeof(nsID) <= sizeof(Zeroes)); }
 
     /* See SafeArray<>::SafeArray(ComSafeArrayIn(T, aArg)). */
     SafeConstGUIDArray(ComSafeGUIDArrayIn(aArg))
@@ -1459,8 +1509,8 @@ public:
      */
     const nsID &operator[] (size_t aIdx) const
     {
-        AssertReturn(m.arr != NULL,  **((const nsID * *)1));
-        AssertReturn(aIdx < size(), **((const nsID * *)1));
+        AssertReturn(m.arr != NULL,  *(const nsID *)&Zeroes[0]);
+        AssertReturn(aIdx < size(), *(const nsID *)&Zeroes[0]);
         return *m.arr[aIdx];
     }
 
@@ -1620,9 +1670,8 @@ public:
             GUID guid;
             rc = SafeArrayGetIID(arg, &guid);
             AssertComRCReturnVoid(rc);
-            AssertMsgReturnVoid(InlineIsEqualGUID(COM_IIDOF(I), guid),
-                                ("Expected IID {%RTuuid}, got {%RTuuid}.\n",
-                                 &COM_IIDOF(I), &guid));
+            AssertMsgReturnVoid(InlineIsEqualGUID(COM_IIDOF(I), guid) || arg->rgsabound[0].cElements == 0 /* IDispatch if empty */,
+                                ("Expected IID {%RTuuid}, got {%RTuuid}.\n", &COM_IIDOF(I), &guid));
 
             rc = SafeArrayAccessData(arg, (void HUGEP **)&m.raw);
             AssertComRCReturnVoid(rc);
@@ -1653,7 +1702,7 @@ public:
         Base::resize(aCntr.size());
         AssertReturnVoid(!Base::isNull());
 
-        int i = 0;
+        size_t i = 0;
         for (typename List::const_iterator it = aCntr.begin();
              it != aCntr.end(); ++ it, ++ i)
 #ifdef VBOX_WITH_XPCOM
@@ -1682,7 +1731,7 @@ public:
         Base::resize(aCntr.size());
         AssertReturnVoid(!Base::isNull());
 
-        int i = 0;
+        size_t i = 0;
         for (typename List::const_iterator it = aCntr.begin();
              it != aCntr.end(); ++ it, ++ i)
 #ifdef VBOX_WITH_XPCOM
@@ -1714,7 +1763,7 @@ public:
         Base::resize(aMap.size());
         AssertReturnVoid(!Base::isNull());
 
-        int i = 0;
+        size_t i = 0;
         for (typename Map::const_iterator it = aMap.begin();
              it != aMap.end(); ++ it, ++ i)
 #ifdef VBOX_WITH_XPCOM
@@ -1746,7 +1795,7 @@ public:
         Base::resize(aMap.size());
         AssertReturnVoid(!Base::isNull());
 
-        int i = 0;
+        size_t i = 0;
         for (typename Map::const_iterator it = aMap.begin();
              it != aMap.end(); ++ it, ++ i)
 #ifdef VBOX_WITH_XPCOM
@@ -1770,5 +1819,5 @@ public:
 
 /** @} */
 
-#endif /* !___VBox_com_array_h */
+#endif /* !VBOX_INCLUDED_com_array_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineSettingsSFDetails.h 86045 2020-09-07 14:58:04Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineSettingsSFDetails class declaration.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,32 +15,39 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIMachineSettingsSFDetails_h__
-#define __UIMachineSettingsSFDetails_h__
+#ifndef FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsSFDetails_h
+#define FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsSFDetails_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Includes */
-#include "UIMachineSettingsSFDetails.gen.h"
 #include "QIDialog.h"
 #include "QIWithRetranslateUI.h"
 #include "UIMachineSettingsSF.h"
 
+class UIFilePathSelector;
+class QCheckBox;
+class QLabel;
+class QLineEdit;
+class QIDialogButtonBox;
+
 /* Shared folders details dialog: */
-class UIMachineSettingsSFDetails : public QIWithRetranslateUI2<QIDialog>,
-                                   public Ui::UIMachineSettingsSFDetails
+class SHARED_LIBRARY_STUFF UIMachineSettingsSFDetails : public QIWithRetranslateUI2<QIDialog>
 {
     Q_OBJECT;
 
 public:
 
-    enum DialogType
+    enum SFDialogType
     {
         AddType,
         EditType
     };
 
-    UIMachineSettingsSFDetails(DialogType type,
-                               bool fEnableSelector, /* for "permanent" checkbox */
-                               const SFoldersNameList &usedNames,
+    UIMachineSettingsSFDetails(SFDialogType type,
+                               bool fUsePermanent,
+                               const QStringList &usedNames,
                                QWidget *pParent = 0);
 
     void setPath(const QString &strPath);
@@ -54,6 +61,9 @@ public:
 
     void setAutoMount(bool fAutoMount);
     bool isAutoMounted() const;
+
+    void setAutoMountPoint(const QString &strAutoMountPoint);
+    QString autoMountPoint() const;
 
     void setPermanent(bool fPermanent);
     bool isPermanent() const;
@@ -69,10 +79,41 @@ private slots:
 
 private:
 
-    DialogType       m_type;
-    bool             m_fUsePermanent;
-    SFoldersNameList m_usedNames;
+    /** Prepares all. */
+    void prepare();
+    /** Prepares widgets. */
+    void prepareWidgets();
+    /** Prepares connections. */
+    void prepareConnections();
+
+    SFDialogType  m_type;
+    bool          m_fUsePermanent;
+    QStringList   m_usedNames;
+    UISettingsCacheSharedFolders *m_pCache;
+
+    /** @name Widgets
+      * @{ */
+        /** Holds the path label instance. */
+        QLabel             *m_pLabelPath;
+        /** Holds the path selector instance. */
+        UIFilePathSelector *m_pSelectorPath;
+        /** Holds the name label instance. */
+        QLabel             *m_pLabelName;
+        /** Holds the name editor instance. */
+        QLineEdit          *m_pEditorName;
+        /** Holds the auto-mount point label instance. */
+        QLabel             *m_pLabelAutoMountPoint;
+        /** Holds the auto-mount point editor instance. */
+        QLineEdit          *m_pEditorAutoMountPoint;
+        /** Holds the read-only check-box instance. */
+        QCheckBox          *m_pCheckBoxReadonly;
+        /** Holds the auto-mount check-box instance. */
+        QCheckBox          *m_pCheckBoxAutoMount;
+        /** Holds the permanent check-box instance. */
+        QCheckBox          *m_pCheckBoxPermanent;
+        /** Holds the button-box instance. */
+        QIDialogButtonBox  *m_pButtonBox;
+    /** @} */
 };
 
-#endif // __UIMachineSettingsSFDetails_h__
-
+#endif /* !FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsSFDetails_h */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstTime-2.cpp 87645 2021-02-08 22:16:51Z vboxsync $ */
 /** @file
  * IPRT Testcase - Simple RTTime test.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -71,7 +71,8 @@ int main()
         RTPrintf("tstTime-2: total time difference: u64OSElapsedTS=%#llx u64RTElapsedTS=%#llx delta=%lld\n",
                  u64OSElapsedTS, u64RTElapsedTS, u64OSElapsedTS - u64RTElapsedTS);
 
-    RTPrintf("tstTime-2: %u calls to RTTimeNanoTS\n", NUMBER_OF_CALLS);
+    RTPrintf("tstTime-2: %'u calls to RTTimeNanoTS in %'lluns -> %'llu calls/sec (%s)\n",
+             NUMBER_OF_CALLS, u64RTElapsedTS, (uint64_t)(NUMBER_OF_CALLS / ((double)u64RTElapsedTS / RT_NS_1SEC)), RTTimeNanoTSWorkerName());
 #if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86) /** @todo This isn't really x86 or AMD64 specific... */
     RTPrintf("tstTime-2: RTTimeDbgSteps   -> %u (%d ppt)\n", RTTimeDbgSteps(),   ((uint64_t)RTTimeDbgSteps() * 1000) / NUMBER_OF_CALLS);
     RTPrintf("tstTime-2: RTTimeDbgExpired -> %u (%d ppt)\n", RTTimeDbgExpired(), ((uint64_t)RTTimeDbgExpired() * 1000) / NUMBER_OF_CALLS);

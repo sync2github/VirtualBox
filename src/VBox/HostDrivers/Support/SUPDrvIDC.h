@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPDrvIDC.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VirtualBox Support Driver - Inter-Driver Communication (IDC) definitions.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___SUPDrvIDC_h___
-#define ___SUPDrvIDC_h___
+#ifndef VBOX_INCLUDED_SRC_Support_SUPDrvIDC_h
+#define VBOX_INCLUDED_SRC_Support_SUPDrvIDC_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 
@@ -36,7 +39,10 @@
  *
  * @remarks We can take a slightly more relaxed attitude wrt to size encoding
  *          here since only windows will use standard I/O control function code.
+ *
+ * @{
  */
+
 #ifdef RT_OS_WINDOWS
 # define SUP_IDC_CODE(Function)                 CTL_CODE(FILE_DEVICE_UNKNOWN, (Function) + 2542, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 #else
@@ -44,9 +50,6 @@
 #endif
 
 
-/*******************************************************************************
-*   Structures and Typedefs                                                    *
-*******************************************************************************/
 #ifdef RT_ARCH_AMD64
 # pragma pack(8)                        /* paranoia. */
 #else
@@ -264,12 +267,12 @@ RT_C_DECLS_END
  * @param   cbReq       The size of the request packet.
  */
 /** @todo move this and change to function proto */
-typedef DECLCALLBACK(int) FNSUPDRVIDCENTRY(PSUPDRVSESSION pSession, uint32_t uReq, void *pvReq, uint32_t cbReq);
+typedef DECLCALLBACKTYPE(int, FNSUPDRVIDCENTRY,(PSUPDRVSESSION pSession, uint32_t uReq, void *pvReq, uint32_t cbReq));
 
 /** @} */
 
 
 #pragma pack()                          /* paranoia */
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Support_SUPDrvIDC_h */
 

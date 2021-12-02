@@ -1,10 +1,10 @@
+/* $Id: split-soapC.cpp 83223 2020-03-06 14:41:03Z vboxsync $ */
 /** @file
- * File splitter: splits soapC.cpp into manageable pieces. It is somewhat
- * intelligent and avoids splitting inside functions or similar places.
+ * Splits soapC.cpp and soapH-noinline.cpp into more manageable portions.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,7 +15,12 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <iprt/types.h>
+#include <iprt/path.h>
 #include <sys/types.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,7 +28,7 @@
 #include <limits.h>
 
 
-char *readfileIntoBuffer(const char *pszFile, size_t *pcbFile)
+static char *readfileIntoBuffer(const char *pszFile, size_t *pcbFile)
 {
     FILE *pFileIn = fopen(pszFile, "rb");
     if (pFileIn)
@@ -68,9 +73,9 @@ int main(int argc, char *argv[])
      */
     if (argc != 4)
     {
-        fprintf(stderr, "split-soapC: Must be started with exactly three arguments,\n"
-                        "1) the input file, 2) the directory where to put the output files and\n"
-                        "3) the number chunks to create.\n");
+        fprintf(stderr, "split-soapC: Must be started with exactly four arguments,\n"
+                        "1) the input file, 2) the output filename prefix and\n"
+                        "3) the number chunks to create.");
         return RTEXITCODE_SYNTAX;
     }
 
@@ -104,6 +109,7 @@ int main(int argc, char *argv[])
     size_t        cbLimit = 0;
     size_t        cbWritten = 0;
     unsigned long cIfNesting = 0;
+    unsigned long cWarningNesting = 0;
     unsigned long cBraceNesting = 0;
     unsigned long cLinesSinceStaticMap = ~0UL / 2;
     bool          fJustZero = false;
@@ -114,9 +120,13 @@ int main(int argc, char *argv[])
         {
             /* construct output filename */
             char szFilename[1024];
-            sprintf(szFilename, "%s/soapC-%lu.cpp", argv[2], ++cFiles);
+            sprintf(szFilename, "%s%lu.cpp", argv[2], ++cFiles);
             szFilename[sizeof(szFilename)-1] = '\0';
-            printf("info: soapC-%lu.cpp\n", cFiles);
+
+            size_t offName = strlen(szFilename);
+            while (offName > 0 && !RTPATH_IS_SEP(szFilename[offName - 1]))
+                offName -= 1;
+            printf("info: %s\n", &szFilename[offName]);
 
             /* create output file */
             pFileOut = fopen(szFilename, "wb");
@@ -165,6 +175,10 @@ int main(int argc, char *argv[])
             if (!cBraceNesting && !cIfNesting)
                 fJustZero = true;
         }
+        else if (!strncmp(pszLine, RT_STR_TUPLE("#pragma warning(push)")))
+            cWarningNesting++;
+        else if (!strncmp(pszLine, RT_STR_TUPLE("#pragma warning(pop)")))
+            cWarningNesting--;
         else
         {
             for (const char *p = pszLine; p < pszLine + cbLine; p++)
@@ -189,6 +203,7 @@ int main(int argc, char *argv[])
         /* start a new output file if necessary and possible */
         if (   cbWritten >= cbLimit
             && cIfNesting == 0
+            && cWarningNesting == 0
             && fJustZero
             && cFiles < cChunks
             && cLinesSinceStaticMap > 150 /*hack!*/)

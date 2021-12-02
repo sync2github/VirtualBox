@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -286,6 +286,9 @@ typedef struct NATState
     struct request *request_hash[1 << HASHSIZE];
     /* this field control behaviour of DHCP server */
     bool fUseDnsProxy;
+    /** Flag whether the guest can contact services on the host's
+     * loopback interface (127.0.0.1/localhost). */
+    bool fLocalhostReachable;
 
     LIST_HEAD(RT_NOTHING, libalias) instancehead;
     int    i32AliasMode;

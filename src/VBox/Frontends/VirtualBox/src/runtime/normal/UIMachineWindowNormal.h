@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineWindowNormal.h 90685 2021-08-13 16:32:18Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineWindowNormal class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineWindowNormal_h___
-#define ___UIMachineWindowNormal_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_normal_UIMachineWindowNormal_h
+#define FEQT_INCLUDED_SRC_runtime_normal_UIMachineWindowNormal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UIMachineWindow.h"
@@ -52,12 +55,14 @@ private slots:
     void sltUSBControllerChange();
     /** Handles USB device state change event. */
     void sltUSBDeviceStateChange();
+    /** Handles audio adapter change event. */
+    void sltAudioAdapterChange();
     /** Handles network adapter change event. */
     void sltNetworkAdapterChange();
     /** Handles shared folder change event. */
     void sltSharedFolderChange();
-    /** Handles video capture change event. */
-    void sltVideoCaptureChange();
+    /** Handles recording change event. */
+    void sltRecordingChange();
     /** Handles CPU execution cap change event. */
     void sltCPUExecutionCapChange();
     /** Handles UISession initialized event. */
@@ -65,17 +70,17 @@ private slots:
 
 #ifndef RT_OS_DARWIN
     /** Handles menu-bar configuration-change. */
-    void sltHandleMenuBarConfigurationChange(const QString &strMachineID);
+    void sltHandleMenuBarConfigurationChange(const QUuid &uMachineID);
     /** Handles menu-bar context-menu-request. */
     void sltHandleMenuBarContextMenuRequest(const QPoint &position);
 #endif /* !RT_OS_DARWIN */
 
     /** Handles status-bar configuration-change. */
-    void sltHandleStatusBarConfigurationChange(const QString &strMachineID);
+    void sltHandleStatusBarConfigurationChange(const QUuid &uMachineID);
     /** Handles status-bar context-menu-request. */
     void sltHandleStatusBarContextMenuRequest(const QPoint &position);
     /** Handles status-bar indicator context-menu-request. */
-    void sltHandleIndicatorContextMenuRequest(IndicatorType indicatorType, const QPoint &position);
+    void sltHandleIndicatorContextMenuRequest(IndicatorType enmIndicatorType, const QPoint &indicatorPosition);
 
 #ifdef VBOX_WS_MAC
     /** Handles signal about some @a pAction hovered. */
@@ -92,15 +97,19 @@ private:
 #endif /* !VBOX_WS_MAC */
     /** Prepare status-bar routine. */
     void prepareStatusBar();
+    /** Prepare notification-center routine. */
+    void prepareNotificationCenter();
     /** Prepare visual-state routine. */
     void prepareVisualState();
     /** Load settings routine. */
     void loadSettings();
 
-    /** Save settings routine. */
-    void saveSettings();
     /** Cleanup visual-state routine. */
     void cleanupVisualState();
+    /** Cleanup notification-center routine. */
+    void cleanupNotificationCenter();
+    /** Cleanup status-bar routine. */
+    void cleanupStatusBar();
     /** Cleanup session connections routine. */
     void cleanupSessionConnections();
 
@@ -111,8 +120,9 @@ private:
     virtual void restoreCachedGeometry() /* override */;
 
     /** Performs window geometry normalization according to guest-size and host's available geometry.
-      * @param  fAdjustPosition  Determines whether is it necessary to adjust position as well. */
-    virtual void normalizeGeometry(bool fAdjustPosition) /* override */;
+      * @param  fAdjustPosition        Determines whether is it necessary to adjust position as well.
+      * @param  fResizeToGuestDisplay  Determines whether is it necessary to resize the window to fit to guest display size. */
+    virtual void normalizeGeometry(bool fAdjustPosition, bool fResizeToGuestDisplay) /* override */;
 
     /** Common update routine. */
     void updateAppearanceOf(int aElement);
@@ -132,11 +142,12 @@ private:
     UIIndicatorsPool *m_pIndicatorsPool;
 
     /** Holds the current window geometry. */
-    QRect m_normalGeometry;
+    QRect  m_geometry;
+    /** Holds the geometry save timer ID. */
+    int  m_iGeometrySaveTimerId;
 
     /** Factory support. */
     friend class UIMachineWindow;
 };
 
-#endif /* !___UIMachineWindowNormal_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_runtime_normal_UIMachineWindowNormal_h */

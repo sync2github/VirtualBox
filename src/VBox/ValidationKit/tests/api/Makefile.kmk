@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 83243 2020-03-10 11:22:14Z vboxsync $
 ## @file
 # VirtualBox Validation Kit - API Tests.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -32,8 +32,28 @@ INSTALLS += ValidationKitTestsApi
 ValidationKitTestsApi_TEMPLATE = VBoxValidationKitR3
 ValidationKitTestsApi_INST = $(INST_VALIDATIONKIT)tests/api/
 ValidationKitTestsApi_EXEC_SOURCES := \
+	$(PATH_SUB_CURRENT)/tdApi1.py \
+	$(PATH_SUB_CURRENT)/tdAppliance1.py \
+	$(PATH_SUB_CURRENT)/tdCreateVMWithDefaults1.py \
+	$(PATH_SUB_CURRENT)/tdMoveMedium1.py \
+	$(PATH_SUB_CURRENT)/tdMoveVm1.py \
 	$(PATH_SUB_CURRENT)/tdPython1.py \
 	$(PATH_SUB_CURRENT)/tdTreeDepth1.py
+
+ifndef VBOX_OSE
+ ValidationKitTestsApi_EXEC_SOURCES += \
+	$(PATH_SUB_CURRENT)/tdCloud1.py \
+	$(PATH_SUB_CURRENT)/tdOciConnection1.py \
+ 	$(PATH_SUB_CURRENT)/tdOciExport1.py \
+	$(PATH_SUB_CURRENT)/tdOciImage1.py \
+ 	$(PATH_SUB_CURRENT)/tdOciImport1.py \
+	$(PATH_SUB_CURRENT)/tdOciInstance1.py \
+ 	$(PATH_SUB_CURRENT)/tdOciProfile1.py
+endif
+ValidationKitTestsApi_SOURCES := \
+	$(wildcard \
+		$(PATH_SUB_CURRENT)/*.ova \
+		)
 
 VBOX_VALIDATIONKIT_PYTHON_SOURCES += $(ValidationKitTestsApi_EXEC_SOURCES)
 

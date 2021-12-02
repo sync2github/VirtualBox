@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: tstCAPIGlue.c 91363 2021-09-24 13:08:32Z vboxsync $ */
 /** @file tstCAPIGlue.c
  * Demonstrator program to illustrate use of C bindings of Main API.
  *
@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -39,7 +39,7 @@
 # include <unistd.h>
 # include <sys/poll.h>
 #endif
-#ifdef ___iprt_cdefs_h
+#ifdef IPRT_INCLUDED_cdefs_h
 # error "not supposed to involve any IPRT or VBox headers here."
 #endif
 
@@ -73,6 +73,7 @@ static const char *GetStateName(MachineState_T machineState)
         case MachineState_Saved:               return "Saved";
         case MachineState_Teleported:          return "Teleported";
         case MachineState_Aborted:             return "Aborted";
+        case MachineState_AbortedSaved:        return "Aborted-Saved";
         case MachineState_Running:             return "Running";
         case MachineState_Paused:              return "Paused";
         case MachineState_Stuck:               return "Stuck";
@@ -84,7 +85,6 @@ static const char *GetStateName(MachineState_T machineState)
         case MachineState_Restoring:           return "Restoring";
         case MachineState_TeleportingPausedVM: return "TeleportingPausedVM";
         case MachineState_TeleportingIn:       return "TeleportingIn";
-        case MachineState_FaultTolerantSyncing: return "FaultTolerantSyncing";
         case MachineState_DeletingSnapshotOnline: return "DeletingSnapshotOnline";
         case MachineState_DeletingSnapshotPaused: return "DeletingSnapshotPaused";
         case MachineState_RestoringSnapshot:   return "RestoringSnapshot";
@@ -102,12 +102,20 @@ static const char *GetStateName(MachineState_T machineState)
  *
  * @param  iInfo    Platform dependent detail info (ignored).
  */
+#ifdef WIN32
 static BOOL VBOX_WINAPI ctrlCHandler(DWORD iInfo)
 {
     (void)iInfo;
     g_fStop = 1;
     return TRUE;
 }
+#else
+static void ctrlCHandler(int iInfo)
+{
+    (void)iInfo;
+    g_fStop = 1;
+}
+#endif
 
 /**
  * Sample event processing function, dumping some event information.
@@ -129,7 +137,7 @@ static HRESULT EventListenerDemoProcessEvent(IEvent *event)
     rc = IEvent_get_Type(event, &evType);
     if (FAILED(rc))
     {
-        printf("cannot get event type, rc=%#x\n", rc);
+        printf("cannot get event type, rc=%#x\n", (unsigned)rc);
         return S_OK;
     }
 
@@ -154,7 +162,7 @@ static HRESULT EventListenerDemoProcessEvent(IEvent *event)
             rc = IEvent_QueryInterface(event, &IID_IStateChangedEvent, (void **)&ev);
             if (FAILED(rc))
             {
-                printf("cannot get StateChangedEvent interface, rc=%#x\n", rc);
+                printf("cannot get StateChangedEvent interface, rc=%#x\n", (unsigned)rc);
                 return S_OK;
             }
             if (!ev)
@@ -164,7 +172,7 @@ static HRESULT EventListenerDemoProcessEvent(IEvent *event)
             }
             rc = IStateChangedEvent_get_State(ev, &state);
             if (FAILED(rc))
-                printf("warning: cannot get state, rc=%#x\n", rc);
+                printf("warning: cannot get state, rc=%#x\n", (unsigned)rc);
             IStateChangedEvent_Release(ev);
             printf("OnStateChanged: %s\n", GetStateName(state));
 
@@ -173,6 +181,7 @@ static HRESULT EventListenerDemoProcessEvent(IEvent *event)
                 || state == MachineState_Saved
                 || state == MachineState_Teleported
                 || state == MachineState_Aborted
+                || state == MachineState_AbortedSaved
                )
                 g_fStop = 1;
             break;
@@ -604,7 +613,7 @@ static void registerPassiveEventListener(ISession *session)
 #ifdef WIN32
                     SetConsoleCtrlHandler(ctrlCHandler, TRUE);
 #else
-                    signal(SIGINT, (void (*)(int))ctrlCHandler);
+                    signal(SIGINT, ctrlCHandler);
 #endif
 
                     while (!g_fStop)
@@ -613,7 +622,7 @@ static void registerPassiveEventListener(ISession *session)
                         rc = IEventSource_GetEvent(es, consoleListener, 250, &ev);
                         if (FAILED(rc))
                         {
-                            printf("Failed getting event: %#x\n", rc);
+                            printf("Failed getting event: %#x\n", (unsigned)rc);
                             g_fStop = 1;
                             continue;
                         }
@@ -623,14 +632,14 @@ static void registerPassiveEventListener(ISession *session)
                         rc = EventListenerDemoProcessEvent(ev);
                         if (FAILED(rc))
                         {
-                            printf("Failed processing event: %#x\n", rc);
+                            printf("Failed processing event: %#x\n", (unsigned)rc);
                             g_fStop = 1;
                             /* finish processing the event */
                         }
                         rc = IEventSource_EventProcessed(es, consoleListener, ev);
                         if (FAILED(rc))
                         {
-                            printf("Failed to mark event as processed: %#x\n", rc);
+                            printf("Failed to mark event as processed: %#x\n", (unsigned)rc);
                             g_fStop = 1;
                             /* continue with event release */
                         }
@@ -735,7 +744,7 @@ static void startVM(const char *argv0, IVirtualBox *virtualBox, ISession *sessio
     HRESULT rc;
     IMachine  *machine    = NULL;
     IProgress *progress   = NULL;
-    BSTR env              = NULL;
+    SAFEARRAY *env        = NULL;
     BSTR sessionType;
     SAFEARRAY *groupsSA = g_pVBoxFuncs->pfnSafeArrayOutParamAlloc();
 
@@ -763,7 +772,7 @@ static void startVM(const char *argv0, IVirtualBox *virtualBox, ISession *sessio
              * 16 bit number. So better play safe and use UTF-8. */
             char *group;
             g_pVBoxFuncs->pfnUtf16ToUtf8(groups[i], &group);
-            printf("Groups[%d]: %s\n", i, group);
+            printf("Groups[%u]: %s\n", (unsigned)i, group);
             g_pVBoxFuncs->pfnUtf8Free(group);
         }
         for (i = 0; i < cGroups; ++i)
@@ -772,7 +781,7 @@ static void startVM(const char *argv0, IVirtualBox *virtualBox, ISession *sessio
     }
 
     g_pVBoxFuncs->pfnUtf8ToUtf16("gui", &sessionType);
-    rc = IMachine_LaunchVMProcess(machine, session, sessionType, env, &progress);
+    rc = IMachine_LaunchVMProcess(machine, session, sessionType, ComSafeArrayAsInParam(env), &progress);
     g_pVBoxFuncs->pfnUtf16Free(sessionType);
     if (SUCCEEDED(rc))
     {
@@ -925,7 +934,7 @@ static void listVMs(const char *argv0, IVirtualBox *virtualBox, ISession *sessio
                 ULONG memorySize;
 
                 IMachine_get_MemorySize(machine, &memorySize);
-                printf("\tMemory size: %uMB\n", memorySize);
+                printf("\tMemory size: %uMB\n", (unsigned)memorySize);
             }
 
             {
@@ -1053,7 +1062,7 @@ int main(int argc, char **argv)
     /* 1. Revision */
     rc = IVirtualBox_get_Revision(vbox, &revision);
     if (SUCCEEDED(rc))
-        printf("\tRevision: %u\n", revision);
+        printf("\tRevision: %u\n", (unsigned)revision);
     else
         PrintErrorInfo(argv[0], "GetRevision() failed", rc);
 

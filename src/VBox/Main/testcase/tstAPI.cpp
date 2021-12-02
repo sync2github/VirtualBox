@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstAPI.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * tstAPI - test program for our COM/XPCOM interface
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,7 +20,6 @@
 
 #include <VBox/com/com.h>
 #include <VBox/com/string.h>
-#include <VBox/com/array.h>
 #include <VBox/com/Guid.h>
 #include <VBox/com/ErrorInfo.h>
 #include <VBox/com/errorprint.h>
@@ -1308,7 +1307,7 @@ int main(int argc, char *argv[])
         ComPtr<IProgress> progress;
         RTPrintf("Launching VM process...\n");
         CHECK_ERROR_BREAK(machine, LaunchVMProcess(session, sessionType.raw(),
-                                                   NULL, progress.asOutParam()));
+                                                   ComSafeArrayNullInParam(), progress.asOutParam()));
         RTPrintf("Waiting for the VM to power on...\n");
         CHECK_ERROR_BREAK(progress, WaitForCompletion(-1));
 

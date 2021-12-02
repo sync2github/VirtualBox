@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: AuthLibrary.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Main - external authentication library interface.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_AUTHLIBRARY
-#define ____H_AUTHLIBRARY
+#ifndef MAIN_INCLUDED_AuthLibrary_h
+#define MAIN_INCLUDED_AuthLibrary_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/VBoxAuth.h>
 #include <iprt/types.h>
@@ -38,4 +41,4 @@ AuthResult AuthLibAuthenticate(const AUTHLIBRARYCONTEXT *pAuthLibCtx,
                                uint32_t u32ClientId);
 void AuthLibDisconnect(const AUTHLIBRARYCONTEXT *pAuthLibCtx, PCRTUUID pUuid, uint32_t u32ClientId);
 
-#endif  /* !____H_AUTHLIBRARY */
+#endif /* !MAIN_INCLUDED_AuthLibrary_h */

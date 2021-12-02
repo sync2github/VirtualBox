@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPLib.cpp 92251 2021-11-06 15:59:09Z vboxsync $ */
 /** @file
  * VirtualBox Support Library - Common code.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -82,7 +82,7 @@
 /*********************************************************************************************************************************
 *   Structures and Typedefs                                                                                                      *
 *********************************************************************************************************************************/
-typedef DECLCALLBACK(int) FNCALLVMMR0(PVMR0 pVMR0, unsigned uOperation, void *pvArg);
+typedef DECLCALLBACKTYPE(int, FNCALLVMMR0,(PVMR0 pVMR0, unsigned uOperation, void *pvArg));
 typedef FNCALLVMMR0 *PFNCALLVMMR0;
 
 
@@ -96,7 +96,7 @@ static bool                     g_fPreInited = false;
 /** The SUPLib instance data.
  * Well, at least parts of it, specifically the parts that are being handed over
  * via the pre-init mechanism from the hardened executable stub.  */
-SUPLIBDATA                      g_supLibData =
+DECL_HIDDEN_DATA(SUPLIBDATA)    g_supLibData =
 {
     /*.hDevice              = */    SUP_HDEVICE_NIL,
     /*.fUnrestricted        = */    true
@@ -115,25 +115,27 @@ SUPLIBDATA                      g_supLibData =
  *
  * @todo This will probably deserve it's own session or some other good solution...
  */
-DECLEXPORT(PSUPGLOBALINFOPAGE)  g_pSUPGlobalInfoPage;
+DECLEXPORT(PSUPGLOBALINFOPAGE)      g_pSUPGlobalInfoPage;
 /** Address of the ring-0 mapping of the GIP. */
-PSUPGLOBALINFOPAGE              g_pSUPGlobalInfoPageR0;
+PSUPGLOBALINFOPAGE                  g_pSUPGlobalInfoPageR0;
 /** The physical address of the GIP. */
-static RTHCPHYS                 g_HCPhysSUPGlobalInfoPage = NIL_RTHCPHYS;
+static RTHCPHYS                     g_HCPhysSUPGlobalInfoPage = NIL_RTHCPHYS;
 
 /** The negotiated cookie. */
-uint32_t                        g_u32Cookie = 0;
+DECL_HIDDEN_DATA(uint32_t)          g_u32Cookie = 0;
 /** The negotiated session cookie. */
-uint32_t                        g_u32SessionCookie;
+DECL_HIDDEN_DATA(uint32_t)          g_u32SessionCookie;
+/** The session version. */
+DECL_HIDDEN_DATA(uint32_t)          g_uSupSessionVersion = 0;
 /** Session handle. */
-PSUPDRVSESSION                  g_pSession;
+DECL_HIDDEN_DATA(PSUPDRVSESSION)    g_pSession;
 /** R0 SUP Functions used for resolving referenced to the SUPR0 module. */
-PSUPQUERYFUNCS                  g_pSupFunctions;
+DECL_HIDDEN_DATA(PSUPQUERYFUNCS)    g_pSupFunctions;
 
 /** PAGE_ALLOC_EX sans kernel mapping support indicator. */
-static bool                     g_fSupportsPageAllocNoKernel = true;
+static bool                         g_fSupportsPageAllocNoKernel = true;
 /** Fake mode indicator. (~0 at first, 0 or 1 after first test) */
-uint32_t                        g_uSupFakeMode = UINT32_MAX;
+DECL_HIDDEN_DATA(uint32_t)          g_uSupFakeMode = UINT32_MAX;
 
 
 /*********************************************************************************************************************************
@@ -166,7 +168,7 @@ SUPR3DECL(int) SUPR3Uninstall(void)
 }
 
 
-DECLEXPORT(int) supR3PreInit(PSUPPREINITDATA pPreInitData, uint32_t fFlags)
+DECL_NOTHROW(DECLEXPORT(int)) supR3PreInit(PSUPPREINITDATA pPreInitData, uint32_t fFlags)
 {
     /*
      * The caller is kind of trustworthy, just perform some basic checks.
@@ -174,7 +176,7 @@ DECLEXPORT(int) supR3PreInit(PSUPPREINITDATA pPreInitData, uint32_t fFlags)
      * Note! Do not do any fancy stuff here because IPRT has NOT been
      *       initialized at this point.
      */
-    if (!VALID_PTR(pPreInitData))
+    if (!RT_VALID_PTR(pPreInitData))
         return VERR_INVALID_POINTER;
     if (g_fPreInited || g_cInits > 0)
         return VERR_WRONG_ORDER;
@@ -213,12 +215,12 @@ SUPR3DECL(int) SUPR3InitEx(bool fUnrestricted, PSUPDRVSESSION *ppSession)
      * Perform some sanity checks.
      * (Got some trouble with compile time member alignment assertions.)
      */
-    Assert(!(RT_OFFSETOF(SUPGLOBALINFOPAGE, u64NanoTSLastUpdateHz) & 0x7));
-    Assert(!(RT_OFFSETOF(SUPGLOBALINFOPAGE, aCPUs) & 0x1f));
-    Assert(!(RT_OFFSETOF(SUPGLOBALINFOPAGE, aCPUs[1]) & 0x1f));
-    Assert(!(RT_OFFSETOF(SUPGLOBALINFOPAGE, aCPUs[0].u64NanoTS) & 0x7));
-    Assert(!(RT_OFFSETOF(SUPGLOBALINFOPAGE, aCPUs[0].u64TSC) & 0x7));
-    Assert(!(RT_OFFSETOF(SUPGLOBALINFOPAGE, aCPUs[0].u64CpuHz) & 0x7));
+    Assert(!(RT_UOFFSETOF(SUPGLOBALINFOPAGE, u64NanoTSLastUpdateHz) & 0x7));
+    Assert(!(RT_UOFFSETOF(SUPGLOBALINFOPAGE, aCPUs) & 0x1f));
+    Assert(!(RT_UOFFSETOF(SUPGLOBALINFOPAGE, aCPUs[1]) & 0x1f));
+    Assert(!(RT_UOFFSETOF(SUPGLOBALINFOPAGE, aCPUs[0].u64NanoTS) & 0x7));
+    Assert(!(RT_UOFFSETOF(SUPGLOBALINFOPAGE, aCPUs[0].u64TSC) & 0x7));
+    Assert(!(RT_UOFFSETOF(SUPGLOBALINFOPAGE, aCPUs[0].u64CpuHz) & 0x7));
 
     /*
      * Check if already initialized.
@@ -275,14 +277,15 @@ SUPR3DECL(int) SUPR3InitEx(bool fUnrestricted, PSUPDRVSESSION *ppSession)
         CookieReq.Hdr.rc = VERR_INTERNAL_ERROR;
         strcpy(CookieReq.u.In.szMagic, SUPCOOKIE_MAGIC);
         CookieReq.u.In.u32ReqVersion = SUPDRV_IOC_VERSION;
-        const uint32_t uMinVersion = (SUPDRV_IOC_VERSION & 0xffff0000) == 0x00230000
-                                   ? 0x00230003
+        const uint32_t uMinVersion = (SUPDRV_IOC_VERSION & 0xffff0000) == 0x00330000
+                                   ? 0x00330002
                                    : SUPDRV_IOC_VERSION & 0xffff0000;
         CookieReq.u.In.u32MinVersion = uMinVersion;
         rc = suplibOsIOCtl(&g_supLibData, SUP_IOCTL_COOKIE, &CookieReq, SUP_IOCTL_COOKIE_SIZE);
         if (    RT_SUCCESS(rc)
             &&  RT_SUCCESS(CookieReq.Hdr.rc))
         {
+            g_uSupSessionVersion = CookieReq.u.Out.u32SessionVersion;
             if (    (CookieReq.u.Out.u32SessionVersion & 0xffff0000) == (SUPDRV_IOC_VERSION & 0xffff0000)
                 &&  CookieReq.u.Out.u32SessionVersion >= uMinVersion)
             {
@@ -405,99 +408,99 @@ static int supInitFake(PSUPDRVSESSION *ppSession)
     Log(("SUP: Fake mode!\n"));
     static const SUPFUNC s_aFakeFunctions[] =
     {
-        /* name                                     function */
-        { "SUPR0AbsIs64bit",                        0 },
-        { "SUPR0Abs64bitKernelCS",                  0 },
-        { "SUPR0Abs64bitKernelSS",                  0 },
-        { "SUPR0Abs64bitKernelDS",                  0 },
-        { "SUPR0AbsKernelCS",                       8 },
-        { "SUPR0AbsKernelSS",                       16 },
-        { "SUPR0AbsKernelDS",                       16 },
-        { "SUPR0AbsKernelES",                       16 },
-        { "SUPR0AbsKernelFS",                       24 },
-        { "SUPR0AbsKernelGS",                       32 },
-        { "SUPR0ComponentRegisterFactory",          0xefeefffd },
-        { "SUPR0ComponentDeregisterFactory",        0xefeefffe },
-        { "SUPR0ComponentQueryFactory",             0xefeeffff },
-        { "SUPR0ObjRegister",                       0xefef0000 },
-        { "SUPR0ObjAddRef",                         0xefef0001 },
-        { "SUPR0ObjAddRefEx",                       0xefef0001 },
-        { "SUPR0ObjRelease",                        0xefef0002 },
-        { "SUPR0ObjVerifyAccess",                   0xefef0003 },
-        { "SUPR0LockMem",                           0xefef0004 },
-        { "SUPR0UnlockMem",                         0xefef0005 },
-        { "SUPR0ContAlloc",                         0xefef0006 },
-        { "SUPR0ContFree",                          0xefef0007 },
-        { "SUPR0MemAlloc",                          0xefef0008 },
-        { "SUPR0MemGetPhys",                        0xefef0009 },
-        { "SUPR0MemFree",                           0xefef000a },
-        { "SUPR0Printf",                            0xefef000b },
-        { "SUPR0GetPagingMode",                     0xefef000c },
-        { "SUPR0EnableVTx",                         0xefef000e },
-        { "RTMemAlloc",                             0xefef000f },
-        { "RTMemAllocZ",                            0xefef0010 },
-        { "RTMemFree",                              0xefef0011 },
-        { "RTR0MemObjAddress",                      0xefef0012 },
-        { "RTR0MemObjAddressR3",                    0xefef0013 },
-        { "RTR0MemObjAllocPage",                    0xefef0014 },
-        { "RTR0MemObjAllocPhysNC",                  0xefef0015 },
-        { "RTR0MemObjAllocLow",                     0xefef0016 },
-        { "RTR0MemObjEnterPhys",                    0xefef0017 },
-        { "RTR0MemObjFree",                         0xefef0018 },
-        { "RTR0MemObjGetPagePhysAddr",              0xefef0019 },
-        { "RTR0MemObjMapUser",                      0xefef001a },
-        { "RTR0MemObjMapKernel",                    0xefef001b },
-        { "RTR0MemObjMapKernelEx",                  0xefef001c },
-        { "RTMpGetArraySize",                       0xefef001c },
-        { "RTProcSelf",                             0xefef001d },
-        { "RTR0ProcHandleSelf",                     0xefef001e },
-        { "RTSemEventCreate",                       0xefef001f },
-        { "RTSemEventSignal",                       0xefef0020 },
-        { "RTSemEventWait",                         0xefef0021 },
-        { "RTSemEventWaitNoResume",                 0xefef0022 },
-        { "RTSemEventDestroy",                      0xefef0023 },
-        { "RTSemEventMultiCreate",                  0xefef0024 },
-        { "RTSemEventMultiSignal",                  0xefef0025 },
-        { "RTSemEventMultiReset",                   0xefef0026 },
-        { "RTSemEventMultiWait",                    0xefef0027 },
-        { "RTSemEventMultiWaitNoResume",            0xefef0028 },
-        { "RTSemEventMultiDestroy",                 0xefef0029 },
-        { "RTSemFastMutexCreate",                   0xefef002a },
-        { "RTSemFastMutexDestroy",                  0xefef002b },
-        { "RTSemFastMutexRequest",                  0xefef002c },
-        { "RTSemFastMutexRelease",                  0xefef002d },
-        { "RTSpinlockCreate",                       0xefef002e },
-        { "RTSpinlockDestroy",                      0xefef002f },
-        { "RTSpinlockAcquire",                      0xefef0030 },
-        { "RTSpinlockRelease",                      0xefef0031 },
-        { "RTSpinlockAcquireNoInts",                0xefef0032 },
-        { "RTTimeNanoTS",                           0xefef0034 },
-        { "RTTimeMillieTS",                         0xefef0035 },
-        { "RTTimeSystemNanoTS",                     0xefef0036 },
-        { "RTTimeSystemMillieTS",                   0xefef0037 },
-        { "RTThreadNativeSelf",                     0xefef0038 },
-        { "RTThreadSleep",                          0xefef0039 },
-        { "RTThreadYield",                          0xefef003a },
-        { "RTTimerCreate",                          0xefef003a },
-        { "RTTimerCreateEx",                        0xefef003a },
-        { "RTTimerDestroy",                         0xefef003a },
-        { "RTTimerStart",                           0xefef003a },
-        { "RTTimerStop",                            0xefef003a },
-        { "RTTimerChangeInterval",                  0xefef003a },
-        { "RTTimerGetSystemGranularity",            0xefef003a },
-        { "RTTimerRequestSystemGranularity",        0xefef003a },
-        { "RTTimerReleaseSystemGranularity",        0xefef003a },
-        { "RTTimerCanDoHighResolution",             0xefef003a },
-        { "RTLogDefaultInstance",                   0xefef003b },
-        { "RTLogRelGetDefaultInstance",             0xefef003c },
-        { "RTLogSetDefaultInstanceThread",          0xefef003d },
-        { "RTLogLogger",                            0xefef003e },
-        { "RTLogLoggerEx",                          0xefef003f },
-        { "RTLogLoggerExV",                         0xefef0040 },
-        { "RTAssertMsg1",                           0xefef0041 },
-        { "RTAssertMsg2",                           0xefef0042 },
-        { "RTAssertMsg2V",                          0xefef0043 },
-        { "SUPR0QueryVTCaps",                       0xefef0044 },
+        /* name                                     0, function */
+        { "SUPR0AbsIs64bit",                        0, 0 },
+        { "SUPR0Abs64bitKernelCS",                  0, 0 },
+        { "SUPR0Abs64bitKernelSS",                  0, 0 },
+        { "SUPR0Abs64bitKernelDS",                  0, 0 },
+        { "SUPR0AbsKernelCS",                       0, 8 },
+        { "SUPR0AbsKernelSS",                       0, 16 },
+        { "SUPR0AbsKernelDS",                       0, 16 },
+        { "SUPR0AbsKernelES",                       0, 16 },
+        { "SUPR0AbsKernelFS",                       0, 24 },
+        { "SUPR0AbsKernelGS",                       0, 32 },
+        { "SUPR0ComponentRegisterFactory",          0, 0xefeefffd },
+        { "SUPR0ComponentDeregisterFactory",        0, 0xefeefffe },
+        { "SUPR0ComponentQueryFactory",             0, 0xefeeffff },
+        { "SUPR0ObjRegister",                       0, 0xefef0000 },
+        { "SUPR0ObjAddRef",                         0, 0xefef0001 },
+        { "SUPR0ObjAddRefEx",                       0, 0xefef0001 },
+        { "SUPR0ObjRelease",                        0, 0xefef0002 },
+        { "SUPR0ObjVerifyAccess",                   0, 0xefef0003 },
+        { "SUPR0LockMem",                           0, 0xefef0004 },
+        { "SUPR0UnlockMem",                         0, 0xefef0005 },
+        { "SUPR0ContAlloc",                         0, 0xefef0006 },
+        { "SUPR0ContFree",                          0, 0xefef0007 },
+        { "SUPR0MemAlloc",                          0, 0xefef0008 },
+        { "SUPR0MemGetPhys",                        0, 0xefef0009 },
+        { "SUPR0MemFree",                           0, 0xefef000a },
+        { "SUPR0Printf",                            0, 0xefef000b },
+        { "SUPR0GetPagingMode",                     0, 0xefef000c },
+        { "SUPR0EnableVTx",                         0, 0xefef000e },
+        { "RTMemAlloc",                             0, 0xefef000f },
+        { "RTMemAllocZ",                            0, 0xefef0010 },
+        { "RTMemFree",                              0, 0xefef0011 },
+        { "RTR0MemObjAddress",                      0, 0xefef0012 },
+        { "RTR0MemObjAddressR3",                    0, 0xefef0013 },
+        { "RTR0MemObjAllocPage",                    0, 0xefef0014 },
+        { "RTR0MemObjAllocPhysNC",                  0, 0xefef0015 },
+        { "RTR0MemObjAllocLow",                     0, 0xefef0016 },
+        { "RTR0MemObjEnterPhys",                    0, 0xefef0017 },
+        { "RTR0MemObjFree",                         0, 0xefef0018 },
+        { "RTR0MemObjGetPagePhysAddr",              0, 0xefef0019 },
+        { "RTR0MemObjMapUser",                      0, 0xefef001a },
+        { "RTR0MemObjMapKernel",                    0, 0xefef001b },
+        { "RTR0MemObjMapKernelEx",                  0, 0xefef001c },
+        { "RTMpGetArraySize",                       0, 0xefef001c },
+        { "RTProcSelf",                             0, 0xefef001d },
+        { "RTR0ProcHandleSelf",                     0, 0xefef001e },
+        { "RTSemEventCreate",                       0, 0xefef001f },
+        { "RTSemEventSignal",                       0, 0xefef0020 },
+        { "RTSemEventWait",                         0, 0xefef0021 },
+        { "RTSemEventWaitNoResume",                 0, 0xefef0022 },
+        { "RTSemEventDestroy",                      0, 0xefef0023 },
+        { "RTSemEventMultiCreate",                  0, 0xefef0024 },
+        { "RTSemEventMultiSignal",                  0, 0xefef0025 },
+        { "RTSemEventMultiReset",                   0, 0xefef0026 },
+        { "RTSemEventMultiWait",                    0, 0xefef0027 },
+        { "RTSemEventMultiWaitNoResume",            0, 0xefef0028 },
+        { "RTSemEventMultiDestroy",                 0, 0xefef0029 },
+        { "RTSemFastMutexCreate",                   0, 0xefef002a },
+        { "RTSemFastMutexDestroy",                  0, 0xefef002b },
+        { "RTSemFastMutexRequest",                  0, 0xefef002c },
+        { "RTSemFastMutexRelease",                  0, 0xefef002d },
+        { "RTSpinlockCreate",                       0, 0xefef002e },
+        { "RTSpinlockDestroy",                      0, 0xefef002f },
+        { "RTSpinlockAcquire",                      0, 0xefef0030 },
+        { "RTSpinlockRelease",                      0, 0xefef0031 },
+        { "RTSpinlockAcquireNoInts",                0, 0xefef0032 },
+        { "RTTimeNanoTS",                           0, 0xefef0034 },
+        { "RTTimeMillieTS",                         0, 0xefef0035 },
+        { "RTTimeSystemNanoTS",                     0, 0xefef0036 },
+        { "RTTimeSystemMillieTS",                   0, 0xefef0037 },
+        { "RTThreadNativeSelf",                     0, 0xefef0038 },
+        { "RTThreadSleep",                          0, 0xefef0039 },
+        { "RTThreadYield",                          0, 0xefef003a },
+        { "RTTimerCreate",                          0, 0xefef003a },
+        { "RTTimerCreateEx",                        0, 0xefef003a },
+        { "RTTimerDestroy",                         0, 0xefef003a },
+        { "RTTimerStart",                           0, 0xefef003a },
+        { "RTTimerStop",                            0, 0xefef003a },
+        { "RTTimerChangeInterval",                  0, 0xefef003a },
+        { "RTTimerGetSystemGranularity",            0, 0xefef003a },
+        { "RTTimerRequestSystemGranularity",        0, 0xefef003a },
+        { "RTTimerReleaseSystemGranularity",        0, 0xefef003a },
+        { "RTTimerCanDoHighResolution",             0, 0xefef003a },
+        { "RTLogDefaultInstance",                   0, 0xefef003b },
+        { "RTLogRelGetDefaultInstance",             0, 0xefef003c },
+        { "RTLogSetDefaultInstanceThread",          0, 0xefef003d },
+        { "RTLogLogger",                            0, 0xefef003e },
+        { "RTLogLoggerEx",                          0, 0xefef003f },
+        { "RTLogLoggerExV",                         0, 0xefef0040 },
+        { "RTAssertMsg1",                           0, 0xefef0041 },
+        { "RTAssertMsg2",                           0, 0xefef0042 },
+        { "RTAssertMsg2V",                          0, 0xefef0043 },
+        { "SUPR0QueryVTCaps",                       0, 0xefef0044 },
     };
 
     /* fake r0 functions. */
@@ -612,15 +615,17 @@ static int supCallVMMR0ExFake(PVMR0 pVMR0, unsigned uOperation, uint64_t u64Arg,
 SUPR3DECL(int) SUPR3CallVMMR0Fast(PVMR0 pVMR0, unsigned uOperation, VMCPUID idCpu)
 {
     NOREF(pVMR0);
-    if (RT_LIKELY(uOperation == SUP_VMMR0_DO_RAW_RUN))
-        return suplibOsIOCtlFast(&g_supLibData, SUP_IOCTL_FAST_DO_RAW_RUN, idCpu);
-    if (RT_LIKELY(uOperation == SUP_VMMR0_DO_HM_RUN))
-        return suplibOsIOCtlFast(&g_supLibData, SUP_IOCTL_FAST_DO_HM_RUN, idCpu);
-    if (RT_LIKELY(uOperation == SUP_VMMR0_DO_NOP))
-        return suplibOsIOCtlFast(&g_supLibData, SUP_IOCTL_FAST_DO_NOP, idCpu);
-
-    AssertMsgFailed(("%#x\n", uOperation));
-    return VERR_INTERNAL_ERROR;
+    static const uintptr_t s_auFunctions[3] =
+    {
+        SUP_IOCTL_FAST_DO_HM_RUN,
+        SUP_IOCTL_FAST_DO_NEM_RUN,
+        SUP_IOCTL_FAST_DO_NOP,
+    };
+    AssertCompile(SUP_VMMR0_DO_HM_RUN  == 0);
+    AssertCompile(SUP_VMMR0_DO_NEM_RUN == 1);
+    AssertCompile(SUP_VMMR0_DO_NOP     == 2);
+    AssertMsgReturn(uOperation < RT_ELEMENTS(s_auFunctions), ("%#x\n", uOperation), VERR_INTERNAL_ERROR);
+    return suplibOsIOCtlFast(&g_supLibData, s_auFunctions[uOperation], idCpu);
 }
 
 
@@ -629,8 +634,8 @@ SUPR3DECL(int) SUPR3CallVMMR0Ex(PVMR0 pVMR0, VMCPUID idCpu, unsigned uOperation,
     /*
      * The following operations don't belong here.
      */
-    AssertMsgReturn(    uOperation != SUP_VMMR0_DO_RAW_RUN
-                    &&  uOperation != SUP_VMMR0_DO_HM_RUN
+    AssertMsgReturn(    uOperation != SUP_VMMR0_DO_HM_RUN
+                    &&  uOperation != SUP_VMMR0_DO_NEM_RUN
                     &&  uOperation != SUP_VMMR0_DO_NOP,
                     ("%#x\n", uOperation),
                     VERR_INTERNAL_ERROR);
@@ -716,8 +721,8 @@ SUPR3DECL(int) SUPR3CallVMMR0(PVMR0 pVMR0, VMCPUID idCpu, unsigned uOperation, v
     /*
      * The following operations don't belong here.
      */
-    AssertMsgReturn(    uOperation != SUP_VMMR0_DO_RAW_RUN
-                    &&  uOperation != SUP_VMMR0_DO_HM_RUN
+    AssertMsgReturn(    uOperation != SUP_VMMR0_DO_HM_RUN
+                    &&  uOperation != SUP_VMMR0_DO_NEM_RUN
                     &&  uOperation != SUP_VMMR0_DO_NOP,
                     ("%#x\n", uOperation),
                     VERR_INTERNAL_ERROR);
@@ -1658,10 +1663,11 @@ SUPR3DECL(int) SUPR3GipGetPhys(PRTHCPHYS pHCPhys)
 }
 
 
-SUPR3DECL(int) SUPR3QueryVTxSupported(void)
+SUPR3DECL(int) SUPR3QueryVTxSupported(const char **ppszWhy)
 {
+    *ppszWhy = NULL;
 #ifdef RT_OS_LINUX
-    return suplibOsQueryVTxSupported();
+    return suplibOsQueryVTxSupported(ppszWhy);
 #else
     return VINF_SUCCESS;
 #endif
@@ -1688,13 +1694,55 @@ SUPR3DECL(int) SUPR3QueryVTCaps(uint32_t *pfCaps)
     Req.Hdr.cbOut = SUP_IOCTL_VT_CAPS_SIZE_OUT;
     Req.Hdr.fFlags = SUPREQHDR_FLAGS_DEFAULT;
     Req.Hdr.rc = VERR_INTERNAL_ERROR;
-    Req.u.Out.Caps = 0;
+    Req.u.Out.fCaps = 0;
     int rc = suplibOsIOCtl(&g_supLibData, SUP_IOCTL_VT_CAPS, &Req, SUP_IOCTL_VT_CAPS_SIZE);
     if (RT_SUCCESS(rc))
     {
         rc = Req.Hdr.rc;
         if (RT_SUCCESS(rc))
-            *pfCaps = Req.u.Out.Caps;
+            *pfCaps = Req.u.Out.fCaps;
+    }
+    return rc;
+}
+
+
+SUPR3DECL(bool) SUPR3IsNemSupportedWhenNoVtxOrAmdV(void)
+{
+#ifdef RT_OS_WINDOWS
+    return suplibOsIsNemSupportedWhenNoVtxOrAmdV();
+#else
+    return false;
+#endif
+}
+
+
+SUPR3DECL(int) SUPR3QueryMicrocodeRev(uint32_t *uMicrocodeRev)
+{
+    AssertPtrReturn(uMicrocodeRev, VERR_INVALID_POINTER);
+
+    *uMicrocodeRev = 0;
+
+    /* fake */
+    if (RT_UNLIKELY(g_uSupFakeMode))
+        return VINF_SUCCESS;
+
+    /*
+     * Issue IOCtl to the SUPDRV kernel module.
+     */
+    SUPUCODEREV Req;
+    Req.Hdr.u32Cookie = g_u32Cookie;
+    Req.Hdr.u32SessionCookie = g_u32SessionCookie;
+    Req.Hdr.cbIn = SUP_IOCTL_UCODE_REV_SIZE_IN;
+    Req.Hdr.cbOut = SUP_IOCTL_UCODE_REV_SIZE_OUT;
+    Req.Hdr.fFlags = SUPREQHDR_FLAGS_DEFAULT;
+    Req.Hdr.rc = VERR_INTERNAL_ERROR;
+    Req.u.Out.MicrocodeRev = 0;
+    int rc = suplibOsIOCtl(&g_supLibData, SUP_IOCTL_UCODE_REV, &Req, SUP_IOCTL_UCODE_REV_SIZE);
+    if (RT_SUCCESS(rc))
+    {
+        rc = Req.Hdr.rc;
+        if (RT_SUCCESS(rc))
+            *uMicrocodeRev = Req.u.Out.MicrocodeRev;
     }
     return rc;
 }
@@ -1845,7 +1893,7 @@ static PSUPDRVTRACERSTRTAB supr3TracerCreateStrTab(PVTGPROBELOC32 paProbeLocs32,
     /*
      * Allocate the string table structures.
      */
-    size_t              cbThis    = RT_OFFSETOF(SUPDRVTRACERSTRTAB, apszOrgFunctions[cProbeLocs]);
+    size_t              cbThis    = RT_UOFFSETOF_DYN(SUPDRVTRACERSTRTAB, apszOrgFunctions[cProbeLocs]);
     PSUPDRVTRACERSTRTAB pThis     = (PSUPDRVTRACERSTRTAB)RTMemAlloc(cbThis);
     if (!pThis)
         return NULL;
@@ -2283,6 +2331,35 @@ SUPR3DECL(int) SUPR3GipSetFlags(uint32_t fOrMask, uint32_t fAndMask)
     int rc = suplibOsIOCtl(&g_supLibData, SUP_IOCTL_GIP_SET_FLAGS, &Req, SUP_IOCTL_GIP_SET_FLAGS_SIZE);
     if (RT_SUCCESS(rc))
         rc = Req.Hdr.rc;
+    return rc;
+}
+
+
+SUPR3DECL(int) SUPR3GetHwvirtMsrs(PSUPHWVIRTMSRS pHwvirtMsrs, bool fForceRequery)
+{
+    AssertReturn(pHwvirtMsrs, VERR_INVALID_PARAMETER);
+
+    SUPGETHWVIRTMSRS Req;
+    Req.Hdr.u32Cookie        = g_u32Cookie;
+    Req.Hdr.u32SessionCookie = g_u32SessionCookie;
+    Req.Hdr.cbIn             = SUP_IOCTL_GET_HWVIRT_MSRS_SIZE_IN;
+    Req.Hdr.cbOut            = SUP_IOCTL_GET_HWVIRT_MSRS_SIZE_OUT;
+    Req.Hdr.fFlags           = SUPREQHDR_FLAGS_DEFAULT;
+    Req.Hdr.rc               = VERR_INTERNAL_ERROR;
+
+    Req.u.In.fForce          = fForceRequery;
+    Req.u.In.fReserved0      = false;
+    Req.u.In.fReserved1      = false;
+    Req.u.In.fReserved2      = false;
+
+    int rc = suplibOsIOCtl(&g_supLibData, SUP_IOCTL_GET_HWVIRT_MSRS, &Req, SUP_IOCTL_GET_HWVIRT_MSRS_SIZE);
+    if (RT_SUCCESS(rc))
+    {
+        rc = Req.Hdr.rc;
+        *pHwvirtMsrs = Req.u.Out.HwvirtMsrs;
+    }
+    else
+        RT_ZERO(*pHwvirtMsrs);
     return rc;
 }
 

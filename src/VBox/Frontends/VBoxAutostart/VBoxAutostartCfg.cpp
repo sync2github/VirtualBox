@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxAutostartCfg.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxAutostart - VirtualBox Autostart service, configuration parser.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,13 +19,13 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-
-#include <iprt/stream.h>
-#include <iprt/process.h>
-#include <iprt/string.h>
-#include <iprt/mem.h>
 #include <iprt/ctype.h>
+#include <iprt/err.h>
+#include <iprt/mem.h>
 #include <iprt/message.h>
+#include <iprt/process.h>
+#include <iprt/stream.h>
+#include <iprt/string.h>
 
 #include "VBoxAutostart.h"
 
@@ -555,7 +555,7 @@ static int autostartConfigParseValue(PCFGTOKENIZER pCfgTokenizer, const char *ps
     {
         PCFGAST pCfgAst = NULL;
 
-        pCfgAst = (PCFGAST)RTMemAllocZ(RT_OFFSETOF(CFGAST, u.KeyValue.aszValue[pToken->u.Id.cchToken + 1]));
+        pCfgAst = (PCFGAST)RTMemAllocZ(RT_UOFFSETOF_DYN(CFGAST, u.KeyValue.aszValue[pToken->u.Id.cchToken + 1]));
         if (!pCfgAst)
             return VERR_NO_MEMORY;
 
@@ -592,7 +592,7 @@ static int autostartConfigParseCompoundNode(PCFGTOKENIZER pCfgTokenizer, const c
                                             PCFGAST *ppCfgAst)
 {
     unsigned cAstNodesMax = 10;
-    PCFGAST pCfgAst = (PCFGAST)RTMemAllocZ(RT_OFFSETOF(CFGAST, u.Compound.apAstNodes[cAstNodesMax]));
+    PCFGAST pCfgAst = (PCFGAST)RTMemAllocZ(RT_UOFFSETOF_DYN(CFGAST, u.Compound.apAstNodes[cAstNodesMax]));
     if (!pCfgAst)
         return VERR_NO_MEMORY;
 
@@ -652,7 +652,7 @@ static int autostartConfigParseCompoundNode(PCFGTOKENIZER pCfgTokenizer, const c
             {
                 cAstNodesMax += 10;
 
-                PCFGAST pCfgAstNew = (PCFGAST)RTMemRealloc(pCfgAst, RT_OFFSETOF(CFGAST, u.Compound.apAstNodes[cAstNodesMax]));
+                PCFGAST pCfgAstNew = (PCFGAST)RTMemRealloc(pCfgAst, RT_UOFFSETOF_DYN(CFGAST, u.Compound.apAstNodes[cAstNodesMax]));
                 if (!pCfgAstNew)
                     rc = VERR_NO_MEMORY;
                 else

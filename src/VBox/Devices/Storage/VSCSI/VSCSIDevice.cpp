@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VSCSIDevice.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual SCSI driver: Device handling
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -66,7 +66,8 @@ static bool vscsiDeviceReqProcess(PVSCSIDEVICEINT pVScsiDevice, PVSCSIREQINT pVS
                 size_t cbData;
                 SCSIINQUIRYDATA ScsiInquiryReply;
 
-                vscsiReqSetXferSize(pVScsiReq, vscsiBE2HU16(&pVScsiReq->pbCDB[3]));
+                vscsiReqSetXferDir(pVScsiReq, VSCSIXFERDIR_T2I);
+                vscsiReqSetXferSize(pVScsiReq, RT_MIN(sizeof(SCSIINQUIRYDATA), scsiBE2H_U16(&pVScsiReq->pbCDB[3])));
                 memset(&ScsiInquiryReply, 0, sizeof(ScsiInquiryReply));
                 ScsiInquiryReply.cbAdditional = 31;
                 ScsiInquiryReply.u5PeripheralDeviceType = SCSI_INQUIRY_DATA_PERIPHERAL_DEVICE_TYPE_UNKNOWN;
@@ -85,7 +86,8 @@ static bool vscsiDeviceReqProcess(PVSCSIDEVICEINT pVScsiDevice, PVSCSIREQINT pVS
              * If allocation length is less than 16 bytes SPC compliant devices have
              * to return an error.
              */
-            vscsiReqSetXferSize(pVScsiReq, vscsiBE2HU32(&pVScsiReq->pbCDB[6]));
+            vscsiReqSetXferDir(pVScsiReq, VSCSIXFERDIR_T2I);
+            vscsiReqSetXferSize(pVScsiReq, scsiBE2H_U32(&pVScsiReq->pbCDB[6]));
             if (pVScsiReq->cbXfer < 16)
                 *prcReq = vscsiReqSenseErrorSet(&pVScsiDevice->VScsiSense, pVScsiReq, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ASC_INV_FIELD_IN_CMD_PACKET, 0x00);
             else
@@ -94,7 +96,7 @@ static bool vscsiDeviceReqProcess(PVSCSIDEVICEINT pVScsiDevice, PVSCSIREQINT pVS
                 uint8_t aReply[16]; /* We report only one LUN. */
 
                 memset(aReply, 0, sizeof(aReply));
-                vscsiH2BEU32(&aReply[0], 8); /* List length starts at position 0. */
+                scsiH2BE_U32(&aReply[0], 8); /* List length starts at position 0. */
                 cbData = RTSgBufCopyFromBuf(&pVScsiReq->SgBuf, aReply, sizeof(aReply));
                 if (cbData < 16)
                     *prcReq = vscsiReqSenseErrorSet(&pVScsiDevice->VScsiSense, pVScsiReq, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ASC_INV_FIELD_IN_CMD_PACKET, 0x00);
@@ -105,6 +107,7 @@ static bool vscsiDeviceReqProcess(PVSCSIDEVICEINT pVScsiDevice, PVSCSIREQINT pVS
         }
         case SCSI_TEST_UNIT_READY:
         {
+            vscsiReqSetXferDir(pVScsiReq, VSCSIXFERDIR_NONE);
             if (   vscsiDeviceLunIsPresent(pVScsiDevice, pVScsiReq->iLun)
                 && pVScsiDevice->papVScsiLun[pVScsiReq->iLun]->fReady)
                 *prcReq = vscsiReqSenseOkSet(&pVScsiDevice->VScsiSense, pVScsiReq);
@@ -114,6 +117,7 @@ static bool vscsiDeviceReqProcess(PVSCSIDEVICEINT pVScsiDevice, PVSCSIREQINT pVS
         }
         case SCSI_REQUEST_SENSE:
         {
+            vscsiReqSetXferDir(pVScsiReq, VSCSIXFERDIR_T2I);
             vscsiReqSetXferSize(pVScsiReq, pVScsiReq->pbCDB[4]);
 
             /* Descriptor format sense data is not supported and results in an error. */
@@ -140,8 +144,8 @@ static bool vscsiDeviceReqProcess(PVSCSIDEVICEINT pVScsiDevice, PVSCSIREQINT pVS
                         bool fTimeoutDesc = RT_BOOL(pVScsiReq->pbCDB[2] & 0x80);
                         uint8_t u8ReportMode = pVScsiReq->pbCDB[2] & 0x7;
                         uint8_t u8Opc = pVScsiReq->pbCDB[3];
-                        uint16_t u16SvcAction = vscsiBE2HU16(&pVScsiReq->pbCDB[4]);
-                        uint16_t cbData = vscsiBE2HU16(&pVScsiReq->pbCDB[6]);
+                        uint16_t u16SvcAction = scsiBE2H_U16(&pVScsiReq->pbCDB[4]);
+                        uint16_t cbData = scsiBE2H_U16(&pVScsiReq->pbCDB[6]);
 
                         switch (u8ReportMode)
                         {
@@ -182,7 +186,21 @@ void vscsiDeviceReqComplete(PVSCSIDEVICEINT pVScsiDevice, PVSCSIREQINT pVScsiReq
 {
     pVScsiDevice->pfnVScsiReqCompleted(pVScsiDevice, pVScsiDevice->pvVScsiDeviceUser,
                                        pVScsiReq->pvVScsiReqUser, rcScsiCode, fRedoPossible,
-                                       rcReq, pVScsiReq->cbXfer);
+                                       rcReq, pVScsiReq->cbXfer, pVScsiReq->enmXferDir, pVScsiReq->cbSenseWritten);
+
+    if (pVScsiReq->pvLun)
+    {
+        if (vscsiDeviceLunIsPresent(pVScsiDevice, pVScsiReq->iLun))
+        {
+            PVSCSILUNINT pVScsiLun = pVScsiDevice->papVScsiLun[pVScsiReq->iLun];
+            pVScsiLun->pVScsiLunDesc->pfnVScsiLunReqFree(pVScsiLun, pVScsiReq, pVScsiReq->pvLun);
+        }
+        else
+            AssertLogRelMsgFailed(("vscsiDeviceReqComplete: LUN %u for VSCSI request %#p is not present but there is LUN specific data allocated\n",
+                                   pVScsiReq->iLun, pVScsiReq));
+
+        pVScsiReq->pvLun = NULL;
+    }
 
     RTMemCacheFree(pVScsiDevice->hCacheReq, pVScsiReq);
 }
@@ -395,6 +413,9 @@ VBOXDDU_DECL(int) VSCSIDeviceReqCreate(VSCSIDEVICE hVScsiDevice, PVSCSIREQ phVSc
     pVScsiReq->cbSense        = cbSense;
     pVScsiReq->pvVScsiReqUser = pvVScsiReqUser;
     pVScsiReq->cbXfer         = 0;
+    pVScsiReq->pvLun          = NULL;
+    pVScsiReq->enmXferDir     = VSCSIXFERDIR_UNKNOWN;
+    pVScsiReq->cbSenseWritten = 0;
     RTSgBufInit(&pVScsiReq->SgBuf, paSGList, cSGListEntries);
 
     *phVScsiReq = pVScsiReq;

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBGetDevices.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Linux host USB device enumeration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___USBGetDevices_h
-#define ___USBGetDevices_h
+#ifndef MAIN_INCLUDED_USBGetDevices_h
+#define MAIN_INCLUDED_USBGetDevices_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/usb.h>
 #include <iprt/mem.h>
@@ -62,7 +65,7 @@ DECLINLINE(void) deviceFree(PUSBDEVICE pDevice)
 
 /**
  * Free a linked list of USB devices created by the Linux enumeration code.
- * @param  pHead  Pointer to the first device in the linked list
+ * @param  ppHead  Pointer to the first device in the linked list
  */
 DECLINLINE(void) deviceListFree(PUSBDEVICE *ppHead)
 {
@@ -97,5 +100,5 @@ extern PUSBDEVICE USBProxyLinuxGetDevices(const char *pcszDevicesRoot, bool fUse
 
 RT_C_DECLS_END
 
-#endif /* !___USBGetDevices_h */
+#endif /* !MAIN_INCLUDED_USBGetDevices_h */
 

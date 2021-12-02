@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxControl.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxControl - Guest Additions Command Line Management Interface.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,6 +22,8 @@
 #include <iprt/alloca.h>
 #include <iprt/cpp/autores.h>
 #include <iprt/buildconfig.h>
+#include <iprt/ctype.h>
+#include <iprt/errcore.h>
 #include <iprt/getopt.h>
 #include <iprt/initterm.h>
 #include <iprt/mem.h>
@@ -29,6 +31,7 @@
 #include <iprt/path.h>
 #include <iprt/string.h>
 #include <iprt/stream.h>
+#include <iprt/zip.h>
 #include <VBox/log.h>
 #include <VBox/version.h>
 #include <VBox/VBoxGuestLib.h>
@@ -38,9 +41,18 @@
 #ifdef VBOX_WITH_GUEST_PROPS
 # include <VBox/HostServices/GuestPropertySvc.h>
 #endif
+#ifdef VBOX_WITH_SHARED_FOLDERS
+# include <VBox/shflsvc.h>
+# ifdef RT_OS_OS2
+#  define OS2EMX_PLAIN_CHAR
+#  define INCL_ERRORS
+#  define INCL_DOSFILEMGR
+#  include <os2emx.h>
+# endif
+#endif
 #ifdef VBOX_WITH_DPC_LATENCY_CHECKER
 # include <VBox/VBoxGuest.h>
-# include "../VBoxGuestLib/VBGLR3Internal.h" /* HACK ALERT! Using vbglR3DoIOCtl directly!! */
+# include "../VBoxGuest/lib/VBoxGuestR3LibInternal.h" /* HACK ALERT! Using vbglR3DoIOCtl directly!! */
 #endif
 
 
@@ -144,9 +156,13 @@ static RTEXITCODE usage(enum VBoxControlUsage eWhich = USAGE_ALL)
     }
 #endif
 #ifdef VBOX_WITH_SHARED_FOLDERS
-    if (eWhich  == GUEST_SHAREDFOLDERS || eWhich == USAGE_ALL)
+    if (eWhich == GUEST_SHAREDFOLDERS || eWhich == USAGE_ALL)
     {
-        doUsage("list [-automount]", g_pszProgName, "sharedfolder");
+        doUsage("list [--automount]", g_pszProgName, "sharedfolder");
+# ifdef RT_OS_OS2
+        doUsage("use <drive> <folder>", g_pszProgName, "sharedfolder");
+        doUsage("unuse <drive>", g_pszProgName, "sharedfolder");
+# endif
     }
 #endif
 
@@ -233,12 +249,14 @@ static RTEXITCODE VBoxControlSyntaxError(const char *pszFormat, ...)
     va_start(va, pszFormat);
     RTMsgErrorV(pszFormat, va);
     va_end(va);
-    return RTEXITCODE_FAILURE;
+    return RTEXITCODE_SYNTAX;
 }
 
 #if defined(RT_OS_WINDOWS) && !defined(VBOX_CONTROL_TEST)
 
-LONG (WINAPI * gpfnChangeDisplaySettingsEx)(LPCTSTR lpszDeviceName, LPDEVMODE lpDevMode, HWND hwnd, DWORD dwflags, LPVOID lParam);
+decltype(ChangeDisplaySettingsExA) *g_pfnChangeDisplaySettingsExA;
+decltype(ChangeDisplaySettings)    *g_pfnChangeDisplaySettingsA;
+decltype(EnumDisplaySettingsA)     *g_pfnEnumDisplaySettingsA;
 
 static unsigned nextAdjacentRectXP(RECTL const *paRects, unsigned cRects, unsigned iRect)
 {
@@ -486,7 +504,7 @@ static BOOL ResizeDisplayDevice(ULONG Id, DWORD Width, DWORD Height, DWORD BitsP
 
             RT_BZERO(&paDeviceModes[DevNum], sizeof(DEVMODE));
             paDeviceModes[DevNum].dmSize = sizeof(DEVMODE);
-            if (!EnumDisplaySettings((LPSTR)DisplayDevice.DeviceName, ENUM_REGISTRY_SETTINGS, &paDeviceModes[DevNum]))
+            if (!g_pfnEnumDisplaySettingsA((LPSTR)DisplayDevice.DeviceName, ENUM_REGISTRY_SETTINGS, &paDeviceModes[DevNum]))
             {
                 Log(("EnumDisplaySettings err %d\n", GetLastError()));
                 return FALSE;
@@ -541,7 +559,7 @@ static BOOL ResizeDisplayDevice(ULONG Id, DWORD Width, DWORD Height, DWORD BitsP
     DEVMODE tempDevMode;
     RT_ZERO(tempDevMode);
     tempDevMode.dmSize = sizeof(DEVMODE);
-    EnumDisplaySettings(NULL, 0xffffff, &tempDevMode);
+    g_pfnEnumDisplaySettingsA(NULL, 0xffffff, &tempDevMode);
 
     /* Assign the new rectangles to displays. */
     for (i = 0; i < NumDevices; i++)
@@ -559,14 +577,14 @@ static BOOL ResizeDisplayDevice(ULONG Id, DWORD Width, DWORD Height, DWORD BitsP
             paDeviceModes[i].dmFields |= DM_BITSPERPEL;
             paDeviceModes[i].dmBitsPerPel = BitsPerPixel;
         }
-        Log(("calling pfnChangeDisplaySettingsEx %x\n", gpfnChangeDisplaySettingsEx));
-        gpfnChangeDisplaySettingsEx((LPSTR)paDisplayDevices[i].DeviceName,
-                 &paDeviceModes[i], NULL, CDS_NORESET | CDS_UPDATEREGISTRY, NULL);
-        Log(("ChangeDisplaySettings position err %d\n", GetLastError()));
+        Log(("calling pfnChangeDisplaySettingsEx %p\n", RT_CB_LOG_CAST(g_pfnChangeDisplaySettingsExA)));
+        g_pfnChangeDisplaySettingsExA((LPSTR)paDisplayDevices[i].DeviceName,
+                                      &paDeviceModes[i], NULL, CDS_NORESET | CDS_UPDATEREGISTRY, NULL);
+        Log(("ChangeDisplaySettingsEx position err %d\n", GetLastError()));
     }
 
     /* A second call to ChangeDisplaySettings updates the monitor. */
-    LONG status = ChangeDisplaySettings(NULL, 0);
+    LONG status = g_pfnChangeDisplaySettingsA(NULL, 0);
     Log(("ChangeDisplaySettings update status %d\n", status));
     if (status == DISP_CHANGE_SUCCESSFUL || status == DISP_CHANGE_BADMODE)
     {
@@ -593,13 +611,22 @@ static DECLCALLBACK(RTEXITCODE) handleSetVideoMode(int argc, char *argv[])
     if (argc == 4)
         scr = atoi(argv[3]);
 
-    HMODULE hUser = GetModuleHandle("user32.dll");
-    if (hUser)
+    HMODULE hmodUser = GetModuleHandle("user32.dll");
+    if (hmodUser)
     {
-        *(uintptr_t *)&gpfnChangeDisplaySettingsEx = (uintptr_t)GetProcAddress(hUser, "ChangeDisplaySettingsExA");
-        Log(("VBoxService: pChangeDisplaySettingsEx = %p\n", gpfnChangeDisplaySettingsEx));
+        /* ChangeDisplaySettingsExA was probably added in W2K, whereas ChangeDisplaySettingsA
+           and EnumDisplaySettingsA was added in NT 3.51. */
+        g_pfnChangeDisplaySettingsExA = (decltype(g_pfnChangeDisplaySettingsExA))GetProcAddress(hmodUser, "ChangeDisplaySettingsExA");
+        g_pfnChangeDisplaySettingsA   = (decltype(g_pfnChangeDisplaySettingsA))  GetProcAddress(hmodUser, "ChangeDisplaySettingsA");
+        g_pfnEnumDisplaySettingsA     = (decltype(g_pfnEnumDisplaySettingsA))    GetProcAddress(hmodUser, "EnumDisplaySettingsA");
 
-        if (gpfnChangeDisplaySettingsEx)
+        Log(("VBoxService: g_pfnChangeDisplaySettingsExA=%p g_pfnChangeDisplaySettingsA=%p g_pfnEnumDisplaySettingsA=%p\n",
+             RT_CB_LOG_CAST(g_pfnChangeDisplaySettingsExA), RT_CB_LOG_CAST(g_pfnChangeDisplaySettingsA),
+             RT_CB_LOG_CAST(g_pfnEnumDisplaySettingsA)));
+
+        if (   g_pfnChangeDisplaySettingsExA
+            && g_pfnChangeDisplaySettingsA
+            && g_pfnEnumDisplaySettingsA)
         {
             /* The screen index is 0 based in the ResizeDisplayDevice call. */
             scr = scr > 0 ? scr - 1 : 0;
@@ -1157,8 +1184,6 @@ static DECLCALLBACK(RTEXITCODE) handleRemoveCustomMode(int argc, char *argv[])
  */
 static RTEXITCODE getGuestProperty(int argc, char **argv)
 {
-    using namespace guestProp;
-
     bool fVerbose = false;
     if (   argc == 2
         && (   strcmp(argv[1], "-verbose")  == 0
@@ -1188,7 +1213,7 @@ static RTEXITCODE getGuestProperty(int argc, char **argv)
     /* The buffer for storing the data and its initial size.  We leave a bit
      * of space here in case the maximum values are raised. */
     void *pvBuf = NULL;
-    uint32_t cbBuf = MAX_VALUE_LEN + MAX_FLAGS_LEN + 1024;
+    uint32_t cbBuf = GUEST_PROP_MAX_VALUE_LEN + GUEST_PROP_MAX_FLAGS_LEN + 1024;
     if (RT_SUCCESS(rc))
     {
         /* Because there is a race condition between our reading the size of a
@@ -1401,7 +1426,7 @@ static RTEXITCODE enumGuestProperty(int argc, char *argv[])
             while (RT_SUCCESS(rc) && pszName)
             {
                 RTPrintf("Name: %s, value: %s, timestamp: %lld, flags: %s\n",
-                         pszName, pszValue, u64Timestamp, pszFlags);
+                         pszName, pszValue ? pszValue : "", u64Timestamp, pszFlags);
 
                 rc = VbglR3GuestPropEnumNext(pHandle, &pszName, &pszValue, &u64Timestamp, &pszFlags);
                 if (RT_FAILURE(rc))
@@ -1431,8 +1456,6 @@ static RTEXITCODE enumGuestProperty(int argc, char *argv[])
  */
 static RTEXITCODE waitGuestProperty(int argc, char **argv)
 {
-    using namespace guestProp;
-
     /*
      * Handle arguments
      */
@@ -1480,9 +1503,7 @@ static RTEXITCODE waitGuestProperty(int argc, char **argv)
      * Connect to the service
      */
     uint32_t u32ClientId = 0;
-    int rc = VINF_SUCCESS;
-
-    rc = VbglR3GuestPropConnect(&u32ClientId);
+    int rc = VbglR3GuestPropConnect(&u32ClientId);
     if (RT_FAILURE(rc))
         VBoxControlError("Failed to connect to the guest property service, error %Rrc\n", rc);
 
@@ -1496,7 +1517,7 @@ static RTEXITCODE waitGuestProperty(int argc, char **argv)
     /* The buffer for storing the data and its initial size.  We leave a bit
      * of space here in case the maximum values are raised. */
     void *pvBuf = NULL;
-    uint32_t cbBuf = MAX_NAME_LEN + MAX_VALUE_LEN + MAX_FLAGS_LEN + 1024;
+    uint32_t cbBuf = GUEST_PROP_MAX_NAME_LEN + GUEST_PROP_MAX_VALUE_LEN + GUEST_PROP_MAX_FLAGS_LEN + 1024;
     /* Because there is a race condition between our reading the size of a
      * property and the guest updating it, we loop a few times here and
      * hope.  Actually this should never go wrong, as we are generous
@@ -1527,10 +1548,8 @@ static RTEXITCODE waitGuestProperty(int argc, char **argv)
             VBoxControlError("Temporarily unable to get a notification\n");
         else if (rc == VERR_INTERRUPTED)
             VBoxControlError("The request timed out or was interrupted\n");
-#ifndef RT_OS_WINDOWS  /* Windows guests do not do this right */
         else if (RT_FAILURE(rc) && rc != VERR_NOT_FOUND)
             VBoxControlError("Failed to get a notification, error %Rrc\n", rc);
-#endif
     }
 
     /*
@@ -1583,20 +1602,20 @@ static DECLCALLBACK(RTEXITCODE) handleGuestProperty(int argc, char *argv[])
     usage(GUEST_PROP);
     return RTEXITCODE_FAILURE;
 }
-#endif
 
+#endif
 #ifdef VBOX_WITH_SHARED_FOLDERS
+
 /**
  * Lists the Shared Folders provided by the host.
  */
-static RTEXITCODE listSharedFolders(int argc, char **argv)
+static RTEXITCODE sharedFolder_list(int argc, char **argv)
 {
     bool fUsageOK = true;
     bool fOnlyShowAutoMount = false;
     if (argc == 1)
     {
-        if (   !strcmp(argv[0], "-automount")
-            || !strcmp(argv[0], "--automount"))
+        if (!strcmp(argv[0], "--automount"))
             fOnlyShowAutoMount = true;
         else
             fUsageOK = false;
@@ -1606,7 +1625,7 @@ static RTEXITCODE listSharedFolders(int argc, char **argv)
     if (!fUsageOK)
     {
         usage(GUEST_SHAREDFOLDERS);
-        return RTEXITCODE_FAILURE;
+        return RTEXITCODE_SYNTAX;
     }
 
     uint32_t u32ClientId;
@@ -1628,11 +1647,67 @@ static RTEXITCODE listSharedFolders(int argc, char **argv)
             for (uint32_t i = 0; i < cMappings; i++)
             {
                 char *pszName;
-                rc = VbglR3SharedFolderGetName(u32ClientId, paMappings[i].u32Root, &pszName);
+                char *pszMntPt;
+                uint64_t fFlags;
+                uint32_t uRootIdVer;
+                rc = VbglR3SharedFolderQueryFolderInfo(u32ClientId, paMappings[i].u32Root, 0,
+                                                       &pszName, &pszMntPt, &fFlags, &uRootIdVer);
                 if (RT_SUCCESS(rc))
                 {
-                    RTPrintf("%02u - %s\n", i + 1, pszName);
+                    RTPrintf("%02u - %s [idRoot=%u", i + 1, pszName, paMappings[i].u32Root);
+                    if (fFlags & SHFL_MIF_WRITABLE)
+                        RTPrintf(" writable");
+                    else
+                        RTPrintf(" readonly");
+                    if (fFlags & SHFL_MIF_AUTO_MOUNT)
+                        RTPrintf(" auto-mount");
+                    if (fFlags & SHFL_MIF_SYMLINK_CREATION)
+                        RTPrintf(" create-symlink");
+                    if (fFlags & SHFL_MIF_HOST_ICASE)
+                        RTPrintf(" host-icase");
+                    if (fFlags & SHFL_MIF_GUEST_ICASE)
+                        RTPrintf(" guest-icase");
+                    if (*pszMntPt)
+                        RTPrintf(" mnt-pt=%s", pszMntPt);
+                    RTPrintf("]");
+# ifdef RT_OS_OS2
+                    /* Show drive letters: */
+                    const char *pszOn = " on";
+                    for (char chDrive = 'A'; chDrive <= 'Z'; chDrive++)
+                    {
+                        char szDrive[4] = { chDrive, ':', '\0', '\0' };
+                        union
+                        {
+                            FSQBUFFER2  FsQueryBuf;
+                            char        achPadding[512];
+                        } uBuf;
+                        RT_ZERO(uBuf);
+                        ULONG cbBuf = sizeof(uBuf) - 2;
+                        APIRET rcOs2 = DosQueryFSAttach(szDrive, 0, FSAIL_QUERYNAME, &uBuf.FsQueryBuf, &cbBuf);
+                        if (rcOs2 == NO_ERROR)
+                        {
+                            const char *pszFsdName = (const char *)&uBuf.FsQueryBuf.szName[uBuf.FsQueryBuf.cbName + 1];
+                            if (   uBuf.FsQueryBuf.iType == FSAT_REMOTEDRV
+                                && RTStrICmpAscii(pszFsdName, "VBOXSF") == 0)
+                            {
+                                const char *pszMountedName = (const char *)&pszFsdName[uBuf.FsQueryBuf.cbFSDName + 1];
+                                if (RTStrICmp(pszMountedName, pszName) == 0)
+                                {
+                                    const char *pszTag = pszMountedName + strlen(pszMountedName) + 1; /* safe */
+                                    if (*pszTag != '\0')
+                                        RTPrintf("%s %s (%s)", pszOn, szDrive, pszTag);
+                                    else
+                                        RTPrintf("%s %s", pszOn, szDrive);
+                                    pszOn = ",";
+                                }
+                            }
+                        }
+                    }
+# endif
+                    RTPrintf("\n");
+
                     RTStrFree(pszName);
+                    RTStrFree(pszMntPt);
                 }
                 else
                     VBoxControlError("Error while getting the shared folder name for root node = %u, rc = %Rrc\n",
@@ -1649,6 +1724,72 @@ static RTEXITCODE listSharedFolders(int argc, char **argv)
     return RT_SUCCESS(rc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
 }
 
+# ifdef RT_OS_OS2
+/**
+ * Attaches a shared folder to a drive letter.
+ */
+static RTEXITCODE sharedFolder_use(int argc, char **argv)
+{
+    /*
+     * Takes a drive letter and a share name as arguments.
+     */
+    if (argc != 2)
+        return VBoxControlSyntaxError("sharedfolder use: expected a drive letter and a shared folder name\n");
+
+    const char *pszDrive  = argv[0];
+    if (!RT_C_IS_ALPHA(pszDrive[0]) || pszDrive[1] != ':' || pszDrive[2] != '\0')
+        return VBoxControlSyntaxError("sharedfolder use: not a drive letter: %s\n", pszDrive);
+
+    static const char s_szTag[] = "VBoxControl";
+    char        szzNameAndTag[256];
+    const char *pszName   = argv[1];
+    size_t cchName = strlen(pszName);
+    if (cchName < 1)
+        return VBoxControlSyntaxError("sharedfolder use: shared folder name cannot be empty!\n");
+    if (cchName + 1 + sizeof(s_szTag) >= sizeof(szzNameAndTag))
+        return VBoxControlSyntaxError("sharedfolder use: shared folder name is too long! (%s)\n", pszName);
+
+    /*
+     * Do the attaching.
+     */
+    memcpy(szzNameAndTag, pszName, cchName);
+    szzNameAndTag[cchName] = '\0';
+    memcpy(&szzNameAndTag[cchName + 1], s_szTag, sizeof(s_szTag));
+
+    APIRET rcOs2 = DosFSAttach(pszDrive, "VBOXSF", szzNameAndTag, cchName + 1 + sizeof(s_szTag), FS_ATTACH);
+    if (rcOs2 == NO_ERROR)
+        return RTEXITCODE_SUCCESS;
+    if (rcOs2 == ERROR_INVALID_FSD_NAME)
+        return VBoxControlError("Shared folders IFS not installed?\n");
+    return VBoxControlError("DosFSAttach/FS_ATTACH failed to attach '%s' to '%s': %u\n", pszName, pszDrive, rcOs2);
+}
+
+/**
+ * Detaches a shared folder from a drive letter.
+ */
+static RTEXITCODE sharedFolder_unuse(int argc, char **argv)
+{
+    /*
+     * Only takes a drive letter as argument.
+     */
+    if (argc != 1)
+        return VBoxControlSyntaxError("sharedfolder unuse: expected drive letter\n");
+    const char *pszDrive = argv[0];
+    if (!RT_C_IS_ALPHA(pszDrive[0]) || pszDrive[1] != ':' || pszDrive[2] != '\0')
+        return VBoxControlSyntaxError("sharedfolder unuse: not a drive letter: %s\n", pszDrive);
+
+    /*
+     * Do the detaching.
+     */
+    APIRET rcOs2 = DosFSAttach(pszDrive, "VBOXSF", NULL, 0, FS_DETACH);
+    if (rcOs2 == NO_ERROR)
+        return RTEXITCODE_SUCCESS;
+    return VBoxControlError("DosFSAttach/FS_DETACH failed on '%s': %u\n", pszDrive, rcOs2);
+}
+
+# endif /* RT_OS_OS2 */
+
+
 /**
  * Handles Shared Folders control.
  *
@@ -1664,14 +1805,21 @@ static DECLCALLBACK(RTEXITCODE) handleSharedFolder(int argc, char *argv[])
         return RTEXITCODE_FAILURE;
     }
     if (!strcmp(argv[0], "list"))
-        return listSharedFolders(argc - 1, argv + 1);
-    /* else */
+        return sharedFolder_list(argc - 1, argv + 1);
+# ifdef RT_OS_OS2
+    if (!strcmp(argv[0], "use"))
+        return sharedFolder_use(argc - 1, argv + 1);
+    if (!strcmp(argv[0], "unuse"))
+        return sharedFolder_unuse(argc - 1, argv + 1);
+# endif
+
     usage(GUEST_SHAREDFOLDERS);
     return RTEXITCODE_FAILURE;
 }
-#endif
 
+#endif
 #if !defined(VBOX_CONTROL_TEST)
+
 /**
  * @callback_method_impl{FNVBOXCTRLCMDHANDLER, Command: writecoredump}
  */
@@ -1690,25 +1838,28 @@ static DECLCALLBACK(RTEXITCODE) handleWriteCoreDump(int argc, char *argv[])
         return RTEXITCODE_FAILURE;
     }
 }
-#endif
 
+#endif
 #ifdef VBOX_WITH_DPC_LATENCY_CHECKER
+
 /**
  * @callback_method_impl{FNVBOXCTRLCMDHANDLER, Command: help}
  */
 static DECLCALLBACK(RTEXITCODE) handleDpc(int argc, char *argv[])
 {
+    RT_NOREF(argc,  argv);
+    int rc = VERR_NOT_IMPLEMENTED;
 # ifndef VBOX_CONTROL_TEST
-    int rc;
     for (int i = 0; i < 30; i++)
     {
-        rc = vbglR3DoIOCtl(VBOXGUEST_IOCTL_DPC_LATENCY_CHECKER, NULL, 0);
-        if (RT_FAILURE(rc))
+        VBGLREQHDR Req;
+        VBGLREQHDR_INIT(&Req, DPC_LATENCY_CHECKER);
+        rc = vbglR3DoIOCtl(VBGL_IOCTL_DPC_LATENCY_CHECKER, &Req, sizeof(Req));
+        if (RT_SUCCESS(rc))
+            RTPrintf("%d\n", i);
+        else
             break;
-        RTPrintf("%d\n", i);
     }
-# else
-    int rc = VERR_NOT_IMPLEMENTED;
 # endif
     if (RT_FAILURE(rc))
         return VBoxControlError("Error. rc=%Rrc\n", rc);
@@ -1838,49 +1989,87 @@ static DECLCALLBACK(RTEXITCODE) handleHelp(int argc, char *argv[])
     return RTEXITCODE_SUCCESS;
 }
 
+/**
+ * @callback_method_impl{FNVBOXCTRLCMDHANDLER, Command: ls}
+ */
+static DECLCALLBACK(RTEXITCODE) handleLs(int argc, char *argv[])
+{
+    return RTFsCmdLs(argc + 1, argv - 1);
+}
+
+/**
+ * @callback_method_impl{FNVBOXCTRLCMDHANDLER, Command: tar}
+ */
+static DECLCALLBACK(RTEXITCODE) handleTar(int argc, char *argv[])
+{
+    return RTZipTarCmd(argc + 1, argv - 1);
+}
+
+/**
+ * @callback_method_impl{FNVBOXCTRLCMDHANDLER, Command: tar}
+ */
+static DECLCALLBACK(RTEXITCODE) handleGzip(int argc, char *argv[])
+{
+    return RTZipGzipCmd(argc + 1, argv - 1);
+}
+
+/**
+ * @callback_method_impl{FNVBOXCTRLCMDHANDLER, Command: unzip}
+ */
+static DECLCALLBACK(RTEXITCODE) handleUnzip(int argc, char *argv[])
+{
+    return RTZipUnzipCmd(argc + 1, argv - 1);
+}
+
 
 /** command handler type */
-typedef DECLCALLBACK(RTEXITCODE) FNVBOXCTRLCMDHANDLER(int argc, char *argv[]);
+typedef DECLCALLBACKTYPE(RTEXITCODE, FNVBOXCTRLCMDHANDLER,(int argc, char *argv[]));
 typedef FNVBOXCTRLCMDHANDLER *PFNVBOXCTRLCMDHANDLER;
 
 /** The table of all registered command handlers. */
 struct COMMANDHANDLER
 {
-    const char *pszCommand;
-    PFNVBOXCTRLCMDHANDLER pfnHandler;
+    const char             *pszCommand;
+    PFNVBOXCTRLCMDHANDLER   pfnHandler;
+    bool                    fNeedDevice;
 } g_aCommandHandlers[] =
 {
 #if defined(RT_OS_WINDOWS) && !defined(VBOX_CONTROL_TEST)
-    { "getvideoacceleration",   handleGetVideoAcceleration },
-    { "setvideoacceleration",   handleSetVideoAcceleration },
-    { "videoflags",             handleVideoFlags },
-    { "listcustommodes",        handleListCustomModes },
-    { "addcustommode",          handleAddCustomMode },
-    { "removecustommode",       handleRemoveCustomMode },
-    { "setvideomode",           handleSetVideoMode },
+    { "getvideoacceleration",   handleGetVideoAcceleration, true  },
+    { "setvideoacceleration",   handleSetVideoAcceleration, true  },
+    { "videoflags",             handleVideoFlags,           true  },
+    { "listcustommodes",        handleListCustomModes,      true  },
+    { "addcustommode",          handleAddCustomMode,        true  },
+    { "removecustommode",       handleRemoveCustomMode,     true  },
+    { "setvideomode",           handleSetVideoMode,         true  },
 #endif
 #ifdef VBOX_WITH_GUEST_PROPS
-    { "guestproperty",          handleGuestProperty },
+    { "guestproperty",          handleGuestProperty,        true  },
 #endif
 #ifdef VBOX_WITH_SHARED_FOLDERS
-    { "sharedfolder",           handleSharedFolder },
+    { "sharedfolder",           handleSharedFolder,         true  },
 #endif
 #if !defined(VBOX_CONTROL_TEST)
-    { "writecoredump",          handleWriteCoreDump },
+    { "writecoredump",          handleWriteCoreDump,        true  },
 #endif
 #ifdef VBOX_WITH_DPC_LATENCY_CHECKER
-    { "dpc",                    handleDpc },
+    { "dpc",                    handleDpc,                  true  },
 #endif
-    { "writelog",               handleWriteLog },
-    { "takesnapshot",           handleTakeSnapshot },
-    { "savestate",              handleSaveState },
-    { "suspend",                handleSuspend },
-    { "pause",                  handleSuspend },
-    { "poweroff",               handlePowerOff },
-    { "powerdown",              handlePowerOff },
-    { "getversion",             handleVersion },
-    { "version",                handleVersion },
-    { "help",                   handleHelp }
+    { "writelog",               handleWriteLog,             true  },
+    { "takesnapshot",           handleTakeSnapshot,         true  },
+    { "savestate",              handleSaveState,            true  },
+    { "suspend",                handleSuspend,              true  },
+    { "pause",                  handleSuspend,              true  },
+    { "poweroff",               handlePowerOff,             true  },
+    { "powerdown",              handlePowerOff,             true  },
+    { "getversion",             handleVersion,              false },
+    { "version",                handleVersion,              false },
+    { "help",                   handleHelp,                 false },
+    /* Hany tricks that doesn't cost much space: */
+    { "gzip",                   handleGzip,                 false },
+    { "ls",                     handleLs,                   false },
+    { "tar",                    handleTar,                  false },
+    { "unzip",                  handleUnzip,                false },
 };
 
 /** Main function */
@@ -1954,24 +2143,8 @@ int main(int argc, char **argv)
         usage();
 
     /*
-     * Do global initialisation for the programme if we will be handling a command
-     */
-    if (!fOnlyInfo)
-    {
-        rrc = VbglR3Init();
-        if (RT_FAILURE(rrc))
-        {
-            VBoxControlError("Could not contact the host system.  Make sure that you are running this\n"
-                             "application inside a VirtualBox guest system, and that you have sufficient\n"
-                             "user permissions.\n");
-            rcExit = RTEXITCODE_FAILURE;
-        }
-    }
-
-    /*
      * Now look for an actual command in the argument list and handle it.
      */
-
     if (!fOnlyInfo && rcExit == RTEXITCODE_SUCCESS)
     {
         if (argc > iArg)
@@ -1983,20 +2156,32 @@ int main(int argc, char **argv)
             for (i = 0; i < RT_ELEMENTS(g_aCommandHandlers); i++)
                 if (!strcmp(argv[iArg], g_aCommandHandlers[i].pszCommand))
                 {
-                    rcExit = g_aCommandHandlers[i].pfnHandler(argc - iArg - 1, argv + iArg + 1);
+                    if (g_aCommandHandlers[i].fNeedDevice)
+                    {
+                        rrc = VbglR3Init();
+                        if (RT_FAILURE(rrc))
+                        {
+                            VBoxControlError("Could not contact the host system.  Make sure that you are running this\n"
+                                             "application inside a VirtualBox guest system, and that you have sufficient\n"
+                                             "user permissions.\n");
+                            rcExit = RTEXITCODE_FAILURE;
+                        }
+                    }
+                    if (rcExit == RTEXITCODE_SUCCESS)
+                        rcExit = g_aCommandHandlers[i].pfnHandler(argc - iArg - 1, argv + iArg + 1);
                     break;
                 }
             if (i >= RT_ELEMENTS(g_aCommandHandlers))
             {
-                rcExit = RTEXITCODE_FAILURE;
                 usage();
+                rcExit = RTEXITCODE_SYNTAX;
             }
         }
         else
         {
             /* The user didn't specify a command. */
-            rcExit = RTEXITCODE_FAILURE;
             usage();
+            rcExit = RTEXITCODE_SYNTAX;
         }
     }
 

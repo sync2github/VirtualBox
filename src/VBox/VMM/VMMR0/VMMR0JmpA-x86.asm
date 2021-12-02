@@ -1,10 +1,10 @@
-; $Id$
+; $Id: VMMR0JmpA-x86.asm 90829 2021-08-24 10:26:07Z vboxsync $
 ;; @file
 ; VMM - R0 SetJmp / LongJmp routines for X86.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -31,9 +31,6 @@
 %define STACK_PADDING   0eeeeeeeeh
 
 
-; For vmmR0LoggerWrapper. (The other architecture(s) use(s) C99 variadic macros.)
-extern NAME(RTLogLogger)
-
 
 BEGINCODE
 
@@ -52,6 +49,7 @@ BEGINCODE
 ; @param    pvUser2 msc:r9  gcc:rcx x86:[esp+0x10]     The argument of that function.
 ;
 BEGINPROC vmmR0CallRing3SetJmp
+GLOBALNAME vmmR0CallRing3SetJmp2
 GLOBALNAME vmmR0CallRing3SetJmpEx
     ;
     ; Save the registers.
@@ -332,6 +330,13 @@ BEGINPROC vmmR0CallRing3LongJmp
     rep movsd
 %endif ; !VMM_R0_SWITCH_STACK
 
+    ; Save a PC here to assist unwinding.
+.unwind_point:
+    mov     dword [xDX + VMMR0JMPBUF.SavedEipForUnwind], .unwind_point
+    mov     ecx, [xDX + VMMR0JMPBUF.ebp]
+    lea     ecx, [ecx + 4]
+    mov     [xDX + VMMR0JMPBUF.UnwindRetPcLocation], ecx
+
     ; Save ESP & EBP to enable stack dumps
     mov     ecx, ebp
     mov     [xDX + VMMR0JMPBUF.SavedEbp], ecx
@@ -351,6 +356,7 @@ BEGINPROC vmmR0CallRing3LongJmp
     mov     edi, [xDX + VMMR0JMPBUF.edi]
     mov     ebp, [xDX + VMMR0JMPBUF.ebp]
     mov     ecx, [xDX + VMMR0JMPBUF.eip]
+    mov     [xDX + VMMR0JMPBUF.UnwindRetPcValue], ecx
     mov     esp, [xDX + VMMR0JMPBUF.esp]
     push    dword [xDX + VMMR0JMPBUF.eflags]
     popf
@@ -376,17 +382,4 @@ BEGINPROC vmmR0CallRing3LongJmp
     leave
     ret
 ENDPROC vmmR0CallRing3LongJmp
-
-
-;;
-; Internal R0 logger worker: Logger wrapper.
-;
-; @cproto VMMR0DECL(void) vmmR0LoggerWrapper(const char *pszFormat, ...)
-;
-EXPORTEDNAME vmmR0LoggerWrapper
-    push    0                           ; assumes we're the wrapper for a default instance.
-    call    NAME(RTLogLogger)
-    add     esp, byte 4
-    ret
-ENDPROC vmmR0LoggerWrapper
 

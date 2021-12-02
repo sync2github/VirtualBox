@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,8 +25,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmsrv_h
-#define ___VBox_vmm_pdmsrv_h
+#ifndef VBOX_INCLUDED_vmm_pdmsrv_h
+#define VBOX_INCLUDED_vmm_pdmsrv_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vmm/pdmifs.h>
 #include <VBox/vmm/ssm.h>
@@ -49,7 +52,7 @@ RT_C_DECLS_BEGIN
  *                      of the driver instance. It's also found in pSrvIns->pCfg, but since it's primary
  *                      usage is expected in this function it is passed as a parameter.
  */
-typedef DECLCALLBACK(int)   FNPDMSRVCONSTRUCT(PPDMSRVINS pSrvIns, PCFGMNODE pCfg);
+typedef DECLCALLBACKTYPE(int, FNPDMSRVCONSTRUCT,(PPDMSRVINS pSrvIns, PCFGMNODE pCfg));
 /** Pointer to a FNPDMSRVCONSTRUCT() function. */
 typedef FNPDMSRVCONSTRUCT *PFNPDMSRVCONSTRUCT;
 
@@ -61,7 +64,7 @@ typedef FNPDMSRVCONSTRUCT *PFNPDMSRVCONSTRUCT;
  *
  * @param   pSrvIns     The service instance data.
  */
-typedef DECLCALLBACK(void)   FNPDMSRVDESTRUCT(PPDMSRVINS pSrvIns);
+typedef DECLCALLBACKTYPE(void, FNPDMSRVDESTRUCT,(PPDMSRVINS pSrvIns));
 /** Pointer to a FNPDMSRVDESTRUCT() function. */
 typedef FNPDMSRVDESTRUCT *PFNPDMSRVDESTRUCT;
 
@@ -70,7 +73,7 @@ typedef FNPDMSRVDESTRUCT *PFNPDMSRVDESTRUCT;
  *
  * @param   pSrvIns     The service instance data.
  */
-typedef DECLCALLBACK(void)   FNPDMSRVPOWERON(PPDMSRVINS pSrvIns);
+typedef DECLCALLBACKTYPE(void, FNPDMSRVPOWERON,(PPDMSRVINS pSrvIns));
 /** Pointer to a FNPDMSRVPOWERON() function. */
 typedef FNPDMSRVPOWERON *PFNPDMSRVPOWERON;
 
@@ -80,7 +83,7 @@ typedef FNPDMSRVPOWERON *PFNPDMSRVPOWERON;
  * @returns VBox status.
  * @param   pSrvIns     The service instance data.
  */
-typedef DECLCALLBACK(void)  FNPDMSRVRESET(PPDMSRVINS pSrvIns);
+typedef DECLCALLBACKTYPE(void, FNPDMSRVRESET,(PPDMSRVINS pSrvIns));
 /** Pointer to a FNPDMSRVRESET() function. */
 typedef FNPDMSRVRESET *PFNPDMSRVRESET;
 
@@ -90,7 +93,7 @@ typedef FNPDMSRVRESET *PFNPDMSRVRESET;
  * @returns VBox status.
  * @param   pSrvIns     The service instance data.
  */
-typedef DECLCALLBACK(void)  FNPDMSRVSUSPEND(PPDMSRVINS pSrvIns);
+typedef DECLCALLBACKTYPE(void, FNPDMSRVSUSPEND,(PPDMSRVINS pSrvIns));
 /** Pointer to a FNPDMSRVSUSPEND() function. */
 typedef FNPDMSRVSUSPEND *PFNPDMSRVSUSPEND;
 
@@ -100,7 +103,7 @@ typedef FNPDMSRVSUSPEND *PFNPDMSRVSUSPEND;
  * @returns VBox status.
  * @param   pSrvIns     The service instance data.
  */
-typedef DECLCALLBACK(void)  FNPDMSRVRESUME(PPDMSRVINS pSrvIns);
+typedef DECLCALLBACKTYPE(void, FNPDMSRVRESUME,(PPDMSRVINS pSrvIns));
 /** Pointer to a FNPDMSRVRESUME() function. */
 typedef FNPDMSRVRESUME *PFNPDMSRVRESUME;
 
@@ -109,7 +112,7 @@ typedef FNPDMSRVRESUME *PFNPDMSRVRESUME;
  *
  * @param   pSrvIns     The service instance data.
  */
-typedef DECLCALLBACK(void)   FNPDMSRVPOWEROFF(PPDMSRVINS pSrvIns);
+typedef DECLCALLBACKTYPE(void, FNPDMSRVPOWEROFF,(PPDMSRVINS pSrvIns));
 /** Pointer to a FNPDMSRVPOWEROFF() function. */
 typedef FNPDMSRVPOWEROFF *PFNPDMSRVPOWEROFF;
 
@@ -119,8 +122,10 @@ typedef FNPDMSRVPOWEROFF *PFNPDMSRVPOWEROFF;
  * This is called when a driver or device is detached from the service
  *
  * @param   pSrvIns     The service instance data.
+ * @param   pDevIns     The device instance to detach.
+ * @param   pDrvIns     The driver instance to detach.
  */
-typedef DECLCALLBACK(void)  FNPDMSRVDETACH(PPDMSRVINS pSrvIns, PPDMDEVINS pDevIns, PPDMDRVINS pDrvIns);
+typedef DECLCALLBACKTYPE(void, FNPDMSRVDETACH,(PPDMSRVINS pSrvIns, PPDMDEVINS pDevIns, PPDMDRVINS pDrvIns));
 /** Pointer to a FNPDMSRVDETACH() function. */
 typedef FNPDMSRVDETACH *PFNPDMSRVDETACH;
 
@@ -284,7 +289,7 @@ typedef struct PDMSRVINS
 #define PDM_SRVINS_VERSION                      PDM_VERSION_MAKE(0xdffe, 1, 0)
 
 /** Converts a pointer to the PDMSRVINS::IBase to a pointer to PDMSRVINS. */
-#define PDMIBASE_2_PDMSRV(pInterface) ( (PPDMSRVINS)((char *)(pInterface) - RT_OFFSETOF(PDMSRVINS, IBase)) )
+#define PDMIBASE_2_PDMSRV(pInterface) ( (PPDMSRVINS)((char *)(pInterface) - RT_UOFFSETOF(PDMSRVINS, IBase)) )
 
 
 
@@ -325,11 +330,11 @@ typedef struct PDMSRVREGCB
  * @param   pCallbacks      Pointer to the callback table.
  * @param   u32Version      VBox version number.
  */
-typedef DECLCALLBACK(int) FNPDMVBOXSERVICESREGISTER(PPDMSRVREGCB pCallbacks, uint32_t u32Version);
+typedef DECLCALLBACKTYPE(int, FNPDMVBOXSERVICESREGISTER,(PPDMSRVREGCB pCallbacks, uint32_t u32Version));
 
 
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_pdmsrv_h */

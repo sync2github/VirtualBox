@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 88215 2021-03-19 18:42:55Z vboxsync $
 ## @file
 # Sub-Makefile for the vboxvideo DRM module (Solaris kernel OpenGL module).
 #
 
 #
-# Copyright (C) 2009-2016 Oracle Corporation
+# Copyright (C) 2009-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -39,6 +39,9 @@ SYSMODS.solaris        += vboxvideo
 vboxvideo_TEMPLATE      = VBOXGUESTR0
 vboxvideo_DEFS          = VBOX_WITH_HGCM VBOX_SVN_REV=$(VBOX_SVN_REV)
 vboxvideo_DEPS         += $(VBOX_SVN_REV_KMK)
+if ($(VBOX_SOLARIS_11_UPDATE_VERSION) > 3)
+vboxvideo_DEFS         += VBOX_WITH_SYSTEM_QUEUE_H
+endif
 vboxvideo_INCS         := \
 	include/
 vboxvideo_SOURCES       = \

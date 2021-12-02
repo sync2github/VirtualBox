@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fileio2-posix.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - File I/O, POSIX, Part 2.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -59,7 +59,7 @@
 #include <iprt/path.h>
 #include <iprt/assert.h>
 #include <iprt/string.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
 #include "internal/file.h"
 #include "internal/fs.h"

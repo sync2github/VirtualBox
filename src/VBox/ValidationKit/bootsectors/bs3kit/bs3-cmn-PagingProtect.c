@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-PagingProtect.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - Bs3PagingProtect
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -345,7 +345,7 @@ BS3_CMN_DEF(int, Bs3PagingProtect,(uint64_t uFlat, uint64_t cb, uint64_t fSet, u
      * We can do this stuff in v8086 mode.
      */
     else
-        return Bs3SwitchFromV86To16BitAndCallC((FPFNBS3FAR)Bs3PagingProtect_f16, sizeof(uint64_t)*4, uFlat, cb, fSet, fClear);
+        return Bs3SwitchFromV86To16BitAndCallC((FPFNBS3FAR)Bs3PagingProtect_f16, sizeof(uint64_t) * 4, uFlat, cb, fSet, fClear);
 #endif
     return VINF_SUCCESS;
 }

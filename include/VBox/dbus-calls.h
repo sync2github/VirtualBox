@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -44,6 +44,8 @@
                  (error)) \
  RT_PROXY_STUB(dbus_free_string_array, void, (char **str_array), \
                  (str_array)) \
+ RT_PROXY_STUB(dbus_connection_ref, DBusConnection *, (DBusConnection *connection), \
+                 (connection)) \
  RT_PROXY_STUB(dbus_connection_unref, void, (DBusConnection *connection), \
                  (connection)) \
  RT_PROXY_STUB(dbus_connection_close, void, (DBusConnection *connection), \

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineViewSeamless.cpp 84790 2020-06-11 10:30:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineViewSeamless class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,35 +15,29 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QApplication>
-# include <QMainWindow>
-# include <QTimer>
-# ifdef VBOX_WS_MAC
-#  include <QMenuBar>
-# endif /* VBOX_WS_MAC */
+#include <QApplication>
+#include <QMainWindow>
+#include <QTimer>
+#ifdef VBOX_WS_MAC
+# include <QMenuBar>
+#endif /* VBOX_WS_MAC */
 
 /* GUI includes: */
-# include "UISession.h"
-# include "UIMachineLogicSeamless.h"
-# include "UIMachineWindow.h"
-# include "UIMachineViewSeamless.h"
-# include "UIFrameBuffer.h"
-# include "UIExtraDataManager.h"
-# include "UIDesktopWidgetWatchdog.h"
+#include "UISession.h"
+#include "UIMachineLogicSeamless.h"
+#include "UIMachineWindow.h"
+#include "UIMachineViewSeamless.h"
+#include "UIFrameBuffer.h"
+#include "UIExtraDataManager.h"
+#include "UIDesktopWidgetWatchdog.h"
 
 /* COM includes: */
-# include "CConsole.h"
-# include "CDisplay.h"
+#include "CConsole.h"
+#include "CDisplay.h"
 
 /* Other VBox includes: */
-# include "VBox/log.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "VBox/log.h"
 
 /* External includes: */
 #ifdef VBOX_WS_X11
@@ -52,18 +46,8 @@
 
 
 
-UIMachineViewSeamless::UIMachineViewSeamless(  UIMachineWindow *pMachineWindow
-                                             , ulong uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                                             , bool bAccelerate2DVideo
-#endif
-                                             )
-    : UIMachineView(  pMachineWindow
-                    , uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                    , bAccelerate2DVideo
-#endif
-                    )
+UIMachineViewSeamless::UIMachineViewSeamless(UIMachineWindow *pMachineWindow, ulong uScreenId)
+    : UIMachineView(pMachineWindow, uScreenId)
 {
     /* Prepare seamless view: */
     prepareSeamless();
@@ -95,9 +79,7 @@ bool UIMachineViewSeamless::eventFilter(QObject *pWatched, QEvent *pEvent)
 
                 /* Recalculate max guest size: */
                 setMaxGuestSize();
-                /* And resize guest to that size: */
-                if (uisession()->isGuestSupportsGraphics())
-                    QTimer::singleShot(0, this, SLOT(sltPerformGuestResize()));
+
                 break;
             }
             default:
@@ -136,7 +118,7 @@ void UIMachineViewSeamless::prepareConsoleConnections()
     UIMachineView::prepareConsoleConnections();
 
     /* Guest additions state-change updater: */
-    connect(uisession(), SIGNAL(sigAdditionsStateActualChange()), this, SLOT(sltAdditionsStateChanged()));
+    connect(uisession(), &UISession::sigAdditionsStateActualChange, this, &UIMachineViewSeamless::sltAdditionsStateChanged);
 }
 
 void UIMachineViewSeamless::prepareSeamless()
@@ -226,4 +208,3 @@ QSize UIMachineViewSeamless::calculateMaxGuestSize() const
 {
     return workingArea().size();
 }
-

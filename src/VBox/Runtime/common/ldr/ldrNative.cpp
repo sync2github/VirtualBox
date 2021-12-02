@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ldrNative.cpp 83539 2020-04-03 17:01:58Z vboxsync $ */
 /** @file
  * IPRT - Binary Image Loader, Native interface.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -85,6 +85,7 @@ static const RTLDROPS g_rtldrNativeOps =
     NULL,
     NULL,
     NULL,
+    NULL /*pfnUnwindFrame*/,
     42
 };
 
@@ -159,8 +160,11 @@ RTDECL(int) RTLdrLoadEx(const char *pszFilename, PRTLDRMOD phLdrMod, uint32_t fF
         rc = rtldrNativeLoad(pszFilename, &pMod->hNative, fFlags, pErrInfo);
         if (RT_SUCCESS(rc))
         {
+            if (fFlags & RTLDRLOAD_FLAGS_NO_UNLOAD)
+                RTMEM_MAY_LEAK(pMod);
+
             *phLdrMod = &pMod->Core;
-            LogFlow(("RTLdrLoad: returns %Rrc *phLdrMod=%RTldrm\n", rc, *phLdrMod));
+            LogFlow(("RTLdrLoad: returns %Rrc *phLdrMod=%RTldrm\n", rc,*phLdrMod));
             return rc;
         }
 
@@ -177,8 +181,13 @@ RT_EXPORT_SYMBOL(RTLdrLoadEx);
 
 RTDECL(int) RTLdrLoadSystem(const char *pszFilename, bool fNoUnload, PRTLDRMOD phLdrMod)
 {
-    LogFlow(("RTLdrLoadSystem: pszFilename=%p:{%s} fNoUnload=%RTbool phLdrMod=%p\n",
-             pszFilename, pszFilename, fNoUnload, phLdrMod));
+    return RTLdrLoadSystemEx(pszFilename, fNoUnload ? RTLDRLOAD_FLAGS_NO_UNLOAD : 0, phLdrMod);
+}
+
+
+RTDECL(int) RTLdrLoadSystemEx(const char *pszFilename, uint32_t fFlags, PRTLDRMOD phLdrMod)
+{
+    LogFlow(("RTLdrLoadSystemEx: pszFilename=%p:{%s} fFlags=%#RX32 phLdrMod=%p\n", pszFilename, pszFilename, fFlags, phLdrMod));
 
     /*
      * Validate input.
@@ -187,6 +196,8 @@ RTDECL(int) RTLdrLoadSystem(const char *pszFilename, bool fNoUnload, PRTLDRMOD p
     *phLdrMod = NIL_RTLDRMOD;
     AssertPtrReturn(pszFilename, VERR_INVALID_PARAMETER);
     AssertMsgReturn(!RTPathHasPath(pszFilename), ("%s\n", pszFilename), VERR_INVALID_PARAMETER);
+    AssertMsgReturn(!(fFlags & ~(RTLDRLOAD_FLAGS_VALID_MASK | RTLDRLOAD_FLAGS_SO_VER_BEGIN_MASK | RTLDRLOAD_FLAGS_SO_VER_END_MASK)),
+                    ("fFlags=%#RX32\n", fFlags), VERR_INVALID_FLAGS);
 
     /*
      * Check the filename.
@@ -194,14 +205,14 @@ RTDECL(int) RTLdrLoadSystem(const char *pszFilename, bool fNoUnload, PRTLDRMOD p
     size_t cchFilename = strlen(pszFilename);
     AssertMsgReturn(cchFilename < (RTPATH_MAX / 4) * 3, ("%zu\n", cchFilename), VERR_INVALID_PARAMETER);
 
-    const char *pszSuffix = "";
+    const char *pszSuffix = NULL;
     if (!RTPathHasSuffix(pszFilename))
         pszSuffix = RTLdrGetSuff();
 
     /*
      * Let the platform specific code do the rest.
      */
-    int rc = rtldrNativeLoadSystem(pszFilename, pszSuffix, fNoUnload ? RTLDRLOAD_FLAGS_NO_UNLOAD : 0, phLdrMod);
+    int rc = rtldrNativeLoadSystem(pszFilename, pszSuffix, fFlags, phLdrMod);
     LogFlow(("RTLdrLoadSystem: returns %Rrc\n", rc));
     return rc;
 }
@@ -209,9 +220,15 @@ RTDECL(int) RTLdrLoadSystem(const char *pszFilename, bool fNoUnload, PRTLDRMOD p
 
 RTDECL(void *) RTLdrGetSystemSymbol(const char *pszFilename, const char *pszSymbol)
 {
+    return RTLdrGetSystemSymbolEx(pszFilename, pszSymbol, RTLDRLOAD_FLAGS_NO_UNLOAD);
+}
+
+
+RTDECL(void *) RTLdrGetSystemSymbolEx(const char *pszFilename, const char *pszSymbol, uint32_t fFlags)
+{
     void    *pvRet = NULL;
     RTLDRMOD hLdrMod;
-    int rc = RTLdrLoadSystem(pszFilename, true /*fNoUnload*/, &hLdrMod);
+    int rc = RTLdrLoadSystemEx(pszFilename, fFlags | RTLDRLOAD_FLAGS_NO_UNLOAD, &hLdrMod);
     if (RT_SUCCESS(rc))
     {
         rc = RTLdrGetSymbol(hLdrMod, pszSymbol, &pvRet);

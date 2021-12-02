@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTFileQuerySize-generic.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTFileQuerySize, generic implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,7 +37,7 @@
 #include <iprt/path.h>
 
 
-RTDECL(int) RTFileQuerySize(const char *pszPath, uint64_t *pcbFile)
+RTDECL(int) RTFileQuerySizeByPath(const char *pszPath, uint64_t *pcbFile)
 {
     RTFSOBJINFO ObjInfo;
     int rc = RTPathQueryInfoEx(pszPath, &ObjInfo, RTFSOBJATTRADD_NOTHING, RTPATH_F_FOLLOW_LINK);

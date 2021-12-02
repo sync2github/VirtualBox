@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_timer_h
-#define ___iprt_timer_h
+#ifndef IPRT_INCLUDED_timer_h
+#define IPRT_INCLUDED_timer_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #include <iprt/cdefs.h>
@@ -77,7 +80,7 @@ typedef struct RTTIMER   *PRTTIMER;
  *                      callback after the timer was started. For omni timers
  *                      this will be 1 when a cpu comes back online.
  */
-typedef DECLCALLBACK(void) FNRTTIMER(PRTTIMER pTimer, void *pvUser, uint64_t iTick);
+typedef DECLCALLBACKTYPE(void, FNRTTIMER,(PRTTIMER pTimer, void *pvUser, uint64_t iTick));
 /** Pointer to FNRTTIMER() function. */
 typedef FNRTTIMER *PFNRTTIMER;
 
@@ -286,7 +289,7 @@ RTDECL(bool) RTTimerCanDoHighResolution(void);
  *                      callback after the timer was started. Will jump if we've
  *                      skipped ticks when lagging behind.
  */
-typedef DECLCALLBACK(void) FNRTTIMERLR(RTTIMERLR hTimerLR, void *pvUser, uint64_t iTick);
+typedef DECLCALLBACKTYPE(void, FNRTTIMERLR,(RTTIMERLR hTimerLR, void *pvUser, uint64_t iTick));
 /** Pointer to FNRTTIMER() function. */
 typedef FNRTTIMERLR *PFNRTTIMERLR;
 
@@ -384,4 +387,4 @@ RTDECL(int) RTTimerLRChangeInterval(RTTIMERLR hTimerLR, uint64_t u64NanoInterval
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_timer_h */

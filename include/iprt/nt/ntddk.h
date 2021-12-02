@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,16 +23,14 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___iprt_nt_ntddk_h___
-#define ___iprt_nt_ntddk_h___
+#ifndef IPRT_INCLUDED_nt_ntddk_h
+#define IPRT_INCLUDED_nt_ntddk_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Make sure we get the right prototypes. */
-#pragma warning(push)
-#pragma warning(disable:4668) /* Several incorrect __cplusplus uses. */
-#pragma warning(disable:4255) /* Incorrect __slwpcb prototype. */
-#include <intrin.h>
-#pragma warning(pop)
+#include <iprt/sanitized/intrin.h>
 
 #define _InterlockedExchange           _InterlockedExchange_StupidDDKVsCompilerCrap
 #define _InterlockedExchangeAdd        _InterlockedExchangeAdd_StupidDDKVsCompilerCrap
@@ -47,6 +45,10 @@
 #pragma warning(disable:4163)
 #pragma warning(disable:4668) /* warning C4668: 'WHEA_DOWNLEVEL_TYPE_NAMES' is not defined as a preprocessor macro, replacing with '0' for '#if/#elif' */
 #pragma warning(disable:4255) /* warning C4255: 'ObGetFilterVersion' : no function prototype given: converting '()' to '(void)' */
+#if _MSC_VER >= 1800 /*RT_MSC_VER_VC120*/
+# pragma warning(disable:4005) /* sdk/v7.1/include/sal_supp.h(57) : warning C4005: '__useHeader' : macro redefinition */
+# pragma warning(disable:4471) /* wdm.h(11057) : warning C4471: '_POOL_TYPE' : a forward declaration of an unscoped enumeration must have an underlying type (int assumed) */
+#endif
 /*RT_C_DECLS_BEGIN - no longer necessary it seems */
 #include <ntddk.h>
 /*RT_C_DECLS_END - no longer necessary it seems */
@@ -61,5 +63,5 @@
 #undef  _interlockedbittestandset64
 #undef  _interlockedbittestandreset64
 
-#endif
+#endif /* !IPRT_INCLUDED_nt_ntddk_h */
 

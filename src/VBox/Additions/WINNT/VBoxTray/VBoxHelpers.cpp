@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxHelpers.cpp 83072 2020-02-14 10:48:14Z vboxsync $ */
 /** @file
  * helpers - Guest Additions Service helper functions
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,15 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#include <malloc.h>
 #include <iprt/win/windows.h>
 
 #include <iprt/string.h>
+#include <iprt/alloca.h>
+#include <iprt/system.h>
 #include <VBox/Log.h>
 #include <VBox/VBoxGuestLib.h>
 
 #include "VBoxHelpers.h"
-#include "resource.h"
 
 
 int hlpReportStatus(VBoxGuestFacilityStatus statusCurrent)
@@ -289,29 +289,23 @@ int hlpShowBalloonTip(HINSTANCE hInst, HWND hWnd, UINT uID,
 
     /* Do we want to have */
 
-    /* Get running OS version. */
-    OSVERSIONINFO osInfo;
-    osInfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-    if (FALSE == GetVersionEx(&osInfo))
-        return RTErrConvertFromWin32(GetLastError());
-
     /* Is the current OS supported (at least WinXP) for displaying
      * our own icon and do we actually *want* to display our own stuff? */
-    if (   osInfo.dwMajorVersion >= 5
+    uint64_t const uNtVersion = RTSystemGetNtVersion();
+    if (    uNtVersion >= RTSYSTEM_MAKE_NT_VERSION(5, 0, 0)
         && (dwInfoFlags & NIIF_INFO))
     {
         /* Load (or retrieve handle of) the app's icon. */
-        HICON hIcon = LoadIcon(hInst, MAKEINTRESOURCE(IDI_VIRTUALBOX));
+        HICON hIcon = LoadIcon(hInst, "IDI_ICON1"); /* see Artwork/win/TemplateR3.rc */
         if (hIcon)
             niData.dwInfoFlags = NIIF_USER; /* Use an own notification icon. */
 
-        if (   osInfo.dwMajorVersion == 5
-            && osInfo.dwMinorVersion == 1) /* WinXP. */
+        if (uNtVersion >= RTSYSTEM_MAKE_NT_VERSION(5, 1, 0)) /* WinXP. */
         {
             /* Use an own icon instead of the default one. */
             niData.hIcon = hIcon;
         }
-        else if (osInfo.dwMajorVersion == 6) /* Vista and up. */
+        else if (uNtVersion >= RTSYSTEM_MAKE_NT_VERSION(6, 0, 0)) /* Vista and up. */
         {
             /* Use an own icon instead of the default one. */
             niData.dwInfoFlags |= NIIF_LARGE_ICON; /* Use a  large icon if available! */

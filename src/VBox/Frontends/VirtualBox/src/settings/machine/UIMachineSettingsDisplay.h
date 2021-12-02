@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineSettingsDisplay.h 86095 2020-09-11 14:28:34Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineSettingsDisplay class declaration.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,230 +15,306 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIMachineSettingsDisplay_h__
-#define __UIMachineSettingsDisplay_h__
+#ifndef FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsDisplay_h
+#define FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsDisplay_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UISettingsPage.h"
-#include "UIMachineSettingsDisplay.gen.h"
 
 /* COM includes: */
 #include "CGuestOSType.h"
 
 /* Forward declarations: */
+class QCheckBox;
+class QComboBox;
+class QLabel;
+class QLineEdit;
+class QGridLayout;
+class QSpinBox;
+class QStackedLayout;
+class QIAdvancedSlider;
+class QITabWidget;
 class UIActionPool;
+struct UIDataSettingsMachineDisplay;
+class UIFilePathSelector;
+class UIFilmContainer;
+class UIGraphicsControllerEditor;
+class UIScaleFactorEditor;
+class UIVideoMemoryEditor;
+typedef UISettingsCache<UIDataSettingsMachineDisplay> UISettingsCacheMachineDisplay;
 
-/* Machine settings / Display page / Data: */
-struct UIDataSettingsMachineDisplay
-{
-    /* Constructor: */
-    UIDataSettingsMachineDisplay()
-        : m_iCurrentVRAM(0)
-        , m_cGuestScreenCount(0)
-        , m_dScaleFactor(1.0)
-#ifdef VBOX_WS_MAC
-        , m_fUseUnscaledHiDPIOutput(false)
-#endif /* VBOX_WS_MAC */
-        , m_f3dAccelerationEnabled(false)
-#ifdef VBOX_WITH_VIDEOHWACCEL
-        , m_f2dAccelerationEnabled(false)
-#endif /* VBOX_WITH_VIDEOHWACCEL */
-        , m_fRemoteDisplayServerSupported(false)
-        , m_fRemoteDisplayServerEnabled(false)
-        , m_strRemoteDisplayPort(QString())
-        , m_remoteDisplayAuthType(KAuthType_Null)
-        , m_uRemoteDisplayTimeout(0)
-        , m_fRemoteDisplayMultiConnAllowed(false)
-        , m_fVideoCaptureEnabled(false)
-        , m_strVideoCaptureFolder(QString())
-        , m_strVideoCaptureFilePath(QString())
-        , m_iVideoCaptureFrameWidth(0)
-        , m_iVideoCaptureFrameHeight(0)
-        , m_iVideoCaptureFrameRate(0)
-        , m_iVideoCaptureBitRate(0)
-    {}
-
-    /* Functions: */
-    bool equal(const UIDataSettingsMachineDisplay &other) const
-    {
-        return (m_iCurrentVRAM == other.m_iCurrentVRAM) &&
-               (m_cGuestScreenCount == other.m_cGuestScreenCount) &&
-               (m_dScaleFactor == other.m_dScaleFactor) &&
-#ifdef VBOX_WS_MAC
-               (m_fUseUnscaledHiDPIOutput == other.m_fUseUnscaledHiDPIOutput) &&
-#endif /* VBOX_WS_MAC */
-               (m_f3dAccelerationEnabled == other.m_f3dAccelerationEnabled) &&
-#ifdef VBOX_WITH_VIDEOHWACCEL
-               (m_f2dAccelerationEnabled == other.m_f2dAccelerationEnabled) &&
-#endif /* VBOX_WITH_VIDEOHWACCEL */
-               (m_fRemoteDisplayServerSupported == other.m_fRemoteDisplayServerSupported) &&
-               (m_fRemoteDisplayServerEnabled == other.m_fRemoteDisplayServerEnabled) &&
-               (m_strRemoteDisplayPort == other.m_strRemoteDisplayPort) &&
-               (m_remoteDisplayAuthType == other.m_remoteDisplayAuthType) &&
-               (m_uRemoteDisplayTimeout == other.m_uRemoteDisplayTimeout) &&
-               (m_fRemoteDisplayMultiConnAllowed == other.m_fRemoteDisplayMultiConnAllowed) &&
-               (m_fVideoCaptureEnabled == other.m_fVideoCaptureEnabled) &&
-               (m_strVideoCaptureFilePath == other.m_strVideoCaptureFilePath) &&
-               (m_iVideoCaptureFrameWidth == other.m_iVideoCaptureFrameWidth) &&
-               (m_iVideoCaptureFrameHeight == other.m_iVideoCaptureFrameHeight) &&
-               (m_iVideoCaptureFrameRate == other.m_iVideoCaptureFrameRate) &&
-               (m_iVideoCaptureBitRate == other.m_iVideoCaptureBitRate) &&
-               (m_screens == other.m_screens);
-    }
-
-    /* Operators: */
-    bool operator==(const UIDataSettingsMachineDisplay &other) const { return equal(other); }
-    bool operator!=(const UIDataSettingsMachineDisplay &other) const { return !equal(other); }
-
-    /* Variables: Video stuff: */
-    int m_iCurrentVRAM;
-    int m_cGuestScreenCount;
-    double m_dScaleFactor;
-#ifdef VBOX_WS_MAC
-    bool m_fUseUnscaledHiDPIOutput;
-#endif /* VBOX_WS_MAC */
-    bool m_f3dAccelerationEnabled;
-#ifdef VBOX_WITH_VIDEOHWACCEL
-    bool m_f2dAccelerationEnabled;
-#endif /* VBOX_WITH_VIDEOHWACCEL */
-
-    /* Variables: Remote Display stuff: */
-    bool m_fRemoteDisplayServerSupported;
-    bool m_fRemoteDisplayServerEnabled;
-    QString m_strRemoteDisplayPort;
-    KAuthType m_remoteDisplayAuthType;
-    ulong m_uRemoteDisplayTimeout;
-    bool m_fRemoteDisplayMultiConnAllowed;
-
-    /* Variables: Video Capture stuff: */
-    bool m_fVideoCaptureEnabled;
-    QString m_strVideoCaptureFolder;
-    QString m_strVideoCaptureFilePath;
-    int m_iVideoCaptureFrameWidth;
-    int m_iVideoCaptureFrameHeight;
-    int m_iVideoCaptureFrameRate;
-    int m_iVideoCaptureBitRate;
-    QVector<BOOL> m_screens;
-};
-typedef UISettingsCache<UIDataSettingsMachineDisplay> UICacheSettingsMachineDisplay;
-
-/* Machine settings / Display page: */
-class UIMachineSettingsDisplay : public UISettingsPageMachine,
-                                 public Ui::UIMachineSettingsDisplay
+/** Machine settings: Display page. */
+class SHARED_LIBRARY_STUFF UIMachineSettingsDisplay : public UISettingsPageMachine
 {
     Q_OBJECT;
 
 public:
 
-    /** Constructor. */
+    /** Constructs Display settings page. */
     UIMachineSettingsDisplay();
+    /** Destructs Display settings page. */
+    ~UIMachineSettingsDisplay();
 
-    /* API: Correlation stuff: */
-    void setGuestOSType(CGuestOSType guestOSType);
-#ifdef VBOX_WITH_VIDEOHWACCEL
-    bool isAcceleration2DVideoSelected() const;
-#endif /* VBOX_WITH_VIDEOHWACCEL */
+    /** Defines @a comGuestOSType. */
+    void setGuestOSType(CGuestOSType comGuestOSType);
+
+#ifdef VBOX_WITH_3D_ACCELERATION
+    /** Returns whether 3D Acceleration is enabled. */
+    bool isAcceleration3DSelected() const;
+#endif
+
+    /** Returns recommended graphics controller type. */
+    KGraphicsControllerType graphicsControllerTypeRecommended() const;
+    /** Returns current graphics controller type. */
+    KGraphicsControllerType graphicsControllerTypeCurrent() const;
 
 protected:
 
-    /* API: Cache stuff: */
-    bool changed() const { return m_cache.wasChanged(); }
+    /** Returns whether the page content was changed. */
+    virtual bool changed() const /* override */;
 
-    /* API: Load data to cache from corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void loadToCacheFrom(QVariant &data);
-    /* API: Load data to corresponding widgets from cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void getFromCache();
+    /** Loads settings from external object(s) packed inside @a data to cache.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void loadToCacheFrom(QVariant &data) /* override */;
+    /** Loads data from cache to corresponding widgets.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void getFromCache() /* override */;
 
-    /* API: Save data from corresponding widgets to cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void putToCache();
-    /* API: Save data from cache to corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void saveFromCacheTo(QVariant &data);
+    /** Saves data from corresponding widgets to cache.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void putToCache() /* override */;
+    /** Saves settings from cache to external object(s) packed inside @a data.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void saveFromCacheTo(QVariant &data) /* overrride */;
 
-    /* API: Validation stuff: */
-    bool validate(QList<UIValidationMessage> &messages);
+    /** Performs validation, updates @a messages list if something is wrong. */
+    virtual bool validate(QList<UIValidationMessage> &messages) /* override */;
 
-    /* Helper: Navigation stuff: */
-    void setOrderAfter(QWidget *pWidget);
+    /** Defines TAB order for passed @a pWidget. */
+    virtual void setOrderAfter(QWidget *pWidget) /* override */;
 
-    /* Helper: Translation stuff: */
-    void retranslateUi();
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
 
-    /* Helper: Polishing stuff: */
-    void polishPage();
+    /** Performs final page polishing. */
+    virtual void polishPage() /* override */;
 
 private slots:
 
-    /* Handlers: Screen stuff: */
-    void sltHandleVideoMemorySizeSliderChange();
-    void sltHandleVideoMemorySizeEditorChange();
-    void sltHandleVideoScreenCountSliderChange();
-    void sltHandleVideoScreenCountEditorChange();
-    void sltHandleGuestScreenScaleSliderChange();
-    void sltHandleGuestScreenScaleEditorChange();
+    /** Handles Guest Screen count slider change. */
+    void sltHandleGuestScreenCountSliderChange();
+    /** Handles Guest Screen count editor change. */
+    void sltHandleGuestScreenCountEditorChange();
+    /** Handles Graphics Controller combo change. */
+    void sltHandleGraphicsControllerComboChange();
+#ifdef VBOX_WITH_3D_ACCELERATION
+    /** Handles 3D Acceleration check-box change. */
+    void sltHandle3DAccelerationCheckboxChange();
+#endif
 
-    /* Handlers: Video Capture stuff: */
-    void sltHandleVideoCaptureCheckboxToggle();
-    void sltHandleVideoCaptureFrameSizeComboboxChange();
-    void sltHandleVideoCaptureFrameWidthEditorChange();
-    void sltHandleVideoCaptureFrameHeightEditorChange();
-    void sltHandleVideoCaptureFrameRateSliderChange();
-    void sltHandleVideoCaptureFrameRateEditorChange();
-    void sltHandleVideoCaptureQualitySliderChange();
-    void sltHandleVideoCaptureBitRateEditorChange();
+    /** Handles recording toggle. */
+    void sltHandleRecordingCheckboxToggle();
+    /** Handles recording frame size change. */
+    void sltHandleRecordingVideoFrameSizeComboboxChange();
+    /** Handles recording frame width change. */
+    void sltHandleRecordingVideoFrameWidthEditorChange();
+    /** Handles recording frame height change. */
+    void sltHandleRecordingVideoFrameHeightEditorChange();
+    /** Handles recording frame rate slider change. */
+    void sltHandleRecordingVideoFrameRateSliderChange();
+    /** Handles recording frame rate editor change. */
+    void sltHandleRecordingVideoFrameRateEditorChange();
+    /** Handles recording quality slider change. */
+    void sltHandleRecordingVideoQualitySliderChange();
+    /** Handles recording bit-rate editor change. */
+    void sltHandleRecordingVideoBitRateEditorChange();
+    void sltHandleRecordingComboBoxChange();
 
 private:
 
-    /** Prepare routine. */
+    /** Prepares all. */
     void prepare();
-    /** Prepare routine: Screen tab. */
-    void prepareScreenTab();
-    /** Prepare routine: Remote Display tab. */
-    void prepareRemoteDisplayTab();
-    /** Prepare routine: Video Capture tab. */
-    void prepareVideoCaptureTab();
-    /** Prepare routine: Validation. */
-    void prepareValidation();
+    /** Prepares widgets. */
+    void prepareWidgets();
+    /** Prepares 'Screen' tab. */
+    void prepareTabScreen();
+    /** Prepares 'Remote Display' tab. */
+    void prepareTabRemoteDisplay();
+    /** Prepares 'Recording' tab. */
+    void prepareTabRecording();
+    /** Prepares connections. */
+    void prepareConnections();
+    /** Cleanups all. */
+    void cleanup();
 
-    /* Helpers: Video stuff: */
-    void checkVRAMRequirements();
-    bool shouldWeWarnAboutLowVideoMemory();
-    static int calcPageStep(int iMax);
+    /** Repopulates auth type combo-box. */
+    void repopulateComboAuthType();
 
-    /* Helpers: Video Capture stuff: */
-    void lookForCorrespondingSizePreset();
-    void updateVideoCaptureScreenCount();
-    void updateVideoCaptureSizeHint();
-    static void lookForCorrespondingPreset(QComboBox *pWhere, const QVariant &whichData);
+    /** Returns whether the VRAM requirements are important. */
+    bool shouldWeWarnAboutLowVRAM();
+
+    /** Searches for corresponding frame size preset. */
+    void lookForCorrespondingFrameSizePreset();
+    /** Updates guest-screen count. */
+    void updateGuestScreenCount();
+    /** Updates recording file size hint. */
+    void updateRecordingFileSizeHint();
+    /** Searches for the @a data field in corresponding @a pComboBox. */
+    static void lookForCorrespondingPreset(QComboBox *pComboBox, const QVariant &data);
+    /** Calculates recording video bit-rate for passed @a iFrameWidth, @a iFrameHeight, @a iFrameRate and @a iQuality. */
     static int calculateBitRate(int iFrameWidth, int iFrameHeight, int iFrameRate, int iQuality);
+    /** Calculates recording video quality for passed @a iFrameWidth, @a iFrameHeight, @a iFrameRate and @a iBitRate. */
     static int calculateQuality(int iFrameWidth, int iFrameHeight, int iFrameRate, int iBitRate);
+    /** Saves existing display data from the cache. */
+    bool saveDisplayData();
+    /** Saves existing 'Screen' data from the cache. */
+    bool saveScreenData();
+    /** Saves existing 'Remote Display' data from the cache. */
+    bool saveRemoteDisplayData();
+    /** Saves existing 'Recording' data from the cache. */
+    bool saveRecordingData();
+    /** Decide which of the recording related widgets are to be disabled/enabled. */
+    void enableDisableRecordingWidgets();
 
-    /* Guest OS type id: */
-    CGuestOSType m_guestOSType;
-    /* System minimum lower limit of VRAM (MiB). */
-    int m_iMinVRAM;
-    /* System maximum limit of VRAM (MiB). */
-    int m_iMaxVRAM;
-    /* Upper limit of VRAM in MiB for this dialog. This value is lower than
-     * m_maxVRAM to save careless users from setting useless big values. */
-    int m_iMaxVRAMVisible;
-    /* Initial VRAM value when the dialog is opened. */
-    int m_iInitialVRAM;
-#ifdef VBOX_WITH_VIDEOHWACCEL
-    /* Specifies whether the guest OS supports 2D video-acceleration: */
-    bool m_f2DVideoAccelerationSupported;
-#endif /* VBOX_WITH_VIDEOHWACCEL */
-#ifdef VBOX_WITH_CRHGSMI
-    /* Specifies whether the guest OS supports WDDM: */
-    bool m_fWddmModeSupported;
-#endif /* VBOX_WITH_CRHGSMI */
+    /** Holds the guest OS type ID. */
+    CGuestOSType  m_comGuestOSType;
+#ifdef VBOX_WITH_3D_ACCELERATION
+    /** Holds whether the guest OS supports WDDM. */
+    bool          m_fWddmModeSupported;
+#endif
+    /** Holds recommended graphics controller type. */
+    KGraphicsControllerType  m_enmGraphicsControllerTypeRecommended;
 
-    /* Cache: */
-    UICacheSettingsMachineDisplay m_cache;
+    /** Holds the page data cache instance. */
+    UISettingsCacheMachineDisplay *m_pCache;
+
+    /** @name Widgets
+     * @{ */
+        /** Holds the tab-widget instance. */
+        QITabWidget *m_pTabWidget;
+
+        /** Holds the 'Screen' tab instance. */
+        QWidget                    *m_pTabScreen;
+        /** Holds the video memory size label instance. */
+        QLabel                     *m_pLabelVideoMemorySize;
+        /** Holds the video memory size editor instance. */
+        UIVideoMemoryEditor        *m_pEditorVideoMemorySize;
+        /** Holds the monitor count label instance. */
+        QLabel                     *m_pLabelMonitorCount;
+        /** Holds the monitor count slider instance. */
+        QIAdvancedSlider           *m_pSliderMonitorCount;
+        /** Holds the monitor count spinbox instance. */
+        QSpinBox                   *m_pSpinboxMonitorCount;
+        /** Holds the monitor count min label instance. */
+        QLabel                     *m_pLabelMonitorCountMin;
+        /** Holds the monitor count max label instance. */
+        QLabel                     *m_pLabelMonitorCountMax;
+        /** Holds the scale factor label instance. */
+        QLabel                     *m_pLabelScaleFactor;
+        /** Holds the scale factor editor instance. */
+        UIScaleFactorEditor        *m_pEditorScaleFactor;
+        /** Holds the graphics controller label instance. */
+        QLabel                     *m_pLabelGraphicsController;
+        /** Holds the graphics controller editor instance. */
+        UIGraphicsControllerEditor *m_pEditorGraphicsController;
+        /** Holds the acceleration label instance. */
+        QLabel                     *m_pLabelAcceleration;
+        /** Holds the 3D check-box instance. */
+        QCheckBox                  *m_pCheckbox3D;
+
+        /** Holds the 'Remote Display' tab instance. */
+        QWidget   *m_pTabRemoteDisplay;
+        /** Holds the remote display check-box instance. */
+        QCheckBox *m_pCheckboxRemoteDisplay;
+        /** Holds the remote display settings widget instance. */
+        QWidget   *m_pWidgetRemoteDisplaySettings;
+        /** Holds the remote display port label instance. */
+        QLabel    *m_pLabelRemoteDisplayPort;
+        /** Holds the remote display port editor instance. */
+        QLineEdit *m_pEditorRemoteDisplayPort;
+        /** Holds the remote display port auth method label instance. */
+        QLabel    *m_pLabelRemoteDisplayAuthMethod;
+        /** Holds the remote display port auth method combo instance. */
+        QComboBox *m_pComboRemoteDisplayAuthMethod;
+        /** Holds the remote display timeout label instance. */
+        QLabel    *m_pLabelRemoteDisplayTimeout;
+        /** Holds the remote display timeout editor instance. */
+        QLineEdit *m_pEditorRemoteDisplayTimeout;
+        /** Holds the remote display options label instance. */
+        QLabel    *m_pLabelRemoteDisplayOptions;
+        /** Holds the remote display multiple connection check-box instance. */
+        QCheckBox *m_pCheckboxMultipleConn;
+
+        /** Holds the 'Recording' tab instance. */
+        QWidget            *m_pTabRecording;
+        /** Holds the recording check-box instance. */
+        QCheckBox          *m_pCheckboxRecording;
+        /** Holds the recording settings widget instance. */
+        QWidget            *m_pWidgetRecordingSettings;
+        /** Holds the recording mode label instance. */
+        QLabel             *m_pLabelRecordingMode;
+        /** Holds the recording mode combo instance. */
+        QComboBox          *m_pComboRecordingMode;
+        /** Holds the recording file path label instance. */
+        QLabel             *m_pLabelRecordingFilePath;
+        /** Holds the recording file path editor instance. */
+        UIFilePathSelector *m_pEditorRecordingFilePath;
+        /** Holds the recording frame size label instance. */
+        QLabel             *m_pLabelRecordingFrameSize;
+        /** Holds the recording frame size combo instance. */
+        QComboBox          *m_pComboRecordingFrameSize;
+        /** Holds the recording frame width spinbox instance. */
+        QSpinBox           *m_pSpinboxRecordingFrameWidth;
+        /** Holds the recording frame height spinbox instance. */
+        QSpinBox           *m_pSpinboxRecordingFrameHeight;
+        /** Holds the recording frame rate label instance. */
+        QLabel             *m_pLabelRecordingFrameRate;
+        /** Holds the recording frame rate settings widget instance. */
+        QWidget            *m_pWidgetRecordingFrameRateSettings;
+        /** Holds the recording frame rate slider instance. */
+        QIAdvancedSlider   *m_pSliderRecordingFrameRate;
+        /** Holds the recording frame rate spinbox instance. */
+        QSpinBox           *m_pSpinboxRecordingFrameRate;
+        /** Holds the recording frame rate min label instance. */
+        QLabel             *m_pLabelRecordingFrameRateMin;
+        /** Holds the recording frame rate max label instance. */
+        QLabel             *m_pLabelRecordingFrameRateMax;
+        /** Holds the recording video quality label instance. */
+        QLabel             *m_pLabelRecordingVideoQuality;
+        /** Holds the recording video quality settings widget instance. */
+        QWidget            *m_pWidgetRecordingVideoQualitySettings;
+        /** Holds the recording video quality slider instance. */
+        QIAdvancedSlider   *m_pSliderRecordingVideoQuality;
+        /** Holds the recording video quality spinbox instance. */
+        QSpinBox           *m_pSpinboxRecordingVideoQuality;
+        /** Holds the recording video quality min label instance. */
+        QLabel             *m_pLabelRecordingVideoQualityMin;
+        /** Holds the recording video quality med label instance. */
+        QLabel             *m_pLabelRecordingVideoQualityMed;
+        /** Holds the recording video quality max label instance. */
+        QLabel             *m_pLabelRecordingVideoQualityMax;
+        /** Holds the recording audio quality label instance. */
+        QLabel             *m_pLabelRecordingAudioQuality;
+        /** Holds the recording audio quality settings widget instance. */
+        QWidget            *m_pWidgetRecordingAudioQualitySettings;
+        /** Holds the recording audio quality slider instance. */
+        QIAdvancedSlider   *m_pSliderRecordingAudioQuality;
+        /** Holds the recording audio quality min label instance. */
+        QLabel             *m_pLabelRecordingAudioQualityMin;
+        /** Holds the recording audio quality med label instance. */
+        QLabel             *m_pLabelRecordingAudioQualityMed;
+        /** Holds the recording audio quality max label instance. */
+        QLabel             *m_pLabelRecordingAudioQualityMax;
+        /** Holds the recording size hint label instance. */
+        QLabel             *m_pLabelRecordingSizeHint;
+        /** Holds the recording screens label instance. */
+        QLabel             *m_pLabelRecordingScreens;
+        /** Holds the recording screens scroller instance. */
+        UIFilmContainer    *m_pScrollerRecordingScreens;
+   /** @} */
 };
 
-#endif // __UIMachineSettingsDisplay_h__
-
+#endif /* !FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsDisplay_h */

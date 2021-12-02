@@ -1,40 +1,43 @@
 /** @file
   Runtime memory status code worker.
 
-  Copyright (c) 2006 - 2010, Intel Corporation. All rights reserved.<BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
+  (C) Copyright 2016 Hewlett Packard Enterprise Development LP<BR>
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#include "StatusCodeHandlerSmm.h"
+#include "StatusCodeHandlerMm.h"
 
-RUNTIME_MEMORY_STATUSCODE_HEADER  *mSmmMemoryStatusCodeTable;
+RUNTIME_MEMORY_STATUSCODE_HEADER  *mMmMemoryStatusCodeTable;
 
 /**
-  Initialize SMM memory status code table as initialization for memory status code worker
+  Initialize MM memory status code table as initialization for memory status code worker
 
-  @retval EFI_SUCCESS  SMM memory status code table successfully initialized.
-
+  @retval EFI_SUCCESS  MM memory status code table successfully initialized.
+  @retval others       Errors from gMmst->MmInstallConfigurationTable().
 **/
 EFI_STATUS
 MemoryStatusCodeInitializeWorker (
   VOID
   )
 {
-  //
-  // Allocate SMM memory status code pool.
-  //
-  mSmmMemoryStatusCodeTable = (RUNTIME_MEMORY_STATUSCODE_HEADER *)AllocateZeroPool (sizeof (RUNTIME_MEMORY_STATUSCODE_HEADER) + PcdGet16 (PcdStatusCodeMemorySize) * 1024);
-  ASSERT (mSmmMemoryStatusCodeTable != NULL);
+  EFI_STATUS                        Status;
 
-  mSmmMemoryStatusCodeTable->MaxRecordsNumber = (PcdGet16 (PcdStatusCodeMemorySize) * 1024) / sizeof (MEMORY_STATUSCODE_RECORD);
-  return EFI_SUCCESS;
+  //
+  // Allocate MM memory status code pool.
+  //
+  mMmMemoryStatusCodeTable = (RUNTIME_MEMORY_STATUSCODE_HEADER *)AllocateZeroPool (sizeof (RUNTIME_MEMORY_STATUSCODE_HEADER) + PcdGet16 (PcdStatusCodeMemorySize) * 1024);
+  ASSERT (mMmMemoryStatusCodeTable != NULL);
+
+  mMmMemoryStatusCodeTable->MaxRecordsNumber = (PcdGet16 (PcdStatusCodeMemorySize) * 1024) / sizeof (MEMORY_STATUSCODE_RECORD);
+  Status = gMmst->MmInstallConfigurationTable (
+                    gMmst,
+                    &gMemoryStatusCodeRecordGuid,
+                    &mMmMemoryStatusCodeTable,
+                    sizeof (mMmMemoryStatusCodeTable)
+                    );
+  return Status;
 }
 
 
@@ -71,8 +74,8 @@ MemoryStatusCodeReportWorker (
   //
   // Locate current record buffer.
   //
-  Record = (MEMORY_STATUSCODE_RECORD *) (mSmmMemoryStatusCodeTable + 1);
-  Record = &Record[mSmmMemoryStatusCodeTable->RecordIndex++];
+  Record = (MEMORY_STATUSCODE_RECORD *) (mMmMemoryStatusCodeTable + 1);
+  Record = &Record[mMmMemoryStatusCodeTable->RecordIndex++];
 
   //
   // Save status code.
@@ -89,12 +92,12 @@ MemoryStatusCodeReportWorker (
   // so the first record is pointed by record index.
   // If it is less then max number, index of the first record is zero.
   //
-  mSmmMemoryStatusCodeTable->NumberOfRecords++;
-  if (mSmmMemoryStatusCodeTable->RecordIndex == mSmmMemoryStatusCodeTable->MaxRecordsNumber) {
+  mMmMemoryStatusCodeTable->NumberOfRecords++;
+  if (mMmMemoryStatusCodeTable->RecordIndex == mMmMemoryStatusCodeTable->MaxRecordsNumber) {
     //
     // Wrap around record index.
     //
-    mSmmMemoryStatusCodeTable->RecordIndex = 0;
+    mMmMemoryStatusCodeTable->RecordIndex = 0;
   }
 
   return EFI_SUCCESS;

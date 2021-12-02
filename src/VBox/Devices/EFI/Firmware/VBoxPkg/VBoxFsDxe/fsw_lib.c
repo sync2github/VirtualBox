@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fsw_lib.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * fsw_lib.c - Core file system wrapper library functions.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,9 +22,7 @@
  *
  * You may elect to license modified versions of this file under the
  * terms and conditions of either the GPL or the CDDL or both.
- */
-
-/*-
+ * ---------------------------------------------------------------------------
  * This code is based on:
  *
  * Copyright (c) 2006 Christoph Pfisterer
@@ -539,7 +537,7 @@ void fsw_strsplit(struct fsw_string *element, struct fsw_string *buffer, char se
         buffer->type = FSW_STRING_TYPE_EMPTY;
     }
 
-    // TODO: support UTF8 and UTF16_SWAPPED
+    /// @todo support UTF8 and UTF16_SWAPPED
 }
 
 /**

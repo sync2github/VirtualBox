@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GIMInternal.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * GIM - Internal header file.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___GIMInternal_h
-#define ___GIMInternal_h
+#ifndef VMM_INCLUDED_SRC_include_GIMInternal_h
+#define VMM_INCLUDED_SRC_include_GIMInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vmm/gim.h>
 #include <VBox/vmm/pgm.h>
@@ -91,12 +94,12 @@ typedef struct GIMCPU
 typedef GIMCPU *PGIMCPU;
 
 /**
- * Callback when a debug buffer read has completed and before signaling
- * the next read.
+ * Callback when a debug buffer read has completed and before signalling the next
+ * read.
  *
  * @param   pVM             The cross context VM structure.
  */
-typedef DECLCALLBACK(void) FNGIMDEBUGBUFREADCOMPLETED(PVM pVM);
+typedef DECLCALLBACKTYPE(void, FNGIMDEBUGBUFREADCOMPLETED,(PVM pVM));
 /** Pointer to GIM debug buffer read completion callback. */
 typedef FNGIMDEBUGBUFREADCOMPLETED *PFNGIMDEBUGBUFREADCOMPLETED;
 
@@ -116,5 +119,5 @@ VMMR3_INT_DECL(int)           gimR3DebugWrite(PVM pVM, void *pvWrite, size_t *pc
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VMM_INCLUDED_SRC_include_GIMInternal_h */
 

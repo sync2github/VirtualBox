@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: slirp.c 92093 2021-10-27 08:18:16Z vboxsync $ */
 /** @file
  * NAT - slirp glue.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -46,11 +46,12 @@
 # include <paths.h>
 #endif
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/vmm/dbgf.h>
 #include <VBox/vmm/pdmdrv.h>
 #include <iprt/assert.h>
 #include <iprt/file.h>
+#include <iprt/path.h>
 #ifndef RT_OS_WINDOWS
 # include <sys/ioctl.h>
 # include <poll.h>
@@ -297,7 +298,7 @@ static int slirpVerifyAndFreeSocket(PNATState pData, struct socket *pSocket)
 
 int slirp_init(PNATState *ppData, uint32_t u32NetAddr, uint32_t u32Netmask,
                bool fPassDomain, bool fUseHostResolver, int i32AliasMode,
-               int iIcmpCacheLimit, void *pvUser)
+               int iIcmpCacheLimit, bool fLocalhostReachable, void *pvUser)
 {
     int rc;
     PNATState pData;
@@ -314,6 +315,7 @@ int slirp_init(PNATState *ppData, uint32_t u32NetAddr, uint32_t u32Netmask,
     pData->fPassDomain = !fUseHostResolver ? fPassDomain : false;
     pData->fUseHostResolver = fUseHostResolver;
     pData->fUseHostResolverPermanent = fUseHostResolver;
+    pData->fLocalhostReachable = fLocalhostReachable;
     pData->pvUser = pvUser;
     pData->netmask = u32Netmask;
 
@@ -387,13 +389,18 @@ int slirp_init(PNATState *ppData, uint32_t u32NetAddr, uint32_t u32Netmask,
     inet_aton("127.0.0.1", &loopback_addr);
 
     rc = slirpTftpInit(pData);
-    AssertRCReturn(rc, VINF_NAT_DNS);
+    AssertRCReturn(rc, rc);
 
     if (i32AliasMode & ~(PKT_ALIAS_LOG|PKT_ALIAS_SAME_PORTS|PKT_ALIAS_PROXY_ONLY))
     {
-        Log(("NAT: alias mode %x is ignored\n", i32AliasMode));
+        LogRel(("NAT: bad alias mode 0x%x ignored\n", i32AliasMode));
         i32AliasMode = 0;
     }
+    else if (i32AliasMode != 0)
+    {
+        LogRel(("NAT: alias mode 0x%x\n", i32AliasMode));
+    }
+
     pData->i32AliasMode = i32AliasMode;
     getouraddr(pData);
     {
@@ -561,12 +568,20 @@ void slirp_term(PNATState pData)
         LIST_REMOVE(ac, list);
         RTMemFree(ac);
     }
+    while (!LIST_EMPTY(&pData->port_forward_rule_head))
+    {
+        struct port_forward_rule *rule = LIST_FIRST(&pData->port_forward_rule_head);
+        LIST_REMOVE(rule, list);
+        RTMemFree(rule);
+    }
     slirpTftpTerm(pData);
     bootp_dhcp_fini(pData);
     m_fini(pData);
 #ifdef RT_OS_WINDOWS
     WSACleanup();
 #endif
+    if (tftp_prefix)
+        RTStrFree((char *)tftp_prefix);
 #ifdef LOG_ENABLED
     Log(("\n"
          "NAT statistics\n"
@@ -674,10 +689,7 @@ void slirp_select_fill(PNATState pData, int *pnfds, struct pollfd *polls)
         so->so_poll_index = -1;
 #endif
         STAM_COUNTER_INC(&pData->StatTCP);
-#ifdef VBOX_WITH_NAT_UDP_SOCKET_CLONE
-        /* TCP socket can't be cloned */
-        Assert((!so->so_cloneOf));
-#endif
+
         /*
          * See if we need a tcp_fasttimo
          */
@@ -786,10 +798,6 @@ void slirp_select_fill(PNATState pData, int *pnfds, struct pollfd *polls)
                 CONTINUE_NO_UNLOCK(udp);
             }
         }
-#ifdef VBOX_WITH_NAT_UDP_SOCKET_CLONE
-        if (so->so_cloneOf)
-                CONTINUE_NO_UNLOCK(udp);
-#endif
 
         /*
          * When UDP packets are received from over the link, they're
@@ -951,10 +959,6 @@ void slirp_select_poll(PNATState pData, struct pollfd *polls, int ndfs)
      */
     QSOCKET_FOREACH(so, so_next, tcp)
     /* { */
-        /* TCP socket can't be cloned */
-#ifdef VBOX_WITH_NAT_UDP_SOCKET_CLONE
-        Assert((!so->so_cloneOf));
-#endif
         Assert(!so->fUnderPolling);
         so->fUnderPolling = 1;
         if (slirpVerifyAndFreeSocket(pData, so))
@@ -1223,10 +1227,6 @@ void slirp_select_poll(PNATState pData, struct pollfd *polls, int ndfs)
      */
      QSOCKET_FOREACH(so, so_next, udp)
      /* { */
-#ifdef VBOX_WITH_NAT_UDP_SOCKET_CLONE
-        if (so->so_cloneOf)
-            CONTINUE_NO_UNLOCK(udp);
-#endif
 #if 0
         so->fUnderPolling = 1;
         if(slirpVerifyAndFreeSocket(pData, so));
@@ -1254,10 +1254,13 @@ done:
 struct arphdr
 {
     unsigned short  ar_hrd;             /* format of hardware address   */
+#define ARPHRD_ETHER    1               /* ethernet hardware format     */
     unsigned short  ar_pro;             /* format of protocol address   */
     unsigned char   ar_hln;             /* length of hardware address   */
     unsigned char   ar_pln;             /* length of protocol address   */
     unsigned short  ar_op;              /* ARP opcode (command)         */
+#define ARPOP_REQUEST   1               /* ARP request                  */
+#define ARPOP_REPLY     2               /* ARP reply                    */
 
     /*
      *      Ethernet looks like this : This bit is variable sized however...
@@ -1323,11 +1326,22 @@ static void arp_input(PNATState pData, struct mbuf *m)
 {
     struct ethhdr *pEtherHeader;
     struct arphdr *pARPHeader;
+    int ar_op;
     uint32_t ip4TargetAddress;
 
-    int ar_op;
+    /* drivers never return runt packets, so this should never happen */
+    if (RT_UNLIKELY((size_t)m->m_len
+                    < sizeof(struct ethhdr) + sizeof(struct arphdr)))
+        goto done;
+
     pEtherHeader = mtod(m, struct ethhdr *);
     pARPHeader = (struct arphdr *)&pEtherHeader[1];
+
+    if (RT_UNLIKELY(   pARPHeader->ar_hrd != RT_H2N_U16_C(ARPHRD_ETHER)
+                    || pARPHeader->ar_pro != RT_H2N_U16_C(ETH_P_IP)
+                    || pARPHeader->ar_hln != ETH_ALEN
+                    || pARPHeader->ar_pln != sizeof(RTNETADDRIPV4)))
+        goto done;
 
     ar_op = RT_N2H_U16(pARPHeader->ar_op);
     ip4TargetAddress = *(uint32_t*)pARPHeader->ar_tip;
@@ -1339,6 +1353,12 @@ static void arp_input(PNATState pData, struct mbuf *m)
                 || CTL_CHECK(ip4TargetAddress, CTL_ALIAS)
                 || CTL_CHECK(ip4TargetAddress, CTL_TFTP))
             {
+#if 0 /* Dropping ARP requests destined for CTL_ALIAS breaks all outgoing traffic completely, so don't do that... */
+                /* Don't reply to ARP requests for the hosts loopback interface if it is disabled. */
+                if (   CTL_CHECK(ip4TargetAddress, CTL_ALIAS)
+                    && !pData->fLocalhostReachable)
+                    break;
+#endif
                 slirp_update_guest_addr_guess(pData, *(uint32_t *)pARPHeader->ar_sip, "arp request");
                 arp_output(pData, pEtherHeader->h_source, pARPHeader, ip4TargetAddress);
                 break;
@@ -1365,6 +1385,7 @@ static void arp_input(PNATState pData, struct mbuf *m)
             break;
     }
 
+  done:
     m_freem(pData, m);
 }
 
@@ -1667,7 +1688,9 @@ void slirp_post_sent(PNATState pData, void *pvArg)
 void slirp_set_dhcp_TFTP_prefix(PNATState pData, const char *tftpPrefix)
 {
     Log2(("tftp_prefix: %s\n", tftpPrefix));
-    tftp_prefix = tftpPrefix;
+    if (tftp_prefix)
+        RTStrFree((char *)tftp_prefix);
+    tftp_prefix = RTPathAbsDup(tftpPrefix);
 }
 
 void slirp_set_dhcp_TFTP_bootfile(PNATState pData, const char *bootFile)
@@ -1687,12 +1710,32 @@ void slirp_set_dhcp_next_server(PNATState pData, const char *next_server)
 
 int slirp_set_binding_address(PNATState pData, char *addr)
 {
-    if (addr == NULL || (inet_aton(addr, &pData->bindIP) == 0))
+    int ok;
+
+    pData->bindIP.s_addr = INADDR_ANY;
+
+    if (addr == NULL || *addr == '\0')
+        return VINF_SUCCESS;
+
+    ok = inet_aton(addr, &pData->bindIP);
+    if (!ok)
     {
-        pData->bindIP.s_addr = INADDR_ANY;
-        return 1;
+        LogRel(("NAT: Unable to parse binding address: %s\n", addr));
+        return VERR_INVALID_PARAMETER;
     }
-    return 0;
+
+    if (pData->bindIP.s_addr == INADDR_ANY)
+        return VINF_SUCCESS;
+
+    if ((pData->bindIP.s_addr & RT_N2H_U32_C(0xe0000000)) == RT_N2H_U32_C(0xe0000000))
+    {
+        LogRel(("NAT: Ignoring multicast binding address %RTnaipv4\n", pData->bindIP.s_addr));
+        pData->bindIP.s_addr = INADDR_ANY;
+        return VERR_INVALID_PARAMETER;
+    }
+
+    LogRel(("NAT: Binding address %RTnaipv4\n", pData->bindIP.s_addr));
+    return VINF_SUCCESS;
 }
 
 void slirp_set_dhcp_dns_proxy(PNATState pData, bool fDNSProxy)
@@ -2007,7 +2050,7 @@ int slirp_host_network_configuration_change_strategy_selector(const PNATState pD
         struct rcp_state rcp_state;
         int rc;
 
-        rcp_state.rcps_flags |= RCPSF_IGNORE_IPV6;
+        rcp_state.rcps_flags = RCPSF_IGNORE_IPV6;
         rc = rcp_parse(&rcp_state, RESOLV_CONF_FILE);
         LogRelFunc(("NAT: rcp_parse:%Rrc old domain:%s new domain:%s\n",
                     rc, LIST_EMPTY(&pData->pDomainList)

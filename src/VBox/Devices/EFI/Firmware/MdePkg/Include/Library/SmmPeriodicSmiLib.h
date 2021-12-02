@@ -1,14 +1,8 @@
 /** @file
   Provides services to enable and disable periodic SMI handlers.
 
-Copyright (c) 2011, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2011 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -70,7 +64,7 @@ PeriodicSmiExit (
   This function yields control back to the SMM Foundation.  When the next
   periodic SMI for the currently executing handler is triggered, the periodic
   SMI handler will be resumed and this function will return.  Use of this
-  function requires a seperate stack for the periodic SMI handler.  A non zero
+  function requires a separate stack for the periodic SMI handler.  A non zero
   stack size must be specified in PeriodicSmiEnable() for this function to be
   used.
 
@@ -79,7 +73,7 @@ PeriodicSmiExit (
   If this function is not called from within an enabled periodic SMI handler,
   then 0 is returned.
 
-  @return  The actual time in 100ns units elasped since this function was
+  @return  The actual time in 100ns units elapsed since this function was
            called.  A value of 0 indicates an unknown amount of time.
 
 **/
@@ -95,7 +89,7 @@ PeriodicSmiYield (
   PeriodicSmiDisable().
 
   @param[in] Context      Content registered with PeriodicSmiEnable().
-  @param[in] ElapsedTime  The actual time in 100ns units elasped since
+  @param[in] ElapsedTime  The actual time in 100ns units elapsed since
                           this function was called.  A value of 0 indicates
                           an unknown amount of time.
 
@@ -119,7 +113,7 @@ VOID
   @param[in]     DispatchFunction  A pointer to a periodic SMI handler function.
   @param[in]     Context           Optional content to pass into DispatchFunction.
   @param[in]     TickPeriod        The requested tick period in 100ns units that
-                                   control should be givien to the periodic SMI
+                                   control should be given to the periodic SMI
                                    handler.  Must be one of the supported values
                                    returned by PeriodicSmiSupportedPickPeriod().
   @param[in]     Cpu               Specifies the CPU that is required to execute
@@ -143,7 +137,7 @@ VOID
   @retval EFI_OUT_OF_RESOURCES   There are not enough resources to enable the
                                  periodic SMI handler.
   @retval EFI_OUT_OF_RESOURCES   There are not enough resources to allocate the
-                                 stack speficied by StackSize.
+                                 stack specified by StackSize.
   @retval EFI_SUCCESS            The periodic SMI handler was enabled.
 
 **/

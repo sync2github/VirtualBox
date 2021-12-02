@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # Top-level makefile for the src directory.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -20,15 +20,13 @@ include $(KBUILD_PATH)/subheader.kmk
 
 include $(PATH_SUB_CURRENT)/bldprogs/Makefile.kmk
 include $(PATH_SUB_CURRENT)/VBox/Makefile.kmk
-if !defined(VBOX_ONLY_ADDITIONS) || "$(KBUILD_TARGET)" == "win"
- include $(PATH_SUB_CURRENT)/libs/Makefile.kmk
-endif
+include $(PATH_SUB_CURRENT)/libs/Makefile.kmk
 if defined(VBOX_ONLY_EXTPACKS) && !defined(VBOX_ONLY_EXTPACKS_USE_IMPLIBS) && defined(VBOX_WITH_REM)
  include $(PATH_SUB_CURRENT)/recompiler/Makefile.kmk
 
 else if !defined(VBOX_ONLY_BUILD)
  # Normal build.
- if1of ($(KBUILD_TARGET_ARCH), x86 amd64)
+ if1of ($(KBUILD_TARGET_ARCH), $(VBOX_SUPPORTED_HOST_ARCHS))
   ifdef VBOX_WITH_REM
    include $(PATH_SUB_CURRENT)/recompiler/Makefile.kmk
   endif

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QITableView.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * VBox Qt GUI - VirtualBox Qt extensions: QITableView class implementation.
+ * VBox Qt GUI - Qt extensions: QITableView class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,21 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QAccessibleWidget>
+#include <QAccessibleWidget>
 
 /* GUI includes: */
-# include "QITableView.h"
-# include "QIStyledItemDelegate.h"
+#include "QIStyledItemDelegate.h"
+#include "QITableView.h"
 
 /* Other VBox includes: */
-# include "iprt/assert.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "iprt/assert.h"
 
 
 /** QAccessibleObject extension used as an accessibility interface for QITableViewCell. */
@@ -167,7 +161,7 @@ private:
 
 
 /*********************************************************************************************************************************
-*   Class QIAccessibilityInterfaceForQITableViewCell implementation.                                                              *
+*   Class QIAccessibilityInterfaceForQITableViewCell implementation.                                                             *
 *********************************************************************************************************************************/
 
 QAccessibleInterface *QIAccessibilityInterfaceForQITableViewCell::parent() const
@@ -408,8 +402,14 @@ QString QIAccessibilityInterfaceForQITableView::text(QAccessible::Text /* enmTex
 QITableView::QITableView(QWidget *pParent)
     : QTableView(pParent)
 {
-    /* Prepare all: */
+    /* Prepare: */
     prepare();
+}
+
+QITableView::~QITableView()
+{
+    /* Cleanup: */
+    cleanup();
 }
 
 void QITableView::makeSureEditorDataCommitted()
@@ -432,7 +432,7 @@ void QITableView::makeSureEditorDataCommitted()
 void QITableView::sltEditorCreated(QWidget *pEditor, const QModelIndex &index)
 {
     /* Connect created editor to the table and store it: */
-    connect(pEditor, SIGNAL(destroyed(QObject *)), this, SLOT(sltEditorDestroyed(QObject *)));
+    connect(pEditor, &QWidget::destroyed, this, &QITableView::sltEditorDestroyed);
     m_editors[index] = pEditor;
 }
 
@@ -470,8 +470,14 @@ void QITableView::prepare()
         /* Assign newly created delegate to the table: */
         setItemDelegate(pStyledItemDelegate);
         /* Connect newly created delegate to the table: */
-        connect(pStyledItemDelegate, SIGNAL(sigEditorCreated(QWidget *, const QModelIndex &)),
-                this, SLOT(sltEditorCreated(QWidget *, const QModelIndex &)));
+        connect(pStyledItemDelegate, &QIStyledItemDelegate::sigEditorCreated,
+                this, &QITableView::sltEditorCreated);
     }
 }
 
+void QITableView::cleanup()
+{
+    /* Disconnect all the editors prematurelly: */
+    foreach (QObject *pEditor, m_editors.values())
+        disconnect(pEditor, 0, this, 0);
+}

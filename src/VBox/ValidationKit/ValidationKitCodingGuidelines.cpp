@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ValidationKitCodingGuidelines.cpp 83458 2020-03-26 21:15:25Z vboxsync $ */
 /** @file
  * VirtualBox Validation Kit - Coding Guidelines.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -53,7 +53,7 @@
  * Collection qualifiers:
  *      - 'a' for a list or an array.
  *      - 'd' for a dictionary.
- *      - 'h' for a hash.
+ *      - 'h' for a set (hashed).
  *      - 't' for a tuple.
  *
  * Other qualifiers:
@@ -70,6 +70,8 @@
  *
  * The type collection qualifiers comes first, then the other qualifiers and
  * finally the type qualifier.
+ *
+ * Python statements are terminated by semicolons (';') as a convention.
  *
  */
 

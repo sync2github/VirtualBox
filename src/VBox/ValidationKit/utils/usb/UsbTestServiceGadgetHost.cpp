@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UsbTestServiceGadgetHost.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * UsbTestServ - Remote USB test configuration and execution server, USB gadget host API.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,13 +28,11 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-
 #include <iprt/asm.h>
-#include <iprt/cdefs.h>
 #include <iprt/ctype.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
-#include <iprt/types.h>
 
 #include "UsbTestServiceGadget.h"
 #include "UsbTestServiceGadgetHostInternal.h"
@@ -108,7 +106,7 @@ DECLHIDDEN(int) utsGadgetHostCreate(UTSGADGETHOSTTYPE enmType, PCUTSGADGETCFGITE
 
     if (RT_LIKELY(pIf))
     {
-        PUTSGADGETHOSTINT pThis = (PUTSGADGETHOSTINT)RTMemAllocZ(RT_OFFSETOF(UTSGADGETHOSTINT, abIfInst[pIf->cbIf]));
+        PUTSGADGETHOSTINT pThis = (PUTSGADGETHOSTINT)RTMemAllocZ(RT_UOFFSETOF_DYN(UTSGADGETHOSTINT, abIfInst[pIf->cbIf]));
         if (RT_LIKELY(pThis))
         {
             pThis->cRefs = 1;

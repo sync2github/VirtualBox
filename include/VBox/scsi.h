@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,11 +23,18 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_scsi_h
-#define ___VBox_scsi_h
+#ifndef VBOX_INCLUDED_scsi_h
+#define VBOX_INCLUDED_scsi_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/assert.h>
 
+/**
+ * @todo: Remove when the splitting code was removed from DevATA.
+ *        The limit doesn't belong here but is specific for each host platform.
+ */
 #ifdef RT_OS_FREEBSD
 /* The cam subsystem doesn't allow more */
 # define SCSI_MAX_BUFFER_SIZE (64  * _1K)
@@ -204,15 +211,20 @@ typedef enum SCSIMAINTENANCEIN
 #define SCSI_ASC_ILLEGAL_OPCODE                             0x20
 #define SCSI_ASC_LOGICAL_BLOCK_OOR                          0x21
 #define SCSI_ASC_INV_FIELD_IN_CMD_PACKET                    0x24
+#define SCSI_ASC_LOGICAL_UNIT_NOT_SUPPORTED                 0x25
 #define SCSI_ASC_WRITE_PROTECTED                            0x27
 #define SCSI_ASC_MEDIUM_MAY_HAVE_CHANGED                    0x28
 #define SCSI_ASC_POWER_ON_RESET_BUS_DEVICE_RESET_OCCURRED   0x29
+#define SCSI_ASC_CANNOT_READ_MEDIUM                         0x30
 #define SCSI_ASC_MEDIUM_NOT_PRESENT                         0x3a
 #define SCSI_ASC_SAVING_PARAMETERS_NOT_SUPPORTED            0x39
+#define SCSI_ASC_INTERNAL_TARGET_FAILURE                    0x44
 #define SCSI_ASC_INVALID_MESSAGE                            0x49
 #define SCSI_ASC_MEDIA_LOAD_OR_EJECT_FAILED                 0x53
 #define SCSI_ASC_LOGICAL_UNIT_DOES_NOT_RESPOND_TO_SELECTION 0x00
 #define SCSI_ASC_SYSTEM_RESOURCE_FAILURE                    0x55
+#define SCSI_ASC_ILLEGAL_MODE_FOR_THIS_TRACK                0x64
+#define SCSI_ASC_COMMAND_TO_LOGICAL_UNIT_FAILED             0x6E
 
 /** Additional sense code qualifiers (ASCQ). */
 /* NB: The ASC/ASCQ combination determines the full meaning. */
@@ -223,10 +235,21 @@ typedef enum SCSIMAINTENANCEIN
 #define SCSI_ASCQ_EOP_EOM_DETECTED                          0x02
 #define SCSI_ASCQ_SETMARK_DETECTED                          0x03
 #define SCSI_ASCQ_BOP_BOM_DETECTED                          0x04
+#define SCSI_ASCQ_UNKNOWN_FORMAT                            0x01
+#define SCSI_ASCQ_INCOMPATIBLE_FORMAT                       0x02
+#define SCSI_ASCQ_COPY_TARGET_DEVICE_DATA_OVERRUN           0x0d
 
 /** @name SCSI_INQUIRY
  * @{
  */
+
+/** Length of the SCSI INQUIRY vendor identifier (without termination). */
+#define SCSI_INQUIRY_VENDOR_ID_LENGTH   8
+/** Length of the SCSI INQUIRY product identifier (without termination). */
+#define SCSI_INQUIRY_PRODUCT_ID_LENGTH 16
+/** Length of the SCSI INQUIRY revision identifier (without termination). */
+#define SCSI_INQUIRY_REVISION_LENGTH    4
+
 #pragma pack(1)
 typedef struct SCSIINQUIRYCDB
 {
@@ -247,21 +270,21 @@ typedef const SCSIINQUIRYCDB *PCSCSIINQUIRYCDB;
 #pragma pack(1)
 typedef struct SCSIINQUIRYDATA
 {
-    unsigned u5PeripheralDeviceType : 5;    /**< 0x00 / 00 */
+    unsigned u5PeripheralDeviceType : 5;                    /**< 0x00 / 00 */
     unsigned u3PeripheralQualifier : 3;
-    unsigned u6DeviceTypeModifier : 7;      /**< 0x01 */
+    unsigned u6DeviceTypeModifier : 7;                      /**< 0x01 */
     unsigned fRMB : 1;
-    unsigned u3AnsiVersion : 3;             /**< 0x02 */
+    unsigned u3AnsiVersion : 3;                             /**< 0x02 */
     unsigned u3EcmaVersion : 3;
     unsigned u2IsoVersion : 2;
-    unsigned u4ResponseDataFormat : 4;      /**< 0x03 */
+    unsigned u4ResponseDataFormat : 4;                      /**< 0x03 */
     unsigned u2Reserved0 : 2;
     unsigned fTrmlOP : 1;
     unsigned fAEC : 1;
-    unsigned cbAdditional : 8;              /**< 0x04 */
-    unsigned u8Reserved1 : 8;               /**< 0x05 */
-    unsigned u8Reserved2 : 8;               /**< 0x06 */
-    unsigned fSftRe : 1;                    /**< 0x07 */
+    unsigned cbAdditional : 8;                              /**< 0x04 */
+    unsigned u8Reserved1 : 8;                               /**< 0x05 */
+    unsigned u8Reserved2 : 8;                               /**< 0x06 */
+    unsigned fSftRe : 1;                                    /**< 0x07 */
     unsigned fCmdQue : 1;
     unsigned fReserved3 : 1;
     unsigned fLinked : 1;
@@ -269,12 +292,12 @@ typedef struct SCSIINQUIRYDATA
     unsigned fWBus16 : 1;
     unsigned fWBus32 : 1;
     unsigned fRelAdr : 1;
-    int8_t   achVendorId[8];                /**< 0x08 */
-    int8_t   achProductId[16];              /**< 0x10 */
-    int8_t   achProductLevel[4];            /**< 0x20 */
-    uint8_t  abVendorSpecific[20];          /**< 0x24/36 - Optional it seems. */
+    int8_t   achVendorId[SCSI_INQUIRY_VENDOR_ID_LENGTH];    /**< 0x08 */
+    int8_t   achProductId[SCSI_INQUIRY_PRODUCT_ID_LENGTH];  /**< 0x10 */
+    int8_t   achProductLevel[SCSI_INQUIRY_REVISION_LENGTH]; /**< 0x20 */
+    uint8_t  abVendorSpecific[20];                          /**< 0x24/36 - Optional it seems. */
     uint8_t  abReserved4[40];
-    uint8_t  abVendorSpecificParameters[1]; /**< 0x60/96 - Variable size. */
+    uint8_t  abVendorSpecificParameters[1];                 /**< 0x60/96 - Variable size. */
 } SCSIINQUIRYDATA;
 #pragma pack()
 AssertCompileSize(SCSIINQUIRYDATA, 97);
@@ -294,6 +317,7 @@ typedef const SCSIINQUIRYDATA *PCSCSIINQUIRYDATA;
 
 #if defined(IN_RING3) && (defined(LOG_ENABLED) || defined(RT_STRICT))
 const char * SCSICmdText(uint8_t uCmd);
+const char * SCSIStatusText(uint8_t uStatus);
 const char * SCSISenseText(uint8_t uSense);
 const char * SCSISenseExtText(uint8_t uASC, uint8_t uASCQ);
 int SCSILogModePage(char *pszBuf, size_t cchBuffer, uint8_t *pbModePage,
@@ -302,4 +326,4 @@ int SCSILogCueSheet(char *pszBuf, size_t cchBuffer, uint8_t *pbCueSheet,
                     size_t cbCueSheet);
 #endif
 
-#endif
+#endif /* !VBOX_INCLUDED_scsi_h */

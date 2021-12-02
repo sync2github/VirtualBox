@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPR3HardenedIPRT.cpp 87593 2021-02-03 20:21:54Z vboxsync $ */
 /** @file
  * VirtualBox Support Library - Hardened Support Routines using IPRT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_SUP
 #include <VBox/sup.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 #include <iprt/string.h>
 #include <iprt/stdarg.h>
@@ -41,54 +41,36 @@
 #include "SUPLibInternal.h"
 
 
-/**
- * @copydoc RTPathFilename
- */
 DECLHIDDEN(char *) supR3HardenedPathFilename(const char *pszPath)
 {
     return RTPathFilename(pszPath);
 }
 
 
-/**
- * @copydoc RTPathAppPrivateNoArch
- */
 DECLHIDDEN(int) supR3HardenedPathAppPrivateNoArch(char *pszPath, size_t cchPath)
 {
     return RTPathAppPrivateNoArch(pszPath, cchPath);
 }
 
 
-/**
- * @copydoc RTPathAppPrivateArch
- */
 DECLHIDDEN(int) supR3HardenedPathAppPrivateArch(char *pszPath, size_t cchPath)
 {
     return RTPathAppPrivateArch(pszPath, cchPath);
 }
 
 
-/**
- * @copydoc RTPathSharedLibs
- */
 DECLHIDDEN(int) supR3HardenedPathAppSharedLibs(char *pszPath, size_t cchPath)
 {
     return RTPathSharedLibs(pszPath, cchPath);
 }
 
 
-/**
- * @copydoc RTPathAppDocs
- */
 DECLHIDDEN(int) supR3HardenedPathAppDocs(char *pszPath, size_t cchPath)
 {
     return RTPathAppDocs(pszPath, cchPath);
 }
 
 
-/**
- * @copydoc RTPathExecDir
- */
 DECLHIDDEN(int) supR3HardenedPathAppBin(char *pszPath, size_t cchPath)
 {
     return RTPathExecDir(pszPath, cchPath);

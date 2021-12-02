@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ip_icmp.c 92093 2021-10-27 08:18:16Z vboxsync $ */
 /** @file
  * NAT - IP/ICMP handling.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -332,7 +332,7 @@ icmp_find_original_mbuf(PNATState pData, struct ip *ip)
             fport = udp->uh_dport;
             lport = udp->uh_sport;
             last_socket = udp_last_so;
-            /* fall through */
+            RT_FALL_THRU();
 
         case IPPROTO_TCP:
             if (head_socket == NULL)
@@ -480,12 +480,18 @@ icmp_input(PNATState pData, struct mbuf *m, int hlen)
                 || CTL_CHECK(dst, CTL_DNS)
                 || CTL_CHECK(dst, CTL_TFTP))
             {
+                /* Don't reply to ping requests for the hosts loopback interface if it is disabled. */
+                if (   CTL_CHECK(dst, CTL_ALIAS)
+                    && !pData->fLocalhostReachable)
+                    goto done;
+
                 uint8_t echo_reply = ICMP_ECHOREPLY;
                 m_copyback(pData, m, hlen + RT_OFFSETOF(struct icmp, icmp_type),
                            sizeof(echo_reply), (caddr_t)&echo_reply);
                 ip->ip_dst.s_addr = ip->ip_src.s_addr;
                 ip->ip_src.s_addr = dst;
                 icmp_reflect(pData, m);
+                m = NULL;       /* m was consumed and freed */
                 goto done;
             }
 
@@ -549,7 +555,7 @@ icmp_input(PNATState pData, struct mbuf *m, int hlen)
                     if (rc >= 0)
                     {
                         icmp_attach(pData, m);
-                        /* don't let m_freem at the end free atached buffer */
+                        m = NULL; /* m was stashed away for safekeeping */
                         goto done;
                     }
 
@@ -561,6 +567,8 @@ icmp_input(PNATState pData, struct mbuf *m, int hlen)
                         fIcmpSocketErrorReported = true;
                     }
                     icmp_error(pData, m, ICMP_UNREACH, ICMP_UNREACH_NET, 0, strerror(errno));
+                    m = NULL;   /* m was consumed and freed */
+                    goto done;
                 }
             }
 #endif  /* !RT_OS_WINDOWS */
@@ -584,7 +592,8 @@ icmp_input(PNATState pData, struct mbuf *m, int hlen)
     } /* switch */
 
 end_error_free_m:
-    m_freem(pData, m);
+    if (m != NULL)
+        m_freem(pData, m);
 
 done:
     if (icp_buf)

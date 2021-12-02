@@ -1,14 +1,8 @@
 /** @file
   Internal library declaration for PCI Bus module.
 
-Copyright (c) 2006 - 2011, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2021, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -30,6 +24,10 @@ typedef struct {
   UINT8                              *AllocRes;
 } EFI_RESOURCE_ALLOC_FAILURE_ERROR_DATA_PAYLOAD;
 
+typedef enum {
+  PciResizableBarMin = 0x00,
+  PciResizableBarMax = 0xFF
+} PCI_RESIZABLE_BAR_OPERATION;
 
 /**
   Retrieve the PCI Card device BAR information via PciIo interface.
@@ -162,4 +160,20 @@ PciHostBridgeEnumerator (
   IN EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL  *PciResAlloc
   );
 
+/**
+  This function is used to program the Resizable BAR Register.
+
+  @param PciIoDevice            A pointer to the PCI_IO_DEVICE.
+  @param ResizableBarOp         PciResizableBarMax: Set BAR to max size
+                                PciResizableBarMin: set BAR to min size.
+
+  @retval EFI_SUCCESS           Successfully enumerated the host bridge.
+  @retval other                 Some error occurred when enumerating the host bridge.
+
+**/
+EFI_STATUS
+PciProgramResizableBar (
+  IN PCI_IO_DEVICE                *PciIoDevice,
+  IN PCI_RESIZABLE_BAR_OPERATION  ResizableBarOp
+  );
 #endif

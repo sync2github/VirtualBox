@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDispD3DCmn.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxVideo Display D3D User mode dll
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,11 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxDispD3DCmn_h___
-#define ___VBoxDispD3DCmn_h___
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispD3DCmn_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispD3DCmn_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VBoxDispD3DBase.h"
 
+#include <iprt/asm.h>
 #include <iprt/initterm.h>
 #include <iprt/log.h>
 #include <iprt/mem.h>
@@ -31,21 +35,10 @@
 #include "VBoxDispDbg.h"
 #include "VBoxDispD3DIf.h"
 #include "../../common/wddm/VBoxMPIf.h"
-#include "VBoxDispCm.h"
 #include "VBoxDispMpInternal.h"
-#include "VBoxDispKmt.h"
-#ifdef VBOX_WITH_CRHGSMI
-#include "VBoxUhgsmiBase.h"
-#include "VBoxUhgsmiDisp.h"
-#include "VBoxUhgsmiKmt.h"
-#endif
+#include <VBoxDispKmt.h>
 #include "VBoxDispD3D.h"
-#ifndef IN_VBOXCRHGSMI
 #include "VBoxD3DIf.h"
-#endif
-#ifdef VBOX_WITH_CROGL
-#include <cr_protocol.h>
-#endif
 
 # ifdef VBOXWDDMDISP
 #  define VBOXWDDMDISP_DECL(_type) DECLEXPORT(_type)
@@ -53,4 +46,4 @@
 #  define VBOXWDDMDISP_DECL(_type) DECLIMPORT(_type)
 # endif
 
-#endif /* #ifndef ___VBoxDispD3DCmn_h___ */
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispD3DCmn_h */

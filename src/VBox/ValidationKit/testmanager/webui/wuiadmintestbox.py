@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: wuiadmintestbox.py 83403 2020-03-25 12:09:58Z vboxsync $
 
 """
 Test Manager WUI - TestBox.
@@ -7,7 +7,7 @@ Test Manager WUI - TestBox.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 83403 $"
 
 
 # Standard python imports.
@@ -38,16 +38,16 @@ from testmanager.webui.wuicontentbase   import WuiContentBase, WuiListContentWit
                                                WuiSvnLink, WuiTmLink, WuiSpanText, WuiRawHtml;
 from testmanager.core.db                import TMDatabaseConnection;
 from testmanager.core.schedgroup        import SchedGroupLogic, SchedGroupData;
-from testmanager.core.testbox           import TestBoxData, TestBoxDataEx;
+from testmanager.core.testbox           import TestBoxData, TestBoxDataEx, TestBoxLogic;
 from testmanager.core.testset           import TestSetData;
 from testmanager.core.db                import isDbTimestampInfinity;
 
 
 
-class WuiTestBoxDetailsLink(WuiTmLink):
+class WuiTestBoxDetailsLinkById(WuiTmLink):
     """  Test box details link by ID. """
 
-    def __init__(self, idTestBox, sName = WuiContentBase.ksShortDetailsLink, fBracketed = False, tsNow = None):
+    def __init__(self, idTestBox, sName = WuiContentBase.ksShortDetailsLink, fBracketed = False, tsNow = None, sTitle = None):
         from testmanager.webui.wuiadmin import WuiAdmin;
         dParams = {
             WuiAdmin.ksParamAction:             WuiAdmin.ksActionTestBoxDetails,
@@ -55,9 +55,88 @@ class WuiTestBoxDetailsLink(WuiTmLink):
         };
         if tsNow is not None:
             dParams[WuiAdmin.ksParamEffectiveDate] = tsNow; ## ??
-        WuiTmLink.__init__(self, sName, WuiAdmin.ksScriptName, dParams, fBracketed = fBracketed);
+        WuiTmLink.__init__(self, sName, WuiAdmin.ksScriptName, dParams, fBracketed = fBracketed, sTitle = sTitle);
         self.idTestBox = idTestBox;
 
+
+class WuiTestBoxDetailsLink(WuiTestBoxDetailsLinkById):
+    """  Test box details link by TestBoxData instance. """
+
+    def __init__(self, oTestBox, sName = None, fBracketed = False, tsNow = None): # (TestBoxData, str, bool, Any) -> None
+        WuiTestBoxDetailsLinkById.__init__(self, oTestBox.idTestBox,
+                                           sName if sName else oTestBox.sName,
+                                           fBracketed = fBracketed,
+                                           tsNow = tsNow,
+                                           sTitle = self.formatTitleText(oTestBox));
+        self.oTestBox = oTestBox;
+
+    @staticmethod
+    def formatTitleText(oTestBox): # (TestBoxData) -> str
+        """
+        Formats the title text for a TestBoxData object.
+        """
+
+        # Note! Somewhat similar code is found in testresults.py
+
+        #
+        # Collect field/value tuples.
+        #
+        aasTestBoxTitle = [
+            (u'Identifier:',  '#%u' % (oTestBox.idTestBox,),),
+            (u'Name:',        oTestBox.sName,),
+        ];
+        if oTestBox.sCpuVendor:
+            aasTestBoxTitle.append((u'CPU\u00a0vendor:',    oTestBox.sCpuVendor, ));
+        if oTestBox.sCpuName:
+            aasTestBoxTitle.append((u'CPU\u00a0name:',      u'\u00a0'.join(oTestBox.sCpuName.split()),));
+        if oTestBox.cCpus:
+            aasTestBoxTitle.append((u'CPU\u00a0threads:',   u'%s' % ( oTestBox.cCpus, ),));
+
+        asFeatures = [];
+        if oTestBox.fCpuHwVirt       is True:
+            if oTestBox.sCpuVendor is None:
+                asFeatures.append(u'HW\u2011Virt');
+            elif oTestBox.sCpuVendor in ['AuthenticAMD',]:
+                asFeatures.append(u'HW\u2011Virt(AMD\u2011V)');
+            else:
+                asFeatures.append(u'HW\u2011Virt(VT\u2011x)');
+        if oTestBox.fCpuNestedPaging is True: asFeatures.append(u'Nested\u2011Paging');
+        if oTestBox.fCpu64BitGuest   is True: asFeatures.append(u'64\u2011bit\u2011Guest');
+        if oTestBox.fChipsetIoMmu    is True: asFeatures.append(u'I/O\u2011MMU');
+        aasTestBoxTitle.append((u'CPU\u00a0features:',      u',\u00a0'.join(asFeatures),));
+
+        if oTestBox.cMbMemory:
+            aasTestBoxTitle.append((u'System\u00a0RAM:',    u'%s MiB' % ( oTestBox.cMbMemory, ),));
+        if oTestBox.sOs:
+            aasTestBoxTitle.append((u'OS:',                 oTestBox.sOs, ));
+        if oTestBox.sCpuArch:
+            aasTestBoxTitle.append((u'OS\u00a0arch:',       oTestBox.sCpuArch,));
+        if oTestBox.sOsVersion:
+            aasTestBoxTitle.append((u'OS\u00a0version:',    u'\u00a0'.join(oTestBox.sOsVersion.split()),));
+        if oTestBox.ip:
+            aasTestBoxTitle.append((u'IP\u00a0address:',    u'%s' % ( oTestBox.ip, ),));
+
+        #
+        # Do a guestimation of the max field name width and pad short
+        # names when constructing the title text lines.
+        #
+        cchMaxWidth = 0;
+        for sEntry, _ in aasTestBoxTitle:
+            cchMaxWidth = max(WuiTestBoxDetailsLink.estimateStringWidth(sEntry), cchMaxWidth);
+        asTestBoxTitle = [];
+        for sEntry, sValue in aasTestBoxTitle:
+            asTestBoxTitle.append(u'%s%s\t\t%s'
+                                  % (sEntry, WuiTestBoxDetailsLink.getStringWidthPadding(sEntry, cchMaxWidth), sValue));
+
+        return u'\n'.join(asTestBoxTitle);
+
+
+class WuiTestBoxDetailsLinkShort(WuiTestBoxDetailsLink):
+    """  Test box details link by TestBoxData instance, but with ksShortDetailsLink as default name. """
+
+    def __init__(self, oTestBox, sName = WuiContentBase.ksShortDetailsLink, fBracketed = False,
+                 tsNow = None): # (TestBoxData, str, bool, Any) -> None
+        WuiTestBoxDetailsLink.__init__(self, oTestBox, sName = sName, fBracketed = fBracketed, tsNow = tsNow);
 
 
 class WuiTestBox(WuiFormContentBase):
@@ -110,7 +189,7 @@ class WuiTestBox(WuiFormContentBase):
         oForm.addListOfSchedGroupsForTestBox(TestBoxDataEx.ksParam_aoInSchedGroups,
                                              oData.aoInSchedGroups,
                                              SchedGroupLogic(TMDatabaseConnection()).fetchOrderedByName(),
-                                             'Scheduling Group');
+                                             'Scheduling Group', oData.idTestBox);
         # Command, comment and submit button.
         if self._sMode == WuiFormContentBase.ksMode_Edit:
             oForm.addComboBox(TestBoxData.ksParam_enmPendingCmd,    oData.enmPendingCmd, 'Pending command',
@@ -179,10 +258,11 @@ class WuiTestBoxList(WuiListContentWithActionBase):
     ## Boxes which doesn't report in for more than 15 min are considered dead.
     kcSecMaxStatusDeltaAlive = 15*60
 
-    def __init__(self, aoEntries, iPage, cItemsPerPage, tsEffective, fnDPrint, oDisp):
+    def __init__(self, aoEntries, iPage, cItemsPerPage, tsEffective, fnDPrint, oDisp, aiSelectedSortColumns = None):
         # type: (list[TestBoxDataForListing], int, int, datetime.datetime, ignore, WuiAdmin) -> None
         WuiListContentWithActionBase.__init__(self, aoEntries, iPage, cItemsPerPage, tsEffective,
-                                              sTitle = 'TestBoxes', sId = 'users', fnDPrint = fnDPrint, oDisp = oDisp);
+                                              sTitle = 'TestBoxes', sId = 'users', fnDPrint = fnDPrint, oDisp = oDisp,
+                                              aiSelectedSortColumns = aiSelectedSortColumns);
         self._asColumnHeaders.extend([ 'Name', 'LOM', 'Status', 'Cmd',
                                        'Note', 'Script', 'Python', 'Group',
                                        'OS', 'CPU', 'Features', 'CPUs', 'RAM', 'Scratch',
@@ -191,6 +271,24 @@ class WuiTestBoxList(WuiListContentWithActionBase):
                                        'align="center"', 'align="center"', 'align="center"', 'align="center"',
                                        '', '', '', 'align="left"', 'align="right"', 'align="right"', 'align="right"',
                                        'align="center"' ]);
+        self._aaiColumnSorting.extend([
+            (TestBoxLogic.kiSortColumn_sName,),
+            None, # LOM
+            (-TestBoxLogic.kiSortColumn_fEnabled, TestBoxLogic.kiSortColumn_enmState, -TestBoxLogic.kiSortColumn_tsUpdated,),
+            (TestBoxLogic.kiSortColumn_enmPendingCmd,),
+            None, # Note
+            (TestBoxLogic.kiSortColumn_iTestBoxScriptRev,),
+            (TestBoxLogic.kiSortColumn_iPythonHexVersion,),
+            None, # Group
+            (TestBoxLogic.kiSortColumn_sOs, TestBoxLogic.kiSortColumn_sOsVersion, TestBoxLogic.kiSortColumn_sCpuArch,),
+            (TestBoxLogic.kiSortColumn_sCpuVendor, TestBoxLogic.kiSortColumn_lCpuRevision,),
+            (TestBoxLogic.kiSortColumn_fCpuNestedPaging,),
+            (TestBoxLogic.kiSortColumn_cCpus,),
+            (TestBoxLogic.kiSortColumn_cMbMemory,),
+            (TestBoxLogic.kiSortColumn_cMbScratch,),
+            None, # Actions
+        ]);
+        assert len(self._aaiColumnSorting) == len(self._asColumnHeaders);
         self._aoActions     = list(self.kasTestBoxActionDescs);
         self._sAction       = oDisp.ksActionTestBoxListPost;
         self._sCheckboxName = TestBoxData.ksParam_idTestBox;
@@ -200,7 +298,7 @@ class WuiTestBoxList(WuiListContentWithActionBase):
         (sTitle, sBody) = super(WuiTestBoxList, self).show(fShowNavigation);
 
         # Count boxes in interesting states.
-        if len(self._aoEntries) > 0:
+        if self._aoEntries:
             cActive = 0;
             cDead   = 0;
             for oTestBox in self._aoEntries:
@@ -219,7 +317,7 @@ class WuiTestBoxList(WuiListContentWithActionBase):
                      % (len(self._aoEntries), cActive, cDead,)
         return (sTitle, sBody);
 
-    def _formatListEntry(self, iEntry): # pylint: disable=R0914
+    def _formatListEntry(self, iEntry): # pylint: disable=too-many-locals
         from testmanager.webui.wuiadmin import WuiAdmin;
         oEntry  = self._aoEntries[iEntry];
 
@@ -254,7 +352,7 @@ class WuiTestBoxList(WuiListContentWithActionBase):
                 oState = str(oEntry.oStatus.enmState);
             else:
                 from testmanager.webui.wuimain import WuiMain;
-                oState = WuiTmLink(oEntry.oStatus.enmState, WuiMain.ksScriptName,                       # pylint: disable=R0204
+                oState = WuiTmLink(oEntry.oStatus.enmState, WuiMain.ksScriptName,                       # pylint: disable=redefined-variable-type
                                    { WuiMain.ksParamAction: WuiMain.ksActionTestResultDetails,
                                      TestSetData.ksParam_idTestSet: oEntry.oStatus.idTestSet, },
                                    sTitle = '#%u' % (oEntry.oStatus.idTestSet,),
@@ -296,6 +394,11 @@ class WuiTestBoxList(WuiListContentWithActionBase):
                 if iSep > 0 and sOsVersion[-1] == ')':
                     sVer1 = sOsVersion[:iSep].strip();
                     sVer2 = sOsVersion[iSep + 2:-1].strip();
+            elif oEntry.sOs == 'win':
+                iSep = sOsVersion.find('build');
+                if iSep > 0:
+                    sVer1 = sOsVersion[:iSep].strip();
+                    sVer2 = 'B' + sOsVersion[iSep + 1:].strip();
             aoOs = [
                 WuiSpanText('tmspan-osarch', u'%s.%s' % (oEntry.sOs, oEntry.sCpuArch,)),
                 WuiSpanText('tmspan-osver1', sVer1.replace('-', u'\u2011'),),
@@ -327,7 +430,7 @@ class WuiTestBoxList(WuiListContentWithActionBase):
         if oEntry.fCpuNestedPaging is True: asFeatures.append(u'Nested\u2011Paging');
         if oEntry.fCpu64BitGuest   is True: asFeatures.append(u'64\u2011bit\u2011Guest');
         if oEntry.fChipsetIoMmu    is True: asFeatures.append(u'I/O\u2011MMU');
-        sFeatures = u' '.join(asFeatures) if len(asFeatures) > 0 else u'';
+        sFeatures = u' '.join(asFeatures) if asFeatures else u'';
 
         # Collection applicable actions.
         aoActions = [
@@ -337,19 +440,20 @@ class WuiTestBoxList(WuiListContentWithActionBase):
                          WuiAdmin.ksParamEffectiveDate: self._tsEffectiveDate, } ),
             ]
 
-        if isDbTimestampInfinity(oEntry.tsExpire):
-            aoActions += [
-                WuiTmLink('Edit', WuiAdmin.ksScriptName,
-                          { WuiAdmin.ksParamAction: WuiAdmin.ksActionTestBoxEdit,
-                            TestBoxData.ksParam_idTestBox: oEntry.idTestBox, } ),
-                WuiTmLink('Remove', WuiAdmin.ksScriptName,
-                          { WuiAdmin.ksParamAction: WuiAdmin.ksActionTestBoxRemovePost,
-                            TestBoxData.ksParam_idTestBox: oEntry.idTestBox },
-                          sConfirm = 'Are you sure that you want to remove %s (%s)?' % (oEntry.sName, oEntry.ip) ),
-            ]
+        if self._oDisp is None or not self._oDisp.isReadOnlyUser():
+            if isDbTimestampInfinity(oEntry.tsExpire):
+                aoActions += [
+                    WuiTmLink('Edit', WuiAdmin.ksScriptName,
+                              { WuiAdmin.ksParamAction: WuiAdmin.ksActionTestBoxEdit,
+                                TestBoxData.ksParam_idTestBox: oEntry.idTestBox, } ),
+                    WuiTmLink('Remove', WuiAdmin.ksScriptName,
+                              { WuiAdmin.ksParamAction: WuiAdmin.ksActionTestBoxRemovePost,
+                                TestBoxData.ksParam_idTestBox: oEntry.idTestBox },
+                              sConfirm = 'Are you sure that you want to remove %s (%s)?' % (oEntry.sName, oEntry.ip) ),
+                ]
 
-        if oEntry.sOs not in [ 'win', 'os2', ] and oEntry.ip is not None:
-            aoActions.append(WuiLinkBase('ssh', 'ssh://vbox@%s' % (oEntry.ip,),));
+            if oEntry.sOs not in [ 'win', 'os2', ] and oEntry.ip is not None:
+                aoActions.append(WuiLinkBase('ssh', 'ssh://vbox@%s' % (oEntry.ip,),));
 
         return [ self._getCheckBoxColumn(iEntry, oEntry.idTestBox),
                  [ WuiSpanText('tmspan-name', oEntry.sName), WuiRawHtml('<br>'), '%s' % (oEntry.ip,),],

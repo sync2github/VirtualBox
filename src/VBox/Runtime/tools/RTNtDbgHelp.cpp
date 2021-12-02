@@ -1,10 +1,10 @@
-﻿/* $Id$ */
+﻿/* $Id: RTNtDbgHelp.cpp 83738 2020-04-17 08:50:54Z vboxsync $ */
 /** @file
  * IPRT - RTNtDbgHelp -  Tool for working/exploring DbgHelp.dll.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,11 +25,11 @@
  */
 
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <iprt/win/windows.h>
-#include <Dbghelp.h>
+#include <iprt/win/dbghelp.h>
 
 #include <iprt/alloca.h>
 #include <iprt/dir.h>
@@ -43,16 +43,16 @@
 #include <iprt/path.h>
 #include <iprt/stream.h>
 #include <iprt/string.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 #include <iprt/win/lazy-dbghelp.h>
 
 #include <iprt/ldrlazy.h>
 
 
-/*******************************************************************************
-*   Structures and Typedefs                                                    *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
 /**
  * Debug module record.
  *
@@ -73,9 +73,9 @@ typedef struct RTNTDBGHELPMOD
 typedef RTNTDBGHELPMOD *PRTNTDBGHELPMOD;
 
 
-/*******************************************************************************
-*   Global Variables                                                           *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
+*********************************************************************************************************************************/
 /** Verbosity level. */
 static int          g_iOptVerbose = 1;
 
@@ -181,7 +181,7 @@ static RTEXITCODE loadModule(const char *pszFile)
         return RTMsgErrorExit(RTEXITCODE_FAILURE, "SymLoadModuleEx failed: %u\n", GetLastError());
 
     size_t cbFullName = strlen(pszFile) + 1;
-    PRTNTDBGHELPMOD pMod = (PRTNTDBGHELPMOD)RTMemAlloc(RT_OFFSETOF(RTNTDBGHELPMOD, szFullName[cbFullName + 1]));
+    PRTNTDBGHELPMOD pMod = (PRTNTDBGHELPMOD)RTMemAlloc(RT_UOFFSETOF_DYN(RTNTDBGHELPMOD, szFullName[cbFullName + 1]));
     memcpy(pMod->szFullName, pszFile, cbFullName);
     pMod->pszName  = RTPathFilename(pMod->szFullName);
     pMod->uModAddr = uModAddrGot;
@@ -361,7 +361,7 @@ int main(int argc, char **argv)
 
 
             case 'V':
-                RTPrintf("$Revision$");
+                RTPrintf("$Revision: 83738 $");
                 break;
 
             case 'h':

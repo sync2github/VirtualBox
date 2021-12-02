@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: thread-r0drv-freebsd.c 90416 2021-07-29 21:10:03Z vboxsync $ */
 /** @file
  * IPRT - Threads (Part 1), Ring-0 Driver, FreeBSD.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -182,5 +182,13 @@ RTDECL(bool) RTThreadIsInInterrupt(RTTHREAD hThread)
     /** @todo FreeBSD: Implement RTThreadIsInInterrupt. Required for guest
      *        additions! */
     return !ASMIntAreEnabled();
+}
+
+
+RTDECL(int) RTThreadQueryTerminationStatus(RTTHREAD hThread)
+{
+    RT_NOREF(hThread);
+    /** @todo implement. */
+    return VERR_NOT_SUPPORTED;
 }
 

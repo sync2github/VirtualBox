@@ -13,7 +13,7 @@
   <doc:reference xmlns="">
     <referenceinfo>
       <releaseinfo role="meta">
-	$Id: string.xsl,v 1.13 2004/10/08 06:37:25 balls Exp $
+	$Id: string.xsl 69482 2017-10-28 13:30:36Z vboxsync $
       </releaseinfo>
       <author>
 	<surname>Ball</surname>

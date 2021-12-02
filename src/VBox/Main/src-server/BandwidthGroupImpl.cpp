@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: BandwidthGroupImpl.cpp 91718 2021-10-14 11:43:12Z vboxsync $ */
 /** @file
- *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,12 +15,13 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_BANDWIDTHGROUP
 #include "BandwidthGroupImpl.h"
 #include "MachineImpl.h"
 #include "Global.h"
 
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <iprt/cpp/utils.h>
 
@@ -65,7 +65,7 @@ HRESULT BandwidthGroup::init(BandwidthControl *aParent,
     if (   (aType <= BandwidthGroupType_Null)
         || (aType >  BandwidthGroupType_Network))
         return setError(E_INVALIDARG,
-                        tr("Invalid bandwidth group type type"));
+                        tr("Invalid bandwidth group type"));
 
     /* Enclose the state transition NotReady->InInit->Ready */
     AutoInitSpan autoInitSpan(this);
@@ -80,7 +80,7 @@ HRESULT BandwidthGroup::init(BandwidthControl *aParent,
     m->bd->mData.strName = aName;
     m->bd->mData.enmType = aType;
     m->bd->cReferences = 0;
-    m->bd->mData.cMaxBytesPerSec = aMaxBytesPerSec;
+    m->bd->mData.cMaxBytesPerSec = (uint64_t)aMaxBytesPerSec;
 
     /* Confirm a successful initialization */
     autoInitSpan.setSucceeded();
@@ -89,20 +89,22 @@ HRESULT BandwidthGroup::init(BandwidthControl *aParent,
 }
 
 /**
- *  Initializes the object given another object
- *  (a kind of copy constructor). This object shares data with
- *  the object passed as an argument.
+ * Initializes the object given another object
+ * (a kind of copy constructor). This object shares data with
+ * the object passed as an argument.
  *
- *  @param  aReshare
- *      When false, the original object will remain a data owner.
- *      Otherwise, data ownership will be transferred from the original
- *      object to this one.
+ * @param   aParent  Pointer to our parent object.
+ * @param   aThat
+ * @param   aReshare
+ *     When false, the original object will remain a data owner.
+ *     Otherwise, data ownership will be transferred from the original
+ *     object to this one.
  *
- *  @note This object must be destroyed before the original object
- *  it shares data with is destroyed.
+ * @note This object must be destroyed before the original object
+ * it shares data with is destroyed.
  *
- *  @note Locks @a aThat object for writing if @a aReshare is @c true, or for
- *  reading if @a aReshare is false.
+ * @note Locks @a aThat object for writing if @a aReshare is @c true, or for
+ * reading if @a aReshare is false.
  */
 HRESULT BandwidthGroup::init(BandwidthControl *aParent,
                              BandwidthGroup *aThat,
@@ -226,7 +228,7 @@ HRESULT BandwidthGroup::getMaxBytesPerSec(LONG64 *aMaxBytesPerSec)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-    *aMaxBytesPerSec = m->bd->mData.cMaxBytesPerSec;
+    *aMaxBytesPerSec = (LONG64)m->bd->mData.cMaxBytesPerSec;
 
     return S_OK;
 }
@@ -240,7 +242,7 @@ HRESULT BandwidthGroup::setMaxBytesPerSec(LONG64 aMaxBytesPerSec)
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
     m->bd.backup();
-    m->bd->mData.cMaxBytesPerSec = aMaxBytesPerSec;
+    m->bd->mData.cMaxBytesPerSec = (uint64_t)aMaxBytesPerSec;
 
     /* inform direct session if any. */
     ComObjPtr<Machine> pMachine = m->pParent->i_getMachine();

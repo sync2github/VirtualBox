@@ -20,7 +20,7 @@
 #include "syn.h"
 #include "hash.h"
 #include "generic.h"
-#define zzcr_attr(attr,tok,t)
+#define zzcr_attr(attr,tok,t)   /*vbox: */ memset((attr), 0, sizeof(*attr))
 #define zzSET_SIZE 20
 #include "antlr.h"
 #include "tokens.h"
@@ -41,6 +41,16 @@ ANTLR_INFO
 #pragma warn -aus  /* unused assignment of 'xxx' */
 #endif
 
+#ifdef VBOX
+#  ifdef _MSC_VER
+#    pragma warning(disable : 4068) /* Unguarded '#pragma clang' below */
+#  endif
+#  ifdef __GNUC__
+#    pragma GCC diagnostic ignored "-Wunknown-pragmas"
+#  endif
+#endif
+
+#pragma clang diagnostic ignored "-Wparentheses-equality"
 
 #ifdef __USE_PROTOS
 static void chkToken(char *, char *, char *, int);
@@ -1339,7 +1349,7 @@ tclass()
   zzBLOCK(zztasp1);
   zzMake0;
   {
-  char *t=NULL; TCnode *e; int go=1,tok,totok; TermEntry *p, *term, *toterm;
+  char *t=NULL; TCnode *e; int go=1,tok,totok; TermEntry *p = NULL /* vbox: shut up GCC */, *term, *toterm;
   char *akaString=NULL; int save_file; int save_line;
   char *totext=NULL;
   zzmatch(118); zzCONSUME;
@@ -1393,7 +1403,7 @@ tclass()
   /* MR23 */         if (p!= NULL && akaString != NULL) {
     /* MR23 */           if (p->akaString != NULL) {
       /* MR23 */             if (strcmp(p->akaString,akaString) != 0) {
-        /* MR23 */                warnFL(eMsg2("this #tokclass statment conflicts with a previous #tokclass %s(\"%s\") statement",
+        /* MR23 */                warnFL(eMsg2("this #tokclass statement conflicts with a previous #tokclass %s(\"%s\") statement",
         /* MR23 */                              t,p->akaString),
         /* MR23 */			                    FileStr[save_file],save_line);
         /* MR23 */             };
@@ -1634,7 +1644,7 @@ token()
     if (te != NULL && akaString != NULL) {
       if (te->akaString != NULL) {
         if (strcmp(te->akaString,akaString) != 0) {
-          warnFL(eMsg2("this #token statment conflicts with a previous #token %s(\"%s\") statement",
+          warnFL(eMsg2("this #token statement conflicts with a previous #token %s(\"%s\") statement",
           t,te->akaString),
           FileStr[save_file],save_line);
         };
@@ -3252,7 +3262,7 @@ enum_def(fname)
         zzMake0;
         {
         if ( (LA(1)==ID)&&(isDLGmaxToken(LATEXT(1))) ) {
-          if (!(isDLGmaxToken(LATEXT(1)))            ) {zzfailed_pred("  isDLGmaxToken(LATEXT(1))",0 /* report */, { 0; /* no user action */ } );}
+          if (!(isDLGmaxToken(LATEXT(1)))            ) {zzfailed_pred("  isDLGmaxToken(LATEXT(1))",0 /* report */, { ; /* no user action */ } );}
           zzmatch(ID); zzCONSUME;
           {
             zzBLOCK(zztasp4);

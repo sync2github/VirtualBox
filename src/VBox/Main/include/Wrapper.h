@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: Wrapper.h 91385 2021-09-27 10:24:08Z vboxsync $ */
 /** @file
  * VirtualBox COM - API wrapper helpers.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_WRAPPER
-#define ____H_WRAPPER
+#ifndef MAIN_INCLUDED_Wrapper_h
+#define MAIN_INCLUDED_Wrapper_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <vector>
 #include <VBox/com/ptr.h>
@@ -34,10 +37,10 @@
     do { \
         if (RT_LIKELY(RT_VALID_PTR(arg))) \
         { /* likely */ }\
-        else \
-            throw setError(E_POINTER, \
-                tr("Output argument %s points to invalid memory location (%p)"), \
-                #arg, (void *)(arg)); \
+        /* Have to use use VirtualBoxBase::tr here or lupdate won't be able to figure out the context, \
+           as it is picking it up right here rather than in the places where the macro is actually used. */ \
+        else throw setError(E_POINTER, VirtualBoxBase::tr("Output argument %s points to invalid memory location (%p)"), \
+                            #arg, (void *)(arg)); \
     } while (0)
 
 
@@ -487,5 +490,5 @@ private:
     std::vector<A> mArray;
 };
 
-#endif // !____H_WRAPPER
+#endif /* !MAIN_INCLUDED_Wrapper_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

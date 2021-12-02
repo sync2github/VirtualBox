@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTSystemQueryDmiString-linux.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTSystemQueryDmiString, linux ring-3.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -67,6 +67,7 @@ RTDECL(int) RTSystemQueryDmiString(RTSYSDMISTR enmString, char *pszBuf, size_t c
         {
             case VINF_SUCCESS:
                 AssertFailed();
+                break;
             case VERR_FILE_NOT_FOUND:
             case VERR_PATH_NOT_FOUND:
             case VERR_IS_A_DIRECTORY:

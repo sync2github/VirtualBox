@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: NetworkAdapterImpl.cpp 91416 2021-09-28 06:15:49Z vboxsync $ */
 /** @file
  * Implementation of INetworkAdapter in VBoxSVC.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,10 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_NETWORKADAPTER
 #include "NetworkAdapterImpl.h"
 #include "NATEngineImpl.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 #include "MachineImpl.h"
 #include "GuestOSTypeImpl.h"
 #include "HostImpl.h"
@@ -29,7 +30,7 @@
 #include <iprt/string.h>
 #include <iprt/cpp/utils.h>
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/settings.h>
 
 #include "AutoStateDep.h"
@@ -64,6 +65,7 @@ void NetworkAdapter::FinalRelease()
  *  Initializes the network adapter object.
  *
  *  @param aParent  Handle of the parent object.
+ *  @param uSlot    Slot number this network adapter is plugged into.
  */
 HRESULT NetworkAdapter::init(Machine *aParent, ULONG uSlot)
 {
@@ -101,6 +103,8 @@ HRESULT NetworkAdapter::init(Machine *aParent, ULONG uSlot)
  *  (a kind of copy constructor). This object shares data with
  *  the object passed as an argument.
  *
+ *  @param  aParent     Parent object.
+ *  @param  aThat
  *  @param  aReshare
  *      When false, the original object will remain a data owner.
  *      Otherwise, data ownership will be transferred from the original
@@ -232,6 +236,7 @@ HRESULT NetworkAdapter::setAdapterType(NetworkAdapterType_T aAdapterType)
     {
         case NetworkAdapterType_Am79C970A:
         case NetworkAdapterType_Am79C973:
+        case NetworkAdapterType_Am79C960:
 #ifdef VBOX_WITH_E1000
         case NetworkAdapterType_I82540EM:
         case NetworkAdapterType_I82543GC:
@@ -239,6 +244,9 @@ HRESULT NetworkAdapter::setAdapterType(NetworkAdapterType_T aAdapterType)
 #endif
 #ifdef VBOX_WITH_VIRTIO
         case NetworkAdapterType_Virtio:
+#endif
+#ifdef VBOX_WITH_VIRTIO_NET_1_0
+        case NetworkAdapterType_Virtio_1_0:
 #endif /* VBOX_WITH_VIRTIO */
             break;
         default:
@@ -454,7 +462,7 @@ HRESULT NetworkAdapter::setAttachmentType(NetworkAttachmentType_T aAttachmentTyp
         mlock.release();
 
         if (oldAttachmentType == NetworkAttachmentType_NATNetwork)
-            i_checkAndSwitchFromNatNetworking(mData->strNATNetworkName);
+            i_switchFromNatNetworking(mData->strNATNetworkName);
 
         if (aAttachmentType == NetworkAttachmentType_NATNetwork)
             i_switchToNatNetworking(mData->strNATNetworkName);
@@ -481,13 +489,36 @@ HRESULT NetworkAdapter::setBridgedInterface(const com::Utf8Str &aBridgedInterfac
     AutoMutableOrSavedOrRunningStateDependency adep(mParent);
     if (FAILED(adep.rc())) return adep.rc();
 
+    Bstr canonicalName = aBridgedInterface;
+#ifdef RT_OS_DARWIN
+    com::SafeIfaceArray<IHostNetworkInterface> hostNetworkInterfaces;
+    ComPtr<IHost> host;
+    HRESULT rc = mParent->i_getVirtualBox()->COMGETTER(Host)(host.asOutParam());
+    if (SUCCEEDED(rc))
+    {
+        host->FindHostNetworkInterfacesOfType(HostNetworkInterfaceType_Bridged,
+                                              ComSafeArrayAsOutParam(hostNetworkInterfaces));
+        for (size_t i = 0; i < hostNetworkInterfaces.size(); ++i)
+        {
+            Bstr shortName;
+            ComPtr<IHostNetworkInterface> ni = hostNetworkInterfaces[i];
+            ni->COMGETTER(ShortName)(shortName.asOutParam());
+            if (shortName == aBridgedInterface)
+            {
+                ni->COMGETTER(Name)(canonicalName.asOutParam());
+                break;
+            }
+        }
+    }
+#endif /* RT_OS_DARWIN */
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-    if (mData->strBridgedName != aBridgedInterface)
+    if (Bstr(mData->strBridgedName) != canonicalName)
     {
         /* if an empty/null string is to be set, bridged interface must be
          * turned off */
-        if (aBridgedInterface.isEmpty()
+        if (   canonicalName.isEmpty()
+            && mData->fEnabled
             && mData->mode == NetworkAttachmentType_Bridged)
         {
             return setError(E_FAIL,
@@ -495,7 +526,7 @@ HRESULT NetworkAdapter::setBridgedInterface(const com::Utf8Str &aBridgedInterfac
         }
 
         mData.backup();
-        mData->strBridgedName = aBridgedInterface;
+        mData->strBridgedName = canonicalName;
 
         // leave the lock before informing callbacks
         alock.release();
@@ -534,8 +565,9 @@ HRESULT NetworkAdapter::setHostOnlyInterface(const com::Utf8Str &aHostOnlyInterf
     {
         /* if an empty/null string is to be set, host only interface must be
          * turned off */
-        if ( aHostOnlyInterface.isEmpty()
-             && mData->mode == NetworkAttachmentType_HostOnly)
+        if (   aHostOnlyInterface.isEmpty()
+            && mData->fEnabled
+            && mData->mode == NetworkAttachmentType_HostOnly)
         {
             return setError(E_FAIL,
                             tr("Empty or null host only interface name is not valid"));
@@ -561,6 +593,65 @@ HRESULT NetworkAdapter::setHostOnlyInterface(const com::Utf8Str &aHostOnlyInterf
 }
 
 
+HRESULT NetworkAdapter::getHostOnlyNetwork(com::Utf8Str &aHostOnlyNetwork)
+{
+#ifdef VBOX_WITH_VMNET
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    aHostOnlyNetwork = mData->strHostOnlyNetworkName;
+
+    return S_OK;
+#else /* !VBOX_WITH_VMNET */
+    NOREF(aHostOnlyNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_VMNET */
+}
+
+HRESULT NetworkAdapter::setHostOnlyNetwork(const com::Utf8Str &aHostOnlyNetwork)
+{
+#ifdef VBOX_WITH_VMNET
+    /* the machine needs to be mutable */
+    AutoMutableOrSavedOrRunningStateDependency adep(mParent);
+    if (FAILED(adep.rc())) return adep.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    if (mData->strHostOnlyNetworkName != aHostOnlyNetwork)
+    {
+        /* if an empty/null string is to be set, host only Network must be
+         * turned off */
+        if (   aHostOnlyNetwork.isEmpty()
+            && mData->fEnabled
+            && mData->mode == NetworkAttachmentType_HostOnly)
+        {
+            return setError(E_FAIL,
+                            tr("Empty or null host only Network name is not valid"));
+        }
+
+        mData.backup();
+        mData->strHostOnlyNetworkName = aHostOnlyNetwork;
+
+        // leave the lock before informing callbacks
+        alock.release();
+
+        AutoWriteLock mlock(mParent COMMA_LOCKVAL_SRC_POS);       // mParent is const, no need to lock
+        mParent->i_setModified(Machine::IsModified_NetworkAdapters);
+        mlock.release();
+
+        /* When changing the host adapter, adapt the CFGM logic to make this
+         * change immediately effect and to notify the guest that the network
+         * might have changed, therefore changeAdapter=TRUE. */
+        mParent->i_onNetworkAdapterChange(this, TRUE);
+    }
+
+    return S_OK;
+#else /* !VBOX_WITH_VMNET */
+    NOREF(aHostOnlyNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_VMNET */
+}
+
+
 HRESULT NetworkAdapter::getInternalNetwork(com::Utf8Str &aInternalNetwork)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
@@ -582,7 +673,9 @@ HRESULT NetworkAdapter::setInternalNetwork(const com::Utf8Str &aInternalNetwork)
     {
         /* if an empty/null string is to be set, internal networking must be
          * turned off */
-        if (aInternalNetwork.isEmpty() && mData->mode == NetworkAttachmentType_Internal)
+        if (   aInternalNetwork.isEmpty()
+            && mData->fEnabled
+            && mData->mode == NetworkAttachmentType_Internal)
         {
             return setError(E_FAIL,
                             tr("Empty or null internal network name is not valid"));
@@ -628,7 +721,8 @@ HRESULT NetworkAdapter::setNATNetwork(const com::Utf8Str &aNATNetwork)
     {
         /* if an empty/null string is to be set, host only interface must be
          * turned off */
-        if (aNATNetwork.isEmpty()
+        if (   aNATNetwork.isEmpty()
+            && mData->fEnabled
             && mData->mode == NetworkAttachmentType_NATNetwork)
             return setError(E_FAIL,
                             tr("Empty or null NAT network name is not valid"));
@@ -644,9 +738,13 @@ HRESULT NetworkAdapter::setNATNetwork(const com::Utf8Str &aNATNetwork)
         AutoWriteLock mlock(mParent COMMA_LOCKVAL_SRC_POS);       // mParent is const, no need to lock
         mParent->i_setModified(Machine::IsModified_NetworkAdapters);
         mlock.release();
-        i_checkAndSwitchFromNatNetworking(oldNatNetworkName.raw());
 
-        i_switchToNatNetworking(aNATNetwork);
+        if (mData->mode == NetworkAttachmentType_NATNetwork)
+        {
+            i_switchFromNatNetworking(oldNatNetworkName.raw());
+            i_switchToNatNetworking(aNATNetwork);
+        }
+
         /* When changing the host adapter, adapt the CFGM logic to make this
          * change immediately effect and to notify the guest that the network
          * might have changed, therefore changeAdapter=TRUE. */
@@ -685,6 +783,68 @@ HRESULT NetworkAdapter::setGenericDriver(const com::Utf8Str &aGenericDriver)
     }
 
     return S_OK;
+}
+
+
+HRESULT NetworkAdapter::getCloudNetwork(com::Utf8Str &aCloudNetwork)
+{
+#ifdef VBOX_WITH_CLOUD_NET
+   AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    aCloudNetwork = mData->strCloudNetworkName;
+
+    return S_OK;
+#else /* !VBOX_WITH_CLOUD_NET */
+    NOREF(aCloudNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_CLOUD_NET */
+}
+
+HRESULT NetworkAdapter::setCloudNetwork(const com::Utf8Str &aCloudNetwork)
+{
+#ifdef VBOX_WITH_CLOUD_NET
+    /* the machine needs to be mutable */
+    AutoMutableOrSavedOrRunningStateDependency adep(mParent);
+    if (FAILED(adep.rc())) return adep.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    if (mData->strCloudNetworkName != aCloudNetwork)
+    {
+        /* if an empty/null string is to be set, Cloud networking must be
+         * turned off */
+        if (   aCloudNetwork.isEmpty()
+            && mData->fEnabled
+            && mData->mode == NetworkAttachmentType_Cloud)
+        {
+            return setError(E_FAIL,
+                            tr("Empty or null Cloud network name is not valid"));
+        }
+        mData.backup();
+        mData->strCloudNetworkName = aCloudNetwork;
+
+        // leave the lock before informing callbacks
+        alock.release();
+
+#if 0
+        /// @todo Implement dynamic re-attachment of cloud network
+        AutoWriteLock mlock(mParent COMMA_LOCKVAL_SRC_POS);       // mParent is const, no need to lock
+        mParent->i_setModified(Machine::IsModified_NetworkAdapters);
+        mlock.release();
+
+        /* When changing the internal network, adapt the CFGM logic to make this
+         * change immediately effect and to notify the guest that the network
+         * might have changed, therefore changeAdapter=TRUE. */
+        mParent->i_onNetworkAdapterChange(this, TRUE);
+#else
+        mParent->i_onNetworkAdapterChange(this, FALSE);
+#endif
+    }
+    return S_OK;
+#else /* !VBOX_WITH_CLOUD_NET */
+    NOREF(aCloudNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_CLOUD_NET */
 }
 
 
@@ -1014,7 +1174,8 @@ HRESULT NetworkAdapter::getProperties(const com::Utf8Str &aNames,
  *  Loads settings from the given adapter node.
  *  May be called once right after this object creation.
  *
- *  @param aAdapterNode <Adapter> node.
+ *  @param bwctl bandwidth control object.
+ *  @param data  Configuration settings.
  *
  *  @note Locks this object for writing.
  */
@@ -1070,7 +1231,7 @@ HRESULT NetworkAdapter::i_loadSettings(BandwidthControl *bwctl,
  *
  *  Note that the given Adapter node is completely empty on input.
  *
- *  @param aAdapterNode <Adapter> node.
+ *  @param data Configuration settings.
  *
  *  @note Locks this object for reading.
  */
@@ -1092,12 +1253,12 @@ HRESULT NetworkAdapter::i_saveSettings(settings::NetworkAdapter &data)
  * Returns true if any setter method has modified settings of this instance.
  * @return
  */
-bool NetworkAdapter::i_isModified() {
-
+bool NetworkAdapter::i_isModified()
+{
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
     bool fChanged = mData.isBackedUp();
-    fChanged |= (mData->type == NetworkAttachmentType_NAT? mNATEngine->i_isModified() : false);
+    fChanged     |= mNATEngine->i_isModified();
     return fChanged;
 }
 
@@ -1176,13 +1337,19 @@ void NetworkAdapter::i_copyFrom(NetworkAdapter *aThat)
 
 }
 
+/**
+ * Applies the defaults for this network adapter.
+ *
+ * @note This method currently assumes that the object is in the state after
+ * calling init(), it does not set defaults from an arbitrary state.
+ */
 void NetworkAdapter::i_applyDefaults(GuestOSType *aOsType)
 {
-    AssertReturnVoid(aOsType != NULL);
-
     /* sanity */
     AutoCaller autoCaller(this);
     AssertComRCReturnVoid(autoCaller.rc());
+
+    mNATEngine->i_applyDefaults();
 
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
@@ -1191,19 +1358,35 @@ void NetworkAdapter::i_applyDefaults(GuestOSType *aOsType)
     e1000enabled = true;
 #endif // VBOX_WITH_E1000
 
-    NetworkAdapterType_T defaultType = aOsType->i_networkAdapterType();
+    NetworkAdapterType_T defaultType;
+    if (aOsType)
+        defaultType = aOsType->i_networkAdapterType();
+    else
+    {
+#ifdef VBOX_WITH_E1000
+        defaultType = NetworkAdapterType_I82540EM;
+#else
+        defaultType = NetworkAdapterType_Am79C973A;
+#endif
+    }
+
 
     /* Set default network adapter for this OS type */
     if (defaultType == NetworkAdapterType_I82540EM ||
         defaultType == NetworkAdapterType_I82543GC ||
         defaultType == NetworkAdapterType_I82545EM)
     {
-        if (e1000enabled) mData->type = defaultType;
+        if (e1000enabled)
+            mData->type = defaultType;
     }
-    else mData->type = defaultType;
+    else
+        mData->type = defaultType;
 
-    /* Enable the first one adapter to the NAT */
-    if (mData->ulSlot == 0)
+    /* Enable the first one adapter and set it to NAT */
+    /** @todo r=klaus remove this long term, since a newly created VM should
+     * have no additional hardware components unless configured either
+     * explicitly or through Machine::applyDefaults. */
+    if (aOsType && mData->ulSlot == 0)
     {
         mData->fEnabled = true;
         if (mData->strMACAddress.isEmpty())
@@ -1211,6 +1394,43 @@ void NetworkAdapter::i_applyDefaults(GuestOSType *aOsType)
         mData->mode = NetworkAttachmentType_NAT;
     }
     mData->fCableConnected = true;
+}
+
+bool NetworkAdapter::i_hasDefaults()
+{
+    /* sanity */
+    AutoCaller autoCaller(this);
+    AssertComRCReturn(autoCaller.rc(), true);
+
+    ComObjPtr<GuestOSType> pGuestOSType;
+    HRESULT rc = mParent->i_getVirtualBox()->i_findGuestOSType(mParent->i_getOSTypeId(),
+                                                               pGuestOSType);
+    if (FAILED(rc))
+        return false;
+
+    NetworkAdapterType_T defaultType = pGuestOSType->i_networkAdapterType();
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    if (   !mData->fEnabled
+        && mData->strMACAddress.isEmpty()
+        && mData->type == defaultType
+        && mData->fCableConnected
+        && mData->ulLineSpeed == 0
+        && mData->enmPromiscModePolicy == NetworkAdapterPromiscModePolicy_Deny
+        && mData->mode == NetworkAttachmentType_Null
+        && mData->strBridgedName.isEmpty()
+        && mData->strInternalNetworkName.isEmpty()
+        && mData->strHostOnlyName.isEmpty()
+        && mData->strNATNetworkName.isEmpty()
+        && mData->strGenericDriver.isEmpty()
+        && mData->genericProperties.size() == 0)
+    {
+        /* Could be default, check NAT defaults. */
+        return mNATEngine->i_hasDefaults();
+    }
+
+    return false;
 }
 
 ComObjPtr<NetworkAdapter> NetworkAdapter::i_getPeer()
@@ -1334,7 +1554,7 @@ void NetworkAdapter::i_updateBandwidthGroup(BandwidthGroup *aBwGroup)
 }
 
 
-HRESULT NetworkAdapter::i_checkAndSwitchFromNatNetworking(com::Utf8Str networkName)
+HRESULT NetworkAdapter::i_switchFromNatNetworking(const com::Utf8Str &networkName)
 {
     HRESULT hrc;
     MachineState_T state;

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: Virtio-solaris.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Guest Additions - Virtio Driver for Solaris.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -166,6 +166,7 @@ int VirtioDetach(dev_info_t *pDip, ddi_detach_cmd_t enmCmd)
  * Allocates a Virtio Queue object and assigns it an index.
  *
  * @param pDevice           Pointer to the Virtio device instance.
+ * @param Index             Queue index.
  *
  * @return A pointer to a Virtio Queue instance.
  */

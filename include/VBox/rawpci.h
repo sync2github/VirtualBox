@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_rawpci_h
-#define ___VBox_rawpci_h
+#ifndef VBOX_INCLUDED_rawpci_h
+#define VBOX_INCLUDED_rawpci_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <VBox/sup.h>
@@ -77,15 +80,15 @@ struct RAWPCIPERVM;
  *
  * @returns VBox status code.
  *
- * @param   pVM             The cross context VM structure.
+ * @param   pVmData         The per VM data.
  * @param   HCPhysStart     Physical address of region start on the host.
  * @param   GCPhysStart     Physical address of region start on the guest.
  * @param   cbMem           Region size in bytes.
  * @param   enmAction       Action performed (i.e. if page was mapped
  *                          or unmapped).
  */
-typedef DECLCALLBACK(int) FNRAWPCICONTIGPHYSMEMINFO(struct RAWPCIPERVM *pVmData, RTHCPHYS HCPhysStart,
-                                                    RTGCPHYS GCPhysStart, uint64_t cbMem, PCIRAWMEMINFOACTION enmAction);
+typedef DECLCALLBACKTYPE(int, FNRAWPCICONTIGPHYSMEMINFO,(struct RAWPCIPERVM *pVmData, RTHCPHYS HCPhysStart,
+                                                         RTGCPHYS GCPhysStart, uint64_t cbMem, PCIRAWMEMINFOACTION enmAction));
 typedef FNRAWPCICONTIGPHYSMEMINFO *PFNRAWPCICONTIGPHYSMEMINFO;
 
 /** Data being part of the VM structure. */
@@ -344,7 +347,7 @@ typedef struct RAWPCIDEVPORT *PRAWPCIDEVPORT;
  * @param   pvContext       Opaque user data passed to the handler.
  * @param   iIrq            Interrupt number.
  */
-typedef DECLCALLBACK(bool) FNRAWPCIISR(void *pvContext, int32_t iIrq);
+typedef DECLCALLBACKTYPE(bool, FNRAWPCIISR,(void *pvContext, int32_t iIrq));
 typedef FNRAWPCIISR *PFNRAWPCIISR;
 
 /**
@@ -389,6 +392,11 @@ typedef struct RAWPCIDEVPORT
      * Get PCI region info.
      *
      * @param   pPort     Pointer to this structure.
+     * @param   iRegion   Region number.
+     * @param   pRegionStart    Where to start the region address.
+     * @param   pu64RegionSize  Where to store the region size.
+     * @param   pfPresent   Where to store if the region is present.
+     * @param   pfFlags     Where to store the flags.
      */
     DECLR0CALLBACKMEMBER(int,  pfnGetRegionInfo,(PRAWPCIDEVPORT pPort,
                                                  int32_t        iRegion,
@@ -402,6 +410,11 @@ typedef struct RAWPCIDEVPORT
      * Map PCI region.
      *
      * @param   pPort     Pointer to this structure.
+     * @param   iRegion   Region number.
+     * @param   RegionStart     Region start.
+     * @param   u64RegionSize   Region size.
+     * @param   fFlags    Flags.
+     * @param   pRegionBaseR0   Where to store the R0 address.
      */
     DECLR0CALLBACKMEMBER(int,  pfnMapRegion,(PRAWPCIDEVPORT pPort,
                                              int32_t        iRegion,
@@ -414,6 +427,10 @@ typedef struct RAWPCIDEVPORT
      * Unmap PCI region.
      *
      * @param   pPort     Pointer to this structure.
+     * @param   iRegion   Region number.
+     * @param   RegionStart     Region start.
+     * @param   u64RegionSize   Region size.
+     * @param   RegionBase      Base address.
      */
     DECLR0CALLBACKMEMBER(int,  pfnUnmapRegion,(PRAWPCIDEVPORT pPort,
                                                int32_t        iRegion,
@@ -495,7 +512,7 @@ typedef struct RAWPCIFACTORY
      * will retain a reference to the factory and the caller has to call this method to
      * release it once the pfnCreateAndConnect call(s) has been done.
      *
-     * @param   pIfFactory          Pointer to this structure.
+     * @param   pFactory            Pointer to this structure.
      */
     DECLR0CALLBACKMEMBER(void, pfnRelease,(PRAWPCIFACTORY pFactory));
 
@@ -506,12 +523,13 @@ typedef struct RAWPCIFACTORY
      *
      * @returns VBox status code.
      *
-     * @param   pIfFactory          Pointer to this structure.
+     * @param   pFactory            Pointer to this structure.
      * @param   u32HostAddress      Address of PCI device on the host.
      * @param   fFlags              Creation flags.
      * @param   pVmCtx              Context of VM where device is created.
      * @param   ppDevPort           Where to store the pointer to the device port
      *                              on success.
+     * @param   pfDevFlags          Where to store the device flags.
      *
      */
     DECLR0CALLBACKMEMBER(int, pfnCreateAndConnect,(PRAWPCIFACTORY       pFactory,
@@ -527,26 +545,26 @@ typedef struct RAWPCIFACTORY
      *
      * @returns VBox status code.
      *
-     * @param   pIfFactory  Pointer to this structure.
+     * @param   pFactory    Pointer to this structure.
      * @param   pVM         The cross context VM structure.
-     * @param   pPciData    Pointer to PCI data.
+     * @param   pVmData     Pointer to PCI data.
      */
     DECLR0CALLBACKMEMBER(int, pfnInitVm,(PRAWPCIFACTORY       pFactory,
                                          PVM                  pVM,
-                                         PRAWPCIPERVM         pPciData));
+                                         PRAWPCIPERVM         pVmData));
 
     /**
      * Deinitialize per-VM data related to PCI passthrough.
      *
      * @returns VBox status code.
      *
-     * @param   pIfFactory  Pointer to this structure.
+     * @param   pFactory    Pointer to this structure.
      * @param   pVM         The cross context VM structure.
-     * @param   pPciData    Pointer to PCI data.
+     * @param   pVmData     Pointer to PCI data.
      */
     DECLR0CALLBACKMEMBER(void, pfnDeinitVm,(PRAWPCIFACTORY       pFactory,
                                             PVM                  pVM,
-                                            PRAWPCIPERVM         pPciData));
+                                            PRAWPCIPERVM         pVmData));
 } RAWPCIFACTORY;
 
 #define RAWPCIFACTORY_UUID_STR   "ea089839-4171-476f-adfb-9e7ab1cbd0fb"
@@ -587,4 +605,4 @@ RT_C_DECLS_END
 
 /* #define VBOX_WITH_SHARED_PCI_INTERRUPTS */
 
-#endif
+#endif /* !VBOX_INCLUDED_rawpci_h */

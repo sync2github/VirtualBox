@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstSeamlessX11.cpp 86871 2020-11-12 10:15:18Z vboxsync $ */
 /** @file
  * Linux seamless guest additions simulator in host.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,10 @@
 
 #include <stdlib.h> /* exit() */
 
+#include <iprt/errcore.h>
 #include <iprt/initterm.h>
 #include <iprt/semaphore.h>
+#include <iprt/string.h>
 #include <iprt/stream.h>
 #include <VBox/VBoxGuestLib.h>
 
@@ -26,11 +28,45 @@
 
 static RTSEMEVENT eventSem;
 
-/** Exit with a fatal error. */
-void vbclFatalError(char *pszMessage)
+void VBClLogError(const char *pszFormat, ...)
 {
-    RTPrintf("Fatal error: %s", pszMessage);
+    va_list args;
+    va_start(args, pszFormat);
+    char *psz = NULL;
+    RTStrAPrintfV(&psz, pszFormat, args);
+    va_end(args);
+
+    AssertPtr(psz);
+    RTPrintf("Error: %s", psz);
+
+    RTStrFree(psz);
+}
+
+/** Exit with a fatal error. */
+void VBClLogFatalError(const char *pszFormat, ...)
+{
+    va_list args;
+    va_start(args, pszFormat);
+    char *psz = NULL;
+    RTStrAPrintfV(&psz, pszFormat, args);
+    va_end(args);
+
+    AssertPtr(psz);
+    RTPrintf("Fatal error: %s", psz);
+
+    RTStrFree(psz);
+
     exit(1);
+}
+
+void VBClLogVerbose(unsigned iLevel, const char *pszFormat, ...)
+{
+    RT_NOREF(iLevel);
+
+    va_list va;
+    va_start(va, pszFormat);
+    RTPrintf("%s", pszFormat);
+    va_end(va);
 }
 
 int VBClStartVTMonitor()
@@ -77,16 +113,6 @@ int VbglR3SeamlessWaitEvent(VMMDevSeamlessMode *pMode)
     else
         rc = RTSemEventWait(eventSem, RT_INDEFINITE_WAIT);
     return rc;
-}
-
-int VbglR3WaitEvent(uint32_t , uint32_t cMillies, uint32_t *)
-{
-    return RTSemEventWait(eventSem, cMillies);
-}
-
-int VbglR3InterruptEventWaits(void)
-{
-    return RTSemEventSignal(eventSem);
 }
 
 VBGLR3DECL(int)     VbglR3InitUser(void) { return VINF_SUCCESS; }
@@ -139,7 +165,8 @@ int main( int argc, char **argv)
     {
         RTPrintf("Failed to initialise seamless Additions, rc = %Rrc\n", rc);
     }
-    rc = seamless.run();
+    bool fShutdown = false;
+    rc = seamless.worker(&fShutdown);
     if (rc != VINF_SUCCESS)
     {
         RTPrintf("Failed to run seamless Additions, rc = %Rrc\n", rc);

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: direnum-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Directory Enumeration, Windows.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -46,12 +46,14 @@
 size_t rtDirNativeGetStructSize(const char *pszPath)
 {
     NOREF(pszPath);
-    return sizeof(RTDIR);
+    return sizeof(RTDIRINTERNAL);
 }
 
 
-int rtDirNativeOpen(PRTDIR pDir, char *pszPathBuf)
+int rtDirNativeOpen(PRTDIRINTERNAL pDir, uintptr_t hRelativeDir, void *pvNativeRelative))
 {
+    RT_NOREF(hRelativeDir, pvNativeRelative);
+
     /*
      * Setup the search expression.
      *
@@ -59,6 +61,7 @@ int rtDirNativeOpen(PRTDIR pDir, char *pszPathBuf)
      * call in rtDirOpenCommon(), so all we gota do is check that we don't overflow
      * it when adding the wildcard expression.
      */
+/** @todo the pszPathBuf argument was removed in order to support paths longer than RTPATH_MAX.  Rewrite this code. */
     size_t cbExpr;
     const char *pszExpr;
     if (pDir->enmFilter == RTDIRFILTER_WINNT)
@@ -79,9 +82,8 @@ int rtDirNativeOpen(PRTDIR pDir, char *pszPathBuf)
     /*
      * Attempt opening the search.
      */
-    int rc = VINF_SUCCESS;
     PRTUTF16 pwszName;
-    rc = RTStrToUtf16(pszPathBuf, &pwszName);
+    int rc = RTPathWinFromUtf8(pwszPathBuf, &pwszName, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         pDir->hDir = FindFirstFileW((LPCWSTR)pwszName, &pDir->Data);
@@ -97,14 +99,14 @@ int rtDirNativeOpen(PRTDIR pDir, char *pszPathBuf)
             else
                 rc = RTErrConvertFromWin32(GetLastError());
         }
-        RTUtf16Free(pwszName);
+        RTPathWinFree(pwszName);
     }
 
     return rc;
 }
 
 
-RTDECL(int) RTDirClose(PRTDIR pDir)
+RTDECL(int) RTDirClose(PRTDIRINTERNAL pDir)
 {
     /*
      * Validate input.
@@ -135,8 +137,10 @@ RTDECL(int) RTDirClose(PRTDIR pDir)
 }
 
 
-RTDECL(int) RTDirRead(PRTDIR pDir, PRTDIRENTRY pDirEntry, size_t *pcbDirEntry)
+RTDECL(int) RTDirRead(RTDIR hDir, PRTDIRENTRY pDirEntry, size_t *pcbDirEntry)
 {
+    PPRTDIRINTERNAL pDir = hDir;
+
     /*
      * Validate input.
      */
@@ -156,7 +160,7 @@ RTDECL(int) RTDirRead(PRTDIR pDir, PRTDIRENTRY pDirEntry, size_t *pcbDirEntry)
         cbDirEntry = *pcbDirEntry;
         if (cbDirEntry < RT_UOFFSETOF(RTDIRENTRY, szName[2]))
         {
-            AssertMsgFailed(("Invalid *pcbDirEntry=%d (min %d)\n", *pcbDirEntry, RT_OFFSETOF(RTDIRENTRY, szName[2])));
+            AssertMsgFailed(("Invalid *pcbDirEntry=%zu (min %zu)\n", *pcbDirEntry, RT_UOFFSETOF(RTDIRENTRY, szName[2])));
             return VERR_INVALID_PARAMETER;
         }
     }
@@ -198,7 +202,7 @@ RTDECL(int) RTDirRead(PRTDIR pDir, PRTDIRENTRY pDirEntry, size_t *pcbDirEntry)
      */
     const char  *pszName    = pDir->pszName;
     const size_t cchName    = pDir->cchName;
-    const size_t cbRequired = RT_OFFSETOF(RTDIRENTRY, szName[1]) + cchName;
+    const size_t cbRequired = RT_UOFFSETOF(RTDIRENTRY, szName[1]) + cchName;
     if (pcbDirEntry)
         *pcbDirEntry = cbRequired;
     if (cbRequired > cbDirEntry)
@@ -219,8 +223,9 @@ RTDECL(int) RTDirRead(PRTDIR pDir, PRTDIRENTRY pDirEntry, size_t *pcbDirEntry)
 }
 
 
-RTDECL(int) RTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntry, RTFSOBJATTRADD enmAdditionalAttribs, uint32_t fFlags)
+RTDECL(int) RTDirReadEx(RTDIR hDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntry, RTFSOBJATTRADD enmAdditionalAttribs, uint32_t fFlags)
 {
+    PPRTDIRINTERNAL pDir = hDir;
     /** @todo Symlinks: Find[First|Next]FileW will return info about
         the link, so RTPATH_F_FOLLOW_LINK is not handled correctly. */
     /*
@@ -249,7 +254,7 @@ RTDECL(int) RTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntr
         cbDirEntry = *pcbDirEntry;
         if (cbDirEntry < RT_UOFFSETOF(RTDIRENTRYEX, szName[2]))
         {
-            AssertMsgFailed(("Invalid *pcbDirEntry=%d (min %d)\n", *pcbDirEntry, RT_OFFSETOF(RTDIRENTRYEX, szName[2])));
+            AssertMsgFailed(("Invalid *pcbDirEntry=%zu (min %zu)\n", *pcbDirEntry, RT_UOFFSETOF(RTDIRENTRYEX, szName[2])));
             return VERR_INVALID_PARAMETER;
         }
     }
@@ -291,7 +296,7 @@ RTDECL(int) RTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntr
      */
     const char  *pszName    = pDir->pszName;
     const size_t cchName    = pDir->cchName;
-    const size_t cbRequired = RT_OFFSETOF(RTDIRENTRYEX, szName[1]) + cchName;
+    const size_t cbRequired = RT_UOFFSETOF(RTDIRENTRYEX, szName[1]) + cchName;
     if (pcbDirEntry)
         *pcbDirEntry = cbRequired;
     if (cbRequired > cbDirEntry)
@@ -339,7 +344,7 @@ RTDECL(int) RTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntr
     pDirEntry->Info.ChangeTime  = pDirEntry->Info.ModificationTime;
 
     pDirEntry->Info.Attr.fMode  = rtFsModeFromDos((pDir->Data.dwFileAttributes << RTFS_DOS_SHIFT) & RTFS_DOS_MASK_NT,
-                                                   pszName, cchName, pDir->Data.dwReserved0);
+                                                   pszName, cchName, pDir->Data.dwReserved0, 0);
 
     /*
      * Requested attributes (we cannot provide anything actually).

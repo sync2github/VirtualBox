@@ -2,23 +2,15 @@
   OVMF support for QEMU system firmware flash device
 
   Copyright (c) 2009 - 2013, Intel Corporation. All rights reserved.<BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
 
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#include "PiDxe.h"
-#include <Library/DebugLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/DebugLib.h>
+#include <Library/MemEncryptSevLib.h>
 #include <Library/PcdLib.h>
-#include <Library/UefiBootServicesTableLib.h>
-#include <Library/UefiRuntimeLib.h>
-#include <Guid/EventGroup.h>
 
 #include "QemuFlash.h"
 
@@ -33,19 +25,10 @@
 #define CLEARED_ARRAY_STATUS  0x00
 
 
-STATIC UINT8       *mFlashBase = NULL;
+UINT8 *mFlashBase;
+
 STATIC UINTN       mFdBlockSize = 0;
 STATIC UINTN       mFdBlockCount = 0;
-
-
-VOID
-QemuFlashConvertPointers (
-  VOID
-  )
-{
-  EfiConvertPointer (0x0, (VOID **) &mFlashBase);
-}
-
 
 STATIC
 volatile UINT8*
@@ -54,7 +37,7 @@ QemuFlashPtr (
   IN        UINTN                               Offset
   )
 {
-  return mFlashBase + (Lba * mFdBlockSize) + Offset;
+  return mFlashBase + ((UINTN)Lba * mFdBlockSize) + Offset;
 }
 
 
@@ -92,35 +75,50 @@ QemuFlashDetected (
   }
 
   if (Offset >= mFdBlockSize) {
-    DEBUG ((EFI_D_INFO, "QEMU Flash: Failed to find probe location\n"));
+    DEBUG ((DEBUG_INFO, "QEMU Flash: Failed to find probe location\n"));
     return FALSE;
   }
 
-  DEBUG ((EFI_D_INFO, "QEMU Flash: Attempting flash detection at %p\n", Ptr));
+  DEBUG ((DEBUG_INFO, "QEMU Flash: Attempting flash detection at %p\n", Ptr));
+
+  if (MemEncryptSevEsIsEnabled ()) {
+    //
+    // When SEV-ES is enabled, the check below can result in an infinite
+    // loop with respect to a nested page fault. When the memslot is mapped
+    // read-only, the nested page table entry is read-only. The check below
+    // will cause a nested page fault that cannot be emulated, causing
+    // the instruction to retried over and over. For SEV-ES, acknowledge that
+    // the FD appears as ROM and not as FLASH, but report FLASH anyway because
+    // FLASH behavior can be simulated using VMGEXIT.
+    //
+    DEBUG ((DEBUG_INFO,
+      "QEMU Flash: SEV-ES enabled, assuming FD behaves as FLASH\n"));
+    return TRUE;
+  }
 
   OriginalUint8 = *Ptr;
   *Ptr = CLEAR_STATUS_CMD;
   ProbeUint8 = *Ptr;
   if (OriginalUint8 != CLEAR_STATUS_CMD &&
       ProbeUint8 == CLEAR_STATUS_CMD) {
-    DEBUG ((EFI_D_INFO, "QemuFlashDetected => FD behaves as RAM\n"));
+    DEBUG ((DEBUG_INFO, "QemuFlashDetected => FD behaves as RAM\n"));
     *Ptr = OriginalUint8;
   } else {
     *Ptr = READ_STATUS_CMD;
     ProbeUint8 = *Ptr;
     if (ProbeUint8 == OriginalUint8) {
-      DEBUG ((EFI_D_INFO, "QemuFlashDetected => FD behaves as ROM\n"));
+      DEBUG ((DEBUG_INFO, "QemuFlashDetected => FD behaves as ROM\n"));
     } else if (ProbeUint8 == READ_STATUS_CMD) {
-      DEBUG ((EFI_D_INFO, "QemuFlashDetected => FD behaves as RAM\n"));
+      DEBUG ((DEBUG_INFO, "QemuFlashDetected => FD behaves as RAM\n"));
       *Ptr = OriginalUint8;
     } else if (ProbeUint8 == CLEARED_ARRAY_STATUS) {
-      DEBUG ((EFI_D_INFO, "QemuFlashDetected => FD behaves as FLASH\n"));
+      DEBUG ((DEBUG_INFO, "QemuFlashDetected => FD behaves as FLASH\n"));
       FlashDetected = TRUE;
       *Ptr = READ_ARRAY_CMD;
     }
   }
 
-  DEBUG ((EFI_D_INFO, "QemuFlashDetected => %a\n",
+  DEBUG ((DEBUG_INFO, "QemuFlashDetected => %a\n",
                       FlashDetected ? "Yes" : "No"));
   return FlashDetected;
 }
@@ -199,8 +197,9 @@ QemuFlashWrite (
   //
   Ptr = QemuFlashPtr (Lba, Offset);
   for (Loop = 0; Loop < *NumBytes; Loop++) {
-    *Ptr = WRITE_BYTE_CMD;
-    *Ptr = Buffer[Loop];
+    QemuFlashPtrWrite (Ptr, WRITE_BYTE_CMD);
+    QemuFlashPtrWrite (Ptr, Buffer[Loop]);
+
     Ptr++;
   }
 
@@ -208,7 +207,7 @@ QemuFlashWrite (
   // Restore flash to read mode
   //
   if (*NumBytes > 0) {
-    *(Ptr - 1) = READ_ARRAY_CMD;
+    QemuFlashPtrWrite (Ptr - 1, READ_ARRAY_CMD);
   }
 
   return EFI_SUCCESS;
@@ -233,8 +232,8 @@ QemuFlashEraseBlock (
   }
 
   Ptr = QemuFlashPtr (Lba, 0);
-  *Ptr = BLOCK_ERASE_CMD;
-  *Ptr = BLOCK_ERASE_CONFIRM_CMD;
+  QemuFlashPtrWrite (Ptr, BLOCK_ERASE_CMD);
+  QemuFlashPtrWrite (Ptr, BLOCK_ERASE_CONFIRM_CMD);
   return EFI_SUCCESS;
 }
 
@@ -256,7 +255,17 @@ QemuFlashInitialize (
   ASSERT(PcdGet32 (PcdOvmfFirmwareFdSize) % mFdBlockSize == 0);
   mFdBlockCount = PcdGet32 (PcdOvmfFirmwareFdSize) / mFdBlockSize;
 
+  //
+  // execute module specific hooks before probing the flash
+  //
+  QemuFlashBeforeProbe (
+    (EFI_PHYSICAL_ADDRESS)(UINTN) mFlashBase,
+    mFdBlockSize,
+    mFdBlockCount
+    );
+
   if (!QemuFlashDetected ()) {
+    ASSERT (!FeaturePcdGet (PcdSmmSmramRequire));
     return EFI_WRITE_PROTECTED;
   }
 

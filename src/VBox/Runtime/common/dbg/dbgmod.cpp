@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: dbgmod.cpp 89881 2021-06-24 10:58:04Z vboxsync $ */
 /** @file
  * IPRT - Debug Module Interpreter.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -119,7 +119,7 @@ static PRTDBGMODREGIMG  g_pImgHead;
 static PRTDBGMODREGDBG  g_pDbgHead;
 /** String cache for the debug info interpreters.
  * RTSTRCACHE is thread safe. */
-DECLHIDDEN(RTSTRCACHE)  g_hDbgModStrCache = NIL_RTSTRCACHE;
+DECL_HIDDEN_DATA(RTSTRCACHE)  g_hDbgModStrCache = NIL_RTSTRCACHE;
 
 
 
@@ -279,9 +279,15 @@ static DECLCALLBACK(int) rtDbgModInitOnce(void *pvUser)
          */
         rc = rtDbgModDebugInterpreterRegister(&g_rtDbgModVtDbgNm);
         if (RT_SUCCESS(rc))
+            rc = rtDbgModDebugInterpreterRegister(&g_rtDbgModVtDbgMapSym);
+        if (RT_SUCCESS(rc))
             rc = rtDbgModDebugInterpreterRegister(&g_rtDbgModVtDbgDwarf);
         if (RT_SUCCESS(rc))
             rc = rtDbgModDebugInterpreterRegister(&g_rtDbgModVtDbgCodeView);
+#ifdef IPRT_WITH_GHIDRA_DBG_MOD
+        if (RT_SUCCESS(rc))
+            rc = rtDbgModDebugInterpreterRegister(&g_rtDbgModVtDbgGhidra);
+#endif
 #ifdef RT_OS_WINDOWS
         if (RT_SUCCESS(rc))
             rc = rtDbgModDebugInterpreterRegister(&g_rtDbgModVtDbgDbgHelp);
@@ -326,7 +332,7 @@ RTDECL(int) RTDbgModCreate(PRTDBGMOD phDbgMod, const char *pszName, RTUINTPTR cb
     *phDbgMod = NIL_RTDBGMOD;
     AssertPtrReturn(pszName, VERR_INVALID_POINTER);
     AssertReturn(*pszName, VERR_INVALID_PARAMETER);
-    AssertReturn(fFlags == 0 || fFlags == RTDBGMOD_F_NOT_DEFERRED, VERR_INVALID_PARAMETER);
+    AssertReturn(fFlags == 0 || fFlags == RTDBGMOD_F_NOT_DEFERRED, VERR_INVALID_FLAGS);
 
     int rc = rtDbgModLazyInit();
     if (RT_FAILURE(rc))
@@ -410,7 +416,6 @@ RTDECL(int) RTDbgModCreateFromMap(PRTDBGMOD phDbgMod, const char *pszFilename, c
                 rc = RTSemRWRequestRead(g_hDbgModRWSem, RT_INDEFINITE_WAIT);
                 if (RT_SUCCESS(rc))
                 {
-                    rc = VERR_DBG_NO_MATCHING_INTERPRETER;
                     for (PRTDBGMODREGDBG pCur = g_pDbgHead; pCur; pCur = pCur->pNext)
                     {
                         if (pCur->pVt->fSupports & RT_DBGTYPE_MAP)
@@ -430,6 +435,7 @@ RTDECL(int) RTDbgModCreateFromMap(PRTDBGMOD phDbgMod, const char *pszFilename, c
                     }
 
                     /* bail out */
+                    rc = VERR_DBG_NO_MATCHING_INTERPRETER;
                     RTSemRWReleaseRead(g_hDbgModRWSem);
                 }
                 RTStrCacheRelease(g_hDbgModStrCache, pDbgMod->pszName);
@@ -745,7 +751,7 @@ static int rtDbgModOpenDebugInfoExternalToImage2(PRTDBGMODINT pDbgMod, RTDBGCFG 
         {
             RTUUID  Uuid;
             PRTUUID pUuid = &Uuid;
-            rc = pDbgMod->pImgVt->pfnQueryProp(pDbgMod, RTLDRPROP_UUID, &Uuid, sizeof(Uuid));
+            rc = pDbgMod->pImgVt->pfnQueryProp(pDbgMod, RTLDRPROP_UUID, &Uuid, sizeof(Uuid), NULL);
             if (RT_FAILURE(rc))
                 pUuid = NULL;
 
@@ -833,14 +839,13 @@ RTDECL(int) RTDbgModCreateFromImage(PRTDBGMOD phDbgMod, const char *pszFilename,
                 rc = RTSemRWRequestRead(g_hDbgModRWSem, RT_INDEFINITE_WAIT);
                 if (RT_SUCCESS(rc))
                 {
-                    rc = VERR_DBG_NO_MATCHING_INTERPRETER;
                     PRTDBGMODREGIMG pImg;
                     for (pImg = g_pImgHead; pImg; pImg = pImg->pNext)
                     {
                         pDbgMod->pImgVt    = pImg->pVt;
                         pDbgMod->pvImgPriv = NULL;
                         /** @todo need to specify some arch stuff here. */
-                        rc = pImg->pVt->pfnTryOpen(pDbgMod, enmArch);
+                        rc = pImg->pVt->pfnTryOpen(pDbgMod, enmArch, 0 /*fLdrFlags*/);
                         if (RT_SUCCESS(rc))
                         {
                             /*
@@ -910,6 +915,7 @@ RTDECL(int) RTDbgModCreateFromImage(PRTDBGMOD phDbgMod, const char *pszFilename,
                     }
 
                     /* bail out */
+                    rc = VERR_DBG_NO_MATCHING_INTERPRETER;
                     RTSemRWReleaseRead(g_hDbgModRWSem);
                 }
                 RTStrCacheRelease(g_hDbgModStrCache, pDbgMod->pszImgFileSpecified);
@@ -977,9 +983,12 @@ static DECLCALLBACK(int) rtDbgModFromPeImageOpenCallback(RTDBGCFG hDbgCfg, const
         {
             pDbgMod->pImgVt    = pImg->pVt;
             pDbgMod->pvImgPriv = NULL;
-            rc = pImg->pVt->pfnTryOpen(pDbgMod, RTLDRARCH_WHATEVER);
-            if (RT_SUCCESS(rc))
+            int rc2 = pImg->pVt->pfnTryOpen(pDbgMod, RTLDRARCH_WHATEVER, 0 /*fLdrFlags*/);
+            if (RT_SUCCESS(rc2))
+            {
+                rc = rc2;
                 break;
+            }
             pDbgMod->pImgVt    = NULL;
             Assert(pDbgMod->pvImgPriv == NULL);
         }
@@ -1073,8 +1082,8 @@ static DECLCALLBACK(int) rtDbgModFromPeImageDeferredCallback(PRTDBGMODINT pDbgMo
 }
 
 
-RTDECL(int) RTDbgModCreateFromPeImage(PRTDBGMOD phDbgMod, const char *pszFilename, const char *pszName, RTLDRMOD hLdrMod,
-                                      uint32_t cbImage, uint32_t uTimestamp, RTDBGCFG hDbgCfg)
+RTDECL(int) RTDbgModCreateFromPeImage(PRTDBGMOD phDbgMod, const char *pszFilename, const char *pszName,
+                                      PRTLDRMOD phLdrMod, uint32_t cbImage, uint32_t uTimestamp, RTDBGCFG hDbgCfg)
 {
     /*
      * Input validation and lazy initialization.
@@ -1086,6 +1095,8 @@ RTDECL(int) RTDbgModCreateFromPeImage(PRTDBGMOD phDbgMod, const char *pszFilenam
     if (!pszName)
         pszName = RTPathFilenameEx(pszFilename, RTPATH_STR_F_STYLE_DOS);
     AssertPtrReturn(pszName, VERR_INVALID_POINTER);
+    AssertPtrNullReturn(phLdrMod, VERR_INVALID_POINTER);
+    RTLDRMOD hLdrMod = phLdrMod ? *phLdrMod : NIL_RTLDRMOD;
     AssertReturn(hLdrMod == NIL_RTLDRMOD || RTLdrSize(hLdrMod) != ~(size_t)0, VERR_INVALID_HANDLE);
 
     int rc = rtDbgModLazyInit();
@@ -1133,6 +1144,10 @@ RTDECL(int) RTDbgModCreateFromPeImage(PRTDBGMOD phDbgMod, const char *pszFilenam
                 }
                 if (RT_SUCCESS(rc))
                 {
+                    /* We now own the loader handle, so clear the caller variable. */
+                    if (phLdrMod)
+                        *phLdrMod = NIL_RTLDRMOD;
+
                     /*
                      * Do it now or procrastinate?
                      */
@@ -1147,8 +1162,8 @@ RTDECL(int) RTDbgModCreateFromPeImage(PRTDBGMOD phDbgMod, const char *pszFilenam
                     else
                     {
                         PRTDBGMODDEFERRED pDeferred;
-                        rc = rtDbgModDeferredCreate(pDbgMod, rtDbgModFromPeImageDeferredCallback, cbImage, hDbgCfg, 0,
-                                                    &pDeferred);
+                        rc = rtDbgModDeferredCreate(pDbgMod, rtDbgModFromPeImageDeferredCallback, cbImage, hDbgCfg,
+                                                    0 /*cbDeferred*/, 0 /*fFlags*/, &pDeferred);
                         if (RT_SUCCESS(rc))
                             pDeferred->u.PeImage.uTimestamp = uTimestamp;
                     }
@@ -1205,6 +1220,8 @@ typedef struct RTDBGMODMACHOARGS
     PCRTUUID            pUuid;
     /** For use more internal use in file locator callbacks. */
     bool                fOpenImage;
+    /** RTDBGMOD_F_XXX. */
+    uint32_t            fFlags;
 } RTDBGMODMACHOARGS;
 /** Pointer to a const segment package. */
 typedef RTDBGMODMACHOARGS const *PCRTDBGMODMACHOARGS;
@@ -1247,9 +1264,13 @@ rtDbgModFromMachOImageOpenDsymMachOCallback(RTDBGCFG hDbgCfg, const char *pszFil
         {
             pDbgMod->pImgVt    = pImg->pVt;
             pDbgMod->pvImgPriv = NULL;
-            rc = pImg->pVt->pfnTryOpen(pDbgMod, pArgs->enmArch);
-            if (RT_SUCCESS(rc))
+            int rc2 = pImg->pVt->pfnTryOpen(pDbgMod, pArgs->enmArch,
+                                            pArgs->fFlags & RTDBGMOD_F_MACHO_LOAD_LINKEDIT ? RTLDR_O_MACHO_LOAD_LINKEDIT : 0);
+            if (RT_SUCCESS(rc2))
+            {
+                rc = rc2;
                 break;
+            }
             pDbgMod->pImgVt    = NULL;
             Assert(pDbgMod->pvImgPriv == NULL);
         }
@@ -1262,7 +1283,7 @@ rtDbgModFromMachOImageOpenDsymMachOCallback(RTDBGCFG hDbgCfg, const char *pszFil
             if (pArgs->pUuid)
             {
                 RTUUID UuidOpened;
-                rc = pDbgMod->pImgVt->pfnQueryProp(pDbgMod, RTLDRPROP_UUID, &UuidOpened, sizeof(UuidOpened));
+                rc = pDbgMod->pImgVt->pfnQueryProp(pDbgMod, RTLDRPROP_UUID, &UuidOpened, sizeof(UuidOpened), NULL);
                 if (RT_SUCCESS(rc))
                 {
                     if (RTUuidCompare(&UuidOpened, pArgs->pUuid) != 0)
@@ -1335,7 +1356,7 @@ rtDbgModFromMachOImageOpenDsymMachOCallback(RTDBGCFG hDbgCfg, const char *pszFil
 
 
 static int rtDbgModFromMachOImageWorker(PRTDBGMODINT pDbgMod, RTLDRARCH enmArch, uint32_t cbImage,
-                                        uint32_t cSegs, PCRTDBGSEGMENT paSegs, PCRTUUID pUuid, RTDBGCFG hDbgCfg)
+                                        uint32_t cSegs, PCRTDBGSEGMENT paSegs, PCRTUUID pUuid, RTDBGCFG hDbgCfg, uint32_t fFlags)
 {
     RT_NOREF_PV(cbImage); RT_NOREF_PV(cSegs); RT_NOREF_PV(paSegs);
 
@@ -1343,6 +1364,7 @@ static int rtDbgModFromMachOImageWorker(PRTDBGMODINT pDbgMod, RTLDRARCH enmArch,
     Args.enmArch    = enmArch;
     Args.pUuid      = pUuid && RTUuidIsNull(pUuid) ? pUuid : NULL;
     Args.fOpenImage = false;
+    Args.fFlags     = fFlags;
 
     /*
      * Search for the .dSYM bundle first, since that's generally all we need.
@@ -1367,12 +1389,12 @@ static DECLCALLBACK(int) rtDbgModFromMachOImageDeferredCallback(PRTDBGMODINT pDb
 {
     return rtDbgModFromMachOImageWorker(pDbgMod, pDeferred->u.MachO.enmArch, pDeferred->cbImage,
                                         pDeferred->u.MachO.cSegs, pDeferred->u.MachO.aSegs,
-                                        &pDeferred->u.MachO.Uuid, pDeferred->hDbgCfg);
+                                        &pDeferred->u.MachO.Uuid, pDeferred->hDbgCfg, pDeferred->fFlags);
 }
 
 
-RTDECL(int) RTDbgModCreateFromMachOImage(PRTDBGMOD phDbgMod, const char *pszFilename, const char *pszName,
-                                         RTLDRARCH enmArch, uint32_t cbImage, uint32_t cSegs, PCRTDBGSEGMENT paSegs,
+RTDECL(int) RTDbgModCreateFromMachOImage(PRTDBGMOD phDbgMod, const char *pszFilename, const char *pszName, RTLDRARCH enmArch,
+                                         PRTLDRMOD phLdrModIn, uint32_t cbImage, uint32_t cSegs, PCRTDBGSEGMENT paSegs,
                                          PCRTUUID pUuid, RTDBGCFG hDbgCfg, uint32_t fFlags)
 {
     /*
@@ -1391,9 +1413,14 @@ RTDECL(int) RTDbgModCreateFromMachOImage(PRTDBGMOD phDbgMod, const char *pszFile
         AssertPtrReturn(paSegs, VERR_INVALID_POINTER);
         AssertReturn(!cbImage, VERR_INVALID_PARAMETER);
     }
-    AssertReturn(cbImage || cSegs, VERR_INVALID_PARAMETER);
     AssertPtrNullReturn(pUuid, VERR_INVALID_POINTER);
-    AssertReturn(!(fFlags & ~(RTDBGMOD_F_NOT_DEFERRED)), VERR_INVALID_PARAMETER);
+    AssertReturn(!(fFlags & ~RTDBGMOD_F_VALID_MASK), VERR_INVALID_FLAGS);
+
+    AssertPtrNullReturn(phLdrModIn, VERR_INVALID_POINTER);
+    RTLDRMOD hLdrModIn = phLdrModIn ? *phLdrModIn : NIL_RTLDRMOD;
+    AssertReturn(hLdrModIn == NIL_RTLDRMOD || RTLdrSize(hLdrModIn) != ~(size_t)0, VERR_INVALID_HANDLE);
+
+    AssertReturn(cbImage || cSegs || hLdrModIn != NIL_RTLDRMOD, VERR_INVALID_PARAMETER);
 
     int rc = rtDbgModLazyInit();
     if (RT_FAILURE(rc))
@@ -1404,6 +1431,18 @@ RTDECL(int) RTDbgModCreateFromMachOImage(PRTDBGMOD phDbgMod, const char *pszFile
     {
         rc = RTDbgCfgQueryUInt(hDbgCfg, RTDBGCFGPROP_FLAGS, &fDbgCfg);
         AssertRCReturn(rc, rc);
+    }
+
+    /*
+     * If we got no UUID but the caller passed in a module handle, try
+     * query the UUID from it.
+     */
+    RTUUID UuidFromImage = RTUUID_INITIALIZE_NULL;
+    if ((!pUuid || RTUuidIsNull(pUuid)) && hLdrModIn != NIL_RTLDRMOD)
+    {
+        rc = RTLdrQueryProp(hLdrModIn, RTLDRPROP_UUID, &UuidFromImage, sizeof(UuidFromImage));
+        if (RT_SUCCESS(rc))
+            pUuid = &UuidFromImage;
     }
 
     /*
@@ -1432,8 +1471,31 @@ RTDECL(int) RTDbgModCreateFromMachOImage(PRTDBGMOD phDbgMod, const char *pszFile
                 if (   !(fDbgCfg & RTDBGCFG_FLAGS_DEFERRED)
                     || cSegs /* for the time being. */
                     || (!cbImage && !cSegs)
-                    || (fFlags & RTDBGMOD_F_NOT_DEFERRED) )
-                    rc = rtDbgModFromMachOImageWorker(pDbgMod, enmArch, cbImage, cSegs, paSegs, pUuid, hDbgCfg);
+                    || (fFlags & RTDBGMOD_F_NOT_DEFERRED)
+                    || hLdrModIn != NIL_RTLDRMOD)
+                {
+                    rc = rtDbgModFromMachOImageWorker(pDbgMod, enmArch, cbImage, cSegs, paSegs, pUuid, hDbgCfg, fFlags);
+                    if (RT_FAILURE(rc) && hLdrModIn != NIL_RTLDRMOD)
+                    {
+                        /*
+                         * Create module based on exports from hLdrModIn.
+                         */
+                        if (!cbImage)
+                            cbImage = (uint32_t)RTLdrSize(hLdrModIn);
+                        pDbgMod->pImgVt = &g_rtDbgModVtImgLdr;
+
+                        rc = rtDbgModLdrOpenFromHandle(pDbgMod, hLdrModIn);
+                        if (RT_SUCCESS(rc))
+                        {
+                            /* We now own the loader handle, so clear the caller variable. */
+                            if (phLdrModIn)
+                                *phLdrModIn = NIL_RTLDRMOD;
+
+                            /** @todo delayed exports stuff   */
+                            rc = rtDbgModCreateForExports(pDbgMod);
+                        }
+                    }
+                }
                 else
                 {
                     /*
@@ -1441,8 +1503,8 @@ RTDECL(int) RTDbgModCreateFromMachOImage(PRTDBGMOD phDbgMod, const char *pszFile
                      */
                     PRTDBGMODDEFERRED pDeferred;
                     rc = rtDbgModDeferredCreate(pDbgMod, rtDbgModFromMachOImageDeferredCallback, cbImage, hDbgCfg,
-                                                RT_OFFSETOF(RTDBGMODDEFERRED, u.MachO.aSegs[cSegs]),
-                                                &pDeferred);
+                                                RT_UOFFSETOF_DYN(RTDBGMODDEFERRED, u.MachO.aSegs[cSegs]),
+                                                0 /*fFlags*/, &pDeferred);
                     if (RT_SUCCESS(rc))
                     {
                         pDeferred->u.MachO.Uuid    = *pUuid;
@@ -1474,9 +1536,6 @@ RTDECL(int) RTDbgModCreateFromMachOImage(PRTDBGMOD phDbgMod, const char *pszFile
     RTMemFree(pDbgMod);
     return rc;
 }
-
-
-
 RT_EXPORT_SYMBOL(RTDbgModCreateFromMachOImage);
 
 
@@ -1641,20 +1700,6 @@ RTDECL(RTDBGSEGIDX) RTDbgModRvaToSegOff(RTDBGMOD hDbgMod, RTUINTPTR uRva, PRTUIN
 RT_EXPORT_SYMBOL(RTDbgModRvaToSegOff);
 
 
-RTDECL(RTUINTPTR) RTDbgModImageSize(RTDBGMOD hDbgMod)
-{
-    PRTDBGMODINT pDbgMod = hDbgMod;
-    RTDBGMOD_VALID_RETURN_RC(pDbgMod, RTUINTPTR_MAX);
-    RTDBGMOD_LOCK(pDbgMod);
-
-    RTUINTPTR cbImage = pDbgMod->pDbgVt->pfnImageSize(pDbgMod);
-
-    RTDBGMOD_UNLOCK(pDbgMod);
-    return cbImage;
-}
-RT_EXPORT_SYMBOL(RTDbgModImageSize);
-
-
 RTDECL(uint64_t) RTDbgModGetTag(RTDBGMOD hDbgMod)
 {
     PRTDBGMODINT pDbgMod = hDbgMod;
@@ -1676,6 +1721,78 @@ RTDECL(int) RTDbgModSetTag(RTDBGMOD hDbgMod, uint64_t uTag)
     return VINF_SUCCESS;
 }
 RT_EXPORT_SYMBOL(RTDbgModSetTag);
+
+
+RTDECL(RTUINTPTR) RTDbgModImageSize(RTDBGMOD hDbgMod)
+{
+    PRTDBGMODINT pDbgMod = hDbgMod;
+    RTDBGMOD_VALID_RETURN_RC(pDbgMod, RTUINTPTR_MAX);
+    RTDBGMOD_LOCK(pDbgMod);
+
+    RTUINTPTR cbImage = pDbgMod->pDbgVt->pfnImageSize(pDbgMod);
+
+    RTDBGMOD_UNLOCK(pDbgMod);
+    return cbImage;
+}
+RT_EXPORT_SYMBOL(RTDbgModImageSize);
+
+
+RTDECL(RTLDRFMT) RTDbgModImageGetFormat(RTDBGMOD hDbgMod)
+{
+    PRTDBGMODINT pDbgMod = hDbgMod;
+    RTDBGMOD_VALID_RETURN_RC(pDbgMod, RTLDRFMT_INVALID);
+    RTDBGMOD_LOCK(pDbgMod);
+
+    RTLDRFMT enmFmt;
+    if (   pDbgMod->pImgVt
+        && pDbgMod->pImgVt->pfnGetFormat)
+        enmFmt = pDbgMod->pImgVt->pfnGetFormat(pDbgMod);
+    else
+        enmFmt = RTLDRFMT_INVALID;
+
+    RTDBGMOD_UNLOCK(pDbgMod);
+    return enmFmt;
+}
+RT_EXPORT_SYMBOL(RTDbgModImageGetFormat);
+
+
+RTDECL(RTLDRARCH) RTDbgModImageGetArch(RTDBGMOD hDbgMod)
+{
+    PRTDBGMODINT pDbgMod = hDbgMod;
+    RTDBGMOD_VALID_RETURN_RC(pDbgMod, RTLDRARCH_INVALID);
+    RTDBGMOD_LOCK(pDbgMod);
+
+    RTLDRARCH enmArch;
+    if (   pDbgMod->pImgVt
+        && pDbgMod->pImgVt->pfnGetArch)
+        enmArch = pDbgMod->pImgVt->pfnGetArch(pDbgMod);
+    else
+        enmArch = RTLDRARCH_WHATEVER;
+
+    RTDBGMOD_UNLOCK(pDbgMod);
+    return enmArch;
+}
+RT_EXPORT_SYMBOL(RTDbgModImageGetArch);
+
+
+RTDECL(int) RTDbgModImageQueryProp(RTDBGMOD hDbgMod, RTLDRPROP enmProp, void *pvBuf, size_t cbBuf, size_t *pcbRet)
+{
+    PRTDBGMODINT pDbgMod = hDbgMod;
+    RTDBGMOD_VALID_RETURN_RC(pDbgMod, VERR_INVALID_HANDLE);
+    AssertPtrNullReturn(pcbRet, VERR_INVALID_POINTER);
+    RTDBGMOD_LOCK(pDbgMod);
+
+    int rc;
+    if (   pDbgMod->pImgVt
+        && pDbgMod->pImgVt->pfnQueryProp)
+        rc = pDbgMod->pImgVt->pfnQueryProp(pDbgMod, enmProp, pvBuf, cbBuf, pcbRet);
+    else
+        rc = VERR_NOT_FOUND;
+
+    RTDBGMOD_UNLOCK(pDbgMod);
+    return rc;
+}
+RT_EXPORT_SYMBOL(RTDbgModImageQueryProp);
 
 
 RTDECL(int) RTDbgModSegmentAdd(RTDBGMOD hDbgMod, RTUINTPTR uRva, RTUINTPTR cb, const char *pszName,
@@ -1775,7 +1892,7 @@ RTDECL(int) RTDbgModSymbolAdd(RTDBGMOD hDbgMod, const char *pszSymbol, RTDBGSEGI
                     ("%#x\n", iSeg),
                     VERR_DBG_INVALID_SEGMENT_INDEX);
     AssertMsgReturn(off + cb >= off, ("off=%RTptr cb=%RTptr\n", off, cb), VERR_DBG_ADDRESS_WRAP);
-    AssertReturn(!fFlags, VERR_INVALID_PARAMETER); /* currently reserved. */
+    AssertReturn(!(fFlags & ~RTDBGSYMBOLADD_F_VALID_MASK), VERR_INVALID_FLAGS);
 
     RTDBGMOD_LOCK(pDbgMod);
 
@@ -1851,6 +1968,36 @@ RTDECL(int) RTDbgModSymbolByOrdinalA(RTDBGMOD hDbgMod, uint32_t iOrdinal, PRTDBG
 RT_EXPORT_SYMBOL(RTDbgModSymbolByOrdinalA);
 
 
+/**
+ * Return a segment number/name as symbol if we couldn't find any
+ * valid symbols within the segment.
+ */
+DECL_NO_INLINE(static, int)
+rtDbgModSymbolByAddrTrySegments(PRTDBGMODINT pDbgMod, RTDBGSEGIDX iSeg, RTUINTPTR off,
+                                PRTINTPTR poffDisp, PRTDBGSYMBOL pSymInfo)
+{
+    Assert(iSeg <= RTDBGSEGIDX_LAST);
+    RTDBGSEGMENT SegInfo;
+    int rc = pDbgMod->pDbgVt->pfnSegmentByIndex(pDbgMod, iSeg, &SegInfo);
+    if (RT_SUCCESS(rc))
+    {
+        pSymInfo->Value  = 0;
+        pSymInfo->cb     = SegInfo.cb;
+        pSymInfo->offSeg = 0;
+        pSymInfo->iSeg   = iSeg;
+        pSymInfo->fFlags = 0;
+        if (SegInfo.szName[0])
+            RTStrPrintf(pSymInfo->szName, sizeof(pSymInfo->szName), "start_seg%u_%s", SegInfo.iSeg, SegInfo.szName);
+        else
+            RTStrPrintf(pSymInfo->szName, sizeof(pSymInfo->szName), "start_seg%u", SegInfo.iSeg);
+        if (poffDisp)
+            *poffDisp = off;
+        return VINF_SUCCESS;
+    }
+    return VERR_SYMBOL_NOT_FOUND;
+}
+
+
 RTDECL(int) RTDbgModSymbolByAddr(RTDBGMOD hDbgMod, RTDBGSEGIDX iSeg, RTUINTPTR off, uint32_t fFlags,
                                  PRTINTPTR poffDisp, PRTDBGSYMBOL pSymInfo)
 {
@@ -1882,6 +2029,12 @@ RTDECL(int) RTDbgModSymbolByAddr(RTDBGMOD hDbgMod, RTDBGSEGIDX iSeg, RTUINTPTR o
      * Get down to business.
      */
     int rc = pDbgMod->pDbgVt->pfnSymbolByAddr(pDbgMod, iSeg, off, fFlags, poffDisp, pSymInfo);
+
+    /* If we failed to locate a symbol, try use the specified segment as a reference. */
+    if (   rc == VERR_SYMBOL_NOT_FOUND
+        && iSeg <= RTDBGSEGIDX_LAST
+        && !(fFlags & RTDBGSYMADDR_FLAGS_GREATER_OR_EQUAL))
+        rc = rtDbgModSymbolByAddrTrySegments(pDbgMod, iSeg, off, poffDisp, pSymInfo);
 
     RTDBGMOD_UNLOCK(pDbgMod);
     return rc;
@@ -2098,4 +2251,57 @@ RTDECL(int) RTDbgModLineByAddrA(RTDBGMOD hDbgMod, RTDBGSEGIDX iSeg, RTUINTPTR of
     return rc;
 }
 RT_EXPORT_SYMBOL(RTDbgModLineByAddrA);
+
+
+RTDECL(int) RTDbgModUnwindFrame(RTDBGMOD hDbgMod, RTDBGSEGIDX iSeg, RTUINTPTR off, PRTDBGUNWINDSTATE pState)
+{
+    /*
+     * Validate input.
+     */
+    PRTDBGMODINT pDbgMod = hDbgMod;
+    RTDBGMOD_VALID_RETURN_RC(pDbgMod, VERR_INVALID_HANDLE);
+    AssertPtr(pState);
+    AssertReturn(pState->u32Magic == RTDBGUNWINDSTATE_MAGIC, VERR_INVALID_MAGIC);
+
+    RTDBGMOD_LOCK(pDbgMod);
+
+    /*
+     * Convert RVAs.
+     */
+    if (iSeg == RTDBGSEGIDX_RVA)
+    {
+        iSeg = pDbgMod->pDbgVt->pfnRvaToSegOff(pDbgMod, off, &off);
+        if (iSeg == NIL_RTDBGSEGIDX)
+        {
+            RTDBGMOD_UNLOCK(pDbgMod);
+            return VERR_DBG_INVALID_RVA;
+        }
+    }
+
+    /*
+     * Try the debug module first, then the image.
+     */
+    int rc = VERR_DBG_NO_UNWIND_INFO;
+    if (pDbgMod->pDbgVt->pfnUnwindFrame)
+        rc = pDbgMod->pDbgVt->pfnUnwindFrame(pDbgMod, iSeg, off, pState);
+    if (   (   rc == VERR_DBG_NO_UNWIND_INFO
+            || rc == VERR_DBG_UNWIND_INFO_NOT_FOUND)
+        && pDbgMod->pImgVt
+        && pDbgMod->pImgVt->pfnUnwindFrame)
+    {
+        if (rc == VERR_DBG_NO_UNWIND_INFO)
+            rc = pDbgMod->pImgVt->pfnUnwindFrame(pDbgMod, iSeg, off, pState);
+        else
+        {
+            rc = pDbgMod->pImgVt->pfnUnwindFrame(pDbgMod, iSeg, off, pState);
+            if (rc == VERR_DBG_NO_UNWIND_INFO)
+                rc = VERR_DBG_UNWIND_INFO_NOT_FOUND;
+        }
+    }
+
+    RTDBGMOD_UNLOCK(pDbgMod);
+    return rc;
+
+}
+RT_EXPORT_SYMBOL(RTDbgModUnwindFrame);
 

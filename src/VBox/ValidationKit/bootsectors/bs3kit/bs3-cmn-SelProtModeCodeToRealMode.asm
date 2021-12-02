@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-cmn-SelProtModeCodeToRealMode.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - Bs3SelProtModeCodeToRealMode.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -83,7 +83,6 @@ AssertCompile(BS3_SEL_RING_SHIFT == 8)
         cmp     ax, BS3_SEL_R0_CS16_CNF_EO & 0xff
         je      .bs3text16
 .panic:
-hlt
         extern  BS3_CMN_NM(Bs3Panic)
         call    BS3_CMN_NM(Bs3Panic)
         jmp     .return

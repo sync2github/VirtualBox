@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: the-nt-kernel.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Include all necessary headers for the NT kernel.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___the_nt_kernel_h
-#define ___the_nt_kernel_h
+#ifndef IPRT_INCLUDED_SRC_r0drv_nt_the_nt_kernel_h
+#define IPRT_INCLUDED_SRC_r0drv_nt_the_nt_kernel_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 
@@ -63,27 +66,24 @@ RT_C_DECLS_END
 # define PAGE_OFFSET_MASK (PAGE_SIZE - 1)
 #endif
 
+/* Missing if we're compiling against older WDKs. */
+#ifndef NonPagedPoolNx
+# define NonPagedPoolNx     ((POOL_TYPE)512)
+#endif
+
 /*
  * When targeting NT4 we have to undo some of the nice macros
  * installed by the later DDKs.
  */
-#ifdef IPRT_TARGET_NT4
-# undef ExAllocatePoolWithTag
-# define ExAllocatePoolWithTag(a,b,c) ExAllocatePool(a,b)
-# undef ExAllocatePoolWithQuotaTag
-# define ExAllocatePoolWithQuotaTag(a,b,c) ExAllocatePoolWithQuota(a,b)
-# undef ExAllocatePool
-  NTKERNELAPI PVOID NTAPI ExAllocatePool(IN POOL_TYPE PoolType, IN SIZE_T NumberOfBytes);
-# undef ExFreePool
-  NTKERNELAPI VOID NTAPI ExFreePool(IN PVOID P);
-#endif /* IPRT_TARGET_NT4 */
+#undef ExAllocatePool
+#undef ExFreePool
 
 /** @def IPRT_NT_POOL_TAG
  * Tag to use with the NT Pool APIs.
- * In memory and in the various windbg tool it appears in the reverse order of
+ * In memory and in the various windbg tools it appears in the reverse order of
  * what it is given as here, so it'll read "IPRT".
  */
 #define IPRT_NT_POOL_TAG    'TRPI'
 
-#endif
+#endif /* !IPRT_INCLUDED_SRC_r0drv_nt_the_nt_kernel_h */
 

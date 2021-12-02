@@ -1,5 +1,10 @@
+/* $Id: eltorito.c 89392 2021-05-31 10:55:21Z vboxsync $ */
+/** @file
+ * PC BIOS - ???
+ */
+
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -38,6 +43,15 @@
  *
  */
 
+/*
+ * Oracle LGPL Disclaimer: For the avoidance of doubt, except that if any license choice
+ * other than GPL or LGPL is available it will apply instead, Oracle elects to use only
+ * the Lesser General Public License version 2.1 (LGPLv2) at this time for any software where
+ * a choice of LGPL license versions is made available with the language indicating
+ * that LGPLv2 or any later version may be used, or where a choice of which version
+ * of the LGPL is applied is otherwise unspecified.
+ */
+
 
 #include <stdint.h>
 #include <string.h>
@@ -64,6 +78,7 @@
 #  define BX_DEBUG_ELTORITO(...)
 #endif
 
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 /// @todo put in a header
 #define AX      r.gr.u.r16.ax
@@ -95,7 +110,7 @@ ct_assert(sizeof(cdb_atapi) == 12);
 
 /* Generic ATAPI/SCSI CD-ROM access routine signature. */
 typedef uint16_t (* cd_pkt_func)(uint16_t device_id, uint8_t cmdlen, char __far *cmdbuf,
-                                 uint16_t header, uint32_t length, uint8_t inout, char __far *buffer);
+                                 uint32_t length, uint8_t inout, char __far *buffer);
 
 /* Pointers to HW specific CD-ROM access routines. */
 cd_pkt_func     pktacc[DSKTYP_CNT] = {
@@ -138,14 +153,34 @@ cd_rst_func     softrst[DSKTYP_CNT] = {
 
 extern  int     diskette_param_table;
 
+/**
+ * Allocates 2K of conventional memory.
+ */
+static uint16_t cdemu_bounce_buf_alloc(void)
+{
+    uint16_t    base_mem_kb;
+    uint16_t    bounce_seg;
+
+    base_mem_kb = read_word(0x00, 0x0413);
+    if (base_mem_kb == 0)
+        return 0;
+
+    base_mem_kb -= 2;
+    bounce_seg = (((uint32_t)base_mem_kb * 1024) >> 4); /* Calculate start segment. */
+
+    write_word(0x00, 0x0413, base_mem_kb);
+
+    return bounce_seg;
+}
 
 void BIOSCALL cdemu_init(void)
 {
     /// @todo a macro or a function for getting the EBDA segment
     uint16_t    ebda_seg = read_word(0x0040,0x000E);
+    cdemu_t __far   *cdemu = ebda_seg :> &EbdaData->cdemu;
 
     // the only important data is this one for now
-    write_byte(ebda_seg,(uint16_t)&EbdaData->cdemu.active, 0x00);
+    cdemu->active = 0x00;
 }
 
 uint8_t BIOSCALL cdemu_isactive(void)
@@ -258,6 +293,79 @@ static uint16_t device_is_cdrom(uint8_t device)
     return 1;
 }
 
+static uint16_t cdrom_read(uint8_t device, uint32_t lba, uint16_t nbsectors, void __far *buf)
+{
+    uint16_t            ebda_seg=read_word(0x0040,0x000E);
+    cdb_atapi           atapicmd;
+    bio_dsk_t __far     *bios_dsk = ebda_seg :> &EbdaData->bdisk;
+
+    atapicmd.command = 0x28;    // READ 10 command
+    atapicmd.lba     = swap_32(lba);
+    atapicmd.nsect   = swap_16(nbsectors);
+
+    bios_dsk->drqp.nsect   = nbsectors;
+    bios_dsk->drqp.sect_sz = 2048L;
+
+    return pktacc[bios_dsk->devices[device].type](device, 12, (char __far *)&atapicmd, nbsectors*2048L, ATA_DATA_IN, buf);
+}
+
+static uint16_t cdemu_read(uint8_t device, uint32_t lba, uint16_t nbsectors, void __far *buf)
+{
+    uint16_t            ebda_seg=read_word(0x0040,0x000E);
+    uint16_t            error;
+    cdemu_t __far       *cdemu = ebda_seg :> &EbdaData->cdemu;
+    uint32_t            ilba = cdemu->ilba;
+    uint32_t            slba;
+    uint16_t            before;
+    uint8_t __far       *dst = (uint8_t __far *)buf;
+
+    BX_DEBUG_ELTORITO("cdemu_read: lba=%lu nbsectors=%u\n", lba, nbsectors);
+
+    // start lba on cd
+    slba   = (uint32_t)lba / 4;
+    before = (uint32_t)lba % 4;
+
+    // Unaligned start will go to a bounce buffer first.
+    if (before)
+    {
+        uint16_t xfer_sect = MIN(nbsectors, 4 - before);
+
+        error = cdrom_read(device, ilba + slba, 1, cdemu->ptr_unaligned);
+        if (error != 0)
+            return error;
+
+        _fmemcpy(dst, cdemu->ptr_unaligned + before * 512L, xfer_sect * 512L);
+        dst       += xfer_sect * 512L;
+        nbsectors -= xfer_sect;
+        slba++;
+    }
+
+    // Now for the aligned part.
+    if (nbsectors / 4)
+    {
+        uint16_t xfer_sect = nbsectors / 4;
+
+        error = cdrom_read(device, ilba + slba, xfer_sect, dst);
+        if (error != 0)
+            return error;
+        dst       += xfer_sect * 2048L;
+        nbsectors -= xfer_sect * 4;
+        slba      += xfer_sect;
+    }
+
+    // Now for the unaligned end.
+    if (nbsectors)
+    {
+        error = cdrom_read(device, ilba + slba, 1, cdemu->ptr_unaligned);
+        if (error != 0)
+            return error;
+
+        _fmemcpy(dst, cdemu->ptr_unaligned, nbsectors * 512);
+    }
+
+    return error;
+}
+
 // ---------------------------------------------------------------------------
 // End of ATA/ATAPI generic functions
 // ---------------------------------------------------------------------------
@@ -271,7 +379,6 @@ uint16_t cdrom_boot(void)
     /// @todo a macro or a function for getting the EBDA segment
     uint16_t            ebda_seg=read_word(0x0040,0x000E);
     uint8_t             buffer[2048];
-    cdb_atapi           atapicmd;
     uint32_t            lba;
     uint16_t            boot_segment, nbsectors, i, error;
     uint8_t             device;
@@ -293,17 +400,9 @@ uint16_t cdrom_boot(void)
         return 2;
 
     /* Read the Boot Record Volume Descriptor (BRVD). */
-    _fmemset(&atapicmd, 0, sizeof(atapicmd));
-    atapicmd.command = 0x28;    // READ 10 command
-    atapicmd.lba     = swap_32(0x11);
-    atapicmd.nsect   = swap_16(1);
-
-    bios_dsk->drqp.nsect   = 1;
-    bios_dsk->drqp.sect_sz = 2048;
-
     for (read_try = 0; read_try <= 4; ++read_try)
     {
-        error = pktacc[bios_dsk->devices[device].type](device, 12, (char __far *)&atapicmd, 0, 2048L, ATA_DATA_IN, &buffer);
+        error = cdrom_read(device, 0x11, 1, &buffer);
         if (!error)
             break;
     }
@@ -327,16 +426,7 @@ uint16_t cdrom_boot(void)
     BX_DEBUG_ELTORITO("BRVD at LBA %lx\n", lba);
 
     /* Now we read the Boot Catalog. */
-    atapicmd.command = 0x28;    // READ 10 command
-    atapicmd.lba     = swap_32(lba);
-    atapicmd.nsect   = swap_16(1);
-
-#if 0   // Not necessary as long as previous values are reused
-    bios_dsk->drqp.nsect   = 1;
-    bios_dsk->drqp.sect_sz = 512;
-#endif
-
-    error = pktacc[bios_dsk->devices[device].type](device, 12, (char __far *)&atapicmd, 0, 2048L, ATA_DATA_IN, &buffer);
+    error = cdrom_read(device, lba, 1, buffer);
     if (error != 0)
         return 7;
 
@@ -392,22 +482,15 @@ uint16_t cdrom_boot(void)
     BX_DEBUG_ELTORITO("Emulate drive %02x, type %02x, LBA %lu\n",
                       cdemu->emulated_drive, cdemu->media, cdemu->ilba);
 
-    /* Read the disk image's boot sector into memory. */
-    atapicmd.command = 0x28;    // READ 10 command
-    atapicmd.lba     = swap_32(lba);
-    atapicmd.nsect   = swap_16(1 + (nbsectors - 1) / 4);
-
-    bios_dsk->drqp.nsect   = 1 + (nbsectors - 1) / 4;
-    bios_dsk->drqp.sect_sz = 512;
-
-    bios_dsk->drqp.skip_a = (2048 - nbsectors * 512) % 2048;
-
-    error = pktacc[bios_dsk->devices[device].type](device, 12, (char __far *)&atapicmd, 0, nbsectors*512L, ATA_DATA_IN, MK_FP(boot_segment,0));
-
-    bios_dsk->drqp.skip_a = 0;
-
-    if (error != 0)
+    /* Now that we know El Torito emulation is in use, allocate buffer. */
+    cdemu->ptr_unaligned = cdemu_bounce_buf_alloc() :> 0;
+    if (cdemu->ptr_unaligned == NULL)
         return 13;
+
+    /* Read the disk image's boot sector into memory. */
+    error = cdemu_read(device, 0, nbsectors, MK_FP(boot_segment,0));
+    if (error != 0)
+        return 14;
 
     BX_DEBUG_ELTORITO("Emulate drive %02x, type %02x, LBA %lu\n",
                       cdemu->emulated_drive, cdemu->media, cdemu->ilba);
@@ -430,7 +513,7 @@ uint16_t cdrom_boot(void)
         break;
     case 0x04:  /* Hard disk */
         cdemu->vdevice.spt       = read_byte(boot_segment,446+6)&0x3f;
-        cdemu->vdevice.cylinders = (read_byte(boot_segment,446+6)<<2) + read_byte(boot_segment,446+7) + 1;
+        cdemu->vdevice.cylinders = ((read_byte(boot_segment,446+6)&~0x3f)<<2) + read_byte(boot_segment,446+7) + 1;
         cdemu->vdevice.heads     = read_byte(boot_segment,446+5) + 1;
         break;
     }
@@ -468,11 +551,13 @@ void BIOSCALL int13_cdemu(disk_regs_t r)
     uint8_t             device, status;
     uint16_t            vheads, vspt, vcylinders;
     uint16_t            head, sector, cylinder, nbsectors;
-    uint32_t            vlba, ilba, slba, elba;
-    uint16_t            before, segment, offset;
-    cdb_atapi           atapicmd;
+    uint32_t            vlba;
+    uint16_t            segment, offset;
     cdemu_t __far       *cdemu;
     bio_dsk_t __far     *bios_dsk;
+    int13ext_t __far    *i13x;
+    uint32_t            lba;
+    uint16_t            count;
 
     cdemu    = ebda_seg :> &EbdaData->cdemu;
     bios_dsk = ebda_seg :> &EbdaData->bdisk;
@@ -537,7 +622,6 @@ void BIOSCALL int13_cdemu(disk_regs_t r)
         vspt       = cdemu->vdevice.spt;
         vcylinders = cdemu->vdevice.cylinders;
         vheads     = cdemu->vdevice.heads;
-        ilba       = cdemu->ilba;
 
         sector    = GET_CL() & 0x003f;
         cylinder  = (GET_CL() & 0x00c0) << 2 | GET_CH();
@@ -573,29 +657,7 @@ void BIOSCALL int13_cdemu(disk_regs_t r)
         // In advance so we don't lose the count
         SET_AL(nbsectors);
 
-        // start lba on cd
-        slba   = (uint32_t)vlba / 4;
-        before = (uint32_t)vlba % 4;
-
-        // end lba on cd
-        elba = (uint32_t)(vlba + nbsectors - 1) / 4;
-
-        _fmemset(&atapicmd, 0, sizeof(atapicmd));
-        atapicmd.command = 0x28;    // READ 10 command
-        atapicmd.lba     = swap_32(ilba + slba);
-        atapicmd.nsect   = swap_16(elba - slba + 1);
-
-        bios_dsk->drqp.nsect   = nbsectors;
-        bios_dsk->drqp.sect_sz = 512;
-
-        bios_dsk->drqp.skip_b = before * 512;
-        bios_dsk->drqp.skip_a = ((4 - nbsectors % 4 - before) * 512) % 2048;
-
-        status = pktacc[bios_dsk->devices[device].type](device, 12, (char __far *)&atapicmd, before*512, nbsectors*512L, ATA_DATA_IN, MK_FP(segment,offset));
-
-        bios_dsk->drqp.skip_b = 0;
-        bios_dsk->drqp.skip_a = 0;
-
+        status = cdemu_read(device, vlba, nbsectors, MK_FP(segment,offset));
         if (status != 0) {
             BX_INFO("%s: function %02x, error %02x !\n", __func__, GET_AH(), status);
             SET_AH(0x02);
@@ -639,19 +701,68 @@ void BIOSCALL int13_cdemu(disk_regs_t r)
         goto int13_success_noah;
         break;
 
+    case 0x41: // IBM/MS installation check
+        BX = 0xaa55;    // install check
+        SET_AH(0x30);   // EDD 2.1
+        CX = 0x0007;    // ext disk access, removable and edd
+        goto int13_success_noah;
+        break;
+
+    case 0x42: // IBM/MS extended read
+    case 0x44: // IBM/MS verify sectors
+    case 0x47: // IBM/MS extended seek
+
+        /* Load the I13X struct pointer. */
+        i13x = MK_FP(DS, SI);
+
+        count   = i13x->count;
+        segment = i13x->segment;
+        offset  = i13x->offset;
+
+        // Can't use 64 bits lba
+        lba = i13x->lba2;
+        if (lba != 0L) {
+            BX_PANIC("%s: function %02x. Can't use 64bits lba\n", __func__, GET_AH());
+            goto int13_fail;
+        }
+
+        // Get 32 bits lba
+        lba = i13x->lba1;
+
+        // If verify or seek
+        if (( GET_AH() == 0x44 ) || ( GET_AH() == 0x47 ))
+            goto int13_success;
+
+        BX_DEBUG_INT13_ET("%s: read %u sectors @ LBA %lu to %04X:%04X\n",
+                          __func__, count, lba, segment, offset);
+
+        status = cdemu_read(device, lba, count, MK_FP(segment,offset));
+        count = (uint16_t)(bios_dsk->drqp.trsfbytes >> 9);
+        i13x->count = count;
+
+        if (status != 0) {
+            BX_INFO("%s: function %02x, status %02x !\n", __func__, GET_AH(), status);
+            SET_AH(0x0c);
+            goto int13_fail_noah;
+        }
+
+        goto int13_success;
+        break;
+
+    case 0x48: // IBM/MS get drive parameters
+        if (edd_fill_dpt(DS :> (dpt_t *)SI, bios_dsk, device))
+            goto int13_fail;
+        else
+            goto int13_success;
+        break;
+
     // all those functions return unimplemented
     case 0x0a: /* read disk sectors with ECC */
     case 0x0b: /* write disk sectors with ECC */
     case 0x18: /* set media type for format */
-    case 0x41: // IBM/MS installation check
-      // FIXME ElTorito Harddisk. Darwin would like to use EDD
-    case 0x42: // IBM/MS extended read
     case 0x43: // IBM/MS extended write
-    case 0x44: // IBM/MS verify sectors
     case 0x45: // IBM/MS lock/unlock drive
     case 0x46: // IBM/MS eject media
-    case 0x47: // IBM/MS extended seek
-    case 0x48: // IBM/MS get drive parameters
     case 0x49: // IBM/MS extended media change
     case 0x4e: // ? - set hardware configuration
     case 0x50: // ? - send packet command
@@ -685,12 +796,10 @@ void BIOSCALL int13_cdrom(uint16_t EHBX, disk_regs_t r)
 {
     uint16_t            ebda_seg = read_word(0x0040,0x000E);
     uint8_t             device, status, locks;
-    cdb_atapi           atapicmd;
     uint32_t            lba;
-    uint16_t            count, segment, offset, size;
+    uint16_t            count, segment, offset;
     bio_dsk_t __far     *bios_dsk;
     int13ext_t __far    *i13x;
-    dpt_t __far         *dpt;
 
     bios_dsk = ebda_seg :> &EbdaData->bdisk;
 
@@ -787,16 +896,7 @@ void BIOSCALL int13_cdrom(uint16_t EHBX, disk_regs_t r)
         BX_DEBUG_INT13_CD("%s: read %u sectors @ LBA %lu to %04X:%04X\n",
                           __func__, count, lba, segment, offset);
 
-        _fmemset(&atapicmd, 0, sizeof(atapicmd));
-        atapicmd.command = 0x28;    // READ 10 command
-        atapicmd.lba     = swap_32(lba);
-        atapicmd.nsect   = swap_16(count);
-
-        bios_dsk->drqp.nsect   = count;
-        bios_dsk->drqp.sect_sz = 2048;
-
-        status = pktacc[bios_dsk->devices[device].type](device, 12, (char __far *)&atapicmd, 0, count*2048L, ATA_DATA_IN, MK_FP(segment,offset));
-
+        status = cdrom_read(device, lba, count, MK_FP(segment,offset));
         count = (uint16_t)(bios_dsk->drqp.trsfbytes >> 11);
         i13x->count = count;
 
@@ -875,127 +975,11 @@ int13_cdrom_rme_end:
         goto int13_success;
         break;
 
-    /// @todo Part of this should be merged with analogous code in disk.c
     case 0x48: // IBM/MS get drive parameters
-        dpt = DS :> (dpt_t *)SI;
-        size = dpt->size;
-
-        // Buffer is too small
-        if (size < 0x1a)
+        if (edd_fill_dpt(DS :> (dpt_t *)SI, bios_dsk, device))
             goto int13_fail;
-
-        // EDD 1.x
-        if (size >= 0x1a) {
-            uint16_t   blksize;
-
-            blksize = bios_dsk->devices[device].blksize;
-
-            dpt->size      = 0x1a;
-            dpt->infos     = 0x74;  /* Removable, media change, lockable, max values */
-            dpt->cylinders = 0xffffffff;
-            dpt->heads     = 0xffffffff;
-            dpt->spt       = 0xffffffff;
-            dpt->blksize   = blksize;
-            dpt->sector_count1 = 0xffffffff;  // FIXME should be Bit64
-            dpt->sector_count2 = 0xffffffff;
-        }
-
-        // EDD 2.x
-        if(size >= 0x1e) {
-            uint8_t     channel, irq, mode, checksum, i;
-            uint16_t    iobase1, iobase2, options;
-
-            dpt->size = 0x1e;
-            dpt->dpte_segment = ebda_seg;
-            dpt->dpte_offset  = (uint16_t)&EbdaData->bdisk.dpte;
-
-            // Fill in dpte
-            channel = device / 2;
-            iobase1 = bios_dsk->channels[channel].iobase1;
-            iobase2 = bios_dsk->channels[channel].iobase2;
-            irq     = bios_dsk->channels[channel].irq;
-            mode    = bios_dsk->devices[device].mode;
-
-            // FIXME atapi device
-            options  = (1<<4); // lba translation
-            options |= (1<<5); // removable device
-            options |= (1<<6); // atapi device
-#if VBOX_BIOS_CPU >= 80386
-            options |= (mode==ATA_MODE_PIO32?1:0<<7);
-#endif
-
-            bios_dsk->dpte.iobase1  = iobase1;
-            bios_dsk->dpte.iobase2  = iobase2;
-            bios_dsk->dpte.prefix   = (0xe | (device % 2))<<4;
-            bios_dsk->dpte.unused   = 0xcb;
-            bios_dsk->dpte.irq      = irq;
-            bios_dsk->dpte.blkcount = 1 ;
-            bios_dsk->dpte.dma      = 0;
-            bios_dsk->dpte.pio      = 0;
-            bios_dsk->dpte.options  = options;
-            bios_dsk->dpte.reserved = 0;
-            bios_dsk->dpte.revision = 0x11;
-
-            checksum = 0;
-            for (i = 0; i < 15; ++i)
-                checksum += read_byte(ebda_seg, (uint16_t)&EbdaData->bdisk.dpte + i);
-            checksum = -checksum;
-            bios_dsk->dpte.checksum = checksum;
-        }
-
-        // EDD 3.x
-        if(size >= 0x42) {
-            uint8_t     channel, iface, checksum, i;
-            uint16_t    iobase1;
-
-            channel = device / 2;
-            iface   = bios_dsk->channels[channel].iface;
-            iobase1 = bios_dsk->channels[channel].iobase1;
-
-            dpt->size       = 0x42;
-            dpt->key        = 0xbedd;
-            dpt->dpi_length = 0x24;
-            dpt->reserved1  = 0;
-            dpt->reserved2  = 0;
-
-            if (iface == ATA_IFACE_ISA) {
-                dpt->host_bus[0] = 'I';
-                dpt->host_bus[1] = 'S';
-                dpt->host_bus[2] = 'A';
-                dpt->host_bus[3] = ' ';
-            }
-            else {
-                // FIXME PCI
-            }
-            dpt->iface_type[0] = 'A';
-            dpt->iface_type[1] = 'T';
-            dpt->iface_type[2] = 'A';
-            dpt->iface_type[3] = ' ';
-            dpt->iface_type[4] = ' ';
-            dpt->iface_type[5] = ' ';
-            dpt->iface_type[6] = ' ';
-            dpt->iface_type[7] = ' ';
-
-            if (iface == ATA_IFACE_ISA) {
-                ((uint16_t __far *)dpt->iface_path)[0] = iobase1;
-                ((uint16_t __far *)dpt->iface_path)[1] = 0;
-                ((uint32_t __far *)dpt->iface_path)[1] = 0;
-            }
-            else {
-                // FIXME PCI
-            }
-            ((uint16_t __far *)dpt->device_path)[0] = device & 1;
-            ((uint16_t __far *)dpt->device_path)[1] = 0;
-            ((uint32_t __far *)dpt->device_path)[1] = 0;
-
-            checksum = 0;
-            for (i = 30; i < 64; ++i)
-                checksum += ((uint8_t __far *)dpt)[i];
-            checksum = -checksum;
-            dpt->checksum = checksum;
-        }
-
-        goto int13_success;
+        else
+            goto int13_success;
         break;
 
     case 0x49: // IBM/MS extended media change

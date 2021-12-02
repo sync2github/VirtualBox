@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3kit.mac 92256 2021-11-08 08:33:27Z vboxsync $
 ;; @file
 ; BS3Kit - structures, symbols, macros and stuff.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -688,8 +688,8 @@ BS3_GLOBAL_NAME_EX %1 %+ _EndProc, function hidden, (%1 %+ _EndProc - %1)
 ;; @{
 %define BS3_PBC_NEAR          1 ;;< Only near.
 %define BS3_PBC_FAR           2 ;;< Only far.
-%define BS3_PBC_HYBRID        3 ;;< Hybrid near/far procedure, trashing AX
-%define BS3_PBC_HYBRID_SAFE   4 ;;< Hybrid near/far procedure, no trashing but slower.
+%define BS3_PBC_HYBRID        3 ;;< Hybrid near/far procedure, trashing AX. Use BS3_HYBRID_RET to return.
+%define BS3_PBC_HYBRID_SAFE   4 ;;< Hybrid near/far procedure, no trashing but slower. Use BS3_HYBRID_RET to return.
 %define BS3_PBC_HYBRID_0_ARGS 5 ;;< Hybrid near/far procedure, no parameters so separate far stub, no trashing, fast near calls.
 ;; @}
 
@@ -1416,6 +1416,33 @@ AssertCompileSize(BS3REGCTX, 0xd0)
 %define BS3REG_CTX_F_NO_AMD64           0x10
 ;; @}
 
+
+;; @name Flags for Bs3RegCtxRestore
+; @{
+;; Skip restoring the CRx registers.
+%define BS3REGCTXRESTORE_F_SKIP_CRX         1
+;; Sets g_fBs3TrapNoV86Assist.
+%define BS3REGCTXRESTORE_F_NO_V86_ASSIST    2
+;; @}
+
+
+;;
+; BS3 extended register context (FPU, SSE, AVX, ++)
+;
+struc BS3EXTCTX
+        .u16Magic       resw 1          ; uint16_t            u16Magic;
+        .cb             resw 1          ; uint16_t            cb;
+        .enmMethod      resb 1          ; uint8_t             enmMethod;
+        alignb           8
+        .fXcr0Nominal   resq 1          ; uint64_t            fXcr0Nominal;
+        .fXcr0Saved     resq 1          ; uint64_t            fXcr0Saved;
+        alignb           64
+        .Ctx            resb 512
+endstruc
+%define BS3EXTCTXMETHOD_ANCIENT     1
+%define BS3EXTCTXMETHOD_FXSAVE      2
+%define BS3EXTCTXMETHOD_XSAVE       3
+
 ;;
 ; BS3 Trap Frame.
 ;
@@ -1431,10 +1458,6 @@ struc BS3TRAPFRAME
         .Ctx            resb BS3REGCTX_size
 endstruc
 AssertCompileSize(BS3TRAPFRAME, 0x20 + 0xd0)
-
-;; Flag for Bs3TrapXxResumeFrame methods.
-%define BS3TRAPRESUME_F_SKIP_CRX 1
-
 
 ;;
 ; Trap record.
@@ -1475,8 +1498,24 @@ endstruc
 %define BS3_SYSCALL_TO_RING3        0006h
 ;; Restore context (pointer in cx:xDI, flags in dx).
 %define BS3_SYSCALL_RESTORE_CTX     0007h
+;; Set DRx register (value in ESI, register number in dl).
+%define BS3_SYSCALL_SET_DRX         0008h
+;; GET DRx register (register number in dl, value returned in ax:dx).
+%define BS3_SYSCALL_GET_DRX         0009h
+;; Set CRx register (value in ESI, register number in dl).
+%define BS3_SYSCALL_SET_CRX         000ah
+;; Get CRx register (register number in dl, value returned in ax:dx).
+%define BS3_SYSCALL_GET_CRX         000bh
+;; Set the task register (value in dx). */
+%define BS3_SYSCALL_SET_TR          000ch
+;; Get the task register (value returned in ax).
+%define BS3_SYSCALL_GET_TR          000dh
+;; Set the LDT register (value in dx).
+%define BS3_SYSCALL_SET_LDTR        000eh
+;; Get the LDT register (value returned in ax).
+%define BS3_SYSCALL_GET_LDTR        000fh
 ;; The last system call value.
-%define BS3_SYSCALL_LAST            BS3_SYSCALL_RESTORE_CTX
+%define BS3_SYSCALL_LAST            BS3_SYSCALL_GET_LDTR
 ;; @}
 
 
@@ -1702,8 +1741,10 @@ endstruc
 %define BS3CPU_F_PSE                0x0800
 %define BS3CPU_F_PSE_BIT            11
 %define BS3CPU_F_LONG_MODE          0x1000
+%define BS3CPU_F_LONG_MODE_BIT      12
+%define BS3CPU_F_NX                 0x2000
+%define BS3CPU_F_NX_BIT             13
 ;; @}
-
 
 %endif
 

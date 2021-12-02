@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRand.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Testcase for the RTRand API.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,6 +29,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <iprt/rand.h>
+#include <iprt/errcore.h>
 #include <iprt/stream.h>
 #include <iprt/initterm.h>
 #include <iprt/string.h>

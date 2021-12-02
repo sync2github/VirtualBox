@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fileaio.h 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT - Internal RTFileAio header.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_fileaio_h
-#define ___internal_fileaio_h
+#ifndef IPRT_INCLUDED_INTERNAL_fileaio_h
+#define IPRT_INCLUDED_INTERNAL_fileaio_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/file.h>
 #include "internal/magics.h"
@@ -54,7 +57,7 @@ typedef enum RTFILEAIOREQSTATE
 
 /** Return true if the specified request is not valid, false otherwise. */
 #define RTFILEAIOREQ_IS_NOT_VALID(pReq) \
-    (RT_UNLIKELY(!VALID_PTR(pReq) || (pReq->u32Magic != RTFILEAIOREQ_MAGIC)))
+    (RT_UNLIKELY(!RT_VALID_PTR(pReq) || (pReq->u32Magic != RTFILEAIOREQ_MAGIC)))
 
 /** Validates a context handle and returns VERR_INVALID_HANDLE if not valid. */
 #define RTFILEAIOREQ_VALID_RETURN_RC(pReq, rc) \
@@ -116,5 +119,5 @@ RT_C_DECLS_BEGIN
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_fileaio_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineSettingsPortForwardingDlg.cpp 87245 2021-01-14 09:52:29Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineSettingsPortForwardingDlg class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,21 +15,16 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QVBoxLayout>
-# include <QPushButton>
+#include <QVBoxLayout>
+#include <QPushButton>
 
 /* GUI includes: */
-# include "UIMachineSettingsPortForwardingDlg.h"
-# include "UIIconPool.h"
-# include "UIMessageCenter.h"
-# include "QIDialogButtonBox.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "UIDesktopWidgetWatchdog.h"
+#include "UIMachineSettingsPortForwardingDlg.h"
+#include "UIIconPool.h"
+#include "UIMessageCenter.h"
+#include "QIDialogButtonBox.h"
 
 
 UIMachineSettingsPortForwardingDlg::UIMachineSettingsPortForwardingDlg(QWidget *pParent,
@@ -46,12 +41,18 @@ UIMachineSettingsPortForwardingDlg::UIMachineSettingsPortForwardingDlg(QWidget *
     {
         /* Create table: */
         m_pTable = new UIPortForwardingTable(rules, false, true);
+        {
+            /* Configure table: */
+            m_pTable->layout()->setContentsMargins(0, 0, 0, 0);
+        }
         /* Create button-box: */
         m_pButtonBox = new QIDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal);
         {
             /* Configure button-box: */
-            connect(m_pButtonBox->button(QDialogButtonBox::Ok), SIGNAL(clicked()), this, SLOT(accept()));
-            connect(m_pButtonBox->button(QDialogButtonBox::Cancel), SIGNAL(clicked()), this, SLOT(reject()));
+            connect(m_pButtonBox->button(QDialogButtonBox::Ok), &QPushButton::clicked,
+                    this, &UIMachineSettingsPortForwardingDlg::accept);
+            connect(m_pButtonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
+                    this, &UIMachineSettingsPortForwardingDlg::reject);
         }
         /* Add widgets into layout: */
         pMainLayout->addWidget(m_pTable);
@@ -60,6 +61,9 @@ UIMachineSettingsPortForwardingDlg::UIMachineSettingsPortForwardingDlg(QWidget *
 
     /* Retranslate dialog: */
     retranslateUi();
+
+    /* Limit the minimum size to 33% of screen size: */
+    setMinimumSize(gpDesktop->screenGeometry(this).size() / 3);
 }
 
 const UIPortForwardingDataList UIMachineSettingsPortForwardingDlg::rules() const
@@ -94,4 +98,3 @@ void UIMachineSettingsPortForwardingDlg::retranslateUi()
     /* Set window title: */
     setWindowTitle(tr("Port Forwarding Rules"));
 }
-

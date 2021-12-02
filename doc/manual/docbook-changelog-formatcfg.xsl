@@ -2,8 +2,8 @@
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
 
 <!-- Single html file template -->
-<xsl:import href="@VBOX_PATH_DOCBOOK@/html/docbook.xsl"/>
-<xsl:import href="@VBOX_PATH_MANUAL_SRC@/common-formatcfg.xsl"/>
+<xsl:import href="html/docbook.xsl"/>
+<xsl:import href="common-formatcfg.xsl"/>
 
 <!-- Adjust some params -->
 <!--
@@ -32,7 +32,7 @@
      position: absolute;
      margin: 0px 0 0 0;
    }
-   h2 
+   h2
    {
      text-decoration: none;
      font-size: 1.2em;
@@ -43,19 +43,19 @@
      -moz-border-radius: 0.3em;
      background: #e6edff;  /* #d7e9a7; */
    }
-   #watermark 
-   { 
-     margin: 0; 
-     position: fixed; 
+   #watermark
+   {
+     margin: 0;
+     position: fixed;
      top: 40%;
-     color: #eeeeee; 
-     width: 100%; 
-     height: 100%; 
-     text-align: center; 
-     vertical-align: middle; 
+     color: #eeeeee;
+     width: 100%;
+     height: 100%;
+     text-align: center;
+     vertical-align: middle;
      font-size: 9em;
-     font-weight: bold; 
-     z-index:-1; 
+     font-weight: bold;
+     z-index:-1;
    }
    -->
   </xsl:comment>

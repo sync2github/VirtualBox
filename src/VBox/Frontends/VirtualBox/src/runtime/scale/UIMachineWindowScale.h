@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineWindowScale.h 90567 2021-08-07 11:50:28Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineWindowScale class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineWindowScale_h___
-#define ___UIMachineWindowScale_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_scale_UIMachineWindowScale_h
+#define FEQT_INCLUDED_SRC_runtime_scale_UIMachineWindowScale_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UIMachineWindow.h"
@@ -36,6 +39,8 @@ private:
 
     /** Prepare main-layout routine. */
     void prepareMainLayout();
+    /** Prepare notification-center routine. */
+    void prepareNotificationCenter();
 #ifdef VBOX_WS_MAC
     /** Prepare visual-state routine. */
     void prepareVisualState();
@@ -43,12 +48,12 @@ private:
     /** Load settings routine. */
     void loadSettings();
 
-    /** Save settings routine. */
-    void saveSettings();
 #ifdef VBOX_WS_MAC
     /** Cleanup visual-state routine. */
     void cleanupVisualState();
 #endif /* VBOX_WS_MAC */
+    /** Cleanup notification-center routine. */
+    void cleanupNotificationCenter();
 
     /** Updates visibility according to visual-state. */
     void showInNecessaryMode();
@@ -57,27 +62,23 @@ private:
     virtual void restoreCachedGeometry() /* override */;
 
     /** Performs window geometry normalization according to guest-size and host's available geometry.
-      * @param  fAdjustPosition  Determines whether is it necessary to adjust position as well. */
-    virtual void normalizeGeometry(bool fAdjustPosition) /* override */;
+      * @param  fAdjustPosition        Determines whether is it necessary to adjust position as well.
+      * @param  fResizeToGuestDisplay  Determines whether is it necessary to resize the window to fit to guest display size. */
+    virtual void normalizeGeometry(bool fAdjustPosition, bool fResizeToGuestDisplay) /* override */;
 
     /** Common @a pEvent handler. */
     bool event(QEvent *pEvent);
-#ifdef VBOX_WS_WIN
-# if QT_VERSION < 0x050000
-    /** Qt4: Win: Handles all native messages. */
-    bool winEvent(MSG *pMessage, long *pResult);
-# endif /* QT_VERSION < 0x050000 */
-#endif /* VBOX_WS_WIN */
 
     /** Returns whether this window is maximized. */
     bool isMaximizedChecked();
 
     /** Holds the current window geometry. */
-    QRect m_normalGeometry;
+    QRect  m_geometry;
+    /** Holds the geometry save timer ID. */
+    int  m_iGeometrySaveTimerId;
 
     /** Factory support. */
     friend class UIMachineWindow;
 };
 
-#endif /* !___UIMachineWindowScale_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_runtime_scale_UIMachineWindowScale_h */

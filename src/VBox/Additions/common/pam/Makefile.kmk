@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 86824 2020-11-06 13:00:51Z vboxsync $
 ## @file
 # Makefile for VBox PAM module for automated logons.
 #
 
 #
-# Copyright (C) 2011-2016 Oracle Corporation
+# Copyright (C) 2011-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,7 @@ DLLS += pam_vbox
 
 pam_vbox_TEMPLATE = VBOXGUESTR3DLL
 pam_vbox_DEFS     = LOG_TO_BACKDOOR VBOX_WITH_HGCM
-pam_vbox_DEFS    += \
-	$(if $(VBOX_WITH_GUEST_PROPS),VBOX_WITH_GUEST_PROPS,)
+pam_vbox_DEFS    += VBOX_WITH_GUEST_PROPS
 pam_vbox_SOURCES  = pam_vbox.cpp
 pam_vbox_LIBS = \
 	pam \

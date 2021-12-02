@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCredProvPoller.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxCredPoller - Thread for querying / retrieving user credentials.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -21,9 +21,7 @@
 *********************************************************************************************************************************/
 #include <iprt/win/windows.h>
 
-#include <VBox/VBoxGuest.h>
 #include <VBox/VBoxGuestLib.h>
-#include <VBox/VMMDev.h>
 #include <iprt/string.h>
 
 #include "VBoxCredProvProvider.h"
@@ -33,9 +31,9 @@
 #include "VBoxCredProvUtils.h"
 
 
-VBoxCredProvPoller::VBoxCredProvPoller(void) :
-    m_hThreadPoller(NIL_RTTHREAD),
-    m_pProv(NULL)
+VBoxCredProvPoller::VBoxCredProvPoller(void)
+    : m_hThreadPoller(NIL_RTTHREAD)
+    , m_pProv(NULL)
 {
 }
 
@@ -147,4 +145,3 @@ VBoxCredProvPoller::threadPoller(RTTHREAD hThreadSelf, void *pvUser)
 
     return VINF_SUCCESS;
 }
-

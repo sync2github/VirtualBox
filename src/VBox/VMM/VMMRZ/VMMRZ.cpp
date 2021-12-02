@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VMMRZ.cpp 90953 2021-08-27 12:45:24Z vboxsync $ */
 /** @file
  * VMM - Virtual Machine Monitor, Raw-mode and ring-0 context code.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,9 +19,10 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_VMM
 #include <VBox/vmm/vmm.h>
 #include "VMMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 #include <VBox/err.h>
 
 #include <iprt/assert.h>
@@ -43,7 +44,7 @@
  * @param   enmOperation    The operation.
  * @param   uArg            The argument to the operation.
  */
-VMMRZDECL(int) VMMRZCallRing3(PVM pVM, PVMCPU pVCpu, VMMCALLRING3 enmOperation, uint64_t uArg)
+VMMRZDECL(int) VMMRZCallRing3(PVMCC pVM, PVMCPUCC pVCpu, VMMCALLRING3 enmOperation, uint64_t uArg)
 {
     VMCPU_ASSERT_EMT(pVCpu);
 
@@ -69,10 +70,12 @@ VMMRZDECL(int) VMMRZCallRing3(PVM pVM, PVMCPU pVCpu, VMMCALLRING3 enmOperation, 
 #endif
 #ifdef IN_RC
         RTStrPrintf(g_szRTAssertMsg1, sizeof(pVM->vmm.s.szRing0AssertMsg1),
-                    "VMMRZCallRing3: enmOperation=%d uArg=%#llx idCpu=%#x\n", enmOperation, uArg, pVCpu->idCpu);
+                    "VMMRZCallRing3: enmOperation=%d uArg=%#llx idCpu=%#x cCallRing3Disabled=%#x\n",
+                    enmOperation, uArg, pVCpu->idCpu, pVCpu->vmm.s.cCallRing3Disabled);
 #endif
         RTStrPrintf(pVM->vmm.s.szRing0AssertMsg1, sizeof(pVM->vmm.s.szRing0AssertMsg1),
-                    "VMMRZCallRing3: enmOperation=%d uArg=%#llx idCpu=%#x\n", enmOperation, uArg, pVCpu->idCpu);
+                    "VMMRZCallRing3: enmOperation=%d uArg=%#llx idCpu=%#x cCallRing3Disabled=%#x\n",
+                    enmOperation, uArg, pVCpu->idCpu, pVCpu->vmm.s.cCallRing3Disabled);
         enmOperation = VMMCALLRING3_VM_R0_ASSERTION;
     }
 
@@ -113,7 +116,7 @@ VMMRZDECL(int) VMMRZCallRing3(PVM pVM, PVMCPU pVCpu, VMMCALLRING3 enmOperation, 
  * @param   enmOperation    The operation.
  * @param   uArg            The argument to the operation.
  */
-VMMRZDECL(int) VMMRZCallRing3NoCpu(PVM pVM, VMMCALLRING3 enmOperation, uint64_t uArg)
+VMMRZDECL(int) VMMRZCallRing3NoCpu(PVMCC pVM, VMMCALLRING3 enmOperation, uint64_t uArg)
 {
     return VMMRZCallRing3(pVM, VMMGetCpu(pVM), enmOperation, uArg);
 }
@@ -125,7 +128,7 @@ VMMRZDECL(int) VMMRZCallRing3NoCpu(PVM pVM, VMMCALLRING3 enmOperation, uint64_t 
  * @param   pVCpu               The cross context virtual CPU structure of the calling EMT.
  * @thread  EMT.
  */
-VMMRZDECL(void) VMMRZCallRing3Disable(PVMCPU pVCpu)
+VMMRZDECL(void) VMMRZCallRing3Disable(PVMCPUCC pVCpu)
 {
     VMCPU_ASSERT_EMT(pVCpu);
 #if defined(LOG_ENABLED) && defined(IN_RING0)
@@ -135,15 +138,10 @@ VMMRZDECL(void) VMMRZCallRing3Disable(PVMCPU pVCpu)
     Assert(pVCpu->vmm.s.cCallRing3Disabled < 16);
     if (ASMAtomicUoIncU32(&pVCpu->vmm.s.cCallRing3Disabled) == 1)
     {
-        /** @todo it might make more sense to just disable logging here, then we
-         * won't flush away important bits... but that goes both ways really. */
 #ifdef IN_RC
         pVCpu->pVMRC->vmm.s.fRCLoggerFlushingDisabled = true;
 #else
-# ifdef LOG_ENABLED
-        if (pVCpu->vmm.s.pR0LoggerR0)
-            pVCpu->vmm.s.pR0LoggerR0->fFlushingDisabled = true;
-# endif
+        pVCpu->vmmr0.s.fLogFlushingDisabled = true;
 #endif
     }
 
@@ -159,7 +157,7 @@ VMMRZDECL(void) VMMRZCallRing3Disable(PVMCPU pVCpu)
  * @param   pVCpu               The cross context virtual CPU structure of the calling EMT.
  * @thread  EMT.
  */
-VMMRZDECL(void) VMMRZCallRing3Enable(PVMCPU pVCpu)
+VMMRZDECL(void) VMMRZCallRing3Enable(PVMCPUCC pVCpu)
 {
     VMCPU_ASSERT_EMT(pVCpu);
 #if defined(LOG_ENABLED) && defined(IN_RING0)
@@ -172,10 +170,7 @@ VMMRZDECL(void) VMMRZCallRing3Enable(PVMCPU pVCpu)
 #ifdef IN_RC
         pVCpu->pVMRC->vmm.s.fRCLoggerFlushingDisabled = false;
 #else
-# ifdef LOG_ENABLED
-        if (pVCpu->vmm.s.pR0LoggerR0)
-            pVCpu->vmm.s.pR0LoggerR0->fFlushingDisabled = false;
-# endif
+        pVCpu->vmmr0.s.fLogFlushingDisabled = false;
 #endif
     }
 
@@ -191,7 +186,7 @@ VMMRZDECL(void) VMMRZCallRing3Enable(PVMCPU pVCpu)
  * @returns true if it's safe, false if it isn't.
  * @param   pVCpu               The cross context virtual CPU structure of the calling EMT.
  */
-VMMRZDECL(bool) VMMRZCallRing3IsEnabled(PVMCPU pVCpu)
+VMMRZDECL(bool) VMMRZCallRing3IsEnabled(PVMCPUCC pVCpu)
 {
     VMCPU_ASSERT_EMT(pVCpu);
     Assert(pVCpu->vmm.s.cCallRing3Disabled <= 16);
@@ -208,7 +203,7 @@ VMMRZDECL(bool) VMMRZCallRing3IsEnabled(PVMCPU pVCpu)
  *
  * @return VBox status code.
  */
-VMMRZDECL(int) VMMRZCallRing3SetNotification(PVMCPU pVCpu, R0PTRTYPE(PFNVMMR0CALLRING3NOTIFICATION) pfnCallback, RTR0PTR pvUser)
+VMMRZDECL(int) VMMRZCallRing3SetNotification(PVMCPUCC pVCpu, R0PTRTYPE(PFNVMMR0CALLRING3NOTIFICATION) pfnCallback, RTR0PTR pvUser)
 {
     AssertPtrReturn(pVCpu, VERR_INVALID_POINTER);
     AssertPtrReturn(pfnCallback, VERR_INVALID_POINTER);
@@ -227,7 +222,7 @@ VMMRZDECL(int) VMMRZCallRing3SetNotification(PVMCPU pVCpu, R0PTRTYPE(PFNVMMR0CAL
  *
  * @param   pVCpu   The cross context virtual CPU structure.
  */
-VMMRZDECL(void) VMMRZCallRing3RemoveNotification(PVMCPU pVCpu)
+VMMRZDECL(void) VMMRZCallRing3RemoveNotification(PVMCPUCC pVCpu)
 {
     pVCpu->vmm.s.pfnCallRing3CallbackR0 = NULL;
 }
@@ -239,7 +234,7 @@ VMMRZDECL(void) VMMRZCallRing3RemoveNotification(PVMCPU pVCpu)
  * @param   pVCpu   The cross context virtual CPU structure.
  * @returns true if there the notification is active, false otherwise.
  */
-VMMRZDECL(bool) VMMRZCallRing3IsNotificationSet(PVMCPU pVCpu)
+VMMRZDECL(bool) VMMRZCallRing3IsNotificationSet(PVMCPUCC pVCpu)
 {
     return pVCpu->vmm.s.pfnCallRing3CallbackR0 != NULL;
 }

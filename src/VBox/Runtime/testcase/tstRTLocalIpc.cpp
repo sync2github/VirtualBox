@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTLocalIpc.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - RTLocalIpc API.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,7 @@
 
 #include <iprt/asm.h>
 #include <iprt/env.h>
+#include <iprt/err.h>
 #include <iprt/initterm.h>
 #include <iprt/mem.h>
 #include <iprt/message.h>
@@ -361,7 +362,7 @@ static void testSessionWait(const char *pszExecPath)
 
         /*
          * Wait for the server thread to indicate that it has processed one
-         * connection, the shut it all down.
+         * connection, then shut it all down.
          */
         if (RT_SUCCESS(rc))
             RTTESTI_CHECK_RC_OK(RTThreadUserWait(hListenThread, RT_MS_1MIN / 2));
@@ -639,7 +640,7 @@ static void testSessionData(const char *pszExecPath)
 
         /*
          * Wait for the server thread to indicate that it has processed one
-         * connection, the shut it all down.
+         * connection, then shut it all down.
          */
         if (RT_SUCCESS(rc))
             RTTESTI_CHECK_RC_OK(RTThreadUserWait(hListenThread, RT_MS_1MIN * 3));
@@ -838,7 +839,7 @@ static void testSessionPerf(const char *pszExecPath)
 
         /*
          * Wait for the server thread to indicate that it has processed one
-         * connection, the shut it all down.
+         * connection, then shut it all down.
          */
         if (RT_SUCCESS(rc))
             RTTESTI_CHECK_RC_OK(RTThreadUserWait(hListenThread, RT_MS_1MIN / 2));

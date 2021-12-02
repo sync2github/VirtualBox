@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VMAll.cpp 90997 2021-08-30 14:04:48Z vboxsync $ */
 /** @file
  * VM - Virtual Machine All Contexts.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,16 +23,16 @@
 #include "VMInternal.h"
 #include <VBox/vmm/vmm.h>
 #include <VBox/vmm/mm.h>
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 #include <VBox/err.h>
 #include <VBox/log.h>
 
 #include <iprt/assert.h>
 #include <iprt/string.h>
-#ifndef IN_RC
-# include <iprt/thread.h>
-#endif
+#include <iprt/thread.h>
 
+
+#ifdef IN_RING3
 
 /**
  * Sets the error message.
@@ -48,7 +48,7 @@
  * @param   ...             Error message arguments.
  * @thread  Any
  */
-VMMDECL(int) VMSetError(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, ...)
+VMMDECL(int) VMSetError(PVMCC pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, ...)
 {
     va_list args;
     va_start(args, pszFormat);
@@ -72,9 +72,9 @@ VMMDECL(int) VMSetError(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat,
  * @param   args            Error message arguments.
  * @thread  Any
  */
-VMMDECL(int) VMSetErrorV(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, va_list args)
+VMMDECL(int) VMSetErrorV(PVMCC pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, va_list args)
 {
-#ifdef IN_RING3
+# ifdef IN_RING3
     /*
      * Switch to EMT.
      */
@@ -84,13 +84,13 @@ VMMDECL(int) VMSetErrorV(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat
                             pVM->pUVM, rc, RT_SRC_POS_ARGS, pszFormat, &va2);
     va_end(va2);
 
-#else
+# else
     /*
      * We're already on the EMT thread and can safely create a VMERROR chunk.
      */
     vmSetErrorCopy(pVM, rc, RT_SRC_POS_ARGS, pszFormat, args);
     VMMRZCallRing3NoCpu(pVM, VMMCALLRING3_VM_SET_ERROR, 0);
-#endif
+# endif
     return rc;
 }
 
@@ -112,7 +112,7 @@ VMMDECL(int) VMSetErrorV(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat
 void vmSetErrorCopy(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, va_list args)
 {
     NOREF(pVM); NOREF(rc); RT_SRC_POS_NOREF(); NOREF(pszFormat); NOREF(args);
-#if 0 /// @todo implement Ring-0 and GC VMSetError
+# if 0 /// @todo implement Ring-0 and GC VMSetError
     /*
      * Create the untranslated message copy.
      */
@@ -170,9 +170,11 @@ void vmSetErrorCopy(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, va_
         /* done. */
         pVM->vm.s.pErrorR3 = MMHyper2HC(pVM, (uintptr_t)pArgs.pErr);
     }
-#endif
+# endif
 }
 
+#endif /* IN_RING3 */
+#ifdef IN_RING3
 
 /**
  * Sets the runtime error message.
@@ -204,7 +206,7 @@ void vmSetErrorCopy(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, va_
  *
  * @thread  Any
  */
-VMMDECL(int) VMSetRuntimeError(PVM pVM, uint32_t fFlags, const char *pszErrorId, const char *pszFormat, ...)
+VMMDECL(int) VMSetRuntimeError(PVMCC pVM, uint32_t fFlags, const char *pszErrorId, const char *pszFormat, ...)
 {
     va_list va;
     va_start(va, pszFormat);
@@ -229,7 +231,7 @@ VMMDECL(int) VMSetRuntimeError(PVM pVM, uint32_t fFlags, const char *pszErrorId,
  *
  * @thread  Any
  */
-VMMDECL(int) VMSetRuntimeErrorV(PVM pVM, uint32_t fFlags, const char *pszErrorId, const char *pszFormat, va_list va)
+VMMDECL(int) VMSetRuntimeErrorV(PVMCC pVM, uint32_t fFlags, const char *pszErrorId, const char *pszFormat, va_list va)
 {
     Log(("VMSetRuntimeErrorV: fFlags=%#x pszErrorId=%s\n", fFlags, pszErrorId));
 
@@ -246,7 +248,7 @@ VMMDECL(int) VMSetRuntimeErrorV(PVM pVM, uint32_t fFlags, const char *pszErrorId
     AssertPtr(pszFormat);
     Assert(RTStrEnd(pszFormat, 512) != NULL);
 
-#ifdef IN_RING3
+# ifdef IN_RING3
     /*
      * Switch to EMT.
      *
@@ -275,7 +277,7 @@ VMMDECL(int) VMSetRuntimeErrorV(PVM pVM, uint32_t fFlags, const char *pszErrorId
             MMR3HeapFree(pszMessage);
     }
 
-#else
+# else
     /*
      * We're already on the EMT and can safely create a VMRUNTIMEERROR chunk.
      */
@@ -283,7 +285,7 @@ VMMDECL(int) VMSetRuntimeErrorV(PVM pVM, uint32_t fFlags, const char *pszErrorId
     vmSetRuntimeErrorCopy(pVM, fFlags, pszErrorId, pszFormat, va);
 
     int rc = VMMRZCallRing3NoCpu(pVM, VMMCALLRING3_VM_SET_RUNTIME_ERROR, 0);
-#endif
+# endif
 
     Log(("VMSetRuntimeErrorV: returns %Rrc (pszErrorId=%s)\n", rc, pszErrorId));
     return rc;
@@ -308,7 +310,7 @@ VMMDECL(int) VMSetRuntimeErrorV(PVM pVM, uint32_t fFlags, const char *pszErrorId
 void vmSetRuntimeErrorCopy(PVM pVM, uint32_t fFlags, const char *pszErrorId, const char *pszFormat, va_list va)
 {
     NOREF(pVM); NOREF(fFlags); NOREF(pszErrorId); NOREF(pszFormat); NOREF(va);
-#if 0 /// @todo implement Ring-0 and GC VMSetError
+# if 0 /// @todo implement Ring-0 and GC VMSetError
     /*
      * Create the untranslated message copy.
      */
@@ -357,9 +359,10 @@ void vmSetRuntimeErrorCopy(PVM pVM, uint32_t fFlags, const char *pszErrorId, con
         /* done. */
         pVM->vm.s.pErrorRuntimeR3 = MMHyper2HC(pVM, (uintptr_t)pArgs.pErr);
     }
-#endif
+# endif
 }
 
+#endif /* IN_RING3 */
 
 /**
  * Gets the name of VM state.
@@ -388,5 +391,44 @@ VMMDECL(const char *) VMGetStateName(VMSTATE enmState)
         default:
             return "Unknown";
     }
+}
+
+
+/**
+ * Gets the total reset count.
+ *
+ * @returns Reset count. UINT32_MAX if @a pVM is invalid.
+ * @param   pVM         The VM handle.
+ */
+VMMDECL(uint32_t) VMGetResetCount(PVMCC pVM)
+{
+    VM_ASSERT_VALID_EXT_RETURN(pVM, UINT32_MAX);
+    return pVM->vm.s.cResets;
+}
+
+
+/**
+ * Gets the soft reset count.
+ *
+ * @returns Soft reset count. UINT32_MAX if @a pVM is invalid.
+ * @param   pVM         The VM handle.
+ */
+VMMDECL(uint32_t) VMGetSoftResetCount(PVMCC pVM)
+{
+    VM_ASSERT_VALID_EXT_RETURN(pVM, UINT32_MAX);
+    return pVM->vm.s.cSoftResets;
+}
+
+
+/**
+ * Gets the hard reset count.
+ *
+ * @returns Hard reset count. UINT32_MAX if @a pVM is invalid.
+ * @param   pVM         The VM handle.
+ */
+VMMDECL(uint32_t) VMGetHardResetCount(PVMCC pVM)
+{
+    VM_ASSERT_VALID_EXT_RETURN(pVM, UINT32_MAX);
+    return pVM->vm.s.cHardResets;
 }
 

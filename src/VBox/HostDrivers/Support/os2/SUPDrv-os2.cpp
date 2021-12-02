@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: SUPDrv-os2.cpp 91789 2021-10-17 18:16:11Z vboxsync $ */
 /** @file
  * VBoxDrv - The VirtualBox Support Driver - OS/2 specifics.
  */
@@ -125,7 +125,7 @@ DECLASM(int) VBoxDrvInit(const char *pszArgs)
                            "\r\n"
                            "VirtualBox.org Support Driver for OS/2 version " VBOX_VERSION_STRING "\r\n"
                            "Copyright (C) 2007 Knut St. Osmundsen\r\n"
-                           "Copyright (C) 2007-2016 Oracle Corporation\r\n");
+                           "Copyright (C) 2007-2020 Oracle Corporation\r\n");
                     g_cchInitText = strlen(&g_szInitText[0]);
                 }
                 return VINF_SUCCESS;
@@ -258,9 +258,13 @@ DECLASM(int) VBoxDrvIOCtlFast(uint16_t sfn, uint8_t iFunction)
     /*
      * Dispatch the fast IOCtl.
      */
-    supdrvIOCtlFast(iFunction, 0, &g_DevExt, pSession);
+    int rc;
+    if ((unsigned)(iFunction - SUP_IOCTL_FAST_DO_FIRST) < (unsigned)32)
+        rc = supdrvIOCtlFast(iFunction, 0, &g_DevExt, pSession);
+    else
+        rc = VERR_INVALID_FUNCTION;
     supdrvSessionRelease(pSession);
-    return 0;
+    return rc;
 }
 
 
@@ -427,9 +431,10 @@ int  VBOXCALL   supdrvOSLdrOpen(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
 }
 
 
-int  VBOXCALL   supdrvOSLdrValidatePointer(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, void *pv, const uint8_t *pbImageBits)
+int  VBOXCALL   supdrvOSLdrValidatePointer(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, void *pv,
+                                           const uint8_t *pbImageBits, const char *pszSymbol)
 {
-    NOREF(pDevExt); NOREF(pImage); NOREF(pv); NOREF(pbImageBits);
+    NOREF(pDevExt); NOREF(pImage); NOREF(pv); NOREF(pbImageBits); NOREF(pszSymbol);
     return VERR_NOT_SUPPORTED;
 }
 
@@ -458,6 +463,27 @@ void VBOXCALL   supdrvOSLdrNotifyUnloaded(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE
     NOREF(pDevExt); NOREF(pImage);
 }
 
+
+int  VBOXCALL   supdrvOSLdrQuerySymbol(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage,
+                                       const char *pszSymbol, size_t cchSymbol, void **ppvSymbol)
+{
+    RT_NOREF(pDevExt, pImage, pszSymbol, cchSymbol, ppvSymbol);
+    return VERR_WRONG_ORDER;
+}
+
+
+void VBOXCALL   supdrvOSLdrRetainWrapperModule(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
+{
+    RT_NOREF(pDevExt, pImage);
+    AssertFailed();
+}
+
+
+void VBOXCALL   supdrvOSLdrReleaseWrapperModule(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
+{
+    RT_NOREF(pDevExt, pImage);
+    AssertFailed();
+}
 
 #ifdef SUPDRV_WITH_MSR_PROBER
 
@@ -509,21 +535,17 @@ static DECLCALLBACK(size_t) VBoxDrvLogOutput(void *pvArg, const char *pachChars,
 }
 
 
-SUPR0DECL(int) SUPR0Printf(const char *pszFormat, ...)
+SUPR0DECL(int) SUPR0PrintfV(const char *pszFormat, va_list va)
 {
-    va_list va;
-
 #if 0 //def DEBUG_bird
-    va_start(va, pszFormat);
-    RTLogComPrintfV(pszFormat, va);
-    va_end(va);
+    va_list va2;
+    va_copy(va2, va);
+    RTLogComPrintfV(pszFormat, va2);
+    va_end(va2);
 #endif
 
-    va_start(va, pszFormat);
-    int cch = RTLogFormatV(VBoxDrvLogOutput, NULL, pszFormat, va);
-    va_end(va);
-
-    return cch;
+    RTLogFormatV(VBoxDrvLogOutput, NULL, pszFormat, va);
+    return 0;
 }
 
 

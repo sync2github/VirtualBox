@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: sched-os2.cpp 86525 2020-10-11 18:28:52Z vboxsync $ */
 /** @file
  * IPRT - Scheduling, OS/2
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -40,7 +40,7 @@
 #include <iprt/thread.h>
 #include <iprt/log.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include "internal/sched.h"
 #include "internal/thread.h"
 
@@ -196,34 +196,27 @@ DECLHIDDEN(int) rtSchedNativeCalcDefaultPriority(RTTHREADTYPE enmType)
 }
 
 
-/**
- * Validates and sets the process priority.
- * This will check that all rtThreadNativeSetPriority() will success for all the
- * thread types when applied to the current thread.
- *
- * @returns iprt status code.
- * @param   enmPriority     The priority to validate and set.
- * @remark  Located in sched.
- */
 DECLHIDDEN(int) rtProcNativeSetPriority(RTPROCPRIORITY enmPriority)
 {
     Assert(enmPriority > RTPROCPRIORITY_INVALID && enmPriority < RTPROCPRIORITY_LAST);
-    return VINF_SUCCESS;
+
+    if (enmPriority == RTPROCPRIORITY_DEFAULT)
+    {
+        g_pProcessPriority = &g_aDefaultPriority;
+        return VINF_SUCCESS;
+    }
+
+    for (size_t i = 0; i < RT_ELEMENTS(g_aPriorities); i++)
+        if (g_aPriorities[i].enmPriority == enmPriority)
+        {
+            g_pProcessPriority = &g_aPriorities[i];
+            return VINF_SUCCESS;
+        }
+
+    AssertFailedReturn(VERR_INTERNAL_ERROR);
 }
 
 
-/**
- * Sets the priority of the thread according to the thread type
- * and current process priority.
- *
- * The RTTHREADINT::enmType member has not yet been updated and will be updated by
- * the caller on a successful return.
- *
- * @returns iprt status code.
- * @param   pThread     The thread in question.
- * @param   enmType     The thread type.
- * @remark  Located in sched.
- */
 DECLHIDDEN(int) rtThreadNativeSetPriority(PRTTHREADINT pThread, RTTHREADTYPE enmType)
 {
     Assert(enmType > RTTHREADTYPE_INVALID && enmType < RTTHREADTYPE_END);

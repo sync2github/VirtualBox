@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: libslirp.h 92093 2021-10-27 08:18:16Z vboxsync $ */
 /** @file
  * NAT - slirp interface.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -46,7 +46,7 @@ struct mbuf;
 extern "C" {
 #endif
 
-int slirp_init(PNATState *, uint32_t, uint32_t, bool, bool, int, int, void *);
+int slirp_init(PNATState *, uint32_t, uint32_t, bool, bool, int, int, bool, void *);
 void slirp_register_statistics(PNATState pData, PPDMDRVINS pDrvIns);
 void slirp_deregister_statistics(PNATState pData, PPDMDRVINS pDrvIns);
 void slirp_term(PNATState);

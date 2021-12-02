@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: asn1-ut-core-decode.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - ASN.1, Generic Core Type, Decoding.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 #include "internal/iprt.h"
 #include <iprt/asn1.h>
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/string.h>
 
 

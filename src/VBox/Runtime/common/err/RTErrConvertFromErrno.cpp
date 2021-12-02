@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTErrConvertFromErrno.cpp 85581 2020-07-31 15:45:56Z vboxsync $ */
 /** @file
  * IPRT - Convert errno to iprt status codes.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,14 +31,15 @@
 #include <iprt/err.h>
 #include "internal/iprt.h"
 
+#include <iprt/log.h>
 #include <iprt/assert.h>
 #include <iprt/errno.h>
 
 
-RTDECL(int)  RTErrConvertFromErrno(unsigned uNativeCode)
+RTDECL(int)  RTErrConvertFromErrno(int iNativeCode)
 {
     /* very fast check for no error. */
-    if (uNativeCode == 0)
+    if (iNativeCode == 0)
         return VINF_SUCCESS;
 
     /*
@@ -50,7 +51,7 @@ RTDECL(int)  RTErrConvertFromErrno(unsigned uNativeCode)
      * This switch is arranged like the Linux i386 errno.h! This switch is mirrored
      * by RTErrConvertToErrno.
      */
-    switch (uNativeCode)
+    switch (iNativeCode)
     {                                                                           /* Linux number */
 #ifdef EPERM
         case EPERM:             return VERR_ACCESS_DENIED;                      /*   1 */
@@ -388,13 +389,17 @@ RTDECL(int)  RTErrConvertFromErrno(unsigned uNativeCode)
         case EHOSTUNREACH:      return VERR_NET_HOST_UNREACHABLE;
 #endif
 #ifdef EALREADY
+# if !defined(ENOLCK) || (EALREADY != ENOLCK)
         case EALREADY:          return VERR_NET_ALREADY_IN_PROGRESS;
+# endif
 #endif
 #ifdef EINPROGRESS
+# if !defined(ENODEV) || (EINPROGRESS != ENODEV)
         case EINPROGRESS:       return VERR_NET_IN_PROGRESS;
+# endif
 #endif
 #ifdef ESTALE
-        //case ESTALE           116     /* Stale NFS file handle */
+        case ESTALE:            return VERR_STALE_FILE_HANDLE; /* 116: Stale NFS file handle */
 #endif
 #ifdef EUCLEAN
         //case EUCLEAN          117     /* Structure needs cleaning */
@@ -444,7 +449,7 @@ RTDECL(int)  RTErrConvertFromErrno(unsigned uNativeCode)
 # endif
 #endif
         default:
-            AssertMsgFailed(("Unhandled error code %d\n", uNativeCode));
+            AssertLogRelMsgFailed(("Unhandled error code %d\n", iNativeCode));
             return VERR_UNRESOLVED_ERROR;
     }
 }

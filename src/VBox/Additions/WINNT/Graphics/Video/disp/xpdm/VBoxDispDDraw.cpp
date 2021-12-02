@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxDispDDraw.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox XPDM Display driver, DirectDraw callbacks
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,16 +23,14 @@
 /* Called to check if our driver can create surface with requested attributes */
 DWORD APIENTRY VBoxDispDDCanCreateSurface(PDD_CANCREATESURFACEDATA lpCanCreateSurface)
 {
-    PVBOXDISPDEV pDev = (PVBOXDISPDEV) lpCanCreateSurface->lpDD->dhpdev;
     LOGF_ENTER();
 
     PDD_SURFACEDESC lpDDS = lpCanCreateSurface->lpDDSurfaceDesc;
 
 #ifdef VBOX_WITH_VIDEOHWACCEL
+    PVBOXDISPDEV pDev = (PVBOXDISPDEV) lpCanCreateSurface->lpDD->dhpdev;
     if(pDev->vhwa.bEnabled)
     {
-        VBOXVHWACMD* pCmd;
-
         uint32_t unsupportedSCaps = VBoxDispVHWAUnsupportedDDSCAPS(lpDDS->ddsCaps.dwCaps);
         if(unsupportedSCaps)
         {
@@ -50,12 +47,12 @@ DWORD APIENTRY VBoxDispDDCanCreateSurface(PDD_CANCREATESURFACEDATA lpCanCreateSu
             return DDHAL_DRIVER_HANDLED;
         }
 
-        pCmd = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_CANCREATE, sizeof(VBOXVHWACMD_SURF_CANCREATE));
-        if(pCmd)
+        VBOXVHWACMD RT_UNTRUSTED_VOLATILE_HOST * pCmd
+            = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_CANCREATE, sizeof(VBOXVHWACMD_SURF_CANCREATE));
+        if (pCmd)
         {
             int rc;
-            VBOXVHWACMD_SURF_CANCREATE *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_CANCREATE);
-            memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_CANCREATE));
+            VBOXVHWACMD_SURF_CANCREATE RT_UNTRUSTED_VOLATILE_HOST  *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_CANCREATE);
 
             rc = VBoxDispVHWAFromDDSURFACEDESC(&pBody->SurfInfo, lpDDS);
             pBody->u.in.bIsDifferentPixelFormat = lpCanCreateSurface->bIsDifferentPixelFormat;
@@ -120,7 +117,6 @@ DWORD APIENTRY VBoxDispDDCanCreateSurface(PDD_CANCREATESURFACEDATA lpCanCreateSu
  */
 DWORD APIENTRY VBoxDispDDCreateSurface(PDD_CREATESURFACEDATA lpCreateSurface)
 {
-    PVBOXDISPDEV pDev = (PVBOXDISPDEV) lpCreateSurface->lpDD->dhpdev;
     LOGF_ENTER();
 
     PDD_SURFACE_LOCAL pSurf = lpCreateSurface->lplpSList[0];
@@ -138,18 +134,17 @@ DWORD APIENTRY VBoxDispDDCreateSurface(PDD_CREATESURFACEDATA lpCreateSurface)
     pSurf->lpGbl->dwReserved1 = 0;
 
 #ifdef VBOX_WITH_VIDEOHWACCEL
+    PVBOXDISPDEV pDev = (PVBOXDISPDEV) lpCreateSurface->lpDD->dhpdev;
     if(pDev->vhwa.bEnabled)
     {
-        VBOXVHWACMD* pCmd;
-
-        pCmd = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_CREATE, sizeof(VBOXVHWACMD_SURF_CREATE));
+        VBOXVHWACMD RT_UNTRUSTED_VOLATILE_HOST *pCmd
+            = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_CREATE, sizeof(VBOXVHWACMD_SURF_CREATE));
         if (pCmd)
         {
-            VBOXVHWACMD_SURF_CREATE *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_CREATE);
+            VBOXVHWACMD_SURF_CREATE RT_UNTRUSTED_VOLATILE_HOST *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_CREATE);
             PVBOXVHWASURFDESC pDesc;
             int rc;
 
-            memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_CREATE));
             rc = VBoxDispVHWAFromDDSURFACEDESC(&pBody->SurfInfo, lpCreateSurface->lpDDSurfaceDesc);
             VBOX_WARNRC(rc);
 
@@ -251,25 +246,22 @@ DWORD APIENTRY VBoxDispDDCreateSurface(PDD_CREATESURFACEDATA lpCreateSurface)
  */
 DWORD APIENTRY VBoxDispDDDestroySurface(PDD_DESTROYSURFACEDATA lpDestroySurface)
 {
-    PVBOXDISPDEV pDev = (PVBOXDISPDEV) lpDestroySurface->lpDD->dhpdev;
     LOGF_ENTER();
 
     lpDestroySurface->ddRVal = DD_OK;
 
 #ifdef VBOX_WITH_VIDEOHWACCEL
+    PVBOXDISPDEV pDev = (PVBOXDISPDEV) lpDestroySurface->lpDD->dhpdev;
     if (pDev->vhwa.bEnabled)
     {
-        VBOXVHWACMD* pCmd;
-
-        pCmd = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_DESTROY, sizeof(VBOXVHWACMD_SURF_DESTROY));
+        VBOXVHWACMD RT_UNTRUSTED_VOLATILE_HOST  *pCmd
+            = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_DESTROY, sizeof(VBOXVHWACMD_SURF_DESTROY));
         if (pCmd)
         {
-            VBOXVHWACMD_SURF_DESTROY *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_DESTROY);
             PVBOXVHWASURFDESC pDesc = (PVBOXVHWASURFDESC)lpDestroySurface->lpDDSurface->lpGbl->dwReserved1;
-
             if (pDesc)
             {
-                memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_DESTROY));
+                VBOXVHWACMD_SURF_DESTROY RT_UNTRUSTED_VOLATILE_HOST *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_DESTROY);
                 pBody->u.in.hSurf = pDesc->hHostHandle;
 
                 VBoxDispVHWACommandSubmit(pDev, pCmd);
@@ -403,13 +395,11 @@ DWORD APIENTRY VBoxDispDDLock(PDD_LOCKDATA lpLock)
         }
         else
         {
-            VBOXVHWACMD *pCmd;
-            pCmd = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_LOCK, sizeof(VBOXVHWACMD_SURF_LOCK));
-
+            VBOXVHWACMD RT_UNTRUSTED_VOLATILE_HOST *pCmd
+                = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_LOCK, sizeof(VBOXVHWACMD_SURF_LOCK));
             if (pCmd)
             {
-                VBOXVHWACMD_SURF_LOCK *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_LOCK);
-                memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_LOCK));
+                VBOXVHWACMD_SURF_LOCK RT_UNTRUSTED_VOLATILE_HOST *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_LOCK);
 
                 pBody->u.in.offSurface = VBoxDispVHWAVramOffsetFromPDEV(pDev, pSurf->lpGbl->fpVidMem);
 
@@ -463,13 +453,12 @@ DWORD APIENTRY VBoxDispDDUnlock(PDD_UNLOCKDATA lpUnlock)
     PVBOXDISPDEV pDev = (PVBOXDISPDEV) lpUnlock->lpDD->dhpdev;
     LOGF_ENTER();
 
-    DD_SURFACE_LOCAL *pSurf = lpUnlock->lpDDSurface;
-
     lpUnlock->ddRVal = DD_OK;
 
 #ifdef VBOX_WITH_VIDEOHWACCEL
     if(pDev->vhwa.bEnabled)
     {
+        DD_SURFACE_LOCAL *pSurf = lpUnlock->lpDDSurface;
         PVBOXVHWASURFDESC pDesc = (PVBOXVHWASURFDESC) pSurf->lpGbl->dwReserved1;
 
         if (!pDesc)
@@ -500,13 +489,11 @@ DWORD APIENTRY VBoxDispDDUnlock(PDD_UNLOCKDATA lpUnlock)
         else if ((pSurf->ddsCaps.dwCaps & DDSCAPS_VISIBLE)
                  || ((pSurf->ddsCaps.dwCaps & DDSCAPS_OVERLAY) && pDesc->bVisible))
         {
-            VBOXVHWACMD *pCmd;
-            pCmd = VBoxDispVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_UNLOCK, sizeof(VBOXVHWACMD_SURF_UNLOCK));
-
-            if(pCmd)
+            VBOXVHWACMD RT_UNTRUSTED_VOLATILE_HOST *pCmd
+                = VBoxDispVHWACommandCreate(pDev, VBOXVHWACMD_TYPE_SURF_UNLOCK, sizeof(VBOXVHWACMD_SURF_UNLOCK));
+            if (pCmd)
             {
-                VBOXVHWACMD_SURF_UNLOCK *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_UNLOCK);
-                memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_UNLOCK));
+                VBOXVHWACMD_SURF_UNLOCK RT_UNTRUSTED_VOLATILE_HOST *pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_UNLOCK);
 
                 pBody->u.in.hSurf = pDesc->hHostHandle;
                 if(pDesc->UpdatedMemRegion.bValid)

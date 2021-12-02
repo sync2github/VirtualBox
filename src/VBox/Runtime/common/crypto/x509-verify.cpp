@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: x509-verify.cpp 85627 2020-08-06 00:43:00Z vboxsync $ */
 /** @file
- * IPRT - Crypto - X.509, Signature verficiation.
+ * IPRT - Crypto - X.509, Signature verification.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,6 +31,7 @@
 #include "internal/iprt.h"
 #include <iprt/crypto/x509.h>
 #include <iprt/crypto/pkix.h>
+#include <iprt/crypto/key.h>
 
 #include <iprt/err.h>
 #include <iprt/mem.h>
@@ -75,36 +76,33 @@ RTDECL(int) RTCrX509Certificate_VerifySignature(PCRTCRX509CERTIFICATE pThis, PCR
                              pszCipherOid, pThis->SignatureAlgorithm.Algorithm.szObjId, pAlgorithm->szObjId);
 
     /*
+     * Wrap up the public key.
+     */
+    RTCRKEY hPubKey;
+    int rc = RTCrKeyCreateFromPublicAlgorithmAndBits(&hPubKey, pAlgorithm, pPublicKey, pErrInfo, NULL);
+    if (RT_FAILURE(rc))
+        return rc;
+
+    /*
      * Here we should recode the to-be-signed part as DER, but we'll ASSUME
      * that it's already in DER encoding and only does this if there the
      * encoded bits are missing.
      */
-    if (   pThis->TbsCertificate.SeqCore.Asn1Core.uData.pu8
-        && pThis->TbsCertificate.SeqCore.Asn1Core.cb > 0)
-        return RTCrPkixPubKeyVerifySignature(&pThis->SignatureAlgorithm.Algorithm, pParameters, pPublicKey, &pThis->SignatureValue,
-                                             RTASN1CORE_GET_RAW_ASN1_PTR(&pThis->TbsCertificate.SeqCore.Asn1Core),
-                                             RTASN1CORE_GET_RAW_ASN1_SIZE(&pThis->TbsCertificate.SeqCore.Asn1Core),
-                                             pErrInfo);
-
-    uint32_t cbEncoded;
-    int rc = RTAsn1EncodePrepare((PRTASN1CORE)&pThis->TbsCertificate.SeqCore.Asn1Core, RTASN1ENCODE_F_DER, &cbEncoded, pErrInfo);
+    const uint8_t  *pbRaw;
+    uint32_t        cbRaw;
+    void           *pvFree = NULL;
+    rc = RTAsn1EncodeQueryRawBits(RTCrX509TbsCertificate_GetAsn1Core(&pThis->TbsCertificate), &pbRaw, &cbRaw, &pvFree, pErrInfo);
     if (RT_SUCCESS(rc))
     {
-        void *pvTbsBits = RTMemTmpAlloc(cbEncoded);
-        if (pvTbsBits)
-        {
-            rc = RTAsn1EncodeToBuffer(&pThis->TbsCertificate.SeqCore.Asn1Core, RTASN1ENCODE_F_DER,
-                                      pvTbsBits, cbEncoded, pErrInfo);
-            if (RT_SUCCESS(rc))
-                rc = RTCrPkixPubKeyVerifySignature(&pThis->SignatureAlgorithm.Algorithm, pParameters, pPublicKey,
-                                                   &pThis->SignatureValue, pvTbsBits, cbEncoded, pErrInfo);
-            else
-                AssertRC(rc);
-            RTMemTmpFree(pvTbsBits);
-        }
-        else
-            rc = VERR_NO_TMP_MEMORY;
+        rc = RTCrPkixPubKeyVerifySignature(&pThis->SignatureAlgorithm.Algorithm, hPubKey, pParameters, &pThis->SignatureValue,
+                                           pbRaw, cbRaw, pErrInfo);
+        RTMemTmpFree(pvFree);
     }
+
+    /* Free the public key. */
+    uint32_t cRefs = RTCrKeyRelease(hPubKey);
+    Assert(cRefs == 0); NOREF(cRefs);
+
     return rc;
 }
 

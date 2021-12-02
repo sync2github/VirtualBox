@@ -1,4 +1,5 @@
-/* $Id$ */
+
+/* $Id: VBoxDTraceTypes.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxDTraceTypes.h - Fake a bunch of Solaris types.
  *
@@ -6,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,11 +16,13 @@
  * comes in the "COPYING.CDDL" file of the VirtualBox OSE distribution.
  * VirtualBox OSE is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY of any kind.
- *
  */
 
-#ifndef ___VBoxDTraceTypes_h___
-#define ___VBoxDTraceTypes_h___
+#ifndef VBOX_INCLUDED_SRC_VBoxDTrace_include_VBoxDTraceTypes_h
+#define VBOX_INCLUDED_SRC_VBoxDTrace_include_VBoxDTraceTypes_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 #include <iprt/stdarg.h>
@@ -52,10 +55,12 @@ typedef uintptr_t                   ulong_t;
 typedef int64_t                     longlong_t;
 typedef uint64_t                    u_longlong_t;
 typedef uint64_t                    hrtime_t;
+# ifndef RT_OS_FREEBSD
 typedef uint32_t                    id_t;
+# endif
 typedef uint32_t                    zoneid_t;
 #endif
-#if !defined(NGREG) || !defined(RT_OS_LINUX)
+#if (!defined(__NGREG) && !defined(NGREG)) || !defined(RT_OS_LINUX)
 typedef RTCCINTREG                  greg_t;
 #else
 AssertCompileSize(greg_t, sizeof(RTCCINTREG));
@@ -108,7 +113,7 @@ typedef char                       *caddr_t;
 # ifndef _IPL32
 #  define _IPL32                    1
 # endif
-# if !defined(_LITTLE_ENDIAN) || !defined(RT_OS_SOLARIS)
+# if !defined(_LITTLE_ENDIAN) || (!defined(RT_OS_SOLARIS) && !defined(RT_OS_FREEBSD))
 #  define _LITTLE_ENDIAN            1
 # endif
 
@@ -122,7 +127,7 @@ typedef char                       *caddr_t;
 # ifndef _LP64
 #  define _LP64                     1
 # endif
-# if !defined(_LITTLE_ENDIAN) || !defined(RT_OS_SOLARIS)
+# if !defined(_LITTLE_ENDIAN) || (!defined(RT_OS_SOLARIS) && !defined(RT_OS_FREEBSD))
 #  define _LITTLE_ENDIAN            1
 # endif
 
@@ -435,7 +440,7 @@ extern int dtrace_close(struct dtrace_state *state);
 /*
  * gelf
  */
-# include "../../../Runtime/include/internal/ldrELF64.h"
+# include <iprt/formats/elf64.h>
 typedef Elf64_Half  GElf_Half;
 typedef Elf64_Xword GElf_Xword;
 typedef Elf64_Shdr  GElf_Shdr;
@@ -462,5 +467,5 @@ typedef Elf64_Addr  GElf_Addr;
 #endif /* IN_RING3 */
 
 RT_C_DECLS_END
-#endif
+#endif /* !VBOX_INCLUDED_SRC_VBoxDTrace_include_VBoxDTraceTypes_h */
 

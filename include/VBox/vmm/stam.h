@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,19 +23,21 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_stam_h
-#define ___VBox_vmm_stam_h
+#ifndef VBOX_INCLUDED_vmm_stam_h
+#define VBOX_INCLUDED_vmm_stam_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <iprt/stdarg.h>
 #ifdef _MSC_VER
-# if _MSC_VER >= 1400
-#  pragma warning(push)
-#  pragma warning(disable:4668) /* Several incorrect __cplusplus uses. */
-#  pragma warning(disable:4255) /* Incorrect __slwpcb prototype. */
-#  include <intrin.h>
-#  pragma warning(pop)
+# if RT_MSC_PREREQ(RT_MSC_VER_VS2005)
+#  include <iprt/sanitized/intrin.h>
 # endif
+#endif
+#if defined(RT_ARCH_ARM64) || defined(RT_ARCH_ARM32)
+# include <iprt/asm-arm.h>
 #endif
 
 RT_C_DECLS_BEGIN
@@ -55,7 +57,9 @@ RT_C_DECLS_BEGIN
  *
  * @param   u64     The 64-bit variable which the timestamp shall be saved in.
  */
-#ifdef __GNUC__
+#if defined(RT_ARCH_ARM64) || defined(RT_ARCH_ARM32)
+#  define STAM_GET_TS(u64) do { (u64) = ASMReadTSC(); } while (0)
+#elif defined(__GNUC__)
 # if defined(RT_ARCH_X86)
    /* This produces optimal assembler code for x86 but does not work for AMD64 ('A' means 'either rax or rdx') */
 #  define STAM_GET_TS(u64) __asm__ __volatile__ ("rdtsc\n\t" : "=A" (u64))
@@ -67,7 +71,7 @@ RT_C_DECLS_BEGIN
     } while (0)
 # endif
 #else
-# if _MSC_VER >= 1400
+# if RT_MSC_PREREQ(RT_MSC_VER_VS2005)
 #  pragma intrinsic(__rdtsc)
 #  define STAM_GET_TS(u64)    \
      do { (u64) = __rdtsc(); } while (0)
@@ -228,6 +232,14 @@ typedef enum STAMUNIT
     /** The end (exclusive). */
     STAMUNIT_END
 } STAMUNIT;
+
+/** @name STAM_REFRESH_GRP_XXX - STAM refresh groups
+ * @{ */
+#define STAM_REFRESH_GRP_NONE       UINT8_MAX
+#define STAM_REFRESH_GRP_GVMM       0
+#define STAM_REFRESH_GRP_GMM        1
+#define STAM_REFRESH_GRP_NEM        2
+/** @} */
 
 
 /** @def STAM_REL_U8_INC
@@ -788,6 +800,61 @@ typedef const STAMPROFILE *PCSTAMPROFILE;
 #endif
 
 
+/** @def STAM_REL_PROFILE_START_NS
+ * Samples the start time of a profiling period, using RTTimeNanoTS().
+ *
+ * @param   pProfile    Pointer to the STAMPROFILE structure to operate on.
+ * @param   Prefix      Identifier prefix used to internal variables.
+ *
+ * @remarks Declears a stack variable that will be used by related macros.
+ */
+#ifndef VBOX_WITHOUT_RELEASE_STATISTICS
+# define STAM_REL_PROFILE_START_NS(pProfile, Prefix) \
+    uint64_t const Prefix##_tsStart = RTTimeNanoTS()
+#else
+# define STAM_REL_PROFILE_START_NS(pProfile, Prefix) do { } while (0)
+#endif
+/** @def STAM_PROFILE_START_NS
+ * Samples the start time of a profiling period, using RTTimeNanoTS().
+ *
+ * @param   pProfile    Pointer to the STAMPROFILE structure to operate on.
+ * @param   Prefix      Identifier prefix used to internal variables.
+ *
+ * @remarks Declears a stack variable that will be used by related macros.
+ */
+#ifdef VBOX_WITH_STATISTICS
+# define STAM_PROFILE_START_NS(pProfile, Prefix) STAM_REL_PROFILE_START_NS(pProfile, Prefix)
+#else
+# define STAM_PROFILE_START_NS(pProfile, Prefix) do { } while (0)
+#endif
+
+/** @def STAM_REL_PROFILE_STOP_NS
+ * Samples the stop time of a profiling period and updates the sample, using
+ * RTTimeNanoTS().
+ *
+ * @param   pProfile    Pointer to the STAMPROFILE structure to operate on.
+ * @param   Prefix      Identifier prefix used to internal variables.
+ */
+#ifndef VBOX_WITHOUT_RELEASE_STATISTICS
+# define STAM_REL_PROFILE_STOP_NS(pProfile, Prefix) \
+    STAM_REL_PROFILE_ADD_PERIOD(pProfile, RTTimeNanoTS() - Prefix##_tsStart)
+#else
+# define STAM_REL_PROFILE_STOP_NS(pProfile, Prefix) do { } while (0)
+#endif
+/** @def STAM_PROFILE_STOP_NS
+ * Samples the stop time of a profiling period and updates the sample, using
+ * RTTimeNanoTS().
+ *
+ * @param   pProfile    Pointer to the STAMPROFILE structure to operate on.
+ * @param   Prefix      Identifier prefix used to internal variables.
+ */
+#ifdef VBOX_WITH_STATISTICS
+# define STAM_PROFILE_STOP_NS(pProfile, Prefix) STAM_REL_PROFILE_STOP_NS(pProfile, Prefix)
+#else
+# define STAM_PROFILE_STOP_NS(pProfile, Prefix) do { } while (0)
+#endif
+
+
 /**
  * Advanced profiling sample - STAMTYPE_PROFILE_ADV.
  *
@@ -1183,7 +1250,7 @@ VMMR3DECL(int)  STAMR3RegisterV(PVM pVM, void *pvSample, STAMTYPE enmType, STAMV
  * @param   pVM         The cross context VM structure.
  * @param   pvSample    The sample registered using STAMR3RegisterCallback.
  */
-typedef void FNSTAMR3CALLBACKRESET(PVM pVM, void *pvSample);
+typedef DECLCALLBACKTYPE(void, FNSTAMR3CALLBACKRESET,(PVM pVM, void *pvSample));
 /** Pointer to a STAM sample reset callback. */
 typedef FNSTAMR3CALLBACKRESET *PFNSTAMR3CALLBACKRESET;
 
@@ -1195,7 +1262,7 @@ typedef FNSTAMR3CALLBACKRESET *PFNSTAMR3CALLBACKRESET;
  * @param   pszBuf      The buffer to print into.
  * @param   cchBuf      The size of the buffer.
  */
-typedef void FNSTAMR3CALLBACKPRINT(PVM pVM, void *pvSample, char *pszBuf, size_t cchBuf);
+typedef DECLCALLBACKTYPE(void, FNSTAMR3CALLBACKPRINT,(PVM pVM, void *pvSample, char *pszBuf, size_t cchBuf));
 /** Pointer to a STAM sample print callback. */
 typedef FNSTAMR3CALLBACKPRINT *PFNSTAMR3CALLBACKPRINT;
 
@@ -1205,9 +1272,18 @@ VMMR3DECL(int)  STAMR3RegisterCallback(PVM pVM, void *pvSample, STAMVISIBILITY e
 VMMR3DECL(int)  STAMR3RegisterCallbackV(PVM pVM, void *pvSample, STAMVISIBILITY enmVisibility, STAMUNIT enmUnit,
                                         PFNSTAMR3CALLBACKRESET pfnReset, PFNSTAMR3CALLBACKPRINT pfnPrint,
                                         const char *pszDesc, const char *pszName, va_list args) RT_IPRT_FORMAT_ATTR(8, 0);
+
+VMMR3DECL(int)  STAMR3RegisterRefresh(PUVM pUVM, void *pvSample, STAMTYPE enmType, STAMVISIBILITY enmVisibility,
+                                      STAMUNIT enmUnit, uint8_t iRefreshGrp, const char *pszDesc,
+                                      const char *pszName, ...) RT_IPRT_FORMAT_ATTR(8, 9);
+VMMR3DECL(int)  STAMR3RegisterRefreshV(PUVM pUVM, void *pvSample, STAMTYPE enmType, STAMVISIBILITY enmVisibility,
+                                       STAMUNIT enmUnit, uint8_t iRefreshGrp, const char *pszDesc,
+                                       const char *pszName, va_list va) RT_IPRT_FORMAT_ATTR(8, 0);
+
 VMMR3DECL(int)  STAMR3Deregister(PUVM pUVM, const char *pszPat);
 VMMR3DECL(int)  STAMR3DeregisterF(PUVM pUVM, const char *pszPatFmt, ...) RT_IPRT_FORMAT_ATTR(2, 3);
 VMMR3DECL(int)  STAMR3DeregisterV(PUVM pUVM, const char *pszPatFmt, va_list va) RT_IPRT_FORMAT_ATTR(2, 0);
+VMMR3DECL(int)  STAMR3DeregisterByPrefix(PUVM pUVM, const char *pszPrefix);
 VMMR3DECL(int)  STAMR3DeregisterByAddr(PUVM pUVM, void *pvSample);
 
 VMMR3DECL(int)  STAMR3Reset(PUVM pUVM, const char *pszPat);
@@ -1230,8 +1306,8 @@ VMMR3DECL(int)  STAMR3Print(PUVM pUVM, const char *pszPat);
  * @param   pszDesc         The description.
  * @param   pvUser          The pvUser argument given to STAMR3Enum().
  */
-typedef DECLCALLBACK(int) FNSTAMR3ENUM(const char *pszName, STAMTYPE enmType, void *pvSample, STAMUNIT enmUnit,
-                                       STAMVISIBILITY enmVisiblity, const char *pszDesc, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNSTAMR3ENUM,(const char *pszName, STAMTYPE enmType, void *pvSample, STAMUNIT enmUnit,
+                                            STAMVISIBILITY enmVisibility, const char *pszDesc, void *pvUser));
 /** Pointer to a FNSTAMR3ENUM(). */
 typedef FNSTAMR3ENUM *PFNSTAMR3ENUM;
 
@@ -1244,5 +1320,5 @@ VMMR3DECL(const char *) STAMR3GetUnit(STAMUNIT enmUnit);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_stam_h */
 

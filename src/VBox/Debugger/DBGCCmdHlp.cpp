@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGCCmdHlp.cpp 90549 2021-08-06 13:57:29Z vboxsync $ */
 /** @file
  * DBGC - Debugger Console, Command Helpers.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -218,7 +218,7 @@ static DECLCALLBACK(size_t) dbgcFormatOutput(void *pvArg, const char *pachChars,
     PDBGC pDbgc = (PDBGC)pvArg;
     if (cbChars)
     {
-        int rc = pDbgc->pBack->pfnWrite(pDbgc->pBack, pachChars, cbChars, NULL);
+        int rc = pDbgc->pfnOutput(pDbgc->pvOutputUser, pachChars, cbChars);
         if (RT_SUCCESS(rc))
             pDbgc->chLastOutput = pachChars[cbChars - 1];
         else
@@ -254,7 +254,7 @@ static DECLCALLBACK(int) dbgcHlpPrintfV(PDBGCCMDHLP pCmdHlp, size_t *pcbWritten,
 
 
 /**
- * @interface_method_impl{DBGCCMDHLP,pfnStrPrintf}
+ * @interface_method_impl{DBGCCMDHLP,pfnStrPrintfV}
  */
 static DECLCALLBACK(size_t) dbgcHlpStrPrintfV(PDBGCCMDHLP pCmdHlp, char *pszBuf, size_t cbBuf,
                                               const char *pszFormat, va_list va)
@@ -431,20 +431,22 @@ static DECLCALLBACK(int) dbgcHlpMemRead(PDBGCCMDHLP pCmdHlp, void *pvBuffer, siz
                 break;
 
             case DBGCVAR_TYPE_HC_PHYS:
-            case DBGCVAR_TYPE_HC_FLAT:
             {
                 DBGCVAR Var2;
                 rc = dbgcOpAddrFlat(pDbgc, &Var, DBGCVAR_CAT_ANY, &Var2);
                 if (RT_SUCCESS(rc))
                 {
-                    /** @todo protect this!!! */
                     memcpy(pvBuffer, Var2.u.pvHCFlat, cb);
-                    rc = 0;
+                    rc = VINF_SUCCESS;
                 }
                 else
                     rc = VERR_INVALID_POINTER;
                 break;
             }
+
+            case DBGCVAR_TYPE_HC_FLAT:
+                rc = VERR_NOT_SUPPORTED;
+                break;
 
             default:
                 rc = VERR_DBGC_PARSE_INCORRECT_ARG_TYPE;
@@ -554,7 +556,7 @@ static DECLCALLBACK(int) dbgcHlpMemWrite(PDBGCCMDHLP pCmdHlp, const void *pvBuff
             Var.enmType = DBGCVAR_TYPE_GC_FLAT;
             Var.u.GCFlat = Address.FlatPtr;
         }
-        /* fall thru */
+        RT_FALL_THRU();
         case DBGCVAR_TYPE_GC_FLAT:
             rc = DBGFR3MemWrite(pDbgc->pUVM, pDbgc->idCpu,
                                 DBGFR3AddrFromFlat(pDbgc->pUVM, &Address, Var.u.GCFlat),
@@ -571,7 +573,6 @@ static DECLCALLBACK(int) dbgcHlpMemWrite(PDBGCCMDHLP pCmdHlp, const void *pvBuff
                 *pcbWritten = cbWrite;
             return rc;
 
-        case DBGCVAR_TYPE_HC_FLAT:
         case DBGCVAR_TYPE_HC_PHYS:
         {
             /*
@@ -597,7 +598,6 @@ static DECLCALLBACK(int) dbgcHlpMemWrite(PDBGCCMDHLP pCmdHlp, const void *pvBuff
                 if (cbChunk > cbWrite)
                     cbChunk = cbWrite;
 
-                /** @todo protect this!!! */
                 memcpy(Var2.u.pvHCFlat, pvBuffer, cbChunk);
 
                 /* advance */
@@ -613,6 +613,9 @@ static DECLCALLBACK(int) dbgcHlpMemWrite(PDBGCCMDHLP pCmdHlp, const void *pvBuff
 
             return VINF_SUCCESS;
         }
+
+        case DBGCVAR_TYPE_HC_FLAT:
+            return VERR_NOT_SUPPORTED;
 
         default:
             return VERR_NOT_IMPLEMENTED;
@@ -698,7 +701,7 @@ static DECLCALLBACK(int) dbgcHlpFailV(PDBGCCMDHLP pCmdHlp, PCDBGCCMD pCmd, const
 
 
 /**
- * @interface_method_impl{DBGCCMDHLP,pfnFailV}
+ * @interface_method_impl{DBGCCMDHLP,pfnFailRcV}
  */
 static DECLCALLBACK(int) dbgcHlpFailRcV(PDBGCCMDHLP pCmdHlp, PCDBGCCMD pCmd, int rc, const char *pszFormat, va_list va)
 {
@@ -935,11 +938,11 @@ static DECLCALLBACK(int) dbgcHlpVarGetRange(PDBGCCMDHLP pCmdHlp, PCDBGCVAR pVar,
 /**
  * @interface_method_impl{DBGCCMDHLP,pfnVarConvert}
  */
-static DECLCALLBACK(int) dbgcHlpVarConvert(PDBGCCMDHLP pCmdHlp, PCDBGCVAR pInVar, DBGCVARTYPE enmToType, bool fConvSyms,
+static DECLCALLBACK(int) dbgcHlpVarConvert(PDBGCCMDHLP pCmdHlp, PCDBGCVAR pVar, DBGCVARTYPE enmToType, bool fConvSyms,
                                            PDBGCVAR pResult)
 {
     PDBGC           pDbgc = DBGC_CMDHLP2DBGC(pCmdHlp);
-    DBGCVAR const   InVar = *pInVar;    /* if pInVar == pResult  */
+    DBGCVAR const   InVar = *pVar;      /* if pVar == pResult  */
     PCDBGCVAR       pArg = &InVar;      /* lazy bird, clean up later */
     DBGFADDRESS     Address;
     int             rc;
@@ -1304,8 +1307,9 @@ static DECLCALLBACK(PCDBGFINFOHLP) dbgcHlpGetDbgfOutputHlp(PDBGCCMDHLP pCmdHlp)
     /* Lazy init */
     if (!pDbgc->DbgfOutputHlp.pfnPrintf)
     {
-        pDbgc->DbgfOutputHlp.pfnPrintf  = dbgcHlpGetDbgfOutputHlp_Printf;
-        pDbgc->DbgfOutputHlp.pfnPrintfV = dbgcHlpGetDbgfOutputHlp_PrintfV;
+        pDbgc->DbgfOutputHlp.pfnPrintf      = dbgcHlpGetDbgfOutputHlp_Printf;
+        pDbgc->DbgfOutputHlp.pfnPrintfV     = dbgcHlpGetDbgfOutputHlp_PrintfV;
+        pDbgc->DbgfOutputHlp.pfnGetOptError = DBGFR3InfoGenericGetOptError;
     }
 
     return &pDbgc->DbgfOutputHlp;
@@ -1329,20 +1333,108 @@ static DECLCALLBACK(CPUMMODE) dbgcHlpGetCpuMode(PDBGCCMDHLP pCmdHlp)
 {
     PDBGC    pDbgc   = DBGC_CMDHLP2DBGC(pCmdHlp);
     CPUMMODE enmMode = CPUMMODE_INVALID;
-    if (pDbgc->fRegCtxGuest)
-    {
-        if (pDbgc->pUVM)
-            enmMode = DBGFR3CpuGetMode(pDbgc->pUVM, DBGCCmdHlpGetCurrentCpu(pCmdHlp));
-        if (enmMode == CPUMMODE_INVALID)
+    if (pDbgc->pUVM)
+        enmMode = DBGFR3CpuGetMode(pDbgc->pUVM, DBGCCmdHlpGetCurrentCpu(pCmdHlp));
+    if (enmMode == CPUMMODE_INVALID)
 #if HC_ARCH_BITS == 64
-            enmMode = CPUMMODE_LONG;
+        enmMode = CPUMMODE_LONG;
 #else
-            enmMode = CPUMMODE_PROTECTED;
+        enmMode = CPUMMODE_PROTECTED;
 #endif
+    return enmMode;
+}
+
+
+/**
+ * @interface_method_impl{DBGCCMDHLP,pfnRegPrintf}
+ */
+static DECLCALLBACK(int) dbgcHlpRegPrintf(PDBGCCMDHLP pCmdHlp, VMCPUID idCpu, int f64BitMode, bool fTerse)
+{
+    PDBGC pDbgc   = DBGC_CMDHLP2DBGC(pCmdHlp);
+    char  szDisAndRegs[8192];
+    int   rc;
+
+    if (f64BitMode < 0)
+        f64BitMode = DBGFR3CpuIsIn64BitCode(pDbgc->pUVM, idCpu);
+
+    if (fTerse)
+    {
+        if (f64BitMode)
+            rc = DBGFR3RegPrintf(pDbgc->pUVM, idCpu, &szDisAndRegs[0], sizeof(szDisAndRegs),
+                                 "u %016VR{rip} L 0\n"
+                                 "rax=%016VR{rax} rbx=%016VR{rbx} rcx=%016VR{rcx} rdx=%016VR{rdx}\n"
+                                 "rsi=%016VR{rsi} rdi=%016VR{rdi} r8 =%016VR{r8} r9 =%016VR{r9}\n"
+                                 "r10=%016VR{r10} r11=%016VR{r11} r12=%016VR{r12} r13=%016VR{r13}\n"
+                                 "r14=%016VR{r14} r15=%016VR{r15} %VRF{rflags}\n"
+                                 "rip=%016VR{rip} rsp=%016VR{rsp} rbp=%016VR{rbp}\n"
+                                 "cs=%04VR{cs} ds=%04VR{ds} es=%04VR{es} fs=%04VR{fs} gs=%04VR{gs} ss=%04VR{ss}                     rflags=%08VR{rflags}\n");
+        else
+            rc = DBGFR3RegPrintf(pDbgc->pUVM, idCpu, szDisAndRegs, sizeof(szDisAndRegs),
+                                 "u %04VR{cs}:%08VR{eip} L 0\n"
+                                 "eax=%08VR{eax} ebx=%08VR{ebx} ecx=%08VR{ecx} edx=%08VR{edx} esi=%08VR{esi} edi=%08VR{edi}\n"
+                                 "eip=%08VR{eip} esp=%08VR{esp} ebp=%08VR{ebp} %VRF{eflags}\n"
+                                 "cs=%04VR{cs} ds=%04VR{ds} es=%04VR{es} fs=%04VR{fs} gs=%04VR{gs} ss=%04VR{ss}               eflags=%08VR{eflags}\n");
     }
     else
-        enmMode = CPUMMODE_PROTECTED;
-    return enmMode;
+    {
+        if (f64BitMode)
+            rc = DBGFR3RegPrintf(pDbgc->pUVM, idCpu, &szDisAndRegs[0], sizeof(szDisAndRegs),
+                                 "u %016VR{rip} L 0\n"
+                                 "rax=%016VR{rax} rbx=%016VR{rbx} rcx=%016VR{rcx} rdx=%016VR{rdx}\n"
+                                 "rsi=%016VR{rsi} rdi=%016VR{rdi} r8 =%016VR{r8} r9 =%016VR{r9}\n"
+                                 "r10=%016VR{r10} r11=%016VR{r11} r12=%016VR{r12} r13=%016VR{r13}\n"
+                                 "r14=%016VR{r14} r15=%016VR{r15} %VRF{rflags}\n"
+                                 "rip=%016VR{rip} rsp=%016VR{rsp} rbp=%016VR{rbp}\n"
+                                 "cs={%04VR{cs} base=%016VR{cs_base} limit=%08VR{cs_lim} flags=%04VR{cs_attr}} cr0=%016VR{cr0}\n"
+                                 "ds={%04VR{ds} base=%016VR{ds_base} limit=%08VR{ds_lim} flags=%04VR{ds_attr}} cr2=%016VR{cr2}\n"
+                                 "es={%04VR{es} base=%016VR{es_base} limit=%08VR{es_lim} flags=%04VR{es_attr}} cr3=%016VR{cr3}\n"
+                                 "fs={%04VR{fs} base=%016VR{fs_base} limit=%08VR{fs_lim} flags=%04VR{fs_attr}} cr4=%016VR{cr4}\n"
+                                 "gs={%04VR{gs} base=%016VR{gs_base} limit=%08VR{gs_lim} flags=%04VR{gs_attr}} cr8=%016VR{cr8}\n"
+                                 "ss={%04VR{ss} base=%016VR{ss_base} limit=%08VR{ss_lim} flags=%04VR{ss_attr}}\n"
+                                 "dr0=%016VR{dr0} dr1=%016VR{dr1} dr2=%016VR{dr2} dr3=%016VR{dr3}\n"
+                                 "dr6=%016VR{dr6} dr7=%016VR{dr7}\n"
+                                 "gdtr=%016VR{gdtr_base}:%04VR{gdtr_lim}  idtr=%016VR{idtr_base}:%04VR{idtr_lim}  rflags=%08VR{rflags}\n"
+                                 "ldtr={%04VR{ldtr} base=%016VR{ldtr_base} limit=%08VR{ldtr_lim} flags=%08VR{ldtr_attr}}\n"
+                                 "tr  ={%04VR{tr} base=%016VR{tr_base} limit=%08VR{tr_lim} flags=%08VR{tr_attr}}\n"
+                                 "    sysenter={cs=%04VR{sysenter_cs} eip=%08VR{sysenter_eip} esp=%08VR{sysenter_esp}}\n"
+                                 "        efer=%016VR{efer}\n"
+                                 "         pat=%016VR{pat}\n"
+                                 "     sf_mask=%016VR{sf_mask}\n"
+                                 "krnl_gs_base=%016VR{krnl_gs_base}\n"
+                                 "       lstar=%016VR{lstar}\n"
+                                 "        star=%016VR{star} cstar=%016VR{cstar}\n"
+                                 "fcw=%04VR{fcw} fsw=%04VR{fsw} ftw=%04VR{ftw} mxcsr=%04VR{mxcsr} mxcsr_mask=%04VR{mxcsr_mask}\n"
+                                 );
+        else
+            rc = DBGFR3RegPrintf(pDbgc->pUVM, idCpu, szDisAndRegs, sizeof(szDisAndRegs),
+                                 "u %04VR{cs}:%08VR{eip} L 0\n"
+                                 "eax=%08VR{eax} ebx=%08VR{ebx} ecx=%08VR{ecx} edx=%08VR{edx} esi=%08VR{esi} edi=%08VR{edi}\n"
+                                 "eip=%08VR{eip} esp=%08VR{esp} ebp=%08VR{ebp} %VRF{eflags}\n"
+                                 "cs={%04VR{cs} base=%08VR{cs_base} limit=%08VR{cs_lim} flags=%04VR{cs_attr}} dr0=%08VR{dr0} dr1=%08VR{dr1}\n"
+                                 "ds={%04VR{ds} base=%08VR{ds_base} limit=%08VR{ds_lim} flags=%04VR{ds_attr}} dr2=%08VR{dr2} dr3=%08VR{dr3}\n"
+                                 "es={%04VR{es} base=%08VR{es_base} limit=%08VR{es_lim} flags=%04VR{es_attr}} dr6=%08VR{dr6} dr7=%08VR{dr7}\n"
+                                 "fs={%04VR{fs} base=%08VR{fs_base} limit=%08VR{fs_lim} flags=%04VR{fs_attr}} cr0=%08VR{cr0} cr2=%08VR{cr2}\n"
+                                 "gs={%04VR{gs} base=%08VR{gs_base} limit=%08VR{gs_lim} flags=%04VR{gs_attr}} cr3=%08VR{cr3} cr4=%08VR{cr4}\n"
+                                 "ss={%04VR{ss} base=%08VR{ss_base} limit=%08VR{ss_lim} flags=%04VR{ss_attr}} cr8=%08VR{cr8}\n"
+                                 "gdtr=%08VR{gdtr_base}:%04VR{gdtr_lim}  idtr=%08VR{idtr_base}:%04VR{idtr_lim}  eflags=%08VR{eflags}\n"
+                                 "ldtr={%04VR{ldtr} base=%08VR{ldtr_base} limit=%08VR{ldtr_lim} flags=%04VR{ldtr_attr}}\n"
+                                 "tr  ={%04VR{tr} base=%08VR{tr_base} limit=%08VR{tr_lim} flags=%04VR{tr_attr}}\n"
+                                 "sysenter={cs=%04VR{sysenter_cs} eip=%08VR{sysenter_eip} esp=%08VR{sysenter_esp}}\n"
+                                 "fcw=%04VR{fcw} fsw=%04VR{fsw} ftw=%04VR{ftw} mxcsr=%04VR{mxcsr} mxcsr_mask=%04VR{mxcsr_mask}\n"
+                                 );
+    }
+    if (RT_FAILURE(rc))
+        return DBGCCmdHlpVBoxError(pCmdHlp, rc, "DBGFR3RegPrintf failed");
+    char *pszRegs = strchr(szDisAndRegs, '\n');
+    *pszRegs++ = '\0';
+    rc = DBGCCmdHlpPrintf(pCmdHlp, "%s", pszRegs);
+
+    /*
+     * Disassemble one instruction at cs:[r|e]ip.
+     */
+    if (!f64BitMode && strstr(pszRegs, " vm ")) /* a bit ugly... */
+        return pCmdHlp->pfnExec(pCmdHlp, "uv86 %s", szDisAndRegs + 2);
+    return pCmdHlp->pfnExec(pCmdHlp, "%s", szDisAndRegs);
 }
 
 
@@ -1376,6 +1468,7 @@ void dbgcInitCmdHlp(PDBGC pDbgc)
     pDbgc->CmdHlp.pfnGetDbgfOutputHlp   = dbgcHlpGetDbgfOutputHlp;
     pDbgc->CmdHlp.pfnGetCurrentCpu      = dbgcHlpGetCurrentCpu;
     pDbgc->CmdHlp.pfnGetCpuMode         = dbgcHlpGetCpuMode;
+    pDbgc->CmdHlp.pfnRegPrintf          = dbgcHlpRegPrintf;
     pDbgc->CmdHlp.u32EndMarker          = DBGCCMDHLP_MAGIC;
 }
 

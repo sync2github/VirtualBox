@@ -1,9 +1,10 @@
-# $Id$
+# $Id: SUPR0-def-lx.sed 91801 2021-10-18 02:33:13Z vboxsync $
 ## @file
 # IPRT - SED script for generating SUPR0.def - OS/2 LX.
 #
 
-# Copyright (C) 2012-2015 Oracle Corporation
+#
+# Copyright (C) 2012-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +35,19 @@ $b footer
 /SED: END/,$d
 
 # Drop all lines not specifying an export.
-/^    { "/!d
+/^    SUPEXP_/!d
+
+# Extract the export name from these type of statements:
+#    SUPEXP_CUSTOM(  0,  g_pSUPGlobalInfoPage,     &g_pSUPGlobalInfoPage),            /* SED: DATA */
+#    SUPEXP_STK_OKAY(0,  SUPGetGIP),
+#    SUPEXP_STK_BACK(22, SUPReadTscWithDelta),
+# Will be transformed to:
+#    _g_pSUPGlobalInfoPage /* SED: DATA */
+#    _SUPGetGIP
+#    _SUPReadTscWithDelta
+s/SUPEXP_CUSTOM( *[0-9][0-9]* *, *\([^),][^),]*\), [^)]*), */_\1 /
+s/SUPEXP_STK_OKAY( *[0-9][0-9]* *, *\([^)][^)]*\)), */_\1 /
+s/SUPEXP_STK_BACKF*( *[0-9][0-9]* *, *\([^)][^)]*\)), */_\1 /
 
 # Handle trailing selection comment (/* solaris-only, os2-only */).
 /\*\/ *$/!b transform
@@ -42,13 +55,10 @@ $b footer
 /only-/!b transform
 d
 
+# Remove trailing comments.
 :transform
-# Transform the export line, the format is like this:
-#    { "g_pSUPGlobalInfoPage",                   (void *)&g_pSUPGlobalInfoPage },            /* SED: DATA */
-
-s/^    { "\([^"]*\)",[^}]*}[,].*$/    _\1/
-
 s, */\*.*\*/ *$,,
+s, *$,,
 b end
 
 :header

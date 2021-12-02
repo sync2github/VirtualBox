@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstTSC.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - SMP TSC testcase.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -437,7 +437,7 @@ int main(int argc, char **argv)
                 return 1;
 
             case 'V':
-                RTPrintf("$Revision$\n");
+                RTPrintf("$Revision: 82968 $\n");
                 return 0;
 
             default:

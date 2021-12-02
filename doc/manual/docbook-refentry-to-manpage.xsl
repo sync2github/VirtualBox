@@ -3,7 +3,7 @@
     docbook-to-man.xsl:
         XSLT stylesheet that renders a refentry into a troff manpage.
 
-    Copyright (C) 2006-2015 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -18,14 +18,30 @@
   version="1.0"
   xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
 
-  <xsl:import href="@VBOX_PATH_DOCBOOK@/manpages/docbook.xsl"/>
-<!--  <xsl:import href="@VBOX_PATH_MANUAL_SRC@/common-formatcfg.xsl"/> -->
+  <xsl:import href="manpages/docbook.xsl"/>
 
   <!--
   <xsl:output method="xml" version="1.0" encoding="utf-8" indent="yes"/>
   <xsl:strip-space elements="*"/>
   -->
 
+  <!--
+      Extract manual's date from an *info/pubdate node (cf.
+      get.refentry.date).  Detect RCS Date keyword.
+  -->
+  <xsl:template match="pubdate">
+    <xsl:choose>
+      <!-- careful with that keyword -->
+      <xsl:when test="starts-with(text(), concat('$', 'Date:'))">
+        <!-- Fetch the ISO 8601 date from inside -->
+        <xsl:value-of select="substring(text(), 8, 10)"/>
+      </xsl:when>
+      <xsl:otherwise>
+        <!-- Use as-is -->
+        <xsl:value-of select="text()"/>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:template>
 
 </xsl:stylesheet>
 

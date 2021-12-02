@@ -6,14 +6,8 @@
   OS virtual address space. All pointer values are different for a virtual
   mapping than from the normal physical mapping at boot services time.
 
-Copyright (c) 2006 - 2010, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php.
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -99,23 +93,21 @@ RuntimeDriverLibConstruct (
   //
   // Register SetVirtualAddressMap () notify function
   //
-  Status = gBS->CreateEventEx (
-                  EVT_NOTIFY_SIGNAL,
+  Status = gBS->CreateEvent (
+                  EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE,
                   TPL_NOTIFY,
                   RuntimeLibVirtualNotifyEvent,
                   NULL,
-                  &gEfiEventVirtualAddressChangeGuid,
                   &mEfiVirtualNotifyEvent
                   );
 
   ASSERT_EFI_ERROR (Status);
 
-  Status = gBS->CreateEventEx (
-                  EVT_NOTIFY_SIGNAL,
+  Status = gBS->CreateEvent (
+                  EVT_SIGNAL_EXIT_BOOT_SERVICES,
                   TPL_NOTIFY,
                   RuntimeLibExitBootServicesEvent,
                   NULL,
-                  &gEfiEventExitBootServicesGuid,
                   &mEfiExitBootServicesEvent
                   );
 
@@ -483,7 +475,7 @@ EfiGetNextVariableName (
   @retval  EFI_DEVICE_ERROR       The variable could not be saved due to a hardware failure.
   @retval  EFI_WRITE_PROTECTED    The variable in question is read-only.
   @retval  EFI_WRITE_PROTECTED    The variable in question cannot be deleted.
-  @retval  EFI_SECURITY_VIOLATION The variable could not be written due to EFI_VARIABLE_AUTHENTICATED_WRITE_ACCESS
+  @retval  EFI_SECURITY_VIOLATION The variable could not be written due to EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS
                                   set but the AuthInfo does NOT pass the validation check carried
                                   out by the firmware.
   @retval  EFI_NOT_FOUND          The variable trying to be updated or deleted was not found.

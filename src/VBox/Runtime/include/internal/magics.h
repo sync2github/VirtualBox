@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: magics.h 87004 2020-11-27 16:18:47Z vboxsync $ */
 /** @file
  * IPRT - Internal header defining The Magic Numbers.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_magics_h
-#define ___internal_magics_h
+#ifndef IPRT_INCLUDED_INTERNAL_magics_h
+#define IPRT_INCLUDED_INTERNAL_magics_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /** @name Magic Numbers.
  * @{ */
@@ -34,21 +37,37 @@
 #define RTAIOMGR_MAGIC                  UINT32_C(0x18990223)
 /** Magic number for RTAIOMGRINTFILE::u32Magic. (Ephraim Kishon) */
 #define RTAIOMGRFILE_MAGIC              UINT32_C(0x19240823)
+/** Magic number for RTCRCIPHERINT::u32Magic. (Michael Wolff) */
+#define RTCRCIPHERINT_MAGIC             UINT32_C(0x19530827)
+/** Magic value for RTCRKEYINT::u32Magic. (Ronald Linn Rivest) */
+#define RTCRKEYINT_MAGIC                UINT32_C(0x19470506)
+/** Magic value for RTCRSSLINT::u32Magic. (Robert Upshur Woodward) */
+#define RTCRSSLINT_MAGIC                UINT32_C(0x19430326)
+/** Magic value for RTCRSSLSESSIONINT::u32Magic. (Carl Berstein) */
+#define RTCRSSLSESSIONINT_MAGIC         UINT32_C(0x19440214)
 /** Magic number for RTDBGMODINT::u32Magic. (Charles Lloyd) */
 #define RTDBGAS_MAGIC                   UINT32_C(0x19380315)
 /** Magic number for RTDBGCFGINT::u32Magic. (McCoy Tyner) */
 #define RTDBGCFG_MAGIC                  UINT32_C(0x19381211)
 /** Magic number for RTDBGMODINT::u32Magic. (Keith Jarrett) */
 #define RTDBGMOD_MAGIC                  UINT32_C(0x19450508)
+/** Magic number for RTDBGMODDEFERRED::u32Magic. (Chet Baker) */
+#define RTDBGMODDEFERRED_MAGIC          UINT32_C(0x19291223)
+/** Magic number for RTDBGMODDEFERRED::u32Magic after release. */
+#define RTDBGMODDEFERRED_MAGIC_DEAD     UINT32_C(0x19880513)
+/** Magic number for RTDBGMODLDR::u32Magic. (Gerry Mulligan) */
+#define RTDBGMODLDR_MAGIC               UINT32_C(0x19270406)
+/** Magic number for RTDBGMODLDR::u32Magic after close. */
+#define RTDBGMODLDR_MAGIC_DEAD          UINT32_C(0x19960120)
 /** Magic number for RTDBGMODVTIMG::u32Magic. (Jack DeJohnette) */
 #define RTDBGMODVTDBG_MAGIC             UINT32_C(0x19420809)
 /** Magic number for RTDBGMODVTIMG::u32Magic. (Cecil McBee) */
 #define RTDBGMODVTIMG_MAGIC             UINT32_C(0x19350419)
 /** Magic value for RTDBGKRNLINFOINT::u32Magic. (John Carmack) */
 #define RTDBGKRNLINFO_MAGIC             UINT32_C(0x19700820)
-/** The value of RTDIR::u32Magic. (Michael Ende) */
+/** The value of RTDIRINTERNAL::u32Magic. (Michael Ende) */
 #define RTDIR_MAGIC                     UINT32_C(0x19291112)
-/** The value of RTDIR::u32Magic after RTDirClose().  */
+/** The value of RTDIRINTERNAL::u32Magic after RTDirClose().  */
 #define RTDIR_MAGIC_DEAD                UINT32_C(0x19950829)
 /** The value of RTDVMINTERNAL::u32Magic. (Dan Brown) */
 #define RTDVM_MAGIC                     UINT32_C(0x19640622)
@@ -64,10 +83,20 @@
 #define RTFILEAIOCTX_MAGIC_DEAD         UINT32_C(0x19370315)
 /** The value of RTFILEAIOREQINT::u32Magic. (Stephen Edwin King)  */
 #define RTFILEAIOREQ_MAGIC              UINT32_C(0x19470921)
+/** The magic value for RTFTPSERVERINTERNAL::u32Magic. */
+#define RTFTPSERVER_MAGIC               UINT32_C(0x20170610)
+/** The value of RTFTPSERVERINTERNAL::u32Magic after close. */
+#define RTFTPSERVER_MAGIC_DEAD          (~RTFTPSERVER_MAGIC)
+/** The magic value for RTFTPSERVERINTERNAL::u32Magic. */
+#define RTHTTPSERVER_MAGIC              UINT32_C(0x20200602)
+/** The value for RTFTPSERVERINTERNAL::u32Magic after close. */
+#define RTHTTPSERVER_MAGIC_DEAD         (~RTHTTPSERVER_MAGIC)
 /** The value of RTENVINTERNAL::u32Magic. (Rumiko Takahashi) */
 #define RTENV_MAGIC                     UINT32_C(0x19571010)
 /** The value of RTERRVARS::ai32Vars[0]. (Ryuichi Sakamoto) */
 #define RTERRVARS_MAGIC                 UINT32_C(0x19520117)
+/** The value of RTFSISOMAKERINT::uMagic. (Brian Blade) */
+#define RTFSISOMAKERINT_MAGIC           UINT32_C(0x19700725)
 /** Magic number for RTHANDLETABLEINT::u32Magic. (Hitomi Kanehara) */
 #define RTHANDLETABLE_MAGIC             UINT32_C(0x19830808)
 /** Magic number for RTHEAPOFFSETINTERNAL::u32Magic. (Neal Town Stephenson) */
@@ -78,6 +107,14 @@
 #define RTHTTP_MAGIC                    UINT32_C(0x18420225)
 /** The value of RTHTTPINTERNAL::u32Magic after close. */
 #define RTHTTP_MAGIC_DEAD               UINT32_C(0x19120330)
+/** The magic value for RTHTTPHEADERLISTINTERNAL::u32Magic. (Ken Follett) */
+#define RTHTTPHEADERLIST_MAGIC          UINT32_C(0x19490605)
+/** The value of RTHTTPHEADERLISTINTERNAL::u32Magic after close. */
+#define RTHTTPHEADERLIST_MAGIC_DEAD     (~RTHTTPHEADERLIST_MAGIC)
+/** The value of RTINIFILEINT::u32Magic. (Jane Austen) */
+#define RTINIFILE_MAGIC                 UINT32_C(0x17751216)
+/** The value of RTINIFILEINT::u32Magic after close. */
+#define RTINIFILE_MAGIC_DEAD            UINT32_C(0x18170718)
 /** The magic value for RTLDRMODINTERNAL::u32Magic. (Alan Moore) */
 #define RTLDRMOD_MAGIC                  UINT32_C(0x19531118)
 /** The magic value for RTLOCALIPCSERVER::u32Magic. (Naoki Yamamoto) */
@@ -164,6 +201,14 @@
 #define RTSEMXROADS_MAGIC               UINT32_C(0x19350917)
 /** RTSEMXROADSINTERNAL::u32Magic value after RTSemXRoadsDestroy. */
 #define RTSEMXROADS_MAGIC_DEAD          UINT32_C(0x20011110)
+/** RTSERIALPORTINTERNAL::u32Magic value (Jules-Gabriel Verne). */
+#define RTSERIALPORT_MAGIC              UINT32_C(0x18280208)
+/** RTSERIALPORTINTERNAL::u32Magic value after RTSerialPortClose. */
+#define RTSERIALPORT_MAGIC_DEAD         UINT32_C(0x19050324)
+/** RTSHMEMINT::u32Magic value (Stephen William Hawking) */
+#define RTSHMEM_MAGIC                   UINT32_C(0x19420108)
+/** RTSHMEMINT::u32Magic value after RTShMemClose */
+#define RTSHMEM_MAGIC_DEAD              UINT32_C(0x20180314)
 /** The magic value for RTSOCKETINT::u32Magic. (Stanislaw Lem) */
 #define RTSOCKET_MAGIC                  UINT32_C(0x19210912)
 /** The magic value for RTSOCKETINT::u32Magic after destruction. */
@@ -206,9 +251,17 @@
 #define RTTRACEBUF_MAGIC                UINT32_C(0x19030625)
 /** Magic value of RTTRACEBUFINT::u32Magic after the final release. */
 #define RTTRACEBUF_MAGIC_DEAD           UINT32_C(0x19500121)
+/** The value of RTTRACELOGRDRINT::u32Magic. (John Michael Scalzi) */
+#define RTTRACELOGRDR_MAGIC             UINT32_C(0x19690510)
+/** The value of RTTRACELOGRDRINT::u32Magic after RTTraceLogRdrDestroy(). */
+#define RTTRACELOGRDR_MAGIC_DEAD        (~RTTRACELOGRDR_MAGIC)
+/** The value of RTTRACELOGWRINT::u32Magic. (Herbert George Wells) */
+#define RTTRACELOGWR_MAGIC              UINT32_C(0x18660921)
+/** The value of RTTRACELOGWRINT::u32Magic after RTTraceLogWrDestroy(). */
+#define RTTRACELOGWR_MAGIC_DEAD         UINT32_C(0x19460813)
 /** The value of RTVFSOBJINTERNAL::u32Magic. (Yasunari Kawabata) */
 #define RTVFSOBJ_MAGIC                  UINT32_C(0x18990614)
-/** The value of RTVFSOBJINTERNAL::u32Magic arter close. */
+/** The value of RTVFSOBJINTERNAL::u32Magic after close. */
 #define RTVFSOBJ_MAGIC_DEAD             UINT32_C(0x19720416)
 /** The value of RTVFSINTERNAL::u32Magic. (Sir Kingsley William Amis) */
 #define RTVFS_MAGIC                     UINT32_C(0x19220416)
@@ -237,5 +290,5 @@
 
 /** @} */
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_magics_h */
 

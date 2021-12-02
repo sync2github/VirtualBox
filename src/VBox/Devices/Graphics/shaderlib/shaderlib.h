@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: shaderlib.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * shaderlib -- interface to WINE's Direct3D shader functions
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,9 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-
-#ifndef ___shaderlib_h___
-#define ___shaderlib_h___
+#ifndef VBOX_INCLUDED_SRC_Graphics_shaderlib_shaderlib_h
+#define VBOX_INCLUDED_SRC_Graphics_shaderlib_shaderlib_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 
@@ -44,7 +46,7 @@ typedef struct VBOXVMSVGASHADERIF
      * @param   fOtherProfile   If set, switch to the non-default profile.  If
      *                          clear, switch back to the default profile.
      */
-    DECLCALLBACKMEMBER(void, pfnSwitchInitProfile)(PVBOXVMSVGASHADERIF pThis, bool fOtherProfile);
+    DECLCALLBACKMEMBER(void, pfnSwitchInitProfile,(PVBOXVMSVGASHADERIF pThis, bool fOtherProfile));
 
     /**
      * Extension enumeration function.
@@ -59,8 +61,8 @@ typedef struct VBOXVMSVGASHADERIF
      *                          we'll use the default profile if CLEAR and the
      *                          non-default if SET.
      */
-    DECLCALLBACKMEMBER(bool, pfnGetNextExtension)(PVBOXVMSVGASHADERIF pThis, void **ppvEnumCtx, char *pszBuf, size_t cbBuf,
-                                                  bool fOtherProfile);
+    DECLCALLBACKMEMBER(bool, pfnGetNextExtension,(PVBOXVMSVGASHADERIF pThis, void **ppvEnumCtx, char *pszBuf, size_t cbBuf,
+                                                  bool fOtherProfile));
 } VBOXVMSVGASHADERIF;
 
 SHADERDECL(int) ShaderInitLib(PVBOXVMSVGASHADERIF pVBoxShaderIf);
@@ -69,8 +71,8 @@ SHADERDECL(int) ShaderDestroyLib(void);
 SHADERDECL(int) ShaderContextCreate(void **ppShaderContext);
 SHADERDECL(int) ShaderContextDestroy(void *pShaderContext);
 
-SHADERDECL(int) ShaderCreateVertexShader(void *pShaderContext, const uint32_t *pShaderData, void **pShaderObj);
-SHADERDECL(int) ShaderCreatePixelShader(void *pShaderContext, const uint32_t *pShaderData, void **pShaderObj);
+SHADERDECL(int) ShaderCreateVertexShader(void *pShaderContext, const uint32_t *pShaderData, uint32_t cbShaderData, void **pShaderObj);
+SHADERDECL(int) ShaderCreatePixelShader(void *pShaderContext, const uint32_t *pShaderData, uint32_t cbShaderData, void **pShaderObj);
 
 SHADERDECL(int) ShaderDestroyVertexShader(void *pShaderContext, void *pShaderObj);
 SHADERDECL(int) ShaderDestroyPixelShader(void *pShaderContext, void *pShaderObj);
@@ -94,5 +96,5 @@ SHADERDECL(int) ShaderTransformProjection(unsigned cxViewPort, unsigned cyViewPo
 
 RT_C_DECLS_END
 
-#endif /* !___shaderlib_h___ */
+#endif /* !VBOX_INCLUDED_SRC_Graphics_shaderlib_shaderlib_h */
 

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#ifndef VBOX_INCLUDED_SRC_Graphics_BIOS_inlines_h
+#define VBOX_INCLUDED_SRC_Graphics_BIOS_inlines_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 extern unsigned inp(unsigned port);
 extern unsigned outp(unsigned port, unsigned value);
@@ -25,12 +30,37 @@ extern unsigned outpw(unsigned port, unsigned value);
 #define inw(p)      inpw(p)
 #define outw(p, v)  outpw(p, v)
 
-extern  uint8_t     read_byte(uint16_t seg, uint16_t offset);
-extern  uint16_t    read_word(uint16_t seg, uint16_t offset);
-extern  uint32_t    read_dword(uint16_t seg, uint16_t offset);
-extern  void        write_byte(uint16_t seg, uint16_t offset, uint8_t data);
-extern  void        write_word(uint16_t seg, uint16_t offset, uint16_t data);
-extern  void        write_dword(uint16_t seg, uint16_t offset, uint32_t data);
+/* Far byte/word/dword access routines. */
+
+inline uint8_t read_byte(uint16_t seg, uint16_t offset)
+{
+    return( *(seg:>(uint8_t *)offset) );
+}
+
+inline void write_byte(uint16_t seg, uint16_t offset, uint8_t data)
+{
+    *(seg:>(uint8_t *)offset) = data;
+}
+
+inline uint16_t read_word(uint16_t seg, uint16_t offset)
+{
+    return( *(seg:>(uint16_t *)offset) );
+}
+
+inline void write_word(uint16_t seg, uint16_t offset, uint16_t data)
+{
+    *(seg:>(uint16_t *)offset) = data;
+}
+
+inline uint32_t read_dword(uint16_t seg, uint16_t offset)
+{
+    return( *(seg:>(uint32_t *)offset) );
+}
+
+inline void write_dword(uint16_t seg, uint16_t offset, uint32_t data)
+{
+    *(seg:>(uint32_t *)offset) = data;
+}
 
 void int_enable(void);
 #pragma aux int_enable = "sti" modify exact [] nomemory;
@@ -68,27 +98,29 @@ void rep_movsw(void __far *d, void __far *s, int nwords);
     "pop    ds"             \
     parm [es di] [dx si] [cx];
 
+int repe_cmpsb(void __far *d, void __far *s, int nbytes);
+#pragma aux repe_cmpsb =    \
+    "push   ds"             \
+    "mov    ds, dx"         \
+    "repe   cmpsb"          \
+    "pop    ds"             \
+    "mov    ax, 0"          \
+    "jz     match"          \
+    "inc    al"             \
+    "match:"                \
+    parm [es di] [dx si] [cx] value [ax] modify nomemory;
+
 char __far *rep_insb(char __far *buffer, unsigned nbytes, unsigned port);
 #pragma aux rep_insb = ".286" "rep insb" parm [es di] [cx] [dx] value [es di] modify exact [cx di];
 
 char __far *rep_insw(char __far *buffer, unsigned nwords, unsigned port);
 #pragma aux rep_insw = ".286" "rep insw" parm [es di] [cx] [dx] value [es di] modify exact [cx di];
 
-#if VBOX_BIOS_CPU >= 80386
-char __far *rep_insd(char __far *buffer, unsigned ndwords, unsigned port);
-# pragma aux rep_insd = ".386" "rep insd" parm [es di] [cx] [dx] value [es di] modify exact [cx di];
-#endif
-
 char __far *rep_outsb(char __far *buffer, unsigned nbytes, unsigned port);
 #pragma aux rep_outsb = ".286" "rep outs dx,byte ptr es:[si]" parm [es si] [cx] [dx] value [es si] modify exact [cx si];
 
 char __far *rep_outsw(char __far *buffer, unsigned nwords, unsigned port);
 #pragma aux rep_outsw = ".286" "rep outs dx,word ptr es:[si]" parm [es si] [cx] [dx] value [es si] modify exact [cx si];
-
-#if VBOX_BIOS_CPU >= 80386
-char __far *rep_outsd(char __far *buffer, unsigned ndwords, unsigned port);
-# pragma aux rep_outsd = ".386" "rep outs dx,dword ptr es:[si]" parm [es si] [cx] [dx] value [es si] modify exact [cx si];
-#endif
 
 uint16_t __far swap_16(uint16_t val);
 #pragma aux swap_16 = "xchg ah,al" parm [ax] value [ax] modify exact [ax] nomemory;
@@ -100,28 +132,22 @@ uint32_t __far swap_32(uint32_t val);
     "xchg   ax, dx"     \
     parm [dx ax] value [dx ax] modify exact [dx ax] nomemory;
 
-//@todo: Do CLD elsewhere!
 extern void memsetb(uint16_t seg, uint16_t offset, uint16_t value, uint16_t count);
 #pragma aux memsetb =   \
-    "cld"               \
     "jcxz no_copy"      \
     "rep stosb"         \
     "no_copy:"          \
     parm [es] [di] [ax] [cx];
 
-//@todo: Do CLD elsewhere!
 extern void memsetw(uint16_t seg, uint16_t offset, uint16_t value, uint16_t count);
 #pragma aux memsetw =   \
-    "cld"               \
     "jcxz no_copy"      \
     "rep stosw"         \
     "no_copy:"          \
     parm [es] [di] [ax] [cx];
 
-//@todo: Do CLD elsewhere!
 extern void memcpyb(uint16_t dseg, uint16_t doffset, uint16_t sseg, uint16_t soffset, uint16_t count);
 #pragma aux memcpyb =   \
-    "cld"               \
     "jcxz   no_copy"    \
     "push   ds"         \
     "mov    ds, dx"     \
@@ -130,10 +156,8 @@ extern void memcpyb(uint16_t dseg, uint16_t doffset, uint16_t sseg, uint16_t sof
     "no_copy:"          \
     parm [es] [di] [dx] [si] [cx];
 
-//@todo: Do CLD elsewhere!
 extern void memcpyw(uint16_t dseg, uint16_t doffset, uint16_t sseg, uint16_t soffset, uint16_t count);
 #pragma aux memcpyw =   \
-    "cld"               \
     "jcxz   no_copy"    \
     "push   ds"         \
     "mov    ds, dx"     \
@@ -141,4 +165,6 @@ extern void memcpyw(uint16_t dseg, uint16_t doffset, uint16_t sseg, uint16_t sof
     "pop    ds"         \
     "no_copy:"          \
     parm [es] [di] [dx] [si] [cx];
+
+#endif /* !VBOX_INCLUDED_SRC_Graphics_BIOS_inlines_h */
 

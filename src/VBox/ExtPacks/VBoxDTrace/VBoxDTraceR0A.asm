@@ -1,12 +1,12 @@
-; $Id$
+; $Id: VBoxDTraceR0A.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; VBoxDTraceR0 - Assembly Hacks.
-;  
-; Contributed by: bird 
+;
+; Contributed by: bird
 ;
 
 ;
-; Copyright (C) 2012-2016 Oracle Corporation
+; Copyright (C) 2012-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -28,5 +28,4 @@ extern NAME(dtrace_probe)
 
 GLOBALNAME dtrace_probe6
     jmp     NAME(dtrace_probe)
-
 

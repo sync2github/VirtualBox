@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineLogic.h 91759 2021-10-15 11:00:14Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineLogic class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineLogic_h___
-#define ___UIMachineLogic_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_UIMachineLogic_h
+#define FEQT_INCLUDED_SRC_runtime_UIMachineLogic_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UIExtraDataDefs.h"
@@ -28,6 +31,7 @@
 /* Forward declarations: */
 class QAction;
 class QActionGroup;
+class QIManagerDialog;
 class UISession;
 class UIActionPool;
 class UIKeyboardHandler;
@@ -35,6 +39,8 @@ class UIMouseHandler;
 class UIMachineWindow;
 class UIMachineView;
 class UIDockIconPreview;
+class UISoftKeyboard;
+class UIVMInformationDialog;
 class CSession;
 class CMachine;
 class CConsole;
@@ -46,6 +52,9 @@ class CMachineDebugger;
 class CSnapshot;
 class CUSBDevice;
 class CVirtualBoxErrorInfo;
+#if defined(VBOX_WS_X11)
+ struct X11ScreenSaverInhibitMethod;
+#endif
 
 #ifdef VBOX_WITH_DEBUGGER_GUI
 typedef struct DBGGUIVT const *PCDBGGUIVT;
@@ -117,13 +126,6 @@ public:
     UIMachineWindow* mainMachineWindow() const;
     UIMachineWindow* activeMachineWindow() const;
 
-    /** Returns whether VM is in 'manual-override' mode.
-      * @note S.a. #m_fIsManualOverride description for more information. */
-    bool isManualOverrideMode() const { return m_fIsManualOverride; }
-    /** Defines whether VM is in 'manual-override' mode.
-      * @note S.a. #m_fIsManualOverride description for more information. */
-    void setManualOverrideMode(bool fIsManualOverride) { m_fIsManualOverride = fIsManualOverride; }
-
     /** Adjusts machine-window(s) geometry if necessary. */
     virtual void adjustMachineWindowsGeometry();
 
@@ -137,24 +139,16 @@ public:
     void updateDockIcon();
     void updateDockIconSize(int screenId, int width, int height);
     UIMachineView* dockPreviewView() const;
+    virtual void updateDock();
 #endif /* VBOX_WS_MAC */
-
-    /** Detach and close Runtime UI. */
-    void detach();
-    /** Save VM state, then close Runtime UI. */
-    void saveState();
-    /** Call for guest shutdown to close Runtime UI. */
-    void shutdown();
-    /** Power off VM, then close Runtime UI. */
-    void powerOff(bool fDiscardingState);
-    /** Close Runtime UI. */
-    void closeRuntimeUI();
 
     /* API: 3D overlay visibility stuff: */
     virtual void notifyAbout3DOverlayVisibilityChange(bool fVisible);
 
     /** Returns whether VM should perform HID LEDs synchronization. */
     bool isHidLedsSyncEnabled() const { return m_fIsHidLedsSyncEnabled; }
+    /** An public interface to sltTypeHostKeyComboPressRelease. */
+    void typeHostKeyComboPressRelease(bool fToggleSequence);
 
 protected slots:
 
@@ -197,6 +191,8 @@ protected:
 
     /* Constructor: */
     UIMachineLogic(QObject *pParent, UISession *pSession, UIVisualStateType visualStateType);
+    /* Destructor: */
+    ~UIMachineLogic();
 
     /* Protected getters/setters: */
     bool isMachineWindowsCreated() const { return m_fIsWindowsCreated; }
@@ -218,7 +214,7 @@ protected:
     virtual void prepareSessionConnections();
     virtual void prepareActionGroups();
     virtual void prepareActionConnections();
-    virtual void prepareOtherConnections() {}
+    virtual void prepareOtherConnections();
     virtual void prepareHandlers();
     virtual void prepareMachineWindows() = 0;
     virtual void prepareMenu() {}
@@ -231,7 +227,6 @@ protected:
     virtual void loadSettings();
 
     /* Cleanup helpers: */
-    virtual void saveSettings();
 #ifdef VBOX_WITH_DEBUGGER_GUI
     virtual void cleanupDebugger();
 #endif /* VBOX_WITH_DEBUGGER_GUI */
@@ -257,6 +252,9 @@ private slots:
 
     /* "Machine" menu functionality: */
     void sltShowKeyboardSettings();
+    void sltShowSoftKeyboard();
+    void sltCloseSoftKeyboard(bool fAsync = false);
+    void sltCloseSoftKeyboardDefault() { sltCloseSoftKeyboard(true); }
     void sltToggleMouseIntegration(bool fEnabled);
     void sltTypeCAD();
 #ifdef VBOX_WS_X11
@@ -266,9 +264,14 @@ private slots:
     void sltTypeInsert();
     void sltTypePrintScreen();
     void sltTypeAltPrintScreen();
+    void sltTypeHostKeyComboPressRelease(bool fToggleSequence);
     void sltTakeSnapshot();
     void sltShowInformationDialog();
-    void sltReset();
+    void sltCloseVMInformationDialog(bool fAsync = false);
+    void sltCloseVMInformationDialogDefault() { sltCloseVMInformationDialog(true); }
+    void sltShowFileManagerDialog();
+    void sltCloseFileManagerDialog();
+    void sltReset(bool fShowConfirmation = true);
     void sltPause(bool fOn);
     void sltDetach();
     void sltSaveState();
@@ -281,13 +284,16 @@ private slots:
     void sltAdjustMachineWindows();
     void sltToggleGuestAutoresize(bool fEnabled);
     void sltTakeScreenshot();
-    void sltOpenVideoCaptureOptions();
-    void sltToggleVideoCapture(bool fEnabled);
+    void sltOpenRecordingOptions();
+    void sltToggleRecording(bool fEnabled);
     void sltToggleVRDE(bool fEnabled);
 
     /* "Device" menu functionality: */
+    void sltOpenVMSettingsDialogDefault();
     void sltOpenVMSettingsDialog(const QString &strCategory = QString(), const QString &strControl = QString());
     void sltOpenStorageSettingsDialog();
+    void sltToggleAudioOutput(bool fEnabled);
+    void sltToggleAudioInput(bool fEnabled);
     void sltOpenNetworkSettingsDialog();
     void sltOpenUSBDevicesSettingsDialog();
     void sltOpenSharedFoldersSettingsDialog();
@@ -305,6 +311,10 @@ private slots:
     void sltShowDebugCommandLine();
     void sltLoggingToggled(bool);
     void sltShowLogDialog();
+    /** Handles close signal from the log viewer dialog. */
+    void sltCloseLogViewerWindow();
+    void sltShowGuestControlConsoleDialog();
+    void sltCloseGuestControlConsoleDialog();
 #endif /* VBOX_WITH_DEBUGGER_GUI */
 
 #ifdef RT_OS_DARWIN /* Something is *really* broken in regards of the moc here */
@@ -326,11 +336,17 @@ private slots:
     void sltSwitchKeyboardLedsToGuestLeds();
     void sltSwitchKeyboardLedsToPreviousLeds();
 
+    /* Handle disabling/enabling host screen saver. */
+    void sltDisableHostScreenSaverStateChanged(bool fDisabled);
+
     /** Show Global Preferences. */
     void sltShowGlobalPreferences();
 
-    /** Close Runtime UI. */
-    void sltCloseRuntimeUI() { closeRuntimeUI(); }
+    /** Handles request for visual state change. */
+    void sltHandleVisualStateChange();
+
+    /** Handles request to commit data. */
+    void sltHandleCommitData();
 
 private:
 
@@ -365,6 +381,15 @@ private:
     static int searchMaxSnapshotIndex(const CMachine &machine, const CSnapshot &snapshot, const QString &strNameTemplate);
     void takeScreenshot(const QString &strFile, const QString &strFormat /* = "png" */) const;
 
+    /** Reactivates the screen saver. This is possbily called during vm window close and enables host screen
+      * if there are no other vms running at the moment. Note that this seems to be not needed on Linux since
+      * closing vm windows re-activates screen saver automatically. On Windows explicit re-activation is needed. */
+    void activateScreenSaver();
+    /* Shows the boot failure dialog through which user can mount a boot DVD and reset the vm. */
+    void showBootFailureDialog();
+    /** Attempts to mount medium with @p uMediumId to the machine if it can find an appropriate controller and port. */
+    bool mountBootMedium(const QUuid &uMediumId);
+
     /* Private variables: */
     UISession *m_pSession;
     UIVisualStateType m_visualStateType;
@@ -383,11 +408,6 @@ private:
 
     bool m_fIsWindowsCreated : 1;
 
-    /** Holds whether VM is in 'manual-override' mode
-      * which means there will be no automatic UI shutdowns,
-      * visual representation mode changes and other similar routines. */
-    bool m_fIsManualOverride : 1;
-
 #ifdef VBOX_WITH_DEBUGGER_GUI
     /* Debugger functionality: */
     bool dbgCreated();
@@ -403,7 +423,11 @@ private:
     bool m_fIsDockIconEnabled;
     UIDockIconPreview *m_pDockIconPreview;
     QActionGroup *m_pDockPreviewSelectMonitorGroup;
+    QAction *m_pDockSettingsMenuSeparator;
     int m_DockIconPreviewMonitor;
+    QAction *m_pDockSettingMenuAction;
+    /* Keeps a list of machine menu actions that we add to dock menu. */
+    QList<QAction*> m_dockMachineMenuActions;
 #endif /* VBOX_WS_MAC */
 
     void *m_pHostLedsState;
@@ -411,9 +435,20 @@ private:
     /** Holds whether VM should perform HID LEDs synchronization. */
     bool m_fIsHidLedsSyncEnabled;
 
+    /** Holds the log viewer dialog instance. */
+    QIManagerDialog       *m_pLogViewerDialog;
+    QIManagerDialog       *m_pFileManagerDialog;
+    QIManagerDialog       *m_pProcessControlDialog;
+    UISoftKeyboard        *m_pSoftKeyboardDialog;
+    UIVMInformationDialog *m_pVMInformationDialog;
+
+    /* Holds the cookies returnd by QDBus inhibition calls. Map keys are service name. These are required during uninhibition.*/
+    QMap<QString, uint> m_screenSaverInhibitionCookies;
+#if defined(VBOX_WS_X11)
+    QVector<X11ScreenSaverInhibitMethod*> m_methods;
+#endif
     /* Friend classes: */
     friend class UIMachineWindow;
 };
 
-#endif /* !___UIMachineLogic_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIMachineLogic_h */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: resolv_conf_parser.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * resolv_conf_parser.c - parser of resolv.conf resolver(5)
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,6 +24,7 @@
 #endif
 
 #include <iprt/assert.h>
+#include <iprt/err.h>
 #include <iprt/net.h>
 #include <iprt/string.h>
 #include <iprt/stream.h>

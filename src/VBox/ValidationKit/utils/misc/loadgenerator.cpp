@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: loadgenerator.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Load Generator.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,6 +28,7 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#include <iprt/errcore.h>
 #include <iprt/thread.h>
 #include <iprt/time.h>
 #include <iprt/initterm.h>
@@ -305,7 +306,7 @@ int main(int argc, char **argv)
                 return 1;
 
             case 'V':
-                RTPrintf("$Revision$\n");
+                RTPrintf("$Revision: 82968 $\n");
                 return 0;
 
             case VINF_GETOPT_NOT_OPTION:

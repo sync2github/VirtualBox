@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: Matching.h 85236 2020-07-11 16:35:49Z vboxsync $ */
 /** @file
  * Declaration of template classes that provide simple API to
  * do matching between values and value filters constructed from strings.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_MATCHING
-#define ____H_MATCHING
+#ifndef MAIN_INCLUDED_Matching_h
+#define MAIN_INCLUDED_Matching_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/com/string.h>
 
@@ -43,6 +46,9 @@ public:
 
     ParsedFilter_base() : mValid (false), mNull (true), mErrorPosition (0) {};
 
+    /**
+     * Returns @c true if the filter is valid, @c false otherwise.
+     */
     bool isValid() const { return mNull || mValid; }
     bool isNull() const { return mNull; }
 
@@ -55,10 +61,10 @@ public:
 protected:
 
     /**
-     *  Returns true if current isNull() and isValid() values make further
-     *  detailed matching meaningful, otherwise returns false.
+     *  Returns @c true if current isNull() and isValid() values make further
+     *  detailed matching meaningful, otherwise returns @c false.
      *  Must be called as a first method of every isMatch() implementation,
-     *  so that isMatch() will immediately return false if isPreMatch() returns
+     *  so that isMatch() will immediately return @c false if isPreMatch() returns
      *  false.
      */
     bool isPreMatch() const
@@ -75,6 +81,9 @@ protected:
 
 class ParsedIntervalFilter_base : public ParsedFilter_base
 {
+public:
+    virtual ~ParsedIntervalFilter_base() { /* Make VC++ 14.2 happy */ }
+
 protected:
 
     enum Mode { Single, Start, End };
@@ -311,16 +320,14 @@ protected:
 
     ParsedRegexpFilter_base (bool aDefIgnoreCase = false,
                              size_t aMinLen = 0, size_t aMaxLen = 0)
-        : mDefIgnoreCase (aDefIgnoreCase)
-        , mIgnoreCase (aDefIgnoreCase)
+        : mIgnoreCase (aDefIgnoreCase)
         , mMinLen (aMinLen)
         , mMaxLen (aMaxLen)
         {}
 
     ParsedRegexpFilter_base (const Bstr &aFilter, bool aDefIgnoreCase = false,
                              size_t aMinLen = 0, size_t aMaxLen = 0)
-        : mDefIgnoreCase (aDefIgnoreCase)
-        , mIgnoreCase (aDefIgnoreCase)
+        : mIgnoreCase (aDefIgnoreCase)
         , mMinLen (aMinLen)
         , mMaxLen (aMaxLen)
     {
@@ -339,7 +346,6 @@ private:
 
     void parse (const Bstr &aFilter);
 
-    bool mDefIgnoreCase : 1;
     bool mIgnoreCase : 1;
 
     size_t mMinLen;
@@ -520,5 +526,5 @@ private:
 
 } /* namespace matching */
 
-#endif // !____H_MATCHING
+#endif /* !MAIN_INCLUDED_Matching_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

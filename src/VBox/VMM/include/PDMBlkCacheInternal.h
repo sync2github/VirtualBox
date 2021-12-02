@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMBlkCacheInternal.h 87766 2021-02-16 14:27:43Z vboxsync $ */
 /** @file
  * PDM Block Cache.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___PDMBlkCacheInternal_h
-#define ___PDMBlkCacheInternal_h
+#ifndef VMM_INCLUDED_SRC_include_PDMBlkCacheInternal_h
+#define VMM_INCLUDED_SRC_include_PDMBlkCacheInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vmm/cfgm.h>
 #include <VBox/vmm/stam.h>
@@ -130,7 +133,7 @@ typedef struct PDMBLKCACHEGLOBAL
     /** Flag whether a commit is currently in progress. */
     volatile bool       fCommitInProgress;
     /** Commit interval timer */
-    PTMTIMERR3          pTimerCommit;
+    TMTIMERHANDLE       hTimerCommit;
     /** Number of endpoints using the cache. */
     uint32_t            cRefs;
     /** List of all users of this cache. */
@@ -262,6 +265,8 @@ typedef struct PDMBLKCACHE
 
     /** Flag whether the cache was suspended. */
     volatile bool                 fSuspended;
+    /** Number of outstanding I/O transfers. */
+    volatile uint32_t             cIoXfersActive;
 
 } PDMBLKCACHE, *PPDMBLKCACHE;
 #ifdef VBOX_WITH_STATISTICS
@@ -325,5 +330,5 @@ typedef struct PDMBLKCACHEWAITER
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VMM_INCLUDED_SRC_include_PDMBlkCacheInternal_h */
 

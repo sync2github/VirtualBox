@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: testi.cpp 88311 2021-03-29 12:59:22Z vboxsync $ */
 /** @file
  * IPRT - Testcase Framework, the implicit test handle API variation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -172,6 +172,22 @@ RTR3DECL(int) RTTestIFailureDetails(const char *pszFormat, ...)
     int cch = RTTestFailureDetailsV(NIL_RTTEST, pszFormat, va);
     va_end(va);
     return cch;
+}
+
+
+RTR3DECL(int) RTTestIErrContextV(const char *pszFormat, va_list va)
+{
+    return RTTestErrContextV(NIL_RTTEST, pszFormat, va);
+}
+
+
+RTR3DECL(int) RTTestErrContext(const char *pszFormat, ...)
+{
+    va_list va;
+    va_start(va, pszFormat);
+    int rc = RTTestIErrContextV(pszFormat, va);
+    va_end(va);
+    return rc;
 }
 
 

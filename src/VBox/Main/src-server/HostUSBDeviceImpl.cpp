@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HostUSBDeviceImpl.cpp 87376 2021-01-22 19:22:03Z vboxsync $ */
 /** @file
  * VirtualBox IHostUSBDevice COM interface implementation.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,6 +16,7 @@
  */
 
 
+#define LOG_GROUP LOG_GROUP_MAIN_HOSTUSBDEVICE
 #include <iprt/types.h> /* for UINT64_C */
 
 #include "HostUSBDeviceImpl.h"
@@ -24,9 +25,9 @@
 #include "VirtualBoxErrorInfoImpl.h"
 #include "USBProxyBackend.h"
 #include "USBIdDatabase.h"
+#include "LoggingNew.h"
 
 #include "AutoCaller.h"
-#include "Logging.h"
 
 #include <VBox/err.h>
 #include <iprt/cpp/utils.h>
@@ -201,11 +202,17 @@ HRESULT HostUSBDevice::getPort(USHORT *aPort)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-#if !defined(RT_OS_WINDOWS) /// @todo check up the bPort value on Windows before enabling this.
     *aPort = mUsb->bPort;
-#else
-    *aPort = 0;
-#endif
+
+    return S_OK;
+}
+
+
+HRESULT HostUSBDevice::getPortPath(com::Utf8Str &aPortPath)
+{
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    aPortPath = mUsb->pszPortPath;
 
     return S_OK;
 }
@@ -367,7 +374,7 @@ com::Utf8Str HostUSBDevice::i_getName()
                                                    : strProduct.c_str());
         else
         {
-            LogRel(("USB: Unknown USB device detected (idVendor: 0x%04x, idProduct: 0x%04x). Please, report the idVendor and idProduct to virtualbox.org.\n",
+            LogRel(("USB: Unknown USB device detected (idVendor: 0x%04x, idProduct: 0x%04x)\n",
                     mUsb->idVendor, mUsb->idProduct));
             if (strVendor.isNotEmpty())
                 name = strVendor;
@@ -477,16 +484,16 @@ HRESULT HostUSBDevice::i_requestCaptureForVM(SessionMachine *aMachine, bool aSet
     mMaskedIfs = aMaskedIfs;
     mCaptureFilename = aCaptureFilename;
     alock.release();
-    int rc = mUSBProxyBackend->captureDevice(this);
-    if (RT_FAILURE(rc))
+    int vrc = mUSBProxyBackend->captureDevice(this);
+    if (RT_FAILURE(vrc))
     {
         alock.acquire();
         i_failTransition(kHostUSBDeviceState_Invalid);
         mMachine.setNull();
-        if (rc == VERR_SHARING_VIOLATION)
-            return setError(E_FAIL,
-                            tr("USB device '%s' with UUID {%RTuuid} is in use by someone else"),
-                            mName, mId.raw());
+        if (vrc == VERR_SHARING_VIOLATION)
+            return setErrorBoth(E_FAIL, vrc,
+                                tr("USB device '%s' with UUID {%RTuuid} is in use by someone else"),
+                                mName, mId.raw());
         return E_FAIL;
     }
 
@@ -508,6 +515,7 @@ HRESULT HostUSBDevice::i_requestCaptureForVM(SessionMachine *aMachine, bool aSet
  * @retval  E_* as appropriate.
  *
  * @param   aMachine        Machine this device should be attach to.
+ * @param   aCaptureFilename Filename to capture the USB traffic to.
  * @param   aMaskedIfs      The interfaces to hide from the guest.
  */
 HRESULT HostUSBDevice::i_attachToVM(SessionMachine *aMachine, const com::Utf8Str &aCaptureFilename,
@@ -1138,7 +1146,7 @@ bool HostUSBDevice::i_updateState(PCUSBDEVICE aDev, bool *aRunFilters, SessionMa
     const USBDEVICESTATE enmOldState = mUsb->enmState; NOREF(enmOldState);
     if (mUsb != aDev)
     {
-#ifdef RT_OS_WINDOWS
+#if defined(RT_OS_WINDOWS)
         /* we used this logic of string comparison in HostUSBDevice::compare
          * now we need to preserve strings from the old device if the new device has zero strings
          * this ensures the device is correctly matched later on
@@ -1194,10 +1202,10 @@ bool HostUSBDevice::i_updateState(PCUSBDEVICE aDev, bool *aRunFilters, SessionMa
         mUsb = aDev;
     }
 
-/** @def HOSTUSBDEVICE_FUZZY_STATE
+/*
  * Defined on hosts where we have a driver that keeps proper device states.
  */
-# if defined(RT_OS_LINUX) || defined(DOXYGEN_RUNNING)
+# if defined(RT_OS_LINUX) || defined(RT_OS_DARWIN)
 #  define HOSTUSBDEVICE_FUZZY_STATE 1
 # else
 #  undef  HOSTUSBDEVICE_FUZZY_STATE
@@ -1292,6 +1300,7 @@ bool HostUSBDevice::i_updateState(PCUSBDEVICE aDev, bool *aRunFilters, SessionMa
                     /* Changed! */
                     case kHostUSBDeviceState_UsedByHost:
                         fIsImportant = true;
+                        RT_FALL_THRU();
                     case kHostUSBDeviceState_Unused:
                         LogThisFunc(("{%s} %s -> %s\n", mName, i_getStateName(), i_stateName(kHostUSBDeviceState_Capturable)));
                         *aRunFilters = i_setState(kHostUSBDeviceState_Capturable);
@@ -1859,6 +1868,7 @@ bool HostUSBDevice::i_setState(HostUSBDeviceState aNewState,
                 case kHostUSBDeviceState_Capturable:
                 case kHostUSBDeviceState_Unused:
                     fFilters = true;
+                    RT_FALL_THRU();
                 case kHostUSBDeviceState_PhysDetached:
                     Assert(aNewPendingState == kHostUSBDeviceState_Invalid);
                     Assert(aNewSubState == kHostUSBDeviceSubState_Default);
@@ -1878,6 +1888,7 @@ bool HostUSBDevice::i_setState(HostUSBDeviceState aNewState,
                 /* Host changes. */
                 case kHostUSBDeviceState_Unused:
                     fFilters = true; /* Wildcard only... */
+                    RT_FALL_THRU();
                 case kHostUSBDeviceState_UsedByHost:
                 case kHostUSBDeviceState_PhysDetached:
                     Assert(aNewPendingState == kHostUSBDeviceState_Invalid);
@@ -2132,7 +2143,7 @@ bool HostUSBDevice::i_setState(HostUSBDeviceState aNewState,
                 case kHostUSBDeviceState_HeldByProxy:
                     Assert(aNewPendingState == kHostUSBDeviceState_Invalid);
                     Assert(aNewSubState == kHostUSBDeviceSubState_Default);
-                    Assert(mPendingUniState == kHostUSBDeviceState_Unused);
+                    Assert(mPendingUniState == kHostUSBDeviceState_UsedByVM);
                     break;
 
                 /* Success */
@@ -2230,7 +2241,7 @@ bool HostUSBDevice::i_setState(HostUSBDeviceState aNewState,
  * A convenience for entering a transitional state.
 
  * @param   aNewState       The new state (transitional).
- * @param   aFinalSubState  The final state of the transition (non-transitional).
+ * @param   aFinalState     The final state of the transition (non-transitional).
  * @param   aNewSubState    The new sub-state when applicable.
  *
  * @returns Always false because filters are never applied for the start of a transition.
@@ -2297,7 +2308,7 @@ bool HostUSBDevice::i_advanceTransition(bool aSkipReAttach /* = false */)
                     break;
                 case kHostUSBDeviceSubState_AwaitingReAttach:
                     enmSub = kHostUSBDeviceSubState_Default;
-                    /* fall thru */
+                    RT_FALL_THRU();
                 case kHostUSBDeviceSubState_Default:
                     switch (enmPending)
                     {
@@ -2326,7 +2337,7 @@ bool HostUSBDevice::i_advanceTransition(bool aSkipReAttach /* = false */)
                     break;
                 case kHostUSBDeviceSubState_AwaitingReAttach:
                     enmSub = kHostUSBDeviceSubState_Default;
-                    /* fall thru */
+                    RT_FALL_THRU();
                 case kHostUSBDeviceSubState_Default:
                     switch (enmPending)
                     {
@@ -2355,7 +2366,7 @@ bool HostUSBDevice::i_advanceTransition(bool aSkipReAttach /* = false */)
                     break;
                 case kHostUSBDeviceSubState_AwaitingReAttach:
                     enmSub = kHostUSBDeviceSubState_Default;
-                    /* fall thru */
+                    RT_FALL_THRU();
                 case kHostUSBDeviceSubState_Default:
                     switch (enmPending)
                     {
@@ -2381,7 +2392,7 @@ bool HostUSBDevice::i_advanceTransition(bool aSkipReAttach /* = false */)
                     break;
                 case kHostUSBDeviceSubState_AwaitingReAttach:
                     enmSub = kHostUSBDeviceSubState_Default;
-                    /* fall thru */
+                    RT_FALL_THRU();
                 case kHostUSBDeviceSubState_Default:
                     switch (enmPending)
                     {
@@ -2470,7 +2481,7 @@ bool HostUSBDevice::i_failTransition(HostUSBDeviceState a_enmStateHint)
             {
                 case kHostUSBDeviceSubState_AwaitingDetach:
                     enmSub = kHostUSBDeviceSubState_Default;
-                    /* fall thru */
+                    RT_FALL_THRU();
                 case kHostUSBDeviceSubState_Default:
                     enmState = mPrevUniState;
                     break;
@@ -2544,9 +2555,7 @@ USBDeviceState_T HostUSBDevice::i_canonicalState() const
         case kHostUSBDeviceState_Capturing:
             Assert(   mPendingUniState == kHostUSBDeviceState_UsedByVM
                    || mPendingUniState == kHostUSBDeviceState_HeldByProxy);
-            return mPendingUniState == kHostUSBDeviceState_UsedByVM
-                ? (USBDeviceState_T)USBDeviceState_Captured
-                : (USBDeviceState_T)USBDeviceState_Held;
+            return mPendingUniState == kHostUSBDeviceState_UsedByVM ? USBDeviceState_Captured : USBDeviceState_Held;
             /* The cast ^^^^ is because xidl is using different enums for
                each of the values. *Very* nice idea... :-) */
 
@@ -2559,9 +2568,7 @@ USBDeviceState_T HostUSBDevice::i_canonicalState() const
         case kHostUSBDeviceState_ReleasingToHost:
             Assert(   mPrevUniState == kHostUSBDeviceState_UsedByVM
                    || mPrevUniState == kHostUSBDeviceState_HeldByProxy);
-            return mPrevUniState == kHostUSBDeviceState_UsedByVM
-                ? (USBDeviceState_T)USBDeviceState_Captured
-                : (USBDeviceState_T)USBDeviceState_Held;
+            return mPrevUniState == kHostUSBDeviceState_UsedByVM ? USBDeviceState_Captured : USBDeviceState_Held;
             /* The cast ^^^^ is because xidl is using different enums for
                each of the values. *Very* nice idea... :-) */
 

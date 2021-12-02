@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fwtcp.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT Network - TCP port-forwarding.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -238,19 +238,26 @@ fwtcp_pmgr_listen(struct pollmgr_handler *handler, SOCKET fd, int revents)
         return POLLIN;
     }
 
+#ifdef RT_OS_LINUX
+    status = proxy_fixup_accepted_socket(newsock);
+    if (status < 0) {
+        proxy_reset_socket(newsock);
+        return POLLIN;
+    }
+#endif
 
-#ifdef LOG_ENABLED
     if (ss.ss_family == PF_INET) {
         struct sockaddr_in *peer4 = (struct sockaddr_in *)&ss;
+        RT_NOREF(peer4);
         DPRINTF(("<--- TCP %RTnaipv4:%d\n",
                  peer4->sin_addr.s_addr, ntohs(peer4->sin_port)));
     }
     else { /* PF_INET6 */
         struct sockaddr_in6 *peer6 = (struct sockaddr_in6 *)&ss;
+        RT_NOREF(peer6);
         DPRINTF(("<--- TCP %RTnaipv6:%d\n",
                  &peer6->sin6_addr, ntohs(peer6->sin6_port)));
     }
-#endif
 
     pxtcp = pxtcp_create_forwarded(newsock);
     if (pxtcp == NULL) {

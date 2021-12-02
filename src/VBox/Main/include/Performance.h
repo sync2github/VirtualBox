@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: Performance.h 85263 2020-07-12 00:24:26Z vboxsync $ */
 /** @file
  * VirtualBox Main - Performance Classes declaration.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,8 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-#ifndef ___performance_h
-#define ___performance_h
+
+#ifndef MAIN_INCLUDED_Performance_h
+#define MAIN_INCLUDED_Performance_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/com/defs.h>
 #include <VBox/com/ptr.h>
@@ -275,12 +279,12 @@ namespace pm
                          ULONG aAllocVMM, ULONG aFreeVMM,
                          ULONG aBalloonedVMM, ULONG aSharedVMM,
                          ULONG aVmNetRx, ULONG aVmNetTx);
-        int enable(ULONG mask);
-        int disable(ULONG mask);
+        HRESULT enable(ULONG mask);
+        HRESULT disable(ULONG mask);
 
-        int enqueueRequest(CollectorGuestRequest *aRequest);
+        HRESULT enqueueRequest(CollectorGuestRequest *aRequest);
         HRESULT enableInternal(ULONG mask);
-        int disableInternal(ULONG mask);
+        HRESULT disableInternal(ULONG mask);
 
         const com::Utf8Str& getVMName() const { return mMachineName; };
 
@@ -302,7 +306,7 @@ namespace pm
         ULONG getVmNetTx()      { return mVmNetTx; };
 
     private:
-        int enableVMMStats(bool mCollectVMMStats);
+        HRESULT enableVMMStats(bool mCollectVMMStats);
 
         CollectorGuestManager *mManager;
 
@@ -342,7 +346,7 @@ namespace pm
         CollectorGuest *getVMMStatsProvider() { return mVMMStatsProvider; };
         void preCollect(CollectorHints& hints, uint64_t iTick);
         void destroyUnregistered();
-        int enqueueRequest(CollectorGuestRequest *aRequest);
+        HRESULT enqueueRequest(CollectorGuestRequest *aRequest);
 
         CollectorGuest *getBlockedGuest() { return mGuestBeingCalled; };
 
@@ -413,8 +417,8 @@ namespace pm
 
         bool collectorBeat(uint64_t nowAt);
 
-        virtual int enable()  { mEnabled = true; return S_OK; };
-        virtual int disable() { mEnabled = false; return S_OK; };
+        virtual HRESULT enable()  { mEnabled = true; return S_OK; };
+        virtual HRESULT disable() { mEnabled = false; return S_OK; };
         void unregister() { mUnregistered = true; };
 
         bool isUnregistered() { return mUnregistered; };
@@ -577,7 +581,7 @@ namespace pm
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints, uint64_t iTick);
         void collect();
-        const char *getUnit() { return "mB"; };
+        const char *getUnit() { return "MB"; };
         ULONG getMinValue() { return 0; };
         ULONG getMaxValue() { return INT32_MAX; };
         ULONG getScale() { return 1; }
@@ -598,7 +602,7 @@ namespace pm
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints, uint64_t iTick);
         void collect();
-        const char *getUnit() { return "mB"; };
+        const char *getUnit() { return "MB"; };
         ULONG getMinValue() { return 0; };
         ULONG getMaxValue() { return INT32_MAX; };
         ULONG getScale() { return 1; }
@@ -644,8 +648,8 @@ namespace pm
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints, uint64_t iTick);
         void collect();
-        int enable();
-        int disable();
+        HRESULT enable();
+        HRESULT disable();
         const char *getUnit() { return "kB"; };
         ULONG getMinValue() { return 0; };
         ULONG getMaxValue() { return INT32_MAX; };
@@ -729,7 +733,7 @@ namespace pm
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints, uint64_t iTick);
         void collect();
-        const char *getUnit() { return "mB"; };
+        const char *getUnit() { return "MB"; };
         ULONG getMinValue() { return 0; };
         ULONG getMaxValue() { return INT32_MAX; };
         ULONG getScale() { return 1; }
@@ -754,8 +758,8 @@ namespace pm
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints, uint64_t iTick);
         void collect();
-        int enable();
-        int disable();
+        HRESULT enable();
+        HRESULT disable();
         const char *getUnit() { return "B/s"; };
         ULONG getMinValue() { return 0; };
         ULONG getMaxValue() { return INT32_MAX; };
@@ -774,8 +778,8 @@ namespace pm
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints, uint64_t iTick);
         void collect();
-        int enable();
-        int disable();
+        HRESULT enable();
+        HRESULT disable();
         const char *getUnit() { return "%"; };
         ULONG getMinValue() { return 0; };
         ULONG getMaxValue() { return PM_CPU_LOAD_MULTIPLIER; };
@@ -796,8 +800,8 @@ namespace pm
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints, uint64_t iTick);
         void collect();
-        int enable();
-        int disable();
+        HRESULT enable();
+        HRESULT disable();
         const char *getUnit() { return "kB"; };
         ULONG getMinValue() { return 0; };
         ULONG getMaxValue() { return INT32_MAX; };
@@ -897,5 +901,5 @@ namespace pm
         void processMetricList(const com::Utf8Str &name, const ComPtr<IUnknown> object);
     };
 }
-#endif /* ___performance_h */
+#endif /* !MAIN_INCLUDED_Performance_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

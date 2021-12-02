@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UsbTestServiceInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * UsbTestServ - Remote USB test configuration and execution server, Internal Header.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___UsbTestServiceInternal_h___
-#define ___UsbTestServiceInternal_h___
+#ifndef VBOX_INCLUDED_SRC_usb_UsbTestServiceInternal_h
+#define VBOX_INCLUDED_SRC_usb_UsbTestServiceInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/getopt.h>
 #include <iprt/stream.h>
@@ -209,5 +212,5 @@ extern UTSTRANSPORT const g_TcpTransport;
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_usb_UsbTestServiceInternal_h */
 

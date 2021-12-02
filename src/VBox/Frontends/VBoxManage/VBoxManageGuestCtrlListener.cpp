@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManageGuestCtrlListener.cpp 84519 2020-05-25 17:29:52Z vboxsync $ */
 /** @file
  * VBoxManage - Guest control listener implementations.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,11 +28,15 @@
 #include <VBox/com/ErrorInfo.h>
 #include <VBox/com/errorprint.h>
 
+#include <iprt/semaphore.h>
 #include <iprt/time.h>
 
 #include <map>
 #include <vector>
 
+
+/** Event semaphore we're using for notification. */
+extern RTSEMEVENT g_SemEventGuestCtrlCanceled;
 
 
 /*
@@ -95,7 +99,7 @@ STDMETHODIMP GuestFileEventListener::HandleEvent(VBoxEventType_T aType, IEvent *
                 FileStatus_T fileSts;
                 CHECK_ERROR_BREAK(pEvent, COMGETTER(Status)(&fileSts));
                 Bstr strPath;
-                CHECK_ERROR_BREAK(pProcess, COMGETTER(FileName)(strPath.asOutParam()));
+                CHECK_ERROR_BREAK(pProcess, COMGETTER(Filename)(strPath.asOutParam()));
                 ULONG uID;
                 CHECK_ERROR_BREAK(pProcess, COMGETTER(Id)(&uID));
 
@@ -247,7 +251,7 @@ STDMETHODIMP GuestSessionEventListener::HandleEvent(VBoxEventType_T aType, IEven
                 BOOL fRegistered;
                 CHECK_ERROR_BREAK(pEvent, COMGETTER(Registered)(&fRegistered));
                 Bstr strPath;
-                CHECK_ERROR_BREAK(pFile, COMGETTER(FileName)(strPath.asOutParam()));
+                CHECK_ERROR_BREAK(pFile, COMGETTER(Filename)(strPath.asOutParam()));
 
                 RTPrintf("File \"%s\" %s\n",
                          Utf8Str(strPath).c_str(),
@@ -504,6 +508,60 @@ STDMETHODIMP GuestEventListener::HandleEvent(VBoxEventType_T aType, IEvent *aEve
                 }
 
             } while (0);
+            break;
+        }
+
+        default:
+            AssertFailed();
+    }
+
+    return S_OK;
+}
+
+/*
+ * GuestAdditionsRunlevelListener
+ * GuestAdditionsRunlevelListener
+ * GuestAdditionsRunlevelListener
+ */
+
+GuestAdditionsRunlevelListener::GuestAdditionsRunlevelListener(AdditionsRunLevelType_T enmRunLevel)
+    : mRunLevelTarget(enmRunLevel)
+{
+}
+
+GuestAdditionsRunlevelListener::~GuestAdditionsRunlevelListener(void)
+{
+}
+
+void GuestAdditionsRunlevelListener::uninit(void)
+{
+}
+
+STDMETHODIMP GuestAdditionsRunlevelListener::HandleEvent(VBoxEventType_T aType, IEvent *aEvent)
+{
+    Assert(mRunLevelTarget != AdditionsRunLevelType_None);
+
+    HRESULT rc;
+
+    switch (aType)
+    {
+        case VBoxEventType_OnGuestAdditionsStatusChanged:
+        {
+            ComPtr<IGuestAdditionsStatusChangedEvent> pEvent = aEvent;
+            Assert(!pEvent.isNull());
+
+            AdditionsRunLevelType_T RunLevelCur = AdditionsRunLevelType_None;
+            CHECK_ERROR_BREAK(pEvent, COMGETTER(RunLevel)(&RunLevelCur));
+
+            if (mfVerbose)
+                RTPrintf("Reached run level %RU32\n", RunLevelCur);
+
+            if (RunLevelCur == mRunLevelTarget)
+            {
+                int vrc = RTSemEventSignal(g_SemEventGuestCtrlCanceled);
+                AssertRC(vrc);
+            }
+
             break;
         }
 

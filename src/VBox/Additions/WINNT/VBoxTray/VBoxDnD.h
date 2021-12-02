@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDnD.h 85695 2020-08-11 16:39:54Z vboxsync $ */
 /** @file
  * VBoxDnD.h - Windows-specific bits of the drag'n drop service.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __VBOXTRAYDND__H
-#define __VBOXTRAYDND__H
+#ifndef GA_INCLUDED_SRC_WINNT_VBoxTray_VBoxDnD_h
+#define GA_INCLUDED_SRC_WINNT_VBoxTray_VBoxDnD_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/critsect.h>
 
@@ -25,17 +28,21 @@
 
 class VBoxDnDWnd;
 
+/**
+ * Class for implementing IDataObject for VBoxTray's DnD support.
+ */
 class VBoxDnDDataObject : public IDataObject
 {
 public:
 
     enum Status
     {
-        Uninitialized = 0,
-        Initialized,
-        Dropping,
-        Dropped,
-        Aborted
+        Status_Uninitialized = 0,
+        Status_Initialized,
+        Status_Dropping,
+        Status_Dropped,
+        Status_Aborted,
+        Status_32Bit_Hack = 0x7fffffff
     };
 
 public:
@@ -67,26 +74,37 @@ public:
 
     int Abort(void);
     void SetStatus(Status status);
-    int Signal(const RTCString &strFormat, const void *pvData, uint32_t cbData);
+    int Signal(const RTCString &strFormat, const void *pvData, size_t cbData);
 
 protected:
 
     bool LookupFormatEtc(LPFORMATETC pFormatEtc, ULONG *puIndex);
-    static HGLOBAL MemDup(HGLOBAL hMemSource);
     void RegisterFormat(LPFORMATETC pFormatEtc, CLIPFORMAT clipFormat, TYMED tyMed = TYMED_HGLOBAL,
                         LONG lindex = -1, DWORD dwAspect = DVASPECT_CONTENT, DVTARGETDEVICE *pTargetDevice = NULL);
 
-    Status      mStatus;
-    LONG        mRefCount;
-    ULONG       mcFormats;
-    LPFORMATETC mpFormatEtc;
-    LPSTGMEDIUM mpStgMedium;
-    RTSEMEVENT  mSemEvent;
-    RTCString   mstrFormat;
-    void       *mpvData;
-    uint32_t    mcbData;
+    /** Current drag and drop status. */
+    Status      m_enmStatus;
+    /** Internal reference count of this object. */
+    LONG        m_cRefs;
+    /** Number of native formats registered. This can be a different number than supplied with m_lstFormats. */
+    ULONG       m_cFormats;
+    /** Array of registered FORMATETC structs. Matches m_cFormats. */
+    LPFORMATETC m_paFormatEtc;
+    /** Array of registered STGMEDIUM structs. Matches m_cFormats. */
+    LPSTGMEDIUM m_paStgMedium;
+    /** Event semaphore used for waiting on status changes. */
+    RTSEMEVENT  m_EvtDropped;
+    /** Format of currently retrieved data. */
+    RTCString   m_strFormat;
+    /** The retrieved data as a raw buffer. */
+    void       *m_pvData;
+    /** Raw buffer size (in bytes). */
+    size_t      m_cbData;
 };
 
+/**
+ * Class for implementing IDropSource for VBoxTray's DnD support.
+ */
 class VBoxDnDDropSource : public IDropSource
 {
 public:
@@ -96,7 +114,7 @@ public:
 
 public:
 
-    uint32_t GetCurrentAction(void) { return muCurAction; }
+    VBOXDNDACTION GetCurrentAction(void) { return m_enmActionCurrent; }
 
 public: /* IUnknown methods. */
 
@@ -112,15 +130,18 @@ public: /* IDropSource methods. */
 protected:
 
     /** Reference count of this object. */
-    LONG                  mRefCount;
+    LONG                  m_cRefs;
     /** Pointer to parent proxy window. */
-    VBoxDnDWnd           *mpWndParent;
+    VBoxDnDWnd           *m_pWndParent;
     /** Current drag effect. */
-    DWORD                 mdwCurEffect;
+    DWORD                 m_dwCurEffect;
     /** Current action to perform on the host. */
-    uint32_t              muCurAction;
+    VBOXDNDACTION         m_enmActionCurrent;
 };
 
+/**
+ * Class for implementing IDropTarget for VBoxTray's DnD support.
+ */
 class VBoxDnDDropTarget : public IDropTarget
 {
 public:
@@ -149,34 +170,41 @@ protected:
 
 public:
 
-    void *DataMutableRaw(void) const { return mpvData; }
-    size_t DataSize(void) const { return mcbData; }
+    /** Returns the data as mutable raw. Use with caution! */
+    void *DataMutableRaw(void) const { return m_pvData; }
+
+    /** Returns the data size (in bytes). */
+    size_t DataSize(void) const { return m_cbData; }
+
     RTCString Formats(void) const;
     int WaitForDrop(RTMSINTERVAL msTimeout);
 
 protected:
 
     /** Reference count of this object. */
-    LONG                  mRefCount;
+    LONG                  m_cRefs;
     /** Pointer to parent proxy window. */
-    VBoxDnDWnd           *mpWndParent;
+    VBoxDnDWnd           *m_pWndParent;
     /** Current drop effect. */
-    DWORD                 mdwCurEffect;
+    DWORD                 m_dwCurEffect;
     /** Copy of the data object's current FORMATETC struct.
      *  Note: We don't keep the pointer of the DVTARGETDEVICE here! */
-    FORMATETC             mFormatEtc;
-    /** Stringified data object's formats string.  */
-    RTCString             mstrFormats;
+    FORMATETC             m_FormatEtc;
+    /** Stringified data object's format currently in use.  */
+    RTCString             m_strFormat;
     /** Pointer to actual format data. */
-    void                 *mpvData;
+    void                 *m_pvData;
     /** Size (in bytes) of format data. */
-    size_t                mcbData;
+    size_t                m_cbData;
     /** Event for waiting on the "drop" event. */
-    RTSEMEVENT            hEventDrop;
+    RTSEMEVENT            m_EvtDrop;
     /** Result of the drop event. */
-    int                   mDroppedRc;
+    int                   m_rcDropped;
 };
 
+/**
+ * Class for implementing IEnumFORMATETC for VBoxTray's DnD support.
+ */
 class VBoxDnDEnumFormatEtc : public IEnumFORMATETC
 {
 public:
@@ -202,22 +230,26 @@ public:
 
 private:
 
-    LONG        m_lRefCount;
-    ULONG       m_nIndex;
-    ULONG       m_nNumFormats;
-    LPFORMATETC m_pFormatEtc;
+    /** Reference count of this object. */
+    LONG        m_cRefs;
+    /** Current index for format iteration. */
+    ULONG       m_uIdxCur;
+    /** Number of format this object contains. */
+    ULONG       m_cFormats;
+    /** Array of FORMATETC formats this object contains. Matches m_cFormats. */
+    LPFORMATETC m_paFormatEtc;
 };
 
 struct VBOXDNDCONTEXT;
 class VBoxDnDWnd;
 
-/*
+/**
  * A drag'n drop event from the host.
  */
 typedef struct VBOXDNDEVENT
 {
-    /** The actual event data. */
-    VBGLR3DNDHGCMEVENT Event;
+    /** The actual DnD HGCM event data. */
+    PVBGLR3DNDEVENT pVbglR3Event;
 
 } VBOXDNDEVENT, *PVBOXDNDEVENT;
 
@@ -228,6 +260,8 @@ typedef struct VBOXDNDCONTEXT
 {
     /** Pointer to the service environment. */
     const VBOXSERVICEENV      *pEnv;
+    /** Started indicator. */
+    bool                       fStarted;
     /** Shutdown indicator. */
     bool                       fShutdown;
     /** The registered window class. */
@@ -302,14 +336,13 @@ public:
 
 public:
 
-    int Initialize(PVBOXDNDCONTEXT pContext);
+    int Initialize(PVBOXDNDCONTEXT a_pCtx);
     void Destroy(void);
 
 public:
 
-    /** The window's thread for the native message pump and
-     *  OLE context. */
-    static int Thread(RTTHREAD hThread, void *pvUser);
+    /** The window's thread for the native message pump and OLE context. */
+    static DECLCALLBACK(int) Thread(RTTHREAD hThread, void *pvUser);
 
 public:
 
@@ -329,82 +362,84 @@ public:
     int OnCreate(void);
     void OnDestroy(void);
 
-    /* H->G */
-    int OnHgEnter(const RTCList<RTCString> &formats, uint32_t uAllActions);
-    int OnHgMove(uint32_t u32xPos, uint32_t u32yPos, uint32_t uAllActions);
+    int Abort(void);
+
+    /* Host -> Guest */
+    int OnHgEnter(const RTCList<RTCString> &formats, VBOXDNDACTIONLIST m_lstActionsAllowed);
+    int OnHgMove(uint32_t u32xPos, uint32_t u32yPos, VBOXDNDACTION dndAction);
     int OnHgDrop(void);
     int OnHgLeave(void);
-    int OnHgDataReceived(const void *pvData, uint32_t cData);
+    int OnHgDataReceive(PVBGLR3GUESTDNDMETADATA pMeta);
     int OnHgCancel(void);
 
 #ifdef VBOX_WITH_DRAG_AND_DROP_GH
-    /* G->H */
-    int OnGhIsDnDPending(uint32_t uScreenID);
-    int OnGhDropped(const char *pszFormat, uint32_t cbFormats, uint32_t uDefAction);
+    /* Guest -> Host */
+    int OnGhIsDnDPending(void);
+    int OnGhDrop(const RTCString &strFormat, VBOXDNDACTION dndActionDefault);
 #endif
 
     void PostMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
     int ProcessEvent(PVBOXDNDEVENT pEvent);
 
-public:
-
-    int hide(void);
+    int Hide(void);
+    void Reset(void);
 
 protected:
 
+    int checkForSessionChange(void);
     int makeFullscreen(void);
     int mouseMove(int x, int y, DWORD dwMouseInputFlags);
     int mouseRelease(void);
-    void reset(void);
     int setMode(Mode enmMode);
 
 public: /** @todo Make protected! */
 
     /** Pointer to DnD context. */
-    PVBOXDNDCONTEXT            pCtx;
+    PVBOXDNDCONTEXT            m_pCtx;
     /** The proxy window's main thread for processing
      *  window messages. */
-    RTTHREAD                   hThread;
-    RTCRITSECT                 mCritSect;
-    RTSEMEVENT                 mEventSem;
+    RTTHREAD                   m_hThread;
+    /** Critical section to serialize access. */
+    RTCRITSECT                 m_CritSect;
+    /** Event semaphore to wait for new DnD events. */
+    RTSEMEVENT                 m_EvtSem;
 #ifdef RT_OS_WINDOWS
     /** The window's handle. */
-    HWND                       hWnd;
+    HWND                       m_hWnd;
     /** List of allowed MIME types this
      *  client can handle. Make this a per-instance
      *  property so that we can selectively allow/forbid
      *  certain types later on runtime. */
-    RTCList<RTCString>         lstFmtSup;
+    RTCList<RTCString>         m_lstFmtSup;
     /** List of formats for the current
      *  drag'n drop operation. */
-    RTCList<RTCString>         lstFmtActive;
-    /** Flags of all current drag'n drop
-     *  actions allowed. */
-    uint32_t                   uAllActions;
+    RTCList<RTCString>         m_lstFmtActive;
+    /** List of all current drag'n drop actions allowed. */
+    VBOXDNDACTIONLIST          m_lstActionsAllowed;
     /** The startup information required
      *  for the actual DoDragDrop() call. */
-    VBOXDNDSTARTUPINFO         startupInfo;
+    VBOXDNDSTARTUPINFO         m_startupInfo;
     /** Is the left mouse button being pressed
      *  currently while being in this window? */
-    bool                       mfMouseButtonDown;
+    bool                       m_fMouseButtonDown;
 # ifdef VBOX_WITH_DRAG_AND_DROP_GH
-    /** IDropTarget implementation for guest -> host
-     *  support. */
-    VBoxDnDDropTarget         *pDropTarget;
+    /** Pointer to IDropTarget implementation for
+     *  guest -> host support. */
+    VBoxDnDDropTarget         *m_pDropTarget;
 # endif /* VBOX_WITH_DRAG_AND_DROP_GH */
 #else /* !RT_OS_WINDOWS */
     /** @todo Implement me. */
 #endif /* !RT_OS_WINDOWS */
 
     /** The window's own DnD context. */
-    VBGLR3GUESTDNDCMDCTX       mDnDCtx;
+    VBGLR3GUESTDNDCMDCTX       m_cmdCtx;
     /** The current operation mode. */
-    Mode                       mMode;
+    Mode                       m_enmMode;
     /** The current state. */
-    State                      mState;
+    State                      m_enmState;
     /** Format being requested. */
-    RTCString                  mFormatRequested;
+    RTCString                  m_strFmtReq;
 };
 
-#endif /* !__VBOXTRAYDND__H */
+#endif /* !GA_INCLUDED_SRC_WINNT_VBoxTray_VBoxDnD_h */
 

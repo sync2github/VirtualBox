@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: uniread.cpp 82972 2020-02-04 11:13:09Z vboxsync $ */
 /** @file
  * IPRT - Unicode Specification Reader.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -1040,7 +1040,7 @@ int PrintHeader(const char *argv0, const char *pszBaseDir)
                   " */\n"
                   "\n"
                   "/*\n"
-                  " * Copyright (C) 2006-2016 Oracle Corporation \n"
+                  " * Copyright (C) 2006-2020 Oracle Corporation \n"
                   " *\n"
                   " * This file is part of VirtualBox Open Source Edition (OSE), as\n"
                   " * available from http://www.virtualbox.org. This file is free software;\n"

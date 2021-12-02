@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_system_h
-#define ___iprt_system_h
+#ifndef IPRT_INCLUDED_system_h
+#define IPRT_INCLUDED_system_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -256,9 +259,106 @@ RTDECL(int) RTSystemShutdown(RTMSINTERVAL cMsDelay, uint32_t fFlags, const char 
  */
 RTDECL(bool) RTSystemIsInsideVM(void);
 
+/**
+ * System firmware types.
+ */
+typedef enum RTSYSFWTYPE
+{
+    /** Invalid zero value. */
+    RTSYSFWTYPE_INVALID = 0,
+    /** Unknown firmware. */
+    RTSYSFWTYPE_UNKNOWN,
+    /** Firmware is BIOS. */
+    RTSYSFWTYPE_BIOS,
+    /** Firmware is UEFI. */
+    RTSYSFWTYPE_UEFI,
+    /** End valid firmware values (exclusive).  */
+    RTSYSFWTYPE_END,
+    /** The usual 32-bit hack.  */
+    RTSYSFWTYPE_32_BIT_HACK = 0x7fffffff
+} RTSYSFWTYPE;
+/** Pointer to a system firmware type. */
+typedef RTSYSFWTYPE *PRTSYSFWTYPE;
+
+/**
+ * Queries the system's firmware type.
+ *
+ * @returns IPRT status code.
+ * @retval  VERR_NOT_SUPPORTED if not supported or implemented.
+ * @param   penmType    Where to return the firmware type on success.
+ */
+RTDECL(int) RTSystemQueryFirmwareType(PRTSYSFWTYPE penmType);
+
+/**
+ * Translates the @a enmType value to a string.
+ *
+ * @returns Read-only name.
+ * @param   enmType     The firmware type to convert to string.
+ */
+RTDECL(const char *) RTSystemFirmwareTypeName(RTSYSFWTYPE enmType);
+
+/**
+ * Boolean firmware values queriable via RTSystemQueryFirmwareBoolean().
+ */
+typedef enum RTSYSFWBOOL
+{
+    /** Invalid property, do not use. */
+    RTSYSFWBOOL_INVALID = 0,
+    /** Whether Secure Boot is enabled or not (type: boolean). */
+    RTSYSFWBOOL_SECURE_BOOT,
+    /** End of valid    */
+    RTSYSFWBOOL_END,
+    /** The usual 32-bit hack.  */
+    RTSYSFWBOOL_32_BIT_HACK = 0x7fffffff
+} RTSYSFWBOOL;
+
+/**
+ * Queries the value of a firmware property.
+ *
+ * @returns IPRT status code.
+ * @retval  VERR_NOT_SUPPORTED if we cannot query firmware properties on the host.
+ * @retval  VERR_SYS_UNSUPPORTED_FIRMWARE_PROPERTY if @a enmBoolean isn't
+ *          supported.
+ * @param   enmBoolean  The value to query.
+ * @param   pfValue     Where to return the value.
+ */
+RTDECL(int) RTSystemQueryFirmwareBoolean(RTSYSFWBOOL enmBoolean, bool *pfValue);
+
+#ifdef RT_OS_WINDOWS
+
+/**
+ * Get the Windows NT build number.
+ *
+ * @returns NT build number.
+ *
+ * @remarks Windows NT only.  Requires IPRT to be initialized.
+ */
+RTDECL(uint32_t) RTSystemGetNtBuildNo(void);
+
+/** Makes an NT version for comparison with RTSystemGetNtVersion(). */
+# define RTSYSTEM_MAKE_NT_VERSION(a_uMajor, a_uMinor, a_uBuild) \
+    ( ((uint64_t)(a_uMajor) << 52) | ((uint64_t)((a_uMinor) & 0xfffU) << 40) | ((uint32_t)(a_uBuild)) )
+/** Extracts the major version number from a RTSYSTEM_MAKE_NT_VERSION value. */
+# define RTSYSTEM_NT_VERSION_GET_MAJOR(a_uNtVersion) ((uint32_t)((a_uNtVersion) >> 52))
+/** Extracts the minor version number from a RTSYSTEM_MAKE_NT_VERSION value. */
+# define RTSYSTEM_NT_VERSION_GET_MINOR(a_uNtVersion) ((uint32_t)((a_uNtVersion) >> 40) & UINT32_C(0xfff))
+/** Extracts the build number from a RTSYSTEM_MAKE_NT_VERSION value. */
+# define RTSYSTEM_NT_VERSION_GET_BUILD(a_uNtVersion) ((uint32_t)(a_uNtVersion))
+
+/**
+ * Get the Windows NT version number.
+ *
+ * @returns Version formatted using RTSYSTEM_MAKE_NT_VERSION().
+ *
+ * @remarks Windows NT only.  Requires IPRT to be initialized.
+ */
+RTDECL(uint64_t) RTSystemGetNtVersion(void);
+
+#endif /* RT_OS_WINDOWS */
+
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_system_h */
 

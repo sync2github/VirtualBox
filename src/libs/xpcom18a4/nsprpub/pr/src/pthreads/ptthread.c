@@ -397,15 +397,11 @@ static PRThread* _PR_CreateThread(
         fFlags |= RTTHREADFLAGS_WAITABLE;
 #endif /* !VBOX_USE_IPRT_IN_NSPR */
 
-#ifndef VBOX_USE_IPRT_IN_NSPR
+#ifndef VBOX_USE_IPRT_IN_NSPR /* We let stackSize stay zero and let IPRT choose a default size. */
     if (0 == stackSize) stackSize = (64 * 1024);  /* default == 64K */
-#else
-    if (0 == stackSize) stackSize = (2 * 64 * 1024);  /* default == 128K */
-#endif /* VBOX_USE_IPRT_IN_NSPR */
 #ifdef _MD_MINIMUM_STACK_SIZE
     if (stackSize < _MD_MINIMUM_STACK_SIZE) stackSize = _MD_MINIMUM_STACK_SIZE;
 #endif
-#ifndef VBOX_USE_IPRT_IN_NSPR
     /*
      * Linux doesn't have pthread_attr_setstacksize.
      */
@@ -524,6 +520,9 @@ static PRThread* _PR_CreateThread(
 #else  /* VBOX_USE_IPRT_IN_NSPR */
 		rv = RTThreadCreateF(&hThread, _pt_iprt_root, thred, stackSize, enmType, fFlags, "nspr-%u", ASMAtomicIncU32(&s_iThread));
 		if (RT_SUCCESS(rv)) {
+#ifdef VBOX_USE_IPRT_IN_NSPR
+			RTMEM_WILL_LEAK(hThread);
+#endif
 			id = (pthread_t)RTThreadGetNative(hThread);
             rv = 0;
         } 

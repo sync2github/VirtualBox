@@ -24,8 +24,11 @@
  * SUCH DAMAGE.
  */
 
-#ifndef ___iprt_formats_elf_common_h
-#define ___iprt_formats_elf_common_h
+#ifndef IPRT_INCLUDED_formats_elf_common_h
+#define IPRT_INCLUDED_formats_elf_common_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/stdint.h>
 
@@ -195,6 +198,12 @@ typedef struct {
 #define PT_LOPROC       0x70000000      /* First processor-specific type. */
 #define PT_HIPROC       0x7fffffff      /* Last processor-specific type. */
 
+#define PT_GNU_EH_FRAME 0x6474e550 /**< GNU/Linux -> .eh_frame_hdr */
+#define PT_GNU_STACK    0x6474e551 /**< GNU/Linux -> stack prot (RWX or RW) */
+#define PT_GNU_RELRO    0x6474e552 /**< GNU/Linux -> make RO after relocations */
+#define PT_GNU_PROPERTY 0x6474e553 /**< GNU/Linux -> .note.gnu.property */
+
+
 /* Values for p_flags. */
 #define PF_X            0x1     /* Executable. */
 #define PF_W            0x2     /* Writable. */
@@ -305,6 +314,8 @@ typedef struct {
 # define NT_AUXV         6   /* Process auxiliary vectors. */
 # define NT_PRXFPREG     0x46e62b7f /* from gdb5.1/include/elf/common.h */
 #endif
+/* GNU Build ID in a dedicated section. */
+#define NT_GNU_BUILD_ID  3
 
 /* VirtualBox specific NOTE sections (added by Ramshankar) */
 #ifdef VBOX
@@ -333,5 +344,5 @@ typedef struct {
 /* Special symbol table indexes. */
 #define STN_UNDEF       0       /* Undefined symbol index. */
 
-#endif
+#endif /* !IPRT_INCLUDED_formats_elf_common_h */
 

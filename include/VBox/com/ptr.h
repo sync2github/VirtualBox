@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_com_ptr_h
-#define ___VBox_com_ptr_h
+#ifndef VBOX_INCLUDED_com_ptr_h
+#define VBOX_INCLUDED_com_ptr_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Make sure all the stdint.h macros are included - must come first! */
 #ifndef __STDC_LIMIT_MACROS
@@ -39,6 +42,7 @@
 #endif /* VBOX_WITH_XPCOM */
 
 #include <VBox/com/defs.h>
+#include <new> /* For bad_alloc. */
 
 
 /** @defgroup grp_com_ptr   Smart COM Pointer Classes
@@ -116,7 +120,7 @@ public:
      * pointer p does not support the ComPtr interface T.
      *
      * Does not call AddRef explicitly because if QueryInterface succeeded, then
-     * the refcount will have been increased by one already .
+     * the refcount will have been increased by one already.
      */
     template <class T2>
     ComPtr(const ComPtr<T2> &that)
@@ -141,7 +145,7 @@ public:
      * pointer p does not support the ComPtr interface T.
      *
      * Does not call AddRef explicitly because if QueryInterface succeeded, then
-     * the refcount will have been increased by one already .
+     * the refcount will have been increased by one already.
      */
     template <class T2>
     ComPtr(T2 *p)
@@ -166,7 +170,7 @@ public:
      * pointer p does not support the ComPtr interface T.
      *
      * Does not call AddRef explicitly because if QueryInterface succeeded, then
-     * the refcount will have been increased by one already .
+     * the refcount will have been increased by one already.
      */
     template <class T2>
     ComPtr& operator=(const ComPtr<T2> &that)
@@ -190,7 +194,7 @@ public:
      * pointer p does not support the ComPtr interface T.
      *
      * Does not call AddRef explicitly because if QueryInterface succeeded, then
-     * the refcount will have been increased by one already .
+     * the refcount will have been increased by one already.
      */
     template <class T2>
     ComPtr& operator=(T2 *p)
@@ -287,13 +291,9 @@ public:
         {
             if (m_p)
                 return m_p->QueryInterface(COM_IIDOF(T2), (void **)pp);
-            else
-            {
-                *pp = NULL;
-                return S_OK;
-            }
+            *pp = NULL;
+            return S_OK;
         }
-
         return E_INVALIDARG;
     }
 
@@ -469,38 +469,91 @@ public:
      *  @note Win32: when VBOX_COM_OUTOFPROC_MODULE is defined, the created
      *  object doesn't increase the lock count of the server module, as it
      *  does otherwise.
+     *
+     *  @note In order to make it easier to use, this method does _not_ throw
+     *        bad_alloc, but instead returns E_OUTOFMEMORY.
      */
     HRESULT createObject()
     {
-        HRESULT rc;
+        HRESULT hrc;
 #ifndef VBOX_WITH_XPCOM
 # ifdef VBOX_COM_OUTOFPROC_MODULE
-        ATL::CComObjectNoLock<T> *obj = new ATL::CComObjectNoLock<T>();
+        ATL::CComObjectNoLock<T> *obj = NULL;
+        try
+        {
+            obj = new ATL::CComObjectNoLock<T>();
+        }
+        catch (std::bad_alloc &)
+        {
+            obj = NULL;
+        }
         if (obj)
         {
             obj->InternalFinalConstructAddRef();
-            rc = obj->FinalConstruct();
+            try
+            {
+                hrc = obj->FinalConstruct();
+            }
+            catch (std::bad_alloc &)
+            {
+                hrc = E_OUTOFMEMORY;
+            }
             obj->InternalFinalConstructRelease();
+            if (FAILED(hrc))
+            {
+                delete obj;
+                obj = NULL;
+            }
         }
         else
-            rc = E_OUTOFMEMORY;
+            hrc = E_OUTOFMEMORY;
 # else
         ATL::CComObject<T> *obj = NULL;
-        rc = ATL::CComObject<T>::CreateInstance(&obj);
+        hrc = ATL::CComObject<T>::CreateInstance(&obj);
 # endif
 #else /* VBOX_WITH_XPCOM */
-        ATL::CComObject<T> *obj = new ATL::CComObject<T>();
+        ATL::CComObject<T> *obj;
+# ifndef RT_EXCEPTIONS_ENABLED
+        obj = new ATL::CComObject<T>();
+# else
+        try
+        {
+            obj = new ATL::CComObject<T>();
+        }
+        catch (std::bad_alloc &)
+        {
+            obj = NULL;
+        }
+# endif
         if (obj)
-            rc = obj->FinalConstruct();
+        {
+# ifndef RT_EXCEPTIONS_ENABLED
+            hrc = obj->FinalConstruct();
+# else
+            try
+            {
+                hrc = obj->FinalConstruct();
+            }
+            catch (std::bad_alloc &)
+            {
+                hrc = E_OUTOFMEMORY;
+            }
+# endif
+            if (FAILED(hrc))
+            {
+                delete obj;
+                obj = NULL;
+            }
+        }
         else
-            rc = E_OUTOFMEMORY;
+            hrc = E_OUTOFMEMORY;
 #endif /* VBOX_WITH_XPCOM */
         *this = obj;
-        return rc;
+        return hrc;
     }
 };
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_com_ptr_h */
 

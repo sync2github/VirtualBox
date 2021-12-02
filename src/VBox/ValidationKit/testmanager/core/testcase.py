@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0302
+# $Id: testcase.py 82968 2020-02-04 10:35:17Z vboxsync $
+# pylint: disable=too-many-lines
 
 """
 Test Manager - Test Case.
@@ -8,7 +8,7 @@ Test Manager - Test Case.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,11 +27,12 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard python imports.
 import copy;
+import sys;
 import unittest;
 
 # Validation Kit imports.
@@ -40,6 +41,10 @@ from testmanager.core.base              import ModelDataBase, ModelDataBaseTestC
                                                TMInvalidData, TMRowNotFound, ChangeLogEntry, AttributeChangeEntry;
 from testmanager.core.globalresource    import GlobalResourceData;
 from testmanager.core.useraccount       import UserAccountLogic;
+
+# Python 3 hacks:
+if sys.version_info[0] >= 3:
+    long = int;     # pylint: disable=redefined-builtin,invalid-name
 
 
 
@@ -297,7 +302,7 @@ class TestCaseDependencyData(ModelDataBase):
         Get list of Test Case IDs which current
         Test Case depends on
         """
-        if len(aTestCaseDependencyData) == 0:
+        if not aTestCaseDependencyData:
             return []
 
         aoRet = []
@@ -677,6 +682,8 @@ class TestCaseData(ModelDataBase):
             'sOsVersion':           oTestBoxData.sOsVersion,
             'sCpuVendor':           oTestBoxData.sCpuVendor,
             'sCpuArch':             oTestBoxData.sCpuArch,
+            'iCpuFamily':           oTestBoxData.getCpuFamily(),
+            'iCpuModel':            oTestBoxData.getCpuModel(),
             'cCpus':                oTestBoxData.cCpus,
             'fCpuHwVirt':           oTestBoxData.fCpuHwVirt,
             'fCpuNestedPaging':     oTestBoxData.fCpuNestedPaging,
@@ -851,7 +858,7 @@ class TestCaseDataEx(TestCaseData):
                 aoNewValues.append(TestCaseArgsData().initFromParams(oDispWrapper, fStrict = False));
         return aoNewValues;
 
-    def _validateAndConvertAttribute(self, sAttr, sParam, oValue, aoNilValues, fAllowNull, oDb): # pylint: disable=R0914
+    def _validateAndConvertAttribute(self, sAttr, sParam, oValue, aoNilValues, fAllowNull, oDb): # pylint: disable=too-many-locals
         """
         Validate special arrays and requirement expressions.
 
@@ -871,7 +878,7 @@ class TestCaseDataEx(TestCaseData):
                     try:
                         oTestCase.idTestCase = int(oTestCase.idTestCase);
                         oTestCase.initFromDbWithId(oDb, oTestCase.idTestCase);
-                    except Exception, oXcpt:
+                    except Exception as oXcpt:
                         asErrors.append('Test case dependency #%s: %s' % (oTestCase.idTestCase, oXcpt));
                 aoNewValues.append(oTestCase);
 
@@ -882,13 +889,13 @@ class TestCaseDataEx(TestCaseData):
                     try:
                         oGlobalRsrc.idTestCase = int(oGlobalRsrc.idGlobalRsrc);
                         oGlobalRsrc.initFromDbWithId(oDb, oGlobalRsrc.idGlobalRsrc);
-                    except Exception, oXcpt:
+                    except Exception as oXcpt:
                         asErrors.append('Resource dependency #%s: %s' % (oGlobalRsrc.idGlobalRsrc, oXcpt));
                 aoNewValues.append(oGlobalRsrc);
 
         else:
             assert sAttr == 'aoTestCaseArgs';
-            if self.aoTestCaseArgs is None or len(self.aoTestCaseArgs) == 0:
+            if not self.aoTestCaseArgs:
                 return (None, 'The testcase requires at least one argument variation to be valid.');
 
             # Note! We'll be returning an error dictionary instead of an string here.
@@ -898,7 +905,7 @@ class TestCaseDataEx(TestCaseData):
                 oVar = copy.copy(self.aoTestCaseArgs[iVar]);
                 oVar.idTestCase = self.idTestCase;
                 dCurErrors = oVar.validateAndConvert(oDb, ModelDataBase.ksValidateFor_Other);
-                if len(dCurErrors) == 0:
+                if not dCurErrors:
                     pass; ## @todo figure out the ID?
                 else:
                     asErrors = [];
@@ -918,16 +925,16 @@ class TestCaseDataEx(TestCaseData):
                         else:                   dErrors[iVar2]  = sMsg;
                         break;
 
-            return (aoNewValues, dErrors if len(dErrors) > 0 else None);
+            return (aoNewValues, dErrors if dErrors else None);
 
-        return (aoNewValues, None if len(asErrors) == 0 else ' <br>'.join(asErrors));
+        return (aoNewValues, None if not asErrors else ' <br>'.join(asErrors));
 
     def _validateAndConvertWorker(self, asAllowNullAttributes, oDb, enmValidateFor = ModelDataBase.ksValidateFor_Other):
         dErrors = TestCaseData._validateAndConvertWorker(self, asAllowNullAttributes, oDb, enmValidateFor);
 
         # Validate dependencies a wee bit for paranoid reasons. The scheduler
         # queue generation code does the real validation here!
-        if len(dErrors) == 0 and self.idTestCase is not None:
+        if not dErrors and self.idTestCase is not None:
             for oDep in self.aoDepTestCases:
                 if oDep.idTestCase == self.idTestCase:
                     if self.ksParam_aoDepTestCases in dErrors:
@@ -964,13 +971,14 @@ class TestCaseLogic(ModelLogicBase):
             aoRet.append(TestCaseData().initFromDbRow(aoRow))
         return aoRet
 
-    def fetchForListing(self, iStart, cMaxRows, tsNow):
+    def fetchForListing(self, iStart, cMaxRows, tsNow, aiSortColumns = None):
         """
         Fetches test cases.
 
         Returns an array (list) of TestCaseDataEx items, empty list if none.
         Raises exception on error.
         """
+        _ = aiSortColumns;
         if tsNow is None:
             self._oDb.execute('SELECT   *\n'
                               'FROM     TestCases\n'
@@ -992,7 +1000,7 @@ class TestCaseLogic(ModelLogicBase):
             aoRows.append(TestCaseDataEx().initFromDbRowEx(aoRow, self._oDb, tsNow));
         return aoRows;
 
-    def fetchForChangeLog(self, idTestCase, iStart, cMaxRows, tsNow): # pylint: disable=R0914
+    def fetchForChangeLog(self, idTestCase, iStart, cMaxRows, tsNow): # pylint: disable=too-many-locals
         """
         Fetches change log entries for a testbox.
 
@@ -1124,7 +1132,7 @@ class TestCaseLogic(ModelLogicBase):
             aoEntries.append(ChangeLogEntry(uidAuthor, None, tsEffective, tsExpire, oNew, oOld, aoChanges));
 
         # If we're at the end of the log, add the initial entry.
-        if len(aoRows) <= cMaxRows and len(aoRows) > 0:
+        if len(aoRows) <= cMaxRows and aoRows:
             oNew = aoRows[-1];
             aoEntries.append(ChangeLogEntry(oNew.uidAuthor, None,
                                             aaoChanges[-1][0], aaoChanges[-2][0] if len(aaoChanges) > 1 else oNew.tsExpire,
@@ -1143,7 +1151,7 @@ class TestCaseLogic(ModelLogicBase):
         #
         assert isinstance(oData, TestCaseDataEx);
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Add);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('Invalid input data: %s' % (dErrors,));
 
         #
@@ -1177,7 +1185,7 @@ class TestCaseLogic(ModelLogicBase):
         self._oDb.maybeCommit(fCommit);
         return True;
 
-    def editEntry(self, oData, uidAuthor, fCommit = False):  # pylint: disable=R0914
+    def editEntry(self, oData, uidAuthor, fCommit = False):  # pylint: disable=too-many-locals
         """
         Edit a testcase entry (extended).
         Caller is expected to rollback the database transactions on exception.
@@ -1188,7 +1196,7 @@ class TestCaseLogic(ModelLogicBase):
         #
         assert isinstance(oData, TestCaseDataEx);
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Edit);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('Invalid input data: %s' % (dErrors,));
 
         #
@@ -1226,7 +1234,7 @@ class TestCaseLogic(ModelLogicBase):
         for idDep in aidOldDeps:
             if idDep in aidNewDeps:
                 asKeepers.append(str(idDep));
-        if len(asKeepers) > 0:
+        if asKeepers:
             sQuery += '     AND idTestCasePreReq NOT IN (' + ', '.join(asKeepers) + ')\n';
         self._oDb.execute(sQuery);
 
@@ -1251,7 +1259,7 @@ class TestCaseLogic(ModelLogicBase):
         for idDep in aidOldDeps:
             if idDep in aidNewDeps:
                 asKeepers.append(str(idDep));
-        if len(asKeepers) > 0:
+        if asKeepers:
             sQuery = '     AND idGlobalRsrc NOT IN (' + ', '.join(asKeepers) + ')\n';
         self._oDb.execute(sQuery);
 
@@ -1274,7 +1282,7 @@ class TestCaseLogic(ModelLogicBase):
                                           , (oData.idTestCase, ));
         for oNewVar in oData.aoTestCaseArgs:
             asKeepers.append(self._oDb.formatBindArgs('%s', (oNewVar.sArgs,)));
-        if len(asKeepers) > 0:
+        if asKeepers:
             sQuery += '    AND  sArgs NOT IN (' + ', '.join(asKeepers) + ')\n';
         self._oDb.execute(sQuery);
 
@@ -1409,7 +1417,7 @@ class TestCaseLogic(ModelLogicBase):
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class TestCaseGlobalRsrcDepDataTestCase(ModelDataBaseTestCase):
     def setUp(self):
         self.aoSamples = [TestCaseGlobalRsrcDepData(),];

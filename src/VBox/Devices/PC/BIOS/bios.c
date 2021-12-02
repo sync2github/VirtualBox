@@ -1,5 +1,10 @@
+/* $Id: bios.c 92290 2021-11-09 12:49:35Z vboxsync $ */
+/** @file
+ * PC BIOS - ???
+ */
+
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -38,45 +43,25 @@
  *
  */
 
+/*
+ * Oracle LGPL Disclaimer: For the avoidance of doubt, except that if any license choice
+ * other than GPL or LGPL is available it will apply instead, Oracle elects to use only
+ * the Lesser General Public License version 2.1 (LGPLv2) at this time for any software where
+ * a choice of LGPL license versions is made available with the language indicating
+ * that LGPLv2 or any later version may be used, or where a choice of which version
+ * of the LGPL is applied is otherwise unspecified.
+ */
+
 
 #include <stdint.h>
 #include "inlines.h"
 #include "biosint.h"
+#include "VBox/bios.h"
 #ifndef VBOX_VERSION_STRING
 #include <VBox/version.h>
 #endif
 
 static  const char  bios_cvs_version_string[] = "VirtualBox " VBOX_VERSION_STRING;
-
-uint8_t read_byte(uint16_t seg, uint16_t offset)
-{
-    return( *(seg:>(uint8_t *)offset) );
-}
-
-void write_byte(uint16_t seg, uint16_t offset, uint8_t data)
-{
-    *(seg:>(uint8_t *)offset) = data;
-}
-
-uint16_t read_word(uint16_t seg, uint16_t offset)
-{
-    return( *(seg:>(uint16_t *)offset) );
-}
-
-void write_word(uint16_t seg, uint16_t offset, uint16_t data)
-{
-    *(seg:>(uint16_t *)offset) = data;
-}
-
-uint32_t read_dword(uint16_t seg, uint16_t offset)
-{
-    return( *(seg:>(uint32_t *)offset) );
-}
-
-void write_dword(uint16_t seg, uint16_t offset, uint32_t data)
-{
-    *(seg:>(uint32_t *)offset) = data;
-}
 
 uint8_t inb_cmos(uint8_t cmos_reg)
 {
@@ -96,6 +81,15 @@ void outb_cmos(uint8_t cmos_reg, uint8_t val)
         cmos_port += 2;
     outb(cmos_port, cmos_reg);
     outb(cmos_port + 1, val);
+}
+
+/**
+ * Reads two adjacent cmos bytes and return their values as a 16-bit word.
+ */
+uint16_t get_cmos_word(uint8_t idxFirst)
+{
+    return ((uint16_t)inb_cmos(idxFirst + 1) << 8)
+         |            inb_cmos(idxFirst);
 }
 
 void BIOSCALL dummy_isr_function(pusha_regs_t regs, uint16_t es,
@@ -136,7 +130,8 @@ void BIOSCALL nmi_handler_msg(void)
 
 void BIOSCALL int18_panic_msg(void)
 {
-    BX_PANIC("INT18: BOOT FAILURE\n");
+    BX_INFO("INT18: BOOT FAILURE\n");
+    out_ctrl_str_asm(VBOX_BIOS_SHUTDOWN_PORT, "Bootfail");
 }
 
 void BIOSCALL log_bios_start(void)

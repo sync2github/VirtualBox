@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ISCSI.cpp 90802 2021-08-23 19:08:27Z vboxsync $ */
 /** @file
  * iSCSI initiator driver, VD backend.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,6 +37,7 @@
 #include <VBox/scsi.h>
 
 #include "VDBackends.h"
+#include "VDBackendsInline.h"
 
 
 /*********************************************************************************************************************************
@@ -391,12 +392,12 @@ typedef enum ISCSICMDTYPE
 
 
 /** The command completion function. */
-typedef DECLCALLBACK(void) FNISCSICMDCOMPLETED(PISCSIIMAGE pImage, int rcReq, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNISCSICMDCOMPLETED,(PISCSIIMAGE pImage, int rcReq, void *pvUser));
 /** Pointer to a command completion function. */
 typedef FNISCSICMDCOMPLETED *PFNISCSICMDCOMPLETED;
 
 /** The command execution function. */
-typedef DECLCALLBACK(int) FNISCSIEXEC(void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNISCSIEXEC,(void *pvUser));
 /** Pointer to a command execution function. */
 typedef FNISCSIEXEC *PFNISCSIEXEC;
 
@@ -568,6 +569,8 @@ typedef struct ISCSIIMAGE
     uint32_t            uReadTimeout;
     /** Flag whether to automatically generate the initiator name. */
     bool                fAutomaticInitiatorName;
+    /** Flag whether to automatically determine the LUN. */
+    bool                fAutomaticLUN;
     /** Flag whether to use the host IP stack or DevINIP. */
     bool                fHostIP;
     /** Flag whether to dump malformed packets in the release log. */
@@ -619,6 +622,8 @@ typedef struct ISCSIIMAGE
 
     /** Release log counter. */
     unsigned            cLogRelErrors;
+    /** The static region list. */
+    VDREGIONLIST        RegionList;
 } ISCSIIMAGE;
 
 
@@ -770,13 +775,13 @@ static PISCSICMD iscsiCmdRemove(PISCSIIMAGE pImage, uint32_t Itt)
     {
         if (pIScsiCmdPrev)
         {
-            Assert(!pIScsiCmd->pNext || VALID_PTR(pIScsiCmd->pNext));
+            AssertPtrNull(pIScsiCmd->pNext);
             pIScsiCmdPrev->pNext = pIScsiCmd->pNext;
         }
         else
         {
             pImage->aCmdsWaiting[idx] = pIScsiCmd->pNext;
-            Assert(!pImage->aCmdsWaiting[idx] || VALID_PTR(pImage->aCmdsWaiting[idx]));
+            AssertPtrNull(pImage->aCmdsWaiting[idx]);
         }
         pImage->cCmdsWaiting--;
     }
@@ -1608,13 +1613,14 @@ static int iscsiLogin(PISCSIIMAGE pImage)
                                     substate = 0;
                                     break;
                                 }
-                                else if (targetCSG == 1 && targetNSG == 1 && !targetTransit)
+                                else if (targetCSG == 1 && (targetNSG == 1 || !targetTransit))
                                 {
                                     /* Target wants to negotiate certain parameters and
                                      * stay in login operational negotiation. */
                                     csg = 1;
                                     nsg = 3;
                                     substate = 0;
+                                    break;
                                 }
                                 rc = VERR_PARSE_ERROR;
                                 break;
@@ -1703,7 +1709,7 @@ static int iscsiLogin(PISCSIIMAGE pImage)
         iscsiTransportClose(pImage);
         pImage->state = ISCSISTATE_FREE;
     }
-    else if (RT_FAILURE(rc))
+    else if (rc == VINF_SUCCESS)
         pImage->state = ISCSISTATE_NORMAL;
 
     return rc;
@@ -2157,7 +2163,7 @@ static int iscsiSendPDU(PISCSIIMAGE pImage, PISCSIREQ paReq, uint32_t cnReq,
  *
  * @returns VBOX status
  * @param   pImage      The iSCSI connection state to be used.
- * @param   itt         The initiator task tag. 
+ * @param   itt         The initiator task tag.
  * @param   paRes       Pointer to array of iSCSI response sections.
  * @param   cnRes       Number of valid iSCSI response sections in the array.
  * @param   fRecvFlags  PDU receive flags.
@@ -2767,7 +2773,7 @@ static int iscsiPDUTxPrepare(PISCSIIMAGE pImage, PISCSICMD pIScsiCmd)
      * The additional segment is for the BHS.
      */
     size_t cI2TSegs = 2*(pScsiReq->cI2TSegs + 1);
-    pIScsiPDU = (PISCSIPDUTX)RTMemAllocZ(RT_OFFSETOF(ISCSIPDUTX, aISCSIReq[cI2TSegs]));
+    pIScsiPDU = (PISCSIPDUTX)RTMemAllocZ(RT_UOFFSETOF_DYN(ISCSIPDUTX, aISCSIReq[cI2TSegs]));
     if (!pIScsiPDU)
         return VERR_NO_MEMORY;
 
@@ -4056,21 +4062,31 @@ static int iscsiOpenImageParseCfg(PISCSIIMAGE pImage)
     else if (RT_FAILURE(rc))
         return vdIfError(pImage->pIfError, rc, RT_SRC_POS, N_("iSCSI: configuration error: failed to read InitiatorName as string"));
 
-    rc = VDCFGQueryStringAllocDef(pImage->pIfConfig, "LUN", &pszLUN, s_iscsiConfigDefaultLUN);
-    if (RT_FAILURE(rc))
+    rc = VDCFGQueryStringAlloc(pImage->pIfConfig, "LUN", &pszLUN);
+    if (rc == VERR_CFGM_VALUE_NOT_FOUND || rc == VERR_CFGM_NO_PARENT)
+    {
+        rc = VINF_SUCCESS;
+        pImage->fAutomaticLUN = true;
+    }
+    else if (RT_FAILURE(rc))
         return vdIfError(pImage->pIfError, rc, RT_SRC_POS, N_("iSCSI: configuration error: failed to read LUN as string"));
 
-    pszLUNInitial = pszLUN;
-    if (!strncmp(pszLUN, "enc", 3))
+    if (pImage->fAutomaticLUN)
+        pImage->LUN = 0;    /* Default to LUN 0. */
+    else
     {
-        fLunEncoded = true;
-        pszLUN += 3;
-    }
-    rc = RTStrToUInt64Full(pszLUN, 0, &pImage->LUN);
-    if (RT_FAILURE(rc))
-        rc = vdIfError(pImage->pIfError, rc, RT_SRC_POS, N_("iSCSI: configuration error: failed to convert LUN to integer"));
+        pszLUNInitial = pszLUN;
+        if (!strncmp(pszLUN, "enc", 3))
+        {
+            fLunEncoded = true;
+            pszLUN += 3;
+        }
+        rc = RTStrToUInt64Full(pszLUN, 0, &pImage->LUN);
+        if (RT_FAILURE(rc))
+            rc = vdIfError(pImage->pIfError, rc, RT_SRC_POS, N_("iSCSI: configuration error: failed to convert LUN to integer"));
 
-    RTMemFree(pszLUNInitial);
+        RTMemFree(pszLUNInitial);
+    }
     if (RT_SUCCESS(rc) && !fLunEncoded)
     {
         if (pImage->LUN <= 255)
@@ -4192,7 +4208,7 @@ static int iscsiOpenImageReportLuns(PISCSIIMAGE pImage)
     uint8_t rlundata[16];
 
     /*
-     * Inquire available LUNs - purely dummy request.
+     * Inquire available LUNs.
      */
     RT_ZERO(sr.abCDB);
     sr.abCDB[0] = SCSI_REPORT_LUNS;
@@ -4223,6 +4239,51 @@ static int iscsiOpenImageReportLuns(PISCSIIMAGE pImage)
     int rc = iscsiCommandSync(pImage, &sr, false, VERR_INVALID_STATE);
     if (RT_FAILURE(rc))
         LogRel(("iSCSI: Could not get LUN info for target %s, rc=%Rrc\n", pImage->pszTargetName, rc));
+
+    /* If there is a single LUN on the target, then either verify that it matches the explicitly
+     * configured LUN, or just use it if a LUN was not configured (defaulted to 0). For multi-LUN targets,
+     * require a correctly configured LUN.
+     */
+    uint32_t    cbLuns = (rlundata[0] << 24) | (rlundata[1] << 16) | (rlundata[2] << 8) | rlundata[3];
+    unsigned    cLuns  = cbLuns / 8;
+
+    /* Dig out the first LUN. */
+    uint64_t    uTgtLun = 0;
+    if ((rlundata[8] & 0xc0) == 0)
+    {
+        /* Single-byte LUN in 0-255 range. */
+        uTgtLun = rlundata[9];
+    }
+    else if ((rlundata[8] & 0xc0) == 0x40)
+    {
+        /* Two-byte LUN in 256-16383 range. */
+        uTgtLun = rlundata[9] | ((rlundata[8] & 0x3f) << 8);
+        uTgtLun = (uTgtLun << 48) | RT_BIT_64(62);
+    }
+    else
+        rc = vdIfError(pImage->pIfError, VERR_OUT_OF_RANGE, RT_SRC_POS, N_("iSCSI: Reported LUN number out of range (0-16383)"));
+    if (RT_FAILURE(rc))
+        return rc;
+
+    LogRel(("iSCSI: %u LUN(s), first LUN %RX64\n", cLuns, uTgtLun));
+
+    /* Convert the LUN back into the 64-bit format. */
+    if (uTgtLun <= 255)
+        uTgtLun = uTgtLun << 48;
+    else
+    {
+        Assert(uTgtLun <= 16383);
+        uTgtLun = (uTgtLun << 48) | RT_BIT_64(62);
+    }
+
+    if (cLuns == 1)
+    {
+        /* NB: It is valid to have a single LUN other than zero, at least in SPC-3. */
+        if (pImage->fAutomaticLUN)
+            pImage->LUN = uTgtLun;
+        else if (pImage->LUN != uTgtLun)
+            rc = vdIfError(pImage->pIfError, VERR_VD_ISCSI_INVALID_TYPE, RT_SRC_POS, N_("iSCSI: configuration error: Configured LUN does not match what target provides"));
+    }
 
     return rc;
 }
@@ -4683,7 +4744,21 @@ static int iscsiOpenImage(PISCSIIMAGE pImage, unsigned uOpenFlags)
         }
     }
 
-    if (RT_FAILURE(rc))
+    if (RT_SUCCESS(rc))
+    {
+        PVDREGIONDESC pRegion = &pImage->RegionList.aRegions[0];
+        pImage->RegionList.fFlags   = 0;
+        pImage->RegionList.cRegions = 1;
+
+        pRegion->offRegion            = 0; /* Disk start. */
+        pRegion->cbBlock              = pImage->cbSector;
+        pRegion->enmDataForm          = VDREGIONDATAFORM_RAW;
+        pRegion->enmMetadataForm      = VDREGIONMETADATAFORM_NONE;
+        pRegion->cbData               = pImage->cbSector;
+        pRegion->cbMetadata           = 0;
+        pRegion->cRegionBlocksOrBytes = pImage->cbSize;
+    }
+    else
         iscsiFreeImage(pImage, false);
     return rc;
 }
@@ -4691,9 +4766,9 @@ static int iscsiOpenImage(PISCSIIMAGE pImage, unsigned uOpenFlags)
 
 /** @copydoc VDIMAGEBACKEND::pfnProbe */
 static DECLCALLBACK(int) iscsiProbe(const char *pszFilename, PVDINTERFACE pVDIfsDisk,
-                                    PVDINTERFACE pVDIfsImage, VDTYPE *penmType)
+                                    PVDINTERFACE pVDIfsImage, VDTYPE enmDesiredType, VDTYPE *penmType)
 {
-    RT_NOREF4(pszFilename, pVDIfsDisk, pVDIfsImage, penmType);
+    RT_NOREF(pszFilename, pVDIfsDisk, pVDIfsImage, enmDesiredType, penmType);
     LogFlowFunc(("pszFilename=\"%s\"\n", pszFilename));
 
     /* iSCSI images can't be checked for validity this way, as the filename
@@ -4717,9 +4792,10 @@ static DECLCALLBACK(int) iscsiOpen(const char *pszFilename, unsigned uOpenFlags,
 
     /* Check open flags. All valid flags are supported. */
     AssertReturn(!(uOpenFlags & ~VD_OPEN_FLAGS_MASK), VERR_INVALID_PARAMETER);
-    AssertReturn((VALID_PTR(pszFilename) && *pszFilename), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
 
-    PISCSIIMAGE pImage = (PISCSIIMAGE)RTMemAllocZ(sizeof(ISCSIIMAGE));
+    PISCSIIMAGE pImage = (PISCSIIMAGE)RTMemAllocZ(RT_UOFFSETOF(ISCSIIMAGE, RegionList.aRegions[1]));
     if (RT_LIKELY(pImage))
     {
         pImage->pszFilename = pszFilename;
@@ -4817,7 +4893,7 @@ static DECLCALLBACK(int) iscsiRead(void *pBackendData, uint64_t uOffset, size_t 
                                                    NULL, &cT2ISegs, cbToRead);
     Assert(cbSegs == cbToRead);
 
-    PSCSIREQ pReq = (PSCSIREQ)RTMemAllocZ(RT_OFFSETOF(SCSIREQ, aSegs[cT2ISegs]));
+    PSCSIREQ pReq = (PSCSIREQ)RTMemAllocZ(RT_UOFFSETOF_DYN(SCSIREQ, aSegs[cT2ISegs]));
     if (RT_LIKELY(pReq))
     {
         uint64_t lba;
@@ -4944,7 +5020,7 @@ static DECLCALLBACK(int) iscsiWrite(void *pBackendData, uint64_t uOffset, size_t
                                                    NULL, &cI2TSegs, cbToWrite);
     Assert(cbSegs == cbToWrite);
 
-    PSCSIREQ pReq = (PSCSIREQ)RTMemAllocZ(RT_OFFSETOF(SCSIREQ, aSegs[cI2TSegs]));
+    PSCSIREQ pReq = (PSCSIREQ)RTMemAllocZ(RT_UOFFSETOF_DYN(SCSIREQ, aSegs[cI2TSegs]));
     if (RT_LIKELY(pReq))
     {
         uint64_t lba;
@@ -5112,28 +5188,6 @@ static DECLCALLBACK(unsigned) iscsiGetVersion(void *pBackendData)
     return 0;
 }
 
-/** @copydoc VDIMAGEBACKEND::pfnGetSectorSize */
-static DECLCALLBACK(uint32_t) iscsiGetSectorSize(void *pBackendData)
-{
-    LogFlowFunc(("pBackendData=%#p\n", pBackendData));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, 0);
-
-    return pImage->cbSector;
-}
-
-/** @copydoc VDIMAGEBACKEND::pfnGetSize */
-static DECLCALLBACK(uint64_t) iscsiGetSize(void *pBackendData)
-{
-    LogFlowFunc(("pBackendData=%#p\n", pBackendData));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, 0);
-
-    return pImage->cbSize;
-}
-
 /** @copydoc VDIMAGEBACKEND::pfnGetFileSize */
 static DECLCALLBACK(uint64_t) iscsiGetFileSize(void *pBackendData)
 {
@@ -5211,6 +5265,30 @@ static DECLCALLBACK(int) iscsiSetLCHSGeometry(void *pBackendData, PCVDGEOMETRY p
     return rc;
 }
 
+/** @copydoc VDIMAGEBACKEND::pfnQueryRegions */
+static DECLCALLBACK(int) iscsiQueryRegions(void *pBackendData, PCVDREGIONLIST *ppRegionList)
+{
+    LogFlowFunc(("pBackendData=%#p ppRegionList=%#p\n", pBackendData, ppRegionList));
+    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
+
+    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
+
+    *ppRegionList = &pImage->RegionList;
+    LogFlowFunc(("returns %Rrc\n", VINF_SUCCESS));
+    return VINF_SUCCESS;
+}
+
+/** @copydoc VDIMAGEBACKEND::pfnRegionListRelease */
+static DECLCALLBACK(void) iscsiRegionListRelease(void *pBackendData, PCVDREGIONLIST pRegionList)
+{
+    RT_NOREF1(pRegionList);
+    LogFlowFunc(("pBackendData=%#p pRegionList=%#p\n", pBackendData, pRegionList));
+    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
+    AssertPtr(pImage); RT_NOREF(pImage);
+
+    /* Nothing to do here. */
+}
+
 /** @copydoc VDIMAGEBACKEND::pfnGetImageFlags */
 static DECLCALLBACK(unsigned) iscsiGetImageFlags(void *pBackendData)
 {
@@ -5268,165 +5346,34 @@ static DECLCALLBACK(int) iscsiSetOpenFlags(void *pBackendData, unsigned uOpenFla
 }
 
 /** @copydoc VDIMAGEBACKEND::pfnGetComment */
-static DECLCALLBACK(int) iscsiGetComment(void *pBackendData, char *pszComment,
-                                         size_t cbComment)
-{
-    RT_NOREF2(pszComment, cbComment);
-    LogFlowFunc(("pBackendData=%#p pszComment=%#p cbComment=%zu\n", pBackendData, pszComment, cbComment));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc comment='%s'\n", VERR_NOT_SUPPORTED, pszComment));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_COMMENT_DEF_NOT_SUPPORTED(iscsiGetComment);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetComment */
-static DECLCALLBACK(int) iscsiSetComment(void *pBackendData, const char *pszComment)
-{
-    RT_NOREF1(pszComment);
-    LogFlowFunc(("pBackendData=%#p pszComment=\"%s\"\n", pBackendData, pszComment));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_IMAGE_READ_ONLY;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_COMMENT_DEF_NOT_SUPPORTED(iscsiSetComment, PISCSIIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetUuid */
-static DECLCALLBACK(int) iscsiGetUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(iscsiGetUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetUuid */
-static DECLCALLBACK(int) iscsiSetUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_IMAGE_READ_ONLY;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(iscsiSetUuid, PISCSIIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetModificationUuid */
-static DECLCALLBACK(int) iscsiGetModificationUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(iscsiGetModificationUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetModificationUuid */
-static DECLCALLBACK(int) iscsiSetModificationUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_IMAGE_READ_ONLY;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(iscsiSetModificationUuid, PISCSIIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetParentUuid */
-static DECLCALLBACK(int) iscsiGetParentUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(iscsiGetParentUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetParentUuid */
-static DECLCALLBACK(int) iscsiSetParentUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_IMAGE_READ_ONLY;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(iscsiSetParentUuid, PISCSIIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetParentModificationUuid */
-static DECLCALLBACK(int) iscsiGetParentModificationUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(iscsiGetParentModificationUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetParentModificationUuid */
-static DECLCALLBACK(int) iscsiSetParentModificationUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PISCSIIMAGE pImage = (PISCSIIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_IMAGE_READ_ONLY;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(iscsiSetParentModificationUuid, PISCSIIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnDump */
 static DECLCALLBACK(void) iscsiDump(void *pBackendData)
@@ -5527,10 +5474,6 @@ const VDIMAGEBACKEND g_ISCSIBackend =
     NULL,
     /* pfnGetVersion */
     iscsiGetVersion,
-    /* pfnGetSectorSize */
-    iscsiGetSectorSize,
-    /* pfnGetSize */
-    iscsiGetSize,
     /* pfnGetFileSize */
     iscsiGetFileSize,
     /* pfnGetPCHSGeometry */
@@ -5541,6 +5484,10 @@ const VDIMAGEBACKEND g_ISCSIBackend =
     iscsiGetLCHSGeometry,
     /* pfnSetLCHSGeometry */
     iscsiSetLCHSGeometry,
+    /* pfnQueryRegions */
+    iscsiQueryRegions,
+    /* pfnRegionListRelease */
+    iscsiRegionListRelease,
     /* pfnGetImageFlags */
     iscsiGetImageFlags,
     /* pfnGetOpenFlags */

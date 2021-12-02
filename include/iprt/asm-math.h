@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,18 +23,17 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_asm_math_h
-#define ___iprt_asm_math_h
+#ifndef IPRT_INCLUDED_asm_math_h
+#define IPRT_INCLUDED_asm_math_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
 #if defined(_MSC_VER) && RT_INLINE_ASM_USES_INTRIN
-# pragma warning(push)
-# pragma warning(disable:4668) /* Several incorrect __cplusplus uses. */
-# pragma warning(disable:4255) /* Incorrect __slwpcb prototype. */
-# include <intrin.h>
-# pragma warning(pop)
-  /* Emit the intrinsics at all optimization levels. */
+/* Emit the intrinsics at all optimization levels. */
+# include <iprt/sanitized/intrin.h>
 # pragma intrinsic(__emul)
 # pragma intrinsic(__emulu)
 # ifdef RT_ARCH_AMD64
@@ -434,5 +433,5 @@ DECLINLINE(uint64_t) ASMMultU64ByU32DivByU32(uint64_t u64A, uint32_t u32B, uint3
 #endif
 
 /** @} */
-#endif
+#endif /* !IPRT_INCLUDED_asm_math_h */
 

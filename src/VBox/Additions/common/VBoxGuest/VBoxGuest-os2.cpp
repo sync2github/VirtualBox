@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxGuest-os2.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxGuest - OS/2 specifics.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,8 +13,16 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
- * --------------------------------------------------------------------
  *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
+ * ---------------------------------------------------------------------------
  * This code is based on:
  *
  * VBoxDrv - OS/2 specifics.
@@ -51,15 +59,16 @@
 
 #include "VBoxGuestInternal.h"
 #include <VBox/version.h>
-#include <iprt/initterm.h>
-#include <iprt/string.h>
-#include <iprt/spinlock.h>
-#include <iprt/process.h>
 #include <iprt/assert.h>
+#include <iprt/err.h>
+#include <iprt/initterm.h>
 #include <iprt/log.h>
 #include <iprt/memobj.h>
 #include <iprt/mem.h>
 #include <iprt/param.h>
+#include <iprt/process.h>
+#include <iprt/spinlock.h>
+#include <iprt/string.h>
 
 
 /*********************************************************************************************************************************
@@ -125,8 +134,8 @@ DECLASM(int) vgdrvOS2DevHlpSetIRQ(uint8_t bIRQ);
  */
 DECLASM(int) vgdrvOS2Init(const char *pszArgs)
 {
-    Log(("vgdrvOS2Init: pszArgs='%s' MMIO=0x%RX32 IOPort=0x%RX16 Int=%#x Bus=%#x Dev=%#x Fun=%d\n",
-         pszArgs, g_PhysMMIOBase, g_IOPortBase, g_bInterruptLine, g_bPciBusNo, g_bPciDevFunNo >> 3, g_bPciDevFunNo & 7));
+    //Log(("vgdrvOS2Init: pszArgs='%s' MMIO=0x%RX32 IOPort=0x%RX16 Int=%#x Bus=%#x Dev=%#x Fun=%d\n",
+    //     pszArgs, g_PhysMMIOBase, g_IOPortBase, g_bInterruptLine, g_bPciBusNo, g_bPciDevFunNo >> 3, g_bPciDevFunNo & 7));
 
     /*
      * Initialize the runtime.
@@ -135,9 +144,26 @@ DECLASM(int) vgdrvOS2Init(const char *pszArgs)
     if (RT_SUCCESS(rc))
     {
         /*
-         * Process the commandline. Later.
+         * Process the command line.
          */
         bool fVerbose = true;
+        if (pszArgs)
+        {
+            char ch;
+            while ((ch = *pszArgs++) != '\0')
+                if (ch == '-' || ch == '/')
+                {
+                    ch = *pszArgs++;
+                    if (ch == 'Q' || ch == 'q')
+                        fVerbose = false;
+                    else if (ch == 'V' || ch == 'v')
+                        fVerbose = true;
+                    else if (ch == '\0')
+                        break;
+                    /*else: ignore stuff we don't know what is */
+                }
+                /* else: skip spaces and unknown stuff */
+        }
 
         /*
          * Map the MMIO memory if found.
@@ -178,6 +204,11 @@ DECLASM(int) vgdrvOS2Init(const char *pszArgs)
                     }
                     if (RT_SUCCESS(rc))
                     {
+                        /*
+                         * Read host configuration.
+                         */
+                        VGDrvCommonProcessOptionsFromHost(&g_DevExt);
+
                         /*
                          * Success
                          */
@@ -350,7 +381,13 @@ DECLASM(int) vgdrvOS2Open(uint16_t sfn)
     /*
      * Create a new session.
      */
-    rc = VGDrvCommonCreateUserSession(&g_DevExt, &pSession);
+    uint32_t fRequestor = VMMDEV_REQUESTOR_USERMODE
+                        | VMMDEV_REQUESTOR_TRUST_NOT_GIVEN
+                        | VMMDEV_REQUESTOR_USR_ROOT  /* everyone is root on OS/2 */
+                        | VMMDEV_REQUESTOR_GRP_WHEEL /* and their admins */
+                        | VMMDEV_REQUESTOR_NO_USER_DEVICE /** @todo implement /dev/vboxuser? */
+                        | VMMDEV_REQUESTOR_CON_DONT_KNOW; /** @todo check screen group/whatever of process to see if console */
+    rc = VGDrvCommonCreateUserSession(&g_DevExt, fRequestor, &pSession);
     if (RT_SUCCESS(rc))
     {
         pSession->sfn = sfn;
@@ -465,37 +502,23 @@ DECLASM(int) vgdrvOS2IOCtlFast(uint16_t sfn, uint8_t iFunction, int32_t *prc)
  * @returns VBox status code.
  * @param   u32Session          The session handle (PVBOXGUESTSESSION).
  * @param   iFunction           The requested function.
- * @param   pvData              The input/output data buffer. The caller ensures that this
- *                              cannot be swapped out, or that it's acceptable to take a
- *                              page in fault in the current context. If the request doesn't
- *                              take input or produces output, apssing NULL is okay.
- * @param   cbData              The size of the data buffer.
- * @param   pcbDataReturned     Where to store the amount of data that's returned.
- *                              This can be NULL if pvData is NULL.
+ * @param   pReqHdr             The input/output data buffer.  The caller
+ *                              ensures that this cannot be swapped out, or that
+ *                              it's acceptable to take a page in fault in the
+ *                              current context.  If the request doesn't take
+ *                              input or produces output, apssing NULL is okay.
+ * @param   cbReq               The size of the data buffer.
  *
  * @remark  This is called from the 16-bit thunker as well as directly from the 32-bit clients.
  */
-DECLASM(int) VGDrvOS2IDCService(uint32_t u32Session, unsigned iFunction, void *pvData, size_t cbData, size_t *pcbDataReturned)
+DECLASM(int) VGDrvOS2IDCService(uint32_t u32Session, unsigned iFunction, PVBGLREQHDR pReqHdr, size_t cbReq)
 {
     PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)u32Session;
     AssertPtrReturn(pSession, VERR_INVALID_POINTER);
     AssertMsgReturn(pSession->sfn == 0xffff, ("%RX16\n", pSession->sfn), VERR_INVALID_HANDLE);
     AssertMsgReturn(pSession->pDevExt == &g_DevExt, ("%p != %p\n", pSession->pDevExt, &g_DevExt), VERR_INVALID_HANDLE);
 
-    int rc;
-    switch (iFunction)
-    {
-        default:
-            rc = VGDrvCommonIoCtl(iFunction, &g_DevExt, pSession, pvData, cbData, pcbDataReturned);
-            break;
-
-        case VBOXGUEST_IOCTL_OS2_IDC_DISCONNECT:
-            pSession->sfn = 0;
-            VGDrvCommonCloseSession(&g_DevExt, pSession);
-            rc = VINF_SUCCESS;
-            break;
-    }
-    return rc;
+    return VGDrvCommonIoCtl(iFunction, &g_DevExt, pSession, pReqHdr, cbReq);
 }
 
 
@@ -547,74 +570,44 @@ DECLASM(int) vgdrvOS2IOCtl(uint16_t sfn, uint8_t iCat, uint8_t iFunction, void *
      * Verify the category and dispatch the IOCtl.
      *
      * The IOCtl call uses the parameter buffer as generic data input/output
-     * buffer similar to the one unix ioctl buffer argument. While the data
-     * buffer is used for passing the VBox status code back to the caller
-     * since the status codes that OS/2 accepts thru the DosDevIOCtl API is
-     * severely restricted.
+     * buffer similar to the one unix ioctl buffer argument.  While the data
+     * buffer is not used.
      */
-    if (RT_LIKELY(iCat == VBOXGUEST_IOCTL_CATEGORY))
+    if (RT_LIKELY(iCat == VBGL_IOCTL_CATEGORY))
     {
         Log(("vgdrvOS2IOCtl: pSession=%p iFunction=%#x pvParm=%p pvData=%p *pcbParm=%d *pcbData=%d\n", pSession, iFunction, pvParm, pvData, *pcbParm, *pcbData));
-        Assert(pvParm || !*pcbData);
-        Assert(pvData);
-        Assert(*pcbData == sizeof(int32_t)); /* the return code */
-
-        /*
-         * Lock the buffers.
-         */
-        int32_t rc;
-        KernVMLock_t ParmLock;
-        if (pvParm)
+        if (   pvParm
+            && *pcbParm >= sizeof(VBGLREQHDR)
+            && *pcbData == 0)
         {
-            Assert(*pcbData);
-            rc = KernVMLock(VMDHL_WRITE, pvParm, *pcbParm, &ParmLock, (KernPageList_t *)-1, NULL);
-            AssertMsgReturn(!rc, ("KernVMLock(VMDHL_WRITE, %p, %#x, &p, NULL, NULL) -> %d\n", pvParm, *pcbParm, &ParmLock, rc), VERR_LOCK_FAILED);
-        }
-
-#if 0 /* don't bother locking it since it's only 4 bytes (the return code). */
-        KernVMLock_t DataLock;
-        if (pvData)
-        {
-            Assert(*pcbData);
-            rc = KernVMLock(VMDHL_WRITE, pvData, *pcbData, &DataLock, (KernPageList_t *)-1, NULL);
-            if (rc)
+            /*
+             * Lock the buffer.
+             */
+            KernVMLock_t ParmLock;
+            int32_t rc = KernVMLock(VMDHL_WRITE, pvParm, *pcbParm, &ParmLock, (KernPageList_t *)-1, NULL);
+            if (rc == 0)
             {
-                AssertMsgFailed(("KernVMLock(VMDHL_WRITE, %p, %#x, &p, NULL, NULL) -> %d\n", pvData, *pcbData, &DataLock, rc));
-                KernVMUnlock(&ParmLock);
-                return VERR_LOCK_FAILED;
+                /*
+                 * Process the IOCtl.
+                 */
+                PVBGLREQHDR pReqHdr = (PVBGLREQHDR)pvParm;
+                rc = VGDrvCommonIoCtl(iFunction, &g_DevExt, pSession, pReqHdr, *pcbParm);
+
+                /*
+                 * Unlock the buffer.
+                 */
+                *pcbParm = RT_SUCCESS(rc) ? pReqHdr->cbOut : sizeof(*pReqHdr);
+                int rc2 = KernVMUnlock(&ParmLock);
+                AssertMsg(rc2 == 0, ("rc2=%d\n", rc2)); NOREF(rc2);
+
+                Log2(("vgdrvOS2IOCtl: returns %d\n", rc));
+                return rc;
             }
+            AssertMsgFailed(("KernVMLock(VMDHL_WRITE, %p, %#x, &p, NULL, NULL) -> %d\n", pvParm, *pcbParm, &ParmLock, rc));
+            return VERR_LOCK_FAILED;
         }
-#endif
-
-        /*
-         * Process the IOCtl.
-         */
-        size_t cbDataReturned;
-        rc = VGDrvCommonIoCtl(iFunction, &g_DevExt, pSession, pvParm, *pcbParm, &cbDataReturned);
-
-        /*
-         * Unlock the buffers.
-         */
-        if (pvParm)
-        {
-            int rc2 = KernVMUnlock(&ParmLock);
-            AssertMsg(!rc2, ("rc2=%d\n", rc2)); NOREF(rc2);
-            AssertMsg(cbDataReturned < _64K, ("cbDataReturned=%d\n", cbDataReturned));
-            *pcbParm = cbDataReturned;
-        }
-#if 0
-        if (pvData)
-        {
-            int rc2 = KernVMUnlock(&DataLock);
-            AssertMsg(!rc2, ("rc2=%d\n", rc2));
-        }
-#else
-        rc = KernCopyOut(pvData, &rc, sizeof(int32_t));
-        AssertMsgReturn(!rc, ("KernCopyOut(%p, %p, sizeof(int32_t)) -> %d\n", pvData, &rc, rc), VERR_LOCK_FAILED);
-#endif
-
-        Log2(("vgdrvOS2IOCtl: returns VINF_SUCCESS / %d\n", rc));
-        return VINF_SUCCESS;
+        Log2(("vgdrvOS2IOCtl: returns VERR_INVALID_PARAMETER (iFunction=%#x)\n", iFunction));
+        return VERR_INVALID_PARAMETER;
     }
     return VERR_NOT_SUPPORTED;
 }
@@ -637,6 +630,13 @@ void VGDrvNativeISRMousePollEvent(PVBOXGUESTDEVEXT pDevExt)
 {
     /* No polling on OS/2 */
     NOREF(pDevExt);
+}
+
+
+bool VGDrvNativeProcessOption(PVBOXGUESTDEVEXT pDevExt, const char *pszName, const char *pszValue)
+{
+    RT_NOREF(pDevExt); RT_NOREF(pszName); RT_NOREF(pszValue);
+    return false;
 }
 
 

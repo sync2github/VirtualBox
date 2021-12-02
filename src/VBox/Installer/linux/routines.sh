@@ -1,8 +1,10 @@
+# $Id: routines.sh 91700 2021-10-12 19:20:16Z vboxsync $
 # Oracle VM VirtualBox
 # VirtualBox installer shell routines
 #
 
-# Copyright (C) 2007-2015 Oracle Corporation
+#
+# Copyright (C) 2007-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -43,12 +45,20 @@ create_log()
     fi
 }
 
-## Writes text to standard error
+## Writes text to standard error, as standard output is masked.
 #
 # Syntax: info text
 info()
 {
     echo 1>&2 "$1"
+}
+
+## Copies standard input to standard error, as standard output is masked.
+#
+# Syntax: info text
+catinfo()
+{
+    cat 1>&2
 }
 
 ## Writes text to the log file
@@ -92,6 +102,15 @@ check_root()
     fi
 }
 
+## Abort if dependencies are not found
+check_deps()
+{
+    for i in ${@}; do
+        type "${i}" >/dev/null 2>&1 ||
+            abort "${i} not found.  Please install: ${*}; and try again."
+    done
+}
+
 ## Abort if a copy of VirtualBox is already running
 check_running()
 {
@@ -122,21 +141,27 @@ systemd_wrap_init_script()
     test -d /lib/systemd/system && unit_path=/lib/systemd/system
     test -n "${unit_path}" || \
         { echo "$self: systemd unit path not found" >&2 && return 1; }
+    conflicts=`sed -n 's/# *X-Conflicts-With: *\(.*\)/\1/p' "${script}" | sed 's/\$[a-z]*//'`
     description=`sed -n 's/# *Short-Description: *\(.*\)/\1/p' "${script}"`
     required=`sed -n 's/# *Required-Start: *\(.*\)/\1/p' "${script}" | sed 's/\$[a-z]*//'`
+    required_target=`sed -n 's/# *X-Required-Target-Start: *\(.*\)/\1/p' "${script}"`
+    startbefore=`sed -n 's/# *X-Start-Before: *\(.*\)/\1/p' "${script}" | sed 's/\$[a-z]*//'`
     runlevels=`sed -n 's/# *Default-Start: *\(.*\)/\1/p' "${script}"`
-    before=`for i in ${runlevels}; do printf "runlevel${i}.target "; done`
-    after=`for i in ${required}; do printf "${i}.service "; done`
+    servicetype=`sed -n 's/# *X-Service-Type: *\(.*\)/\1/p' "${script}"`
+    test -z "${servicetype}" && servicetype="forking"
+    targets=`for i in ${runlevels}; do printf "runlevel${i}.target "; done`
+    before=`for i in ${startbefore}; do printf "${i}.service "; done`
+    after=`for i in ${required_target}; do printf "${i}.target "; done; for i in ${required}; do printf "${i}.service "; done`
     cat > "${unit_path}/${name}.service" << EOF
 [Unit]
 SourcePath=${script}
 Description=${description}
-Before=${before}shutdown.target
+Before=${targets}shutdown.target ${before}
 After=${after}
-Conflicts=shutdown.target
+Conflicts=shutdown.target ${conflicts}
 
 [Service]
-Type=forking
+Type=${servicetype}
 Restart=no
 TimeoutSec=5min
 IgnoreSIGPIPE=no
@@ -149,10 +174,15 @@ ExecStop=${script} stop
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reexec
 }
 
-## Installs a file containing a shell script as an init script
+use_systemd()
+{
+    test ! -f /sbin/init || test -L /sbin/init
+}
+
+## Installs a file containing a shell script as an init script.  Call
+# finish_init_script_install when all scripts have been installed.
 install_init_script()
 {
     self="install_init_script"
@@ -167,7 +197,7 @@ install_init_script()
     test -L "/sbin/rc${name}" && rm "/sbin/rc${name}"
     ln -s "${script}" "/sbin/rc${name}"
     if test -x "`which systemctl 2>/dev/null`"; then
-        if ! test -f /sbin/init || ls -l /sbin/init | grep -q ">.*systemd"; then
+        if use_systemd; then
             { systemd_wrap_init_script "$script" "$name"; return; }
         fi
     fi
@@ -195,6 +225,16 @@ remove_init_script()
     rm -f /lib/systemd/system/"$name".service /usr/lib/systemd/system/"$name".service
     rm -f "/etc/rc.d/init.d/$name"
     rm -f "/etc/init.d/$name"
+}
+
+## Tell systemd services have been installed or removed.  Should not be done
+# after each individual one, as systemd can crash if it is done too often
+# (reported by the OL team for OL 7.6, may not apply to other versions.)
+finish_init_script_install()
+{
+    if use_systemd; then
+        systemctl daemon-reload
+    fi
 }
 
 ## Did we install a systemd service?
@@ -266,7 +306,7 @@ get_chkconfig_info()
             return 1; }
 }
 
-## Add a service to a runlevel
+## Add a service to its default runlevels (annotated inside the script, see get_chkconfig_info).
 addrunlevel()
 {
     self="addrunlevel"
@@ -352,11 +392,18 @@ terminate_proc() {
 maybe_run_python_bindings_installer() {
     VBOX_INSTALL_PATH="${1}"
 
-    PYTHON=python
-    if [ "`python -c 'import sys
-if sys.version_info >= (2, 6):
-    print \"test\"' 2> /dev/null`" != "test" ]; then
-        echo  1>&2 "Python 2.6 or later not available, skipping bindings installation."
+    # Check for python2 only, because the generic package does not provide
+    # any XPCOM bindings support for python3 since there is no standard ABI.
+    PYTHON=""
+    for p in python python2 python2.6 python2.7; do
+        if [ "`$p -c 'import sys
+if sys.version_info >= (2, 6) and sys.version_info < (3, 0):
+    print \"test\"' 2> /dev/null`" = "test" ]; then
+            PYTHON=$p
+        fi
+    done
+    if [ -z "$PYTHON" ]; then
+        echo  1>&2 "Python 2 (2.6 or 2.7) not available, skipping bindings installation."
         return 1
     fi
 

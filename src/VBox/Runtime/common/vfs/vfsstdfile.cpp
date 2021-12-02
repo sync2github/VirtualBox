@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vfsstdfile.cpp 92083 2021-10-26 14:08:57Z vboxsync $ */
 /** @file
  * IPRT - Virtual File System, Standard File Implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,9 +31,11 @@
 #include <iprt/vfs.h>
 #include <iprt/vfslowlevel.h>
 
+#include <iprt/assert.h>
 #include <iprt/err.h>
 #include <iprt/file.h>
 #include <iprt/poll.h>
+#include <iprt/string.h>
 #include <iprt/thread.h>
 
 
@@ -108,7 +110,7 @@ DECLINLINE(int) rtVfsStdFile_ReadFixRC(PRTVFSSTDFILE pThis, RTFOFF off, size_t c
         return VINF_SUCCESS;
 
     uint64_t cbFile;
-    int rc = RTFileGetSize(pThis->hFile, &cbFile);
+    int rc = RTFileQuerySize(pThis->hFile, &cbFile);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -140,7 +142,11 @@ static DECLCALLBACK(int) rtVfsStdFile_Read(void *pvThis, RTFOFF off, PCRTSGBUF p
         if (off < 0)
             rc = RTFileRead(  pThis->hFile,      pSgBuf->paSegs[0].pvSeg, pSgBuf->paSegs[0].cbSeg, pcbRead);
         else
+        {
             rc = RTFileReadAt(pThis->hFile, off, pSgBuf->paSegs[0].pvSeg, pSgBuf->paSegs[0].cbSeg, pcbRead);
+            if (RT_SUCCESS(rc)) /* RTFileReadAt() doesn't increment the file-position indicator on some platforms */
+                rc = RTFileSeek(pThis->hFile, off + (pcbRead ? *pcbRead : pSgBuf->paSegs[0].cbSeg), RTFILE_SEEK_BEGIN, NULL);
+        }
         if (rc == VINF_SUCCESS && pcbRead)
             rc = rtVfsStdFile_ReadFixRC(pThis, off, pSgBuf->paSegs[0].cbSeg, *pcbRead);
     }
@@ -160,7 +166,11 @@ static DECLCALLBACK(int) rtVfsStdFile_Read(void *pvThis, RTFOFF off, PCRTSGBUF p
             if (off < 0)
                 rc = RTFileRead(  pThis->hFile,      pvSeg, cbSeg, pcbRead ? &cbReadSeg : NULL);
             else
+            {
                 rc = RTFileReadAt(pThis->hFile, off, pvSeg, cbSeg, pcbRead ? &cbReadSeg : NULL);
+                if (RT_SUCCESS(rc)) /* RTFileReadAt() doesn't increment the file-position indicator on some platforms */
+                    rc = RTFileSeek(pThis->hFile, off + cbReadSeg, RTFILE_SEEK_BEGIN, NULL);
+            }
             if (RT_FAILURE(rc))
                 break;
             if (off >= 0)
@@ -196,7 +206,12 @@ static DECLCALLBACK(int) rtVfsStdFile_Write(void *pvThis, RTFOFF off, PCRTSGBUF 
         if (off < 0)
             rc = RTFileWrite(pThis->hFile, pSgBuf->paSegs[0].pvSeg, pSgBuf->paSegs[0].cbSeg, pcbWritten);
         else
+        {
             rc = RTFileWriteAt(pThis->hFile, off, pSgBuf->paSegs[0].pvSeg, pSgBuf->paSegs[0].cbSeg, pcbWritten);
+            if (RT_SUCCESS(rc)) /* RTFileWriteAt() doesn't increment the file-position indicator on some platforms */
+                rc = RTFileSeek(pThis->hFile, off + (pcbWritten ? *pcbWritten : pSgBuf->paSegs[0].cbSeg), RTFILE_SEEK_BEGIN,
+                                NULL);
+        }
     }
     else
     {
@@ -216,7 +231,12 @@ static DECLCALLBACK(int) rtVfsStdFile_Write(void *pvThis, RTFOFF off, PCRTSGBUF 
             else
             {
                 rc = RTFileWriteAt(pThis->hFile, off, pvSeg, cbSeg, pcbWrittenSeg);
-                off += cbSeg;
+                if (RT_SUCCESS(rc))
+                {
+                    off += pcbWrittenSeg ? *pcbWrittenSeg : cbSeg;
+                    /* RTFileWriteAt() doesn't increment the file-position indicator on some platforms */
+                    rc = RTFileSeek(pThis->hFile, off, RTFILE_SEEK_BEGIN, NULL);
+                }
             }
             if (RT_FAILURE(rc))
                 break;
@@ -242,7 +262,14 @@ static DECLCALLBACK(int) rtVfsStdFile_Write(void *pvThis, RTFOFF off, PCRTSGBUF 
 static DECLCALLBACK(int) rtVfsStdFile_Flush(void *pvThis)
 {
     PRTVFSSTDFILE pThis = (PRTVFSSTDFILE)pvThis;
-    return RTFileFlush(pThis->hFile);
+    int rc = RTFileFlush(pThis->hFile);
+#ifdef RT_OS_WINDOWS
+    /* Workaround for console handles. */  /** @todo push this further down? */
+    if (   rc == VERR_INVALID_HANDLE
+        && RTFileIsValid(pThis->hFile))
+        rc = VINF_NOT_SUPPORTED; /* not flushable */
+#endif
+    return rc;
 }
 
 
@@ -373,7 +400,41 @@ static DECLCALLBACK(int) rtVfsStdFile_Seek(void *pvThis, RTFOFF offSeek, unsigne
 static DECLCALLBACK(int) rtVfsStdFile_QuerySize(void *pvThis, uint64_t *pcbFile)
 {
     PRTVFSSTDFILE pThis = (PRTVFSSTDFILE)pvThis;
-    return RTFileGetSize(pThis->hFile, pcbFile);
+    return RTFileQuerySize(pThis->hFile, pcbFile);
+}
+
+
+/**
+ * @interface_method_impl{RTVFSFILEOPS,pfnSetSize}
+ */
+static DECLCALLBACK(int) rtVfsStdFile_SetSize(void *pvThis, uint64_t cbFile, uint32_t fFlags)
+{
+    PRTVFSSTDFILE pThis = (PRTVFSSTDFILE)pvThis;
+    switch (fFlags & RTVFSFILE_SIZE_F_ACTION_MASK)
+    {
+        case RTVFSFILE_SIZE_F_NORMAL:
+            return RTFileSetSize(pThis->hFile, cbFile);
+        case RTVFSFILE_SIZE_F_GROW:
+            return RTFileSetAllocationSize(pThis->hFile, cbFile, RTFILE_ALLOC_SIZE_F_DEFAULT);
+        case RTVFSFILE_SIZE_F_GROW_KEEP_SIZE:
+            return RTFileSetAllocationSize(pThis->hFile, cbFile, RTFILE_ALLOC_SIZE_F_KEEP_SIZE);
+        default:
+            return VERR_NOT_SUPPORTED;
+    }
+}
+
+
+/**
+ * @interface_method_impl{RTVFSFILEOPS,pfnQueryMaxSize}
+ */
+static DECLCALLBACK(int) rtVfsStdFile_QueryMaxSize(void *pvThis, uint64_t *pcbMax)
+{
+    PRTVFSSTDFILE pThis = (PRTVFSSTDFILE)pvThis;
+    RTFOFF cbMax = 0;
+    int rc = RTFileQueryMaxSizeEx(pThis->hFile, &cbMax);
+    if (RT_SUCCESS(rc))
+        *pcbMax = cbMax;
+    return rc;
 }
 
 
@@ -406,7 +467,7 @@ DECL_HIDDEN_CONST(const RTVFSFILEOPS) g_rtVfsStdFileOps =
     0,
     { /* ObjSet */
         RTVFSOBJSETOPS_VERSION,
-        RT_OFFSETOF(RTVFSFILEOPS, Stream.Obj) - RT_OFFSETOF(RTVFSFILEOPS, ObjSet),
+        RT_UOFFSETOF(RTVFSFILEOPS, ObjSet) - RT_UOFFSETOF(RTVFSFILEOPS, Stream.Obj),
         rtVfsStdFile_SetMode,
         rtVfsStdFile_SetTimes,
         rtVfsStdFile_SetOwner,
@@ -414,6 +475,8 @@ DECL_HIDDEN_CONST(const RTVFSFILEOPS) g_rtVfsStdFileOps =
     },
     rtVfsStdFile_Seek,
     rtVfsStdFile_QuerySize,
+    rtVfsStdFile_SetSize,
+    rtVfsStdFile_QueryMaxSize,
     RTVFSFILEOPS_VERSION
 };
 
@@ -507,4 +570,89 @@ RTDECL(int) RTVfsIoStrmOpenNormal(const char *pszFilename, uint64_t fOpen, PRTVF
     }
     return rc;
 }
+
+
+
+/**
+ * @interface_method_impl{RTVFSCHAINELEMENTREG,pfnValidate}
+ */
+static DECLCALLBACK(int) rtVfsChainStdFile_Validate(PCRTVFSCHAINELEMENTREG pProviderReg, PRTVFSCHAINSPEC pSpec,
+                                                    PRTVFSCHAINELEMSPEC pElement, uint32_t *poffError, PRTERRINFO pErrInfo)
+{
+    RT_NOREF(pProviderReg);
+
+    /*
+     * Basic checks.
+     */
+    if (pElement->enmTypeIn != RTVFSOBJTYPE_INVALID)
+        return VERR_VFS_CHAIN_MUST_BE_FIRST_ELEMENT;
+    if (   pElement->enmType != RTVFSOBJTYPE_FILE
+        && pElement->enmType != RTVFSOBJTYPE_IO_STREAM)
+        return VERR_VFS_CHAIN_ONLY_FILE_OR_IOS;
+
+    /*
+     * Join common cause with the 'open' provider.
+     */
+    return RTVfsChainValidateOpenFileOrIoStream(pSpec, pElement, poffError, pErrInfo);
+}
+
+
+/**
+ * @interface_method_impl{RTVFSCHAINELEMENTREG,pfnInstantiate}
+ */
+static DECLCALLBACK(int) rtVfsChainStdFile_Instantiate(PCRTVFSCHAINELEMENTREG pProviderReg, PCRTVFSCHAINSPEC pSpec,
+                                                       PCRTVFSCHAINELEMSPEC pElement, RTVFSOBJ hPrevVfsObj,
+                                                       PRTVFSOBJ phVfsObj, uint32_t *poffError, PRTERRINFO pErrInfo)
+{
+    RT_NOREF(pProviderReg, pSpec, poffError, pErrInfo);
+    AssertReturn(hPrevVfsObj == NIL_RTVFSOBJ, VERR_VFS_CHAIN_IPE);
+
+    RTVFSFILE hVfsFile;
+    int rc = RTVfsFileOpenNormal(pElement->paArgs[0].psz, pElement->uProvider, &hVfsFile);
+    if (RT_SUCCESS(rc))
+    {
+        *phVfsObj = RTVfsObjFromFile(hVfsFile);
+        RTVfsFileRelease(hVfsFile);
+        if (*phVfsObj != NIL_RTVFSOBJ)
+            return VINF_SUCCESS;
+        rc = VERR_VFS_CHAIN_CAST_FAILED;
+    }
+    return rc;
+}
+
+
+/**
+ * @interface_method_impl{RTVFSCHAINELEMENTREG,pfnCanReuseElement}
+ */
+static DECLCALLBACK(bool) rtVfsChainStdFile_CanReuseElement(PCRTVFSCHAINELEMENTREG pProviderReg,
+                                                            PCRTVFSCHAINSPEC pSpec, PCRTVFSCHAINELEMSPEC pElement,
+                                                            PCRTVFSCHAINSPEC pReuseSpec, PCRTVFSCHAINELEMSPEC pReuseElement)
+{
+    RT_NOREF(pProviderReg, pSpec, pReuseSpec);
+    if (strcmp(pElement->paArgs[0].psz, pReuseElement->paArgs[0].psz) == 0)
+        if (pElement->paArgs[0].uProvider == pReuseElement->paArgs[0].uProvider)
+            return true;
+    return false;
+}
+
+
+/** VFS chain element 'file'. */
+static RTVFSCHAINELEMENTREG g_rtVfsChainStdFileReg =
+{
+    /* uVersion = */            RTVFSCHAINELEMENTREG_VERSION,
+    /* fReserved = */           0,
+    /* pszName = */             "stdfile",
+    /* ListEntry = */           { NULL, NULL },
+    /* pszHelp = */             "Open a real file, providing either a file or an I/O stream object. Initial element.\n"
+                                "First argument is the filename path.\n"
+                                "Second argument is access mode, optional: r, w, rw.\n"
+                                "Third argument is open disposition, optional: create, create-replace, open, open-create, open-append, open-truncate.\n"
+                                "Forth argument is file sharing, optional: nr, nw, nrw, d.",
+    /* pfnValidate = */         rtVfsChainStdFile_Validate,
+    /* pfnInstantiate = */      rtVfsChainStdFile_Instantiate,
+    /* pfnCanReuseElement = */  rtVfsChainStdFile_CanReuseElement,
+    /* uEndMarker = */          RTVFSCHAINELEMENTREG_VERSION
+};
+
+RTVFSCHAIN_AUTO_REGISTER_ELEMENT_PROVIDER(&g_rtVfsChainStdFileReg, rtVfsChainStdFileReg);
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: TMAllReal.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * TM - Timeout Manager, Real Time, All Contexts.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,7 +22,7 @@
 #define LOG_GROUP LOG_GROUP_TM
 #include <VBox/vmm/tm.h>
 #include "TMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 #include <iprt/time.h>
 
 

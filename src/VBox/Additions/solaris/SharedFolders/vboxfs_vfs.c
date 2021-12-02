@@ -1,9 +1,10 @@
+/* $Id: vboxfs_vfs.c 88215 2021-03-19 18:42:55Z vboxsync $ */
 /** @file
  * VirtualBox File System for Solaris Guests, VFS implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,6 +26,7 @@
 
 #include <VBox/log.h>
 #include <VBox/version.h>
+#include <iprt/dbg.h>
 
 #include <sys/types.h>
 #include <sys/mntent.h>
@@ -38,18 +40,18 @@
 #include <sys/sunddi.h>
 #include <sys/vfs.h>
 #if !defined(VBOX_VFS_SOLARIS_10U6)
-#include <sys/vfs_opreg.h>
+# include <sys/vfs_opreg.h>
 #endif
 #include <sys/pathname.h>
 #include <sys/cmn_err.h>
+#include <sys/vmsystm.h>
+#undef u /* /usr/include/sys/user.h:249:1 is where this is defined to (curproc->p_user). very cool. */
+
 #include "vboxfs_prov.h"
 #include "vboxfs_vnode.h"
 #include "vboxfs_vfs.h"
 #include "vboxfs.h"
 
-#ifdef u
-#undef u
-#endif
 
 #define VBOXSOLQUOTE2(x)                #x
 #define VBOXSOLQUOTE(x)                 VBOXSOLQUOTE2(x)
@@ -80,7 +82,8 @@ static mntopt_t sffs_options[] = {
 	{"dmask",	NULL,		NULL,	MO_HASVALUE,	NULL},
 	{"fmask",	NULL,		NULL,	MO_HASVALUE,	NULL},
 	{"stat_ttl",	NULL,		NULL,	MO_HASVALUE,	NULL},
-	{"fsync",	NULL,		NULL,	0,	        NULL}
+	{"fsync",	NULL,		NULL,	0,	        NULL},
+	{"tag", 	NULL,		NULL,	MO_HASVALUE,	NULL}
 };
 
 static mntopts_t sffs_options_table = {
@@ -102,6 +105,11 @@ static int sffs_major;	/* major number for device */
 kmutex_t sffs_minor_lock;
 int sffs_minor;		/* minor number for device */
 
+/** Whether to use the old-style map_addr()/choose_addr() routines. */
+bool                     g_fVBoxVFS_SolOldAddrMap;
+/** The map_addr()/choose_addr() hooks callout table structure. */
+VBoxVFS_SolAddrMap       g_VBoxVFS_SolAddrMap;
+
 /*
  * Module linkage information
  */
@@ -120,6 +128,37 @@ static sfp_connection_t *sfprov = NULL;
 int
 _init()
 {
+    RTDBGKRNLINFO hKrnlDbgInfo;
+    int rc = RTR0DbgKrnlInfoOpen(&hKrnlDbgInfo, 0 /* fFlags */);
+    if (RT_SUCCESS(rc))
+    {
+        rc = RTR0DbgKrnlInfoQuerySymbol(hKrnlDbgInfo, NULL /* pszModule */, "plat_map_align_amount",  NULL /* ppvSymbol */);
+        if (RT_SUCCESS(rc))
+        {
+#if defined(VBOX_VFS_SOLARIS_10U6)
+            g_VBoxVFS_SolAddrMap.MapAddr.pfnSol_map_addr    = (void *)map_addr;
+#else
+            g_VBoxVFS_SolAddrMap.ChooseAddr.pfnSol_choose_addr = (void *)choose_addr;
+#endif
+        }
+        else
+        {
+            g_fVBoxVFS_SolOldAddrMap = true;
+#if defined(VBOX_VFS_SOLARIS_10U6)
+            g_VBoxVFS_SolAddrMap.MapAddr.pfnSol_map_addr_old    = (void *)map_addr;
+#else
+            g_VBoxVFS_SolAddrMap.ChooseAddr.pfnSol_choose_addr_old = (void *)choose_addr;
+#endif
+        }
+
+        RTR0DbgKrnlInfoRelease(hKrnlDbgInfo);
+    }
+    else
+    {
+        cmn_err(CE_NOTE, "RTR0DbgKrnlInfoOpen failed. rc=%d\n", rc);
+        return rc;
+    }
+
 	return (mod_install(&modlinkage));
 }
 
@@ -239,6 +278,7 @@ sf_pn_get(char *rawpath, struct mounta *uap, char **outpath)
 	return (0);
 }
 
+#ifdef DEBUG_ramshankar
 static void
 sffs_print(sffs_data_t *sffs)
 {
@@ -255,6 +295,7 @@ sffs_print(sffs_data_t *sffs)
 	cmn_err(CE_NOTE, "    char *sf_mntpath = %s\n", sffs->sf_mntpath);
 	cmn_err(CE_NOTE, "    sfp_mount_t *sf_handle = 0x%p\n", sffs->sf_handle);
 }
+#endif
 
 static int
 sffs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
@@ -501,14 +542,24 @@ sffs_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 	 * forced unmount is not supported by this file system
 	 * and thus, ENOTSUP, is being returned.
 	 */
-	if (flag & MS_FORCE)
+	if (flag & MS_FORCE) {
+		LogFlowFunc(("sffs_unmount(MS_FORCE) returns ENOSUP\n"));
 		return (ENOTSUP);
+	}
+
+	/*
+	 * Mark the file system unmounted.
+	 */
+	vfsp->vfs_flag |= VFS_UNMOUNTED;
 
 	/*
 	 * Make sure nothing is still in use.
 	 */
-	if (sffs_purge(sffs) != 0)
+	if (sffs_purge(sffs) != 0) {
+		vfsp->vfs_flag &= ~VFS_UNMOUNTED;
+		LogFlowFunc(("sffs_unmount() returns EBUSY\n"));
 		return (EBUSY);
+	}
 
 	/*
 	 * Invoke Hypervisor unmount interface before proceeding

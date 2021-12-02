@@ -334,17 +334,26 @@ static inline void set_bitmap_bit(DWORD *bitmap, DWORD bit)
     bitmap[idx] |= (1 << shift);
 }
 
-static void shader_record_register_usage(IWineD3DBaseShaderImpl *shader, struct shader_reg_maps *reg_maps,
+static HRESULT shader_record_register_usage(IWineD3DBaseShaderImpl *shader, struct shader_reg_maps *reg_maps,
         const struct wined3d_shader_register *reg, enum wined3d_shader_type shader_type)
 {
     switch (reg->type)
     {
         case WINED3DSPR_TEXTURE: /* WINED3DSPR_ADDR */
-            if (shader_type == WINED3D_SHADER_TYPE_PIXEL) reg_maps->texcoord |= 1 << reg->idx;
-            else reg_maps->address |= 1 << reg->idx;
+            if (shader_type == WINED3D_SHADER_TYPE_PIXEL)
+            {
+                AssertReturn(reg->idx < MAX_REG_TEXCRD, E_INVALIDARG);
+                reg_maps->texcoord |= 1 << reg->idx;
+            }
+            else
+            {
+                AssertReturn(reg->idx < MAX_REG_ADDR, E_INVALIDARG);
+                reg_maps->address |= 1 << reg->idx;
+            }
             break;
 
         case WINED3DSPR_TEMP:
+            AssertReturn(reg->idx < MAX_REG_TEMP, E_INVALIDARG);
             reg_maps->temporary |= 1 << reg->idx;
             break;
 
@@ -364,10 +373,17 @@ static void shader_record_register_usage(IWineD3DBaseShaderImpl *shader, struct 
                 }
                 else
                 {
-                    ((IWineD3DPixelShaderImpl *)shader)->input_reg_used[reg->idx] = TRUE;
+                    unsigned int reg_idx = reg->idx;
+                    AssertReturn(reg_idx < MAX_REG_INPUT, E_INVALIDARG);
+
+                    ((IWineD3DPixelShaderImpl *)shader)->input_reg_used[reg_idx] = TRUE;
                 }
             }
-            else reg_maps->input_registers |= 1 << reg->idx;
+            else
+            {
+                AssertReturn(reg->idx < MAX_ATTRIBS, E_INVALIDARG);
+                reg_maps->input_registers |= 1 << reg->idx;
+            }
             break;
 
         case WINED3DSPR_RASTOUT:
@@ -400,15 +416,18 @@ static void shader_record_register_usage(IWineD3DBaseShaderImpl *shader, struct 
             }
             else
             {
+                AssertReturn(reg->idx < reg_maps->constf_size, E_INVALIDARG);
                 set_bitmap_bit(reg_maps->constf, reg->idx);
             }
             break;
 
         case WINED3DSPR_CONSTINT:
+            AssertReturn(reg->idx < MAX_CONST_I, E_INVALIDARG);
             reg_maps->integer_constants |= (1 << reg->idx);
             break;
 
         case WINED3DSPR_CONSTBOOL:
+            AssertReturn(reg->idx < MAX_CONST_B, E_INVALIDARG);
             reg_maps->boolean_constants |= (1 << reg->idx);
             break;
 
@@ -420,6 +439,8 @@ static void shader_record_register_usage(IWineD3DBaseShaderImpl *shader, struct 
             TRACE("Not recording register of type %#x and idx %u\n", reg->type, reg->idx);
             break;
     }
+
+    return S_OK;
 }
 
 static unsigned int get_instr_extra_regcount(enum WINED3D_SHADER_INSTRUCTION_HANDLER instr, unsigned int param)
@@ -473,6 +494,8 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
         return E_OUTOFMEMORY;
     }
 
+    reg_maps->constf_size = constf_size;
+
     while (!fe->shader_is_end(fe_data, &ptr))
     {
         struct wined3d_shader_instruction ins;
@@ -499,27 +522,32 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
         if (ins.handler_idx == WINED3DSIH_DCL)
         {
             struct wined3d_shader_semantic semantic;
+            unsigned int reg_idx;
 
             fe->shader_read_semantic(&ptr, &semantic);
+            reg_idx = semantic.reg.reg.idx;
 
             switch (semantic.reg.reg.type)
             {
                 /* Mark input registers used. */
                 case WINED3DSPR_INPUT:
-                    reg_maps->input_registers |= 1 << semantic.reg.reg.idx;
-                    shader_signature_from_semantic(&input_signature[semantic.reg.reg.idx], &semantic);
+                    AssertReturn(reg_idx < max(MAX_ATTRIBS, MAX_REG_INPUT), E_INVALIDARG);
+                    reg_maps->input_registers |= 1 << reg_idx;
+                    shader_signature_from_semantic(&input_signature[reg_idx], &semantic);
                     break;
 
                 /* Vertex shader: mark 3.0 output registers used, save token. */
                 case WINED3DSPR_OUTPUT:
-                    reg_maps->output_registers |= 1 << semantic.reg.reg.idx;
-                    shader_signature_from_semantic(&output_signature[semantic.reg.reg.idx], &semantic);
+                    AssertReturn(reg_idx < MAX_REG_OUTPUT, E_INVALIDARG);
+                    reg_maps->output_registers |= 1 << reg_idx;
+                    shader_signature_from_semantic(&output_signature[reg_idx], &semantic);
                     if (semantic.usage == WINED3DDECLUSAGE_FOG) reg_maps->fog = 1;
                     break;
 
                 /* Save sampler usage token. */
                 case WINED3DSPR_SAMPLER:
-                    reg_maps->sampler_type[semantic.reg.reg.idx] = semantic.sampler_type;
+                    AssertReturn(reg_idx < RT_ELEMENTS(reg_maps->sampler_type), E_INVALIDARG);
+                    reg_maps->sampler_type[reg_idx] = semantic.sampler_type;
                     break;
 
                 default:
@@ -531,13 +559,16 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
         {
             struct wined3d_shader_src_param rel_addr;
             struct wined3d_shader_dst_param dst;
-
-            local_constant *lconst = HeapAlloc(GetProcessHeap(), 0, sizeof(local_constant));
-            if (!lconst) return E_OUTOFMEMORY;
+            local_constant* lconst;
 
             fe->shader_read_dst_param(fe_data, &ptr, &dst, &rel_addr);
-            lconst->idx = dst.reg.idx;
 
+            AssertReturn(dst.reg.idx < constf_size, E_INVALIDARG);
+
+            lconst = HeapAlloc(GetProcessHeap(), 0, sizeof(local_constant));
+            if (!lconst) return E_OUTOFMEMORY;
+
+            lconst->idx = dst.reg.idx;
             memcpy(lconst->value, ptr, 4 * sizeof(DWORD));
             ptr += 4;
 
@@ -561,13 +592,16 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
         {
             struct wined3d_shader_src_param rel_addr;
             struct wined3d_shader_dst_param dst;
-
-            local_constant *lconst = HeapAlloc(GetProcessHeap(), 0, sizeof(local_constant));
-            if (!lconst) return E_OUTOFMEMORY;
+            local_constant* lconst;
 
             fe->shader_read_dst_param(fe_data, &ptr, &dst, &rel_addr);
-            lconst->idx = dst.reg.idx;
 
+            AssertReturn(dst.reg.idx < MAX_CONST_I, E_INVALIDARG);
+
+            lconst = HeapAlloc(GetProcessHeap(), 0, sizeof(local_constant));
+            if (!lconst) return E_OUTOFMEMORY;
+
+            lconst->idx = dst.reg.idx;
             memcpy(lconst->value, ptr, 4 * sizeof(DWORD));
             ptr += 4;
 
@@ -578,13 +612,16 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
         {
             struct wined3d_shader_src_param rel_addr;
             struct wined3d_shader_dst_param dst;
-
-            local_constant *lconst = HeapAlloc(GetProcessHeap(), 0, sizeof(local_constant));
-            if (!lconst) return E_OUTOFMEMORY;
+            local_constant* lconst;
 
             fe->shader_read_dst_param(fe_data, &ptr, &dst, &rel_addr);
-            lconst->idx = dst.reg.idx;
 
+            AssertReturn(dst.reg.idx < MAX_CONST_B, E_INVALIDARG);
+
+            lconst = HeapAlloc(GetProcessHeap(), 0, sizeof(local_constant));
+            if (!lconst) return E_OUTOFMEMORY;
+
+            lconst->idx = dst.reg.idx;
             memcpy(lconst->value, ptr, sizeof(DWORD));
             ++ptr;
 
@@ -642,10 +679,12 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
             {
                 struct wined3d_shader_src_param dst_rel_addr;
                 struct wined3d_shader_dst_param dst_param;
+                HRESULT hr;
 
                 fe->shader_read_dst_param(fe_data, &ptr, &dst_param, &dst_rel_addr);
 
-                shader_record_register_usage(shader, reg_maps, &dst_param.reg, shader_version.type);
+                hr = shader_record_register_usage(shader, reg_maps, &dst_param.reg, shader_version.type);
+                AssertReturn(SUCCEEDED(hr), hr);
 
                 /* WINED3DSPR_TEXCRDOUT is the same as WINED3DSPR_OUTPUT. _OUTPUT can be > MAX_REG_TEXCRD and
                  * is used in >= 3.0 shaders. Filter 3.0 shaders to prevent overflows, and also filter pixel
@@ -653,7 +692,10 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
                 if (shader_version.type == WINED3D_SHADER_TYPE_VERTEX && shader_version.major < 3
                         && dst_param.reg.type == WINED3DSPR_TEXCRDOUT)
                 {
-                    reg_maps->texcoord_mask[dst_param.reg.idx] |= dst_param.write_mask;
+                    unsigned int idx = dst_param.reg.idx;
+                    AssertReturn(idx < MAX_REG_TEXCRD, E_INVALIDARG);
+
+                    reg_maps->texcoord_mask[idx] |= dst_param.write_mask;
                 }
 
                 if (shader_version.type == WINED3D_SHADER_TYPE_PIXEL)
@@ -687,39 +729,45 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
                 }
 
                 /* Declare 1.x samplers implicitly, based on the destination reg. number. */
-                if (shader_version.major == 1
-                        && (ins.handler_idx == WINED3DSIH_TEX
-                            || ins.handler_idx == WINED3DSIH_TEXBEM
-                            || ins.handler_idx == WINED3DSIH_TEXBEML
-                            || ins.handler_idx == WINED3DSIH_TEXDP3TEX
-                            || ins.handler_idx == WINED3DSIH_TEXM3x2TEX
-                            || ins.handler_idx == WINED3DSIH_TEXM3x3SPEC
-                            || ins.handler_idx == WINED3DSIH_TEXM3x3TEX
-                            || ins.handler_idx == WINED3DSIH_TEXM3x3VSPEC
-                            || ins.handler_idx == WINED3DSIH_TEXREG2AR
-                            || ins.handler_idx == WINED3DSIH_TEXREG2GB
-                            || ins.handler_idx == WINED3DSIH_TEXREG2RGB))
+                if (ins.handler_idx == WINED3DSIH_TEX
+                    || ins.handler_idx == WINED3DSIH_TEXBEM
+                    || ins.handler_idx == WINED3DSIH_TEXBEML
+                    || ins.handler_idx == WINED3DSIH_TEXDP3TEX
+                    || ins.handler_idx == WINED3DSIH_TEXM3x2TEX
+                    || ins.handler_idx == WINED3DSIH_TEXM3x3SPEC
+                    || ins.handler_idx == WINED3DSIH_TEXM3x3TEX
+                    || ins.handler_idx == WINED3DSIH_TEXM3x3VSPEC
+                    || ins.handler_idx == WINED3DSIH_TEXREG2AR
+                    || ins.handler_idx == WINED3DSIH_TEXREG2GB
+                    || ins.handler_idx == WINED3DSIH_TEXREG2RGB)
                 {
+                    unsigned int sampler_idx;
+
                     /* Fake sampler usage, only set reserved bit and type. */
-                    DWORD sampler_code = dst_param.reg.idx;
+                    sampler_idx = dst_param.reg.idx;
+                    AssertReturn(sampler_idx < RT_ELEMENTS(reg_maps->sampler_type), E_INVALIDARG);
 
                     TRACE("Setting fake 2D sampler for 1.x pixelshader.\n");
-                    reg_maps->sampler_type[sampler_code] = WINED3DSTT_2D;
+                    reg_maps->sampler_type[sampler_idx] = WINED3DSTT_2D;
 
                     /* texbem is only valid with < 1.4 pixel shaders */
                     if (ins.handler_idx == WINED3DSIH_TEXBEM
                             || ins.handler_idx == WINED3DSIH_TEXBEML)
                     {
-                        reg_maps->bumpmat |= 1 << dst_param.reg.idx;
+                        reg_maps->bumpmat |= 1 << sampler_idx;
                         if (ins.handler_idx == WINED3DSIH_TEXBEML)
                         {
-                            reg_maps->luminanceparams |= 1 << dst_param.reg.idx;
+                            reg_maps->luminanceparams |= 1 << sampler_idx;
                         }
                     }
                 }
                 else if (ins.handler_idx == WINED3DSIH_BEM)
                 {
-                    reg_maps->bumpmat |= 1 << dst_param.reg.idx;
+                    unsigned int sampler_idx = dst_param.reg.idx;
+                    AssertReturn(shader_version.major == 1, E_INVALIDARG);
+                    AssertReturn(sampler_idx < RT_ELEMENTS(reg_maps->sampler_type), E_INVALIDARG);
+
+                    reg_maps->bumpmat |= 1 << sampler_idx;
                 }
             }
 
@@ -737,15 +785,19 @@ static HRESULT shader_get_registers_used(IWineD3DBaseShader *iface, const struct
             {
                 struct wined3d_shader_src_param src_param, src_rel_addr;
                 unsigned int count;
+                HRESULT hr;
 
                 fe->shader_read_src_param(fe_data, &ptr, &src_param, &src_rel_addr);
                 count = get_instr_extra_regcount(ins.handler_idx, i);
 
-                shader_record_register_usage(shader, reg_maps, &src_param.reg, shader_version.type);
+                hr = shader_record_register_usage(shader, reg_maps, &src_param.reg, shader_version.type);
+                AssertReturn(SUCCEEDED(hr), hr);
+
                 while (count)
                 {
                     ++src_param.reg.idx;
-                    shader_record_register_usage(shader, reg_maps, &src_param.reg, shader_version.type);
+                    hr = shader_record_register_usage(shader, reg_maps, &src_param.reg, shader_version.type);
+                    AssertReturn(SUCCEEDED(hr), hr);
                     --count;
                 }
 
@@ -1515,7 +1567,7 @@ static HRESULT shader_set_function(IWineD3DBaseShaderImpl *shader, const DWORD *
         return WINED3DERR_INVALIDCALL;
     }
     shader->baseShader.frontend = fe;
-    shader->baseShader.frontend_data = fe->shader_init(byte_code, output_signature);
+    shader->baseShader.frontend_data = fe->shader_init(byte_code, shader->baseShader.functionLength / 4, output_signature);
     if (!shader->baseShader.frontend_data)
     {
         FIXME("Failed to initialize frontend.\n");
@@ -1740,7 +1792,7 @@ static void vertexshader_set_limits(IWineD3DVertexShaderImpl *shader)
 
         case WINED3D_SHADER_VERSION(4, 0):
             FIXME("Using 3.0 limits for 4.0 shader.\n");
-            /* Fall through. */
+            RT_FALL_THRU();
 
         case WINED3D_SHADER_VERSION(3, 0):
             shader->baseShader.limits.temporary = 32;
@@ -2109,7 +2161,7 @@ void find_ps_compile_args(IWineD3DPixelShaderImpl *shader,
 
                     switch (stateblock->renderState[WINED3DRS_FOGVERTEXMODE])
                     {
-                        case WINED3DFOG_NONE: /* Fall through. */
+                        case WINED3DFOG_NONE: RT_FALL_THRU();
                         case WINED3DFOG_LINEAR: args->fog = FOG_LINEAR; break;
                         case WINED3DFOG_EXP:    args->fog = FOG_EXP;    break;
                         case WINED3DFOG_EXP2:   args->fog = FOG_EXP2;   break;
@@ -2188,7 +2240,7 @@ static void pixelshader_set_limits(IWineD3DPixelShaderImpl *shader)
 
         case WINED3D_SHADER_VERSION(4, 0):
             FIXME("Using 3.0 limits for 4.0 shader.\n");
-            /* Fall through. */
+            RT_FALL_THRU();
 
         case WINED3D_SHADER_VERSION(3, 0):
             shader->baseShader.limits.temporary = 32;

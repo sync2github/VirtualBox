@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTPathGlob.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * IPRT - RTPathGlob
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -43,6 +43,7 @@
 #include <iprt/uni.h>
 
 #if defined(RT_OS_WINDOWS)
+# include <iprt/utf16.h>
 # include <iprt/win/windows.h>
 # include "../../r3/win/internal-r3-win.h"
 
@@ -269,7 +270,7 @@ typedef struct RTPATHMATCHVAR
      * @param   pCache      Pointer to the path matching cache.  May speed up
      *                      enumerating PATH items and similar.
      */
-    DECLCALLBACKMEMBER(int, pfnQuery)(uint32_t iItem, char *pszBuf, size_t cbBuf, size_t *pcchValue, PRTPATHMATCHCACHE pCache);
+    DECLCALLBACKMEMBER(int, pfnQuery,(uint32_t iItem, char *pszBuf, size_t cbBuf, size_t *pcchValue, PRTPATHMATCHCACHE pCache));
 
     /**
      * Matching method, optional.
@@ -283,7 +284,7 @@ typedef struct RTPATHMATCHVAR
      * @param   fIgnoreCase Whether to ignore case or not when comparing.
      * @param   pcchMatched Where to return the length of the match (value length).
      */
-    DECLCALLBACKMEMBER(int, pfnMatch)(const char *pchMatch, size_t cchMatch, bool fIgnoreCase, size_t *pcchMatched);
+    DECLCALLBACKMEMBER(int, pfnMatch,(const char *pchMatch, size_t cchMatch, bool fIgnoreCase, size_t *pcchMatched));
 
 } RTPATHMATCHVAR;
 
@@ -1366,7 +1367,7 @@ static int rtPathGlobParse(PRTPATHGLOB pGlob, const char *pszPattern, PRTPATHPAR
             else
                 AssertMsgFailedReturn(("'%.*s' is not supported yet\n", pszComp, pParsed->aComps[0].cch),
                                       VERR_PATH_MATCH_FEATURE_NOT_IMPLEMENTED);
-            pGlob->offFirstPath = (uint32_t)RTPathEnsureTrailingSeparator(pGlob->szPath, sizeof(pGlob->szPath));
+            pGlob->offFirstPath = (uint16_t)RTPathEnsureTrailingSeparator(pGlob->szPath, sizeof(pGlob->szPath));
             pGlob->iFirstComp   = iComp = 1;
         }
     }
@@ -1446,7 +1447,7 @@ static int rtPathGlobParse(PRTPATHGLOB pGlob, const char *pszPattern, PRTPATHPAR
  * @param   hDir        The directory handle.
  * @param   cbNeeded    The required entry size.
  */
-DECL_NO_INLINE(static, int) rtPathGlobSkipDirEntry(PRTDIR hDir, size_t cbNeeded)
+DECL_NO_INLINE(static, int) rtPathGlobSkipDirEntry(RTDIR hDir, size_t cbNeeded)
 {
     int rc = VERR_BUFFER_OVERFLOW;
     cbNeeded = RT_ALIGN_Z(cbNeeded, 16);
@@ -1474,7 +1475,7 @@ DECL_NO_INLINE(static, int) rtPathGlobAddResult(PRTPATHGLOB pGlob, size_t cchPat
 {
     if (pGlob->cResults < RTPATHGLOB_MAX_RESULTS)
     {
-        PRTPATHGLOBENTRY pEntry = (PRTPATHGLOBENTRY)RTMemAlloc(RT_OFFSETOF(RTPATHGLOBENTRY, szPath[cchPath + 1]));
+        PRTPATHGLOBENTRY pEntry = (PRTPATHGLOBENTRY)RTMemAlloc(RT_UOFFSETOF_DYN(RTPATHGLOBENTRY, szPath[cchPath + 1]));
         if (pEntry)
         {
             pEntry->uType   = uType;
@@ -1514,7 +1515,7 @@ DECL_NO_INLINE(static, int) rtPathGlobAddResult2(PRTPATHGLOB pGlob, size_t cchPa
 {
     if (pGlob->cResults < RTPATHGLOB_MAX_RESULTS)
     {
-        PRTPATHGLOBENTRY pEntry = (PRTPATHGLOBENTRY)RTMemAlloc(RT_OFFSETOF(RTPATHGLOBENTRY, szPath[cchPath + cchName + 1]));
+        PRTPATHGLOBENTRY pEntry = (PRTPATHGLOBENTRY)RTMemAlloc(RT_UOFFSETOF_DYN(RTPATHGLOBENTRY, szPath[cchPath + cchName + 1]));
         if (pEntry)
         {
             pEntry->uType   = uType;
@@ -1558,7 +1559,7 @@ DECL_NO_INLINE(static, int) rtPathGlobAlmostAddResult(PRTPATHGLOB pGlob, size_t 
 {
     if (pGlob->cResults < RTPATHGLOB_MAX_RESULTS)
     {
-        PRTPATHGLOBENTRY pEntry = (PRTPATHGLOBENTRY)RTMemAlloc(RT_OFFSETOF(RTPATHGLOBENTRY, szPath[cchPath + cchName + 1]));
+        PRTPATHGLOBENTRY pEntry = (PRTPATHGLOBENTRY)RTMemAlloc(RT_UOFFSETOF_DYN(RTPATHGLOBENTRY, szPath[cchPath + cchName + 1]));
         if (pEntry)
         {
             pEntry->uType   = uType;
@@ -1874,7 +1875,7 @@ DECL_NO_INLINE(static, int) rtPathGlobExecRecursiveGeneric(PRTPATHGLOB pGlob, si
     /*
      * Enumerate entire directory and match each entry.
      */
-    PRTDIR hDir;
+    RTDIR hDir;
     int rc = RTDirOpen(&hDir, offPath ? pGlob->szPath : ".");
     if (RT_SUCCESS(rc))
     {
@@ -2082,13 +2083,13 @@ RTDECL(int) RTPathGlob(const char *pszPattern, uint32_t fFlags, PPCRTPATHGLOBENT
     /*
      * Parse the path.
      */
-    size_t        cbParsed = RT_OFFSETOF(RTPATHPARSED, aComps[1]); /** @todo 16 after testing */
+    size_t        cbParsed = RT_UOFFSETOF(RTPATHPARSED, aComps[1]); /** @todo 16 after testing */
     PRTPATHPARSED pParsed = (PRTPATHPARSED)RTMemTmpAlloc(cbParsed);
     AssertReturn(pParsed, VERR_NO_MEMORY);
     int rc = RTPathParse(pszPattern, pParsed, cbParsed, RTPATH_STR_F_STYLE_HOST);
     if (rc == VERR_BUFFER_OVERFLOW)
     {
-        cbParsed = RT_OFFSETOF(RTPATHPARSED, aComps[pParsed->cComps + 1]);
+        cbParsed = RT_UOFFSETOF_DYN(RTPATHPARSED, aComps[pParsed->cComps + 1]);
         RTMemTmpFree(pParsed);
         pParsed = (PRTPATHPARSED)RTMemTmpAlloc(cbParsed);
         AssertReturn(pParsed, VERR_NO_MEMORY);
@@ -2111,7 +2112,7 @@ RTDECL(int) RTPathGlob(const char *pszPattern, uint32_t fFlags, PPCRTPATHGLOBENT
             /*
              * Allocate and initialize the glob state data structure.
              */
-            size_t      cbGlob = RT_OFFSETOF(RTPATHGLOB, aComps[pParsed->cComps + 1]);
+            size_t      cbGlob = RT_UOFFSETOF_DYN(RTPATHGLOB, aComps[pParsed->cComps + 1]);
             PRTPATHGLOB pGlob  = (PRTPATHGLOB)RTMemTmpAllocZ(cbGlob);
             if (pGlob)
             {

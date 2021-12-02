@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: mp-r0drv-nt.cpp 86191 2020-09-21 09:59:04Z vboxsync $ */
 /** @file
  * IPRT - Multiprocessor, Ring-0 Driver, NT.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -103,7 +103,7 @@ uint32_t volatile                       g_cRtMpNtActiveCpus;
 RTCPUSET                                g_rtMpNtCpuSet;
 
 /** Static per group info.
- * @remarks  With RTCPUSET_MAX_CPUS as 256, this takes up 33KB. */
+ * @remarks  With 256 groups this takes up 33KB.  */
 static struct
 {
     /** The max CPUs in the group. */
@@ -112,7 +112,7 @@ static struct
     uint16_t    cActiveCpus;
     /** CPU set indexes for each CPU in the group. */
     int16_t     aidxCpuSetMembers[64];
-}                                       g_aRtMpNtCpuGroups[RTCPUSET_MAX_CPUS];
+}                                       g_aRtMpNtCpuGroups[256];
 /** Maps CPU set indexes to RTCPUID.
  * Inactive CPUs has bit 31 set (RTMPNT_ID_F_INACTIVE) so we can identify them
  * and shuffle duplicates during CPU hotplugging.  We assign temporary IDs to
@@ -121,6 +121,13 @@ static struct
 RTCPUID                                 g_aidRtMpNtByCpuSetIdx[RTCPUSET_MAX_CPUS];
 /** The handle of the rtR0NtMpProcessorChangeCallback registration. */
 static PVOID                            g_pvMpCpuChangeCallback = NULL;
+/** Size of the KAFFINITY_EX structure.
+ * This increased from 20 to 32 bitmap words in the 2020 H2 windows 10 release
+ * (i.e. 1280 to 2048 CPUs).  We expect this to increase in the future. */
+static size_t                           g_cbRtMpNtKaffinityEx = RT_UOFFSETOF(KAFFINITY_EX, Bitmap)
+                                                              + RT_SIZEOFMEMB(KAFFINITY_EX, Bitmap[0]) * 256;
+/** The size value of the KAFFINITY_EX structure. */
+static uint16_t                         g_cRtMpNtKaffinityExEntries = 256;
 
 
 /*********************************************************************************************************************************
@@ -592,25 +599,48 @@ DECLHIDDEN(int) rtR0MpNtInit(RTNTSDBOSVER const *pOsVerInfo)
     else
         g_pfnrtHalRequestIpiW7Plus = NULL;
 
-    g_pfnrtMpPokeCpuWorker = rtMpPokeCpuUsingDpc;
-#ifndef IPRT_TARGET_NT4
     if (   g_pfnrtHalRequestIpiW7Plus
         && g_pfnrtKeInitializeAffinityEx
         && g_pfnrtKeAddProcessorAffinityEx
         && g_pfnrtKeGetProcessorIndexFromNumber)
     {
-        DbgPrint("IPRT: RTMpPoke => rtMpPokeCpuUsingHalReqestIpiW7Plus\n");
-        g_pfnrtMpPokeCpuWorker = rtMpPokeCpuUsingHalReqestIpiW7Plus;
+        /* Determine the real size of the KAFFINITY_EX structure. */
+        size_t const  cbAffinity = _8K;
+        PKAFFINITY_EX pAffinity  = (PKAFFINITY_EX)RTMemAllocZ(cbAffinity);
+        AssertReturn(pAffinity, VERR_NO_MEMORY);
+        size_t const cMaxEntries = (cbAffinity - RT_UOFFSETOF(KAFFINITY_EX, Bitmap[0])) / sizeof(pAffinity->Bitmap[0]);
+        g_pfnrtKeInitializeAffinityEx(pAffinity);
+        if (pAffinity->Size > 1 && pAffinity->Size <= cMaxEntries)
+        {
+            g_cRtMpNtKaffinityExEntries = pAffinity->Size;
+            g_cbRtMpNtKaffinityEx       = pAffinity->Size * sizeof(pAffinity->Bitmap[0]) + RT_UOFFSETOF(KAFFINITY_EX, Bitmap[0]);
+            g_pfnrtMpPokeCpuWorker      = rtMpPokeCpuUsingHalRequestIpiW7Plus;
+            RTMemFree(pAffinity);
+            DbgPrint("IPRT: RTMpPoke => rtMpPokeCpuUsingHalRequestIpiW7Plus\n");
+            return VINF_SUCCESS;
+        }
+        DbgPrint("IPRT: RTMpPoke can't use rtMpPokeCpuUsingHalRequestIpiW7Plus! pAffinity->Size=%u\n", pAffinity->Size);
+        AssertReleaseMsg(pAffinity->Size <= cMaxEntries, ("%#x\n", pAffinity->Size)); /* stack is toast if larger (32768 CPUs). */
+        RTMemFree(pAffinity);
     }
-    else if (pOsVerInfo->uMajorVer >= 6 && g_pfnrtKeIpiGenericCall)
+
+    if (pOsVerInfo->uMajorVer >= 6 && g_pfnrtKeIpiGenericCall)
     {
         DbgPrint("IPRT: RTMpPoke => rtMpPokeCpuUsingBroadcastIpi\n");
         g_pfnrtMpPokeCpuWorker = rtMpPokeCpuUsingBroadcastIpi;
     }
-    else
+    else if (g_pfnrtKeSetTargetProcessorDpc)
+    {
         DbgPrint("IPRT: RTMpPoke => rtMpPokeCpuUsingDpc\n");
-    /* else: Windows XP should send always send an IPI -> VERIFY */
-#endif
+        g_pfnrtMpPokeCpuWorker = rtMpPokeCpuUsingDpc;
+        /* Windows XP should send always send an IPI -> VERIFY */
+    }
+    else
+    {
+        DbgPrint("IPRT: RTMpPoke => rtMpPokeCpuUsingFailureNotSupported\n");
+        Assert(pOsVerInfo->uMajorVer == 3 && pOsVerInfo->uMinorVer <= 50);
+        g_pfnrtMpPokeCpuWorker = rtMpPokeCpuUsingFailureNotSupported;
+    }
 
     return VINF_SUCCESS;
 }
@@ -1309,7 +1339,7 @@ static VOID rtmpNtDPCWrapper(IN PKDPC Dpc, IN PVOID DeferredContext, IN PVOID Sy
     int32_t cRefs = ASMAtomicDecS32(&pArgs->cRefs);
     Assert(cRefs >= 0);
     if (cRefs == 0)
-        ExFreePool(pArgs);
+        RTMemFree(pArgs);
 }
 
 
@@ -1339,8 +1369,10 @@ DECLHIDDEN(int) rtMpNtSetTargetProcessorDpc(KDPC *pDpc, RTCPUID idCpu)
                         ("KeSetTargetProcessorDpcEx(,%u(%u/%u)) -> %#x\n", idCpu, ProcNum.Group, ProcNum.Number, rcNt),
                         RTErrConvertFromNtStatus(rcNt));
     }
+    else if (g_pfnrtKeSetTargetProcessorDpc)
+        g_pfnrtKeSetTargetProcessorDpc(pDpc, RTMpCpuIdToSetIndex(idCpu));
     else
-        KeSetTargetProcessorDpc(pDpc, RTMpCpuIdToSetIndex(idCpu));
+        return VERR_NOT_SUPPORTED;
     return VINF_SUCCESS;
 }
 
@@ -1361,18 +1393,12 @@ DECLHIDDEN(int) rtMpNtSetTargetProcessorDpc(KDPC *pDpc, RTCPUID idCpu)
 static int rtMpCallUsingDpcs(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUser2,
                              RT_NT_CPUID enmCpuid, RTCPUID idCpu, RTCPUID idCpu2, uint32_t *pcHits)
 {
-#ifdef IPRT_TARGET_NT4
-    RT_NOREF(pfnWorker, pvUser1, pvUser2, enmCpuid, idCpu, idCpu2, pcHits);
-    /* g_pfnrtNt* are not present on NT anyway. */
-    return VERR_NOT_SUPPORTED;
-
-#else  /* !IPRT_TARGET_NT4 */
-# if 0
+#if 0
     /* KeFlushQueuedDpcs must be run at IRQL PASSIVE_LEVEL according to MSDN, but the
      * driver verifier doesn't complain...
      */
     AssertMsg(KeGetCurrentIrql() == PASSIVE_LEVEL, ("%d != %d (PASSIVE_LEVEL)\n", KeGetCurrentIrql(), PASSIVE_LEVEL));
-# endif
+#endif
     /* KeFlushQueuedDpcs is not present in Windows 2000; import it dynamically so we can just fail this call. */
     if (!g_pfnrtNtKeFlushQueuedDpcs)
         return VERR_NOT_SUPPORTED;
@@ -1404,7 +1430,7 @@ static int rtMpCallUsingDpcs(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUse
      * Allocate an RTMPARGS structure followed by cDpcsNeeded KDPCs
      * and initialize them.
      */
-    PRTMPARGS pArgs = (PRTMPARGS)ExAllocatePoolWithTag(NonPagedPool, sizeof(RTMPARGS) + cDpcsNeeded * sizeof(KDPC), (ULONG)'RTMp');
+    PRTMPARGS pArgs = (PRTMPARGS)RTMemAllocZ(sizeof(RTMPARGS) + cDpcsNeeded * sizeof(KDPC));
     if (!pArgs)
         return VERR_NO_MEMORY;
 
@@ -1421,19 +1447,22 @@ static int rtMpCallUsingDpcs(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUse
     if (enmCpuid == RT_NT_CPUID_SPECIFIC)
     {
         KeInitializeDpc(&paExecCpuDpcs[0], rtmpNtDPCWrapper, pArgs);
-        KeSetImportanceDpc(&paExecCpuDpcs[0], HighImportance);
+        if (g_pfnrtKeSetImportanceDpc)
+            g_pfnrtKeSetImportanceDpc(&paExecCpuDpcs[0], HighImportance);
         rc = rtMpNtSetTargetProcessorDpc(&paExecCpuDpcs[0], idCpu);
         pArgs->idCpu = idCpu;
     }
     else if (enmCpuid == RT_NT_CPUID_PAIR)
     {
         KeInitializeDpc(&paExecCpuDpcs[0], rtmpNtDPCWrapper, pArgs);
-        KeSetImportanceDpc(&paExecCpuDpcs[0], HighImportance);
+        if (g_pfnrtKeSetImportanceDpc)
+            g_pfnrtKeSetImportanceDpc(&paExecCpuDpcs[0], HighImportance);
         rc = rtMpNtSetTargetProcessorDpc(&paExecCpuDpcs[0], idCpu);
         pArgs->idCpu = idCpu;
 
         KeInitializeDpc(&paExecCpuDpcs[1], rtmpNtDPCWrapper, pArgs);
-        KeSetImportanceDpc(&paExecCpuDpcs[1], HighImportance);
+        if (g_pfnrtKeSetImportanceDpc)
+            g_pfnrtKeSetImportanceDpc(&paExecCpuDpcs[1], HighImportance);
         if (RT_SUCCESS(rc))
             rc = rtMpNtSetTargetProcessorDpc(&paExecCpuDpcs[1], (int)idCpu2);
         pArgs->idCpu2 = idCpu2;
@@ -1445,13 +1474,14 @@ static int rtMpCallUsingDpcs(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUse
             if (RTCpuSetIsMemberByIndex(&OnlineSet, i))
             {
                 KeInitializeDpc(&paExecCpuDpcs[i], rtmpNtDPCWrapper, pArgs);
-                KeSetImportanceDpc(&paExecCpuDpcs[i], HighImportance);
+                if (g_pfnrtKeSetImportanceDpc)
+                    g_pfnrtKeSetImportanceDpc(&paExecCpuDpcs[i], HighImportance);
                 rc = rtMpNtSetTargetProcessorDpc(&paExecCpuDpcs[i], RTMpCpuIdFromSetIndex(i));
             }
     }
     if (RT_FAILURE(rc))
     {
-        ExFreePool(pArgs);
+        RTMemFree(pArgs);
         return rc;
     }
 
@@ -1511,7 +1541,8 @@ static int rtMpCallUsingDpcs(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUse
     /** @todo Seems KeFlushQueuedDpcs doesn't wait for the DPCs to be completely
      *        executed. Seen pArgs being freed while some CPU was using it before
      *        cRefs was added. */
-    g_pfnrtNtKeFlushQueuedDpcs();
+    if (g_pfnrtNtKeFlushQueuedDpcs)
+        g_pfnrtNtKeFlushQueuedDpcs();
 
     if (pcHits)
         *pcHits = pArgs->cHits;
@@ -1520,10 +1551,9 @@ static int rtMpCallUsingDpcs(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUse
     int32_t cRefs = ASMAtomicDecS32(&pArgs->cRefs);
     Assert(cRefs >= 0);
     if (cRefs == 0)
-        ExFreePool(pArgs);
+        RTMemFree(pArgs);
 
     return VINF_SUCCESS;
-#endif /* !IPRT_TARGET_NT4 */
 }
 
 
@@ -1609,7 +1639,7 @@ DECLINLINE(void) rtMpNtOnSpecificRelease(PRTMPNTONSPECIFICARGS pArgs)
     uint32_t cRefs = ASMAtomicDecU32(&pArgs->cRefs);
     AssertMsg(cRefs <= 1, ("cRefs=%#x\n", cRefs));
     if (cRefs == 0)
-        ExFreePool(pArgs);
+        RTMemFree(pArgs);
 }
 
 
@@ -1686,7 +1716,7 @@ RTDECL(int) RTMpOnSpecific(RTCPUID idCpu, PFNRTMPWORKER pfnWorker, void *pvUser1
      * The package is referenced counted to avoid unnecessary spinning to
      * synchronize cleanup and prevent stack corruption.
      */
-    PRTMPNTONSPECIFICARGS pArgs = (PRTMPNTONSPECIFICARGS)ExAllocatePoolWithTag(NonPagedPool, sizeof(*pArgs), (ULONG)'RTMp');
+    PRTMPNTONSPECIFICARGS pArgs = (PRTMPNTONSPECIFICARGS)RTMemAllocZ(sizeof(*pArgs));
     if (!pArgs)
         return VERR_NO_MEMORY;
     pArgs->cRefs                  = 2;
@@ -1700,11 +1730,12 @@ RTDECL(int) RTMpOnSpecific(RTCPUID idCpu, PFNRTMPWORKER pfnWorker, void *pvUser1
     pArgs->CallbackArgs.cRefs     = 2;
     KeInitializeEvent(&pArgs->DoneEvt, SynchronizationEvent, FALSE /* not signalled */);
     KeInitializeDpc(&pArgs->Dpc, rtMpNtOnSpecificDpcWrapper, pArgs);
-    KeSetImportanceDpc(&pArgs->Dpc, HighImportance);
+    if (g_pfnrtKeSetImportanceDpc)
+        g_pfnrtKeSetImportanceDpc(&pArgs->Dpc, HighImportance);
     rc = rtMpNtSetTargetProcessorDpc(&pArgs->Dpc, idCpu);
     if (RT_FAILURE(rc))
     {
-        ExFreePool(pArgs);
+        RTMemFree(pArgs);
         return rc;
     }
 
@@ -1721,7 +1752,7 @@ RTDECL(int) RTMpOnSpecific(RTCPUID idCpu, PFNRTMPWORKER pfnWorker, void *pvUser1
         pfnWorker(idCpu, pvUser1, pvUser2);
         KeLowerIrql(bOldIrql);
 
-        ExFreePool(pArgs);
+        RTMemFree(pArgs);
         return VINF_SUCCESS;
     }
 
@@ -1763,12 +1794,10 @@ RTDECL(int) RTMpOnSpecific(RTCPUID idCpu, PFNRTMPWORKER pfnWorker, void *pvUser1
         /* If it hasn't respondend yet, maybe poke it and wait some more. */
         if (rcNt == STATUS_TIMEOUT)
         {
-#ifndef IPRT_TARGET_NT4
             if (   !pArgs->fExecuting
-                && (   g_pfnrtMpPokeCpuWorker == rtMpPokeCpuUsingHalReqestIpiW7Plus
-                    || g_pfnrtMpPokeCpuWorker == rtMpPokeCpuUsingHalReqestIpiPreW7))
+                && (   g_pfnrtMpPokeCpuWorker == rtMpPokeCpuUsingHalRequestIpiW7Plus
+                    || g_pfnrtMpPokeCpuWorker == rtMpPokeCpuUsingHalRequestIpiPreW7))
                 RTMpPokeCpu(idCpu);
-#endif
 
             Timeout.QuadPart = -1280000; /* 128ms */
             rcNt = KeWaitForSingleObject(&pArgs->DoneEvt, Executive, KernelMode, FALSE /* Alertable */, &Timeout);
@@ -1784,7 +1813,7 @@ RTDECL(int) RTMpOnSpecific(RTCPUID idCpu, PFNRTMPWORKER pfnWorker, void *pvUser1
          */
         if (KeRemoveQueueDpc(&pArgs->Dpc))
         {
-            ExFreePool(pArgs); /* DPC was still queued, so we can return without further ado. */
+            RTMemFree(pArgs); /* DPC was still queued, so we can return without further ado. */
             LogRel(("RTMpOnSpecific(%#x): Not processed after %llu ns: rcNt=%#x\n", idCpu, RTTimeNanoTS() - nsRealWaitTS, rcNt));
         }
         else
@@ -1822,7 +1851,6 @@ static VOID rtMpNtPokeCpuDummy(IN PKDPC Dpc, IN PVOID DeferredContext, IN PVOID 
     NOREF(SystemArgument2);
 }
 
-#ifndef IPRT_TARGET_NT4
 
 /** Callback used by rtMpPokeCpuUsingBroadcastIpi. */
 static ULONG_PTR rtMpIpiGenericCall(ULONG_PTR Argument)
@@ -1853,14 +1881,15 @@ int rtMpPokeCpuUsingBroadcastIpi(RTCPUID idCpu)
  * @returns VINF_SUCCESS
  * @param   idCpu           The CPU identifier.
  */
-int rtMpPokeCpuUsingHalReqestIpiW7Plus(RTCPUID idCpu)
+int rtMpPokeCpuUsingHalRequestIpiW7Plus(RTCPUID idCpu)
 {
     /* idCpu is an HAL processor index, so we can use it directly. */
-    KAFFINITY_EX Target;
-    g_pfnrtKeInitializeAffinityEx(&Target);
-    g_pfnrtKeAddProcessorAffinityEx(&Target, idCpu);
+    PKAFFINITY_EX pTarget = (PKAFFINITY_EX)alloca(g_cbRtMpNtKaffinityEx);
+    pTarget->Size = g_cRtMpNtKaffinityExEntries; /* (just in case KeInitializeAffinityEx starts using it) */
+    g_pfnrtKeInitializeAffinityEx(pTarget);
+    g_pfnrtKeAddProcessorAffinityEx(pTarget, idCpu);
 
-    g_pfnrtHalRequestIpiW7Plus(0, &Target);
+    g_pfnrtHalRequestIpiW7Plus(0, pTarget);
     return VINF_SUCCESS;
 }
 
@@ -1872,7 +1901,7 @@ int rtMpPokeCpuUsingHalReqestIpiW7Plus(RTCPUID idCpu)
  * @returns VINF_SUCCESS
  * @param   idCpu           The CPU identifier.
  */
-int rtMpPokeCpuUsingHalReqestIpiPreW7(RTCPUID idCpu)
+int rtMpPokeCpuUsingHalRequestIpiPreW7(RTCPUID idCpu)
 {
     __debugbreak(); /** @todo this code needs testing!!  */
     KAFFINITY Target = 1;
@@ -1881,7 +1910,12 @@ int rtMpPokeCpuUsingHalReqestIpiPreW7(RTCPUID idCpu)
     return VINF_SUCCESS;
 }
 
-#endif /* !IPRT_TARGET_NT4 */
+
+int rtMpPokeCpuUsingFailureNotSupported(RTCPUID idCpu)
+{
+    NOREF(idCpu);
+    return VERR_NOT_SUPPORTED;
+}
 
 
 int rtMpPokeCpuUsingDpc(RTCPUID idCpu)
@@ -1899,7 +1933,8 @@ int rtMpPokeCpuUsingDpc(RTCPUID idCpu)
         for (unsigned i = 0; i < g_cRtMpNtMaxCpus; i++)
         {
             KeInitializeDpc(&s_aPokeDpcs[i], rtMpNtPokeCpuDummy, NULL);
-            KeSetImportanceDpc(&s_aPokeDpcs[i], HighImportance);
+            if (g_pfnrtKeSetImportanceDpc)
+                g_pfnrtKeSetImportanceDpc(&s_aPokeDpcs[i], HighImportance);
             int rc = rtMpNtSetTargetProcessorDpc(&s_aPokeDpcs[i], idCpu);
             if (RT_FAILURE(rc))
                 return rc;
@@ -1909,21 +1944,20 @@ int rtMpPokeCpuUsingDpc(RTCPUID idCpu)
     }
 
     /* Raise the IRQL to DISPATCH_LEVEL so we can't be rescheduled to another cpu.
-     * KeInsertQueueDpc must also be executed at IRQL >= DISPATCH_LEVEL.
-     */
+       KeInsertQueueDpc must also be executed at IRQL >= DISPATCH_LEVEL. */
     KIRQL oldIrql;
     KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
 
-    KeSetImportanceDpc(&s_aPokeDpcs[idCpu], HighImportance);
-    KeSetTargetProcessorDpc(&s_aPokeDpcs[idCpu], (int)idCpu);
+    if (g_pfnrtKeSetImportanceDpc)
+        g_pfnrtKeSetImportanceDpc(&s_aPokeDpcs[idCpu], HighImportance);
+    g_pfnrtKeSetTargetProcessorDpc(&s_aPokeDpcs[idCpu], (int)idCpu);
 
     /* Assuming here that high importance DPCs will be delivered immediately; or at least an IPI will be sent immediately.
-     * @note: not true on at least Vista & Windows 7
-     */
-    BOOLEAN bRet = KeInsertQueueDpc(&s_aPokeDpcs[idCpu], 0, 0);
+       Note! Not true on at least Vista & Windows 7 */
+    BOOLEAN fRet = KeInsertQueueDpc(&s_aPokeDpcs[idCpu], 0, 0);
 
     KeLowerIrql(oldIrql);
-    return (bRet == TRUE) ? VINF_SUCCESS : VERR_ACCESS_DENIED /* already queued */;
+    return fRet == TRUE ? VINF_SUCCESS : VERR_ACCESS_DENIED /* already queued */;
 }
 
 
@@ -1933,7 +1967,7 @@ RTDECL(int) RTMpPokeCpu(RTCPUID idCpu)
         return !RTMpIsCpuPossible(idCpu)
               ? VERR_CPU_NOT_FOUND
               : VERR_CPU_OFFLINE;
-    /* Calls rtMpPokeCpuUsingDpc, rtMpPokeCpuUsingHalReqestIpiW7Plus or rtMpPokeCpuUsingBroadcastIpi. */
+    /* Calls rtMpPokeCpuUsingDpc, rtMpPokeCpuUsingHalRequestIpiW7Plus or rtMpPokeCpuUsingBroadcastIpi. */
     return g_pfnrtMpPokeCpuWorker(idCpu);
 }
 

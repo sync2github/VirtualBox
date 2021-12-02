@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxMPVidPn.cpp 85058 2020-07-03 19:36:39Z vboxsync $ */
 /** @file
  * VBox WDDM Miniport driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -147,7 +146,7 @@ static NTSTATUS vboxVidPnPopulateVideoSignalInfo(D3DKMDT_VIDEO_SIGNAL_INFO *pVsi
         pVsi->VSyncFreq.Numerator = VSync * 1000;
         pVsi->VSyncFreq.Denominator = 1000;
         pVsi->PixelRate = pVsi->TotalSize.cx * pVsi->TotalSize.cy * VSync;
-        pVsi->HSyncFreq.Numerator = (UINT)((pVsi->PixelRate / pVsi->TotalSize.cy) * 1000);
+        pVsi->HSyncFreq.Numerator = (UINT)((VSync * pVsi->TotalSize.cy) * 1000);
         pVsi->HSyncFreq.Denominator = 1000;
     }
     pVsi->ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
@@ -202,7 +201,7 @@ static void vboxVidPnPopulateSourceModeInfo(D3DKMDT_VIDPN_SOURCE_MODE *pNewVidPn
 
 static void vboxVidPnPopulateMonitorModeInfo(D3DKMDT_MONITOR_SOURCE_MODE *pMonitorSourceMode, const RTRECTSIZE *pResolution)
 {
-    vboxVidPnPopulateVideoSignalInfo(&pMonitorSourceMode->VideoSignalInfo, pResolution, 60 /* ULONG VSync */);
+    vboxVidPnPopulateVideoSignalInfo(&pMonitorSourceMode->VideoSignalInfo, pResolution, g_RefreshRate);
     pMonitorSourceMode->ColorBasis = D3DKMDT_CB_SRGB;
     pMonitorSourceMode->ColorCoeffDynamicRanges.FirstChannel = 8;
     pMonitorSourceMode->ColorCoeffDynamicRanges.SecondChannel = 8;
@@ -215,7 +214,7 @@ static void vboxVidPnPopulateMonitorModeInfo(D3DKMDT_MONITOR_SOURCE_MODE *pMonit
 static NTSTATUS vboxVidPnPopulateTargetModeInfo(D3DKMDT_VIDPN_TARGET_MODE *pNewVidPnTargetModeInfo, const RTRECTSIZE *pResolution)
 {
     pNewVidPnTargetModeInfo->Preference = D3DKMDT_MP_NOTPREFERRED;
-    return vboxVidPnPopulateVideoSignalInfo(&pNewVidPnTargetModeInfo->VideoSignalInfo, pResolution, 60 /* ULONG VSync */);
+    return vboxVidPnPopulateVideoSignalInfo(&pNewVidPnTargetModeInfo->VideoSignalInfo, pResolution, g_RefreshRate);
 }
 
 void VBoxVidPnStTargetCleanup(PVBOXWDDM_SOURCE paSources, uint32_t cScreens, PVBOXWDDM_TARGET pTarget)
@@ -555,11 +554,12 @@ static NTSTATUS vboxVidPnSourceModeSetFromArray(D3DKMDT_HVIDPNSOURCEMODESET hVid
         Status = pVidPnModeSetInterface->pfnAddMode(hVidPnModeSet, pVidPnModeInfo);
         if (!NT_SUCCESS(Status))
         {
-            WARN(("pfnAddMode failed, Status 0x%x", Status));
+            WARN(("pfnAddMode (%d x %d) failed, Status 0x%x", size.cx, size.cy, Status));
             VBoxVidPnDumpSourceMode("SourceMode: ", pVidPnModeInfo, "\n");
             NTSTATUS rcNt2 = pVidPnModeSetInterface->pfnReleaseModeInfo(hVidPnModeSet, pVidPnModeInfo);
             AssertNtStatusSuccess(rcNt2);
-            return Status;
+            // Continue adding modes into modeset even if a mode was rejected
+            continue;
         }
     }
 
@@ -615,11 +615,12 @@ static NTSTATUS vboxVidPnTargetModeSetFromArray(D3DKMDT_HVIDPNTARGETMODESET hVid
         Status = pVidPnModeSetInterface->pfnAddMode(hVidPnModeSet, pVidPnModeInfo);
         if (!NT_SUCCESS(Status))
         {
-            WARN(("pfnAddMode failed, Status 0x%x", Status));
+            WARN(("pfnAddMode (%d x %d) failed, Status 0x%x", size.cx, size.cy, Status));
             VBoxVidPnDumpTargetMode("TargetMode: ", pVidPnModeInfo, "\n");
             NTSTATUS rcNt2 = pVidPnModeSetInterface->pfnReleaseModeInfo(hVidPnModeSet, pVidPnModeInfo);
             AssertNtStatusSuccess(rcNt2);
-            return Status;
+            // Continue adding modes into modeset even if a mode was rejected
+            continue;
         }
     }
 
@@ -678,6 +679,7 @@ static NTSTATUS vboxVidPnMonitorModeSetFromArray(D3DKMDT_HMONITORSOURCEMODESET h
             WARN(("pfnAddMode (%d x %d) failed, Status 0x%x", size.cx, size.cy, Status));
             NTSTATUS rcNt2 = pVidPnModeSetInterface->pfnReleaseModeInfo(hVidPnModeSet, pVidPnModeInfo);
             AssertNtStatusSuccess(rcNt2);
+            // Continue adding modes into modeset even if a mode was rejected
             continue;
         }
 
@@ -1339,7 +1341,7 @@ NTSTATUS VBoxVidPnUpdateModes(PVBOXMP_DEVEXT pDevExt, uint32_t u32TargetId, cons
     }
 
 #ifdef VBOX_WDDM_REPLUG_ON_MODE_CHANGE
-    /* The VBOXESC_UPDATEMODES is a hint for VBoxVideoW8.sys to use new display mode as soon as VidPn
+    /* The VBOXESC_UPDATEMODES is a hint for the driver to use new display mode as soon as VidPn
      * manager will ask for it.
      * Probably, some new interface is required to plug/unplug displays by calling
      * VBoxWddmChildStatusReportReconnected.
@@ -1686,6 +1688,14 @@ static BOOLEAN vboxVidPnIsPathSupported(PVBOXMP_DEVEXT pDevExt, const D3DKMDT_VI
 
 NTSTATUS VBoxVidPnIsSupported(PVBOXMP_DEVEXT pDevExt, D3DKMDT_HVIDPN hVidPn, BOOLEAN *pfSupported)
 {
+    /* According Microsoft Docs we must return pfSupported = TRUE here if hVidPn is NULL, as
+     * the display adapter can always be configured to display nothing. */
+    if (hVidPn == NULL)
+    {
+        *pfSupported = TRUE;
+        return STATUS_SUCCESS;
+    }
+
     *pfSupported = FALSE;
 
     const DXGK_VIDPN_INTERFACE* pVidPnInterface = NULL;
@@ -2257,12 +2267,11 @@ NTSTATUS vboxVidPnSetupSourceInfo(PVBOXMP_DEVEXT pDevExt, CONST D3DKMDT_VIDPN_SO
             fChanges |= VBOXWDDM_HGSYNC_F_SYNCED_DIMENSIONS;
             pSource->AllocData.SurfDesc.cbSize = pVidPnSourceModeInfo->Format.Graphics.Stride * pVidPnSourceModeInfo->Format.Graphics.PrimSurfSize.cy;
         }
-#ifdef VBOX_WDDM_WIN8
+
         if (g_VBoxDisplayOnly)
         {
             vboxWddmDmSetupDefaultVramLocation(pDevExt, VidPnSourceId, paSources);
         }
-#endif
     }
     else
     {
@@ -2271,10 +2280,8 @@ NTSTATUS vboxVidPnSetupSourceInfo(PVBOXMP_DEVEXT pDevExt, CONST D3DKMDT_VIDPN_SO
         fChanges |= VBOXWDDM_HGSYNC_F_SYNCED_ALL;
     }
 
-#ifdef VBOX_WDDM_WIN8
     Assert(!g_VBoxDisplayOnly || !pAllocation);
     if (!g_VBoxDisplayOnly)
-#endif
     {
         vboxWddmAssignPrimary(pSource, pAllocation, VidPnSourceId);
     }

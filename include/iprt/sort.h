@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_sort_h
-#define ___iprt_sort_h
+#ifndef IPRT_INCLUDED_sort_h
+#define IPRT_INCLUDED_sort_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -45,20 +48,20 @@ RT_C_DECLS_BEGIN
  * @param   pvElement2      The 2nd element.
  * @param   pvUser          The user argument passed to the sorting function.
  */
-typedef DECLCALLBACK(int) FNRTSORTCMP(void const *pvElement1, void const *pvElement2, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNRTSORTCMP,(void const *pvElement1, void const *pvElement2, void *pvUser));
 /** Pointer to a compare function. */
 typedef FNRTSORTCMP *PFNRTSORTCMP;
 
 /**
  * Sorter function for an array of variable sized elementes.
  *
- * @param   papvArray       The array to sort.
+ * @param   pvArray         The array to sort.
  * @param   cElements       The number of elements in the array.
  * @param   cbElement       The size of an array element.
  * @param   pfnCmp          Callback function comparing two elements.
  * @param   pvUser          User argument for the callback.
  */
-typedef DECLCALLBACK(void) FNRTSORT(void *pvArray, size_t cElements, size_t cbElement, PFNRTSORTCMP pfnCmp, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNRTSORT,(void *pvArray, size_t cElements, size_t cbElement, PFNRTSORTCMP pfnCmp, void *pvUser));
 /** Pointer to a sorter function for an array of variable sized elements. */
 typedef FNRTSORT *PFNRTSORT;
 
@@ -70,7 +73,7 @@ typedef FNRTSORT *PFNRTSORT;
  * @param   pfnCmp          Callback function comparing two elements.
  * @param   pvUser          User argument for the callback.
  */
-typedef DECLCALLBACK(void) FNRTSORTAPV(void **papvArray, size_t cElements, PFNRTSORTCMP pfnCmp, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNRTSORTAPV,(void **papvArray, size_t cElements, PFNRTSORTCMP pfnCmp, void *pvUser));
 /** Pointer to a pointer array sorter function. */
 typedef FNRTSORTAPV *PFNRTSORTAPV;
 
@@ -124,5 +127,5 @@ RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !IPRT_INCLUDED_sort_h */
 

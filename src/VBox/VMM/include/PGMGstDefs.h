@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PGMGstDefs.h 92072 2021-10-26 09:34:40Z vboxsync $ */
 /** @file
  * VBox - Page Manager, Guest Paging Template - All context code.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,6 +19,8 @@
 /*******************************************************************************
 *   Defined Constants And Macros                                               *
 *******************************************************************************/
+#undef GSTUINT
+#undef GST_ATOMIC_OR
 #undef GSTPT
 #undef PGSTPT
 #undef GSTPTE
@@ -32,6 +34,9 @@
 #undef PCGSTPTWALK
 #undef GST_BIG_PAGE_SIZE
 #undef GST_BIG_PAGE_OFFSET_MASK
+#undef GST_GIGANT_PAGE_SIZE
+#undef GST_GIGANT_PAGE_OFFSET_MASK
+#undef GST_PDPE_BIG_PG_MASK
 #undef GST_PDE_PG_MASK
 #undef GST_PDE_BIG_PG_MASK
 #undef GST_PD_SHIFT
@@ -40,7 +45,6 @@
 #undef GST_GET_PTE_SHW_FLAGS
 #undef GST_PT_SHIFT
 #undef GST_PT_MASK
-#undef GST_TOTAL_PD_ENTRIES
 #undef GST_CR3_PAGE_MASK
 #undef GST_PDPE_ENTRIES
 #undef GST_PDPT_SHIFT
@@ -49,6 +53,7 @@
 #undef GST_GET_PTE_GCPHYS
 #undef GST_GET_PDE_GCPHYS
 #undef GST_GET_BIG_PDE_GCPHYS
+#undef GST_GET_BIG_PDPE_GCPHYS
 #undef GST_GET_PDE_SHW_FLAGS
 #undef GST_GET_BIG_PDE_SHW_FLAGS
 #undef GST_GET_BIG_PDE_SHW_FLAGS_4_PTE
@@ -58,6 +63,7 @@
 #undef GST_IS_PDPE_VALID
 #undef GST_IS_BIG_PDPE_VALID
 #undef GST_IS_PML4E_VALID
+#undef GST_IS_PGENTRY_PRESENT
 #undef GST_IS_PSE_ACTIVE
 #undef GST_IS_NX_ACTIVE
 #undef BTH_IS_NP_ACTIVE
@@ -66,6 +72,8 @@
  || PGM_GST_TYPE == PGM_TYPE_PROT
 
 # if PGM_SHW_TYPE == PGM_TYPE_EPT
+#  define GSTUINT                               uint64_t
+#  define GST_ATOMIC_OR(a_pu, a_fFlags)         ASMAtomicOrU64((a_pu), (a_fFlags))
 #  define GSTPT                                 X86PTPAE
 #  define PGSTPT                                PX86PTPAE
 #  define GSTPTE                                X86PTEPAE
@@ -79,6 +87,8 @@
 #  define BTH_IS_NP_ACTIVE(pVM)                 (true)
 # else
 #  if PGM_SHW_TYPE == PGM_TYPE_32BIT /* Same as shadow paging, but no PGMSHWPTEPAE. */
+#   define GSTUINT                              uint32_t
+#   define GST_ATOMIC_OR(a_pu, a_fFlags)        ASMAtomicOrU32((a_pu), (a_fFlags))
 #   define GSTPT                                X86PT
 #   define PGSTPT                               PX86PT
 #   define GSTPTE                               X86PTE
@@ -89,6 +99,8 @@
 #   define PGSTPDE                              PX86PDE
 #   define GST_PTE_PG_MASK                      X86_PTE_PG_MASK
 #  else
+#   define GSTUINT                              uint64_t
+#   define GST_ATOMIC_OR(a_pu, a_fFlags)        ASMAtomicOrU64((a_pu), (a_fFlags))
 #   define GSTPT                                X86PTPAE
 #   define PGSTPT                               PX86PTPAE
 #   define GSTPTE                               X86PTEPAE
@@ -119,9 +131,12 @@
 # define GST_IS_PDPE_VALID(pVCpu, Pdpe)         (true)
 # define GST_IS_BIG_PDPE_VALID(pVCpu, Pdpe)     (true)
 # define GST_IS_PML4E_VALID(pVCpu, Pml4e)       (true)
+# define GST_IS_PGENTRY_PRESENT(pVCpu, Pge)     ((Pge.u) & X86_PTE_P)
 # define GST_IS_PSE_ACTIVE(pVCpu)               (false && This_should_not_be_used_in_this_context)
 
 #elif PGM_GST_TYPE == PGM_TYPE_32BIT
+# define GSTUINT                                uint32_t
+# define GST_ATOMIC_OR(a_pu, a_fFlags)          ASMAtomicOrU32((a_pu), (a_fFlags))
 # define GSTPT                                  X86PT
 # define PGSTPT                                 PX86PT
 # define GSTPTE                                 X86PTE
@@ -142,12 +157,11 @@
 # define GST_GET_BIG_PDE_GCPHYS(pVM, Pde)       PGM_A20_APPLY(pVCpu, pgmGstGet4MBPhysPage((pVM), Pde))
 # define GST_GET_PDE_SHW_FLAGS(pVCpu, Pde)      ((Pde).u & (X86_PDE_P | X86_PDE_RW | X86_PDE_US | X86_PDE_A))
 # define GST_GET_BIG_PDE_SHW_FLAGS(pVCpu, Pde) \
-    ((Pde).u & (X86_PDE4M_P | X86_PDE4M_RW | X86_PDE4M_US | X86_PDE4M_A))
+    ( ((Pde).u & (X86_PDE4M_P | X86_PDE4M_RW | X86_PDE4M_US | X86_PDE4M_A)) | PGM_PDFLAGS_BIG_PAGE )
 # define GST_GET_BIG_PDE_SHW_FLAGS_4_PTE(pVCpu, Pde) \
     ((Pde).u & (X86_PDE4M_P | X86_PDE4M_RW | X86_PDE4M_US | X86_PDE4M_A | X86_PDE4M_D | X86_PDE4M_G))
 # define GST_PD_SHIFT                           X86_PD_SHIFT
 # define GST_PD_MASK                            X86_PD_MASK
-# define GST_TOTAL_PD_ENTRIES                   X86_PG_ENTRIES
 # define GST_PTE_PG_MASK                        X86_PTE_PG_MASK
 # define GST_GET_PTE_SHW_FLAGS(pVCpu, Pte)      ((Pte).u & (X86_PTE_P | X86_PTE_RW | X86_PTE_US | X86_PTE_A | X86_PTE_D | X86_PTE_G))
 # define GST_PT_SHIFT                           X86_PT_SHIFT
@@ -159,12 +173,15 @@
 //# define GST_IS_PDPE_VALID(pVCpu, Pdpe)         (false)
 //# define GST_IS_BIG_PDPE_VALID(pVCpu, Pdpe)     (false)
 //# define GST_IS_PML4E_VALID(pVCpu, Pml4e)       (false)
+# define GST_IS_PGENTRY_PRESENT(pVCpu, Pge)     ((Pge.u) & X86_PTE_P)
 # define GST_IS_PSE_ACTIVE(pVCpu)               pgmGst32BitIsPageSizeExtActive(pVCpu)
 # define GST_IS_NX_ACTIVE(pVCpu)                (false)
 # define BTH_IS_NP_ACTIVE(pVM)                  (false)
 
 #elif   PGM_GST_TYPE == PGM_TYPE_PAE \
      || PGM_GST_TYPE == PGM_TYPE_AMD64
+# define GSTUINT                                uint64_t
+# define GST_ATOMIC_OR(a_pu, a_fFlags)          ASMAtomicOrU64((a_pu), (a_fFlags))
 # define GSTPT                                  X86PTPAE
 # define PGSTPT                                 PX86PTPAE
 # define GSTPTE                                 X86PTEPAE
@@ -182,7 +199,7 @@
 # define GST_GET_BIG_PDE_GCPHYS(pVM, Pde)       PGM_A20_APPLY(pVCpu, ((Pde).u & GST_PDE_BIG_PG_MASK))
 # define GST_GET_PTE_SHW_FLAGS(pVCpu, Pte)      ((Pte).u & (pVCpu)->pgm.s.fGst64ShadowedPteMask )
 # define GST_GET_PDE_SHW_FLAGS(pVCpu, Pde)      ((Pde).u & (pVCpu)->pgm.s.fGst64ShadowedPdeMask )
-# define GST_GET_BIG_PDE_SHW_FLAGS(pVCpu, Pde)  ((Pde).u & (pVCpu)->pgm.s.fGst64ShadowedBigPdeMask )
+# define GST_GET_BIG_PDE_SHW_FLAGS(pVCpu, Pde)  ( ((Pde).u & (pVCpu)->pgm.s.fGst64ShadowedBigPdeMask ) | PGM_PDFLAGS_BIG_PAGE)
 # define GST_GET_BIG_PDE_SHW_FLAGS_4_PTE(pVCpu, Pde)  ((Pde).u & (pVCpu)->pgm.s.fGst64ShadowedBigPde4PteMask )
 
 # define GST_PD_SHIFT                           X86_PD_PAE_SHIFT
@@ -191,7 +208,6 @@
 #  define GSTPTWALK                             PGMPTWALKGSTPAE
 #  define PGSTPTWALK                            PPGMPTWALKGSTPAE
 #  define PCGSTPTWALK                           PCPGMPTWALKGSTPAE
-#  define GST_TOTAL_PD_ENTRIES                  (X86_PG_PAE_ENTRIES * X86_PG_PAE_PDPE_ENTRIES)
 #  define GST_PDPE_ENTRIES                      X86_PG_PAE_PDPE_ENTRIES
 #  define GST_PDPE_PG_MASK                      X86_PDPE_PG_MASK
 #  define GST_PDPT_SHIFT                        X86_PDPT_SHIFT
@@ -208,7 +224,6 @@
 #  define GSTPTWALK                             PGMPTWALKGSTAMD64
 #  define PGSTPTWALK                            PPGMPTWALKGSTAMD64
 #  define PCGSTPTWALK                           PCPGMPTWALKGSTAMD64
-#  define GST_TOTAL_PD_ENTRIES                  (X86_PG_AMD64_ENTRIES * X86_PG_AMD64_PDPE_ENTRIES)
 #  define GST_PDPE_ENTRIES                      X86_PG_AMD64_PDPE_ENTRIES
 #  define GST_PDPT_SHIFT                        X86_PDPT_SHIFT
 #  define GST_PDPE_PG_MASK                      X86_PDPE_PG_MASK
@@ -222,9 +237,60 @@
 #  define GST_IS_BIG_PDPE_VALID(pVCpu, Pdpe)    (!( (Pdpe).u  & (pVCpu)->pgm.s.fGstAmd64MbzBigPdpeMask ))
 #  define GST_IS_PML4E_VALID(pVCpu, Pml4e)      (!( (Pml4e).u & (pVCpu)->pgm.s.fGstAmd64MbzPml4eMask ))
 # endif
+# define GST_IS_PGENTRY_PRESENT(pVCpu, Pge)     ((Pge.u) & X86_PTE_P)
 # define GST_PT_SHIFT                           X86_PT_PAE_SHIFT
 # define GST_PT_MASK                            X86_PT_PAE_MASK
 # define GST_IS_PSE_ACTIVE(pVCpu)               (true)
+# define GST_IS_NX_ACTIVE(pVCpu)                (pgmGstIsNoExecuteActive(pVCpu))
+# define BTH_IS_NP_ACTIVE(pVM)                  (false)
+
+#elif PGM_GST_TYPE == PGM_TYPE_EPT
+# define GSTUINT                                uint64_t
+# define GST_ATOMIC_OR(a_pu, a_fFlags)          ASMAtomicOrU64((a_pu), (a_fFlags))
+# define GSTPT                                  EPTPT
+# define PGSTPT                                 PEPTPT
+# define GSTPTE                                 EPTPTE
+# define PGSTPTE                                PEPTPTE
+# define GSTPD                                  EPTPD
+# define PGSTPD                                 PEPTPD
+# define GSTPDE                                 EPTPDE
+# define PGSTPDE                                PEPTPDE
+# define GST_GIGANT_PAGE_SIZE                   X86_PAGE_1G_SIZE
+# define GST_GIGANT_PAGE_OFFSET_MASK            X86_PAGE_1G_OFFSET_MASK
+# define GST_PDPE_BIG_PG_MASK                   X86_PDPE1G_PG_MASK
+# define GST_BIG_PAGE_SIZE                      X86_PAGE_2M_SIZE
+# define GST_BIG_PAGE_OFFSET_MASK               X86_PAGE_2M_OFFSET_MASK
+# define GST_PDE_PG_MASK                        EPT_PDE_PG_MASK
+# define GST_PDE_BIG_PG_MASK                    EPT_PDE2M_PG_MASK
+# define GST_PD_SHIFT                           EPT_PD_SHIFT
+# define GST_PD_MASK                            EPT_PD_MASK
+# define GSTPTWALK                              PGMPTWALKGSTEPT
+# define PGSTPTWALK                             PPGMPTWALKGSTEPT
+# define PCGSTPTWALK                            PCPGMPTWALKGSTEPT
+# define GST_PDPE_ENTRIES                       EPT_PG_ENTRIES
+# define GST_PDPT_SHIFT                         EPT_PDPT_SHIFT
+# define GST_PDPE_PG_MASK                       EPT_PDPTE_PG_MASK
+# define GST_PDPT_MASK                          EPT_PDPT_MASK
+# define GST_PTE_PG_MASK                        EPT_E_PG_MASK
+# define GST_CR3_PAGE_MASK                      X86_CR3_EPT_PAGE_MASK
+# define GST_PT_SHIFT                           EPT_PT_SHIFT
+# define GST_PT_MASK                            EPT_PT_MASK
+# define GST_GET_PTE_GCPHYS(Pte)                PGM_A20_APPLY(pVCpu, ((Pte).u & GST_PTE_PG_MASK))
+# define GST_GET_PDE_GCPHYS(Pde)                PGM_A20_APPLY(pVCpu, ((Pde).u & GST_PDE_PG_MASK))
+# define GST_GET_BIG_PDE_GCPHYS(pVM, Pde)       PGM_A20_APPLY(pVCpu, ((Pde).u & GST_PDE_BIG_PG_MASK))
+# define GST_GET_BIG_PDPE_GCPHYS(pVM, Pde)      PGM_A20_APPLY(pVCpu, ((Pde).u & GST_PDPE_BIG_PG_MASK))
+# define GST_GET_PTE_SHW_FLAGS(pVCpu, Pte)      ((Pte).u & (pVCpu)->pgm.s.fGst64ShadowedPteMask )                                // TODO
+# define GST_GET_PDE_SHW_FLAGS(pVCpu, Pde)      ((Pde).u & (pVCpu)->pgm.s.fGst64ShadowedPdeMask )                                // TODO
+# define GST_GET_BIG_PDE_SHW_FLAGS(pVCpu, Pde)  ( ((Pde).u & (pVCpu)->pgm.s.fGst64ShadowedBigPdeMask ) | PGM_PDFLAGS_BIG_PAGE)   // TODO
+# define GST_GET_BIG_PDE_SHW_FLAGS_4_PTE(pVCpu, Pde)  ((Pde).u & (pVCpu)->pgm.s.fGst64ShadowedBigPde4PteMask )                   // TODO
+# define GST_IS_PTE_VALID(pVCpu, Pte)           (!( (Pte).u   & (pVCpu)->pgm.s.fGstAmd64MbzPteMask ))                            // TODO
+# define GST_IS_PDE_VALID(pVCpu, Pde)           (!( (Pde).u   & (pVCpu)->pgm.s.fGstAmd64MbzPdeMask ))                            // TODO
+# define GST_IS_BIG_PDE_VALID(pVCpu, Pde)       (!( (Pde).u   & (pVCpu)->pgm.s.fGstEptMbzBigPdeMask ))
+# define GST_IS_PDPE_VALID(pVCpu, Pdpe)         (!( (Pdpe).u  & (pVCpu)->pgm.s.fGstEptMbzPdpteMask ))
+# define GST_IS_BIG_PDPE_VALID(pVCpu, Pdpe)     (!( (Pdpe).u  & (pVCpu)->pgm.s.fGstEptMbzBigPdpteMask ))
+# define GST_IS_PML4E_VALID(pVCpu, Pml4e)       (!( (Pml4e).u & (pVCpu)->pgm.s.fGstEptMbzPml4eMask ))
+# define GST_IS_PGENTRY_PRESENT(pVCpu, Pge)     ((Pge).u & (pVCpu)->pgm.s.fGstEptPresentMask)
+# define GST_IS_PSE_ACTIVE(pVCpu)               (!((pVCpu)->pgm.s.fGstEptMbzBigPdeMask & EPT_E_BIT_LEAF))
 # define GST_IS_NX_ACTIVE(pVCpu)                (pgmGstIsNoExecuteActive(pVCpu))
 # define BTH_IS_NP_ACTIVE(pVM)                  (false)
 #endif

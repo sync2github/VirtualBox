@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: sg.cpp 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT - S/G buffer handling.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -83,7 +83,7 @@ static void *rtSgBufGet(PRTSGBUF pSgBuf, size_t *pcbData)
 RTDECL(void) RTSgBufInit(PRTSGBUF pSgBuf, PCRTSGSEG paSegs, size_t cSegs)
 {
     AssertPtr(pSgBuf);
-    Assert(   (cSegs > 0 && VALID_PTR(paSegs))
+    Assert(   (cSegs > 0 && RT_VALID_PTR(paSegs))
            || (!cSegs && !paSegs));
     Assert(cSegs < (~(unsigned)0 >> 1));
 
@@ -340,6 +340,56 @@ RTDECL(size_t) RTSgBufCopyFromBuf(PRTSGBUF pSgBuf, const void *pvBuf, size_t cbC
 
         cbLeft -= cbThisCopy;
         pvBuf = (const void *)((uintptr_t)pvBuf + cbThisCopy);
+    }
+
+    return cbCopy - cbLeft;
+}
+
+
+RTDECL(size_t) RTSgBufCopyToFn(PRTSGBUF pSgBuf, size_t cbCopy, PFNRTSGBUFCOPYTO pfnCopyTo, void *pvUser)
+{
+    AssertPtrReturn(pSgBuf, 0);
+    AssertPtrReturn(pfnCopyTo, 0);
+
+    size_t cbLeft = cbCopy;
+
+    while (cbLeft)
+    {
+        size_t cbThisCopy = cbLeft;
+        void *pvSrc = rtSgBufGet(pSgBuf, &cbThisCopy);
+
+        if (!cbThisCopy)
+            break;
+
+        size_t cbThisCopied = pfnCopyTo(pSgBuf, pvSrc, cbThisCopy, pvUser);
+        cbLeft -= cbThisCopied;
+        if (cbThisCopied < cbThisCopy)
+            break;
+    }
+
+    return cbCopy - cbLeft;
+}
+
+
+RTDECL(size_t) RTSgBufCopyFromFn(PRTSGBUF pSgBuf, size_t cbCopy, PFNRTSGBUFCOPYFROM pfnCopyFrom, void *pvUser)
+{
+    AssertPtrReturn(pSgBuf, 0);
+    AssertPtrReturn(pfnCopyFrom, 0);
+
+    size_t cbLeft = cbCopy;
+
+    while (cbLeft)
+    {
+        size_t cbThisCopy = cbLeft;
+        void *pvDst = rtSgBufGet(pSgBuf, &cbThisCopy);
+
+        if (!cbThisCopy)
+            break;
+
+        size_t cbThisCopied = pfnCopyFrom(pSgBuf, pvDst, cbThisCopy, pvUser);
+        cbLeft -= cbThisCopied;
+        if (cbThisCopied < cbThisCopy)
+            break;
     }
 
     return cbCopy - cbLeft;

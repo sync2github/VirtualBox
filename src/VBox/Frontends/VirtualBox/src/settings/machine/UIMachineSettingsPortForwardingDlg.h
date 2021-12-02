@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineSettingsPortForwardingDlg.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineSettingsPortForwardingDlg class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIMachineSettingsPortForwardingDlg_h__
-#define __UIMachineSettingsPortForwardingDlg_h__
+#ifndef FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsPortForwardingDlg_h
+#define FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsPortForwardingDlg_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "QIWithRetranslateUI.h"
@@ -27,7 +30,7 @@
 class QIDialogButtonBox;
 
 /* Machine settings / Network page / NAT attachment / Port forwarding dialog: */
-class UIMachineSettingsPortForwardingDlg : public QIWithRetranslateUI<QIDialog>
+class SHARED_LIBRARY_STUFF UIMachineSettingsPortForwardingDlg : public QIWithRetranslateUI<QIDialog>
 {
     Q_OBJECT;
 
@@ -55,4 +58,4 @@ private:
     QIDialogButtonBox *m_pButtonBox;
 };
 
-#endif // __UIMachineSettingsPortForwardingDlg_h__
+#endif /* !FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsPortForwardingDlg_h */

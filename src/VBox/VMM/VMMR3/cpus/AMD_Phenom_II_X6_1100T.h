@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: AMD_Phenom_II_X6_1100T.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * CPU database entry "AMD Phenom II X6 1100T".
  * Generated at 2013-12-17T13:39:08Z by VBoxCpuReport v4.3.53r91360 on linux.amd64.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOX_CPUDB_AMD_Phenom_II_X6_1100T
-#define VBOX_CPUDB_AMD_Phenom_II_X6_1100T
+#ifndef VBOX_CPUDB_AMD_Phenom_II_X6_1100T_h
+#define VBOX_CPUDB_AMD_Phenom_II_X6_1100T_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #ifndef CPUM_DB_STANDALONE
@@ -255,6 +258,7 @@ static CPUMDBENTRY const g_Entry_AMD_Phenom_II_X6_1100T =
     /*.uScalableBusFreq = */ CPUM_SBUSFREQ_UNKNOWN,
     /*.fFlags           = */ 0,
     /*.cMaxPhysAddrWidth= */ 48,
+    /*.fMxCsrMask       = */ 0x2ffff,
     /*.paCpuIdLeaves    = */ NULL_ALONE(g_aCpuIdLeaves_AMD_Phenom_II_X6_1100T),
     /*.cCpuIdLeaves     = */ ZERO_ALONE(RT_ELEMENTS(g_aCpuIdLeaves_AMD_Phenom_II_X6_1100T)),
     /*.enmUnknownCpuId  = */ CPUMUNKNOWNCPUID_DEFAULTS,
@@ -264,5 +268,5 @@ static CPUMDBENTRY const g_Entry_AMD_Phenom_II_X6_1100T =
     /*.paMsrRanges      = */ NULL_ALONE(g_aMsrRanges_AMD_Phenom_II_X6_1100T),
 };
 
-#endif /* !VBOX_DB_AMD_Phenom_II_X6_1100T */
+#endif /* !VBOX_CPUDB_AMD_Phenom_II_X6_1100T_h */
 

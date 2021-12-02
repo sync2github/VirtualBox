@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MachineDebuggerImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,14 +15,18 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_MACHINEDEBUGGER
-#define ____H_MACHINEDEBUGGER
+#ifndef MAIN_INCLUDED_MachineDebuggerImpl_h
+#define MAIN_INCLUDED_MachineDebuggerImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "MachineDebuggerWrap.h"
 #include <iprt/log.h>
 #include <VBox/vmm/em.h>
 
 class Console;
+class Progress;
 
 class ATL_NO_VTABLE MachineDebugger :
     public MachineDebuggerWrap
@@ -30,7 +34,7 @@ class ATL_NO_VTABLE MachineDebugger :
 
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR (MachineDebugger)
+    DECLARE_COMMON_CLASS_METHODS (MachineDebugger)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -65,6 +69,7 @@ private:
     HRESULT getLogRelFlags(com::Utf8Str &aLogRelFlags);
     HRESULT getLogRelGroups(com::Utf8Str &aLogRelGroups);
     HRESULT getLogRelDestinations(com::Utf8Str &aLogRelDestinations);
+    HRESULT getExecutionEngine(VMExecutionEngine_T *apenmEngine);
     HRESULT getHWVirtExEnabled(BOOL *aHWVirtExEnabled);
     HRESULT getHWVirtExNestedPagingEnabled(BOOL *aHWVirtExNestedPagingEnabled);
     HRESULT getHWVirtExVPIDEnabled(BOOL *aHWVirtExVPIDEnabled);
@@ -128,6 +133,8 @@ private:
     HRESULT getStats(const com::Utf8Str &aPattern,
                      BOOL aWithDescriptions,
                      com::Utf8Str &aStats);
+    HRESULT getCPULoad(ULONG aCpuId, ULONG *aPctExecuting, ULONG *aPctHalted, ULONG *aPctOther, LONG64 *aMsInterval) RT_OVERRIDE;
+    HRESULT takeGuestSample(const com::Utf8Str &aFilename, ULONG aUsInterval, LONG64 aUsSampleTime, ComPtr<IProgress> &pProgress);
 
     // private methods
     bool i_queueSettings() const;
@@ -135,10 +142,12 @@ private:
     HRESULT i_setEmExecPolicyProperty(EMEXECPOLICY enmPolicy, BOOL fEnforce);
 
     /** RTLogGetFlags, RTLogGetGroupSettings and RTLogGetDestinations function. */
-    typedef DECLCALLBACK(int) FNLOGGETSTR(PRTLOGGER, char *, size_t);
+    typedef DECLCALLBACKTYPE(int, FNLOGGETSTR,(PRTLOGGER, char *, size_t));
     /** Function pointer.  */
     typedef FNLOGGETSTR *PFNLOGGETSTR;
     HRESULT i_logStringProps(PRTLOGGER pLogger, PFNLOGGETSTR pfnLogGetStr, const char *pszLogGetStr, Utf8Str *pstrSettings);
+
+    static DECLCALLBACK(int) i_dbgfProgressCallback(void *pvUser, unsigned uPercentage);
 
     Console * const mParent;
     /** @name Flags whether settings have been queued because they could not be sent
@@ -154,7 +163,17 @@ private:
     uint32_t mVirtualTimeRateQueued;
     bool mFlushMode;
     /** @}  */
+
+    /** @name Sample report related things.
+     * @{ */
+    /** Sample report handle. */
+    DBGFSAMPLEREPORT        m_hSampleReport;
+    /** Progress object for the currently taken guest sample. */
+    ComObjPtr<Progress>     m_Progress;
+    /** Filename to dump the report to. */
+    com::Utf8Str            m_strFilename;
+    /** @} */
 };
 
-#endif /* !____H_MACHINEDEBUGGER */
+#endif /* !MAIN_INCLUDED_MachineDebuggerImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

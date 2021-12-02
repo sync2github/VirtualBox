@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: path-posix.cpp 90781 2021-08-23 09:26:08Z vboxsync $ */
 /** @file
  * IPRT - Path Manipulation, POSIX, Part 1.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -42,6 +42,7 @@
 #include <iprt/path.h>
 #include <iprt/env.h>
 #include <iprt/assert.h>
+#include <iprt/mem.h>
 #include <iprt/string.h>
 #include <iprt/err.h>
 #include <iprt/log.h>
@@ -85,7 +86,7 @@ RTR3DECL(int) RTPathSetMode(const char *pszPath, RTFMODE fMode)
     AssertReturn(*pszPath, VERR_INVALID_PARAMETER);
 
     int rc;
-    fMode = rtFsModeNormalize(fMode, pszPath, 0);
+    fMode = rtFsModeNormalize(fMode, pszPath, 0, 0);
     if (rtFsModeIsValidPermissions(fMode))
     {
         char const *pszNativePath;
@@ -283,8 +284,8 @@ RTR3DECL(int) RTPathRename(const char *pszSrc, const char *pszDst, unsigned fRen
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszSrc), ("%p\n", pszSrc), VERR_INVALID_POINTER);
-    AssertMsgReturn(VALID_PTR(pszDst), ("%p\n", pszDst), VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSrc, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszDst, VERR_INVALID_POINTER);
     AssertMsgReturn(*pszSrc, ("%p\n", pszSrc), VERR_INVALID_PARAMETER);
     AssertMsgReturn(*pszDst, ("%p\n", pszDst), VERR_INVALID_PARAMETER);
     AssertMsgReturn(!(fRename & ~RTPATHRENAME_FLAGS_REPLACE), ("%#x\n", fRename), VERR_INVALID_PARAMETER);
@@ -345,13 +346,41 @@ RTDECL(bool) RTPathExistsEx(const char *pszPath, uint32_t fFlags)
 
 RTDECL(int)  RTPathGetCurrent(char *pszPath, size_t cchPath)
 {
-    int rc;
+    /*
+     * Try with a reasonably sized buffer first.
+     */
     char szNativeCurDir[RTPATH_MAX];
     if (getcwd(szNativeCurDir, sizeof(szNativeCurDir)) != NULL)
-        rc = rtPathFromNativeCopy(pszPath, cchPath, szNativeCurDir, NULL);
-    else
-        rc = RTErrConvertFromErrno(errno);
-    return rc;
+        return rtPathFromNativeCopy(pszPath, cchPath, szNativeCurDir, NULL);
+
+    /*
+     * Retry a few times with really big buffers if we failed because CWD is unreasonably long.
+     */
+    int iErr = errno;
+    if (iErr != ERANGE)
+        return RTErrConvertFromErrno(iErr);
+
+    size_t cbNativeTmp = RTPATH_BIG_MAX;
+    for (;;)
+    {
+        char *pszNativeTmp = (char *)RTMemTmpAlloc(cbNativeTmp);
+        if (!pszNativeTmp)
+            return VERR_NO_TMP_MEMORY;
+        if (getcwd(pszNativeTmp, cbNativeTmp) != NULL)
+        {
+            int rc = rtPathFromNativeCopy(pszPath, cchPath, pszNativeTmp, NULL);
+            RTMemTmpFree(pszNativeTmp);
+            return rc;
+        }
+        iErr = errno;
+        RTMemTmpFree(pszNativeTmp);
+        if (iErr != ERANGE)
+            return RTErrConvertFromErrno(iErr);
+
+        cbNativeTmp += RTPATH_BIG_MAX;
+        if (cbNativeTmp > RTPATH_BIG_MAX * 4)
+            return VERR_FILENAME_TOO_LONG;
+    }
 }
 
 

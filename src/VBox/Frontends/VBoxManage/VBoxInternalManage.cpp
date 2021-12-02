@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxInternalManage.cpp 89905 2021-06-24 19:59:39Z vboxsync $ */
 /** @file
  * VBoxManage - The 'internalcommands' command.
  *
@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,6 @@
 
 #include <VBox/vd.h>
 #include <VBox/sup.h>
-#include <VBox/err.h>
 #include <VBox/log.h>
 
 #include <iprt/ctype.h>
@@ -124,7 +123,7 @@ typedef struct HOSTPARTITION
 typedef struct HOSTPARTITIONS
 {
     /** partitioning type - MBR or GPT */
-    VBOXHDDPARTTYPE uPartitioningType;
+    VDISKPARTTYPE   uPartitioningType;
     unsigned        cPartitions;
     HOSTPARTITION   aPartitions[HOSTPARTITION_MAX];
 } HOSTPARTITIONS, *PHOSTPARTITIONS;
@@ -135,8 +134,11 @@ bool g_fInternalMode;
 /**
  * Print the usage info.
  */
-void printUsageInternal(USAGECATEGORY u64Cmd, PRTSTREAM pStrm)
+void printUsageInternal(USAGECATEGORY enmCommand, PRTSTREAM pStrm)
 {
+    Assert(enmCommand != USAGE_INVALID);
+    Assert(enmCommand != USAGE_S_NEWCMD);
+    Assert(enmCommand != USAGE_S_DUMPOPTS);
     RTStrmPrintf(pStrm,
         "Usage: VBoxManage internalcommands <command> [command arguments]\n"
         "\n"
@@ -147,40 +149,40 @@ void printUsageInternal(USAGECATEGORY u64Cmd, PRTSTREAM pStrm)
         "         problems. It is completely unsupported and will change in\n"
         "         incompatible ways without warning.\n",
 
-        (u64Cmd & USAGE_LOADMAP)
+        (enmCommand == USAGE_I_LOADMAP || enmCommand == USAGE_S_ALL)
         ? "  loadmap <vmname|uuid> <symfile> <address> [module] [subtrahend] [segment]\n"
           "      This will instruct DBGF to load the given map file\n"
           "      during initialization.  (See also loadmap in the debugger.)\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_LOADSYMS)
+        (enmCommand == USAGE_I_LOADSYMS || enmCommand == USAGE_S_ALL)
         ? "  loadsyms <vmname|uuid> <symfile> [delta] [module] [module address]\n"
           "      This will instruct DBGF to load the given symbol file\n"
           "      during initialization.\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_SETHDUUID)
+        (enmCommand == USAGE_I_SETHDUUID || enmCommand == USAGE_S_ALL)
         ? "  sethduuid <filepath> [<uuid>]\n"
           "       Assigns a new UUID to the given image file. This way, multiple copies\n"
           "       of a container can be registered.\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_SETHDPARENTUUID)
+        (enmCommand == USAGE_I_SETHDPARENTUUID || enmCommand == USAGE_S_ALL)
         ? "  sethdparentuuid <filepath> <uuid>\n"
           "       Assigns a new parent UUID to the given image file.\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_DUMPHDINFO)
+        (enmCommand == USAGE_I_DUMPHDINFO || enmCommand == USAGE_S_ALL)
         ?  "  dumphdinfo <filepath>\n"
            "       Prints information about the image at the given location.\n"
            "\n"
         : "",
-        (u64Cmd & USAGE_LISTPARTITIONS)
+        (enmCommand == USAGE_I_LISTPARTITIONS || enmCommand == USAGE_S_ALL)
         ? "  listpartitions -rawdisk <diskname>\n"
           "       Lists all partitions on <diskname>.\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_CREATERAWVMDK)
+        (enmCommand == USAGE_I_CREATERAWVMDK || enmCommand == USAGE_S_ALL)
         ? "  createrawvmdk -filename <filename> -rawdisk <diskname>\n"
           "                [-partitions <list of partition numbers> [-mbr <filename>] ]\n"
           "                [-relative]\n"
@@ -198,12 +200,12 @@ void printUsageInternal(USAGECATEGORY u64Cmd, PRTSTREAM pStrm)
           "         VBoxManage internalcommands listpartitions\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_RENAMEVMDK)
+        (enmCommand == USAGE_I_RENAMEVMDK || enmCommand == USAGE_S_ALL)
         ? "  renamevmdk -from <filename> -to <filename>\n"
           "       Renames an existing VMDK image, including the base file and all its extents.\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_CONVERTTORAW)
+        (enmCommand == USAGE_I_CONVERTTORAW || enmCommand == USAGE_S_ALL)
         ? "  converttoraw [-format <fileformat>] <filename> <outputfile>"
 #ifdef ENABLE_CONVERT_RAW_TO_STDOUT
           "|stdout"
@@ -216,14 +218,14 @@ void printUsageInternal(USAGECATEGORY u64Cmd, PRTSTREAM pStrm)
           ".\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_CONVERTHD)
+        (enmCommand == USAGE_I_CONVERTHD || enmCommand == USAGE_S_ALL)
         ? "  converthd [-srcformat VDI|VMDK|VHD|RAW]\n"
           "            [-dstformat VDI|VMDK|VHD|RAW]\n"
           "            <inputfile> <outputfile>\n"
           "       converts hard disk images between formats\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_REPAIRHD)
+        (enmCommand == USAGE_I_REPAIRHD || enmCommand == USAGE_S_ALL)
         ? "  repairhd [-dry-run]\n"
           "           [-format VDI|VMDK|VHD|...]\n"
           "           <filename>\n"
@@ -231,12 +233,12 @@ void printUsageInternal(USAGECATEGORY u64Cmd, PRTSTREAM pStrm)
           "\n"
         : "",
 #ifdef RT_OS_WINDOWS
-        (u64Cmd & USAGE_MODINSTALL)
+        (enmCommand == USAGE_I_MODINSTALL || enmCommand == USAGE_S_ALL)
         ? "  modinstall\n"
           "       Installs the necessary driver for the host OS\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_MODUNINSTALL)
+        (enmCommand == USAGE_I_MODUNINSTALL || enmCommand == USAGE_S_ALL)
         ? "  moduninstall\n"
           "       Deinstalls the driver\n"
           "\n"
@@ -245,18 +247,18 @@ void printUsageInternal(USAGECATEGORY u64Cmd, PRTSTREAM pStrm)
         "",
         "",
 #endif
-        (u64Cmd & USAGE_DEBUGLOG)
+        (enmCommand == USAGE_I_DEBUGLOG || enmCommand == USAGE_S_ALL)
         ? "  debuglog <vmname|uuid> [--enable|--disable] [--flags todo]\n"
           "           [--groups todo] [--destinations todo]\n"
           "       Controls debug logging.\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_PASSWORDHASH)
-        ? "  passwordhash <passsword>\n"
+        (enmCommand == USAGE_I_PASSWORDHASH || enmCommand == USAGE_S_ALL)
+        ? "  passwordhash <password>\n"
           "       Generates a password hash.\n"
           "\n"
         : "",
-        (u64Cmd & USAGE_GUESTSTATS)
+        (enmCommand == USAGE_I_GUESTSTATS || enmCommand == USAGE_S_ALL)
         ? "  gueststats <vmname|uuid> [--interval <seconds>]\n"
           "       Obtains and prints internal guest statistics.\n"
           "       Sets the update interval if specified.\n"
@@ -627,12 +629,12 @@ static RTEXITCODE CmdSetHDUUID(int argc, char **argv, ComPtr<IVirtualBox> aVirtu
     {
         uuidType = HDUUID;
         if (argc != 3 && argc != 2)
-            return errorSyntax(USAGE_SETHDUUID, "Not enough parameters");
+            return errorSyntax(USAGE_I_SETHDUUID, "Not enough parameters");
         /* if specified, take UUID, otherwise generate a new one */
         if (argc == 3)
         {
             if (RT_FAILURE(RTUuidFromStr(&rtuuid, argv[2])))
-                return errorSyntax(USAGE_SETHDUUID, "Invalid UUID parameter");
+                return errorSyntax(USAGE_I_SETHDUUID, "Invalid UUID parameter");
             uuid = argv[2];
         } else
             uuid.create();
@@ -641,23 +643,23 @@ static RTEXITCODE CmdSetHDUUID(int argc, char **argv, ComPtr<IVirtualBox> aVirtu
     {
         uuidType = HDPARENTUUID;
         if (argc != 3)
-            return errorSyntax(USAGE_SETHDPARENTUUID, "Not enough parameters");
+            return errorSyntax(USAGE_I_SETHDPARENTUUID, "Not enough parameters");
         if (RT_FAILURE(RTUuidFromStr(&rtuuid, argv[2])))
-            return errorSyntax(USAGE_SETHDPARENTUUID, "Invalid UUID parameter");
+            return errorSyntax(USAGE_I_SETHDPARENTUUID, "Invalid UUID parameter");
         uuid = argv[2];
     }
     else
-        return errorSyntax(USAGE_SETHDUUID, "Invalid invocation");
+        return errorSyntax(USAGE_I_SETHDUUID, "Invalid invocation");
 
     /* just try it */
     char *pszFormat = NULL;
     VDTYPE enmType = VDTYPE_INVALID;
     int rc = VDGetFormat(NULL /* pVDIfsDisk */, NULL /* pVDIfsImage */,
-                         argv[1], &pszFormat, &enmType);
+                         argv[1], VDTYPE_INVALID, &pszFormat, &enmType);
     if (RT_FAILURE(rc))
         return RTMsgErrorExit(RTEXITCODE_FAILURE, "Format autodetect failed: %Rrc", rc);
 
-    PVBOXHDD pDisk = NULL;
+    PVDISK pDisk = NULL;
 
     PVDINTERFACE     pVDIfs = NULL;
     VDINTERFACEERROR vdInterfaceError;
@@ -699,18 +701,18 @@ static RTEXITCODE CmdDumpHDInfo(int argc, char **argv, ComPtr<IVirtualBox> aVirt
     /* we need exactly one parameter: the image file */
     if (argc != 1)
     {
-        return errorSyntax(USAGE_DUMPHDINFO, "Not enough parameters");
+        return errorSyntax(USAGE_I_DUMPHDINFO, "Not enough parameters");
     }
 
     /* just try it */
     char *pszFormat = NULL;
     VDTYPE enmType = VDTYPE_INVALID;
     int rc = VDGetFormat(NULL /* pVDIfsDisk */, NULL /* pVDIfsImage */,
-                         argv[0], &pszFormat, &enmType);
+                         argv[0], VDTYPE_INVALID, &pszFormat, &enmType);
     if (RT_FAILURE(rc))
         return RTMsgErrorExit(RTEXITCODE_FAILURE, "Format autodetect failed: %Rrc", rc);
 
-    PVBOXHDD pDisk = NULL;
+    PVDISK pDisk = NULL;
 
     PVDINTERFACE     pVDIfs = NULL;
     VDINTERFACEERROR vdInterfaceError;
@@ -745,7 +747,7 @@ static int partRead(RTFILE File, PHOSTPARTITIONS pPart)
     uint64_t lastUsableLBA = 0;
     int rc;
 
-    VBOXHDDPARTTYPE partitioningType;
+    VDISKPARTTYPE partitioningType;
 
     pPart->cPartitions = 0;
     memset(pPart->aPartitions, '\0', sizeof(pPart->aPartitions));
@@ -756,8 +758,8 @@ static int partRead(RTFILE File, PHOSTPARTITIONS pPart)
 
     if (aBuffer[450] == 0xEE)/* check the sign of the GPT disk*/
     {
-        partitioningType = GPT;
-        pPart->uPartitioningType = GPT;//partitioningType;
+        partitioningType = VDISKPARTTYPE_GPT;
+        pPart->uPartitioningType = VDISKPARTTYPE_GPT;//partitioningType;
 
         if (aBuffer[510] != 0x55 || aBuffer[511] != 0xaa)
             return VERR_INVALID_PARAMETER;
@@ -872,8 +874,8 @@ static int partRead(RTFILE File, PHOSTPARTITIONS pPart)
     }
     else
     {
-        partitioningType = MBR;
-        pPart->uPartitioningType = MBR;//partitioningType;
+        partitioningType = VDISKPARTTYPE_MBR;
+        pPart->uPartitioningType = VDISKPARTTYPE_MBR;//partitioningType;
 
         if (aBuffer[510] != 0x55 || aBuffer[511] != 0xaa)
             return VERR_INVALID_PARAMETER;
@@ -1032,7 +1034,7 @@ static int partRead(RTFILE File, PHOSTPARTITIONS pPart)
     pPart->aPartitions[0].cPartDataSectors = pPart->aPartitions[0].uStart;
 
     /* Fill out partitioning location info for backup GPT. */
-    if (partitioningType == GPT)
+    if (partitioningType == VDISKPARTTYPE_GPT)
     {
         pPart->aPartitions[pPart->cPartitions-1].uPartDataStart = lastUsableLBA+1;
         pPart->aPartitions[pPart->cPartitions-1].cPartDataSectors = 33;
@@ -1093,12 +1095,12 @@ static RTEXITCODE CmdListPartitions(int argc, char **argv, ComPtr<IVirtualBox> a
         }
         else
         {
-            return errorSyntax(USAGE_LISTPARTITIONS, "Invalid parameter '%s'", argv[i]);
+            return errorSyntax(USAGE_I_LISTPARTITIONS, "Invalid parameter '%s'", argv[i]);
         }
     }
 
     if (rawdisk.isEmpty())
-        return errorSyntax(USAGE_LISTPARTITIONS, "Mandatory parameter -rawdisk missing");
+        return errorSyntax(USAGE_I_LISTPARTITIONS, "Mandatory parameter -rawdisk missing");
 
     RTFILE hRawFile;
     int vrc = RTFileOpen(&hRawFile, rawdisk.c_str(), RTFILE_O_READ | RTFILE_O_OPEN | RTFILE_O_DENY_WRITE);
@@ -1133,17 +1135,17 @@ static RTEXITCODE CmdListPartitions(int argc, char **argv, ComPtr<IVirtualBox> a
     return RT_SUCCESS(vrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
 }
 
-static PVBOXHDDRAWPARTDESC appendPartDesc(uint32_t *pcPartDescs, PVBOXHDDRAWPARTDESC *ppPartDescs)
+static PVDISKRAWPARTDESC appendPartDesc(uint32_t *pcPartDescs, PVDISKRAWPARTDESC *ppPartDescs)
 {
     (*pcPartDescs)++;
-    PVBOXHDDRAWPARTDESC p;
-    p = (PVBOXHDDRAWPARTDESC)RTMemRealloc(*ppPartDescs,
-                                          *pcPartDescs * sizeof(VBOXHDDRAWPARTDESC));
+    PVDISKRAWPARTDESC p;
+    p = (PVDISKRAWPARTDESC)RTMemRealloc(*ppPartDescs,
+                                          *pcPartDescs * sizeof(VDISKRAWPARTDESC));
     *ppPartDescs = p;
     if (p)
     {
         p = p + *pcPartDescs - 1;
-        memset(p, '\0', sizeof(VBOXHDDRAWPARTDESC));
+        memset(p, '\0', sizeof(VDISKRAWPARTDESC));
     }
 
     return p;
@@ -1160,8 +1162,8 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
     bool fRelative = false;
 
     uint64_t cbSize = 0;
-    PVBOXHDD pDisk = NULL;
-    VBOXHDDRAW RawDescriptor;
+    PVDISK pDisk = NULL;
+    VDISKRAW RawDescriptor;
     PVDINTERFACE pVDIfs = NULL;
 
     /* let's have a closer look at the arguments */
@@ -1210,15 +1212,15 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
         }
 #endif /* RT_OS_LINUX || RT_OS_FREEBSD */
         else
-            return errorSyntax(USAGE_CREATERAWVMDK, "Invalid parameter '%s'", argv[i]);
+            return errorSyntax(USAGE_I_CREATERAWVMDK, "Invalid parameter '%s'", argv[i]);
     }
 
     if (filename.isEmpty())
-        return errorSyntax(USAGE_CREATERAWVMDK, "Mandatory parameter -filename missing");
+        return errorSyntax(USAGE_I_CREATERAWVMDK, "Mandatory parameter -filename missing");
     if (rawdisk.isEmpty())
-        return errorSyntax(USAGE_CREATERAWVMDK, "Mandatory parameter -rawdisk missing");
+        return errorSyntax(USAGE_I_CREATERAWVMDK, "Mandatory parameter -rawdisk missing");
     if (!pszPartitions && pszMBRFilename)
-        return errorSyntax(USAGE_CREATERAWVMDK, "The parameter -mbr is only valid when the parameter -partitions is also present");
+        return errorSyntax(USAGE_I_CREATERAWVMDK, "The parameter -mbr is only valid when the parameter -partitions is also present");
 
 #ifdef RT_OS_DARWIN
     fRelative = true;
@@ -1285,7 +1287,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
          * before failing.
          */
         vrc = RTErrConvertFromWin32(GetLastError());
-        if (RT_FAILURE(RTFileGetSize(hRawFile, &cbSize)))
+        if (RT_FAILURE(RTFileQuerySize(hRawFile, &cbSize)))
         {
             RTMsgError("Cannot get the geometry of the raw disk '%s': %Rrc", rawdisk.c_str(), vrc);
             goto out;
@@ -1335,7 +1337,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
         }
         else if (S_ISREG(DevStat.st_mode))
         {
-            vrc = RTFileGetSize(hRawFile, &cbSize);
+            vrc = RTFileQuerySize(hRawFile, &cbSize);
             if (RT_FAILURE(vrc))
             {
                 RTMsgError("Failed to get size of file '%s': %Rrc", rawdisk.c_str(), vrc);
@@ -1390,7 +1392,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
         else if (S_ISREG(DevStat.st_mode))
         {
             fRelative = false; /* Must be false for raw image files. */
-            vrc = RTFileGetSize(hRawFile, &cbSize);
+            vrc = RTFileQuerySize(hRawFile, &cbSize);
             if (RT_FAILURE(vrc))
             {
                 RTMsgError("Failed to get size of file '%s': %Rrc", rawdisk.c_str(), vrc);
@@ -1428,7 +1430,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
         }
         else if (S_ISREG(DevStat.st_mode))
         {
-            vrc = RTFileGetSize(hRawFile, &cbSize);
+            vrc = RTFileQuerySize(hRawFile, &cbSize);
             if (RT_FAILURE(vrc))
             {
                 RTMsgError("Failed to get size of file '%s': %Rrc", rawdisk.c_str(), vrc);
@@ -1490,7 +1492,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
 #else /* all unrecognized OSes */
     /* Hopefully this works on all other hosts. If it doesn't, it'll just fail
      * creating the VMDK, so no real harm done. */
-    vrc = RTFileGetSize(hRawFile, &cbSize);
+    vrc = RTFileQuerySize(hRawFile, &cbSize);
     if (RT_FAILURE(vrc))
     {
         RTMsgError("Cannot get the size of the raw disk '%s': %Rrc", rawdisk.c_str(), vrc);
@@ -1501,7 +1503,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
     /* Check whether cbSize is actually sensible. */
     if (!cbSize || cbSize % 512)
     {
-        RTMsgError("Detected size of raw disk '%s' is %s, an invalid value", rawdisk.c_str(), cbSize);
+        RTMsgError("Detected size of raw disk '%s' is %RU64, an invalid value", rawdisk.c_str(), cbSize);
         vrc = VERR_INVALID_PARAMETER;
         goto out;
     }
@@ -1512,12 +1514,12 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
     RawDescriptor.szSignature[3] = '\0';
     if (!pszPartitions)
     {
-        RawDescriptor.uFlags = VBOXHDDRAW_DISK;
-        RawDescriptor.pszRawDisk = rawdisk.c_str();
+        RawDescriptor.uFlags = VDISKRAW_DISK;
+        RawDescriptor.pszRawDisk = (char *)rawdisk.c_str();
     }
     else
     {
-        RawDescriptor.uFlags = VBOXHDDRAW_NORMAL;
+        RawDescriptor.uFlags = VDISKRAW_NORMAL;
         RawDescriptor.pszRawDisk = NULL;
         RawDescriptor.cPartDescs = 0;
         RawDescriptor.pPartDescs = NULL;
@@ -1561,7 +1563,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
             goto out;
         }
 
-        RawDescriptor.uPartitioningType = partitions.uPartitioningType;
+        RawDescriptor.enmPartitioningType = partitions.uPartitioningType;
 
         for (unsigned i = 0; i < partitions.cPartitions; i++)
         {
@@ -1582,7 +1584,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
 
         for (unsigned i = 0; i < partitions.cPartitions; i++)
         {
-            PVBOXHDDRAWPARTDESC pPartDesc = NULL;
+            PVDISKRAWPARTDESC pPartDesc = NULL;
 
             /* first dump the MBR/EPT data area */
             if (partitions.aPartitions[i].cPartDataSectors)
@@ -1602,7 +1604,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
                  * any case the clipping is adjusted later after sorting, to
                  * prevent overlapping data areas on the resulting image. */
                 pPartDesc->cbData = RT_MIN(partitions.aPartitions[i].cPartDataSectors, 63) * 512;
-                pPartDesc->uStart = partitions.aPartitions[i].uPartDataStart * 512;
+                pPartDesc->offStartInVDisk = partitions.aPartitions[i].uPartDataStart * 512;
                 Assert(pPartDesc->cbData - (size_t)pPartDesc->cbData == 0);
                 void *pPartData = RTMemAlloc((size_t)pPartDesc->cbData);
                 if (!pPartData)
@@ -1664,7 +1666,7 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
             if (uPartitions & RT_BIT(partitions.aPartitions[i].uIndex))
             {
                 if (uPartitionsRO & RT_BIT(partitions.aPartitions[i].uIndex))
-                    pPartDesc->uFlags |= VBOXHDDRAW_READONLY;
+                    pPartDesc->uFlags |= VDISKRAW_READONLY;
 
                 if (fRelative)
                 {
@@ -1726,16 +1728,16 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
 #endif
                 }
 
-                pPartDesc->pszRawDevice = pszRawName;
-                pPartDesc->uStartOffset = uStartOffset;
+                pPartDesc->pszRawDevice = (char *)pszRawName;
+                pPartDesc->offStartInDevice = uStartOffset;
             }
             else
             {
                 pPartDesc->pszRawDevice = NULL;
-                pPartDesc->uStartOffset = 0;
+                pPartDesc->offStartInDevice = 0;
             }
 
-            pPartDesc->uStart = partitions.aPartitions[i].uStart * 512;
+            pPartDesc->offStartInVDisk = partitions.aPartitions[i].uStart * 512;
             pPartDesc->cbData = partitions.aPartitions[i].uSize * 512;
         }
 
@@ -1743,19 +1745,19 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
         for (unsigned i = 0; i < RawDescriptor.cPartDescs-1; i++)
         {
             unsigned uMinIdx = i;
-            uint64_t uMinVal = RawDescriptor.pPartDescs[i].uStart;
+            uint64_t uMinVal = RawDescriptor.pPartDescs[i].offStartInVDisk;
             for (unsigned j = i + 1; j < RawDescriptor.cPartDescs; j++)
             {
-                if (RawDescriptor.pPartDescs[j].uStart < uMinVal)
+                if (RawDescriptor.pPartDescs[j].offStartInVDisk < uMinVal)
                 {
                     uMinIdx = j;
-                    uMinVal = RawDescriptor.pPartDescs[j].uStart;
+                    uMinVal = RawDescriptor.pPartDescs[j].offStartInVDisk;
                 }
             }
             if (uMinIdx != i)
             {
                 /* Swap entries at index i and uMinIdx. */
-                VBOXHDDRAWPARTDESC tmp;
+                VDISKRAWPARTDESC tmp;
                 memcpy(&tmp, &RawDescriptor.pPartDescs[i], sizeof(tmp));
                 memcpy(&RawDescriptor.pPartDescs[i], &RawDescriptor.pPartDescs[uMinIdx], sizeof(tmp));
                 memcpy(&RawDescriptor.pPartDescs[uMinIdx], &tmp, sizeof(tmp));
@@ -1769,23 +1771,22 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
         {
             if (RawDescriptor.pPartDescs[i].pvPartitionData)
             {
-                RawDescriptor.pPartDescs[i].cbData = RT_MIN(RawDescriptor.pPartDescs[i+1].uStart - RawDescriptor.pPartDescs[i].uStart, RawDescriptor.pPartDescs[i].cbData);
+                RawDescriptor.pPartDescs[i].cbData = RT_MIN(  RawDescriptor.pPartDescs[i+1].offStartInVDisk
+                                                            - RawDescriptor.pPartDescs[i].offStartInVDisk,
+                                                            RawDescriptor.pPartDescs[i].cbData);
                 if (!RawDescriptor.pPartDescs[i].cbData)
                 {
-                    if (RawDescriptor.uPartitioningType == MBR)
+                    if (RawDescriptor.enmPartitioningType == VDISKPARTTYPE_MBR)
                     {
                         RTMsgError("MBR/EPT overlaps with data area");
                         vrc = VERR_INVALID_PARAMETER;
                         goto out;
                     }
-                    else
+                    if (RawDescriptor.cPartDescs != i+1)
                     {
-                        if (RawDescriptor.cPartDescs != i+1)
-                        {
-                            RTMsgError("GPT overlaps with data area");
-                            vrc = VERR_INVALID_PARAMETER;
-                            goto out;
-                        }
+                        RTMsgError("GPT overlaps with data area");
+                        vrc = VERR_INVALID_PARAMETER;
+                        goto out;
                     }
                 }
             }
@@ -1795,15 +1796,15 @@ static RTEXITCODE CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aV
     RTFileClose(hRawFile);
 
 #ifdef DEBUG_klaus
-    if (!(RawDescriptor.uFlags & VBOXHDDRAW_DISK))
+    if (!(RawDescriptor.uFlags & VDISKRAW_DISK))
     {
         RTPrintf("#            start         length    startoffset  partdataptr  device\n");
         for (unsigned i = 0; i < RawDescriptor.cPartDescs; i++)
         {
             RTPrintf("%2u  %14RU64 %14RU64 %14RU64 %#18p %s\n", i,
-                     RawDescriptor.pPartDescs[i].uStart,
+                     RawDescriptor.pPartDescs[i].offStartInVDisk,
                      RawDescriptor.pPartDescs[i].cbData,
-                     RawDescriptor.pPartDescs[i].uStartOffset,
+                     RawDescriptor.pPartDescs[i].offStartInDevice,
                      RawDescriptor.pPartDescs[i].pvPartitionData,
                      RawDescriptor.pPartDescs[i].pszRawDevice);
         }
@@ -1897,16 +1898,16 @@ static RTEXITCODE CmdRenameVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirt
         }
         else
         {
-            return errorSyntax(USAGE_RENAMEVMDK, "Invalid parameter '%s'", argv[i]);
+            return errorSyntax(USAGE_I_RENAMEVMDK, "Invalid parameter '%s'", argv[i]);
         }
     }
 
     if (src.isEmpty())
-        return errorSyntax(USAGE_RENAMEVMDK, "Mandatory parameter -from missing");
+        return errorSyntax(USAGE_I_RENAMEVMDK, "Mandatory parameter -from missing");
     if (dst.isEmpty())
-        return errorSyntax(USAGE_RENAMEVMDK, "Mandatory parameter -to missing");
+        return errorSyntax(USAGE_I_RENAMEVMDK, "Mandatory parameter -to missing");
 
-    PVBOXHDD pDisk = NULL;
+    PVDISK pDisk = NULL;
 
     PVDINTERFACE     pVDIfs = NULL;
     VDINTERFACEERROR vdInterfaceError;
@@ -1970,16 +1971,16 @@ static RTEXITCODE CmdConvertToRaw(int argc, char **argv, ComPtr<IVirtualBox> aVi
         }
         else
         {
-            return errorSyntax(USAGE_CONVERTTORAW, "Invalid parameter '%s'", argv[i]);
+            return errorSyntax(USAGE_I_CONVERTTORAW, "Invalid parameter '%s'", argv[i]);
         }
     }
 
     if (src.isEmpty())
-        return errorSyntax(USAGE_CONVERTTORAW, "Mandatory filename parameter missing");
+        return errorSyntax(USAGE_I_CONVERTTORAW, "Mandatory filename parameter missing");
     if (dst.isEmpty())
-        return errorSyntax(USAGE_CONVERTTORAW, "Mandatory outputfile parameter missing");
+        return errorSyntax(USAGE_I_CONVERTTORAW, "Mandatory outputfile parameter missing");
 
-    PVBOXHDD pDisk = NULL;
+    PVDISK pDisk = NULL;
 
     PVDINTERFACE     pVDIfs = NULL;
     VDINTERFACEERROR vdInterfaceError;
@@ -2013,7 +2014,7 @@ static RTEXITCODE CmdConvertToRaw(int argc, char **argv, ComPtr<IVirtualBox> aVi
         char *pszFormat = NULL;
         VDTYPE enmType = VDTYPE_INVALID;
         vrc = VDGetFormat(NULL /* pVDIfsDisk */, NULL /* pVDIfsImage */,
-                          src.c_str(), &pszFormat, &enmType);
+                          src.c_str(), VDTYPE_INVALID, &pszFormat, &enmType);
         if (RT_FAILURE(vrc) || enmType != VDTYPE_HDD)
         {
             VDCloseAll(pDisk);
@@ -2100,8 +2101,8 @@ static RTEXITCODE CmdConvertHardDisk(int argc, char **argv, ComPtr<IVirtualBox> 
     Utf8Str src;
     Utf8Str dst;
     int vrc;
-    PVBOXHDD pSrcDisk = NULL;
-    PVBOXHDD pDstDisk = NULL;
+    PVDISK pSrcDisk = NULL;
+    PVDISK pDstDisk = NULL;
     VDTYPE enmSrcType = VDTYPE_INVALID;
 
     /* Parse the arguments. */
@@ -2135,14 +2136,14 @@ static RTEXITCODE CmdConvertHardDisk(int argc, char **argv, ComPtr<IVirtualBox> 
         }
         else
         {
-            return errorSyntax(USAGE_CONVERTHD, "Invalid parameter '%s'", argv[i]);
+            return errorSyntax(USAGE_I_CONVERTHD, "Invalid parameter '%s'", argv[i]);
         }
     }
 
     if (src.isEmpty())
-        return errorSyntax(USAGE_CONVERTHD, "Mandatory input image parameter missing");
+        return errorSyntax(USAGE_I_CONVERTHD, "Mandatory input image parameter missing");
     if (dst.isEmpty())
-        return errorSyntax(USAGE_CONVERTHD, "Mandatory output image parameter missing");
+        return errorSyntax(USAGE_I_CONVERTHD, "Mandatory output image parameter missing");
 
 
     PVDINTERFACE     pVDIfs = NULL;
@@ -2161,7 +2162,7 @@ static RTEXITCODE CmdConvertHardDisk(int argc, char **argv, ComPtr<IVirtualBox> 
         {
             char *pszFormat = NULL;
             vrc = VDGetFormat(NULL /* pVDIfsDisk */, NULL /* pVDIfsImage */,
-                              src.c_str(), &pszFormat, &enmSrcType);
+                              src.c_str(), VDTYPE_HDD, &pszFormat, &enmSrcType);
             if (RT_FAILURE(vrc))
             {
                 RTMsgError("No file format specified and autodetect failed - please specify format: %Rrc", vrc);
@@ -2254,12 +2255,12 @@ static RTEXITCODE CmdRepairHardDisk(int argc, char **argv, ComPtr<IVirtualBox> a
         }
         else
         {
-            return errorSyntax(USAGE_REPAIRHD, "Invalid parameter '%s'", argv[i]);
+            return errorSyntax(USAGE_I_REPAIRHD, "Invalid parameter '%s'", argv[i]);
         }
     }
 
     if (image.isEmpty())
-        return errorSyntax(USAGE_REPAIRHD, "Mandatory input image parameter missing");
+        return errorSyntax(USAGE_I_REPAIRHD, "Mandatory input image parameter missing");
 
     PVDINTERFACE     pVDIfs = NULL;
     VDINTERFACEERROR vdInterfaceError;
@@ -2279,7 +2280,7 @@ static RTEXITCODE CmdRepairHardDisk(int argc, char **argv, ComPtr<IVirtualBox> a
             VDTYPE enmSrcType = VDTYPE_INVALID;
 
             vrc = VDGetFormat(NULL /* pVDIfsDisk */, NULL /* pVDIfsImage */,
-                              image.c_str(), &pszFormat, &enmSrcType);
+                              image.c_str(), VDTYPE_HDD, &pszFormat, &enmSrcType);
             if (RT_FAILURE(vrc) && (vrc != VERR_VD_IMAGE_CORRUPTED))
             {
                 RTMsgError("No file format specified and autodetect failed - please specify format: %Rrc", vrc);
@@ -2333,7 +2334,7 @@ static RTEXITCODE CmdDebugLog(int argc, char **argv, ComPtr<IVirtualBox> aVirtua
      * that we wish to open.
      */
     if (argc < 1)
-        return errorSyntax(USAGE_DEBUGLOG, "Missing VM name/UUID");
+        return errorSyntax(USAGE_I_DEBUGLOG, "Missing VM name/UUID");
 
     ComPtr<IMachine> ptrMachine;
     HRESULT rc;
@@ -2421,7 +2422,7 @@ static RTEXITCODE CmdDebugLog(int argc, char **argv, ComPtr<IVirtualBox> aVirtua
                 break;
 
             default:
-                return errorGetOpt(USAGE_DEBUGLOG, ch, &ValueUnion);
+                return errorGetOpt(USAGE_I_DEBUGLOG, ch, &ValueUnion);
         }
     }
 
@@ -2449,7 +2450,7 @@ static RTEXITCODE CmdGeneratePasswordHash(int argc, char **argv, ComPtr<IVirtual
 
     /* one parameter, the password to hash */
     if (argc != 1)
-        return errorSyntax(USAGE_PASSWORDHASH, "password to hash required");
+        return errorSyntax(USAGE_I_PASSWORDHASH, "password to hash required");
 
     uint8_t abDigest[RTSHA256_HASH_SIZE];
     RTSha256(argv[0], strlen(argv[0]), abDigest);
@@ -2468,7 +2469,7 @@ static RTEXITCODE CmdGuestStats(int argc, char **argv, ComPtr<IVirtualBox> aVirt
 {
     /* one parameter, guest name */
     if (argc < 1)
-        return errorSyntax(USAGE_GUESTSTATS, "Missing VM name/UUID");
+        return errorSyntax(USAGE_I_GUESTSTATS, "Missing VM name/UUID");
 
     /*
      * Parse the command.
@@ -2493,12 +2494,12 @@ static RTEXITCODE CmdGuestStats(int argc, char **argv, ComPtr<IVirtualBox> aVirt
                 break;
 
             default:
-                return errorGetOpt(USAGE_GUESTSTATS, ch, &ValueUnion);
+                return errorGetOpt(USAGE_I_GUESTSTATS, ch, &ValueUnion);
         }
     }
 
     if (argc > 1 && aUpdateInterval == 0)
-        return errorSyntax(USAGE_GUESTSTATS, "Invalid update interval specified");
+        return errorSyntax(USAGE_I_GUESTSTATS, "Invalid update interval specified");
 
     RTPrintf("argc=%d interval=%u\n", argc, aUpdateInterval);
 
@@ -2553,7 +2554,7 @@ RTEXITCODE handleInternalCommands(HandlerArg *a)
 
     /* at least a command is required */
     if (a->argc < 1)
-        return errorSyntax(USAGE_ALL, "Command missing");
+        return errorSyntax(USAGE_S_ALL, "Command missing");
 
     /*
      * The 'string switch' on command name.
@@ -2593,6 +2594,6 @@ RTEXITCODE handleInternalCommands(HandlerArg *a)
         return CmdRepairHardDisk(a->argc - 1, &a->argv[1], a->virtualBox, a->session);
 
     /* default: */
-    return errorSyntax(USAGE_ALL, "Invalid command '%s'", a->argv[0]);
+    return errorSyntax(USAGE_S_ALL, "Invalid command '%s'", a->argv[0]);
 }
 

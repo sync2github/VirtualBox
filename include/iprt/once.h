@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,13 +23,16 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_once_h
-#define ___iprt_once_h
+#ifndef IPRT_INCLUDED_once_h
+#define IPRT_INCLUDED_once_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
 #include <iprt/asm.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/list.h>
 
 RT_C_DECLS_BEGIN
@@ -46,7 +49,7 @@ RT_C_DECLS_BEGIN
  *
  * @param   pvUser          The user parameter.
  */
-typedef DECLCALLBACK(int32_t) FNRTONCE(void *pvUser);
+typedef DECLCALLBACKTYPE(int32_t, FNRTONCE,(void *pvUser));
 /** Pointer to a FNRTONCE. */
 typedef FNRTONCE *PFNRTONCE;
 
@@ -57,7 +60,7 @@ typedef FNRTONCE *PFNRTONCE;
  * @param   fLazyCleanUpOk  Indicates whether lazy clean-up is OK (see
  *                          initterm.h).
  */
-typedef DECLCALLBACK(void) FNRTONCECLEANUP(void *pvUser, bool fLazyCleanUpOk);
+typedef DECLCALLBACKTYPE(void, FNRTONCECLEANUP,(void *pvUser, bool fLazyCleanUpOk));
 /** Pointer to a FNRTONCE. */
 typedef FNRTONCECLEANUP *PFNRTONCECLEANUP;
 
@@ -202,5 +205,5 @@ RTDECL(void) RTOnceReset(PRTONCE pOnce);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_once_h */
 

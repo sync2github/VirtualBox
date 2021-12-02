@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: thread-r0drv-darwin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Threads, Ring-0 Driver, Darwin.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,7 +33,7 @@
 #include <iprt/thread.h>
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 
 

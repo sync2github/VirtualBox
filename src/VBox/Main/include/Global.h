@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: Global.h 92154 2021-10-29 17:11:00Z vboxsync $ */
 /** @file
  * VirtualBox COM API - Global Declarations and Definitions.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_GLOBAL
-#define ____H_GLOBAL
+#ifndef MAIN_INCLUDED_Global_h
+#define MAIN_INCLUDED_Global_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* interface definitions */
 #include "VBox/com/VirtualBox.h"
@@ -42,6 +45,10 @@
 #define VBOXOSHINT_TFRESET              RT_BIT(13)
 #define VBOXOSHINT_USB3                 RT_BIT(14)
 #define VBOXOSHINT_X2APIC               RT_BIT(15)
+#define VBOXOSHINT_EFI_SECUREBOOT       RT_BIT(16)
+#define VBOXOSHINT_TPM                  RT_BIT(17)
+#define VBOXOSHINT_TPM2                 RT_BIT(18)
+#define VBOXOSHINT_WDDM_GRAPHICS        RT_BIT(19)
 
 /** The VBoxVRDP kludge extension pack name.
  *
@@ -67,9 +74,11 @@ public:
         const char                    *description; /* utf-8 */
         const VBOXOSTYPE               osType;
         const uint32_t                 osHint;
+        const uint32_t                 recommendedCPUCount;
         const uint32_t                 recommendedRAM;
         const uint32_t                 recommendedVRAM;
         const uint64_t                 recommendedHDD;
+        const GraphicsControllerType_T graphicsControllerType;
         const NetworkAdapterType_T     networkAdapterType;
         const uint32_t                 numSerialEnabled;
         const StorageControllerType_T  dvdStorageControllerType;
@@ -77,6 +86,7 @@ public:
         const StorageControllerType_T  hdStorageControllerType;
         const StorageBus_T             hdStorageBusType;
         const ChipsetType_T            chipsetType;
+        const IommuType_T              iommuType;
         const AudioControllerType_T    audioControllerType;
         const AudioCodecType_T         audioCodecType;
     };
@@ -90,6 +100,12 @@ public:
     static const char *OSTypeId(VBOXOSTYPE aOSType);
 
     /**
+     * Maps an OS type ID string to index into sOSTypes.
+     * @returns index on success, UINT32_MAX if not found.
+     */
+    static uint32_t getOSTypeIndexFromId(const char *pszId);
+
+    /**
      * Get the network adapter limit for each chipset type.
      */
     static uint32_t getMaxNetworkAdapters(ChipsetType_T aChipsetType);
@@ -98,7 +114,7 @@ public:
      * Returns @c true if the given machine state is an online state. This is a
      * recommended way to detect if the VM is online (being executed in a
      * dedicated process) or not. Note that some online states are also
-     * transitional states (see #IsTransitional()).
+     * transitional states (see #IsTransient()).
      */
     static bool IsOnline(MachineState_T aState)
     {
@@ -121,7 +137,7 @@ public:
 
     /**
      * Shortcut to <tt>IsOnline(aState) || IsTransient(aState)</tt>. When it returns
-     * @false, the VM is turned off (no VM process) and not busy with
+     * @c false, the VM is turned off (no VM process) and not busy with
      * another exclusive operation.
      */
     static bool IsOnlineOrTransient(MachineState_T aState)
@@ -182,5 +198,5 @@ public:
     static HRESULT vboxStatusCodeToCOM(int aVBoxStatus);
 };
 
-#endif /* !____H_GLOBAL */
+#endif /* !MAIN_INCLUDED_Global_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

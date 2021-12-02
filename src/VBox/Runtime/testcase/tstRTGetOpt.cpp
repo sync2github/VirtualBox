@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTGetOpt.cpp 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT Testcase - RTGetOpt
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -72,7 +72,7 @@ int main()
         const int rcGetOpt = (expr); \
         CHECK2(rcGetOpt == (chRet), ("got %d, expected %d\n", rcGetOpt, (chRet))); \
         CHECK2(GetState.iNext == (iInc) + iPrev, ("iNext=%d expected %d\n", GetState.iNext, (iInc) + iPrev)); \
-        CHECK2(VALID_PTR(Val.psz) && !strcmp(Val.psz, (str)), ("got %s, expected %s\n", Val.psz, (str))); \
+        CHECK2(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, (str)), ("got %s, expected %s\n", Val.psz, (str))); \
         GetState.iNext = (iInc) + iPrev; \
     } while (0)
 
@@ -105,6 +105,9 @@ int main()
         { "--threevalues",      407, RTGETOPT_REQ_UINT32 },
         { "--boolean",          408, RTGETOPT_REQ_BOOL_ONOFF },
         { "--booleanindex",     409, RTGETOPT_REQ_BOOL_ONOFF | RTGETOPT_FLAG_INDEX },
+        { "--pair32",           410, RTGETOPT_REQ_UINT32_PAIR  },
+        { "--optpair32",        411, RTGETOPT_REQ_UINT32_OPTIONAL_PAIR  },
+        { "--optpair64",        412, RTGETOPT_REQ_UINT64_OPTIONAL_PAIR  },
     };
 
     const char *argv2[] =
@@ -187,6 +190,14 @@ int main()
         "-version",
         "-V",
 
+        /* 32-bit pairs */
+        "--pair32", "1536:0x1536",
+        "--optpair32", "0x42:042",
+        "--optpair32", "0128",
+        "--optpair64", "0x128 0x42",
+        "--optpair64", "0x128 :0x42",
+        "--optpair64", "0x128",
+
         /* done */
         NULL
     };
@@ -195,37 +206,37 @@ int main()
     CHECK(RT_SUCCESS(RTGetOptInit(&GetState, argc2, (char **)argv2, &s_aOpts2[0], RT_ELEMENTS(s_aOpts2), 0, 0 /* fFlags */)));
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string1"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string1"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string2"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string2"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string3"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string3"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string4"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string4"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string5"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string5"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string6"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string6"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string7"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string7"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 's', 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
     CHECK(GetState.uIndex == UINT32_MAX);
 
     /* -i */
@@ -258,13 +269,13 @@ int main()
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 385, 1);
     CHECK_pDef(s_aOpts2, 5);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 386, 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "myvm"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "myvm"));
 
     /* no-dash options */
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 387, 1);
     CHECK_pDef(s_aOpts2, 7);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 388, 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string9"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string9"));
 
     /* non-option, option, non-option  */
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), VINF_GETOPT_NOT_OPTION, 1);
@@ -307,35 +318,35 @@ int main()
     /* string with indexed argument */
     RTTestSub(hTest, "RTGetOpt - Option w/ Index");
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 400, 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string10"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string10"));
     CHECK(GetState.uIndex == 786);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 400, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string11"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string11"));
     CHECK(GetState.uIndex == 786);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 400, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string12"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string12"));
     CHECK(GetState.uIndex == 786);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 400, 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string13"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string13"));
     CHECK(GetState.uIndex == 687);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 400, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string14"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string14"));
     CHECK(GetState.uIndex == 687);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 400, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "string15"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "string15"));
     CHECK(GetState.uIndex == 687);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 400, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
     CHECK(GetState.uIndex == 688);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 400, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, ""));
     CHECK(GetState.uIndex == 689);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 401, 2);
@@ -360,17 +371,17 @@ int main()
     /* RTGetOptFetchValue tests */
     RTTestSub(hTest, "RTGetOptFetchValue");
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 405, 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "firstvalue"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "firstvalue"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOptFetchValue(&GetState, &Val, RTGETOPT_REQ_STRING), VINF_SUCCESS, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "secondvalue"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "secondvalue"));
     CHECK(GetState.uIndex == UINT32_MAX);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 405, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "firstvalue"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "firstvalue"));
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOptFetchValue(&GetState, &Val, RTGETOPT_REQ_STRING), VINF_SUCCESS, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "secondvalue"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "secondvalue"));
     CHECK(GetState.uIndex == UINT32_MAX);
 
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 406, 2);
@@ -394,7 +405,7 @@ int main()
     CHECK(Val.u32 == 12);
     CHECK(GetState.uIndex == UINT32_MAX);
     CHECK_GETOPT(RTGetOptFetchValue(&GetState, &Val, RTGETOPT_REQ_STRING), VINF_SUCCESS, 1);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "thirdvalue"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "thirdvalue"));
     CHECK(GetState.uIndex == UINT32_MAX);
 
     /* bool on/off tests */
@@ -404,7 +415,7 @@ int main()
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 408, 2);
     CHECK(!Val.f);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), VERR_GETOPT_UNKNOWN_OPTION, 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "invalid"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "invalid"));
 
     /* bool on/off with indexed argument */
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 409, 2);
@@ -414,7 +425,7 @@ int main()
     CHECK(!Val.f);
     CHECK(GetState.uIndex == 7);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), VERR_GETOPT_UNKNOWN_OPTION, 2);
-    CHECK(VALID_PTR(Val.psz) && !strcmp(Val.psz, "invalid"));
+    CHECK(RT_VALID_PTR(Val.psz) && !strcmp(Val.psz, "invalid"));
 
     /* standard options. */
     RTTestSub(hTest, "Standard options");
@@ -425,6 +436,27 @@ int main()
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 'V', 1);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 'V', 1);
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 'V', 1);
+
+    /* 32-bit pairs */
+    RTTestSub(hTest, "RTGetOpt - pairs");
+    CHECK_GETOPT(RTGetOpt(&GetState, &Val), 410, 2);
+    CHECK(Val.PairU32.uFirst == 1536);
+    CHECK(Val.PairU32.uSecond == 0x1536);
+    CHECK_GETOPT(RTGetOpt(&GetState, &Val), 411, 2);
+    CHECK(Val.PairU32.uFirst == 0x42);
+    CHECK(Val.PairU32.uSecond == 42);
+    CHECK_GETOPT(RTGetOpt(&GetState, &Val), 411, 2);
+    CHECK(Val.PairU32.uFirst == 128);
+    CHECK(Val.PairU32.uSecond == UINT32_MAX);
+    CHECK_GETOPT(RTGetOpt(&GetState, &Val), 412, 2);
+    CHECK(Val.PairU64.uFirst == 0x128);
+    CHECK(Val.PairU64.uSecond == 0x42);
+    CHECK_GETOPT(RTGetOpt(&GetState, &Val), 412, 2);
+    CHECK(Val.PairU64.uFirst == 0x128);
+    CHECK(Val.PairU64.uSecond == 0x42);
+    CHECK_GETOPT(RTGetOpt(&GetState, &Val), 412, 2);
+    CHECK(Val.PairU64.uFirst == 0x128);
+    CHECK(Val.PairU64.uSecond == UINT64_MAX);
 
     /* the end */
     CHECK_GETOPT(RTGetOpt(&GetState, &Val), 0, 0);
@@ -605,6 +637,20 @@ int main()
     CHECK(Val.pDef == NULL);
     CHECK(argc4 == GetState.iNext);
 
+    /*
+     * Some negative testing.
+     */
+    const char *argv5[] =
+    {
+        "non-option-argument",
+        "--optwithstring",  /* missing string */
+        /* done */
+        NULL
+    };
+    int argc5 = (int)RT_ELEMENTS(argv5) - 1;
+    CHECK(RT_SUCCESS(RTGetOptInit(&GetState, argc5, (char **)argv5, &s_aOpts2[0], RT_ELEMENTS(s_aOpts2), 0,
+                                  RTGETOPTINIT_FLAGS_OPTS_FIRST)));
+    RTTESTI_CHECK_RC(RTGetOpt(&GetState, &Val), VERR_GETOPT_REQUIRED_ARGUMENT_MISSING);
 
 
     /*

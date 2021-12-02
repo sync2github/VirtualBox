@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTHeapSimple.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - Simple Heap.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 *********************************************************************************************************************************/
 #include <iprt/heap.h>
 #include <iprt/initterm.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/stream.h>
 #include <iprt/string.h>
 #include <iprt/param.h>
@@ -97,7 +97,7 @@ int main(int argc, char **argv)
         {        16,          0,    NULL,  7 },
     };
     unsigned i;
-    RTHeapSimpleDump(Heap, (PFNRTHEAPSIMPLEPRINTF)RTPrintf); /** @todo Add some detail info output with a signature identical to RTPrintf. */
+    RTHeapSimpleDump(Heap, (PFNRTHEAPSIMPLEPRINTF)(uintptr_t)RTPrintf); /** @todo Add some detail info output with a signature identical to RTPrintf. */
     size_t cbBefore = RTHeapSimpleGetFreeSize(Heap);
     static char szFill[] = "01234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
         RTTestIPrintf(RTTESTLVL_ALWAYS,
                       "Warning: Either we've split out an alignment chunk at the start, or we've got\n"
                       "         an alloc/free accounting bug: cbBefore=%d cbAfter=%d\n", cbBefore, cbAfter);
-        RTHeapSimpleDump(Heap, (PFNRTHEAPSIMPLEPRINTF)RTPrintf);
+        RTHeapSimpleDump(Heap, (PFNRTHEAPSIMPLEPRINTF)(uintptr_t)RTPrintf);
     }
 
     /* relocate and free the bits in heap2 now. */

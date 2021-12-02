@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bzero.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; IPRT - No-CRT bzero - AMD64 & X86.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -29,8 +29,8 @@
 BEGINCODE
 
 ;;
-; @param    pvDst   gcc: rdi  msc: rcx  x86:[esp+4]
-; @param    cb      gcc: rsi  msc: rdx  x86:[esp+8]
+; @param    pvDst   gcc: rdi  msc: rcx  x86:[esp+4]  wcall:eax
+; @param    cb      gcc: rsi  msc: rdx  x86:[esp+8]  wcall:edx
 RT_NOCRT_BEGINPROC bzero
 %ifdef RT_OS_DARWIN
 GLOBALNAME __bzero
@@ -70,8 +70,13 @@ GLOBALNAME __bzero
         mov     ebp, esp
         push    edi
 
+ %ifdef ASM_CALL32_WATCOM
+        mov     ecx, edx
+        mov     edi, eax
+ %else
         mov     ecx, [ebp + 0ch]
         mov     edi, [ebp + 08h]
+ %endif
         xor     eax, eax
 
         mov     edx, ecx

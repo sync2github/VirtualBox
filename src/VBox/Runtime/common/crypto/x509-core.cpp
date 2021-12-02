@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: x509-core.cpp 86610 2020-10-16 14:34:15Z vboxsync $ */
 /** @file
  * IPRT - Crypto - X.509, Core APIs.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -82,6 +82,15 @@ RTDECL(RTDIGESTTYPE) RTCrX509AlgorithmIdentifier_QueryDigestType(PCRTCRX509ALGOR
         return RTDIGESTTYPE_SHA512T224;
     if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA512T256))
         return RTDIGESTTYPE_SHA512T256;
+
+    if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA3_224))
+        return RTDIGESTTYPE_SHA3_224;
+    if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA3_256))
+        return RTDIGESTTYPE_SHA3_256;
+    if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA3_384))
+        return RTDIGESTTYPE_SHA3_384;
+    if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA3_512))
+        return RTDIGESTTYPE_SHA3_512;
     return RTDIGESTTYPE_INVALID;
 }
 
@@ -113,6 +122,14 @@ RTDECL(uint32_t) RTCrX509AlgorithmIdentifier_QueryDigestSize(PCRTCRX509ALGORITHM
         return 224 / 8;
     if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA512T256))
         return 256 / 8;
+    if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA3_224))
+        return 224 / 8;
+    if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA3_256))
+        return 256 / 8;
+    if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA3_384))
+        return 384 / 8;
+    if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_SHA3_512))
+        return 512 / 8;
     if (!strcmp(pThis->Algorithm.szObjId, RTCRX509ALGORITHMIDENTIFIERID_WHIRLPOOL))
         return 512 / 8;
 
@@ -171,6 +188,36 @@ RTDECL(int) RTCrX509AlgorithmIdentifier_CompareDigestOidAndEncryptedDigestOid(co
         if (!strcmp(pszEncryptedDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA224_WITH_RSA))
             return 0;
     }
+    else if (!strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T224))
+    {
+        if (!strcmp(pszEncryptedDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T224_WITH_RSA))
+            return 0;
+    }
+    else if (!strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T256))
+    {
+        if (!strcmp(pszEncryptedDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T256_WITH_RSA))
+            return 0;
+    }
+    else if (!strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_224))
+    {
+        if (!strcmp(pszEncryptedDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_224_WITH_RSA))
+            return 0;
+    }
+    else if (!strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_256))
+    {
+        if (!strcmp(pszEncryptedDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_256_WITH_RSA))
+            return 0;
+    }
+    else if (!strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_384))
+    {
+        if (!strcmp(pszEncryptedDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_384_WITH_RSA))
+            return 0;
+    }
+    else if (!strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_512))
+    {
+        if (!strcmp(pszEncryptedDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_512_WITH_RSA))
+            return 0;
+    }
     else if (!strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_WHIRLPOOL))
     {
         /* ?? */
@@ -218,6 +265,24 @@ RTDECL(const char *) RTCrX509AlgorithmIdentifier_CombineEncryptionOidAndDigestOi
         if (   !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA224)
             || !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA224_WITH_RSA))
             return RTCRX509ALGORITHMIDENTIFIERID_SHA224_WITH_RSA;
+        if (   !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T224)
+            || !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T224_WITH_RSA))
+            return RTCRX509ALGORITHMIDENTIFIERID_SHA512T224_WITH_RSA;
+        if (   !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T256)
+            || !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T256_WITH_RSA))
+            return RTCRX509ALGORITHMIDENTIFIERID_SHA512T256_WITH_RSA;
+        if (   !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_224)
+            || !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_224_WITH_RSA))
+            return RTCRX509ALGORITHMIDENTIFIERID_SHA3_224_WITH_RSA;
+        if (   !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_256)
+            || !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_256_WITH_RSA))
+            return RTCRX509ALGORITHMIDENTIFIERID_SHA3_256_WITH_RSA;
+        if (   !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_384)
+            || !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_384_WITH_RSA))
+            return RTCRX509ALGORITHMIDENTIFIERID_SHA3_384_WITH_RSA;
+        if (   !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_512)
+            || !strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_SHA3_512_WITH_RSA))
+            return RTCRX509ALGORITHMIDENTIFIERID_SHA3_512_WITH_RSA;
 
         /* if (!strcmp(pszDigestOid, RTCRX509ALGORITHMIDENTIFIERID_WHIRLPOOL))
             return ???; */
@@ -690,7 +755,7 @@ RTDECL(bool) RTCrX509Name_ConstraintMatch(PCRTCRX509NAME pConstraint, PCRTCRX509
 /**
  * Mapping between X.500 object IDs and short and long names.
  *
- * See RFC-1327, ...
+ * See RFC-1327, RFC-4519 ...
  */
 static struct
 {
@@ -702,17 +767,30 @@ static struct
 {
     {   "0.9.2342.19200300.100.1.3",  RT_STR_TUPLE("Mail"),                 "Rfc822Mailbox" },
     {   "0.9.2342.19200300.100.1.25", RT_STR_TUPLE("DC"),                   "DomainComponent" },
-    {   "1.2.840.113549.1.9.1",       RT_STR_TUPLE("Email"),                "EmailAddress" },
+    {   "1.2.840.113549.1.9.1",       RT_STR_TUPLE("Email") /*nonstandard*/,"EmailAddress" },
     {   "2.5.4.3",                    RT_STR_TUPLE("CN"),                   "CommonName" },
-    {   "2.5.4.4",                    RT_STR_TUPLE("S"),                    "Surname" },
+    {   "2.5.4.4",                    RT_STR_TUPLE("SN"),                   "Surname" },
+    {   "2.5.4.5",                    RT_STR_TUPLE("SRN") /*nonstandard*/,  "SerialNumber" },
     {   "2.5.4.6",                    RT_STR_TUPLE("C"),                    "CountryName" },
     {   "2.5.4.7",                    RT_STR_TUPLE("L"),                    "LocalityName" },
-    {   "2.5.4.8",                    RT_STR_TUPLE("ST"),                   "StatOrProviceName" },
+    {   "2.5.4.8",                    RT_STR_TUPLE("ST"),                   "StateOrProviceName" },
+    {   "2.5.4.9",                    RT_STR_TUPLE("street"),               "Street" },
     {   "2.5.4.10",                   RT_STR_TUPLE("O"),                    "OrganizationName" },
-    {   "2.5.4.11",                   RT_STR_TUPLE("OU"),                   "OrganizationUnitName" },
-    {   "2.5.4.42",                   RT_STR_TUPLE("G"),                    "GivenName" },
-    {   "2.5.4.43",                   RT_STR_TUPLE("I"),                    "Initials" },
-    {   "2.5.4.44",                   RT_STR_TUPLE("GQ"),                   "GenerationQualifier" },
+    {   "2.5.4.11",                   RT_STR_TUPLE("OU"),                   "OrganizationalUnitName" },
+    {   "2.5.4.12",                   RT_STR_TUPLE("title"),                "Title" },
+    {   "2.5.4.13",                   RT_STR_TUPLE("desc"),                 "Description" },
+    {   "2.5.4.15",                   RT_STR_TUPLE("BC") /*nonstandard*/,   "BusinessCategory" },
+    {   "2.5.4.17",                   RT_STR_TUPLE("ZIP") /*nonstandard*/,  "PostalCode" },
+    {   "2.5.4.18",                   RT_STR_TUPLE("POBox") /*nonstandard*/,"PostOfficeBox" },
+    {   "2.5.4.20",                   RT_STR_TUPLE("PN") /*nonstandard*/,   "TelephoneNumber" },
+    {   "2.5.4.33",                   RT_STR_TUPLE("RO") /*nonstandard*/,   "RoleOccupant" },
+    {   "2.5.4.34",                   RT_STR_TUPLE("SA") /*nonstandard*/,   "StreetAddress" },
+    {   "2.5.4.41",                   RT_STR_TUPLE("N") /*nonstandard*/,    "Name" },
+    {   "2.5.4.42",                   RT_STR_TUPLE("GN"),                   "GivenName" },
+    {   "2.5.4.43",                   RT_STR_TUPLE("I") /*nonstandard*/,    "Initials" },
+    {   "2.5.4.44",                   RT_STR_TUPLE("GQ") /*nonstandard*/,   "GenerationQualifier" },
+    {   "2.5.4.46",                   RT_STR_TUPLE("DNQ") /*nonstandard*/,  "DNQualifier" },
+    {   "2.5.4.51",                   RT_STR_TUPLE("HID") /*nonstandard*/,  "HouseIdentifier" },
 };
 
 
@@ -1377,6 +1455,10 @@ static void rtCrx509TbsCertificate_AddExtKeyUsageFlags(PRTCRX509TBSCERTIFICATE p
         {
             if (RTAsn1ObjId_CompareWithString(pObjIds->papItems[i], RTCRX509_MS_EKU_TIMESTAMP_SIGNING_OID) == 0)
                 pThis->T3.fExtKeyUsage |= RTCRX509CERT_EKU_F_MS_TIMESTAMP_SIGNING;
+            else if (RTAsn1ObjId_CompareWithString(pObjIds->papItems[i], RTCRX509_MS_EKU_WHQL_CRYPTO_OID) == 0)
+                pThis->T3.fExtKeyUsage |= RTCRX509CERT_EKU_F_MS_WHQL_CRYPTO;
+            else if (RTAsn1ObjId_CompareWithString(pObjIds->papItems[i], RTCRX509_MS_EKU_ATTEST_WHQL_CRYPTO_OID) == 0)
+                pThis->T3.fExtKeyUsage |= RTCRX509CERT_EKU_F_MS_ATTEST_WHQL_CRYPTO;
             else if (RTAsn1ObjId_CompareWithString(pObjIds->papItems[i], RTCRX509_MS_EKU_NT5_CRYPTO_OID) == 0)
                 pThis->T3.fExtKeyUsage |= RTCRX509CERT_EKU_F_MS_NT5_CRYPTO;
             else if (RTAsn1ObjId_CompareWithString(pObjIds->papItems[i], RTCRX509_MS_EKU_OEM_WHQL_CRYPTO_OID) == 0)

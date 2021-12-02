@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: errorprint.cpp 89720 2021-06-15 18:53:58Z vboxsync $ */
 
 /** @file
  * MS COM / XPCOM Abstraction Layer:
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -44,61 +44,90 @@ void GluePrintErrorInfo(const com::ErrorInfo &info)
     bool haveInterfaceID = info.isFullAvailable();
 #endif
 
-    Utf8Str str;
-    RTCList<Utf8Str> comp;
-
-    Bstr bstrDetailsText = info.getText();
-    if (!bstrDetailsText.isEmpty())
-        str = Utf8StrFmt("%ls\n",
-                         bstrDetailsText.raw());
-    if (haveResultCode)
-        comp.append(Utf8StrFmt("code %Rhrc (0x%RX32)",
-                               info.getResultCode(),
-                               info.getResultCode()));
-    if (haveComponent)
-        comp.append(Utf8StrFmt("component %ls",
-                               info.getComponent().raw()));
-    if (haveInterfaceID)
-        comp.append(Utf8StrFmt("interface %ls",
-                               info.getInterfaceName().raw()));
-    if (!info.getCalleeName().isEmpty())
-        comp.append(Utf8StrFmt("callee %ls",
-                               info.getCalleeName().raw()));
-
-    if (comp.size() > 0)
+    try
     {
-        str += "Details: ";
-        for (size_t i = 0; i < comp.size() - 1; ++i)
-            str += comp.at(i) + ", ";
-        str += comp.last();
-        str += "\n";
-    }
+        HRESULT rc = S_OK;
+        Utf8Str str;
+        RTCList<Utf8Str> comp;
 
-    // print and log
-    RTMsgError("%s", str.c_str());
-    Log(("ERROR: %s", str.c_str()));
+        Bstr bstrDetailsText = info.getText();
+        if (!bstrDetailsText.isEmpty())
+            str = Utf8StrFmt("%ls\n",
+                             bstrDetailsText.raw());
+        if (haveResultCode)
+        {
+            rc = info.getResultCode();
+            comp.append(Utf8StrFmt("code %Rhrc (0x%RX32)", rc, rc));
+        }
+        if (haveComponent)
+            comp.append(Utf8StrFmt("component %ls",
+                                   info.getComponent().raw()));
+        if (haveInterfaceID)
+            comp.append(Utf8StrFmt("interface %ls",
+                                   info.getInterfaceName().raw()));
+        if (!info.getCalleeName().isEmpty())
+            comp.append(Utf8StrFmt("callee %ls",
+                                   info.getCalleeName().raw()));
+
+        if (comp.size() > 0)
+        {
+            str += "Details: ";
+            for (size_t i = 0; i < comp.size() - 1; ++i)
+                str += comp.at(i) + ", ";
+            str += comp.last();
+            str += "\n";
+        }
+
+        // print and log
+        if (FAILED(rc))
+        {
+            RTMsgError("%s", str.c_str());
+            Log(("ERROR: %s", str.c_str()));
+        }
+        else
+        {
+            RTMsgWarning("%s", str.c_str());
+            Log(("WARNING: %s", str.c_str()));
+        }
+    }
+    catch (std::bad_alloc &)
+    {
+        RTMsgError("std::bad_alloc in GluePrintErrorInfo!");
+        Log(("ERROR: std::bad_alloc in GluePrintErrorInfo!\n"));
+    }
 }
 
-void GluePrintErrorContext(const char *pcszContext, const char *pcszSourceFile, uint32_t ulLine)
+void GluePrintErrorContext(const char *pcszContext, const char *pcszSourceFile, uint32_t ulLine, bool fWarning /* = false */)
 {
     // pcszSourceFile comes from __FILE__ macro, which always contains the full path,
     // which we don't want to see printed:
-    Utf8Str strFilename(RTPathFilename(pcszSourceFile));
-    Utf8Str str = Utf8StrFmt("Context: \"%s\" at line %d of file %s\n",
-                             pcszContext,
-                             ulLine,
-                             strFilename.c_str());
     // print and log
-    RTMsgError("%s", str.c_str());
-    Log(("%s", str.c_str()));
+    const char *pszFilenameOnly = RTPathFilename(pcszSourceFile);
+    if (!fWarning)
+    {
+        RTMsgError("Context: \"%s\" at line %d of file %s\n", pcszContext, ulLine, pszFilenameOnly);
+        Log(("ERROR: Context: \"%s\" at line %d of file %s\n", pcszContext, ulLine, pszFilenameOnly));
+    }
+    else
+    {
+        RTMsgWarning("Context: \"%s\" at line %d of file %s\n", pcszContext, ulLine, pszFilenameOnly);
+        Log(("WARNING: Context: \"%s\" at line %d of file %s\n", pcszContext, ulLine, pszFilenameOnly));
+    }
 }
 
 void GluePrintRCMessage(HRESULT rc)
 {
-    Utf8Str str = Utf8StrFmt("Code %Rhra (extended info not available)\n", rc);
     // print and log
-    RTMsgError("%s", str.c_str());
-    Log(("ERROR: %s", str.c_str()));
+    if (FAILED(rc))
+    {
+        RTMsgError("Code %Rhra (extended info not available)\n", rc);
+        Log(("ERROR: Code %Rhra (extended info not available)\n", rc));
+    }
+    else
+    {
+        RTMsgWarning("Code %Rhra (extended info not available)\n", rc);
+        Log(("WARNING: Code %Rhra (extended info not available)\n", rc));
+    }
 }
 
 static void glueHandleComErrorInternal(com::ErrorInfo &info,
@@ -113,6 +142,12 @@ static void glueHandleComErrorInternal(com::ErrorInfo &info,
         do
         {
             GluePrintErrorInfo(*pInfo);
+
+            /* Use rc for figuring out if there were just warnings. */
+            HRESULT rc2 = pInfo->getResultCode();
+            if (   (SUCCEEDED_WARNING(rc) && FAILED(rc2))
+                || (SUCCEEDED(rc) && (FAILED(rc2) || SUCCEEDED_WARNING(rc2))))
+                rc = rc2;
 
             pInfo = pInfo->getNext();
             /* If there is more than one error, separate them visually. */
@@ -131,7 +166,8 @@ static void glueHandleComErrorInternal(com::ErrorInfo &info,
     else
         GluePrintRCMessage(rc);
 
-    GluePrintErrorContext(pcszContext, pcszSourceFile, ulLine);
+    if (pcszContext != NULL || pcszSourceFile != NULL)
+        GluePrintErrorContext(pcszContext, pcszSourceFile, ulLine, SUCCEEDED_WARNING(rc));
 }
 
 void GlueHandleComError(ComPtr<IUnknown> iface,
@@ -150,6 +186,11 @@ void GlueHandleComError(ComPtr<IUnknown> iface,
                                pcszSourceFile,
                                ulLine);
 
+}
+
+void GlueHandleComErrorNoCtx(ComPtr<IUnknown> iface, HRESULT rc)
+{
+    GlueHandleComError(iface, NULL, rc, NULL, 0);
 }
 
 void GlueHandleComErrorProgress(ComPtr<IProgress> progress,

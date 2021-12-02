@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardNewVM.h 92110 2021-10-27 15:48:02Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardNewVM class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,75 +15,234 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIWizardNewVM_h__
-#define __UIWizardNewVM_h__
+#ifndef FEQT_INCLUDED_SRC_wizards_newvm_UIWizardNewVM_h
+#define FEQT_INCLUDED_SRC_wizards_newvm_UIWizardNewVM_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
-#include "UIWizard.h"
+#include "UINativeWizard.h"
 
 /* COM includes: */
 #include "COMEnums.h"
 #include "CMachine.h"
+#include "CMedium.h"
+#include "CMediumFormat.h"
+#include "CGuestOSType.h"
 
-/* New Virtual Machine wizard: */
-class UIWizardNewVM : public UIWizard
+enum SelectedDiskSource
+{
+    SelectedDiskSource_Empty = 0,
+    SelectedDiskSource_New,
+    SelectedDiskSource_Existing,
+    SelectedDiskSource_Max
+};
+
+/** Container for unattended install related data. */
+struct UIUnattendedInstallData
+{
+    UIUnattendedInstallData();
+    QUuid m_uMachineUid;
+    QString m_strISOPath;
+
+    bool m_fUnattendedEnabled;
+    bool m_fStartHeadless;
+    QString m_strUserName;
+    QString m_strPassword;
+    QString m_strHostnameDomainName;
+    QString m_strProductKey;
+    bool m_fInstallGuestAdditions;
+    QString m_strGuestAdditionsISOPath;
+#if 0
+    QString m_strDetectedOSVersion;
+    QString m_strDetectedOSFlavor;
+    QString m_strDetectedOSLanguages;
+    QString m_strDetectedOSHints;
+#endif
+};
+
+
+/** New Virtual Machine wizard: */
+class UIWizardNewVM : public UINativeWizard
 {
     Q_OBJECT;
 
 public:
 
-    /* Page IDs: */
-    enum
-    {
-        Page1,
-        Page2,
-        Page3
-    };
+    UIWizardNewVM(QWidget *pParent, const QString &strMachineGroup = QString(), const QString &strHelpHashtag = QString());
+    bool isUnattendedEnabled() const;
+    void setDefaultUnattendedInstallData(const UIUnattendedInstallData &unattendedInstallData);
+    const UIUnattendedInstallData &unattendedInstallData() const;
+    bool isGuestOSTypeWindows() const;
 
-    /* Page IDs: */
-    enum
-    {
-        PageExpert
-    };
+    bool createVM();
+    bool createVirtualDisk();
 
-    /* Constructor: */
-    UIWizardNewVM(QWidget *pParent, const QString &strGroup = QString());
+    CMedium &virtualDisk();
+    void setVirtualDisk(const CMedium &medium);
+    void setVirtualDisk(const QUuid &mediumId);
 
-    /** Prepare routine. */
-    void prepare();
+    const QString &machineGroup() const;
 
-    /** Returns the Id of newly created VM. */
-    QString createdMachineId() const { return m_machine.GetId(); }
+    /** @name Setter/getters for vm parameters
+      * @{ */
+        const QString &machineFilePath() const;
+        void setMachineFilePath(const QString &strMachineFilePath);
+
+        /* The name of the .vbox file. Obtained from machineFilePath(). Unlike machine base name it cannot have characters like / etc. */
+        QString machineFileName() const;
+
+        const QString &machineFolder() const;
+        void setMachineFolder(const QString &strMachineFolder);
+
+        const QString &machineBaseName() const;
+        void setMachineBaseName(const QString &strMachineBaseName);
+
+        const QString &createdMachineFolder() const;
+        void setCreatedMachineFolder(const QString &strCreatedMachineFolder);
+
+        const QString &detectedOSTypeId() const;
+        void setDetectedOSTypeId(const QString &strDetectedOSTypeId);
+
+        const QString &guestOSFamilyId() const;
+        void setGuestOSFamilyId(const QString &strGuestOSFamilyId);
+
+        const CGuestOSType &guestOSType() const;
+        void setGuestOSType(const CGuestOSType &guestOSType);
+
+        bool installGuestAdditions() const;
+        void setInstallGuestAdditions(bool fInstallGA);
+
+        bool startHeadless() const;
+        void setStartHeadless(bool fStartHeadless);
+
+        bool skipUnattendedInstall() const;
+        void setSkipUnattendedInstall(bool fSkipUnattendedInstall);
+
+        bool EFIEnabled() const;
+        void setEFIEnabled(bool fEnabled);
+
+        const QString &ISOFilePath() const;
+        void setISOFilePath(const QString &strISOFilePath);
+
+        const QString &userName() const;
+        void setUserName(const QString &strUserName);
+
+        const QString &password() const;
+        void setPassword(const QString &strPassword);
+
+        const QString &guestAdditionsISOPath() const;
+        void setGuestAdditionsISOPath(const QString &strGAISOPath);
+
+        const QString &hostnameDomainName() const;
+        void setHostnameDomainName(const QString &strHostnameDomainName);
+
+        const QString &productKey() const;
+        void setProductKey(const QString &productKey);
+
+        int CPUCount() const;
+        void setCPUCount(int iCPUCount);
+
+        int memorySize() const;
+        void setMemorySize(int iMemory);
+
+        qulonglong mediumVariant() const;
+        void setMediumVariant(qulonglong uMediumVariant);
+
+        const CMediumFormat &mediumFormat();
+        void setMediumFormat(const CMediumFormat &mediumFormat);
+
+        const QString &mediumPath() const;
+        void setMediumPath(const QString &strMediumPath);
+
+        qulonglong mediumSize() const;
+        void setMediumSize(qulonglong mediumSize);
+
+        SelectedDiskSource diskSource() const;
+        void setDiskSource(SelectedDiskSource enmDiskSource);
+
+        bool emptyDiskRecommended() const;
+        void setEmptyDiskRecommended(bool fEmptyDiskRecommended);
+
+        QVector<KMediumVariant> mediumVariants() const;
+    /** @} */
 
 protected:
 
-    /* Create VM stuff: */
-    bool createVM();
+    /** Populates pages. */
+    virtual void populatePages() /* final override */;
+    virtual void cleanWizard() /* final override */;
+    void configureVM(const QString &strGuestTypeId, const CGuestOSType &comGuestType);
+    bool attachDefaultDevices();
 
-    /* Who will be able to create virtual-machine: */
-    friend class UIWizardNewVMPageBasic3;
-    friend class UIWizardNewVMPageExpert;
+private slots:
+
+    void sltHandleWizardCancel();
 
 private:
 
-    /* Translation stuff: */
     void retranslateUi();
-
-    /* Helping stuff: */
     QString getNextControllerName(KStorageBus type);
+    void setUnattendedPageVisible(bool fVisible);
+    /** Returns the Id of newly created VM. */
+    QUuid createdMachineId() const;
+    void deleteVirtualDisk();
 
-    /* Variables: */
-    CMachine m_machine;
-    QString m_strGroup;
-    int m_iIDECount;
-    int m_iSATACount;
-    int m_iSCSICount;
-    int m_iFloppyCount;
-    int m_iSASCount;
-    int m_iUSBCount;
+    /** @name Variables
+     * @{ */
+       CMedium m_virtualDisk;
+       CMachine m_machine;
+       QString m_strMachineGroup;
+       int m_iIDECount;
+       int m_iSATACount;
+       int m_iSCSICount;
+       int m_iFloppyCount;
+       int m_iSASCount;
+       int m_iUSBCount;
+       mutable UIUnattendedInstallData m_unattendedInstallData;
+
+       /** Path of the ISO file attached to the new vm. Possibly used for the unattended install. */
+       QString m_strISOFilePath;
+
+       /** Path of the folder created by this wizard page. Used to remove previously created
+         *  folder. see cleanupMachineFolder();*/
+       QString m_strCreatedFolder;
+
+       /** Full path (including the file name) of the machine's configuration file. */
+       QString m_strMachineFilePath;
+       /** Path of the folder hosting the machine's configuration file. Generated from m_strMachineFilePath. */
+       QString m_strMachineFolder;
+       /** Base name of the machine. Can include characters / or \. */
+       QString m_strMachineBaseName;
+
+       /** Type Id od the OS detected from the ISO file by IUnattended. */
+       QString m_strDetectedOSTypeId;
+
+       /** Holds the VM OS family ID. */
+       QString  m_strGuestOSFamilyId;
+       /** Holds the VM OS type. */
+       CGuestOSType m_comGuestOSType;
+
+       /** True if guest additions are to be installed during unattended install. */
+       bool m_fInstallGuestAdditions;
+       bool m_fSkipUnattendedInstall;
+       bool m_fEFIEnabled;
+
+       int m_iCPUCount;
+       int m_iMemorySize;
+       int m_iUnattendedInstallPageIndex;
+
+       qulonglong m_uMediumVariant;
+       CMediumFormat m_comMediumFormat;
+       QString m_strMediumPath;
+       qulonglong m_uMediumSize;
+       SelectedDiskSource m_enmDiskSource;
+       bool m_fEmptyDiskRecommended;
+       QVector<KMediumVariant> m_mediumVariants;
+    /** @} */
 };
 
 typedef QPointer<UIWizardNewVM> UISafePointerWizardNewVM;
 
-#endif // __UIWizardNewVM_h__
-
+#endif /* !FEQT_INCLUDED_SRC_wizards_newvm_UIWizardNewVM_h */

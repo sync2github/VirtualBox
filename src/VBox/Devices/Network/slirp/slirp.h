@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: slirp.h 87126 2020-12-25 02:51:44Z vboxsync $ */
 /** @file
  * NAT - slirp (declarations/defines).
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -389,9 +389,6 @@ int errno_func(const char *file, int line);
 # define ETH_ALEN        6
 # define ETH_HLEN        14
 
-# define ARPOP_REQUEST   1               /* ARP request                  */
-# define ARPOP_REPLY     2               /* ARP reply                    */
-
 struct ethhdr
 {
     unsigned char   h_dest[ETH_ALEN];           /* destination eth addr */
@@ -409,7 +406,9 @@ int sscanf(const char *s, const char *format, ...);
 
 # define ip_next(ip) (void *)((uint8_t *)(ip) + ((ip)->ip_hl << 2))
 # define udp_next(udp) (void *)((uint8_t *)&((struct udphdr *)(udp))[1])
+# undef  bcopy
 # define bcopy(src, dst, len) memcpy((dst), (src), (len))
+# undef  bcmp
 # define bcmp(a1, a2, len) memcmp((a1), (a2), (len))
 # define NO_FW_PUNCH
 /* Two wrongs don't make a right, but this at least averts harm. */
@@ -528,10 +527,6 @@ static inline struct mbuf *slirpServiceMbufAlloc(PNATState pData, uint8_t u8Serv
     return m;
 }
 
-static inline struct mbuf *slirpTftpMbufAlloc(PNATState pData)
-{
-    return slirpServiceMbufAlloc(pData, CTL_TFTP);
-}
 static inline struct mbuf *slirpDnsMbufAlloc(PNATState pData)
 {
     return slirpServiceMbufAlloc(pData, CTL_DNS);

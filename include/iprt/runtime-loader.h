@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -121,7 +121,7 @@ static DECLCALLBACK(int) rtldrLoadOnce(void *)
     int         rc;
 
     LogFlowFunc(("\n"));
-    rc = RTLdrLoad(RT_RUNTIME_LOADER_LIB_NAME, &hLib);
+    rc = RTLdrLoadEx(RT_RUNTIME_LOADER_LIB_NAME, &hLib, RTLDRLOAD_FLAGS_LOCAL | RTLDRLOAD_FLAGS_NO_UNLOAD, NULL);
     for (unsigned i = 0; RT_SUCCESS(rc) && g_aSharedFuncs[i].pszName != NULL; ++i)
         rc = RTLdrGetSymbol(hLib, g_aSharedFuncs[i].pszName, (void **)g_aSharedFuncs[i].ppfn);
     LogFlowFunc(("rc = %Rrc\n", rc));
@@ -155,7 +155,7 @@ RTR3DECL(int) RT_RUNTIME_LOADER_FUNCTION(void)
 /* Declarations of the functions that we need from
  * RT_RUNTIME_LOADER_LIB_NAME */
 #  define RT_PROXY_STUB(function, rettype, signature, shortsig) \
-    RTR3DECL(rettype) ( function ) signature ;
+    RTR3DECL(rettype)  function  signature ;
 
 RT_RUNTIME_LOADER_INSERT_SYMBOLS
 

@@ -1,14 +1,8 @@
 /** @file
   x64-specifc functionality for DxeLoad.
 
-Copyright (c) 2006 - 2013, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -41,6 +35,16 @@ HandOffToDxeCore (
   UINT32                          Index;
   EFI_VECTOR_HANDOFF_INFO         *VectorInfo;
   EFI_PEI_VECTOR_HANDOFF_INFO_PPI *VectorHandoffInfoPpi;
+  VOID                            *GhcbBase;
+  UINTN                           GhcbSize;
+
+  //
+  // Clear page 0 and mark it as allocated if NULL pointer detection is enabled.
+  //
+  if (IsNullDetectionEnabled ()) {
+    ClearFirst4KPage (HobList.Raw);
+    BuildMemoryAllocationHob (0, EFI_PAGES_TO_SIZE (1), EfiBootServicesData);
+  }
 
   //
   // Get Vector Hand-off Info PPI and build Guided HOB
@@ -79,12 +83,26 @@ HandOffToDxeCore (
   TopOfStack = (VOID *) ((UINTN) BaseOfStack + EFI_SIZE_TO_PAGES (STACK_SIZE) * EFI_PAGE_SIZE - CPU_STACK_ALIGNMENT);
   TopOfStack = ALIGN_POINTER (TopOfStack, CPU_STACK_ALIGNMENT);
 
+  //
+  // Get the address and size of the GHCB pages
+  //
+  GhcbBase = (VOID *) PcdGet64 (PcdGhcbBase);
+  GhcbSize = PcdGet64 (PcdGhcbSize);
+
   PageTables = 0;
   if (FeaturePcdGet (PcdDxeIplBuildPageTables)) {
     //
     // Create page table and save PageMapLevel4 to CR3
     //
-    PageTables = CreateIdentityMappingPageTables ();
+    PageTables = CreateIdentityMappingPageTables ((EFI_PHYSICAL_ADDRESS) (UINTN) BaseOfStack, STACK_SIZE,
+                                                  (EFI_PHYSICAL_ADDRESS) (UINTN) GhcbBase, GhcbSize);
+  } else {
+    //
+    // Set NX for stack feature also require PcdDxeIplBuildPageTables be TRUE
+    // for the DxeIpl and the DxeCore are both X64.
+    //
+    ASSERT (PcdGetBool (PcdSetNxForStack) == FALSE);
+    ASSERT (PcdGetBool (PcdCpuStackGuard) == FALSE);
   }
 
   //

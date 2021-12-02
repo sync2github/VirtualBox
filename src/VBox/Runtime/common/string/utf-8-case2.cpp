@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: utf-8-case2.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - UTF-8 Case Sensitivity and Folding, Part 2 (requires unidata-flags.cpp).
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,7 @@
 #include <iprt/uni.h>
 #include <iprt/alloc.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include "internal/string.h"
 
 

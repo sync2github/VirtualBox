@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ConsoleVRDPServer.h 91312 2021-09-20 11:06:57Z vboxsync $ */
 /** @file
  * VBox Console VRDE Server Helper class and implementation of IVRDEServerInfo
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_CONSOLEVRDPSERVER
-#define ____H_CONSOLEVRDPSERVER
+#ifndef MAIN_INCLUDED_ConsoleVRDPServer_h
+#define MAIN_INCLUDED_ConsoleVRDPServer_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VRDEServerInfoWrap.h"
 #include "RemoteUSBBackend.h"
@@ -60,6 +63,8 @@ typedef struct _VRDPInputSynch
 class ConsoleVRDPServer
 {
 public:
+    DECLARE_TRANSLATE_METHODS(ConsoleVRDPServer)
+
     ConsoleVRDPServer (Console *console);
     ~ConsoleVRDPServer ();
 
@@ -132,7 +137,7 @@ public:
     void SendResize (void);
     void SendUpdateBitmap (unsigned uScreenId, uint32_t x, uint32_t y, uint32_t w, uint32_t h) const;
 
-    void SendAudioSamples (void *pvSamples, uint32_t cSamples, VRDEAUDIOFORMAT format) const;
+    void SendAudioSamples (void const *pvSamples, uint32_t cSamples, VRDEAUDIOFORMAT format) const;
     void SendAudioVolume (uint16_t left, uint16_t right) const;
     void SendUSBRequest (uint32_t u32ClientId, void *pvParms, uint32_t cbParms) const;
 
@@ -220,7 +225,7 @@ private:
     PFNVRDPCLIPBOARDEXTCALLBACK mpfnClipboardCallback;
 
     static DECLCALLBACK(int) ClipboardCallback (void *pvCallback, uint32_t u32ClientId, uint32_t u32Function, uint32_t u32Format, const void *pvData, uint32_t cbData);
-    static DECLCALLBACK(int) ClipboardServiceExtension (void *pvExtension, uint32_t u32Function, void *pvParm, uint32_t cbParms);
+    static DECLCALLBACK(int) ClipboardServiceExtension(void *pvExtension, uint32_t u32Function, void *pvParms, uint32_t cbParms);
 
 #ifdef VBOX_WITH_USB
     RemoteUSBBackend *usbBackendFindByUUID (const Guid *pGuid);
@@ -255,6 +260,7 @@ private:
 
     int32_t volatile mcClients;
 
+#if 0 /** @todo Chromium got removed (see @bugref{9529}) and this is not available for VMSVGA yet. */
     static DECLCALLBACK(void) H3DORBegin(const void *pvContext, void **ppvInstance,
                                          const char *pszFormat);
     static DECLCALLBACK(void) H3DORGeometry(void *pvInstance,
@@ -266,6 +272,7 @@ private:
     static DECLCALLBACK(void) H3DOREnd(void *pvInstance);
     static DECLCALLBACK(int)  H3DORContextProperty(const void *pvContext, uint32_t index,
                                                    void *pvBuffer, uint32_t cbBuffer, uint32_t *pcbOut);
+#endif
 
     void remote3DRedirect(bool fEnable);
 
@@ -373,7 +380,7 @@ class ATL_NO_VTABLE VRDEServerInfo :
 public:
     DECLARE_NOT_AGGREGATABLE(VRDEServerInfo)
 
-    DECLARE_EMPTY_CTOR_DTOR(VRDEServerInfo)
+    DECLARE_COMMON_CLASS_METHODS(VRDEServerInfo)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -407,5 +414,5 @@ private:
     Console * const         mParent;
 };
 
-#endif // ____H_CONSOLEVRDPSERVER
+#endif /* !MAIN_INCLUDED_ConsoleVRDPServer_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

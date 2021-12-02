@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-pic.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - Internal PIC Defines, Variables and Functions.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___bs3_cmn_pic_h
-#define ___bs3_cmn_pic_h
+#ifndef BS3KIT_INCLUDED_bs3_cmn_pic_h
+#define BS3KIT_INCLUDED_bs3_cmn_pic_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "bs3kit.h"
 
@@ -53,5 +56,5 @@ RT_C_DECLS_END
 
 #include "bs3kit-mangling-code.h"
 
-#endif
+#endif /* !BS3KIT_INCLUDED_bs3_cmn_pic_h */
 

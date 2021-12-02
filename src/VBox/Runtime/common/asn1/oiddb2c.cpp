@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: oiddb2c.cpp 83728 2020-04-17 02:00:27Z vboxsync $ */
 /** @file
  * IPRT - OID text database to C converter.
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -144,11 +144,8 @@ static void writeOidTree(PRAWOIDNODE pCurNode, FILE *pOut, bool fBigTable, PBLDP
         for (unsigned i = 0; i < pCurNode->cChildren; i++)
         {
             PRAWOIDNODE pChild = pCurNode->papChildren[i];
-            fprintf(pOut,
-                    fBigTable
-                    ? "    { %7u, %2u, %u, %2u, %4u, %#06x }, /* "
-                    : "    { %2u, %2u, %u, %2u, %4u, %#06x }, /* "
-                    ,
+            fprintf(pOut, "    { %*u, %2u, %u, %2u, %4u, %#06x }, /* ",
+                    fBigTable ? 7 : 2,
                     pChild->uKey,
                     (unsigned)pChild->StrTabEntry.cchString,
                     pChild->fChildrenInBigTable,

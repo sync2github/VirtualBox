@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: clipboard-helper.h 86959 2020-11-23 11:25:53Z vboxsync $ */
 /** @file
  * Shared Clipboard - Some helper function for converting between the various EOLs.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,126 +24,151 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_GuestHost_clipboard_helper_h
-#define ___VBox_GuestHost_clipboard_helper_h
+#ifndef VBOX_INCLUDED_GuestHost_clipboard_helper_h
+#define VBOX_INCLUDED_GuestHost_clipboard_helper_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/string.h>
 
+#include <VBox/GuestHost/SharedClipboard.h>
+
 /** Constants needed for string conversions done by the Linux/Mac clipboard code. */
-enum {
+enum
+{
     /** In Linux, lines end with a linefeed character. */
-    LINEFEED = 0xa,
+    VBOX_SHCL_LINEFEED = 0xa,
     /** In Windows, lines end with a carriage return and a linefeed character. */
-    CARRIAGERETURN = 0xd,
+    VBOX_SHCL_CARRIAGERETURN = 0xd,
     /** Little endian "real" UTF-16 strings start with this marker. */
-    UTF16LEMARKER = 0xfeff,
+    VBOX_SHCL_UTF16LEMARKER = 0xfeff,
     /** Big endian "real" UTF-16 strings start with this marker. */
-    UTF16BEMARKER = 0xfffe
+    VBOX_SHCL_UTF16BEMARKER = 0xfffe
 };
 
 /**
- * Get the size of the buffer needed to hold a UTF-16-LE zero terminated string
- * with Windows EOLs converted from a UTF-16 string with Linux EOLs.
+ * Returns the length (in UTF-8 characters) of an UTF-16 string with LF EOL.
  *
  * @returns VBox status code.
- *
- * @param   pwszSrc  The source UTF-16 string.
- * @param   cwcSrc   The length of the source string in RTUTF16 units.
- * @param   pcwcDst  The length of the destination string in RTUTF16 units.
+ * @param   pcwszSrc            UTF-16 string to return size for.
+ * @param   cwcSrc              Length of the string in RTUTF16 units.
+ * @param   pchLen              Where to return the length (in UTF-8 characters).
+ *                              Does not include terminator.
  */
-int vboxClipboardUtf16GetWinSize(PRTUTF16 pwszSrc, size_t cwcSrc, size_t *pcwcDst);
+int ShClUtf16LFLenUtf8(PCRTUTF16 pcwszSrc, size_t cwcSrc, size_t *pchLen);
 
 /**
- * Convert a UTF-16 text with Linux EOLs to null-terminated UTF-16-LE with
- * Windows EOLs.
+ * Returns the length (in UTF-8 characters) of an UTF-16 string with CRLF EOL.
  *
- * Does no checking for validity.
- *
- * @returns VBox status code
- *
- * @param   pwszSrc  Source UTF-16 text to convert.
- * @param   cwcSrc   Size of the source text int RTUTF16 units
- * @param   pwszDst  Buffer to store the converted text to.
- * @param   cwcDst   Size of the buffer for the converted text in RTUTF16 units.
+ * @returns VBox status code.
+ * @param   pcwszSrc            UTF-16 string to return size for.
+ * @param   cwcSrc              Length of the source string in RTUTF16 units.
+ * @param   pchLen              Where to return the length (in UTF-8 characters).
+ *                              Does not include terminator.
  */
-int vboxClipboardUtf16LinToWin(PRTUTF16 pwszSrc, size_t cwcSrc, PRTUTF16 pwszDst, size_t cwcDst);
+int ShClUtf16CRLFLenUtf8(PCRTUTF16 pcwszSrc, size_t cwcSrc, size_t *pchLen);
 
 /**
- * Get the size of the buffer needed to hold a zero-terminated UTF-16 string
- * with Linux EOLs converted from a UTF-16 string with Windows EOLs.
+ * Returns the length (in characters) of an UTF-16 string, including terminator.
  *
- * @returns RT status code
- *
- * @param   pwszSrc  The source UTF-16 string
- * @param   cwcSrc   The length of the source string in RTUTF16 units.
- * @retval  pcwcDst  The length of the destination string in RTUTF16 units.
+ * @returns VBox status code.
+ * @param  pcwszSrc             UTF-16 string to return size for.
+ * @param  cwcSrc               Length of the source string in RTUTF16 units.
+ * @param  pchLen               Where to return the length (in UTF-8 characters).
+ *                              Does not include terminator.
  */
-int vboxClipboardUtf16GetLinSize(PRTUTF16 pwszSrc, size_t cwcSrc, size_t *pcwcDst);
+int ShClUtf16LenUtf8(PCRTUTF16 pcwszSrc, size_t cwcSrc, size_t *pchLen);
 
 /**
- * Convert UTF-16-LE text with Windows EOLs to zero-terminated UTF-16 with Linux
- * EOLs.  This function does not verify that the UTF-16 is valid.
+ * Converts an UTF-16 string with LF EOL to an UTF-16 string with CRLF EOL.
  *
- * @returns VBox status code
- *
- * @param   pwszSrc  Text to convert
- * @param   cwcSrc   Size of the source text in RTUTF16 units.
- * @param   pwszDst  The buffer to store the converted text to
- * @param   cwcDst   The size of the buffer for the destination text in RTUTF16
- *                   chars.
+ * @returns VBox status code.
+ * @param   pcwszSrc            UTF-16 string to convert.
+ * @param   cwcSrc              Size of the string int RTUTF16 units.
+ * @param   pwszDst             Buffer to store the converted string to.
+ * @param   cwcDst              The size of \a pwszDst in RTUTF16 units.
  */
-int vboxClipboardUtf16WinToLin(PRTUTF16 pwszSrc, size_t cwcSrc, PRTUTF16 pwszDst, size_t cwcDst);
-
-#pragma pack(1)
-/** @todo r=bird: Why duplicate these structures here, we've got them in
- *        DevVGA.cpp already! */
-/**
- * Bitmap File Header. Official win32 name is BITMAPFILEHEADER
- * Always Little Endian.
- */
-typedef struct BMFILEHEADER
-{
-/** @todo r=bird: this type centric prefixing is what give hungarian notation a bad name... */
-    uint16_t    u16Type;
-    uint32_t    u32Size;
-    uint16_t    u16Reserved1;
-    uint16_t    u16Reserved2;
-    uint32_t    u32OffBits;
-} BMFILEHEADER;
-/** Pointer to a BMFILEHEADER structure. */
-typedef BMFILEHEADER *PBMFILEHEADER;
-/** BMP file magic number */
-#define BITMAPHEADERMAGIC (RT_H2LE_U16_C(0x4d42))
+int ShClConvUtf16LFToCRLF(PCRTUTF16 pcwszSrc, size_t cwcSrc, PRTUTF16 pwszDst, size_t cwcDst);
 
 /**
- * Bitmap Info Header. Official win32 name is BITMAPINFOHEADER
- * Always Little Endian.
+ * Converts an UTF-16 string with LF EOL to an UTF-16 string with CRLF EOL.
+ *
+ * Convenience function which returns the allocated + converted string on success.
+ *
+ * @returns VBox status code.
+ * @param   pcwszSrc            UTF-16 string to convert.
+ * @param   cwcSrc              Size of the string int RTUTF16 units.
+ * @param   ppwszDst            Where to return the allocated converted string. Must be free'd by the caller.
+ * @param   pcwDst              Where to return the size of the converted string in RTUTF16 units.
+ *                              Does not include the terminator.
  */
-typedef struct BMINFOHEADER
-{
-/** @todo r=bird: this type centric prefixing is what give hungarian notation a bad name... */
-    uint32_t    u32Size;
-    uint32_t    u32Width;
-    uint32_t    u32Height;
-    uint16_t    u16Planes;
-    uint16_t    u16BitCount;
-    uint32_t    u32Compression;
-    uint32_t    u32SizeImage;
-    uint32_t    u32XBitsPerMeter;
-    uint32_t    u32YBitsPerMeter;
-    uint32_t    u32ClrUsed;
-    uint32_t    u32ClrImportant;
-} BMINFOHEADER;
-/** Pointer to a BMINFOHEADER structure. */
-typedef BMINFOHEADER *PBMINFOHEADER;
-#pragma pack() /** @todo r=bird: Only BMFILEHEADER needs packing. The BMINFOHEADER is perfectly aligned. */
+int ShClConvUtf16LFToCRLFA(PCRTUTF16 pcwszSrc, size_t cwcSrc, PRTUTF16 *ppwszDst, size_t *pcwDst);
+
+/**
+ * Converts an UTF-16 string with CRLF EOL to an UTF-16 string with LF EOL.
+ *
+ * @returns VBox status code.
+ * @param   pcwszSrc            UTF-16 string to convert.
+ * @param   cwcSrc              Size of the string in RTUTF16 units.
+ * @param   pwszDst             Where to store the converted string to.
+ * @param   cwcDst              The size of \a pwszDst in RTUTF16 units.
+ */
+int ShClConvUtf16CRLFToLF(PCRTUTF16 pcwszSrc, size_t cwcSrc, PRTUTF16 pwszDst, size_t cwcDst);
+
+/**
+ * Converts an UTF-16 string with CRLF EOL to UTF-8 LF.
+ *
+ * @returns VBox status code. Will return VERR_NO_DATA if no data was converted.
+ * @param  pcwszSrc             UTF-16 string to convert.
+ * @param  cbSrc                Length of @a pwszSrc (in bytes).
+ * @param  pszBuf               Where to write the converted string.
+ * @param  cbBuf                The size of the buffer pointed to by @a pszBuf.
+ * @param  pcbLen               Where to store the size (in bytes) of the converted string.
+ *                              Does not include terminator.
+ */
+int ShClConvUtf16CRLFToUtf8LF(PCRTUTF16 pcwszSrc, size_t cbSrc, char *pszBuf, size_t cbBuf, size_t *pcbLen);
+
+/**
+* Converts an HTML string from UTF-16 into UTF-8.
+*
+* @returns VBox status code.
+* @param  pcwszSrc              UTF-16 string to convert.
+* @param  cwcSrc                Length (in RTUTF16 units) of the source text.
+* @param  ppszDst               Where to store the converted result on success.
+* @param  pcbDst                Where to store the number of bytes written.
+*/
+int ShClConvUtf16ToUtf8HTML(PCRTUTF16 pcwszSrc, size_t cwcSrc, char **ppszDst, size_t *pcbDst);
+
+/**
+ * Converts an UTF-8 string with LF EOL into UTF-16 CRLF.
+ *
+ * @returns VBox status code.
+ * @param  pcszSrc              UTF-8 string to convert.
+ * @param  cbSrc                Size of UTF-8 string to convert (in bytes), not counting the terminating zero.
+ * @param  ppwszDst             Where to return the allocated buffer on success.
+ * @param  pcwDst               Where to return the size (in RTUTF16 units) of the allocated buffer on success.
+ *                              Does not include terminator.
+ */
+int ShClConvUtf8LFToUtf16CRLF(const char *pcszSrc, size_t cbSrc, PRTUTF16 *ppwszDst, size_t *pcwDst);
+
+/**
+ * Converts a Latin-1 string with LF EOL into UTF-16 CRLF.
+ *
+ * @returns VBox status code.
+ * @param  pcszSrc              UTF-8 string to convert.
+ * @param  cbSrc                Size of string (in bytes), not counting the terminating zero.
+ * @param  ppwszDst             Where to return the allocated buffer on success.
+ * @param  pcwDst               Where to return the size (in RTUTF16 units) of the allocated buffer on success.
+ *                              Does not include terminator.
+ */
+int ShClConvLatin1LFToUtf16CRLF(const char *pcszSrc, size_t cbSrc, PRTUTF16 *ppwszDst, size_t *pcwDst);
 
 /**
  * Convert CF_DIB data to full BMP data by prepending the BM header.
  * Allocates with RTMemAlloc.
  *
- * @returns VBox status code
- *
+ * @returns VBox status code.
  * @param   pvSrc         DIB data to convert
  * @param   cbSrc         Size of the DIB data to convert in bytes
  * @param   ppvDst        Where to store the pointer to the buffer for the
@@ -151,21 +176,65 @@ typedef BMINFOHEADER *PBMINFOHEADER;
  * @param   pcbDst        Pointer to the size of the buffer for the destination
  *                        data in bytes.
  */
-int vboxClipboardDibToBmp(const void *pvSrc, size_t cbSrc, void **ppvDst, size_t *pcbDst);
+int ShClDibToBmp(const void *pvSrc, size_t cbSrc, void **ppvDst, size_t *pcbDst);
 
 /**
  * Get the address and size of CF_DIB data in a full BMP data in the input buffer.
  * Does not do any allocation.
  *
- * @returns VBox status code
- *
+ * @returns VBox status code.
  * @param   pvSrc         BMP data to convert
  * @param   cbSrc         Size of the BMP data to convert in bytes
  * @param   ppvDst        Where to store the pointer to the destination data
  * @param   pcbDst        Pointer to the size of the destination data in bytes
  */
-int vboxClipboardBmpGetDib(const void *pvSrc, size_t cbSrc, const void **ppvDst, size_t *pcbDst);
+int ShClBmpGetDib(const void *pvSrc, size_t cbSrc, const void **ppvDst, size_t *pcbDst);
 
+#ifdef LOG_ENABLED
+/**
+ * Dumps HTML data to the debug log.
+ *
+ * @returns VBox status code.
+ * @param   pszSrc              HTML data to dump.
+ * @param   cbSrc               Size (in bytes) of HTML data to dump.
+ */
+int ShClDbgDumpHtml(const char *pszSrc, size_t cbSrc);
 
-#endif
+/**
+ * Dumps data using a specified clipboard format.
+ *
+ * @param   pv                  Pointer to data to dump.
+ * @param   cb                  Size (in bytes) of data to dump.
+ * @param   u32Format           Clipboard format to use for dumping.
+ */
+void ShClDbgDumpData(const void *pv, size_t cb, SHCLFORMAT u32Format);
+#endif /* LOG_ENABLED */
+
+/**
+ * Translates a Shared Clipboard host function number to a string.
+ *
+ * @returns Function ID string name.
+ * @param   uFn                 The function to translate.
+ */
+const char *ShClHostFunctionToStr(uint32_t uFn);
+
+/**
+ * Translates a Shared Clipboard host message enum to a string.
+ *
+ * @returns Message ID string name.
+ * @param   uMsg                The message to translate.
+ */
+const char *ShClHostMsgToStr(uint32_t uMsg);
+
+/**
+ * Translates a Shared Clipboard guest message enum to a string.
+ *
+ * @returns Message ID string name.
+ * @param   uMsg                The message to translate.
+ */
+const char *ShClGuestMsgToStr(uint32_t uMsg);
+
+char *ShClFormatsToStrA(SHCLFORMATS fFormats);
+
+#endif /* !VBOX_INCLUDED_GuestHost_clipboard_helper_h */
 

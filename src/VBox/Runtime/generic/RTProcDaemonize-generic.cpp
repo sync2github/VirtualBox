@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTProcDaemonize-generic.cpp 83289 2020-03-13 16:09:08Z vboxsync $ */
 /** @file
  * IPRT - RTProcDaemonize, generic implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,7 @@
 
 #include <iprt/assert.h>
 #include <iprt/env.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/file.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
@@ -83,12 +83,12 @@ RTR3DECL(int) RTProcDaemonize(const char * const *papszArgs, const char *pszDaem
             rc = RTProcCreateEx(szExecPath, papszNewArgs, RTENV_DEFAULT,
                                 RTPROC_FLAGS_DETACHED | RTPROC_FLAGS_SAME_CONTRACT,
                                 &hStdIn, &hStdOutAndErr, &hStdOutAndErr,
-                                NULL /*pszAsUser*/,  NULL /*pszPassword*/, NULL /*phProcess*/);
+                                NULL /*pszAsUser*/,  NULL /*pszPassword*/, NULL /*pExtraData*/, NULL /*phProcess*/);
 
             RTFileClose(hStdOutAndErr.u.hFile);
         }
 
-        RTFileClose(hStdOutAndErr.u.hFile);
+        RTFileClose(hStdIn.u.hFile);
     }
     RTMemFree(papszNewArgs);
     return rc;

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: cpu-numa.cpp 85074 2020-07-06 17:17:00Z vboxsync $ */
 /** @file
  * numa - NUMA / memory benchmark.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -122,7 +122,7 @@ static void doTest(RTTEST hTest)
             for (uint32_t i = 0; i < cIterations; i++)
             {
 #if 1
-                size_t register u = 0;
+                size_t           u = 0;
                 size_t volatile *puCur = (size_t volatile *)pvTest;
                 size_t volatile *puEnd = puCur + cbTestSet / sizeof(size_t);
                 while (puCur != puEnd)

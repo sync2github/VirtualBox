@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDnDDropSource.cpp 85694 2020-08-11 16:30:25Z vboxsync $ */
 /** @file
  * VBoxDnDSource.cpp - IDropSource implementation.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,7 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
 #include <iprt/win/windows.h>
 #include <new> /* For bad_alloc. */
 
@@ -32,17 +33,17 @@
 
 
 VBoxDnDDropSource::VBoxDnDDropSource(VBoxDnDWnd *pParent)
-    : mRefCount(1),
-      mpWndParent(pParent),
-      mdwCurEffect(0),
-      muCurAction(DND_IGNORE_ACTION)
+    : m_cRefs(1),
+      m_pWndParent(pParent),
+      m_dwCurEffect(0),
+      m_enmActionCurrent(VBOX_DND_ACTION_IGNORE)
 {
     LogFlowFuncEnter();
 }
 
 VBoxDnDDropSource::~VBoxDnDDropSource(void)
 {
-    LogFlowFunc(("mRefCount=%RI32\n", mRefCount));
+    LogFlowFunc(("mRefCount=%RI32\n", m_cRefs));
 }
 
 /*
@@ -51,12 +52,12 @@ VBoxDnDDropSource::~VBoxDnDDropSource(void)
 
 STDMETHODIMP_(ULONG) VBoxDnDDropSource::AddRef(void)
 {
-    return InterlockedIncrement(&mRefCount);
+    return InterlockedIncrement(&m_cRefs);
 }
 
 STDMETHODIMP_(ULONG) VBoxDnDDropSource::Release(void)
 {
-    LONG lCount = InterlockedDecrement(&mRefCount);
+    LONG lCount = InterlockedDecrement(&m_cRefs);
     if (lCount == 0)
     {
         delete this;
@@ -95,15 +96,15 @@ STDMETHODIMP VBoxDnDDropSource::QueryInterface(REFIID iid, void **ppvObject)
 STDMETHODIMP VBoxDnDDropSource::QueryContinueDrag(BOOL fEscapePressed, DWORD dwKeyState)
 {
 #if 1
-    LogFlowFunc(("fEscapePressed=%RTbool, dwKeyState=0x%x, mdwCurEffect=%RI32, muCurAction=%RU32\n",
-                 fEscapePressed, dwKeyState, mdwCurEffect, muCurAction));
+    LogFlowFunc(("fEscapePressed=%RTbool, dwKeyState=0x%x, mdwCurEffect=%RI32, mDnDActionCurrent=%RU32\n",
+                 fEscapePressed, dwKeyState, m_dwCurEffect, m_enmActionCurrent));
 #endif
 
     /* ESC pressed? Bail out. */
     if (fEscapePressed)
     {
-        mdwCurEffect = 0;
-        muCurAction = DND_IGNORE_ACTION;
+        m_dwCurEffect = 0;
+        m_enmActionCurrent = VBOX_DND_ACTION_IGNORE;
 
         LogFlowFunc(("Canceled\n"));
         return DRAGDROP_S_CANCEL;
@@ -128,7 +129,7 @@ STDMETHODIMP VBoxDnDDropSource::QueryContinueDrag(BOOL fEscapePressed, DWORD dwK
  */
 STDMETHODIMP VBoxDnDDropSource::GiveFeedback(DWORD dwEffect)
 {
-    uint32_t uAction = DND_IGNORE_ACTION;
+    uint32_t uAction = VBOX_DND_ACTION_IGNORE;
 
 #if 1
     LogFlowFunc(("dwEffect=0x%x\n", dwEffect));
@@ -136,15 +137,15 @@ STDMETHODIMP VBoxDnDDropSource::GiveFeedback(DWORD dwEffect)
     if (dwEffect)
     {
         if (dwEffect & DROPEFFECT_COPY)
-            uAction |= DND_COPY_ACTION;
+            uAction |= VBOX_DND_ACTION_COPY;
         if (dwEffect & DROPEFFECT_MOVE)
-            uAction |= DND_MOVE_ACTION;
+            uAction |= VBOX_DND_ACTION_MOVE;
         if (dwEffect & DROPEFFECT_LINK)
-            uAction |= DND_LINK_ACTION;
+            uAction |= VBOX_DND_ACTION_LINK;
     }
 
-    mdwCurEffect = dwEffect;
-    muCurAction = uAction;
+    m_dwCurEffect = dwEffect;
+    m_enmActionCurrent = uAction;
 
     return DRAGDROP_S_USEDEFAULTCURSORS;
 }

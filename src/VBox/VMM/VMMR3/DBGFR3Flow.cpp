@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFR3Flow.cpp 90784 2021-08-23 09:42:32Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, Control Flow Graph Interface (CFG).
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -43,11 +43,6 @@
 #include <iprt/sort.h>
 #include <iprt/strcache.h>
 
-/*********************************************************************************************************************************
-*   Defined Constants And Macros                                                                                                 *
-*********************************************************************************************************************************/
-
-
 
 /*********************************************************************************************************************************
 *   Structures and Typedefs                                                                                                      *
@@ -72,6 +67,8 @@ typedef struct DBGFFLOWINT
     uint32_t                cBbs;
     /** Number of branch tables in this control flow graph. */
     uint32_t                cBranchTbls;
+    /** Number of call instructions in this control flow graph. */
+    uint32_t                cCallInsns;
     /** The lowest addres of a basic block. */
     DBGFADDRESS             AddrLowest;
     /** The highest address of a basic block. */
@@ -195,6 +192,7 @@ typedef struct DBGFFLOWBRANCHTBLITINT
 /** Pointer to the internal control flow graph branch table iterator state. */
 typedef DBGFFLOWBRANCHTBLITINT *PDBGFFLOWBRANCHTBLITINT;
 
+
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
 *********************************************************************************************************************************/
@@ -281,7 +279,7 @@ static RTGCUINTPTR dbgfR3FlowAddrGetDistance(PDBGFADDRESS pAddr1, PDBGFADDRESS p
 static PDBGFFLOWBBINT dbgfR3FlowBbCreate(PDBGFFLOWINT pThis, PDBGFADDRESS pAddrStart, uint32_t fFlowBbFlags,
                                          uint32_t cInstrMax)
 {
-    PDBGFFLOWBBINT pFlowBb = (PDBGFFLOWBBINT)RTMemAllocZ(RT_OFFSETOF(DBGFFLOWBBINT, aInstr[cInstrMax]));
+    PDBGFFLOWBBINT pFlowBb = (PDBGFFLOWBBINT)RTMemAllocZ(RT_UOFFSETOF_DYN(DBGFFLOWBBINT, aInstr[cInstrMax]));
     if (RT_LIKELY(pFlowBb))
     {
         RTListInit(&pFlowBb->NdFlowBb);
@@ -312,9 +310,11 @@ static PDBGFFLOWBBINT dbgfR3FlowBbCreate(PDBGFFLOWINT pThis, PDBGFADDRESS pAddrS
  * @param   idxGenRegBase       The general register index holding the base address.
  * @param   cSlots              Number of slots the table has.
  */
-static PDBGFFLOWBRANCHTBLINT dbgfR3FlowBranchTblCreate(PDBGFFLOWINT pThis, PDBGFADDRESS pAddrStart, uint8_t idxGenRegBase, uint32_t cSlots)
+static PDBGFFLOWBRANCHTBLINT
+dbgfR3FlowBranchTblCreate(PDBGFFLOWINT pThis, PDBGFADDRESS pAddrStart, uint8_t idxGenRegBase,  uint32_t cSlots)
 {
-    PDBGFFLOWBRANCHTBLINT pBranchTbl = (PDBGFFLOWBRANCHTBLINT)RTMemAllocZ(RT_OFFSETOF(DBGFFLOWBRANCHTBLINT, aAddresses[cSlots]));
+    PDBGFFLOWBRANCHTBLINT pBranchTbl = (PDBGFFLOWBRANCHTBLINT)RTMemAllocZ(RT_UOFFSETOF_DYN(DBGFFLOWBRANCHTBLINT,
+                                                                                           aAddresses[cSlots]));
     if (RT_LIKELY(pBranchTbl))
     {
         RTListInit(&pBranchTbl->NdBranchTbl);
@@ -596,7 +596,7 @@ static int dbgfR3FlowBbSplit(PDBGFFLOWINT pThis, PDBGFFLOWBBINT pFlowBb, PDBGFAD
             rc = VERR_NO_MEMORY;
     }
     else
-        AssertFailedStmt(rc = VERR_INVALID_STATE); /** @todo: Proper status code. */
+        AssertFailedStmt(rc = VERR_INVALID_STATE); /** @todo Proper status code. */
 
     return rc;
 }
@@ -772,7 +772,7 @@ static bool dbgfR3FlowSearchMovWithConstantPtrSizeBackwards(PDBGFFLOWBBINT pFlow
 
     for (;;)
     {
-        /** @todo: Avoid to disassemble again. */
+        /** @todo Avoid to disassemble again. */
         PDBGFFLOWBBINSTR pInstr = &pFlowBb->aInstr[idxInstrCur];
         DBGFDISSTATE DisState;
         char szOutput[_4K];
@@ -1092,7 +1092,7 @@ static int dbgfR3FlowBbCheckBranchTblCandidate(PDBGFFLOWINT pThis, PDBGFFLOWBBIN
                 pFlowBb->pFlowBranchTbl = NULL;
                 rc = dbgfR3FlowTryResolveIndirectBranch(pThis, pFlowBb, pUVM, idCpu, pDisParam, fFlagsDisasm);
             }
-            /** @todo: else check that the base register is not modified in this basic block. */
+            /** @todo else check that the base register is not modified in this basic block. */
         }
         else
             dbgfR3FlowBbSetError(pFlowBb, VERR_INVALID_STATE,
@@ -1149,19 +1149,37 @@ static int dbgfR3FlowBbProcess(PUVM pUVM, VMCPUID idCpu, PDBGFFLOWINT pThis, PDB
             break;
         }
 
-        pFlowBb->fFlags &= ~DBGF_FLOW_BB_F_EMPTY;
-
         rc = dbgfR3DisasInstrStateEx(pUVM, idCpu, &AddrDisasm, fFlags,
                                      &szOutput[0], sizeof(szOutput), &DisState);
         if (RT_SUCCESS(rc))
         {
+            if (   pThis->fFlags & DBGF_FLOW_CREATE_F_CALL_INSN_SEPARATE_BB
+                && DisState.pCurInstr->uOpcode == OP_CALL
+                && !(pFlowBb->fFlags & DBGF_FLOW_BB_F_EMPTY))
+            {
+                /*
+                 * If the basic block is not empty, the basic block is terminated and the successor is added
+                 * which will contain the call instruction.
+                 */
+                pFlowBb->AddrTarget = AddrDisasm;
+                pFlowBb->enmEndType = DBGFFLOWBBENDTYPE_UNCOND;
+                rc = dbgfR3FlowBbSuccessorAdd(pThis, &AddrDisasm,
+                                              (pFlowBb->fFlags & DBGF_FLOW_BB_F_BRANCH_TABLE),
+                                              pFlowBb->pFlowBranchTbl);
+                if (RT_FAILURE(rc))
+                    dbgfR3FlowBbSetError(pFlowBb, rc, "Adding successor blocks failed with %Rrc", rc);
+                break;
+            }
+
+            pFlowBb->fFlags &= ~DBGF_FLOW_BB_F_EMPTY;
             cbDisasmLeft -= DisState.cbInstr;
 
             if (pFlowBb->cInstr == pFlowBb->cInstrMax)
             {
                 /* Reallocate. */
                 RTListNodeRemove(&pFlowBb->NdFlowBb);
-                PDBGFFLOWBBINT pFlowBbNew = (PDBGFFLOWBBINT)RTMemRealloc(pFlowBb, RT_OFFSETOF(DBGFFLOWBBINT, aInstr[pFlowBb->cInstrMax + 10]));
+                PDBGFFLOWBBINT pFlowBbNew = (PDBGFFLOWBBINT)RTMemRealloc(pFlowBb,
+                                                                         RT_UOFFSETOF_DYN(DBGFFLOWBBINT, aInstr[pFlowBb->cInstrMax + 10]));
                 if (pFlowBbNew)
                 {
                     pFlowBbNew->cInstrMax += 10;
@@ -1192,6 +1210,9 @@ static int dbgfR3FlowBbProcess(PUVM pUVM, VMCPUID idCpu, PDBGFFLOWINT pThis, PDB
                 if (DisState.pCurInstr->fOpType & DISOPTYPE_CONTROLFLOW)
                 {
                     uint16_t uOpc = DisState.pCurInstr->uOpcode;
+
+                    if (uOpc == OP_CALL)
+                        pThis->cCallInsns++;
 
                     if (   uOpc == OP_RETN || uOpc == OP_RETF || uOpc == OP_IRET
                         || uOpc == OP_SYSEXIT || uOpc == OP_SYSRET)
@@ -1254,7 +1275,7 @@ static int dbgfR3FlowBbProcess(PUVM pUVM, VMCPUID idCpu, PDBGFFLOWINT pThis, PDB
                                                       pFlowBb->pFlowBranchTbl);
                         if (RT_SUCCESS(rc))
                         {
-                            rc = dbgfR3FlowQueryDirectBranchTarget(pUVM, idCpu, &DisState.Param1, &pInstr->AddrInstr, pInstr->cbInstr, 
+                            rc = dbgfR3FlowQueryDirectBranchTarget(pUVM, idCpu, &DisState.Param1, &pInstr->AddrInstr, pInstr->cbInstr,
                                                                    RT_BOOL(DisState.pCurInstr->fOpType & DISOPTYPE_RELATIVE_CONTROLFLOW),
                                                                    &pFlowBb->AddrTarget);
                             if (RT_SUCCESS(rc))
@@ -1263,12 +1284,33 @@ static int dbgfR3FlowBbProcess(PUVM pUVM, VMCPUID idCpu, PDBGFFLOWINT pThis, PDB
                                                               pFlowBb->pFlowBranchTbl);
                         }
                     }
+                    else if (pThis->fFlags & DBGF_FLOW_CREATE_F_CALL_INSN_SEPARATE_BB)
+                    {
+                        pFlowBb->enmEndType = DBGFFLOWBBENDTYPE_UNCOND;
+                        pFlowBb->fFlags    |= DBGF_FLOW_BB_F_CALL_INSN;
+
+                        /* Add new basic block coming after the call instruction. */
+                        rc = dbgfR3FlowBbSuccessorAdd(pThis, &AddrDisasm,
+                                                      (pFlowBb->fFlags & DBGF_FLOW_BB_F_BRANCH_TABLE),
+                                                      pFlowBb->pFlowBranchTbl);
+                        if (   RT_SUCCESS(rc)
+                            && !dbgfR3FlowBranchTargetIsIndirect(&DisState.Param1))
+                        {
+                            /* Resolve the branch target. */
+                            rc = dbgfR3FlowQueryDirectBranchTarget(pUVM, idCpu, &DisState.Param1, &pInstr->AddrInstr, pInstr->cbInstr,
+                                                                   RT_BOOL(DisState.pCurInstr->fOpType & DISOPTYPE_RELATIVE_CONTROLFLOW),
+                                                                   &pFlowBb->AddrTarget);
+                            if (RT_SUCCESS(rc))
+                                pFlowBb->fFlags |= DBGF_FLOW_BB_F_CALL_INSN_TARGET_KNOWN;
+                        }
+                    }
 
                     if (RT_FAILURE(rc))
                         dbgfR3FlowBbSetError(pFlowBb, rc, "Adding successor blocks failed with %Rrc", rc);
 
                     /* Quit disassembling. */
-                    if (   uOpc != OP_CALL
+                    if (   (   uOpc != OP_CALL
+                            || (pThis->fFlags & DBGF_FLOW_CREATE_F_CALL_INSN_SEPARATE_BB))
                         || RT_FAILURE(rc))
                         break;
                 }
@@ -1290,19 +1332,15 @@ static int dbgfR3FlowBbProcess(PUVM pUVM, VMCPUID idCpu, PDBGFFLOWINT pThis, PDB
  * @param   pUVM                The user mode VM handle.
  * @param   idCpu               CPU id for disassembling.
  * @param   pThis               The control flow graph to populate.
- * @param   pAddrStart          The start address to disassemble at.
  * @param   cbDisasmMax         The maximum amount to disassemble.
  * @param   fFlags              Combination of DBGF_DISAS_FLAGS_*.
  */
-static int dbgfR3FlowPopulate(PUVM pUVM, VMCPUID idCpu, PDBGFFLOWINT pThis, PDBGFADDRESS pAddrStart,
-                             uint32_t cbDisasmMax, uint32_t fFlags)
+static int dbgfR3FlowPopulate(PUVM pUVM, VMCPUID idCpu, PDBGFFLOWINT pThis, uint32_t cbDisasmMax, uint32_t fFlags)
 {
     int rc = VINF_SUCCESS;
     PDBGFFLOWBBINT pFlowBb = dbgfR3FlowGetUnpopulatedBb(pThis);
-    DBGFADDRESS AddrEnd = *pAddrStart;
-    DBGFR3AddrAdd(&AddrEnd, cbDisasmMax);
 
-    while (VALID_PTR(pFlowBb))
+    while (pFlowBb != NULL)
     {
         rc = dbgfR3FlowBbProcess(pUVM, idCpu, pThis, pFlowBb, cbDisasmMax, fFlags);
         if (RT_FAILURE(rc))
@@ -1350,6 +1388,7 @@ VMMR3DECL(int) DBGFR3FlowCreate(PUVM pUVM, VMCPUID idCpu, PDBGFADDRESS pAddressS
             pThis->cRefsBb     = 0;
             pThis->cBbs        = 0;
             pThis->cBranchTbls = 0;
+            pThis->cCallInsns  = 0;
             pThis->fFlags      = fFlagsFlow;
             RTListInit(&pThis->LstFlowBb);
             RTListInit(&pThis->LstBranchTbl);
@@ -1359,7 +1398,7 @@ VMMR3DECL(int) DBGFR3FlowCreate(PUVM pUVM, VMCPUID idCpu, PDBGFADDRESS pAddressS
             if (RT_LIKELY(pFlowBb))
             {
                 dbgfR3FlowLink(pThis, pFlowBb);
-                rc = dbgfR3FlowPopulate(pUVM, idCpu, pThis, pAddressStart, cbDisasmMax, fFlagsDisasm);
+                rc = dbgfR3FlowPopulate(pUVM, idCpu, pThis, cbDisasmMax, fFlagsDisasm);
                 if (RT_SUCCESS(rc))
                 {
                     *phFlow = pThis;
@@ -1538,6 +1577,22 @@ VMMR3DECL(uint32_t) DBGFR3FlowGetBranchTblCount(DBGFFLOW hFlow)
 
 
 /**
+ * Returns the number of call instructions encountered in the given
+ * control flow graph.
+ *
+ * @returns Number of call instructions.
+ * @param   hFlow                The control flow graph handle.
+ */
+VMMR3DECL(uint32_t) DBGFR3FlowGetCallInsnCount(DBGFFLOW hFlow)
+{
+    PDBGFFLOWINT pThis = hFlow;
+    AssertPtrReturn(pThis, 0);
+
+    return pThis->cCallInsns;
+}
+
+
+/**
  * Retains the basic block handle.
  *
  * @returns Current reference count.
@@ -1613,10 +1668,12 @@ VMMR3DECL(PDBGFADDRESS) DBGFR3FlowBbGetEndAddress(DBGFFLOWBB hFlowBb, PDBGFADDRE
  * @param   hFlowBb             The basic block handle.
  * @param   pAddrTarget         Where to store the branch address of the basic block.
  *
- * @note This is only valid for unconditional or conditional branches and will assert
- *       for every other basic block type.
+ * @note This is only valid for unconditional or conditional branches, or for a basic block
+ *       containing only a call instruction when DBGF_FLOW_CREATE_F_CALL_INSN_SEPARATE_BB was given
+ *       during creation and the branch target could be deduced as indicated by the DBGF_FLOW_BB_F_CALL_INSN_TARGET_KNOWN
+ *       flag for the basic block. This method will assert for every other basic block type.
  * @note For indirect unconditional branches using a branch table this will return the start address
- *       of the branch table. 
+ *       of the branch table.
  */
 VMMR3DECL(PDBGFADDRESS) DBGFR3FlowBbGetBranchAddress(DBGFFLOWBB hFlowBb, PDBGFADDRESS pAddrTarget)
 {
@@ -1625,7 +1682,9 @@ VMMR3DECL(PDBGFADDRESS) DBGFR3FlowBbGetBranchAddress(DBGFFLOWBB hFlowBb, PDBGFAD
     AssertPtrReturn(pAddrTarget, NULL);
     AssertReturn(   pFlowBb->enmEndType == DBGFFLOWBBENDTYPE_UNCOND_JMP
                  || pFlowBb->enmEndType == DBGFFLOWBBENDTYPE_COND
-                 || pFlowBb->enmEndType == DBGFFLOWBBENDTYPE_UNCOND_INDIRECT_JMP,
+                 || pFlowBb->enmEndType == DBGFFLOWBBENDTYPE_UNCOND_INDIRECT_JMP
+                 || (   pFlowBb->enmEndType == DBGFFLOWBBENDTYPE_UNCOND
+                     && (pFlowBb->fFlags & DBGF_FLOW_BB_F_CALL_INSN_TARGET_KNOWN)),
                  NULL);
 
     if (   pFlowBb->enmEndType == DBGFFLOWBBENDTYPE_UNCOND_INDIRECT_JMP
@@ -2034,7 +2093,7 @@ VMMR3DECL(int) DBGFR3FlowItCreate(DBGFFLOW hFlow, DBGFFLOWITORDER enmOrder, PDBG
                  VERR_INVALID_PARAMETER);
     AssertReturn(enmOrder < DBGFFLOWITORDER_DEPTH_FRIST, VERR_NOT_IMPLEMENTED); /** @todo */
 
-    PDBGFFLOWITINT pIt = (PDBGFFLOWITINT)RTMemAllocZ(RT_OFFSETOF(DBGFFLOWITINT, apBb[pFlow->cBbs]));
+    PDBGFFLOWITINT pIt = (PDBGFFLOWITINT)RTMemAllocZ(RT_UOFFSETOF_DYN(DBGFFLOWITINT, apBb[pFlow->cBbs]));
     if (RT_LIKELY(pIt))
     {
         DBGFR3FlowRetain(hFlow);
@@ -2171,7 +2230,8 @@ VMMR3DECL(int) DBGFR3FlowBranchTblItCreate(DBGFFLOW hFlow, DBGFFLOWITORDER enmOr
                  VERR_INVALID_PARAMETER);
     AssertReturn(enmOrder < DBGFFLOWITORDER_DEPTH_FRIST, VERR_NOT_SUPPORTED);
 
-    PDBGFFLOWBRANCHTBLITINT pIt = (PDBGFFLOWBRANCHTBLITINT)RTMemAllocZ(RT_OFFSETOF(DBGFFLOWBRANCHTBLITINT, apBranchTbl[pFlow->cBranchTbls]));
+    PDBGFFLOWBRANCHTBLITINT pIt = (PDBGFFLOWBRANCHTBLITINT)RTMemAllocZ(RT_UOFFSETOF_DYN(DBGFFLOWBRANCHTBLITINT,
+                                                                                        apBranchTbl[pFlow->cBranchTbls]));
     if (RT_LIKELY(pIt))
     {
         DBGFR3FlowRetain(hFlow);

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCertUtil.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxCertUtil - VBox Certificate Utility - Windows Only.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,26 +16,28 @@
  */
 
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <iprt/win/windows.h>
 #include <Wincrypt.h>
 
 #include <iprt/buildconfig.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/file.h>
 #include <iprt/getopt.h>
 #include <iprt/initterm.h>
 #include <iprt/message.h>
+#include <iprt/path.h>
 #include <iprt/stream.h>
 #include <iprt/string.h>
 #include <iprt/time.h>
+#include <iprt/utf16.h>
 
 
-/*******************************************************************************
-*   Global Variables                                                           *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
+*********************************************************************************************************************************/
 /** The verbosity level. */
 static unsigned  g_cVerbosityLevel = 1;
 
@@ -99,12 +101,9 @@ static const char *errorToString(DWORD dwErr)
         MY_CASE(CRYPT_E_OSS_ERROR);
         default:
         {
-            PCRTCOMERRMSG pWinComMsg = RTErrCOMGet(dwErr);
-            if (pWinComMsg)
-                return pWinComMsg->pszDefine;
-
-            static char s_szErr[32];
-            RTStrPrintf(s_szErr, sizeof(s_szErr), "%#x (%d)", dwErr, dwErr);
+            static char s_szErr[80];
+            if (RTErrWinQueryDefine(dwErr, s_szErr, sizeof(s_szErr), true /*fFailIfUnknown*/) == VERR_NOT_FOUND)
+                RTStrPrintf(s_szErr, sizeof(s_szErr), "%#x (%d)", dwErr, dwErr);
             return s_szErr;
         }
     }
@@ -389,9 +388,7 @@ static bool addCertToStore(DWORD dwDst, const char *pszStoreNm, const char *pszC
                 RTMsgError("CertAddCertificateContextToStore returned %s", errorToString(GetLastError()));
         }
         else
-        {
             RTMsgError("Path not implemented at line %d\n",  __LINE__);
-        }
 
         CertCloseStore(hDstStore, CERT_CLOSE_STORE_CHECK_FLAG);
     }
@@ -406,7 +403,7 @@ static bool addCertToStore(DWORD dwDst, const char *pszStoreNm, const char *pszC
  * Worker for cmdDisplayAll.
  */
 static BOOL WINAPI displaySystemStoreCallback(const void *pvSystemStore, DWORD dwFlags, PCERT_SYSTEM_STORE_INFO pStoreInfo,
-                                              void *pvReserved, void *pvArg)
+                                              void *pvReserved, void *pvArg) RT_NOTHROW_DEF
 {
     RT_NOREF(pvArg);
     if (g_cVerbosityLevel > 1)
@@ -484,7 +481,8 @@ static BOOL WINAPI displaySystemStoreCallback(const void *pvSystemStore, DWORD d
 /**
  * Worker for cmdDisplayAll.
  */
-static BOOL WINAPI displaySystemStoreLocation(LPCWSTR pwszStoreLocation, DWORD dwFlags, void *pvReserved, void *pvArg)
+static BOOL WINAPI
+displaySystemStoreLocation(LPCWSTR pwszStoreLocation, DWORD dwFlags, void *pvReserved, void *pvArg) RT_NOTHROW_DEF
 {
     NOREF(pvReserved); NOREF(pvArg);
     RTPrintf("System store location: %#010x '%ls'\n", dwFlags, pwszStoreLocation);
@@ -591,20 +589,19 @@ static RTEXITCODE cmdRemoveTrustedPublisher(int argc, char **argv)
 static RTEXITCODE cmdAddTrustedPublisher(int argc, char **argv)
 {
     /*
-     * Parse arguments.
+     * Parse arguments and execute imports as we move along.
      */
     static const RTGETOPTDEF s_aOptions[] =
     {
         { "--root",     'r',    RTGETOPT_REQ_STRING },
     };
 
-    const char *pszRootCert    = NULL;
-    const char *pszTrustedCert = NULL;
-
-    int             rc;
-    RTGETOPTUNION   ValueUnion;
-    RTGETOPTSTATE   GetState;
-    RTGetOptInit(&GetState, argc, argv, s_aOptions, RT_ELEMENTS(s_aOptions), 1, 0);
+    RTEXITCODE          rcExit = RTEXITCODE_SUCCESS;
+    unsigned            cImports = 0;
+    RTGETOPTUNION       ValueUnion;
+    RTGETOPTSTATE       GetState;
+    int rc = RTGetOptInit(&GetState, argc, argv, s_aOptions, RT_ELEMENTS(s_aOptions), 1, 0);
+    AssertRC(rc);
     while ((rc = RTGetOpt(&GetState, &ValueUnion)))
     {
         switch (rc)
@@ -618,47 +615,39 @@ static RTEXITCODE cmdAddTrustedPublisher(int argc, char **argv)
                 return RTEXITCODE_SUCCESS;
 
             case 'r':
-                if (pszRootCert)
-                    return RTMsgErrorExit(RTEXITCODE_SUCCESS,
-                                          "You've already specified '%s' as root certificate.",
-                                          pszRootCert);
-                pszRootCert = ValueUnion.psz;
-                break;
-
             case VINF_GETOPT_NOT_OPTION:
-                if (pszTrustedCert)
-                    return RTMsgErrorExit(RTEXITCODE_SUCCESS,
-                                          "You've already specified '%s' as trusted certificate.",
-                                          pszTrustedCert);
-                pszTrustedCert = ValueUnion.psz;
+            {
+                const char * const  pszStoreNm   = rc == 'r' ? "Root" : "TrustedPublisher";
+                const char * const  pszStoreDesc = rc == 'r' ? "root" : "trusted publisher";
+                PCRTPATHGLOBENTRY   pResultHead;
+                rc = RTPathGlob(ValueUnion.psz, RTPATHGLOB_F_NO_DIRS, &pResultHead, NULL);
+                if (RT_SUCCESS(rc))
+                {
+                    for (PCRTPATHGLOBENTRY pCur = pResultHead; pCur; pCur = pCur->pNext)
+                    {
+                        if (addCertToStore(CERT_SYSTEM_STORE_LOCAL_MACHINE, pszStoreNm, pCur->szPath, CERT_STORE_ADD_NEW))
+                            RTMsgInfo("Successfully added '%s' as %s", pCur->szPath, pszStoreDesc);
+                        else
+                            rcExit = RTEXITCODE_FAILURE;
+                        cImports++;
+                    }
+                    RTPathGlobFree(pResultHead);
+                }
+                else
+                {
+                    rcExit = RTMsgErrorExit(RTEXITCODE_SUCCESS, "glob failed on '%s': %Rrc", ValueUnion.psz, rc);
+                    cImports++;
+                }
                 break;
+            }
 
             default:
                 return RTGetOptPrintError(rc, &ValueUnion);
         }
     }
-    if (!pszTrustedCert)
-        return RTMsgErrorExit(RTEXITCODE_SUCCESS, "No trusted certificate specified.");
-
-    /*
-     * Do the job.
-     */
-    /** @todo The root-cert part needs to be made more flexible. */
-    if (   pszRootCert
-        && !addCertToStore(CERT_SYSTEM_STORE_LOCAL_MACHINE, "Root", pszRootCert, CERT_STORE_ADD_NEW))
-        return RTEXITCODE_FAILURE;
-
-    if (!addCertToStore(CERT_SYSTEM_STORE_LOCAL_MACHINE, "TrustedPublisher", pszTrustedCert, CERT_STORE_ADD_NEW))
-        return RTEXITCODE_FAILURE;
-
-    if (g_cVerbosityLevel > 0)
-    {
-        if (pszRootCert)
-            RTMsgInfo("Successfully added '%s' as root and '%s' as trusted publisher", pszRootCert, pszTrustedCert);
-        else
-            RTMsgInfo("Successfully added '%s' as trusted publisher", pszTrustedCert);
-    }
-    return RTEXITCODE_SUCCESS;
+    if (cImports == 0)
+        return RTMsgErrorExit(RTEXITCODE_SUCCESS, "No trusted or root certificates specified.");
+    return rcExit;
 }
 
 

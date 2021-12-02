@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,17 +23,20 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_list_off32_h
-#define ___iprt_list_off32_h
+#ifndef IPRT_INCLUDED_list_off32_h
+#define IPRT_INCLUDED_list_off32_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
-/* @defgroup grp_rt_list_off32 RTListOff32 - Generic Doubly Linked List based on 32-bit offset.
+/** @defgroup grp_rt_list_off32 RTListOff32 - Generic Doubly Linked List based on 32-bit offset.
  * @ingroup grp_rt
  *
- * This is the same as @link grp_rt_list, except that instead of pointers we
- * use 32-bit offsets.  The list implementation is circular, with a dummy node
- * as anchor.  Be careful with the dummy node when walking the list.
+ * This is the same as @ref grp_rt_list , except that instead of pointers we use
+ * 32-bit offsets.  The list implementation is circular, with a dummy node as
+ * anchor.  Be careful with the dummy node when walking the list.
  *
  * @{
  */
@@ -494,9 +497,8 @@ DECLINLINE(void) RTListOff32Concatenate(PRTLISTOFF32ANCHOR pListDst, PRTLISTOFF3
     }
 }
 
+/** @} */
 RT_C_DECLS_END
 
-/** @} */
-
-#endif
+#endif /* !IPRT_INCLUDED_list_off32_h */
 

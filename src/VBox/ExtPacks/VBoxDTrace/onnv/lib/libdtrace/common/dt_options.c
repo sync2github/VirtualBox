@@ -45,7 +45,7 @@
 #  include <sys/resource.h>
 #  include <unistd.h>
 #  include <signal.h>
-#  if defined(RT_OS_DARWIN)
+#  if defined(RT_OS_DARWIN) || defined(RT_OS_FREEBSD)
 #   define open64 open
 #  endif
 # else
@@ -55,7 +55,11 @@
 # endif
 # include <fcntl.h>
 # include <stdlib.h>
+# include <iprt/err.h>
 
+# if RT_GNUC_PREREQ(10, 0)
+#  pragma GCC diagnostic ignored "-Walloca-larger-than="
+# endif
 #endif /* VBOX */
 
 #include <dt_impl.h>
@@ -641,19 +645,19 @@ dt_optval_parse(const char *arg, dtrace_optval_t *rval)
 	case 't':
 	case 'T':
 		mul *= 1024;
-		/*FALLTHRU*/
+		RT_FALL_THRU();
 	case 'g':
 	case 'G':
 		mul *= 1024;
-		/*FALLTHRU*/
+		RT_FALL_THRU();
 	case 'm':
 	case 'M':
 		mul *= 1024;
-		/*FALLTHRU*/
+		RT_FALL_THRU();
 	case 'k':
 	case 'K':
 		mul *= 1024;
-		/*FALLTHRU*/
+		RT_FALL_THRU();
 	default:
 		break;
 	}

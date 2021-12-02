@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTR0DbgKrnlInfo.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT R0 Testcase - Debug kernel information, common header.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,6 +24,12 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
+#ifndef IPRT_INCLUDED_SRC_testcase_tstRTR0DbgKrnlInfo_h
+#define IPRT_INCLUDED_SRC_testcase_tstRTR0DbgKrnlInfo_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
 #ifdef IN_RING0
 RT_C_DECLS_BEGIN
 DECLEXPORT(int) TSTR0DbgKrnlInfoSrvReqHandler(PSUPDRVSESSION pSession, uint32_t uOperation,
@@ -37,4 +43,6 @@ typedef enum TSTR0DBGKRNLINFO
     TSTRTR0DBGKRNLINFO_SANITY_FAILURE,
     TSTRTR0DBGKRNLINFO_BASIC
 } TSTR0DBGKRNLINFO;
+
+#endif /* !IPRT_INCLUDED_SRC_testcase_tstRTR0DbgKrnlInfo_h */
 

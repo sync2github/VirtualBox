@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 84541 2020-05-26 15:52:19Z vboxsync $
 ## @file
 # Sub-Makefile for the Network Filter Driver (VBoxNetFlt).
 #
 
 #
-# Copyright (C) 2008-2016 Oracle Corporation
+# Copyright (C) 2008-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
 # Foundation, in version 2 as it comes in the "COPYING" file of the
 # VirtualBox OSE distribution. VirtualBox OSE is distributed in the
 # hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+# The contents of this file may alternatively be used under the terms
+# of the Common Development and Distribution License Version 1.0
+# (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+# VirtualBox OSE distribution, in which case the provisions of the
+# CDDL are applicable instead of those of the GPL.
+#
+# You may elect to license modified versions of this file under the
+# terms and conditions of either the GPL or the CDDL or both.
 #
 
 SUB_DEPTH = ../../../..
@@ -104,7 +113,7 @@ ifeq ($(KBUILD_TARGET),win)
  # Windows extras.
  #
  INSTALLS.win += VBoxNetFlt-inf
- VBoxNetFlt-inf_INST = $(INST_BIN)
+ VBoxNetFlt-inf_TEMPLATE = VBoxR0DrvInfCat
  VBoxNetFlt-inf_SOURCES = \
  	$(PATH_TARGET)/VBoxNetFltCat.dir/VBoxNetFlt.inf \
  	$(PATH_TARGET)/VBoxNetFltCat.dir/VBoxNetFltM.inf
@@ -184,7 +193,7 @@ $(PATH_TARGET)/VBoxNetFltCat.dir/VBoxNetFlt.cat: \
  # VBoxNetLwf installation.
  #
  INSTALLS.win += VBoxNetLwf-inf
- VBoxNetLwf-inf_INST = $(INST_BIN)
+ VBoxNetLwf-inf_TEMPLATE = VBoxR0DrvInfCat
  VBoxNetLwf-inf_SOURCES = \
  	$(PATH_TARGET)/VBoxNetLwfCat.dir/VBoxNetLwf.inf
  VBoxNetLwf-inf_CLEAN = $(VBoxNetLwf-inf_SOURCES)
@@ -197,7 +206,8 @@ $(PATH_TARGET)/VBoxNetLwfCat.dir/VBoxNetLwf.inf: $(PATH_SUB_CURRENT)/win/drv/VBo
  ifdef VBOX_SIGNING_MODE
 VBoxNetLwf-inf_SOURCES += \
 	$(PATH_TARGET)/VBoxNetLwfCat.dir/VBoxNetLwf.sys \
-	$(PATH_TARGET)/VBoxNetLwfCat.dir/VBoxNetLwf.cat
+	$(PATH_TARGET)/VBoxNetLwfCat.dir/VBoxNetLwf.cat \
+	$(PATH_TARGET)/VBoxNetLwfCat.dir/VBoxNetLwf.cat=>VBoxNetLwf-PreW10.cat
 
 #	$(PATH_TARGET)/VBoxNetLwfCat.dir/VBoxNetLwfNobj.dll \
 
@@ -222,11 +232,20 @@ $(PATH_TARGET)/VBoxNetLwfCat.dir/VBoxNetLwf.cat: \
  #
  LIBRARIES.win += WinNetConfig
  WinNetConfig_TEMPLATE = VBOXR3STATIC
- WinNetConfig_DEFS     = _WIN32_WINNT=0x0501 _UNICODE UNICODE
  WinNetConfig_SDKS     = ReorderCompilerIncs $(VBOX_WINPSDK) $(VBOX_WINDDK)
- WinNetConfig_SOURCES  = \
- 	win/cfg/VBoxNetCfg.cpp
- WinNetConfig_INCS.win += $(PATH_TOOL_$(VBOX_VCC_TOOL)_INC)
+ WinNetConfig_DEFS     = _WIN32_WINNT=0x0501 _UNICODE UNICODE
+ WinNetConfig_INCS.win = $(PATH_TOOL_$(VBOX_VCC_TOOL)_INC)
+ WinNetConfig_SOURCES  = win/cfg/VBoxNetCfg.cpp
+
+ #
+ # WinNetConfigNonStatic - static library with host network interface config API
+ #
+ LIBRARIES.win += WinNetConfigNonStatic
+ WinNetConfigNonStatic_TEMPLATE = VBoxR3Dll
+ WinNetConfigNonStatic_SDKS     = ReorderCompilerIncs $(VBOX_WINPSDK) $(VBOX_WINDDK)
+ WinNetConfigNonStatic_DEFS     = _WIN32_WINNT=0x0501 _UNICODE UNICODE
+ WinNetConfigNonStatic_INCS.win = $(PATH_TOOL_$(VBOX_VCC_TOOL)_INC)
+ WinNetConfigNonStatic_SOURCES  = win/cfg/VBoxNetCfg.cpp
 
  #
  # NetFltInstall
@@ -381,11 +400,19 @@ $$(VBoxNetFltNobj_0_OUTDIR)/VBoxNetFltNobjT_i.c \
 + $$(VBoxNetFltNobj_0_OUTDIR)/VBoxNetFltNobjT.tlb: \
 		$(PATH_SUB_CURRENT)/win/nobj/VBoxNetFltNobjT.idl \
 		| $$(dir $$@)
-	$(VBOX_WIN_MIDL) /nologo \
+ifdef KMK_WITH_QUOTING
+	$(VBOX_MIDL_REDIRECT) $(VBOX_WIN_MIDL) /nologo \
 		/out $(call VBOX_FN_MAKE_WIN_PATH,$(VBoxNetFltNobj_0_OUTDIR)) \
-		/cpp_cmd $(subst $(EXEC_X86_WIN32),,$(call VBOX_FN_MAKE_WIN_PATH,$(TOOL_$(VBOX_VCC_TOOL)_CC))) \
-		$(addprefix /I , $(call VBOX_FN_MAKE_WIN_PATH,$(SDK_$(VBOX_WINDDK)_INCS))) \
+		/cpp_cmd $(VBOX_MIDL_CPP_CMD) \
+		$(qforeachfile unq, incdir, $(SDK_$(VBOX_WINDDK)_INCS),/I $(quote-sh $(incdir))) \
 		$(call VBOX_FN_MAKE_WIN_PATH,$<)
+else
+	$(VBOX_MIDL_REDIRECT) $(VBOX_WIN_MIDL) /nologo \
+		/out $(call VBOX_FN_MAKE_WIN_PATH,$(VBoxNetFltNobj_0_OUTDIR)) \
+		/cpp_cmd $(VBOX_MIDL_CPP_CMD) \
+		$(foreach incdir, $(SDK_$(VBOX_WINDDK)_INCS),/I $(call VBOX_FN_MAKE_WIN_PATH,$(incdir)) ) \
+		$(call VBOX_FN_MAKE_WIN_PATH,$<)
+endif
 
  #
  # VBoxNetAdp.sys - The VirtualBox Adapter miniport driver.
@@ -421,8 +448,7 @@ $$(VBoxNetFltNobj_0_OUTDIR)/VBoxNetFltNobjT_i.c \
 
 
  INSTALLS.win += VBoxNetAdp-inf
- VBoxNetAdp-inf_INST = $(INST_BIN)
- VBoxNetAdp-inf_MODE = a+r,u+w
+ VBoxNetAdp-inf_TEMPLATE = VBoxR0DrvInfCat
  VBoxNetAdp-inf_SOURCES = \
  	$(PATH_TARGET)/VBoxNetAdpCat.dir/VBoxNetAdp.inf
  VBoxNetAdp-inf_CLEAN = $(VBoxNetAdp-inf_SOURCES)
@@ -450,7 +476,7 @@ $(PATH_TARGET)/VBoxNetAdpCat.dir/VBoxNetAdp.cat: \
 
 endif #ifeq ($(KBUILD_TARGET), win)
 
-else if1of ($(KBUILD_TARGET), linux solaris freebsd) ## @todo merge this with the mixed case stuff.
+else if1of ($(KBUILD_TARGET), solaris freebsd) ## @todo merge this with the mixed case stuff.
 #
 # vboxnetflt(.ko/.o/) - The lower case driver.
 # Note! On Solaris the name has to be <= 8 chars long.
@@ -460,14 +486,8 @@ else if1of ($(KBUILD_TARGET), linux solaris freebsd) ## @todo merge this with th
   SYSMODS += vboxnetflt
   vboxnetflt_TEMPLATE      = VBOXR0DRV
   vboxnetflt_NAME.solaris  = vboxflt
-  vboxnetflt_DEFS.linux    = \
-	KBUILD_MODNAME=KBUILD_STR\(vboxnetflt\) \
-	KBUILD_BASENAME=KBUILD_STR\(vboxnetflt\) \
-	MODULE DEBUG_HASH=2 DEBUG_HASH2=3
   vboxnetflt_DEFS          = IN_RT_R0
   vboxnetflt_DEPS.solaris += $(VBOX_SVN_REV_KMK)
-  vboxnetflt_INCS.linux   := \
-  	$(PATH_ROOT)/src/VBox/Runtime/r0drv/linux
   vboxnetflt_INCS         := \
   	$(PATH_SUB_CURRENT)
   vboxnetflt_LDFLAGS.solaris += -N drv/vboxdrv -N misc/ctf
@@ -476,11 +496,9 @@ else if1of ($(KBUILD_TARGET), linux solaris freebsd) ## @todo merge this with th
   ## @todo vboxflt should resolves all the IPRT bits from vboxdrv.
   #vboxnetflt_LIBS += \
   #	$(PATH_STAGE_LIB)/RuntimeR0Drv$(VBOX_SUFF_LIB)
-  vboxnetflt_SOURCES.linux = linux/VBoxNetFlt-linux.c
   vboxnetflt_SOURCES.solaris = solaris/VBoxNetFlt-solaris.c
   vboxnetflt_SOURCES.freebsd = freebsd/VBoxNetFlt-freebsd.c
   vboxnetflt_SOURCES = VBoxNetFlt.c
-  linux/VBoxNetFlt-linux.c_DEPS = $(VBOX_SVN_REV_HEADER)
   solaris/VBoxNetFlt-solaris.c_DEFS = VBOX_SVN_REV=$(VBOX_SVN_REV)
 
   ifdef VBOX_WITH_NETFLT_CROSSBOW
@@ -524,13 +542,17 @@ ifeq ($(KBUILD_TARGET),linux)
 		| $$(dir $$@)
 	$(QUIET)$(RM) -f -- $@
  ifndef VBOX_WITH_HARDENING
-	$(QUIET)$(SED) -e "s;-DVBOX_WITH_HARDENING;;g" --output $@ $<
+	$(QUIET)$(SED) -e "s;VBOX_WITH_HARDENING;;g" --output $@ $<
  else
 	$(QUIET)$(CP) -f $< $@
  endif
 	%$(QUIET2)$(RM) -f -- $(PATH_TARGET)/VBoxNetFlt-src-1.dep
 	%$(QUIET2)$(APPEND) '$(PATH_TARGET)/VBoxNetFlt-src-1.dep' 'VBoxNetFlt/linux/Makefile_VBOX_HARDENED=$(VBOX_WITH_HARDENING)'
 
+ #
+ # Build test for the linux host kernel modules.
+ #
+ $(evalcall2 VBOX_LINUX_KMOD_TEST_BUILD_RULE_FN,VBoxNetFlt-src,vboxdrv-src,)
 endif # linux
 
 # Gross hack for FreeBSD 7, should figure this out properly
@@ -560,7 +582,7 @@ $(PATH_OUT)/opt_netgraph.h:
 	$(QUIET)$(RM) -f -- $@
 	$(QUIET)$(CP) -f $< $@
  ifndef VBOX_WITH_HARDENING
-	$(QUIET)$(SED) -e "s;-DVBOX_WITH_HARDENING;;g" --output $@.tmp $@
+	$(QUIET)$(SED) -e "s;VBOX_WITH_HARDENING;;g" --output $@.tmp $@
 	${QUIET}$(MV) -f $@.tmp $@
  endif
  ifndef VBOX_WITH_NETFLT_VIMAGE

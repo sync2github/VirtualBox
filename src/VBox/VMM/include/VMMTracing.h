@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VMMTracing.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxVMM - Trace point macros for the VMM.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,9 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-
-#ifndef ___VMMTracing_h___
-#define ___VMMTracing_h___
+#ifndef VMM_INCLUDED_SRC_include_VMMTracing_h
+#define VMM_INCLUDED_SRC_include_VMMTracing_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 /*******************************************************************************
@@ -116,11 +118,9 @@
 # else
 
 # endif
-#endif /* IN_RING0*/
+#endif /* IN_RING0 */
 /** @} */
 
 
-/** @} */
-
-#endif
+#endif /* !VMM_INCLUDED_SRC_include_VMMTracing_h */
 

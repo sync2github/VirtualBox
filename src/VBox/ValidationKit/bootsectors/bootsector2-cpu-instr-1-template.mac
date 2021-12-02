@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bootsector2-cpu-instr-1-template.mac 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; Bootsector test for misc instruction - multi mode template.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -94,8 +94,8 @@ BEGINPROC TMPL_NM(TestMemFences)
         db                                 X86_OP_PRF_SIZE_ADDR, 0fh, 0aeh, MY_RM
         BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_SIZE_OP,   0fh, 0aeh, MY_RM ; (used in group)
         BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_LOCK,      0fh, 0aeh, MY_RM ; (used in group)
-        BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_REPZ,      0fh, 0aeh, MY_RM ; (used in group)
         BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_REPNZ,     0fh, 0aeh, MY_RM ; (used in group)
+        BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_REPZ,      0fh, 0aeh, MY_RM ; (used in group)
 %ifdef TMPL_64BIT
  %assign MY_REX 0x40
  %rep 10h
@@ -110,8 +110,8 @@ BEGINPROC TMPL_NM(TestMemFences)
         db                                 X86_OP_PRF_SIZE_ADDR, MY_REX, 0fh, 0aeh, MY_RM
         BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_SIZE_OP,   MY_REX, 0fh, 0aeh, MY_RM ; (used in group)
         BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_LOCK,      MY_REX, 0fh, 0aeh, MY_RM ; (used in group)
-        BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_REPZ,      MY_REX, 0fh, 0aeh, MY_RM ; (used in group)
         BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_REPNZ,     MY_REX, 0fh, 0aeh, MY_RM ; (used in group)
+        BS2_TRAP_INSTR X86_XCPT_UD, 0,  db X86_OP_PRF_REPZ,      MY_REX, 0fh, 0aeh, MY_RM ; (used in group)
   %assign MY_REX (MY_REX + 1)
  %endrep
 %endif
@@ -311,5 +311,4 @@ TMPL_BEGINCODE
 BITS TMPL_BITS
 
 %include "bootsector2-template-footer.mac"
-
 

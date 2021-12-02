@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: TestExecServiceTcp.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * TestExecServ - Basic Remote Execution Service, TCP/IP Transport Layer.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -741,7 +741,7 @@ static DECLCALLBACK(int) txsTcpOption(int ch, PCRTGETOPTUNION pVal)
 
         case TXSTCPOPT_LEGACY_CONNECT:
             g_enmTcpMode = TXSTCPMODE_CLIENT;
-            /* fall thru */
+            RT_FALL_THRU();
         case TXSTCPOPT_CONNECT_ADDRESS:
             rc = RTStrCopy(g_szTcpConnectAddr, sizeof(g_szTcpConnectAddr), pVal->psz);
             if (RT_FAILURE(rc))

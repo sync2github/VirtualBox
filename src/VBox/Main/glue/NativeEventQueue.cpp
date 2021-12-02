@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: NativeEventQueue.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * MS COM / XPCOM Abstraction Layer:
  * Main event queue class declaration
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -599,8 +599,8 @@ int NativeEventQueue::interruptEventQueueProcessing()
 /**
  *  Posts an event to this event loop asynchronously.
  *
- *  @param  event   the event to post, must be allocated using |new|
- *  @return         TRUE if successful and false otherwise
+ *  @param  pEvent  the event to post, must be allocated using |new|
+ *  @return         @c TRUE if successful and false otherwise
  */
 BOOL NativeEventQueue::postEvent(NativeEvent *pEvent)
 {

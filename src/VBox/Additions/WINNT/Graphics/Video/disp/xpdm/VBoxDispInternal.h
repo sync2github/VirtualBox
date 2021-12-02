@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDispInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox XPDM Display driver, internal header
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOXDISPINTERNAL_H
-#define VBOXDISPINTERNAL_H
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_xpdm_VBoxDispInternal_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_xpdm_VBoxDispInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #define LOG_GROUP LOG_GROUP_DRV_DISPLAY
@@ -34,9 +37,9 @@
 #include "common/VBoxVideoLog.h"
 #include "common/xpdm/VBoxVideoPortAPI.h"
 #include "common/xpdm/VBoxVideoIOCTL.h"
-#include <VBox/HGSMI/HGSMI.h>
-#include <VBox/VBoxVideo.h>
-#include <VBox/VBoxVideoGuest.h>
+#include <HGSMI.h>
+#include <VBoxVideo.h>
+#include <VBoxVideoGuest.h>
 #include <VBoxDisplay.h>
 
 typedef struct _VBOXDISPDEV *PVBOXDISPDEV;
@@ -130,7 +133,7 @@ int VBoxDispSetPalette8BPP(PVBOXDISPDEV pDev);
 
 /* VBVA related */
 int VBoxDispVBVAInit(PVBOXDISPDEV pDev);
-void VBoxDispVBVAHostCommandComplete(PVBOXDISPDEV pDev, VBVAHOSTCMD *pCmd);
+void VBoxDispVBVAHostCommandComplete(PVBOXDISPDEV pDev, VBVAHOSTCMD RT_UNTRUSTED_VOLATILE_HOST *pCmd);
 
 void vrdpReportDirtyRect(PVBOXDISPDEV pDev, RECTL *prcl);
 void vbvaReportDirtyRect(PVBOXDISPDEV pDev, RECTL *prcl);
@@ -167,4 +170,4 @@ DECLINLINE(int) format2BytesPerPixel(const SURFOBJ *pso)
     return 0;
 }
 
-#endif /*VBOXDISPINTERNAL_H*/
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_xpdm_VBoxDispInternal_h */

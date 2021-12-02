@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTHeapOffset.cpp 86517 2020-10-11 12:45:11Z vboxsync $ */
 /** @file
  * IPRT Testcase - Offset Based Heap.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 #include <iprt/heap.h>
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/initterm.h>
 #include <iprt/log.h>
 #include <iprt/rand.h>
@@ -100,7 +100,7 @@ int main(int argc, char **argv)
         {        16,          0,    NULL,  7 },
     };
     uint32_t i;
-    RTHeapOffsetDump(Heap, (PFNRTHEAPOFFSETPRINTF)RTPrintf); /** @todo Add some detail info output with a signature identical to RTPrintf. */
+    RTHeapOffsetDump(Heap, (PFNRTHEAPOFFSETPRINTF)(uintptr_t)RTPrintf); /** @todo Add some detail info output with a signature identical to RTPrintf. */
     size_t cbBefore = RTHeapOffsetGetFreeSize(Heap);
     static char const s_szFill[] = "01234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -184,7 +184,7 @@ int main(int argc, char **argv)
         RTTestIPrintf(RTTESTLVL_ALWAYS,
                       "Warning: Either we've split out an alignment chunk at the start, or we've got\n"
                       "         an alloc/free accounting bug: cbBefore=%d cbAfter=%d\n", cbBefore, cbAfter);
-        RTHeapOffsetDump(Heap, (PFNRTHEAPOFFSETPRINTF)RTPrintf);
+        RTHeapOffsetDump(Heap, (PFNRTHEAPOFFSETPRINTF)(uintptr_t)RTPrintf);
     }
 
     /* relocate and free the bits in heap2 now. */
@@ -303,6 +303,7 @@ int main(int argc, char **argv)
     size_t cbAfterRand = RTHeapOffsetGetFreeSize(Heap);
     RTTESTI_CHECK_MSG(cbAfterRand == cbAfter, ("cbAfterRand=%zu cbAfter=%zu\n", cbAfterRand, cbAfter));
 
+    RTTESTI_CHECK_RC(rc = RTRandAdvDestroy(hRand), VINF_SUCCESS);
     return RTTestSummaryAndDestroy(hTest);
 }
 

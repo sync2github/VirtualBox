@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstDir.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - Directory listing.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -45,6 +45,7 @@ int main(int argc, char **argv)
     bool fShortName = false;
     bool fFiltered  = false;
     bool fQuiet     = false;
+    bool fNoFollow  = false;
     for (int i = 1; i < argc; i++)
     {
         if (argv[i][0] == '-')
@@ -71,6 +72,9 @@ int main(int argc, char **argv)
                     case 'q':
                         fQuiet = true;
                         break;
+                    case 'H':
+                        fNoFollow = true;
+                        break;
                     default:
                         RTPrintf("Unknown option '%c' ignored!\n", argv[i][j]);
                         break;
@@ -80,12 +84,13 @@ int main(int argc, char **argv)
         else
         {
             /* open */
-            PRTDIR pDir;
+            RTDIR hDir;
             int rc;
-            if (!fFiltered)
-                rc = RTDirOpen(&pDir, argv[i]);
+            if (!fFiltered && !fNoFollow)
+                rc = RTDirOpen(&hDir, argv[i]);
             else
-                rc = RTDirOpenFiltered(&pDir, argv[i], RTDIRFILTER_WINNT, 0);
+                rc = RTDirOpenFiltered(&hDir, argv[i], fFiltered ? RTDIRFILTER_WINNT : RTDIRFILTER_NONE,
+                                       fNoFollow ? RTDIR_F_NO_FOLLOW : 0);
             if (RT_SUCCESS(rc))
             {
                 /* list */
@@ -94,7 +99,7 @@ int main(int argc, char **argv)
                     for (;;)
                     {
                         RTDIRENTRY DirEntry;
-                        rc = RTDirRead(pDir, &DirEntry, NULL);
+                        rc = RTDirRead(hDir, &DirEntry, NULL);
                         if (RT_FAILURE(rc))
                             break;
                         if (!fQuiet)
@@ -125,7 +130,7 @@ int main(int argc, char **argv)
                     for (;;)
                     {
                         RTDIRENTRYEX DirEntry;
-                        rc = RTDirReadEx(pDir, &DirEntry, NULL, RTFSOBJATTRADD_UNIX, RTPATH_F_ON_LINK);
+                        rc = RTDirReadEx(hDir, &DirEntry, NULL, RTFSOBJATTRADD_UNIX, RTPATH_F_ON_LINK);
                         if (RT_FAILURE(rc))
                             break;
 
@@ -207,7 +212,7 @@ int main(int argc, char **argv)
                 }
 
                 /* close up */
-                rc = RTDirClose(pDir);
+                rc = RTDirClose(hDir);
                 if (RT_FAILURE(rc))
                 {
                     RTPrintf("tstDir: Failed to close dir! rc=%Rrc\n", rc);

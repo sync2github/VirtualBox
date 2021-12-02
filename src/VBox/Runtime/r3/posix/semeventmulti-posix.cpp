@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semeventmulti-posix.cpp 88294 2021-03-25 17:50:38Z vboxsync $ */
 /** @file
  * IPRT - Multiple Release Event Semaphore, POSIX.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -456,7 +456,7 @@ static int rtSemEventMultiPosixWaitTimed(struct RTSEMEVENTMULTIINTERNAL *pThis, 
      * Convert uTimeout to a relative value in nano seconds.
      */
     if (fFlags & RTSEMWAIT_FLAGS_MILLISECS)
-        uTimeout = uTimeout < UINT64_MAX / UINT32_C(1000000) * UINT32_C(1000000)
+        uTimeout = uTimeout < UINT64_MAX / UINT32_C(1000000)
                  ? uTimeout * UINT32_C(1000000)
                  : UINT64_MAX;
     if (uTimeout == UINT64_MAX) /* unofficial way of indicating an indefinite wait */

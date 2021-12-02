@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: threadctxhooks-r0drv-linux.c 87669 2021-02-09 19:34:41Z vboxsync $ */
 /** @file
  * IPRT - Thread Context Switching Hook, Ring-0 Driver, Linux.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,7 @@
 #include <iprt/mem.h>
 #include <iprt/assert.h>
 #include <iprt/thread.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/asm.h>
 #if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
 # include <iprt/asm-amd64-x86.h>
@@ -46,7 +46,7 @@
  * Linux kernel 2.6.23 introduced preemption notifiers but RedHat 2.6.18 kernels
  * got it backported.
  */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 18) && defined(CONFIG_PREEMPT_NOTIFIERS)
+#if RTLNX_VER_MIN(2,6,18) && defined(CONFIG_PREEMPT_NOTIFIERS)
 
 
 /*********************************************************************************************************************************
@@ -72,7 +72,7 @@ typedef struct RTTHREADCTXHOOKINT
     void                       *pvUser;
     /** The linux callbacks. */
     struct preempt_ops          PreemptOps;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 19) && defined(RT_ARCH_AMD64)
+#if RTLNX_VER_MIN(3,1,19) && defined(RT_ARCH_AMD64)
     /** Starting with 3.1.19, the linux kernel doesn't restore kernel RFLAGS during
      * task switch, so we have to do that ourselves. (x86 code is not affected.) */
     RTCCUINTREG                 fSavedRFlags;
@@ -109,7 +109,7 @@ static void rtThreadCtxHooksLnxSchedOut(struct preempt_notifier *pPreemptNotifie
 
 #if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
     ASMSetFlags(fSavedEFlags);
-# if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 19) && defined(RT_ARCH_AMD64)
+# if RTLNX_VER_MIN(3,1,19) && defined(RT_ARCH_AMD64)
     pThis->fSavedRFlags = fSavedEFlags;
 # endif
 #endif
@@ -142,7 +142,7 @@ static void rtThreadCtxHooksLnxSchedIn(struct preempt_notifier *pPreemptNotifier
     pThis->pfnCallback(RTTHREADCTXEVENT_IN, pThis->pvUser);
 
 #if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
-# if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 1, 19) && defined(RT_ARCH_AMD64)
+# if RTLNX_VER_MIN(3,1,19) && defined(RT_ARCH_AMD64)
     fSavedEFlags &= ~RT_BIT_64(18) /*X86_EFL_AC*/;
     fSavedEFlags |= pThis->fSavedRFlags & RT_BIT_64(18) /*X86_EFL_AC*/;
 # endif
@@ -198,7 +198,7 @@ RTDECL(int) RTThreadCtxHookCreate(PRTTHREADCTXHOOK phCtxHook, uint32_t fFlags, P
     pThis->PreemptOps.sched_out = rtThreadCtxHooksLnxSchedOut;
     pThis->PreemptOps.sched_in  = rtThreadCtxHooksLnxSchedIn;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)
+#if RTLNX_VER_MIN(4,2,0)
     preempt_notifier_inc();
 #endif
 
@@ -235,7 +235,7 @@ RTDECL(int ) RTThreadCtxHookDestroy(RTTHREADCTXHOOK hCtxHook)
         Assert(!pThis->fEnabled); /* paranoia */
     }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)
+#if RTLNX_VER_MIN(4,2,0)
     preempt_notifier_dec();
 #endif
 
@@ -323,6 +323,7 @@ RTDECL(bool) RTThreadCtxHookIsEnabled(RTTHREADCTXHOOK hCtxHook)
 
     return pThis->fEnabled;
 }
+RT_EXPORT_SYMBOL(RTThreadCtxHookIsEnabled);
 
 #else    /* Not supported / Not needed */
 # include "../generic/threadctxhooks-r0drv-generic.cpp"

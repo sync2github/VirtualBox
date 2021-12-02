@@ -1,10 +1,10 @@
+/* $Id: USBTest.cpp 83803 2020-04-18 18:20:34Z vboxsync $ */
 /** @file
- *
  * VBox host drivers - USB drivers - Filter & driver installation
- *
- * Installation code
- *
- * Copyright (C) 2006-2016 Oracle Corporation
+ */
+
+/*
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -69,8 +78,7 @@ int usbMonStopService(void)
      */
     int rc = -1;
     SC_HANDLE   hSMgr = OpenSCManager(NULL, NULL, SERVICE_STOP | SERVICE_QUERY_STATUS);
-    DWORD LastError = GetLastError(); NOREF(LastError);
-    AssertMsg(hSMgr, ("OpenSCManager(,,delete) failed rc=%d\n", LastError));
+    AssertMsg(hSMgr, ("OpenSCManager(,,delete) failed rc=%d\n", GetLastError()));
     if (hSMgr)
     {
         SC_HANDLE hService = OpenServiceW(hSMgr, USBMON_SERVICE_NAME_W, SERVICE_STOP | SERVICE_QUERY_STATUS);
@@ -97,23 +105,18 @@ int usbMonStopService(void)
                    AssertMsgFailed(("Failed to stop service. status=%d\n", Status.dwCurrentState));
             }
             else
-            {
-                DWORD LastError = GetLastError(); NOREF(LastError);
-                AssertMsgFailed(("ControlService failed with LastError=%Rwa. status=%d\n", LastError, Status.dwCurrentState));
-            }
+                AssertMsgFailed(("ControlService failed with LastError=%Rwa. status=%d\n", GetLastError(), Status.dwCurrentState));
             CloseServiceHandle(hService);
         }
         else if (GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST)
             rc = 0;
         else
-        {
-            DWORD LastError = GetLastError(); NOREF(LastError);
-            AssertMsgFailed(("OpenService failed LastError=%Rwa\n", LastError));
-        }
+            AssertMsgFailed(("OpenService failed LastError=%Rwa\n", GetLastError()));
         CloseServiceHandle(hSMgr);
     }
     return rc;
 }
+
 /**
  * Release specified USB device to the host.
  *
@@ -147,12 +150,12 @@ int usbMonReleaseDevice(USHORT usVendorId, USHORT usProductId, USHORT usRevision
  * Add USB device filter
  *
  * @returns VBox status code.
- * @param   pszVendor       Vendor filter string
- * @param   pszProduct      Product filter string
- * @param   pszRevision     Revision filter string
+ * @param   usVendorId      Vendor id
+ * @param   usProductId     Product id
+ * @param   usRevision      Revision
  * @param   ppID            Pointer to filter id
  */
-int usbMonInsertFilter(const char *pszVendor, const char *pszProduct, const char *pszRevision, void **ppID)
+int usbMonInsertFilter(USHORT usVendorId, USHORT usProductId, USHORT usRevision, void **ppID)
 {
     USBFILTER           filter;
     USBSUP_FLTADDOUT    flt_add;
@@ -160,11 +163,12 @@ int usbMonInsertFilter(const char *pszVendor, const char *pszProduct, const char
 
     Assert(g_hUSBMonitor);
 
-    printf("usblibInsertFilter %s %s %s\n", pszVendor, pszProduct, pszRevision);
+    printf("usblibInsertFilter %04X %04X %04X\n", usVendorId, usProductId, usRevision);
 
-//    strncpy(filter.szVendor,   pszVendor,   sizeof(filter.szVendor));
-//    strncpy(filter.szProduct,  pszProduct,  sizeof(filter.szProduct));
-//    strncpy(filter.szRevision, pszRevision, sizeof(filter.szRevision));
+    USBFilterInit(&filter, USBFILTERTYPE_CAPTURE);
+    USBFilterSetNumExact(&filter, USBFILTERIDX_VENDOR_ID, usVendorId, true);
+    USBFilterSetNumExact(&filter, USBFILTERIDX_PRODUCT_ID, usProductId, true);
+    USBFilterSetNumExact(&filter, USBFILTERIDX_DEVICE_REV, usRevision, true);
 
     if (!DeviceIoControl(g_hUSBMonitor, SUPUSBFLT_IOCTL_ADD_FILTER, &filter, sizeof(filter), &flt_add, sizeof(flt_add), &cbReturned, NULL))
     {
@@ -172,6 +176,25 @@ int usbMonInsertFilter(const char *pszVendor, const char *pszProduct, const char
         return RTErrConvertFromWin32(GetLastError());
     }
     *ppID = (void *)flt_add.uId;
+    return VINF_SUCCESS;
+}
+
+/**
+ * Applies existing filters to currently plugged-in USB devices
+ *
+ * @returns VBox status code.
+ */
+int usbMonRunFilters(void)
+{
+    DWORD               cbReturned = 0;
+
+    Assert(g_hUSBMonitor);
+
+    if (!DeviceIoControl(g_hUSBMonitor, SUPUSBFLT_IOCTL_RUN_FILTERS, NULL, 0, NULL, 0, &cbReturned, NULL))
+    {
+        AssertMsgFailed(("DeviceIoControl failed with %d\n", GetLastError()));
+        return RTErrConvertFromWin32(GetLastError());
+    }
     return VINF_SUCCESS;
 }
 
@@ -235,7 +258,7 @@ int usbMonitorInit()
         if (g_hUSBMonitor == INVALID_HANDLE_VALUE)
         {
             /* AssertFailed(); */
-            printf("usbproxy: Unable to open filter driver!! (rc=%d)\n", GetLastError());
+            printf("usbproxy: Unable to open filter driver!! (rc=%lu)\n", GetLastError());
             rc = VERR_FILE_NOT_FOUND;
             goto failure;
         }
@@ -247,7 +270,7 @@ int usbMonitorInit()
     cbReturned = 0;
     if (!DeviceIoControl(g_hUSBMonitor, SUPUSBFLT_IOCTL_GET_VERSION, NULL, 0,&version, sizeof(version),  &cbReturned, NULL))
     {
-        printf("usbproxy: Unable to query filter version!! (rc=%d)\n", GetLastError());
+        printf("usbproxy: Unable to query filter version!! (rc=%lu)\n", GetLastError());
         rc = VERR_VERSION_MISMATCH;
         goto failure;
     }
@@ -307,6 +330,7 @@ int usbMonitorTerm()
 int __cdecl main(int argc, char **argv)
 {
     int rc;
+    int c;
     RT_NOREF2(argc, argv);
 
     printf("USB test\n");
@@ -314,19 +338,28 @@ int __cdecl main(int argc, char **argv)
     rc = usbMonitorInit();
     AssertRC(rc);
 
-    void *pId1, *pId2;
+    void *pId1, *pId2, *pId3;
 
-    usbMonInsertFilter("0529", "0514", "0100", &pId1);
-    usbMonInsertFilter("0A16", "2499", "0100", &pId2);
+    usbMonInsertFilter(0x0529, 0x0514, 0x0100, &pId1);
+    usbMonInsertFilter(0x0A16, 0x2499, 0x0100, &pId2);
+    usbMonInsertFilter(0x80EE, 0x0030, 0x0110, &pId3);
 
-    printf("Waiting to capture device\n");
-    getchar();
+    printf("Waiting to capture devices... enter 'r' to run filters\n");
+    c = getchar();
+    if (c == 'r')
+    {
+        usbMonRunFilters();
+        printf("Waiting to capture devices...\n");
+        getchar();  /* eat the '\n' */
+        getchar();  /* wait for more input */
+    }
 
     printf("Releasing device\n");
     usbMonReleaseDevice(0xA16, 0x2499, 0x100);
 
     usbMonRemoveFilter(pId1);
     usbMonRemoveFilter(pId2);
+    usbMonRemoveFilter(pId3);
 
     rc = usbMonitorTerm();
 

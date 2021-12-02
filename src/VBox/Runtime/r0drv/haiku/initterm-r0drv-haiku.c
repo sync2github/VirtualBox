@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: initterm-r0drv-haiku.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Initialization & Termination, R0 Driver, Haiku.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 #include "the-haiku-kernel.h"
 #include "internal/iprt.h"
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/assert.h>
 #include "internal/initterm.h"
 

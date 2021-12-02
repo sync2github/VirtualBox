@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semevent-r0drv-haiku.c 90488 2021-08-03 09:17:59Z vboxsync $ */
 /** @file
  * IPRT - Single Release Event Semaphores, Ring-0 Driver, Haiku.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -261,4 +261,12 @@ RTDECL(uint32_t) RTSemEventGetResolution(void)
     /* At least that's what the API supports. */
     return 1000;
 }
+
+
+RTR0DECL(bool) RTSemEventIsSignalSafe(void)
+{
+    /** @todo check the code...   */
+    return false;
+}
+RT_EXPORT_SYMBOL(RTSemEventIsSignalSafe);
 

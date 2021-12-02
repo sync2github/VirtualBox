@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxDispDrawCmd.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox XPDM Display driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOXDISPDRAWCMD_H
-#define VBOXDISPDRAWCMD_H
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_xpdm_VBoxDispDrawCmd_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_xpdm_VBoxDispDrawCmd_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #define VBVA_DECL_OP(__fn, __args) \
     void vbvaDrv##__fn __args;     \
@@ -136,4 +138,4 @@ VBVA_DECL_OP(SaveScreenBits, (         \
 
 #undef VBVA_DECL_OP
 
-#endif /*VBOXDISPDRAWCMD_H*/
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_xpdm_VBoxDispDrawCmd_h */

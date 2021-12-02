@@ -1,10 +1,11 @@
-/* $Id$ */
-
-/* Small sample/testcase which demonstrates that the same source code can
- * be used to connect to the webservice and (XP)COM APIs. */
+/* $Id: TestVBox.java 86279 2020-09-24 20:27:33Z vboxsync $ */
+/*! file
+ * Small sample/testcase which demonstrates that the same source code can
+ * be used to connect to the webservice and (XP)COM APIs.
+ */
 
 /*
- * Copyright (C) 2010-2015 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,9 +15,11 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-import org.virtualbox_5_0.*;
+
+import org.virtualbox_6_2.*;
 import java.util.List;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.math.BigInteger;
 
 public class TestVBox
@@ -140,9 +143,10 @@ public class TestVBox
         IMachine m = vbox.getMachines().get(0);
         String name = m.getName();
         System.out.println("\nAttempting to start VM '" + name + "'");
-        
+
         ISession session = mgr.getSessionObject();
-        IProgress p = m.launchVMProcess(session, "gui", "");
+        ArrayList<String> env = new ArrayList<String>();
+        IProgress p = m.launchVMProcess(session, "gui", env);
         progressBar(mgr, p, 10000);
         session.unlockMachine();
         // process system event queue
@@ -164,8 +168,9 @@ public class TestVBox
             String name2 = m2.getName();
             ISession session1 = mgr1.getSessionObject();
             ISession session2 = mgr2.getSessionObject();
-            IProgress p1 = m1.launchVMProcess(session1, "gui", "");
-            IProgress p2 = m2.launchVMProcess(session2, "gui", "");
+            ArrayList<String> env = new ArrayList<String>();
+            IProgress p1 = m1.launchVMProcess(session1, "gui", env);
+            IProgress p2 = m2.launchVMProcess(session2, "gui", env);
             progressBar(mgr1, p1, 10000);
             progressBar(mgr2, p2, 10000);
             session1.unlockMachine();

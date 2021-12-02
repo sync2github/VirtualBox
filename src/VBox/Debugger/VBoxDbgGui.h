@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDbgGui.h 90520 2021-08-04 21:37:54Z vboxsync $ */
 /** @file
  * VBox Debugger GUI - The Manager.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___Debugger_VBoxDbgGui_h
-#define ___Debugger_VBoxDbgGui_h
+#ifndef DEBUGGER_INCLUDED_SRC_VBoxDbgGui_h
+#define DEBUGGER_INCLUDED_SRC_VBoxDbgGui_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 // VirtualBox COM interfaces declarations (generated header)
 #ifdef VBOX_WITH_XPCOM
@@ -25,7 +28,7 @@
 # include <VirtualBox.h>
 #endif
 
-#include "VBoxDbgStatsQt4.h"
+#include "VBoxDbgStatsQt.h"
 #include "VBoxDbgConsole.h"
 
 
@@ -87,8 +90,10 @@ public:
      * Show the default statistics window, creating it if necessary.
      *
      * @returns VBox status code.
+     * @param   pszFilter   Filter pattern.
+     * @param   pszExpand   Expand pattern.
      */
-    int showStatistics();
+    int showStatistics(const char *pszFilter, const char *pszExpand);
 
     /**
      * Repositions and resizes (optionally) the statistics to its defaults
@@ -137,6 +142,10 @@ public:
         return m_pUVM;
     }
 
+    /**
+     * @returns The name of the machine.
+     */
+    QString getMachineName() const;
 
 protected slots:
     /**
@@ -189,5 +198,5 @@ protected:
 };
 
 
-#endif
+#endif /* !DEBUGGER_INCLUDED_SRC_VBoxDbgGui_h */
 

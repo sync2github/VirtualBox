@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-cmn-SelFlatCodeToRealMode.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - Bs3SelFlatCodeToRealMode.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -150,5 +150,4 @@ BS3_PROC_END_CMN   Bs3SelFlatCodeToRealMode
 ; penalize it.
 ;
 BS3_CMN_FAR_STUB   Bs3SelFlatCodeToRealMode, 4
-
 

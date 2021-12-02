@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBProxyBackend.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox USB Proxy Service (base) class.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_USBPROXYBACKEND
 #include "USBProxyBackend.h"
 #include "USBProxyService.h"
 #include "HostUSBDeviceImpl.h"
@@ -23,10 +24,10 @@
 #include "VirtualBoxImpl.h"
 
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/com/array.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/asm.h>
 #include <iprt/semaphore.h>
 #include <iprt/thread.h>
@@ -65,8 +66,11 @@ void USBProxyBackend::FinalRelease()
 /**
  * Stub needed as long as the class isn't virtual
  */
-int USBProxyBackend::init(USBProxyService *pUsbProxyService, const com::Utf8Str &strId, const com::Utf8Str &strAddress)
+int USBProxyBackend::init(USBProxyService *pUsbProxyService, const com::Utf8Str &strId,
+                          const com::Utf8Str &strAddress, bool fLoadingSettings)
 {
+    RT_NOREF1(fLoadingSettings);
+
     m_pUsbProxyService    = pUsbProxyService;
     mThread               = NIL_RTTHREAD;
     mTerminate            = false;
@@ -524,19 +528,19 @@ USBProxyBackend::initFilterFromDevice(PUSBFILTER aFilter, HostUSBDevice *aDevice
     if (pDev->pszSerialNumber)
     {
         vrc = USBFilterSetStringExact(aFilter, USBFILTERIDX_SERIAL_NUMBER_STR, pDev->pszSerialNumber,
-                                      true /*fMustBePresent*/, false /*fPurge*/);
+                                      true /*fMustBePresent*/, true /*fPurge*/);
         AssertRC(vrc);
     }
     if (pDev->pszProduct)
     {
         vrc = USBFilterSetStringExact(aFilter, USBFILTERIDX_PRODUCT_STR, pDev->pszProduct,
-                                      true /*fMustBePresent*/, false /*fPurge*/);
+                                      true /*fMustBePresent*/, true /*fPurge*/);
         AssertRC(vrc);
     }
     if (pDev->pszManufacturer)
     {
         vrc = USBFilterSetStringExact(aFilter, USBFILTERIDX_MANUFACTURER_STR, pDev->pszManufacturer,
-                                      true /*fMustBePresent*/, false /*fPurge*/);
+                                      true /*fMustBePresent*/, true /*fPurge*/);
         AssertRC(vrc);
     }
 }
@@ -558,7 +562,7 @@ HRESULT USBProxyBackend::getType(com::Utf8Str &aType)
  * Sort a list of USB devices.
  *
  * @returns Pointer to the head of the sorted doubly linked list.
- * @param   aDevices        Head pointer (can be both singly and doubly linked list).
+ * @param   pDevices        Head pointer (can be both singly and doubly linked list).
  */
 static PUSBDEVICE sortDevices(PUSBDEVICE pDevices)
 {

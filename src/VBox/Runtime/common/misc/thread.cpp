@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: thread.cpp 92253 2021-11-07 02:02:46Z vboxsync $ */
 /** @file
  * IPRT - Threads, common routines.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -72,19 +72,21 @@
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
-/** The AVL thread containing the threads. */
-static PAVLPVNODECORE       g_ThreadTree;
-/** The number of threads in the tree (for ring-0 termination kludge). */
-static uint32_t volatile    g_cThreadInTree;
+/** Indicates whether we've been initialized or not. */
+static bool                     g_frtThreadInitialized;
 #ifdef IN_RING3
 /** The RW lock protecting the tree. */
-static RTSEMRW          g_ThreadRWSem = NIL_RTSEMRW;
+static RTSEMRW                  g_ThreadRWSem = NIL_RTSEMRW;
 #else
 /** The spinlocks protecting the tree. */
-static RTSPINLOCK       g_ThreadSpinlock = NIL_RTSPINLOCK;
+static RTSPINLOCK               g_ThreadSpinlock = NIL_RTSPINLOCK;
 #endif
-/** Indicates whether we've been initialized or not. */
-static bool             g_frtThreadInitialized;
+/** The AVL thread containing the threads. */
+static PAVLPVNODECORE           g_ThreadTree;
+/** The number of threads in the tree (for ring-0 termination kludge). */
+static uint32_t volatile        g_cThreadInTree;
+/** Counters for each thread type. */
+DECL_HIDDEN_DATA(uint32_t volatile) g_acRTThreadTypeStats[RTTHREADTYPE_END];
 
 
 /*********************************************************************************************************************************
@@ -281,6 +283,8 @@ static int rtThreadAdopt(RTTHREADTYPE enmType, unsigned fFlags, uint32_t fIntFla
             rtThreadSetState(pThread, RTTHREADSTATE_RUNNING);
             rtThreadRelease(pThread);
         }
+        else
+            rtThreadDestroy(pThread);
     }
     return rc;
 }
@@ -299,9 +303,9 @@ RTDECL(int) RTThreadAdopt(RTTHREADTYPE enmType, unsigned fFlags, const char *psz
     int      rc;
     RTTHREAD Thread;
 
-    AssertReturn(!(fFlags & RTTHREADFLAGS_WAITABLE), VERR_INVALID_PARAMETER);
-    AssertReturn(!pszName || VALID_PTR(pszName), VERR_INVALID_POINTER);
-    AssertReturn(!pThread || VALID_PTR(pThread), VERR_INVALID_POINTER);
+    AssertReturn(!(fFlags & RTTHREADFLAGS_WAITABLE), VERR_INVALID_FLAGS);
+    AssertPtrNullReturn(pszName, VERR_INVALID_POINTER);
+    AssertPtrNullReturn(pThread, VERR_INVALID_POINTER);
 
     rc = VINF_SUCCESS;
     Thread = RTThreadSelf();
@@ -449,7 +453,7 @@ DECLHIDDEN(void) rtThreadInsert(PRTTHREADINT pThread, RTNATIVETHREAD NativeThrea
                     ASMAtomicBitClear(&pThread->fIntFlags, RTTHREADINT_FLAG_IN_TREE_BIT);
                     rtThreadRemoveLocked(pThreadOther);
                     if (pThreadOther->fIntFlags & RTTHREADINT_FLAGS_ALIEN)
-                    rtThreadRelease(pThreadOther);
+                        rtThreadRelease(pThreadOther);
                 }
 
                 /* insert the thread */
@@ -457,7 +461,10 @@ DECLHIDDEN(void) rtThreadInsert(PRTTHREADINT pThread, RTNATIVETHREAD NativeThrea
                 fRc = RTAvlPVInsert(&g_ThreadTree, &pThread->Core);
                 ASMAtomicOrU32(&pThread->fIntFlags, RTTHREADINT_FLAG_IN_TREE);
                 if (fRc)
+                {
                     ASMAtomicIncU32(&g_cThreadInTree);
+                    ASMAtomicIncU32(&g_acRTThreadTypeStats[pThread->enmType]);
+                }
 
                 AssertReleaseMsg(fRc, ("Lock problem? %p (%RTnthrd) %s\n", pThread, NativeThread, pThread->szName));
                 NOREF(fRc);
@@ -478,12 +485,13 @@ DECLHIDDEN(void) rtThreadInsert(PRTTHREADINT pThread, RTNATIVETHREAD NativeThrea
 static void rtThreadRemoveLocked(PRTTHREADINT pThread)
 {
     PRTTHREADINT pThread2 = (PRTTHREADINT)RTAvlPVRemove(&g_ThreadTree, pThread->Core.Key);
-#if !defined(RT_OS_OS2) /** @todo this asserts for threads created by NSPR */
     AssertMsg(pThread2 == pThread, ("%p(%s) != %p (%p/%s)\n", pThread2, pThread2  ? pThread2->szName : "<null>",
                                     pThread, pThread->Core.Key, pThread->szName));
-#endif
     if (pThread2)
+    {
         ASMAtomicDecU32(&g_cThreadInTree);
+        ASMAtomicDecU32(&g_acRTThreadTypeStats[pThread->enmType]);
+    }
 }
 
 
@@ -543,8 +551,8 @@ DECLHIDDEN(PRTTHREADINT) rtThreadGetByNative(RTNATIVETHREAD NativeThread)
  */
 DECLHIDDEN(PRTTHREADINT) rtThreadGet(RTTHREAD Thread)
 {
-    if (    Thread != NIL_RTTHREAD
-        &&  VALID_PTR(Thread))
+    if (   Thread != NIL_RTTHREAD
+        && RT_VALID_PTR(Thread))
     {
         PRTTHREADINT pThread = (PRTTHREADINT)Thread;
         if (    pThread->u32Magic == RTTHREADINT_MAGIC
@@ -655,12 +663,14 @@ DECLHIDDEN(void) rtThreadTerminate(PRTTHREADINT pThread, int rc)
 {
     Assert(pThread->cRefs >= 1);
 
-#ifdef IPRT_WITH_GENERIC_TLS
     /*
      * Destroy TLS entries.
      */
+#ifdef IPRT_WITH_GENERIC_TLS
     rtThreadTlsDestruction(pThread);
-#endif /* IPRT_WITH_GENERIC_TLS */
+#elif defined(RT_OS_WINDOWS) && defined(IN_RING3)
+    rtThreadWinTlsDestruction();
+#endif
 
     /*
      * Set the rc, mark it terminated and signal anyone waiting.
@@ -690,7 +700,7 @@ DECLHIDDEN(void) rtThreadTerminate(PRTTHREADINT pThread, int rc)
  * @param   NativeThread    The native thread id.
  * @param   pszThreadName   The name of the thread (purely a dummy for backtrace).
  */
-DECLCALLBACK(DECLHIDDEN(int)) rtThreadMain(PRTTHREADINT pThread, RTNATIVETHREAD NativeThread, const char *pszThreadName)
+DECL_HIDDEN_CALLBACK(int) rtThreadMain(PRTTHREADINT pThread, RTNATIVETHREAD NativeThread, const char *pszThreadName)
 {
     int rc;
     NOREF(pszThreadName);
@@ -759,26 +769,12 @@ RTDECL(int) RTThreadCreate(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUse
     /*
      * Validate input.
      */
-    if (!VALID_PTR(pThread) && pThread)
-    {
-        Assert(VALID_PTR(pThread));
-        return VERR_INVALID_PARAMETER;
-    }
-    if (!VALID_PTR(pfnThread))
-    {
-        Assert(VALID_PTR(pfnThread));
-        return VERR_INVALID_PARAMETER;
-    }
-    if (!pszName || !*pszName || strlen(pszName) >= RTTHREAD_NAME_LEN)
-    {
-        AssertMsgFailed(("pszName=%s (max len is %d because of logging)\n", pszName, RTTHREAD_NAME_LEN - 1));
-        return VERR_INVALID_PARAMETER;
-    }
-    if (fFlags & ~RTTHREADFLAGS_MASK)
-    {
-        AssertMsgFailed(("fFlags=%#x\n", fFlags));
-        return VERR_INVALID_PARAMETER;
-    }
+    AssertPtrNullReturn(pThread, VERR_INVALID_POINTER);
+    AssertPtrReturn(pfnThread, VERR_INVALID_POINTER);
+    AssertMsgReturn(pszName && *pszName != '\0' && strlen(pszName) < RTTHREAD_NAME_LEN,
+                    ("pszName=%s (max len is %d because of logging)\n", pszName, RTTHREAD_NAME_LEN - 1),
+                    VERR_INVALID_PARAMETER);
+    AssertMsgReturn(!(fFlags & ~RTTHREADFLAGS_MASK), ("fFlags=%#x\n", fFlags), VERR_INVALID_FLAGS);
 
     /*
      * Allocate thread argument.
@@ -1001,12 +997,15 @@ RT_EXPORT_SYMBOL(RTThreadSetName);
  */
 RTDECL(bool) RTThreadIsMain(RTTHREAD hThread)
 {
-    PRTTHREADINT pThread = rtThreadGet(hThread);
-    if (pThread)
+    if (hThread != NIL_RTTHREAD)
     {
-        bool fRc = !!(pThread->fIntFlags & RTTHREADINT_FLAGS_MAIN);
-        rtThreadRelease(pThread);
-        return fRc;
+        PRTTHREADINT pThread = rtThreadGet(hThread);
+        if (pThread)
+        {
+            bool fRc = !!(pThread->fIntFlags & RTTHREADINT_FLAGS_MAIN);
+            rtThreadRelease(pThread);
+            return fRc;
+        }
     }
     return false;
 }
@@ -1165,10 +1164,23 @@ static int rtThreadWait(RTTHREAD Thread, RTMSINTERVAL cMillies, int *prc, bool f
         {
             if (pThread->fFlags & RTTHREADFLAGS_WAITABLE)
             {
-                if (fAutoResume)
-                    rc = RTSemEventMultiWait(pThread->EventTerminated, cMillies);
+#if defined(IN_RING3) && defined(RT_OS_WINDOWS)
+                if (RT_LIKELY(rtThreadNativeIsAliveKludge(pThread)))
+#endif
+                {
+                    if (fAutoResume)
+                        rc = RTSemEventMultiWait(pThread->EventTerminated, cMillies);
+                    else
+                        rc = RTSemEventMultiWaitNoResume(pThread->EventTerminated, cMillies);
+                }
+#if defined(IN_RING3) && defined(RT_OS_WINDOWS)
                 else
-                    rc = RTSemEventMultiWaitNoResume(pThread->EventTerminated, cMillies);
+                {
+                    rc = VINF_SUCCESS;
+                    if (pThread->rc == VERR_PROCESS_RUNNING)
+                        pThread->rc = VERR_THREAD_IS_DEAD;
+                }
+#endif
                 if (RT_SUCCESS(rc))
                 {
                     if (prc)

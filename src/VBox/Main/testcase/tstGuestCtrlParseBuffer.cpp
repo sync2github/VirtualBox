@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstGuestCtrlParseBuffer.cpp 86543 2020-10-12 14:46:02Z vboxsync $ */
 /** @file
  * Output stream parsing test cases.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,12 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#define LOG_ENABLED
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_MAIN
+#include <VBox/err.h>
 #include <VBox/log.h>
 
 #include "../include/GuestCtrlImplPrivate.h"
@@ -31,9 +35,16 @@ using namespace com;
 # define BYTE uint8_t
 #endif
 
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
 #define STR_SIZE(a_sz) a_sz, sizeof(a_sz)
 
 
+/*********************************************************************************************************************************
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
 typedef struct VBOXGUESTCTRL_BUFFER_VALUE
 {
     char *pszValue;
@@ -42,6 +53,10 @@ typedef std::map< RTCString, VBOXGUESTCTRL_BUFFER_VALUE > GuestBufferMap;
 typedef std::map< RTCString, VBOXGUESTCTRL_BUFFER_VALUE >::iterator GuestBufferMapIter;
 typedef std::map< RTCString, VBOXGUESTCTRL_BUFFER_VALUE >::const_iterator GuestBufferMapIterConst;
 
+
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
+*********************************************************************************************************************************/
 char szUnterm1[] = { 'a', 's', 'd', 'f' };
 char szUnterm2[] = { 'f', 'o', 'o', '3', '=', 'b', 'a', 'r', '3' };
 
@@ -49,11 +64,11 @@ static struct
 {
     const char *pbData;
     size_t      cbData;
-    uint32_t    uOffsetStart;
-    uint32_t    uOffsetAfter;
-    uint32_t    uMapElements;
+    uint32_t    offStart;
+    uint32_t    offAfter;
+    uint32_t    cMapElements;
     int         iResult;
-} g_aTestBlock[] =
+} g_aTestBlocks[] =
 {
     /*
      * Single object parsing.
@@ -103,10 +118,10 @@ static struct
     const char *pbData;
     size_t      cbData;
     /** Number of data blocks retrieved. These are separated by "\0\0". */
-    uint32_t    uNumBlocks;
+    uint32_t    cBlocks;
     /** Overall result when done parsing. */
     int         iResult;
-} g_aTestStream[] =
+} const g_aTestStream[] =
 {
     /* No blocks. */
     { "\0\0\0\0",                                      sizeof("\0\0\0\0"),                                0, VERR_NO_DATA },
@@ -124,11 +139,11 @@ int manualTest(void)
     {
         const char *pbData;
         size_t      cbData;
-        uint32_t    uOffsetStart;
-        uint32_t    uOffsetAfter;
-        uint32_t    uMapElements;
+        uint32_t    offStart;
+        uint32_t    offAfter;
+        uint32_t    cMapElements;
         int         iResult;
-    } s_aTest[] =
+    } const s_aTest[] =
     {
         { "test5=test5\0t51=t51",           sizeof("test5=test5\0t51=t51"),                            0,  sizeof("test5=test5\0") - 1,                   1, VERR_MORE_DATA },
         { "\0\0test5=test5\0t51=t51",       sizeof("\0\0test5=test5\0t51=t51"),                        0,  sizeof("\0\0test5=test5\0") - 1,               1, VERR_MORE_DATA },
@@ -159,9 +174,9 @@ int manualTest(void)
 int main()
 {
     RTTEST hTest;
-    int rc = RTTestInitAndCreate("tstParseBuffer", &hTest);
-    if (rc)
-        return rc;
+    RTEXITCODE rcExit = RTTestInitAndCreate("tstParseBuffer", &hTest);
+    if (rcExit != RTEXITCODE_SUCCESS)
+        return rcExit;
     RTTestBanner(hTest);
 
     RTTestIPrintf(RTTESTLVL_DEBUG, "Initializing COM...\n");
@@ -173,17 +188,19 @@ int main()
     }
 
 #ifdef DEBUG_andy
-    rc = manualTest();
+    int rc = manualTest();
+    if (RT_FAILURE(rc))
+        return RTEXITCODE_FAILURE;
 #endif
 
     RTTestIPrintf(RTTESTLVL_INFO, "Doing basic tests ...\n");
 
     if (sizeof("sizecheck") != 10)
-        RTTestFailed(hTest, "Basic size test #1 failed (%u <-> 10)", sizeof("sizecheck"));
+        RTTestFailed(hTest, "Basic size test #1 failed (%zu <-> 10)", sizeof("sizecheck"));
     if (sizeof("off=rab") != 8)
-        RTTestFailed(hTest, "Basic size test #2 failed (%u <-> 7)", sizeof("off=rab"));
+        RTTestFailed(hTest, "Basic size test #2 failed (%zu <-> 7)", sizeof("off=rab"));
     if (sizeof("off=rab\0\0") != 10)
-        RTTestFailed(hTest, "Basic size test #3 failed (%u <-> 10)", sizeof("off=rab\0\0"));
+        RTTestFailed(hTest, "Basic size test #3 failed (%zu <-> 10)", sizeof("off=rab\0\0"));
 
     RTTestIPrintf(RTTESTLVL_INFO, "Doing line tests ...\n");
 
@@ -192,45 +209,36 @@ int main()
     RTAssertSetQuiet(true);
 
     unsigned iTest;
-    for (iTest = 0; iTest < RT_ELEMENTS(g_aTestBlock); iTest++)
+    for (iTest = 0; iTest < RT_ELEMENTS(g_aTestBlocks); iTest++)
     {
         RTTestIPrintf(RTTESTLVL_DEBUG, "=> Test #%u\n", iTest);
 
         GuestProcessStream stream;
-        int iResult = stream.AddData((BYTE*)g_aTestBlock[iTest].pbData, g_aTestBlock[iTest].cbData);
+        if (RT_FAILURE(g_aTestBlocks[iTest].iResult))
+            RTTestDisableAssertions(hTest);
+        int iResult = stream.AddData((BYTE *)g_aTestBlocks[iTest].pbData, g_aTestBlocks[iTest].cbData);
+        if (RT_FAILURE(g_aTestBlocks[iTest].iResult))
+            RTTestRestoreAssertions(hTest);
         if (RT_SUCCESS(iResult))
         {
             GuestProcessStreamBlock curBlock;
             iResult = stream.ParseBlock(curBlock);
-            if (iResult != g_aTestBlock[iTest].iResult)
-            {
-                RTTestFailed(hTest, "\tReturned %Rrc, expected %Rrc\n",
-                             iResult, g_aTestBlock[iTest].iResult);
-            }
-            else if (stream.GetOffset() != g_aTestBlock[iTest].uOffsetAfter)
-            {
-                RTTestFailed(hTest, "\tOffset %zu wrong, expected %u\n",
-                             stream.GetOffset(), g_aTestBlock[iTest].uOffsetAfter);
-            }
+            if (iResult != g_aTestBlocks[iTest].iResult)
+                RTTestFailed(hTest, "\tReturned %Rrc, expected %Rrc\n", iResult, g_aTestBlocks[iTest].iResult);
+            else if (stream.GetOffset() != g_aTestBlocks[iTest].offAfter)
+                RTTestFailed(hTest, "\tOffset %zu wrong, expected %u\n", stream.GetOffset(), g_aTestBlocks[iTest].offAfter);
             else if (iResult == VERR_MORE_DATA)
-            {
                 RTTestIPrintf(RTTESTLVL_DEBUG, "\tMore data (Offset: %zu)\n", stream.GetOffset());
-            }
 
-            if (  (   RT_SUCCESS(iResult)
-                   || iResult == VERR_MORE_DATA))
-            {
-                if (curBlock.GetCount() != g_aTestBlock[iTest].uMapElements)
-                {
+            if (RT_SUCCESS(iResult) || iResult == VERR_MORE_DATA)
+                if (curBlock.GetCount() != g_aTestBlocks[iTest].cMapElements)
                     RTTestFailed(hTest, "\tMap has %u elements, expected %u\n",
-                                 curBlock.GetCount(), g_aTestBlock[iTest].uMapElements);
-                }
-            }
+                                 curBlock.GetCount(), g_aTestBlocks[iTest].cMapElements);
 
             /* There is remaining data left in the buffer (which needs to be merged
              * with a following buffer) -- print it. */
             size_t off = stream.GetOffset();
-            size_t cbToWrite = g_aTestBlock[iTest].cbData - off;
+            size_t cbToWrite = g_aTestBlocks[iTest].cbData - off;
             if (cbToWrite)
             {
                 RTTestIPrintf(RTTESTLVL_DEBUG, "\tRemaining (%u):\n", cbToWrite);
@@ -238,7 +246,7 @@ int main()
                 /* How to properly get the current RTTESTLVL (aka IPRT_TEST_MAX_LEVEL) here?
                  * Hack alert: Using RTEnvGet for now. */
                 if (!RTStrICmp(RTEnvGet("IPRT_TEST_MAX_LEVEL"), "debug"))
-                    RTStrmWriteEx(g_pStdOut, &g_aTestBlock[iTest].pbData[off], cbToWrite - 1, NULL);
+                    RTStrmWriteEx(g_pStdOut, &g_aTestBlocks[iTest].pbData[off], cbToWrite - 1, NULL);
             }
         }
     }
@@ -253,7 +261,7 @@ int main()
         int iResult = stream.AddData((BYTE*)g_aTestStream[iTest].pbData, g_aTestStream[iTest].cbData);
         if (RT_SUCCESS(iResult))
         {
-            uint32_t uNumBlocks = 0;
+            uint32_t cBlocks = 0;
             uint8_t uSafeCouunter = 0;
             do
             {
@@ -264,22 +272,16 @@ int main()
                 {
                     /* Only count block which have at least one pair. */
                     if (curBlock.GetCount())
-                        uNumBlocks++;
+                        cBlocks++;
                 }
                 if (uSafeCouunter++ > 32)
                     break;
             } while (RT_SUCCESS(iResult));
 
             if (iResult != g_aTestStream[iTest].iResult)
-            {
-                RTTestFailed(hTest, "\tReturned %Rrc, expected %Rrc\n",
-                             iResult, g_aTestStream[iTest].iResult);
-            }
-            else if (uNumBlocks != g_aTestStream[iTest].uNumBlocks)
-            {
-                RTTestFailed(hTest, "\tReturned %u blocks, expected %u\n",
-                             uNumBlocks, g_aTestStream[iTest].uNumBlocks);
-            }
+                RTTestFailed(hTest, "\tReturned %Rrc, expected %Rrc\n", iResult, g_aTestStream[iTest].iResult);
+            else if (cBlocks != g_aTestStream[iTest].cBlocks)
+                RTTestFailed(hTest, "\tReturned %u blocks, expected %u\n", cBlocks, g_aTestStream[iTest].cBlocks);
         }
         else
             RTTestFailed(hTest, "\tAdding data failed with %Rrc", iResult);

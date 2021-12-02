@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMUsb.cpp 92155 2021-10-29 17:27:53Z vboxsync $ */
 /** @file
  * PDM - Pluggable Device and Driver Manager, USB part.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -283,7 +283,7 @@ int pdmR3UsbLoadModules(PVM pVM)
 {
     LogFlow(("pdmR3UsbLoadModules:\n"));
 
-    AssertRelease(!(RT_OFFSETOF(PDMUSBINS, achInstanceData) & 15));
+    AssertRelease(!(RT_UOFFSETOF(PDMUSBINS, achInstanceData) & 15));
     AssertRelease(sizeof(pVM->pdm.s.pUsbInstances->Internal.s) <= sizeof(pVM->pdm.s.pUsbInstances->Internal.padding));
 
     /*
@@ -458,7 +458,7 @@ static int pdmR3UsbFindHub(PVM pVM, uint32_t iUsbVersion, PPDMUSBHUB *ppHub)
 
 
 /**
- * Translates a USB vesion (a bit-mask) to USB speed (enum). Picks
+ * Translates a USB version (a bit-mask) to USB speed (enum). Picks
  * the highest available version.
  *
  * @returns VUSBSPEED enum
@@ -479,6 +479,39 @@ static VUSBSPEED pdmR3UsbVer2Spd(uint32_t iUsbVersion)
         enmSpd = VUSB_SPEED_FULL;    /* Can't distinguish LS vs. FS. */
 
     return enmSpd;
+}
+
+
+/**
+ * Translates a USB speed (enum) to USB version.
+ *
+ * @returns USB version mask
+ *
+ * @param   enmSpeed        The USB connection speed.
+ *
+ */
+static uint32_t pdmR3UsbSpd2Ver(VUSBSPEED enmSpeed)
+{
+    uint32_t    iUsbVersion = 0;
+    Assert(enmSpeed != VUSB_SPEED_UNKNOWN);
+
+    switch (enmSpeed)
+    {
+    case VUSB_SPEED_LOW:
+    case VUSB_SPEED_FULL:
+        iUsbVersion = VUSB_STDVER_11;
+        break;
+    case VUSB_SPEED_HIGH:
+        iUsbVersion = VUSB_STDVER_20;
+        break;
+    case VUSB_SPEED_SUPER:
+    case VUSB_SPEED_SUPERPLUS:
+    default:
+        iUsbVersion = VUSB_STDVER_30;
+        break;
+    }
+
+    return iUsbVersion;
 }
 
 
@@ -575,7 +608,7 @@ static int pdmR3UsbCreateDevice(PVM pVM, PPDMUSBHUB pHub, PPDMUSB pUsbDev, int i
     /*
      * Allocate the device instance.
      */
-    size_t cb = RT_OFFSETOF(PDMUSBINS, achInstanceData[pUsbDev->pReg->cbInstance]);
+    size_t cb = RT_UOFFSETOF_DYN(PDMUSBINS, achInstanceData[pUsbDev->pReg->cbInstance]);
     cb = RT_ALIGN_Z(cb, 16);
     PPDMUSBINS pUsbIns;
     rc = MMR3HeapAllocZEx(pVM, MM_TAG_PDM_USB, cb, (void **)&pUsbIns);
@@ -683,7 +716,7 @@ static int pdmR3UsbCreateDevice(PVM pVM, PPDMUSBHUB pHub, PPDMUSB pUsbDev, int i
     {
         AssertMsgFailed(("Failed to construct '%s'/%d! %Rra\n", pUsbIns->pReg->szName, pUsbIns->iInstance, rc));
         if (rc == VERR_VERSION_MISMATCH)
-            rc = VERR_PDM_DRIVER_VERSION_MISMATCH;
+            rc = VERR_PDM_USBDEV_VERSION_MISMATCH;
     }
     if (fAtRuntime)
         pdmR3UsbDestroyDevice(pVM, pUsbIns);
@@ -986,12 +1019,12 @@ VMMR3DECL(int) PDMR3UsbCreateEmulatedDevice(PUVM pUVM, const char *pszDeviceName
  * @param   pszBackend          The proxy backend to use.
  * @param   pszAddress          The address string.
  * @param   pvBackend           Pointer to the backend.
- * @param   iUsbVersion         The preferred USB version.
+ * @param   enmSpeed            The speed the USB device is operating at.
  * @param   fMaskedIfs          The interfaces to hide from the guest.
  * @param   pszCaptureFilename  Path to the file for USB traffic capturing, optional.
  */
 VMMR3DECL(int) PDMR3UsbCreateProxyDevice(PUVM pUVM, PCRTUUID pUuid, const char *pszBackend, const char *pszAddress, void *pvBackend,
-                                         uint32_t iUsbVersion, uint32_t fMaskedIfs, const char *pszCaptureFilename)
+                                         VUSBSPEED enmSpeed, uint32_t fMaskedIfs, const char *pszCaptureFilename)
 {
     /*
      * Validate input.
@@ -1002,9 +1035,11 @@ VMMR3DECL(int) PDMR3UsbCreateProxyDevice(PUVM pUVM, PCRTUUID pUuid, const char *
     VM_ASSERT_EMT_RETURN(pVM, VERR_VM_THREAD_NOT_EMT);
     AssertPtrReturn(pUuid, VERR_INVALID_POINTER);
     AssertPtrReturn(pszAddress, VERR_INVALID_POINTER);
-    AssertReturn(    iUsbVersion == VUSB_STDVER_30
-                 ||  iUsbVersion == VUSB_STDVER_20
-                 ||  iUsbVersion == VUSB_STDVER_11, VERR_INVALID_PARAMETER);
+    AssertReturn(    enmSpeed == VUSB_SPEED_LOW
+                 ||  enmSpeed == VUSB_SPEED_FULL
+                 ||  enmSpeed == VUSB_SPEED_HIGH
+                 ||  enmSpeed == VUSB_SPEED_SUPER
+                 ||  enmSpeed == VUSB_SPEED_SUPERPLUS, VERR_INVALID_PARAMETER);
 
     /*
      * Find the USBProxy driver.
@@ -1020,6 +1055,7 @@ VMMR3DECL(int) PDMR3UsbCreateProxyDevice(PUVM pUVM, PCRTUUID pUuid, const char *
      * Find a suitable hub with free ports.
      */
     PPDMUSBHUB pHub;
+    uint32_t iUsbVersion = pdmR3UsbSpd2Ver(enmSpeed);
     int rc = pdmR3UsbFindHub(pVM, iUsbVersion, &pHub);
     if (RT_FAILURE(rc))
     {
@@ -1041,7 +1077,6 @@ VMMR3DECL(int) PDMR3UsbCreateProxyDevice(PUVM pUVM, PCRTUUID pUuid, const char *
         rc = RTUuidToStr(pUuid, &szUuid[0], sizeof(szUuid));                    AssertRCBreak(rc);
         rc = CFGMR3InsertString(pConfig,  "UUID", szUuid);                      AssertRCBreak(rc);
         rc = CFGMR3InsertString(pConfig, "Backend", pszBackend);                AssertRCBreak(rc);
-        rc = CFGMR3InsertInteger(pConfig, "USBVersion", iUsbVersion);           AssertRCBreak(rc);
         rc = CFGMR3InsertInteger(pConfig, "pvBackend", (uintptr_t)pvBackend);   AssertRCBreak(rc);
         rc = CFGMR3InsertInteger(pConfig, "MaskedIfs", fMaskedIfs);             AssertRCBreak(rc);
         rc = CFGMR3InsertInteger(pConfig, "Force11Device", !(pHub->fVersions & iUsbVersion)); AssertRCBreak(rc);
@@ -1053,7 +1088,8 @@ VMMR3DECL(int) PDMR3UsbCreateProxyDevice(PUVM pUVM, PCRTUUID pUuid, const char *
         return rc;
     }
 
-    VUSBSPEED enmSpeed = pdmR3UsbVer2Spd(iUsbVersion);
+    if (enmSpeed == VUSB_SPEED_UNKNOWN)
+        enmSpeed = pdmR3UsbVer2Spd(iUsbVersion);
 
     /*
      * Finally, try to create it.
@@ -1381,23 +1417,23 @@ VMMR3DECL(int)  PDMR3UsbDriverAttach(PUVM pUVM, const char *pszDevice, unsigned 
  * @param   iLun            The Logical Unit in which to look for the driver.
  * @param   pszDriver       The name of the driver which to detach.  If NULL
  *                          then the entire driver chain is detatched.
- * @param   iOccurance      The occurrence of that driver in the chain.  This is
+ * @param   iOccurrence     The occurrence of that driver in the chain.  This is
  *                          usually 0.
  * @param   fFlags          Flags, combination of the PDM_TACH_FLAGS_* \#defines.
  * @thread  EMT
  */
 VMMR3DECL(int)  PDMR3UsbDriverDetach(PUVM pUVM, const char *pszDevice, unsigned iDevIns, unsigned iLun,
-                                     const char *pszDriver, unsigned iOccurance, uint32_t fFlags)
+                                     const char *pszDriver, unsigned iOccurrence, uint32_t fFlags)
 {
-    LogFlow(("PDMR3UsbDriverDetach: pszDevice=%p:{%s} iDevIns=%u iLun=%u pszDriver=%p:{%s} iOccurance=%u fFlags=%#x\n",
-             pszDevice, pszDevice, iDevIns, iLun, pszDriver, pszDriver, iOccurance, fFlags));
+    LogFlow(("PDMR3UsbDriverDetach: pszDevice=%p:{%s} iDevIns=%u iLun=%u pszDriver=%p:{%s} iOccurrence=%u fFlags=%#x\n",
+             pszDevice, pszDevice, iDevIns, iLun, pszDriver, pszDriver, iOccurrence, fFlags));
     UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
     PVM pVM = pUVM->pVM;
     VM_ASSERT_VALID_EXT_RETURN(pVM, VERR_INVALID_VM_HANDLE);
     VM_ASSERT_EMT(pVM);
     AssertPtr(pszDevice);
     AssertPtrNull(pszDriver);
-    Assert(iOccurance == 0 || pszDriver);
+    Assert(iOccurrence == 0 || pszDriver);
     Assert(!(fFlags & ~(PDM_TACH_FLAGS_NOT_HOT_PLUG)));
 
     /*
@@ -1419,9 +1455,9 @@ VMMR3DECL(int)  PDMR3UsbDriverDetach(PUVM pUVM, const char *pszDevice, unsigned 
                 {
                     if (!strcmp(pDrvIns->pReg->szName, pszDriver))
                     {
-                        if (iOccurance == 0)
+                        if (iOccurrence == 0)
                             break;
-                        iOccurance--;
+                        iOccurrence--;
                     }
                     pDrvIns = pDrvIns->Internal.s.pDown;
                 }
@@ -1668,9 +1704,9 @@ static DECLCALLBACK(int) pdmR3UsbHlp_DBGFStopV(PPDMUSBINS pUsbIns, const char *p
 }
 
 
-/** @interface_method_impl{PDMUSBHLP,pfnDBGFInfoRegister} */
-static DECLCALLBACK(int) pdmR3UsbHlp_DBGFInfoRegister(PPDMUSBINS pUsbIns, const char *pszName, const char *pszDesc,
-                                                      PFNDBGFHANDLERUSB pfnHandler)
+/** @interface_method_impl{PDMUSBHLP,pfnDBGFInfoRegisterArgv} */
+static DECLCALLBACK(int) pdmR3UsbHlp_DBGFInfoRegisterArgv(PPDMUSBINS pUsbIns, const char *pszName, const char *pszDesc,
+                                                          PFNDBGFINFOARGVUSB pfnHandler)
 {
     PDMUSB_ASSERT_USBINS(pUsbIns);
     LogFlow(("pdmR3UsbHlp_DBGFInfoRegister: caller='%s'/%d: pszName=%p:{%s} pszDesc=%p:{%s} pfnHandler=%p\n",
@@ -1678,8 +1714,7 @@ static DECLCALLBACK(int) pdmR3UsbHlp_DBGFInfoRegister(PPDMUSBINS pUsbIns, const 
 
     PVM pVM = pUsbIns->Internal.s.pVM;
     VM_ASSERT_EMT(pVM);
-    RT_NOREF4(pVM, pfnHandler, pszDesc, pszName); /** @todo int rc = DBGFR3InfoRegisterUsb(pVM, pszName, pszDesc, pfnHandler, pUsbIns); */
-    int rc = VERR_NOT_IMPLEMENTED; AssertFailed();
+    int rc = DBGFR3InfoRegisterUsbArgv(pVM, pszName, pszDesc, pfnHandler, pUsbIns);
 
     LogFlow(("pdmR3UsbHlp_DBGFInfoRegister: caller='%s'/%d: returns %Rrc\n", pUsbIns->pReg->szName, pUsbIns->iInstance, rc));
     return rc;
@@ -1709,6 +1744,18 @@ static DECLCALLBACK(void *) pdmR3UsbHlp_MMHeapAllocZ(PPDMUSBINS pUsbIns, size_t 
 
     LogFlow(("pdmR3UsbHlp_MMHeapAllocZ: caller='%s'/%d: returns %p\n", pUsbIns->pReg->szName, pUsbIns->iInstance, pv));
     return pv;
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnMMHeapFree} */
+static DECLCALLBACK(void) pdmR3UsbHlp_MMHeapFree(PPDMUSBINS pUsbIns, void *pv)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns); RT_NOREF(pUsbIns);
+    LogFlow(("pdmR3UsbHlp_MMHeapFree: caller='%s'/%d: pv=%p\n", pUsbIns->pReg->szName, pUsbIns->iInstance, pv));
+
+    MMR3HeapFree(pv);
+
+    LogFlow(("pdmR3UsbHlp_MMHeapFree: caller='%s'/%d: returns\n", pUsbIns->pReg->szName, pUsbIns->iInstance));
 }
 
 
@@ -1779,27 +1826,230 @@ static DECLCALLBACK(void) pdmR3UsbHlp_STAMRegisterV(PPDMUSBINS pUsbIns, void *pv
 }
 
 
-/** @interface_method_impl{PDMUSBHLP,pfnTMTimerCreate} */
-static DECLCALLBACK(int) pdmR3UsbHlp_TMTimerCreate(PPDMUSBINS pUsbIns, TMCLOCK enmClock, PFNTMTIMERUSB pfnCallback, void *pvUser,
-                                                   uint32_t fFlags, const char *pszDesc, PPTMTIMERR3 ppTimer)
+/** @interface_method_impl{PDMUSBHLP,pfnTimerCreate} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerCreate(PPDMUSBINS pUsbIns, TMCLOCK enmClock, PFNTMTIMERUSB pfnCallback, void *pvUser,
+                                                 uint32_t fFlags, const char *pszDesc, PTMTIMERHANDLE phTimer)
 {
     PDMUSB_ASSERT_USBINS(pUsbIns);
     PVM pVM = pUsbIns->Internal.s.pVM;
     VM_ASSERT_EMT(pVM);
-    LogFlow(("pdmR3UsbHlp_TMTimerCreate: caller='%s'/%d: enmClock=%d pfnCallback=%p pvUser=%p fFlags=%#x pszDesc=%p:{%s} ppTimer=%p\n",
-             pUsbIns->pReg->szName, pUsbIns->iInstance, enmClock, pfnCallback, pvUser, fFlags, pszDesc, pszDesc, ppTimer));
+    LogFlow(("pdmR3UsbHlp_TMTimerCreate: caller='%s'/%d: enmClock=%d pfnCallback=%p pvUser=%p fFlags=%#x pszDesc=%p:{%s} phTimer=%p\n",
+             pUsbIns->pReg->szName, pUsbIns->iInstance, enmClock, pfnCallback, pvUser, fFlags, pszDesc, pszDesc, phTimer));
 
-    if (pUsbIns->iInstance > 0) /** @todo use a string cache here later. */
+    AssertReturn(!(fFlags & TMTIMER_FLAGS_RING0), VERR_INVALID_FLAGS);
+    fFlags |= TMTIMER_FLAGS_NO_RING0;
+
+    /* Mangle the timer name if there are more than one instance of this device. */
+    char szName[32];
+    AssertReturn(strlen(pszDesc) < sizeof(szName) - 8, VERR_INVALID_NAME);
+    if (pUsbIns->iInstance > 0)
     {
-         char *pszDesc2 = MMR3HeapAPrintf(pVM, MM_TAG_PDM_USB_DESC, "%s [%u]", pszDesc, pUsbIns->iInstance);
-         if (pszDesc2)
-             pszDesc = pszDesc2;
+        RTStrPrintf(szName, sizeof(szName), "%s[%u:%s]", pszDesc, pUsbIns->iInstance, pUsbIns->Internal.s.pUsbDev->pReg->szName);
+        pszDesc = szName;
     }
 
-    int rc = TMR3TimerCreateUsb(pVM, pUsbIns, enmClock, pfnCallback, pvUser, fFlags, pszDesc, ppTimer);
+    int rc = TMR3TimerCreateUsb(pVM, pUsbIns, enmClock, pfnCallback, pvUser, fFlags, pszDesc, phTimer);
 
-    LogFlow(("pdmR3UsbHlp_TMTimerCreate: caller='%s'/%d: returns %Rrc\n", pUsbIns->pReg->szName, pUsbIns->iInstance, rc));
+    LogFlow(("pdmR3UsbHlp_TMTimerCreate: caller='%s'/%d: returns %Rrc *phTimer=%p\n", pUsbIns->pReg->szName, pUsbIns->iInstance, rc, *phTimer));
     return rc;
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerFromMicro} */
+static DECLCALLBACK(uint64_t) pdmR3UsbHlp_TimerFromMicro(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint64_t cMicroSecs)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerFromMicro(pUsbIns->Internal.s.pVM, hTimer, cMicroSecs);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerFromMilli} */
+static DECLCALLBACK(uint64_t) pdmR3UsbHlp_TimerFromMilli(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint64_t cMilliSecs)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerFromMilli(pUsbIns->Internal.s.pVM, hTimer, cMilliSecs);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerFromNano} */
+static DECLCALLBACK(uint64_t) pdmR3UsbHlp_TimerFromNano(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint64_t cNanoSecs)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerFromNano(pUsbIns->Internal.s.pVM, hTimer, cNanoSecs);
+}
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerGet} */
+static DECLCALLBACK(uint64_t) pdmR3UsbHlp_TimerGet(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerGet(pUsbIns->Internal.s.pVM, hTimer);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerGetFreq} */
+static DECLCALLBACK(uint64_t) pdmR3UsbHlp_TimerGetFreq(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerGetFreq(pUsbIns->Internal.s.pVM, hTimer);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerGetNano} */
+static DECLCALLBACK(uint64_t) pdmR3UsbHlp_TimerGetNano(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerGetNano(pUsbIns->Internal.s.pVM, hTimer);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerIsActive} */
+static DECLCALLBACK(bool) pdmR3UsbHlp_TimerIsActive(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerIsActive(pUsbIns->Internal.s.pVM, hTimer);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerIsLockOwner} */
+static DECLCALLBACK(bool) pdmR3UsbHlp_TimerIsLockOwner(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerIsLockOwner(pUsbIns->Internal.s.pVM, hTimer);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerLockClock} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerLockClock(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerLock(pUsbIns->Internal.s.pVM, hTimer, VERR_IGNORED);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerLockClock2} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerLockClock2(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, PPDMCRITSECT pCritSect)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    PVM const pVM = pUsbIns->Internal.s.pVM;
+    int rc = TMTimerLock(pVM, hTimer, VERR_IGNORED);
+    if (rc == VINF_SUCCESS)
+    {
+        rc = PDMCritSectEnter(pVM, pCritSect, VERR_IGNORED);
+        if (rc == VINF_SUCCESS)
+            return rc;
+        AssertRC(rc);
+        TMTimerUnlock(pVM, hTimer);
+    }
+    else
+        AssertRC(rc);
+    return rc;
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerSet} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerSet(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint64_t uExpire)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerSet(pUsbIns->Internal.s.pVM, hTimer, uExpire);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerSetFrequencyHint} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerSetFrequencyHint(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint32_t uHz)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerSetFrequencyHint(pUsbIns->Internal.s.pVM, hTimer, uHz);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerSetMicro} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerSetMicro(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint64_t cMicrosToNext)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerSetMicro(pUsbIns->Internal.s.pVM, hTimer, cMicrosToNext);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerSetMillies} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerSetMillies(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint64_t cMilliesToNext)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerSetMillies(pUsbIns->Internal.s.pVM, hTimer, cMilliesToNext);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerSetNano} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerSetNano(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint64_t cNanosToNext)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerSetNano(pUsbIns->Internal.s.pVM, hTimer, cNanosToNext);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerSetRelative} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerSetRelative(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, uint64_t cTicksToNext, uint64_t *pu64Now)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerSetRelative(pUsbIns->Internal.s.pVM, hTimer, cTicksToNext, pu64Now);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerStop} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerStop(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMTimerStop(pUsbIns->Internal.s.pVM, hTimer);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerUnlockClock} */
+static DECLCALLBACK(void) pdmR3UsbHlp_TimerUnlockClock(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    TMTimerUnlock(pUsbIns->Internal.s.pVM, hTimer);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerUnlockClock2} */
+static DECLCALLBACK(void) pdmR3UsbHlp_TimerUnlockClock2(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, PPDMCRITSECT pCritSect)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    PVM const pVM = pUsbIns->Internal.s.pVM;
+    TMTimerUnlock(pVM, hTimer);
+    int rc = PDMCritSectLeave(pVM, pCritSect);
+    AssertRC(rc);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerSetCritSect} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerSetCritSect(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, PPDMCRITSECT pCritSect)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMR3TimerSetCritSect(pUsbIns->Internal.s.pVM, hTimer, pCritSect);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerSave} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerSave(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, PSSMHANDLE pSSM)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMR3TimerSave(pUsbIns->Internal.s.pVM, hTimer, pSSM);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerLoad} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerLoad(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer, PSSMHANDLE pSSM)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMR3TimerLoad(pUsbIns->Internal.s.pVM, hTimer, pSSM);
+}
+
+
+/** @interface_method_impl{PDMUSBHLP,pfnTimerDestroy} */
+static DECLCALLBACK(int) pdmR3UsbHlp_TimerDestroy(PPDMUSBINS pUsbIns, TMTIMERHANDLE hTimer)
+{
+    PDMUSB_ASSERT_USBINS(pUsbIns);
+    return TMR3TimerDestroy(pUsbIns->Internal.s.pVM, hTimer);
 }
 
 
@@ -1938,17 +2188,189 @@ const PDMUSBHLP g_pdmR3UsbHlp =
     pdmR3UsbHlp_AssertEMT,
     pdmR3UsbHlp_AssertOther,
     pdmR3UsbHlp_DBGFStopV,
-    pdmR3UsbHlp_DBGFInfoRegister,
+    pdmR3UsbHlp_DBGFInfoRegisterArgv,
     pdmR3UsbHlp_MMHeapAlloc,
     pdmR3UsbHlp_MMHeapAllocZ,
+    pdmR3UsbHlp_MMHeapFree,
     pdmR3UsbHlp_PDMQueueCreate,
     pdmR3UsbHlp_SSMRegister,
+    SSMR3PutStruct,
+    SSMR3PutStructEx,
+    SSMR3PutBool,
+    SSMR3PutU8,
+    SSMR3PutS8,
+    SSMR3PutU16,
+    SSMR3PutS16,
+    SSMR3PutU32,
+    SSMR3PutS32,
+    SSMR3PutU64,
+    SSMR3PutS64,
+    SSMR3PutU128,
+    SSMR3PutS128,
+    SSMR3PutUInt,
+    SSMR3PutSInt,
+    SSMR3PutGCUInt,
+    SSMR3PutGCUIntReg,
+    SSMR3PutGCPhys32,
+    SSMR3PutGCPhys64,
+    SSMR3PutGCPhys,
+    SSMR3PutGCPtr,
+    SSMR3PutGCUIntPtr,
+    SSMR3PutRCPtr,
+    SSMR3PutIOPort,
+    SSMR3PutSel,
+    SSMR3PutMem,
+    SSMR3PutStrZ,
+    SSMR3GetStruct,
+    SSMR3GetStructEx,
+    SSMR3GetBool,
+    SSMR3GetBoolV,
+    SSMR3GetU8,
+    SSMR3GetU8V,
+    SSMR3GetS8,
+    SSMR3GetS8V,
+    SSMR3GetU16,
+    SSMR3GetU16V,
+    SSMR3GetS16,
+    SSMR3GetS16V,
+    SSMR3GetU32,
+    SSMR3GetU32V,
+    SSMR3GetS32,
+    SSMR3GetS32V,
+    SSMR3GetU64,
+    SSMR3GetU64V,
+    SSMR3GetS64,
+    SSMR3GetS64V,
+    SSMR3GetU128,
+    SSMR3GetU128V,
+    SSMR3GetS128,
+    SSMR3GetS128V,
+    SSMR3GetGCPhys32,
+    SSMR3GetGCPhys32V,
+    SSMR3GetGCPhys64,
+    SSMR3GetGCPhys64V,
+    SSMR3GetGCPhys,
+    SSMR3GetGCPhysV,
+    SSMR3GetUInt,
+    SSMR3GetSInt,
+    SSMR3GetGCUInt,
+    SSMR3GetGCUIntReg,
+    SSMR3GetGCPtr,
+    SSMR3GetGCUIntPtr,
+    SSMR3GetRCPtr,
+    SSMR3GetIOPort,
+    SSMR3GetSel,
+    SSMR3GetMem,
+    SSMR3GetStrZ,
+    SSMR3GetStrZEx,
+    SSMR3Skip,
+    SSMR3SkipToEndOfUnit,
+    SSMR3SetLoadError,
+    SSMR3SetLoadErrorV,
+    SSMR3SetCfgError,
+    SSMR3SetCfgErrorV,
+    SSMR3HandleGetStatus,
+    SSMR3HandleGetAfter,
+    SSMR3HandleIsLiveSave,
+    SSMR3HandleMaxDowntime,
+    SSMR3HandleHostBits,
+    SSMR3HandleRevision,
+    SSMR3HandleVersion,
+    SSMR3HandleHostOSAndArch,
+    CFGMR3Exists,
+    CFGMR3QueryType,
+    CFGMR3QuerySize,
+    CFGMR3QueryInteger,
+    CFGMR3QueryIntegerDef,
+    CFGMR3QueryString,
+    CFGMR3QueryStringDef,
+    CFGMR3QueryBytes,
+    CFGMR3QueryU64,
+    CFGMR3QueryU64Def,
+    CFGMR3QueryS64,
+    CFGMR3QueryS64Def,
+    CFGMR3QueryU32,
+    CFGMR3QueryU32Def,
+    CFGMR3QueryS32,
+    CFGMR3QueryS32Def,
+    CFGMR3QueryU16,
+    CFGMR3QueryU16Def,
+    CFGMR3QueryS16,
+    CFGMR3QueryS16Def,
+    CFGMR3QueryU8,
+    CFGMR3QueryU8Def,
+    CFGMR3QueryS8,
+    CFGMR3QueryS8Def,
+    CFGMR3QueryBool,
+    CFGMR3QueryBoolDef,
+    CFGMR3QueryPort,
+    CFGMR3QueryPortDef,
+    CFGMR3QueryUInt,
+    CFGMR3QueryUIntDef,
+    CFGMR3QuerySInt,
+    CFGMR3QuerySIntDef,
+    CFGMR3QueryPtr,
+    CFGMR3QueryPtrDef,
+    CFGMR3QueryGCPtr,
+    CFGMR3QueryGCPtrDef,
+    CFGMR3QueryGCPtrU,
+    CFGMR3QueryGCPtrUDef,
+    CFGMR3QueryGCPtrS,
+    CFGMR3QueryGCPtrSDef,
+    CFGMR3QueryStringAlloc,
+    CFGMR3QueryStringAllocDef,
+    CFGMR3GetParent,
+    CFGMR3GetChild,
+    CFGMR3GetChildF,
+    CFGMR3GetChildFV,
+    CFGMR3GetFirstChild,
+    CFGMR3GetNextChild,
+    CFGMR3GetName,
+    CFGMR3GetNameLen,
+    CFGMR3AreChildrenValid,
+    CFGMR3GetFirstValue,
+    CFGMR3GetNextValue,
+    CFGMR3GetValueName,
+    CFGMR3GetValueNameLen,
+    CFGMR3GetValueType,
+    CFGMR3AreValuesValid,
+    CFGMR3ValidateConfig,
     pdmR3UsbHlp_STAMRegisterV,
-    pdmR3UsbHlp_TMTimerCreate,
+    pdmR3UsbHlp_TimerCreate,
+    pdmR3UsbHlp_TimerFromMicro,
+    pdmR3UsbHlp_TimerFromMilli,
+    pdmR3UsbHlp_TimerFromNano,
+    pdmR3UsbHlp_TimerGet,
+    pdmR3UsbHlp_TimerGetFreq,
+    pdmR3UsbHlp_TimerGetNano,
+    pdmR3UsbHlp_TimerIsActive,
+    pdmR3UsbHlp_TimerIsLockOwner,
+    pdmR3UsbHlp_TimerLockClock,
+    pdmR3UsbHlp_TimerLockClock2,
+    pdmR3UsbHlp_TimerSet,
+    pdmR3UsbHlp_TimerSetFrequencyHint,
+    pdmR3UsbHlp_TimerSetMicro,
+    pdmR3UsbHlp_TimerSetMillies,
+    pdmR3UsbHlp_TimerSetNano,
+    pdmR3UsbHlp_TimerSetRelative,
+    pdmR3UsbHlp_TimerStop,
+    pdmR3UsbHlp_TimerUnlockClock,
+    pdmR3UsbHlp_TimerUnlockClock2,
+    pdmR3UsbHlp_TimerSetCritSect,
+    pdmR3UsbHlp_TimerSave,
+    pdmR3UsbHlp_TimerLoad,
+    pdmR3UsbHlp_TimerDestroy,
+    TMR3TimerSkip,
     pdmR3UsbHlp_VMSetErrorV,
     pdmR3UsbHlp_VMSetRuntimeErrorV,
     pdmR3UsbHlp_VMState,
     pdmR3UsbHlp_ThreadCreate,
+    PDMR3ThreadDestroy,
+    PDMR3ThreadIAmSuspending,
+    PDMR3ThreadIAmRunning,
+    PDMR3ThreadSleep,
+    PDMR3ThreadSuspend,
+    PDMR3ThreadResume,
     pdmR3UsbHlp_SetAsyncNotification,
     pdmR3UsbHlp_AsyncNotificationCompleted,
     pdmR3UsbHlp_VMGetSuspendReason,

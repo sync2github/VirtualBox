@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: lwipopts.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT Network - lwIP configuration options.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef _VBOX_NETNAT_LWIP_OPTS_H_
-#define _VBOX_NETNAT_LWIP_OPTS_H_
+#ifndef VBOX_INCLUDED_SRC_NAT_lwipopts_h
+#define VBOX_INCLUDED_SRC_NAT_lwipopts_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>     /* For VBOX_STRICT. */
 #include <iprt/mem.h>
@@ -199,4 +202,4 @@
 # define LWIP_NOASSERT 1
 #endif
 
-#endif /* _VBOX_NETNAT_LWIP_OPTS_H_ */
+#endif /* !VBOX_INCLUDED_SRC_NAT_lwipopts_h */

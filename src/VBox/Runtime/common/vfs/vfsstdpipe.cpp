@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vfsstdpipe.cpp 86413 2020-10-02 11:40:15Z vboxsync $ */
 /** @file
  * IPRT - Virtual File System, Standard Pipe I/O stream Implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -66,11 +66,7 @@ static DECLCALLBACK(int) rtVfsStdPipe_Close(void *pvThis)
 {
     PRTVFSSTDPIPE pThis = (PRTVFSSTDPIPE)pvThis;
 
-    int rc;
-    if (!pThis->fLeaveOpen)
-        rc = RTPipeClose(pThis->hPipe);
-    else
-        rc = VINF_SUCCESS;
+    int rc = RTPipeCloseEx(pThis->hPipe, pThis->fLeaveOpen);
     pThis->hPipe = NIL_RTPIPE;
 
     return rc;

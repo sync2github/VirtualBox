@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvHostBase-linux.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DrvHostBase - Host base drive access driver, Linux specifics.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,11 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DRV_HOST_BASE
 #include <sys/ioctl.h>
 #include <sys/fcntl.h>
@@ -36,10 +41,13 @@
 
 #include <iprt/mem.h>
 #include <iprt/file.h>
+#include <iprt/string.h>
+#include <VBox/err.h>
 #include <VBox/scsi.h>
 
+
 /**
- * Host backend specific data.
+ * Host backend specific data (needed by DrvHostBase.h).
  */
 typedef struct DRVHOSTBASEOS
 {
@@ -58,6 +66,17 @@ AssertCompile(sizeof(DRVHOSTBASEOS) <= 64);
 #define DRVHOSTBASE_OS_INT_DECLARED
 #include "DrvHostBase.h"
 
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
+/** Maximum buffer size supported by the kernel interface. */
+#define LNX_SCSI_MAX_BUFFER_SIZE (100 * _1K)
+
+
+
+
+
 DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, size_t cbCmd, PDMMEDIATXDIR enmTxDir,
                                      void *pvBuf, uint32_t *pcbBuf, uint8_t *pbSense, size_t cbSense, uint32_t cTimeoutMillies)
 {
@@ -74,7 +93,7 @@ DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, s
     /* Allocate the temporary buffer lazily. */
     if(RT_UNLIKELY(!pThis->Os.pbDoubleBuffer))
     {
-        pThis->Os.pbDoubleBuffer = (uint8_t *)RTMemAlloc(SCSI_MAX_BUFFER_SIZE);
+        pThis->Os.pbDoubleBuffer = (uint8_t *)RTMemAlloc(LNX_SCSI_MAX_BUFFER_SIZE);
         if (!pThis->Os.pbDoubleBuffer)
             return VERR_NO_MEMORY;
     }
@@ -91,7 +110,7 @@ DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, s
             break;
         case PDMMEDIATXDIR_FROM_DEVICE:
             Assert(*pcbBuf != 0);
-            Assert(*pcbBuf <= SCSI_MAX_BUFFER_SIZE);
+            Assert(*pcbBuf <= LNX_SCSI_MAX_BUFFER_SIZE);
             /* Make sure that the buffer is clear for commands reading
              * data. The actually received data may be shorter than what
              * we expect, and due to the unreliable feedback about how much
@@ -104,7 +123,7 @@ DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, s
             break;
         case PDMMEDIATXDIR_TO_DEVICE:
             Assert(*pcbBuf != 0);
-            Assert(*pcbBuf <= SCSI_MAX_BUFFER_SIZE);
+            Assert(*pcbBuf <= LNX_SCSI_MAX_BUFFER_SIZE);
             memcpy(pThis->Os.pbDoubleBuffer, pvBuf, *pcbBuf);
             direction = CGC_DATA_WRITE;
             break;
@@ -152,6 +171,15 @@ DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, s
 
     return rc;
 }
+
+
+DECLHIDDEN(size_t) drvHostBaseScsiCmdGetBufLimitOs(PDRVHOSTBASE pThis)
+{
+    RT_NOREF(pThis);
+
+    return LNX_SCSI_MAX_BUFFER_SIZE;
+}
+
 
 DECLHIDDEN(int) drvHostBaseGetMediaSizeOs(PDRVHOSTBASE pThis, uint64_t *pcb)
 {

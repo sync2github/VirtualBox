@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxPktDmp.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxPktDmp.h - Dump Ethernet frame into debug log.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,18 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vboxpktdmp_h
-#define ___VBox_vboxpktdmp_h
+#ifndef VBOX_INCLUDED_VBoxPktDmp_h
+#define VBOX_INCLUDED_VBoxPktDmp_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
+#include <iprt/net.h>
+#include <iprt/log.h>
+#if defined(LOG_ENABLED) && !defined(VBOX_DEVICE_STRUCT_TESTCASE)
+# include <iprt/asm.h>
+#endif
+
 
 DECLINLINE(const char *) vboxEthTypeStr(uint16_t uType)
 {
@@ -39,7 +49,7 @@ DECLINLINE(const char *) vboxEthTypeStr(uint16_t uType)
 }
 
 
-DECLHIDDEN(void) vboxEthPacketDump(const char *pcszInstance, const char *pcszText, const uint8_t *pcPacket, uint32_t cb)
+DECLINLINE(void) vboxEthPacketDump(const char *pcszInstance, const char *pcszText, const uint8_t *pcPacket, uint32_t cb)
 {
 #if defined(LOG_ENABLED) && !defined(VBOX_DEVICE_STRUCT_TESTCASE)
     AssertReturnVoid(cb >= 14);
@@ -163,4 +173,4 @@ DECLHIDDEN(void) vboxEthPacketDump(const char *pcszInstance, const char *pcszTex
 #endif
 }
 
-#endif
+#endif /* !VBOX_INCLUDED_VBoxPktDmp_h */

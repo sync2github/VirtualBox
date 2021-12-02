@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineSettingsStorage.cpp 91414 2021-09-27 17:46:20Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineSettingsStorage class implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,44 +15,252 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QHeaderView>
-# include <QItemEditorFactory>
-# include <QMouseEvent>
-# include <QScrollBar>
-# include <QStylePainter>
-# include <QTimer>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QCommonStyle>
+#include <QDrag>
+#include <QDragMoveEvent>
+#include <QGridLayout>
+#include <QItemDelegate>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMenu>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QSpinBox>
+#include <QStackedWidget>
+#include <QVBoxLayout>
 
 /* GUI includes: */
-# include "QIWidgetValidator.h"
-# include "UIIconPool.h"
-# include "UIWizardNewVD.h"
-# include "VBoxGlobal.h"
-# include "QIFileDialog.h"
-# include "UIMessageCenter.h"
-# include "UIMachineSettingsStorage.h"
-# include "UIConverter.h"
-# include "UIMedium.h"
-# include "UIExtraDataManager.h"
+#include "QILabel.h"
+#include "QILabelSeparator.h"
+#include "QIToolButton.h"
+#include "QITreeView.h"
+#include "QISplitter.h"
+#include "UICommon.h"
+#include "UIConverter.h"
+#include "UIErrorString.h"
+#include "UIExtraDataManager.h"
+#include "UIIconPool.h"
+#include "UIMachineSettingsStorage.h"
+#include "UIMedium.h"
+#include "UIMediumSelector.h"
+#include "UIMessageCenter.h"
+#include "QIToolBar.h"
 
 /* COM includes: */
-# include "CStorageController.h"
-# include "CMediumAttachment.h"
+#include "CMediumAttachment.h"
+#include "CStorageController.h"
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+/* Defines: */
+typedef QList<StorageSlot> SlotsList;
+typedef QList<KDeviceType> DeviceTypeList;
+typedef QList<KStorageBus> ControllerBusList;
+typedef QList<KStorageControllerType> ControllerTypeList;
+Q_DECLARE_METATYPE(SlotsList);
+Q_DECLARE_METATYPE(DeviceTypeList);
+Q_DECLARE_METATYPE(ControllerBusList);
+Q_DECLARE_METATYPE(ControllerTypeList);
 
-#include <QCommonStyle>
-#include <QMetaProperty>
 
-
-QString compressText (const QString &aText)
+/** Item states. */
+enum ItemState
 {
-    return QString ("<nobr><compact elipsis=\"end\">%1</compact></nobr>").arg (aText);
-}
+    State_DefaultItem,
+    State_CollapsedItem,
+    State_ExpandedItem,
+    State_MAX
+};
+
+
+/** Pixmap types. */
+enum PixmapType
+{
+    InvalidPixmap,
+
+    ControllerAddEn,
+    ControllerAddDis,
+    ControllerDelEn,
+    ControllerDelDis,
+
+    AttachmentAddEn,
+    AttachmentAddDis,
+    AttachmentDelEn,
+    AttachmentDelDis,
+
+    IDEControllerNormal,
+    IDEControllerExpand,
+    IDEControllerCollapse,
+    SATAControllerNormal,
+    SATAControllerExpand,
+    SATAControllerCollapse,
+    SCSIControllerNormal,
+    SCSIControllerExpand,
+    SCSIControllerCollapse,
+    SASControllerNormal,
+    SASControllerExpand,
+    SASControllerCollapse,
+    USBControllerNormal,
+    USBControllerExpand,
+    USBControllerCollapse,
+    NVMeControllerNormal,
+    NVMeControllerExpand,
+    NVMeControllerCollapse,
+    VirtioSCSIControllerNormal,
+    VirtioSCSIControllerExpand,
+    VirtioSCSIControllerCollapse,
+    FloppyControllerNormal,
+    FloppyControllerExpand,
+    FloppyControllerCollapse,
+
+    IDEControllerAddEn,
+    IDEControllerAddDis,
+    SATAControllerAddEn,
+    SATAControllerAddDis,
+    SCSIControllerAddEn,
+    SCSIControllerAddDis,
+    SASControllerAddEn,
+    SASControllerAddDis,
+    USBControllerAddEn,
+    USBControllerAddDis,
+    NVMeControllerAddEn,
+    NVMeControllerAddDis,
+    VirtioSCSIControllerAddEn,
+    VirtioSCSIControllerAddDis,
+    FloppyControllerAddEn,
+    FloppyControllerAddDis,
+
+    HDAttachmentNormal,
+    CDAttachmentNormal,
+    FDAttachmentNormal,
+
+    HDAttachmentAddEn,
+    HDAttachmentAddDis,
+    CDAttachmentAddEn,
+    CDAttachmentAddDis,
+    FDAttachmentAddEn,
+    FDAttachmentAddDis,
+
+    ChooseExistingEn,
+    ChooseExistingDis,
+    CDUnmountEnabled,
+    CDUnmountDisabled,
+    FDUnmountEnabled,
+    FDUnmountDisabled,
+
+    MaxIndex
+};
+
+
+/** Machine settings: Storage Attachment data structure. */
+struct UIDataSettingsMachineStorageAttachment
+{
+    /** Constructs data. */
+    UIDataSettingsMachineStorageAttachment()
+        : m_enmDeviceType(KDeviceType_Null)
+        , m_iPort(-1)
+        , m_iDevice(-1)
+        , m_uMediumId(QUuid())
+        , m_fPassthrough(false)
+        , m_fTempEject(false)
+        , m_fNonRotational(false)
+        , m_fHotPluggable(false)
+    {}
+
+    /** Returns whether @a another passed data is equal to this one. */
+    bool equal(const UIDataSettingsMachineStorageAttachment &another) const
+    {
+        return true
+               && (m_enmDeviceType == another.m_enmDeviceType)
+               && (m_iPort == another.m_iPort)
+               && (m_iDevice == another.m_iDevice)
+               && (m_uMediumId == another.m_uMediumId)
+               && (m_fPassthrough == another.m_fPassthrough)
+               && (m_fTempEject == another.m_fTempEject)
+               && (m_fNonRotational == another.m_fNonRotational)
+               && (m_fHotPluggable == another.m_fHotPluggable)
+               ;
+    }
+
+    /** Returns whether @a another passed data is equal to this one. */
+    bool operator==(const UIDataSettingsMachineStorageAttachment &another) const { return equal(another); }
+    /** Returns whether @a another passed data is different from this one. */
+    bool operator!=(const UIDataSettingsMachineStorageAttachment &another) const { return !equal(another); }
+
+    /** Holds the device type. */
+    KDeviceType  m_enmDeviceType;
+    /** Holds the port. */
+    LONG         m_iPort;
+    /** Holds the device. */
+    LONG         m_iDevice;
+    /** Holds the medium ID. */
+    QUuid        m_uMediumId;
+    /** Holds whether the attachment being passed through. */
+    bool         m_fPassthrough;
+    /** Holds whether the attachment being temporarily eject. */
+    bool         m_fTempEject;
+    /** Holds whether the attachment is solid-state. */
+    bool         m_fNonRotational;
+    /** Holds whether the attachment is hot-pluggable. */
+    bool         m_fHotPluggable;
+};
+
+
+/** Machine settings: Storage Controller data structure. */
+struct UIDataSettingsMachineStorageController
+{
+    /** Constructs data. */
+    UIDataSettingsMachineStorageController()
+        : m_strName(QString())
+        , m_enmBus(KStorageBus_Null)
+        , m_enmType(KStorageControllerType_Null)
+        , m_uPortCount(0)
+        , m_fUseHostIOCache(false)
+    {}
+
+    /** Returns whether @a another passed data is equal to this one. */
+    bool equal(const UIDataSettingsMachineStorageController &another) const
+    {
+        return true
+               && (m_strName == another.m_strName)
+               && (m_enmBus == another.m_enmBus)
+               && (m_enmType == another.m_enmType)
+               && (m_uPortCount == another.m_uPortCount)
+               && (m_fUseHostIOCache == another.m_fUseHostIOCache)
+               ;
+    }
+
+    /** Returns whether @a another passed data is equal to this one. */
+    bool operator==(const UIDataSettingsMachineStorageController &another) const { return equal(another); }
+    /** Returns whether @a another passed data is different from this one. */
+    bool operator!=(const UIDataSettingsMachineStorageController &another) const { return !equal(another); }
+
+    /** Holds the name. */
+    QString                 m_strName;
+    /** Holds the bus. */
+    KStorageBus             m_enmBus;
+    /** Holds the type. */
+    KStorageControllerType  m_enmType;
+    /** Holds the port count. */
+    uint                    m_uPortCount;
+    /** Holds whether the controller uses host IO cache. */
+    bool                    m_fUseHostIOCache;
+};
+
+
+/** Machine settings: Storage page data structure. */
+struct UIDataSettingsMachineStorage
+{
+    /** Constructs data. */
+    UIDataSettingsMachineStorage() {}
+
+    /** Returns whether @a another passed data is equal to this one. */
+    bool operator==(const UIDataSettingsMachineStorage & /* another */) const { return true; }
+    /** Returns whether @a another passed data is different from this one. */
+    bool operator!=(const UIDataSettingsMachineStorage & /* another */) const { return false; }
+};
 
 
 /** UIIconPool interface extension used as Storage Settings page icon-pool. */
@@ -60,66 +268,703 @@ class UIIconPoolStorageSettings : public UIIconPool
 {
 public:
 
-    /** Icon-pool instance access method. */
-    static UIIconPoolStorageSettings* instance();
     /** Create icon-pool instance. */
     static void create();
     /** Destroy icon-pool instance. */
     static void destroy();
 
-    /** Returns pixmap corresponding to passed @a pixmapType. */
-    QPixmap pixmap(PixmapType pixmapType) const;
-    /** Returns icon (probably merged) corresponding to passed @a pixmapType and @a pixmapDisabledType. */
-    QIcon icon(PixmapType pixmapType, PixmapType pixmapDisabledType = InvalidPixmap) const;
+    /** Returns pixmap corresponding to passed @a enmPixmapType. */
+    QPixmap pixmap(PixmapType enmPixmapType) const;
+    /** Returns icon (probably merged) corresponding to passed @a enmPixmapType and @a enmPixmapDisabledType. */
+    QIcon icon(PixmapType enmPixmapType, PixmapType enmPixmapDisabledType = InvalidPixmap) const;
 
 private:
 
     /** Icon-pool constructor. */
     UIIconPoolStorageSettings();
     /** Icon-pool destructor. */
-    ~UIIconPoolStorageSettings();
+    virtual ~UIIconPoolStorageSettings() /* override */;
+
+    /** Icon-pool instance access method. */
+    static UIIconPoolStorageSettings *instance();
 
     /** Icon-pool instance. */
-    static UIIconPoolStorageSettings *m_spInstance;
+    static UIIconPoolStorageSettings *s_pInstance;
     /** Icon-pool names cache. */
-    QMap<PixmapType, QString> m_names;
+    QMap<PixmapType, QString>         m_names;
     /** Icon-pool icons cache. */
-    mutable QMap<PixmapType, QIcon> m_icons;
+    mutable QMap<PixmapType, QIcon>   m_icons;
+
+    /** Allows for shortcut access. */
+    friend UIIconPoolStorageSettings *iconPool();
 };
-UIIconPoolStorageSettings* iconPool() { return UIIconPoolStorageSettings::instance(); }
+UIIconPoolStorageSettings *iconPool() { return UIIconPoolStorageSettings::instance(); }
+
+
+/** QITreeViewItem subclass used as abstract storage tree-view item. */
+class AbstractItem : public QITreeViewItem
+{
+    Q_OBJECT;
+
+public:
+
+    /** Item types. */
+    enum ItemType
+    {
+        Type_InvalidItem    = 0,
+        Type_RootItem       = 1,
+        Type_ControllerItem = 2,
+        Type_AttachmentItem = 3
+    };
+
+    /** Constructs top-level item passing @a pParentTree to the base-class. */
+    AbstractItem(QITreeView *pParentTree);
+    /** Constructs sub-level item passing @a pParentItem to the base-class. */
+    AbstractItem(AbstractItem *pParentItem);
+    /** Destructs item. */
+    virtual ~AbstractItem() /* override */;
+
+    /** Returns parent-item. */
+    AbstractItem *parent() const;
+    /** Returns ID. */
+    QUuid id() const;
+
+    /** Returns machine ID. */
+    QUuid machineId() const;
+    /** Defines @a uMachineId. */
+    void setMachineId(const QUuid &uMachineId);
+
+    /** Returns runtime type information. */
+    virtual ItemType rtti() const = 0;
+
+    /** Returns child item with specified @a iIndex. */
+    virtual AbstractItem *childItem(int iIndex) const = 0;
+    /** Returns child item with specified @a uId. */
+    virtual AbstractItem *childItemById(const QUuid &uId) const = 0;
+    /** Returns position of specified child @a pItem. */
+    virtual int posOfChild(AbstractItem *pItem) const = 0;
+
+    /** Returns tool-tip information. */
+    virtual QString toolTip() const = 0;
+    /** Returns pixmap information for specified @a enmState. */
+    virtual QPixmap pixmap(ItemState enmState = State_DefaultItem) = 0;
+
+protected:
+
+    /** Adds a child @a pItem. */
+    virtual void addChild(AbstractItem *pItem) = 0;
+    /** Removes the child @a pItem. */
+    virtual void delChild(AbstractItem *pItem) = 0;
+
+private:
+
+    /** Holds the parent item reference. */
+    AbstractItem *m_pParentItem;
+    /** Holds the item ID. */
+    QUuid         m_uId;
+    /** Holds the item machine ID. */
+    QUuid         m_uMachineId;
+};
+Q_DECLARE_METATYPE(AbstractItem::ItemType);
+
+
+/** AbstractItem subclass used as root storage tree-view item. */
+class RootItem : public AbstractItem
+{
+    Q_OBJECT;
+
+public:
+
+    /** Constructs top-level item passing @a pParentTree to the base-class. */
+    RootItem(QITreeView *pParentTree);
+    /** Destructs item. */
+    virtual ~RootItem() /* override */;
+
+    /** Returns a number of children of certain @a enmBus type. */
+    ULONG childCount(KStorageBus enmBus) const;
+
+protected:
+
+    /** Returns runtime type information. */
+    virtual ItemType rtti() const /* override */;
+
+    /** Returns child item with specified @a iIndex. */
+    virtual AbstractItem *childItem(int iIndex) const /* override */;
+    /** Returns child item with specified @a uId. */
+    virtual AbstractItem *childItemById(const QUuid &uId) const /* override */;
+    /** Returns position of specified child @a pItem. */
+    virtual int posOfChild(AbstractItem *pItem) const /* override */;
+    /** Returns the number of children. */
+    virtual int childCount() const /* override */;
+
+    /** Returns the item text. */
+    virtual QString text() const /* override */;
+    /** Returns tool-tip information. */
+    virtual QString toolTip() const /* override */;
+    /** Returns pixmap information for specified @a enmState. */
+    virtual QPixmap pixmap(ItemState enmState) /* override */;
+
+    /** Adds a child @a pItem. */
+    virtual void addChild(AbstractItem *pItem) /* override */;
+    /** Removes the child @a pItem. */
+    virtual void delChild(AbstractItem *pItem) /* override */;
+
+private:
+
+    /** Holds the list of controller items. */
+    QList<AbstractItem*> m_controllers;
+};
+
+
+/** AbstractItem subclass used as controller storage tree-view item. */
+class ControllerItem : public AbstractItem
+{
+    Q_OBJECT;
+
+public:
+
+    /** Constructs sub-level item passing @a pParentItem to the base-class.
+      * @param  strName  Brings the name.
+      * @param  enmBus   Brings the bus.
+      * @param  enmType  Brings the type. */
+    ControllerItem(AbstractItem *pParentItem, const QString &strName,
+                   KStorageBus enmBus, KStorageControllerType enmType);
+    /** Destructs item. */
+    virtual ~ControllerItem() /* override */;
+
+    /** Defines current @a strName. */
+    void setName(const QString &strName);
+    /** Returns current name. */
+    QString name() const;
+    /** Returns old name. */
+    QString oldName() const;
+
+    /** Defines @a enmBus. */
+    void setBus(KStorageBus enmBus);
+    /** Returns bus. */
+    KStorageBus bus() const;
+    /** Returns possible buses to switch from current one. */
+    ControllerBusList buses() const;
+
+    /** Defines @a enmType. */
+    void setType(KStorageControllerType enmType);
+    /** Returns type. */
+    KStorageControllerType type() const;
+    /** Returns possible types for specified @a enmBus to switch from current one. */
+    ControllerTypeList types(KStorageBus enmBus) const;
+
+    /** Defines current @a uPortCount. */
+    void setPortCount(uint uPortCount);
+    /** Returns current port count. */
+    uint portCount();
+    /** Returns maximum port count. */
+    uint maxPortCount();
+
+    /** Defines whether controller @a fUseIoCache. */
+    void setUseIoCache(bool fUseIoCache);
+    /** Returns whether controller uses IO cache. */
+    bool useIoCache() const;
+
+    /** Returns possible controller slots. */
+    SlotsList allSlots() const;
+    /** Returns used controller slots. */
+    SlotsList usedSlots() const;
+    /** Returns supported device type list. */
+    DeviceTypeList deviceTypeList() const;
+
+    /** Defines a list of @a attachments. */
+    void setAttachments(const QList<AbstractItem*> &attachments) { m_attachments = attachments; }
+    /** Returns a list of attachments. */
+    QList<AbstractItem*> attachments() const { return m_attachments; }
+    /** Returns an ID list of attached media of specified @a enmType. */
+    QList<QUuid> attachmentIDs(KDeviceType enmType = KDeviceType_Null) const;
+
+private:
+
+    /** Returns runtime type information. */
+    virtual ItemType rtti() const /* override */;
+
+    /** Returns child item with specified @a iIndex. */
+    virtual AbstractItem *childItem(int iIndex) const /* override */;
+    /** Returns child item with specified @a uId. */
+    virtual AbstractItem *childItemById(const QUuid &uId) const /* override */;
+    /** Returns position of specified child @a pItem. */
+    virtual int posOfChild(AbstractItem *pItem) const /* override */;
+    /** Returns the number of children. */
+    virtual int childCount() const /* override */;
+
+    /** Returns the item text. */
+    virtual QString text() const /* override */;
+    /** Returns tool-tip information. */
+    virtual QString toolTip() const /* override */;
+    /** Returns pixmap information for specified @a enmState. */
+    virtual QPixmap pixmap(ItemState enmState) /* override */;
+
+    /** Adds a child @a pItem. */
+    virtual void addChild(AbstractItem *pItem) /* override */;
+    /** Removes the child @a pItem. */
+    virtual void delChild(AbstractItem *pItem) /* override */;
+
+    /** Updates possible buses. */
+    void updateBusInfo();
+    /** Updates possible types. */
+    void updateTypeInfo();
+    /** Updates pixmaps of possible buses. */
+    void updatePixmaps();
+
+    /** Holds the current name. */
+    QString  m_strName;
+    /** Holds the old name. */
+    QString  m_strOldName;
+
+    /** Holds the bus. */
+    KStorageBus             m_enmBus;
+    /** Holds the type. */
+    KStorageControllerType  m_enmType;
+
+    /** Holds the possible buses. */
+    ControllerBusList                      m_buses;
+    /** Holds the possible types on per bus basis. */
+    QMap<KStorageBus, ControllerTypeList>  m_types;
+    /** Holds the pixmaps of possible buses. */
+    QList<PixmapType>                      m_pixmaps;
+
+    /** Holds the current port count. */
+    uint  m_uPortCount;
+    /** Holds whether controller uses IO cache. */
+    bool  m_fUseIoCache;
+
+    /** Holds the list of attachments. */
+    QList<AbstractItem*>  m_attachments;
+};
+
+
+/** AbstractItem subclass used as attachment storage tree-view item. */
+class AttachmentItem : public AbstractItem
+{
+    Q_OBJECT;
+
+public:
+
+    /** Constructs sub-level item passing @a pParentItem to the base-class.
+      * @param  enmDeviceType  Brings the attachment device type. */
+    AttachmentItem(AbstractItem *pParentItem, KDeviceType enmDeviceType);
+
+    /** Defines @a enmDeviceType. */
+    void setDeviceType(KDeviceType enmDeviceType);
+    /** Returns device type. */
+    KDeviceType deviceType() const;
+    /** Returns possible device types. */
+    DeviceTypeList deviceTypes() const;
+
+    /** Defines storage @a slot. */
+    void setStorageSlot(const StorageSlot &slot);
+    /** Returns storage slot. */
+    StorageSlot storageSlot() const;
+    /** Returns possible storage slots. */
+    SlotsList storageSlots() const;
+
+    /** Defines @a uMediumId. */
+    void setMediumId(const QUuid &uMediumId);
+    /** Returns the medium id. */
+    QUuid mediumId() const;
+
+    /** Returns whether attachment is a host drive. */
+    bool isHostDrive() const;
+
+    /** Defines whether attachment is @a fPassthrough. */
+    void setPassthrough(bool fPassthrough);
+    /** Returns whether attachment is passthrough. */
+    bool isPassthrough() const;
+
+    /** Defines whether attachment is @a fTemporaryEjectable. */
+    void setTempEject(bool fTemporaryEjectable);
+    /** Returns whether attachment is temporary ejectable. */
+    bool isTempEject() const;
+
+    /** Defines whether attachment is @a fNonRotational. */
+    void setNonRotational(bool fNonRotational);
+    /** Returns whether attachment is non-rotational. */
+    bool isNonRotational() const;
+
+    /** Returns whether attachment is @a fIsHotPluggable. */
+    void setHotPluggable(bool fIsHotPluggable);
+    /** Returns whether attachment is hot-pluggable. */
+    bool isHotPluggable() const;
+
+    /** Returns medium size. */
+    QString size() const;
+    /** Returns logical medium size. */
+    QString logicalSize() const;
+    /** Returns medium location. */
+    QString location() const;
+    /** Returns medium format. */
+    QString format() const;
+    /** Returns medium details. */
+    QString details() const;
+    /** Returns medium usage. */
+    QString usage() const;
+    /** Returns medium encryption password ID. */
+    QString encryptionPasswordId() const;
+
+private:
+
+    /** Caches medium information. */
+    void cache();
+
+    /** Returns runtime type information. */
+    virtual ItemType rtti() const /* override */;
+
+    /** Returns child item with specified @a iIndex. */
+    virtual AbstractItem *childItem(int iIndex) const /* override */;
+    /** Returns child item with specified @a uId. */
+    virtual AbstractItem *childItemById(const QUuid &uId) const /* override */;
+    /** Returns position of specified child @a pItem. */
+    virtual int posOfChild(AbstractItem *pItem) const /* override */;
+    /** Returns the number of children. */
+    virtual int childCount() const /* override */;
+
+    /** Returns the item text. */
+    virtual QString text() const /* override */;
+    /** Returns tool-tip information. */
+    virtual QString toolTip() const /* override */;
+    /** Returns pixmap information for specified @a enmState. */
+    virtual QPixmap pixmap(ItemState enmState) /* override */;
+
+    /** Adds a child @a pItem. */
+    virtual void addChild(AbstractItem *pItem) /* override */;
+    /** Removes the child @a pItem. */
+    virtual void delChild(AbstractItem *pItem) /* override */;
+
+    /** Holds the device type. */
+    KDeviceType  m_enmDeviceType;
+    /** Holds the storage slot. */
+    StorageSlot  m_storageSlot;
+    /** Holds the medium ID. */
+    QUuid        m_uMediumId;
+    /** Holds whether attachment is a host drive. */
+    bool         m_fHostDrive;
+    /** Holds whether attachment is passthrough. */
+    bool         m_fPassthrough;
+    /** Holds whether attachment is temporary ejectable. */
+    bool         m_fTempEject;
+    /** Holds whether attachment is non-rotational. */
+    bool         m_fNonRotational;
+    /** Holds whether attachment is hot-pluggable. */
+    bool         m_fHotPluggable;
+
+    /** Holds the name. */
+    QString  m_strName;
+    /** Holds the tool-tip. */
+    QString  m_strTip;
+    /** Holds the pixmap. */
+    QPixmap  m_strPixmap;
+
+    /** Holds the medium size. */
+    QString  m_strSize;
+    /** Holds the logical medium size. */
+    QString  m_strLogicalSize;
+    /** Holds the medium location. */
+    QString  m_strLocation;
+    /** Holds the medium format. */
+    QString  m_strFormat;
+    /** Holds the medium details. */
+    QString  m_strDetails;
+    /** Holds the medium usage. */
+    QString  m_strUsage;
+    /** Holds the medium encryption password ID. */
+    QString  m_strAttEncryptionPasswordID;
+};
+
+
+/** QAbstractItemModel subclass used as complex storage model. */
+class StorageModel : public QAbstractItemModel
+{
+    Q_OBJECT;
+
+public:
+
+    /** Data roles. */
+    enum DataRole
+    {
+        R_ItemId = Qt::UserRole + 1,
+        R_ItemPixmap,
+        R_ItemPixmapRect,
+        R_ItemName,
+        R_ItemNamePoint,
+        R_ItemType,
+        R_IsController,
+        R_IsAttachment,
+
+        R_ToolTipType,
+        R_IsMoreIDEControllersPossible,
+        R_IsMoreSATAControllersPossible,
+        R_IsMoreSCSIControllersPossible,
+        R_IsMoreFloppyControllersPossible,
+        R_IsMoreSASControllersPossible,
+        R_IsMoreUSBControllersPossible,
+        R_IsMoreNVMeControllersPossible,
+        R_IsMoreVirtioSCSIControllersPossible,
+        R_IsMoreAttachmentsPossible,
+
+        R_CtrOldName,
+        R_CtrName,
+        R_CtrType,
+        R_CtrTypesForIDE,
+        R_CtrTypesForSATA,
+        R_CtrTypesForSCSI,
+        R_CtrTypesForFloppy,
+        R_CtrTypesForSAS,
+        R_CtrTypesForUSB,
+        R_CtrTypesForPCIe,
+        R_CtrTypesForVirtioSCSI,
+        R_CtrDevices,
+        R_CtrBusType,
+        R_CtrBusTypes,
+        R_CtrPortCount,
+        R_CtrMaxPortCount,
+        R_CtrIoCache,
+
+        R_AttSlot,
+        R_AttSlots,
+        R_AttDevice,
+        R_AttMediumId,
+        R_AttIsShowDiffs,
+        R_AttIsHostDrive,
+        R_AttIsPassthrough,
+        R_AttIsTempEject,
+        R_AttIsNonRotational,
+        R_AttIsHotPluggable,
+        R_AttSize,
+        R_AttLogicalSize,
+        R_AttLocation,
+        R_AttFormat,
+        R_AttDetails,
+        R_AttUsage,
+        R_AttEncryptionPasswordID,
+
+        R_Margin,
+        R_Spacing,
+        R_IconSize,
+
+        R_HDPixmapEn,
+        R_CDPixmapEn,
+        R_FDPixmapEn,
+
+        R_HDPixmapAddEn,
+        R_HDPixmapAddDis,
+        R_CDPixmapAddEn,
+        R_CDPixmapAddDis,
+        R_FDPixmapAddEn,
+        R_FDPixmapAddDis,
+        R_HDPixmapRect,
+        R_CDPixmapRect,
+        R_FDPixmapRect
+    };
+
+    /** Tool-tip types. */
+    enum ToolTipType
+    {
+        DefaultToolTip  = 0,
+        ExpanderToolTip = 1,
+        HDAdderToolTip  = 2,
+        CDAdderToolTip  = 3,
+        FDAdderToolTip  = 4
+    };
+
+    /** Constructs storage model passing @a pParentTree to the base-class. */
+    StorageModel(QITreeView *pParentTree);
+    /** Destructs storage model. */
+    virtual ~StorageModel() /* override */;
+
+    /** Returns row count for the passed @a parentIndex. */
+    int rowCount(const QModelIndex &parentIndex = QModelIndex()) const;
+    /** Returns column count for the passed @a parentIndex. */
+    int columnCount(const QModelIndex &parentIndex = QModelIndex()) const;
+
+    /** Returns root item. */
+    QModelIndex root() const;
+    /** Returns item specified by @a iRow, @a iColum and @a parentIndex. */
+    QModelIndex index(int iRow, int iColumn, const QModelIndex &parentIndex = QModelIndex()) const;
+    /** Returns parent item of @a specifiedIndex item. */
+    QModelIndex parent(const QModelIndex &specifiedIndex) const;
+
+    /** Returns model data for @a specifiedIndex and @a iRole. */
+    QVariant data(const QModelIndex &specifiedIndex, int iRole) const;
+    /** Defines model data for @a specifiedIndex and @a iRole as @a value. */
+    bool setData(const QModelIndex &specifiedIndex, const QVariant &value, int iRole);
+
+    /** Adds controller with certain @a strCtrName, @a enmBus and @a enmType. */
+    QModelIndex addController(const QString &strCtrName, KStorageBus enmBus, KStorageControllerType enmType);
+    /** Deletes controller with certain @a uCtrId. */
+    void delController(const QUuid &uCtrId);
+
+    /** Adds attachment with certain @a enmDeviceType and @a uMediumId to controller with certain @a uCtrId. */
+    QModelIndex addAttachment(const QUuid &uCtrId, KDeviceType enmDeviceType, const QUuid &uMediumId);
+    /** Deletes attachment with certain @a uAttId from controller with certain @a uCtrId. */
+    void delAttachment(const QUuid &uCtrId, const QUuid &uAttId);
+    /** Moves attachment with certain @a uAttId from controller with certain @a uCtrOldId to one with another @a uCtrNewId. */
+    void moveAttachment(const QUuid &uAttId, const QUuid &uCtrOldId, const QUuid &uCtrNewId);
+
+    /** Returns device type of attachment with certain @a uAttId from controller with certain @a uCtrId. */
+    KDeviceType attachmentDeviceType(const QUuid &uCtrId, const QUuid &uAttId) const;
+
+    /** Defines @a uMachineId for reference. */
+    void setMachineId(const QUuid &uMachineId);
+
+    /** Sorts the contents of model by @a iColumn and @a enmOrder. */
+    void sort(int iColumn = 0, Qt::SortOrder enmOrder = Qt::AscendingOrder);
+    /** Returns attachment index by specified @a controllerIndex and @a attachmentStorageSlot. */
+    QModelIndex attachmentBySlot(QModelIndex controllerIndex, StorageSlot attachmentStorageSlot);
+
+    /** Returns chipset type. */
+    KChipsetType chipsetType() const;
+    /** Defines @a enmChipsetType. */
+    void setChipsetType(KChipsetType enmChipsetType);
+
+    /** Defines @a enmConfigurationAccessLevel. */
+    void setConfigurationAccessLevel(ConfigurationAccessLevel enmConfigurationAccessLevel);
+
+    /** Clears model of all contents. */
+    void clear();
+
+    /** Returns current controller types. */
+    QMap<KStorageBus, int> currentControllerTypes() const;
+    /** Returns maximum controller types. */
+    QMap<KStorageBus, int> maximumControllerTypes() const;
+
+    /** Returns bus corresponding to passed enmRole. */
+    static KStorageBus roleToBus(StorageModel::DataRole enmRole);
+    /** Returns role corresponding to passed enmBus. */
+    static StorageModel::DataRole busToRole(KStorageBus enmBus);
+
+private:
+
+    /** Returns model flags for @a specifiedIndex. */
+    Qt::ItemFlags flags(const QModelIndex &specifiedIndex) const;
+
+    /** Holds the root item instance. */
+    AbstractItem *m_pRootItem;
+
+    /** Holds the enabled plus pixmap instance. */
+    QPixmap  m_pixmapPlusEn;
+    /** Holds the disabled plus pixmap instance. */
+    QPixmap  m_pixmapPlusDis;
+    /** Holds the enabled minus pixmap instance. */
+    QPixmap  m_pixmapMinusEn;
+    /** Holds the disabled minus pixmap instance. */
+    QPixmap  m_pixmapMinusDis;
+
+    /** Holds the tool-tip type. */
+    ToolTipType  m_enmToolTipType;
+
+    /** Holds the chipset type. */
+    KChipsetType  m_enmChipsetType;
+
+    /** Holds configuration access level. */
+    ConfigurationAccessLevel  m_enmConfigurationAccessLevel;
+};
+Q_DECLARE_METATYPE(StorageModel::ToolTipType);
+
+
+/** QItemDelegate subclass used as storage table item delegate. */
+class StorageDelegate : public QItemDelegate
+{
+    Q_OBJECT;
+
+public:
+
+    /** Constructs storage delegate passing @a pParent to the base-class. */
+    StorageDelegate(QObject *pParent);
+
+private:
+
+    /** Paints @a index item with specified @a option using specified @a pPainter. */
+    void paint(QPainter *pPainter, const QStyleOptionViewItem &option, const QModelIndex &index) const;
+};
+
+
+/** QObject subclass used as UI medium ID holder.
+  * Used for compliance with other storage page widgets
+  * which caching and holding corresponding information. */
+class UIMediumIDHolder : public QObject
+{
+    Q_OBJECT;
+
+public:
+
+    /** Constructs medium ID holder passing @a pParent to the base-class. */
+    UIMediumIDHolder(QWidget *pParent) : QObject(pParent) {}
+
+    /** Defines medium @a uId. */
+    void setId(const QUuid &uId) { m_uId = uId; emit sigChanged(); }
+    /** Returns medium ID. */
+    QUuid id() const { return m_uId; }
+
+    /** Defines medium device @a enmType. */
+    void setType(UIMediumDeviceType enmType) { m_enmType = enmType; }
+    /** Returns medium device type. */
+    UIMediumDeviceType type() const { return m_enmType; }
+
+    /** Returns whether medium ID is null. */
+    bool isNull() const { return m_uId == UIMedium().id(); }
+
+signals:
+
+    /** Notify about medium ID changed. */
+    void sigChanged();
+
+private:
+
+    /** Holds the medium ID. */
+    QUuid               m_uId;
+    /** Holds the medium device type. */
+    UIMediumDeviceType  m_enmType;
+};
+
+
+QString compressText(const QString &strText)
+{
+    return QString("<nobr><compact elipsis=\"end\">%1</compact></nobr>").arg(strText);
+}
+
+
+/*********************************************************************************************************************************
+*   Class UIIconPoolStorageSettings implementation.                                                                              *
+*********************************************************************************************************************************/
 
 /* static */
-UIIconPoolStorageSettings* UIIconPoolStorageSettings::m_spInstance = 0;
-UIIconPoolStorageSettings* UIIconPoolStorageSettings::instance() { return m_spInstance; }
+UIIconPoolStorageSettings *UIIconPoolStorageSettings::s_pInstance = 0;
+UIIconPoolStorageSettings *UIIconPoolStorageSettings::instance() { return s_pInstance; }
 void UIIconPoolStorageSettings::create() { new UIIconPoolStorageSettings; }
-void UIIconPoolStorageSettings::destroy() { delete m_spInstance; }
+void UIIconPoolStorageSettings::destroy() { delete s_pInstance; }
 
-QPixmap UIIconPoolStorageSettings::pixmap(PixmapType pixmapType) const
+QPixmap UIIconPoolStorageSettings::pixmap(PixmapType enmPixmapType) const
 {
     /* Prepare fallback pixmap: */
     static QPixmap nullPixmap;
 
     /* If we do NOT have that 'pixmap type' icon cached already: */
-    if (!m_icons.contains(pixmapType))
+    if (!m_icons.contains(enmPixmapType))
     {
         /* Compose proper icon if we have that 'pixmap type' known: */
-        if (m_names.contains(pixmapType))
-            m_icons[pixmapType] = iconSet(m_names[pixmapType]);
+        if (m_names.contains(enmPixmapType))
+            m_icons[enmPixmapType] = iconSet(m_names[enmPixmapType]);
         /* Assign fallback icon if we do NOT have that 'pixmap type' known: */
         else
-            m_icons[pixmapType] = iconSet(nullPixmap);
+            m_icons[enmPixmapType] = iconSet(nullPixmap);
     }
 
     /* Retrieve corresponding icon: */
-    const QIcon &icon = m_icons[pixmapType];
+    const QIcon &icon = m_icons[enmPixmapType];
     AssertMsgReturn(!icon.isNull(),
-                    ("Undefined icon for type '%d'.", (int)pixmapType),
+                    ("Undefined icon for type '%d'.", (int)enmPixmapType),
                     nullPixmap);
 
     /* Retrieve available sizes for that icon: */
     const QList<QSize> availableSizes = icon.availableSizes();
     AssertMsgReturn(!availableSizes.isEmpty(),
-                    ("Undefined icon for type '%s'.", (int)pixmapType),
+                    ("Undefined icon for type '%s'.", (int)enmPixmapType),
                     nullPixmap);
 
     /* Determine icon metric: */
@@ -130,8 +975,8 @@ QPixmap UIIconPoolStorageSettings::pixmap(PixmapType pixmapType) const
     return icon.pixmap(QSize(iIconMetric, iIconMetric));
 }
 
-QIcon UIIconPoolStorageSettings::icon(PixmapType pixmapType,
-                                      PixmapType pixmapDisabledType /* = InvalidPixmap */) const
+QIcon UIIconPoolStorageSettings::icon(PixmapType enmPixmapType,
+                                      PixmapType enmPixmapDisabledType /* = InvalidPixmap */) const
 {
     /* Prepare fallback pixmap: */
     static QPixmap nullPixmap;
@@ -139,41 +984,41 @@ QIcon UIIconPoolStorageSettings::icon(PixmapType pixmapType,
     static QIcon nullIcon;
 
     /* If we do NOT have that 'pixmap type' icon cached already: */
-    if (!m_icons.contains(pixmapType))
+    if (!m_icons.contains(enmPixmapType))
     {
         /* Compose proper icon if we have that 'pixmap type' known: */
-        if (m_names.contains(pixmapType))
-            m_icons[pixmapType] = iconSet(m_names[pixmapType]);
+        if (m_names.contains(enmPixmapType))
+            m_icons[enmPixmapType] = iconSet(m_names[enmPixmapType]);
         /* Assign fallback icon if we do NOT have that 'pixmap type' known: */
         else
-            m_icons[pixmapType] = iconSet(nullPixmap);
+            m_icons[enmPixmapType] = iconSet(nullPixmap);
     }
 
     /* Retrieve normal icon: */
-    const QIcon &icon = m_icons[pixmapType];
+    const QIcon &icon = m_icons[enmPixmapType];
     AssertMsgReturn(!icon.isNull(),
-                    ("Undefined icon for type '%d'.", (int)pixmapType),
+                    ("Undefined icon for type '%d'.", (int)enmPixmapType),
                     nullIcon);
 
     /* If 'disabled' icon is invalid => just return 'normal' icon: */
-    if (pixmapDisabledType == InvalidPixmap)
+    if (enmPixmapDisabledType == InvalidPixmap)
         return icon;
 
     /* If we do NOT have that 'pixmap disabled type' icon cached already: */
-    if (!m_icons.contains(pixmapDisabledType))
+    if (!m_icons.contains(enmPixmapDisabledType))
     {
         /* Compose proper icon if we have that 'pixmap disabled type' known: */
-        if (m_names.contains(pixmapDisabledType))
-            m_icons[pixmapDisabledType] = iconSet(m_names[pixmapDisabledType]);
+        if (m_names.contains(enmPixmapDisabledType))
+            m_icons[enmPixmapDisabledType] = iconSet(m_names[enmPixmapDisabledType]);
         /* Assign fallback icon if we do NOT have that 'pixmap disabled type' known: */
         else
-            m_icons[pixmapDisabledType] = iconSet(nullPixmap);
+            m_icons[enmPixmapDisabledType] = iconSet(nullPixmap);
     }
 
     /* Retrieve disabled icon: */
-    const QIcon &iconDisabled = m_icons[pixmapDisabledType];
+    const QIcon &iconDisabled = m_icons[enmPixmapDisabledType];
     AssertMsgReturn(!iconDisabled.isNull(),
-                    ("Undefined icon for type '%d'.", (int)pixmapDisabledType),
+                    ("Undefined icon for type '%d'.", (int)enmPixmapDisabledType),
                     nullIcon);
 
     /* Return icon composed on the basis of two above: */
@@ -186,270 +1031,95 @@ QIcon UIIconPoolStorageSettings::icon(PixmapType pixmapType,
 UIIconPoolStorageSettings::UIIconPoolStorageSettings()
 {
     /* Connect instance: */
-    m_spInstance = this;
+    s_pInstance = this;
 
     /* Controller file-names: */
-    m_names.insert(ControllerAddEn,          ":/controller_add_16px.png");
-    m_names.insert(ControllerAddDis,         ":/controller_add_disabled_16px.png");
-    m_names.insert(ControllerDelEn,          ":/controller_remove_16px.png");
-    m_names.insert(ControllerDelDis,         ":/controller_remove_disabled_16px.png");
+    m_names.insert(ControllerAddEn,              ":/controller_add_16px.png");
+    m_names.insert(ControllerAddDis,             ":/controller_add_disabled_16px.png");
+    m_names.insert(ControllerDelEn,              ":/controller_remove_16px.png");
+    m_names.insert(ControllerDelDis,             ":/controller_remove_disabled_16px.png");
     /* Attachment file-names: */
-    m_names.insert(AttachmentAddEn,          ":/attachment_add_16px.png");
-    m_names.insert(AttachmentAddDis,         ":/attachment_add_disabled_16px.png");
-    m_names.insert(AttachmentDelEn,          ":/attachment_remove_16px.png");
-    m_names.insert(AttachmentDelDis,         ":/attachment_remove_disabled_16px.png");
+    m_names.insert(AttachmentAddEn,              ":/attachment_add_16px.png");
+    m_names.insert(AttachmentAddDis,             ":/attachment_add_disabled_16px.png");
+    m_names.insert(AttachmentDelEn,              ":/attachment_remove_16px.png");
+    m_names.insert(AttachmentDelDis,             ":/attachment_remove_disabled_16px.png");
     /* Specific controller default/expand/collapse file-names: */
-    m_names.insert(IDEControllerNormal,      ":/ide_16px.png");
-    m_names.insert(IDEControllerExpand,      ":/ide_expand_16px.png");
-    m_names.insert(IDEControllerCollapse,    ":/ide_collapse_16px.png");
-    m_names.insert(SATAControllerNormal,     ":/sata_16px.png");
-    m_names.insert(SATAControllerExpand,     ":/sata_expand_16px.png");
-    m_names.insert(SATAControllerCollapse,   ":/sata_collapse_16px.png");
-    m_names.insert(SCSIControllerNormal,     ":/scsi_16px.png");
-    m_names.insert(SCSIControllerExpand,     ":/scsi_expand_16px.png");
-    m_names.insert(SCSIControllerCollapse,   ":/scsi_collapse_16px.png");
-    m_names.insert(USBControllerNormal,      ":/usb_16px.png");
-    m_names.insert(USBControllerExpand,      ":/usb_expand_16px.png");
-    m_names.insert(USBControllerCollapse,    ":/usb_collapse_16px.png");
-    m_names.insert(NVMeControllerNormal,     ":/ide_16px.png");
-    m_names.insert(NVMeControllerExpand,     ":/ide_expand_16px.png");
-    m_names.insert(NVMeControllerCollapse,   ":/ide_collapse_16px.png");
-    m_names.insert(FloppyControllerNormal,   ":/floppy_16px.png");
-    m_names.insert(FloppyControllerExpand,   ":/floppy_expand_16px.png");
-    m_names.insert(FloppyControllerCollapse, ":/floppy_collapse_16px.png");
+    m_names.insert(IDEControllerNormal,          ":/ide_16px.png");
+    m_names.insert(IDEControllerExpand,          ":/ide_expand_16px.png");
+    m_names.insert(IDEControllerCollapse,        ":/ide_collapse_16px.png");
+    m_names.insert(SATAControllerNormal,         ":/sata_16px.png");
+    m_names.insert(SATAControllerExpand,         ":/sata_expand_16px.png");
+    m_names.insert(SATAControllerCollapse,       ":/sata_collapse_16px.png");
+    m_names.insert(SCSIControllerNormal,         ":/scsi_16px.png");
+    m_names.insert(SCSIControllerExpand,         ":/scsi_expand_16px.png");
+    m_names.insert(SCSIControllerCollapse,       ":/scsi_collapse_16px.png");
+    m_names.insert(SASControllerNormal,          ":/sas_16px.png");
+    m_names.insert(SASControllerExpand,          ":/sas_expand_16px.png");
+    m_names.insert(SASControllerCollapse,        ":/sas_collapse_16px.png");
+    m_names.insert(USBControllerNormal,          ":/usb_16px.png");
+    m_names.insert(USBControllerExpand,          ":/usb_expand_16px.png");
+    m_names.insert(USBControllerCollapse,        ":/usb_collapse_16px.png");
+    m_names.insert(NVMeControllerNormal,         ":/pcie_16px.png");
+    m_names.insert(NVMeControllerExpand,         ":/pcie_expand_16px.png");
+    m_names.insert(NVMeControllerCollapse,       ":/pcie_collapse_16px.png");
+    m_names.insert(VirtioSCSIControllerNormal,   ":/virtio_scsi_16px.png");
+    m_names.insert(VirtioSCSIControllerExpand,   ":/virtio_scsi_expand_16px.png");
+    m_names.insert(VirtioSCSIControllerCollapse, ":/virtio_scsi_collapse_16px.png");
+    m_names.insert(FloppyControllerNormal,       ":/floppy_16px.png");
+    m_names.insert(FloppyControllerExpand,       ":/floppy_expand_16px.png");
+    m_names.insert(FloppyControllerCollapse,     ":/floppy_collapse_16px.png");
     /* Specific controller add file-names: */
-    m_names.insert(IDEControllerAddEn,       ":/ide_add_16px.png");
-    m_names.insert(IDEControllerAddDis,      ":/ide_add_disabled_16px.png");
-    m_names.insert(SATAControllerAddEn,      ":/sata_add_16px.png");
-    m_names.insert(SATAControllerAddDis,     ":/sata_add_disabled_16px.png");
-    m_names.insert(SCSIControllerAddEn,      ":/scsi_add_16px.png");
-    m_names.insert(SCSIControllerAddDis,     ":/scsi_add_disabled_16px.png");
-    m_names.insert(USBControllerAddEn,       ":/usb_add_16px.png");
-    m_names.insert(USBControllerAddDis,      ":/usb_add_disabled_16px.png");
-    m_names.insert(NVMeControllerAddEn,      ":/ide_add_16px.png");
-    m_names.insert(NVMeControllerAddDis,     ":/ide_add_disabled_16px.png");
-    m_names.insert(FloppyControllerAddEn,    ":/floppy_add_16px.png");
-    m_names.insert(FloppyControllerAddDis,   ":/floppy_add_disabled_16px.png");
+    m_names.insert(IDEControllerAddEn,           ":/ide_add_16px.png");
+    m_names.insert(IDEControllerAddDis,          ":/ide_add_disabled_16px.png");
+    m_names.insert(SATAControllerAddEn,          ":/sata_add_16px.png");
+    m_names.insert(SATAControllerAddDis,         ":/sata_add_disabled_16px.png");
+    m_names.insert(SCSIControllerAddEn,          ":/scsi_add_16px.png");
+    m_names.insert(SCSIControllerAddDis,         ":/scsi_add_disabled_16px.png");
+    m_names.insert(SASControllerAddEn,           ":/sas_add_16px.png");
+    m_names.insert(SASControllerAddDis,          ":/sas_add_disabled_16px.png");
+    m_names.insert(USBControllerAddEn,           ":/usb_add_16px.png");
+    m_names.insert(USBControllerAddDis,          ":/usb_add_disabled_16px.png");
+    m_names.insert(NVMeControllerAddEn,          ":/pcie_add_16px.png");
+    m_names.insert(NVMeControllerAddDis,         ":/pcie_add_disabled_16px.png");
+    m_names.insert(VirtioSCSIControllerAddEn,    ":/virtio_scsi_add_16px.png");
+    m_names.insert(VirtioSCSIControllerAddDis,   ":/virtio_scsi_add_disabled_16px.png");
+    m_names.insert(FloppyControllerAddEn,        ":/floppy_add_16px.png");
+    m_names.insert(FloppyControllerAddDis,       ":/floppy_add_disabled_16px.png");
     /* Specific attachment file-names: */
-    m_names.insert(HDAttachmentNormal,       ":/hd_16px.png");
-    m_names.insert(CDAttachmentNormal,       ":/cd_16px.png");
-    m_names.insert(FDAttachmentNormal,       ":/fd_16px.png");
+    m_names.insert(HDAttachmentNormal,           ":/hd_16px.png");
+    m_names.insert(CDAttachmentNormal,           ":/cd_16px.png");
+    m_names.insert(FDAttachmentNormal,           ":/fd_16px.png");
     /* Specific attachment add file-names: */
-    m_names.insert(HDAttachmentAddEn,        ":/hd_add_16px.png");
-    m_names.insert(HDAttachmentAddDis,       ":/hd_add_disabled_16px.png");
-    m_names.insert(CDAttachmentAddEn,        ":/cd_add_16px.png");
-    m_names.insert(CDAttachmentAddDis,       ":/cd_add_disabled_16px.png");
-    m_names.insert(FDAttachmentAddEn,        ":/fd_add_16px.png");
-    m_names.insert(FDAttachmentAddDis,       ":/fd_add_disabled_16px.png");
+    m_names.insert(HDAttachmentAddEn,            ":/hd_add_16px.png");
+    m_names.insert(HDAttachmentAddDis,           ":/hd_add_disabled_16px.png");
+    m_names.insert(CDAttachmentAddEn,            ":/cd_add_16px.png");
+    m_names.insert(CDAttachmentAddDis,           ":/cd_add_disabled_16px.png");
+    m_names.insert(FDAttachmentAddEn,            ":/fd_add_16px.png");
+    m_names.insert(FDAttachmentAddDis,           ":/fd_add_disabled_16px.png");
     /* Specific attachment custom file-names: */
-    m_names.insert(ChooseExistingEn,         ":/select_file_16px.png");
-    m_names.insert(ChooseExistingDis,        ":/select_file_disabled_16px.png");
-    m_names.insert(HDNewEn,                  ":/hd_new_16px.png");
-    m_names.insert(HDNewDis,                 ":/hd_new_disabled_16px.png");
-    m_names.insert(CDUnmountEnabled,         ":/cd_unmount_16px.png");
-    m_names.insert(CDUnmountDisabled,        ":/cd_unmount_disabled_16px.png");
-    m_names.insert(FDUnmountEnabled,         ":/fd_unmount_16px.png");
-    m_names.insert(FDUnmountDisabled,        ":/fd_unmount_disabled_16px.png");
+    m_names.insert(ChooseExistingEn,             ":/select_file_16px.png");
+    m_names.insert(ChooseExistingDis,            ":/select_file_disabled_16px.png");
+    m_names.insert(CDUnmountEnabled,             ":/cd_unmount_16px.png");
+    m_names.insert(CDUnmountDisabled,            ":/cd_unmount_disabled_16px.png");
+    m_names.insert(FDUnmountEnabled,             ":/fd_unmount_16px.png");
+    m_names.insert(FDUnmountDisabled,            ":/fd_unmount_disabled_16px.png");
 }
 
 UIIconPoolStorageSettings::~UIIconPoolStorageSettings()
 {
     /* Disconnect instance: */
-    m_spInstance = 0;
+    s_pInstance = 0;
 }
 
 
-/* Abstract Controller Type */
-AbstractControllerType::AbstractControllerType (KStorageBus aBusType, KStorageControllerType aCtrType)
-    : mBusType (aBusType)
-    , mCtrType (aCtrType)
-{
-    AssertMsg (mBusType != KStorageBus_Null, ("Wrong Bus Type {%d}!\n", mBusType));
-    AssertMsg (mCtrType != KStorageControllerType_Null, ("Wrong Controller Type {%d}!\n", mCtrType));
+/*********************************************************************************************************************************
+*   Class AbstractItem implementation.                                                                                           *
+*********************************************************************************************************************************/
 
-    for (int i = 0; i < State_MAX; ++ i)
-    {
-        mPixmaps << InvalidPixmap;
-        switch (mBusType)
-        {
-            case KStorageBus_IDE:
-                mPixmaps [i] = (PixmapType)(IDEControllerNormal + i);
-                break;
-            case KStorageBus_SATA:
-                mPixmaps [i] = (PixmapType)(SATAControllerNormal + i);
-                break;
-            case KStorageBus_SCSI:
-                mPixmaps [i] = (PixmapType)(SCSIControllerNormal + i);
-                break;
-            case KStorageBus_Floppy:
-                mPixmaps [i] = (PixmapType)(FloppyControllerNormal + i);
-                break;
-            case KStorageBus_SAS:
-                mPixmaps [i] = (PixmapType)(SATAControllerNormal + i);
-                break;
-            case KStorageBus_USB:
-                mPixmaps [i] = (PixmapType)(USBControllerNormal + i);
-                break;
-            case KStorageBus_PCIe:
-                mPixmaps [i] = (PixmapType)(NVMeControllerNormal + i);
-                break;
-            default:
-                break;
-        }
-        AssertMsg (mPixmaps [i] != InvalidPixmap, ("Item state pixmap was not set!\n"));
-    }
-}
-
-KStorageBus AbstractControllerType::busType() const
-{
-    return mBusType;
-}
-
-KStorageControllerType AbstractControllerType::ctrType() const
-{
-    return mCtrType;
-}
-
-ControllerTypeList AbstractControllerType::ctrTypes() const
-{
-    ControllerTypeList result;
-    for (uint i = first(); i < first() + size(); ++ i)
-        result << (KStorageControllerType) i;
-    return result;
-}
-
-PixmapType AbstractControllerType::pixmap(ItemState aState) const
-{
-    return mPixmaps [aState];
-}
-
-void AbstractControllerType::setCtrType (KStorageControllerType aCtrType)
-{
-    mCtrType = aCtrType;
-}
-
-DeviceTypeList AbstractControllerType::deviceTypeList() const
-{
-    return vboxGlobal().virtualBox().GetSystemProperties().GetDeviceTypesForStorageBus (mBusType).toList();
-}
-
-/* IDE Controller Type */
-IDEControllerType::IDEControllerType (KStorageControllerType aSubType)
-    : AbstractControllerType (KStorageBus_IDE, aSubType)
-{
-}
-
-KStorageControllerType IDEControllerType::first() const
-{
-    return KStorageControllerType_PIIX3;
-}
-
-uint IDEControllerType::size() const
-{
-    return 3;
-}
-
-/* SATA Controller Type */
-SATAControllerType::SATAControllerType (KStorageControllerType aSubType)
-    : AbstractControllerType (KStorageBus_SATA, aSubType)
-{
-}
-
-KStorageControllerType SATAControllerType::first() const
-{
-    return KStorageControllerType_IntelAhci;
-}
-
-uint SATAControllerType::size() const
-{
-    return 1;
-}
-
-/* SCSI Controller Type */
-SCSIControllerType::SCSIControllerType (KStorageControllerType aSubType)
-    : AbstractControllerType (KStorageBus_SCSI, aSubType)
-{
-}
-
-KStorageControllerType SCSIControllerType::first() const
-{
-    return KStorageControllerType_LsiLogic;
-}
-
-uint SCSIControllerType::size() const
-{
-    return 2;
-}
-
-/* Floppy Controller Type */
-FloppyControllerType::FloppyControllerType (KStorageControllerType aSubType)
-    : AbstractControllerType (KStorageBus_Floppy, aSubType)
-{
-}
-
-KStorageControllerType FloppyControllerType::first() const
-{
-    return KStorageControllerType_I82078;
-}
-
-uint FloppyControllerType::size() const
-{
-    return 1;
-}
-
-/* SAS Controller Type */
-SASControllerType::SASControllerType (KStorageControllerType aSubType)
-    : AbstractControllerType (KStorageBus_SAS, aSubType)
-{
-}
-
-KStorageControllerType SASControllerType::first() const
-{
-    return KStorageControllerType_LsiLogicSas;
-}
-
-uint SASControllerType::size() const
-{
-    return 1;
-}
-
-/* USB Controller Type */
-USBStorageControllerType::USBStorageControllerType (KStorageControllerType aSubType)
-    : AbstractControllerType (KStorageBus_USB, aSubType)
-{
-}
-
-KStorageControllerType USBStorageControllerType::first() const
-{
-    return KStorageControllerType_USB;
-}
-
-uint USBStorageControllerType::size() const
-{
-    return 1;
-}
-
-/* NVMe Controller Type */
-NVMeStorageControllerType::NVMeStorageControllerType (KStorageControllerType aSubType)
-    : AbstractControllerType (KStorageBus_PCIe, aSubType)
-{
-}
-
-KStorageControllerType NVMeStorageControllerType::first() const
-{
-    return KStorageControllerType_NVMe;
-}
-
-uint NVMeStorageControllerType::size() const
-{
-    return 1;
-}
-
-/* Abstract Item */
-AbstractItem::AbstractItem(QITreeView *pParent)
-    : QITreeViewItem(pParent)
+AbstractItem::AbstractItem(QITreeView *pParentTree)
+    : QITreeViewItem(pParentTree)
     , m_pParentItem(0)
-    , mId(QUuid::createUuid())
+    , m_uId(QUuid::createUuid())
 {
     if (m_pParentItem)
         m_pParentItem->addChild(this);
@@ -458,7 +1128,7 @@ AbstractItem::AbstractItem(QITreeView *pParent)
 AbstractItem::AbstractItem(AbstractItem *pParentItem)
     : QITreeViewItem(pParentItem)
     , m_pParentItem(pParentItem)
-    , mId(QUuid::createUuid())
+    , m_uId(QUuid::createUuid())
 {
     if (m_pParentItem)
         m_pParentItem->addChild(this);
@@ -470,48 +1140,52 @@ AbstractItem::~AbstractItem()
         m_pParentItem->delChild(this);
 }
 
-AbstractItem* AbstractItem::parent() const
+AbstractItem *AbstractItem::parent() const
 {
     return m_pParentItem;
 }
 
 QUuid AbstractItem::id() const
 {
-    return mId;
+    return m_uId;
 }
 
-QString AbstractItem::machineId() const
+QUuid AbstractItem::machineId() const
 {
-    return mMachineId;
+    return m_uMachineId;
 }
 
-void AbstractItem::setMachineId (const QString &aMachineId)
+void AbstractItem::setMachineId(const QUuid &uMachineId)
 {
-    mMachineId = aMachineId;
+    m_uMachineId = uMachineId;
 }
 
-/* Root Item */
-RootItem::RootItem(QITreeView *pParent)
-    : AbstractItem(pParent)
+
+/*********************************************************************************************************************************
+*   Class RootItem implementation.                                                                                               *
+*********************************************************************************************************************************/
+
+RootItem::RootItem(QITreeView *pParentTree)
+    : AbstractItem(pParentTree)
 {
 }
 
 RootItem::~RootItem()
 {
-    while (!mControllers.isEmpty())
-        delete mControllers.first();
+    while (!m_controllers.isEmpty())
+        delete m_controllers.first();
 }
 
-ULONG RootItem::childCount (KStorageBus aBus) const
+ULONG RootItem::childCount(KStorageBus enmBus) const
 {
-    ULONG result = 0;
-    foreach (AbstractItem *item, mControllers)
+    ULONG uResult = 0;
+    foreach (AbstractItem *pItem, m_controllers)
     {
-        ControllerItem *ctrItem = static_cast <ControllerItem*> (item);
-        if (ctrItem->ctrBusType() == aBus)
-            ++ result;
+        ControllerItem *pItemController = qobject_cast<ControllerItem*>(pItem);
+        if (pItemController->bus() == enmBus)
+            ++ uResult;
     }
-    return result;
+    return uResult;
 }
 
 AbstractItem::ItemType RootItem::rtti() const
@@ -519,27 +1193,27 @@ AbstractItem::ItemType RootItem::rtti() const
     return Type_RootItem;
 }
 
-AbstractItem* RootItem::childItem (int aIndex) const
+AbstractItem *RootItem::childItem(int iIndex) const
 {
-    return mControllers [aIndex];
+    return m_controllers[iIndex];
 }
 
-AbstractItem* RootItem::childItemById (const QUuid &aId) const
+AbstractItem *RootItem::childItemById(const QUuid &uId) const
 {
     for (int i = 0; i < childCount(); ++ i)
-        if (mControllers [i]->id() == aId)
-            return mControllers [i];
+        if (m_controllers[i]->id() == uId)
+            return m_controllers[i];
     return 0;
 }
 
-int RootItem::posOfChild (AbstractItem *aItem) const
+int RootItem::posOfChild(AbstractItem *pItem) const
 {
-    return mControllers.indexOf (aItem);
+    return m_controllers.indexOf(pItem);
 }
 
 int RootItem::childCount() const
 {
-    return mControllers.size();
+    return m_controllers.size();
 }
 
 QString RootItem::text() const
@@ -547,162 +1221,178 @@ QString RootItem::text() const
     return QString();
 }
 
-QString RootItem::tip() const
+QString RootItem::toolTip() const
 {
     return QString();
 }
 
-QPixmap RootItem::pixmap (ItemState /* aState */)
+QPixmap RootItem::pixmap(ItemState /* enmState */)
 {
     return QPixmap();
 }
 
-void RootItem::addChild (AbstractItem *aItem)
+void RootItem::addChild(AbstractItem *pItem)
 {
-    mControllers << aItem;
+    m_controllers << pItem;
 }
 
-void RootItem::delChild (AbstractItem *aItem)
+void RootItem::delChild(AbstractItem *pItem)
 {
-    mControllers.removeAll (aItem);
+    m_controllers.removeAll(pItem);
 }
 
-/* Controller Item */
-ControllerItem::ControllerItem (AbstractItem *aParent, const QString &aName,
-                                KStorageBus aBusType, KStorageControllerType aControllerType)
-    : AbstractItem (aParent)
-    , mCtrName (aName)
-    , mCtrType (0)
-    , mPortCount (0)
-    , mUseIoCache (false)
+
+/*********************************************************************************************************************************
+*   Class ControllerItem implementation.                                                                                         *
+*********************************************************************************************************************************/
+
+ControllerItem::ControllerItem(AbstractItem *pParentItem, const QString &strName,
+                               KStorageBus enmBus, KStorageControllerType enmType)
+    : AbstractItem(pParentItem)
+    , m_strName(strName)
+    , m_strOldName(strName)
+    , m_enmBus(enmBus)
+    , m_enmType(enmType)
+    , m_uPortCount(0)
+    , m_fUseIoCache(false)
 {
-    /* Check for proper parent type */
-    AssertMsg(m_pParentItem->rtti() == AbstractItem::Type_RootItem, ("Incorrect parent type!\n"));
+    /* Check for proper parent type: */
+    AssertMsg(parent()->rtti() == AbstractItem::Type_RootItem, ("Incorrect parent type!\n"));
 
-    /* Select default type */
-    switch (aBusType)
-    {
-        case KStorageBus_IDE:
-            mCtrType = new IDEControllerType (aControllerType);
-            break;
-        case KStorageBus_SATA:
-            mCtrType = new SATAControllerType (aControllerType);
-            break;
-        case KStorageBus_SCSI:
-            mCtrType = new SCSIControllerType (aControllerType);
-            break;
-        case KStorageBus_Floppy:
-            mCtrType = new FloppyControllerType (aControllerType);
-            break;
-        case KStorageBus_SAS:
-            mCtrType = new SASControllerType (aControllerType);
-            break;
-        case KStorageBus_USB:
-            mCtrType = new USBStorageControllerType (aControllerType);
-            break;
-        case KStorageBus_PCIe:
-            mCtrType = new NVMeStorageControllerType (aControllerType);
-            break;
+    AssertMsg(m_enmBus != KStorageBus_Null, ("Wrong Bus Type {%d}!\n", m_enmBus));
+    AssertMsg(m_enmType != KStorageControllerType_Null, ("Wrong Controller Type {%d}!\n", m_enmType));
 
-        default:
-            AssertMsgFailed (("Wrong Controller Type {%d}!\n", aBusType));
-            break;
-    }
+    updateBusInfo();
+    updateTypeInfo();
+    updatePixmaps();
 
-    mUseIoCache = vboxGlobal().virtualBox().GetSystemProperties().GetDefaultIoCacheSettingForStorageController (aControllerType);
+    m_fUseIoCache = uiCommon().virtualBox().GetSystemProperties().GetDefaultIoCacheSettingForStorageController(enmType);
 }
 
 ControllerItem::~ControllerItem()
 {
-    delete mCtrType;
-    while (!mAttachments.isEmpty())
-        delete mAttachments.first();
+    while (!m_attachments.isEmpty())
+        delete m_attachments.first();
 }
 
-KStorageBus ControllerItem::ctrBusType() const
+void ControllerItem::setName(const QString &strName)
 {
-    return mCtrType->busType();
+    m_strName = strName;
 }
 
-QString ControllerItem::ctrName() const
+QString ControllerItem::name() const
 {
-    return mCtrName;
+    return m_strName;
 }
 
-KStorageControllerType ControllerItem::ctrType() const
+QString ControllerItem::oldName() const
 {
-    return mCtrType->ctrType();
+    return m_strOldName;
 }
 
-ControllerTypeList ControllerItem::ctrTypes() const
+void ControllerItem::setBus(KStorageBus enmBus)
 {
-    return mCtrType->ctrTypes();
+    m_enmBus = enmBus;
+
+    updateBusInfo();
+    updateTypeInfo();
+    updatePixmaps();
+}
+
+KStorageBus ControllerItem::bus() const
+{
+    return m_enmBus;
+}
+
+ControllerBusList ControllerItem::buses() const
+{
+    return m_buses;
+}
+
+void ControllerItem::setType(KStorageControllerType enmType)
+{
+    m_enmType = enmType;
+
+    updateTypeInfo();
+}
+
+KStorageControllerType ControllerItem::type() const
+{
+    return m_enmType;
+}
+
+ControllerTypeList ControllerItem::types(KStorageBus enmBus) const
+{
+    return m_types.value(enmBus);
+}
+
+void ControllerItem::setPortCount(uint uPortCount)
+{
+    /* Limit maximum port count: */
+    m_uPortCount = qMin(uPortCount, (uint)uiCommon().virtualBox().GetSystemProperties().GetMaxPortCountForStorageBus(bus()));
 }
 
 uint ControllerItem::portCount()
 {
     /* Recalculate actual port count: */
-    for (int i = 0; i < mAttachments.size(); ++i)
+    for (int i = 0; i < m_attachments.size(); ++i)
     {
-        AttachmentItem *pItem = static_cast<AttachmentItem*>(mAttachments[i]);
-        if (mPortCount < (uint)pItem->attSlot().port + 1)
-            mPortCount = (uint)pItem->attSlot().port + 1;
+        AttachmentItem *pItem = qobject_cast<AttachmentItem*>(m_attachments.at(i));
+        if (m_uPortCount < (uint)pItem->storageSlot().port + 1)
+            m_uPortCount = (uint)pItem->storageSlot().port + 1;
     }
-    return mPortCount;
+    return m_uPortCount;
 }
 
 uint ControllerItem::maxPortCount()
 {
-    return (uint)vboxGlobal().virtualBox().GetSystemProperties().GetMaxPortCountForStorageBus(ctrBusType());
+    return (uint)uiCommon().virtualBox().GetSystemProperties().GetMaxPortCountForStorageBus(bus());
 }
 
-bool ControllerItem::ctrUseIoCache() const
+void ControllerItem::setUseIoCache(bool fUseIoCache)
 {
-    return mUseIoCache;
+    m_fUseIoCache = fUseIoCache;
 }
 
-void ControllerItem::setCtrName (const QString &aCtrName)
+bool ControllerItem::useIoCache() const
 {
-    mCtrName = aCtrName;
+    return m_fUseIoCache;
 }
 
-void ControllerItem::setCtrType (KStorageControllerType aCtrType)
-{
-    mCtrType->setCtrType (aCtrType);
-}
-
-void ControllerItem::setPortCount (uint aPortCount)
-{
-    /* Limit maximum port count: */
-    mPortCount = qMin(aPortCount, (uint)vboxGlobal().virtualBox().GetSystemProperties().GetMaxPortCountForStorageBus(ctrBusType()));
-}
-
-void ControllerItem::setCtrUseIoCache (bool aUseIoCache)
-{
-    mUseIoCache = aUseIoCache;
-}
-
-SlotsList ControllerItem::ctrAllSlots() const
+SlotsList ControllerItem::allSlots() const
 {
     SlotsList allSlots;
-    CSystemProperties sp = vboxGlobal().virtualBox().GetSystemProperties();
-    for (ULONG i = 0; i < sp.GetMaxPortCountForStorageBus (mCtrType->busType()); ++ i)
-        for (ULONG j = 0; j < sp.GetMaxDevicesPerPortForStorageBus (mCtrType->busType()); ++ j)
-            allSlots << StorageSlot (mCtrType->busType(), i, j);
+    CSystemProperties comProps = uiCommon().virtualBox().GetSystemProperties();
+    for (ULONG i = 0; i < comProps.GetMaxPortCountForStorageBus(bus()); ++ i)
+        for (ULONG j = 0; j < comProps.GetMaxDevicesPerPortForStorageBus(bus()); ++ j)
+            allSlots << StorageSlot(bus(), i, j);
     return allSlots;
 }
 
-SlotsList ControllerItem::ctrUsedSlots() const
+SlotsList ControllerItem::usedSlots() const
 {
     SlotsList usedSlots;
-    for (int i = 0; i < mAttachments.size(); ++ i)
-        usedSlots << static_cast <AttachmentItem*> (mAttachments [i])->attSlot();
+    for (int i = 0; i < m_attachments.size(); ++ i)
+        usedSlots << qobject_cast<AttachmentItem*>(m_attachments.at(i))->storageSlot();
     return usedSlots;
 }
 
-DeviceTypeList ControllerItem::ctrDeviceTypeList() const
+DeviceTypeList ControllerItem::deviceTypeList() const
 {
-     return mCtrType->deviceTypeList();
+     return uiCommon().virtualBox().GetSystemProperties().GetDeviceTypesForStorageBus(m_enmBus).toList();
+}
+
+QList<QUuid> ControllerItem::attachmentIDs(KDeviceType enmType /* = KDeviceType_Null */) const
+{
+    QList<QUuid> ids;
+    foreach (AbstractItem *pItem, m_attachments)
+    {
+        AttachmentItem *pItemAttachment = qobject_cast<AttachmentItem*>(pItem);
+        if (   enmType == KDeviceType_Null
+            || pItemAttachment->deviceType() == enmType)
+            ids << pItem->id();
+    }
+    return ids;
 }
 
 AbstractItem::ItemType ControllerItem::rtti() const
@@ -710,236 +1400,314 @@ AbstractItem::ItemType ControllerItem::rtti() const
     return Type_ControllerItem;
 }
 
-AbstractItem* ControllerItem::childItem (int aIndex) const
+AbstractItem *ControllerItem::childItem(int iIndex) const
 {
-    return mAttachments [aIndex];
+    return m_attachments[iIndex];
 }
 
-AbstractItem* ControllerItem::childItemById (const QUuid &aId) const
+AbstractItem *ControllerItem::childItemById(const QUuid &uId) const
 {
     for (int i = 0; i < childCount(); ++ i)
-        if (mAttachments [i]->id() == aId)
-            return mAttachments [i];
+        if (m_attachments[i]->id() == uId)
+            return m_attachments[i];
     return 0;
 }
 
-int ControllerItem::posOfChild (AbstractItem *aItem) const
+int ControllerItem::posOfChild(AbstractItem *pItem) const
 {
-    return mAttachments.indexOf (aItem);
+    return m_attachments.indexOf(pItem);
 }
 
 int ControllerItem::childCount() const
 {
-    return mAttachments.size();
+    return m_attachments.size();
 }
 
 QString ControllerItem::text() const
 {
-    return UIMachineSettingsStorage::tr("Controller: %1").arg(ctrName());
+    return UIMachineSettingsStorage::tr("Controller: %1").arg(name());
 }
 
-QString ControllerItem::tip() const
+QString ControllerItem::toolTip() const
 {
-    return UIMachineSettingsStorage::tr ("<nobr><b>%1</b></nobr><br>"
-                                 "<nobr>Bus:&nbsp;&nbsp;%2</nobr><br>"
-                                 "<nobr>Type:&nbsp;&nbsp;%3</nobr>")
-                                 .arg (mCtrName)
-                                 .arg (gpConverter->toString (mCtrType->busType()))
-                                 .arg (gpConverter->toString (mCtrType->ctrType()));
+    return UIMachineSettingsStorage::tr("<nobr><b>%1</b></nobr><br>"
+                                        "<nobr>Bus:&nbsp;&nbsp;%2</nobr><br>"
+                                        "<nobr>Type:&nbsp;&nbsp;%3</nobr>")
+                                        .arg(m_strName)
+                                        .arg(gpConverter->toString(bus()))
+                                        .arg(gpConverter->toString(type()));
 }
 
-QPixmap ControllerItem::pixmap (ItemState aState)
+QPixmap ControllerItem::pixmap(ItemState enmState)
 {
-    return iconPool()->pixmap(mCtrType->pixmap(aState));
+    return iconPool()->pixmap(m_pixmaps.at(enmState));
 }
 
-void ControllerItem::addChild (AbstractItem *aItem)
+void ControllerItem::addChild(AbstractItem *pItem)
 {
-    mAttachments << aItem;
+    m_attachments << pItem;
 }
 
-void ControllerItem::delChild (AbstractItem *aItem)
+void ControllerItem::delChild(AbstractItem *pItem)
 {
-    mAttachments.removeAll (aItem);
+    m_attachments.removeAll(pItem);
 }
 
-/* Attachment Item */
-AttachmentItem::AttachmentItem (AbstractItem *aParent, KDeviceType aDeviceType)
-    : AbstractItem (aParent)
-    , mAttDeviceType (aDeviceType)
-    , mAttIsHostDrive (false)
-    , mAttIsPassthrough (false)
-    , mAttIsTempEject (false)
-    , mAttIsNonRotational (false)
-    , m_fIsHotPluggable(false)
+void ControllerItem::updateBusInfo()
 {
-    /* Check for proper parent type */
-    AssertMsg(m_pParentItem->rtti() == AbstractItem::Type_ControllerItem, ("Incorrect parent type!\n"));
+    /* Clear the buses initially: */
+    m_buses.clear();
 
-    /* Select default slot */
-    AssertMsg (!attSlots().isEmpty(), ("There should be at least one available slot!\n"));
-    mAttSlot = attSlots() [0];
+    /* Load currently supported storage buses: */
+    CSystemProperties comProperties = uiCommon().virtualBox().GetSystemProperties();
+    const QVector<KStorageBus> supportedBuses = comProperties.GetSupportedStorageBuses();
+
+    /* If current bus is NOT KStorageBus_Floppy: */
+    if (m_enmBus != KStorageBus_Floppy)
+    {
+        /* We update the list with all supported buses
+         * and remove the current one from that list. */
+        m_buses << supportedBuses.toList();
+        m_buses.removeAll(m_enmBus);
+    }
+
+    /* And prepend current bus finally: */
+    m_buses.prepend(m_enmBus);
 }
 
-StorageSlot AttachmentItem::attSlot() const
+void ControllerItem::updateTypeInfo()
 {
-    return mAttSlot;
+    /* Clear the types initially: */
+    m_types.clear();
+
+    /* Load currently supported storage buses & types: */
+    CSystemProperties comProperties = uiCommon().virtualBox().GetSystemProperties();
+    const QVector<KStorageBus> supportedBuses = comProperties.GetSupportedStorageBuses();
+    const QVector<KStorageControllerType> supportedTypes = comProperties.GetSupportedStorageControllerTypes();
+
+    /* We update the list with all supported buses
+     * and remove the current one from that list. */
+    ControllerBusList possibleBuses = supportedBuses.toList();
+    possibleBuses.removeAll(m_enmBus);
+
+    /* And prepend current bus finally: */
+    possibleBuses.prepend(m_enmBus);
+
+    /* Enumerate possible buses: */
+    foreach (const KStorageBus &enmBus, possibleBuses)
+    {
+        /* Enumerate possible types and check whether type is supported or already selected before adding it: */
+        foreach (const KStorageControllerType &enmType, comProperties.GetStorageControllerTypesForStorageBus(enmBus))
+            if (supportedTypes.contains(enmType) || enmType == m_enmType)
+                m_types[enmBus] << enmType;
+    }
 }
 
-SlotsList AttachmentItem::attSlots() const
+void ControllerItem::updatePixmaps()
 {
-    ControllerItem *ctr = static_cast<ControllerItem*>(m_pParentItem);
+    m_pixmaps.clear();
 
-    /* Filter list from used slots */
-    SlotsList allSlots (ctr->ctrAllSlots());
-    SlotsList usedSlots (ctr->ctrUsedSlots());
-    foreach (StorageSlot usedSlot, usedSlots)
-        if (usedSlot != mAttSlot)
-            allSlots.removeAll (usedSlot);
+    for (int i = 0; i < State_MAX; ++i)
+    {
+        m_pixmaps << InvalidPixmap;
+        switch (m_enmBus)
+        {
+            case KStorageBus_IDE:        m_pixmaps[i] = static_cast<PixmapType>(IDEControllerNormal + i); break;
+            case KStorageBus_SATA:       m_pixmaps[i] = static_cast<PixmapType>(SATAControllerNormal + i); break;
+            case KStorageBus_SCSI:       m_pixmaps[i] = static_cast<PixmapType>(SCSIControllerNormal + i); break;
+            case KStorageBus_Floppy:     m_pixmaps[i] = static_cast<PixmapType>(FloppyControllerNormal + i); break;
+            case KStorageBus_SAS:        m_pixmaps[i] = static_cast<PixmapType>(SASControllerNormal + i); break;
+            case KStorageBus_USB:        m_pixmaps[i] = static_cast<PixmapType>(USBControllerNormal + i); break;
+            case KStorageBus_PCIe:       m_pixmaps[i] = static_cast<PixmapType>(NVMeControllerNormal + i); break;
+            case KStorageBus_VirtioSCSI: m_pixmaps[i] = static_cast<PixmapType>(VirtioSCSIControllerNormal + i); break;
+            default: break;
+        }
+        AssertMsg(m_pixmaps[i] != InvalidPixmap, ("Invalid item state pixmap!\n"));
+    }
+}
+
+
+/*********************************************************************************************************************************
+*   Class AttachmentItem implementation.                                                                                         *
+*********************************************************************************************************************************/
+
+AttachmentItem::AttachmentItem(AbstractItem *pParentItem, KDeviceType enmDeviceType)
+    : AbstractItem(pParentItem)
+    , m_enmDeviceType(enmDeviceType)
+    , m_fHostDrive(false)
+    , m_fPassthrough(false)
+    , m_fTempEject(false)
+    , m_fNonRotational(false)
+    , m_fHotPluggable(false)
+{
+    /* Check for proper parent type: */
+    AssertMsg(parent()->rtti() == AbstractItem::Type_ControllerItem, ("Incorrect parent type!\n"));
+
+    /* Select default slot: */
+    AssertMsg(!storageSlots().isEmpty(), ("There should be at least one available slot!\n"));
+    m_storageSlot = storageSlots()[0];
+}
+
+void AttachmentItem::setDeviceType(KDeviceType enmDeviceType)
+{
+    m_enmDeviceType = enmDeviceType;
+}
+
+KDeviceType AttachmentItem::deviceType() const
+{
+    return m_enmDeviceType;
+}
+
+DeviceTypeList AttachmentItem::deviceTypes() const
+{
+    return qobject_cast<ControllerItem*>(parent())->deviceTypeList();
+}
+
+void AttachmentItem::setStorageSlot(const StorageSlot &storageSlot)
+{
+    m_storageSlot = storageSlot;
+}
+
+StorageSlot AttachmentItem::storageSlot() const
+{
+    return m_storageSlot;
+}
+
+SlotsList AttachmentItem::storageSlots() const
+{
+    ControllerItem *pItemController = qobject_cast<ControllerItem*>(parent());
+
+    /* Filter list from used slots: */
+    SlotsList allSlots(pItemController->allSlots());
+    SlotsList usedSlots(pItemController->usedSlots());
+    foreach(StorageSlot usedSlot, usedSlots)
+        if (usedSlot != m_storageSlot)
+            allSlots.removeAll(usedSlot);
 
     return allSlots;
 }
 
-KDeviceType AttachmentItem::attDeviceType() const
+void AttachmentItem::setMediumId(const QUuid &uMediumId)
 {
-    return mAttDeviceType;
-}
-
-DeviceTypeList AttachmentItem::attDeviceTypes() const
-{
-    return static_cast<ControllerItem*>(m_pParentItem)->ctrDeviceTypeList();
-}
-
-QString AttachmentItem::attMediumId() const
-{
-    return mAttMediumId;
-}
-
-bool AttachmentItem::attIsHostDrive() const
-{
-    return mAttIsHostDrive;
-}
-
-bool AttachmentItem::attIsPassthrough() const
-{
-    return mAttIsPassthrough;
-}
-
-bool AttachmentItem::attIsTempEject() const
-{
-    return mAttIsTempEject;
-}
-
-bool AttachmentItem::attIsNonRotational() const
-{
-    return mAttIsNonRotational;
-}
-
-bool AttachmentItem::attIsHotPluggable() const
-{
-    return m_fIsHotPluggable;
-}
-
-void AttachmentItem::setAttSlot (const StorageSlot &aAttSlot)
-{
-    mAttSlot = aAttSlot;
-}
-
-void AttachmentItem::setAttDevice (KDeviceType aAttDeviceType)
-{
-    mAttDeviceType = aAttDeviceType;
-}
-
-void AttachmentItem::setAttMediumId (const QString &aAttMediumId)
-{
-    AssertMsg(!aAttMediumId.isEmpty(), ("Medium ID value can't be null/empty!\n"));
-    mAttMediumId = vboxGlobal().medium(aAttMediumId).id();
+    /// @todo is this required?
+    //AssertMsg(!aAttMediumId.isNull(), ("Medium ID value can't be null!\n"));
+    m_uMediumId = uiCommon().medium(uMediumId).id();
     cache();
 }
 
-void AttachmentItem::setAttIsPassthrough (bool aIsAttPassthrough)
+QUuid AttachmentItem::mediumId() const
 {
-    mAttIsPassthrough = aIsAttPassthrough;
+    return m_uMediumId;
 }
 
-void AttachmentItem::setAttIsTempEject (bool aIsAttTempEject)
+bool AttachmentItem::isHostDrive() const
 {
-    mAttIsTempEject = aIsAttTempEject;
+    return m_fHostDrive;
 }
 
-void AttachmentItem::setAttIsNonRotational (bool aIsAttNonRotational)
+void AttachmentItem::setPassthrough(bool fPassthrough)
 {
-    mAttIsNonRotational = aIsAttNonRotational;
+    m_fPassthrough = fPassthrough;
 }
 
-void AttachmentItem::setAttIsHotPluggable(bool fIsHotPluggable)
+bool AttachmentItem::isPassthrough() const
 {
-    m_fIsHotPluggable = fIsHotPluggable;
+    return m_fPassthrough;
 }
 
-QString AttachmentItem::attSize() const
+void AttachmentItem::setTempEject(bool fTempEject)
 {
-    return mAttSize;
+    m_fTempEject = fTempEject;
 }
 
-QString AttachmentItem::attLogicalSize() const
+bool AttachmentItem::isTempEject() const
 {
-    return mAttLogicalSize;
+    return m_fTempEject;
 }
 
-QString AttachmentItem::attLocation() const
+void AttachmentItem::setNonRotational(bool fNonRotational)
 {
-    return mAttLocation;
+    m_fNonRotational = fNonRotational;
 }
 
-QString AttachmentItem::attFormat() const
+bool AttachmentItem::isNonRotational() const
 {
-    return mAttFormat;
+    return m_fNonRotational;
 }
 
-QString AttachmentItem::attDetails() const
+void AttachmentItem::setHotPluggable(bool fHotPluggable)
 {
-    return mAttDetails;
+    m_fHotPluggable = fHotPluggable;
 }
 
-QString AttachmentItem::attUsage() const
+bool AttachmentItem::isHotPluggable() const
 {
-    return mAttUsage;
+    return m_fHotPluggable;
 }
 
-QString AttachmentItem::attEncryptionPasswordID() const
+QString AttachmentItem::size() const
+{
+    return m_strSize;
+}
+
+QString AttachmentItem::logicalSize() const
+{
+    return m_strLogicalSize;
+}
+
+QString AttachmentItem::location() const
+{
+    return m_strLocation;
+}
+
+QString AttachmentItem::format() const
+{
+    return m_strFormat;
+}
+
+QString AttachmentItem::details() const
+{
+    return m_strDetails;
+}
+
+QString AttachmentItem::usage() const
+{
+    return m_strUsage;
+}
+
+QString AttachmentItem::encryptionPasswordId() const
 {
     return m_strAttEncryptionPasswordID;
 }
 
 void AttachmentItem::cache()
 {
-    UIMedium medium = vboxGlobal().medium(mAttMediumId);
+    UIMedium guiMedium = uiCommon().medium(m_uMediumId);
 
-    /* Cache medium information */
-    mAttName = medium.name (true);
-    mAttTip = medium.toolTipCheckRO (true, mAttDeviceType != KDeviceType_HardDisk);
-    mAttPixmap = medium.iconCheckRO (true);
-    mAttIsHostDrive = medium.isHostDrive();
+    /* Cache medium information: */
+    m_strName = guiMedium.name(true);
+    m_strTip = guiMedium.toolTipCheckRO(true, m_enmDeviceType != KDeviceType_HardDisk);
+    m_strPixmap = guiMedium.iconCheckRO(true);
+    m_fHostDrive = guiMedium.isHostDrive();
 
-    /* Cache additional information */
-    mAttSize = medium.size (true);
-    mAttLogicalSize = medium.logicalSize (true);
-    mAttLocation = medium.location (true);
+    /* Cache additional information: */
+    m_strSize = guiMedium.size(true);
+    m_strLogicalSize = guiMedium.logicalSize(true);
+    m_strLocation = guiMedium.location(true);
     m_strAttEncryptionPasswordID = QString("--");
-    if (medium.isNull())
+    if (guiMedium.isNull())
     {
-        mAttFormat = QString("--");
+        m_strFormat = QString("--");
     }
     else
     {
-        switch (mAttDeviceType)
+        switch (m_enmDeviceType)
         {
             case KDeviceType_HardDisk:
             {
-                mAttFormat = QString("%1 (%2)").arg(medium.hardDiskType(true)).arg(medium.hardDiskFormat(true));
-                mAttDetails = medium.storageDetails();
-                const QString strAttEncryptionPasswordID = medium.encryptionPasswordID();
+                m_strFormat = QString("%1 (%2)").arg(guiMedium.hardDiskType(true)).arg(guiMedium.hardDiskFormat(true));
+                m_strDetails = guiMedium.storageDetails();
+                const QString strAttEncryptionPasswordID = guiMedium.encryptionPasswordID();
                 if (!strAttEncryptionPasswordID.isNull())
                     m_strAttEncryptionPasswordID = strAttEncryptionPasswordID;
                 break;
@@ -947,18 +1715,18 @@ void AttachmentItem::cache()
             case KDeviceType_DVD:
             case KDeviceType_Floppy:
             {
-                mAttFormat = mAttIsHostDrive ? UIMachineSettingsStorage::tr("Host Drive") : UIMachineSettingsStorage::tr("Image", "storage image");
+                m_strFormat = m_fHostDrive ? UIMachineSettingsStorage::tr("Host Drive") : UIMachineSettingsStorage::tr("Image", "storage image");
                 break;
             }
             default:
                 break;
         }
     }
-    mAttUsage = medium.usage (true);
+    m_strUsage = guiMedium.usage(true);
 
-    /* Fill empty attributes */
-    if (mAttUsage.isEmpty())
-        mAttUsage = QString ("--");
+    /* Fill empty attributes: */
+    if (m_strUsage.isEmpty())
+        m_strUsage = QString("--");
 }
 
 AbstractItem::ItemType AttachmentItem::rtti() const
@@ -966,17 +1734,17 @@ AbstractItem::ItemType AttachmentItem::rtti() const
     return Type_AttachmentItem;
 }
 
-AbstractItem* AttachmentItem::childItem (int /* aIndex */) const
+AbstractItem *AttachmentItem::childItem(int /* iIndex */) const
 {
     return 0;
 }
 
-AbstractItem* AttachmentItem::childItemById (const QUuid& /* aId */) const
+AbstractItem *AttachmentItem::childItemById(const QUuid& /* uId */) const
 {
     return 0;
 }
 
-int AttachmentItem::posOfChild (AbstractItem* /* aItem */) const
+int AttachmentItem::posOfChild(AbstractItem * /* pItem */) const
 {
     return 0;
 }
@@ -988,149 +1756,153 @@ int AttachmentItem::childCount() const
 
 QString AttachmentItem::text() const
 {
-    return mAttName;
+    return m_strName;
 }
 
-QString AttachmentItem::tip() const
+QString AttachmentItem::toolTip() const
 {
-    return mAttTip;
+    return m_strTip;
 }
 
-QPixmap AttachmentItem::pixmap (ItemState /* aState */)
+QPixmap AttachmentItem::pixmap(ItemState /* enmState */)
 {
-    if (mAttPixmap.isNull())
+    if (m_strPixmap.isNull())
     {
-        switch (mAttDeviceType)
+        switch (m_enmDeviceType)
         {
             case KDeviceType_HardDisk:
-                mAttPixmap = iconPool()->pixmap(HDAttachmentNormal);
+                m_strPixmap = iconPool()->pixmap(HDAttachmentNormal);
                 break;
             case KDeviceType_DVD:
-                mAttPixmap = iconPool()->pixmap(CDAttachmentNormal);
+                m_strPixmap = iconPool()->pixmap(CDAttachmentNormal);
                 break;
             case KDeviceType_Floppy:
-                mAttPixmap = iconPool()->pixmap(FDAttachmentNormal);
+                m_strPixmap = iconPool()->pixmap(FDAttachmentNormal);
                 break;
             default:
                 break;
         }
     }
-    return mAttPixmap;
+    return m_strPixmap;
 }
 
-void AttachmentItem::addChild (AbstractItem* /* aItem */)
+void AttachmentItem::addChild(AbstractItem * /* pItem */)
 {
 }
 
-void AttachmentItem::delChild (AbstractItem* /* aItem */)
+void AttachmentItem::delChild(AbstractItem * /* pItem */)
 {
 }
 
-/* Storage model */
-StorageModel::StorageModel(QITreeView *pParent)
-    : QAbstractItemModel(pParent)
-    , mRootItem(new RootItem(pParent))
-    , mToolTipType(DefaultToolTip)
-    , m_chipsetType(KChipsetType_PIIX3)
-    , m_configurationAccessLevel(ConfigurationAccessLevel_Null)
+
+/*********************************************************************************************************************************
+*   Class StorageModel implementation.                                                                                           *
+*********************************************************************************************************************************/
+
+StorageModel::StorageModel(QITreeView *pParentTree)
+    : QAbstractItemModel(pParentTree)
+    , m_pRootItem(new RootItem(pParentTree))
+    , m_enmToolTipType(DefaultToolTip)
+    , m_enmChipsetType(KChipsetType_PIIX3)
+    , m_enmConfigurationAccessLevel(ConfigurationAccessLevel_Null)
 {
 }
 
 StorageModel::~StorageModel()
 {
-    delete mRootItem;
+    delete m_pRootItem;
 }
 
-int StorageModel::rowCount (const QModelIndex &aParent) const
+int StorageModel::rowCount(const QModelIndex &parentIndex) const
 {
-    return !aParent.isValid() ? 1 /* only root item has invalid parent */ :
-           static_cast <AbstractItem*> (aParent.internalPointer())->childCount();
+    return !parentIndex.isValid() ? 1 /* only root item has invalid parent */ :
+           static_cast<AbstractItem*>(parentIndex.internalPointer())->childCount();
 }
 
-int StorageModel::columnCount (const QModelIndex & /* aParent */) const
+int StorageModel::columnCount(const QModelIndex & /* parentIndex */) const
 {
     return 1;
 }
 
 QModelIndex StorageModel::root() const
 {
-    return index (0, 0);
+    return index(0, 0);
 }
 
-QModelIndex StorageModel::index (int aRow, int aColumn, const QModelIndex &aParent) const
+QModelIndex StorageModel::index(int iRow, int iColumn, const QModelIndex &parentIndex) const
 {
-    if (!hasIndex (aRow, aColumn, aParent))
+    if (!hasIndex(iRow, iColumn, parentIndex))
         return QModelIndex();
 
-    AbstractItem *item = !aParent.isValid() ? mRootItem :
-                         static_cast <AbstractItem*> (aParent.internalPointer())->childItem (aRow);
+    AbstractItem *pItem = !parentIndex.isValid() ? m_pRootItem :
+                          static_cast<AbstractItem*>(parentIndex.internalPointer())->childItem(iRow);
 
-    return item ? createIndex (aRow, aColumn, item) : QModelIndex();
+    return pItem ? createIndex(iRow, iColumn, pItem) : QModelIndex();
 }
 
-QModelIndex StorageModel::parent (const QModelIndex &aIndex) const
+QModelIndex StorageModel::parent(const QModelIndex &specifiedIndex) const
 {
-    if (!aIndex.isValid())
+    if (!specifiedIndex.isValid())
         return QModelIndex();
 
-    AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer());
-    AbstractItem *parentOfItem = item->parent();
-    AbstractItem *parentOfParent = parentOfItem ? parentOfItem->parent() : 0;
-    int position = parentOfParent ? parentOfParent->posOfChild (parentOfItem) : 0;
+    AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer());
+    AbstractItem *pParentOfItem = pItem->parent();
+    AbstractItem *pParentOfParent = pParentOfItem ? pParentOfItem->parent() : 0;
+    int iPosition = pParentOfParent ? pParentOfParent->posOfChild(pParentOfItem) : 0;
 
-    if (parentOfItem)
-        return createIndex (position, 0, parentOfItem);
+    if (pParentOfItem)
+        return createIndex(iPosition, 0, pParentOfItem);
     else
         return QModelIndex();
 }
 
-QVariant StorageModel::data (const QModelIndex &aIndex, int aRole) const
+QVariant StorageModel::data(const QModelIndex &specifiedIndex, int iRole) const
 {
-    if (!aIndex.isValid())
+    if (!specifiedIndex.isValid())
         return QVariant();
 
-    switch (aRole)
+    switch (iRole)
     {
         /* Basic Attributes: */
         case Qt::FontRole:
         {
-            return QVariant (qApp->font());
+            return QVariant(qApp->font());
         }
         case Qt::SizeHintRole:
         {
-            QFontMetrics fm (data (aIndex, Qt::FontRole).value <QFont>());
-            int minimumHeight = qMax (fm.height(), data (aIndex, R_IconSize).toInt());
-            int margin = data (aIndex, R_Margin).toInt();
-            return QSize (1 /* ignoring width */, 2 * margin + minimumHeight);
+            QFontMetrics fm(data(specifiedIndex, Qt::FontRole).value<QFont>());
+            int iMinimumHeight = qMax(fm.height(), data(specifiedIndex, R_IconSize).toInt());
+            int iMargin = data(specifiedIndex, R_Margin).toInt();
+            return QSize(1 /* ignoring width */, 2 * iMargin + iMinimumHeight);
         }
         case Qt::ToolTipRole:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
             {
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
                 {
-                    QString tip (item->tip());
-                    switch (mToolTipType)
+                    QString strTip(pItem->toolTip());
+                    switch (m_enmToolTipType)
                     {
                         case ExpanderToolTip:
-                            if (aIndex.child (0, 0).isValid())
-                                tip = UIMachineSettingsStorage::tr("<nobr>Expands/Collapses&nbsp;item.</nobr>");
+                            if (index(0, 0, specifiedIndex).isValid())
+                                strTip = UIMachineSettingsStorage::tr("<nobr>Expands/Collapses&nbsp;item.</nobr>");
                             break;
                         case HDAdderToolTip:
-                            tip = UIMachineSettingsStorage::tr("<nobr>Adds&nbsp;hard&nbsp;disk.</nobr>");
+                            strTip = UIMachineSettingsStorage::tr("<nobr>Adds&nbsp;hard&nbsp;disk.</nobr>");
                             break;
                         case CDAdderToolTip:
-                            tip = UIMachineSettingsStorage::tr("<nobr>Adds&nbsp;optical&nbsp;drive.</nobr>");
+                            strTip = UIMachineSettingsStorage::tr("<nobr>Adds&nbsp;optical&nbsp;drive.</nobr>");
                             break;
                         case FDAdderToolTip:
-                            tip = UIMachineSettingsStorage::tr("<nobr>Adds&nbsp;floppy&nbsp;drive.</nobr>");
+                            strTip = UIMachineSettingsStorage::tr("<nobr>Adds&nbsp;floppy&nbsp;drive.</nobr>");
                             break;
                         default:
                             break;
                     }
-                    return tip;
+                    return strTip;
                 }
-                return item->tip();
+                return pItem->toolTip();
             }
             return QString();
         }
@@ -1138,135 +1910,141 @@ QVariant StorageModel::data (const QModelIndex &aIndex, int aRole) const
         /* Advanced Attributes: */
         case R_ItemId:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                return item->id().toString();
-            return QUuid().toString();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                return pItem->id();
+            return QUuid();
         }
         case R_ItemPixmap:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
             {
-                ItemState state = State_DefaultItem;
-                if (hasChildren (aIndex))
-                    if (QTreeView *view = qobject_cast <QTreeView*> (QObject::parent()))
-                        state = view->isExpanded (aIndex) ? State_ExpandedItem : State_CollapsedItem;
-                return item->pixmap (state);
+                ItemState enmState = State_DefaultItem;
+                if (hasChildren(specifiedIndex))
+                    if (QTreeView *view = qobject_cast<QTreeView*>(QObject::parent()))
+                        enmState = view->isExpanded(specifiedIndex) ? State_ExpandedItem : State_CollapsedItem;
+                return pItem->pixmap(enmState);
             }
             return QPixmap();
         }
         case R_ItemPixmapRect:
         {
-            int margin = data (aIndex, R_Margin).toInt();
-            int width = data (aIndex, R_IconSize).toInt();
-            return QRect (margin, margin, width, width);
+            int iMargin = data(specifiedIndex, R_Margin).toInt();
+            int iWidth = data(specifiedIndex, R_IconSize).toInt();
+            return QRect(iMargin, iMargin, iWidth, iWidth);
         }
         case R_ItemName:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                return item->text();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                return pItem->text();
             return QString();
         }
         case R_ItemNamePoint:
         {
-            int margin = data (aIndex, R_Margin).toInt();
-            int spacing = data (aIndex, R_Spacing).toInt();
-            int width = data (aIndex, R_IconSize).toInt();
-            QFontMetrics fm (data (aIndex, Qt::FontRole).value <QFont>());
-            QSize sizeHint = data (aIndex, Qt::SizeHintRole).toSize();
-            return QPoint (margin + width + 2 * spacing,
-                           sizeHint.height() / 2 + fm.ascent() / 2 - 1 /* base line */);
+            int iMargin = data(specifiedIndex, R_Margin).toInt();
+            int iSpacing = data(specifiedIndex, R_Spacing).toInt();
+            int iWidth = data(specifiedIndex, R_IconSize).toInt();
+            QFontMetrics fm(data(specifiedIndex, Qt::FontRole).value<QFont>());
+            QSize sizeHint = data(specifiedIndex, Qt::SizeHintRole).toSize();
+            return QPoint(iMargin + iWidth + 2 * iSpacing,
+                          sizeHint.height() / 2 + fm.ascent() / 2 - 1 /* base line */);
         }
         case R_ItemType:
         {
-            QVariant result (QVariant::fromValue (AbstractItem::Type_InvalidItem));
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                result.setValue (item->rtti());
+            QVariant result(QVariant::fromValue(AbstractItem::Type_InvalidItem));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                result.setValue(pItem->rtti());
             return result;
         }
         case R_IsController:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                return item->rtti() == AbstractItem::Type_ControllerItem;
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                return pItem->rtti() == AbstractItem::Type_ControllerItem;
             return false;
         }
         case R_IsAttachment:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                return item->rtti() == AbstractItem::Type_AttachmentItem;
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                return pItem->rtti() == AbstractItem::Type_AttachmentItem;
             return false;
         }
 
         case R_ToolTipType:
         {
-            return QVariant::fromValue (mToolTipType);
+            return QVariant::fromValue(m_enmToolTipType);
         }
         case R_IsMoreIDEControllersPossible:
         {
-            return (m_configurationAccessLevel == ConfigurationAccessLevel_Full) &&
-                   (static_cast<RootItem*>(mRootItem)->childCount(KStorageBus_IDE) <
-                    vboxGlobal().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_IDE));
+            return (m_enmConfigurationAccessLevel == ConfigurationAccessLevel_Full) &&
+                   (qobject_cast<RootItem*>(m_pRootItem)->childCount(KStorageBus_IDE) <
+                    uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_IDE));
         }
         case R_IsMoreSATAControllersPossible:
         {
-            return (m_configurationAccessLevel == ConfigurationAccessLevel_Full) &&
-                   (static_cast<RootItem*>(mRootItem)->childCount(KStorageBus_SATA) <
-                    vboxGlobal().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_SATA));
+            return (m_enmConfigurationAccessLevel == ConfigurationAccessLevel_Full) &&
+                   (qobject_cast<RootItem*>(m_pRootItem)->childCount(KStorageBus_SATA) <
+                    uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_SATA));
         }
         case R_IsMoreSCSIControllersPossible:
         {
-            return (m_configurationAccessLevel == ConfigurationAccessLevel_Full) &&
-                   (static_cast<RootItem*>(mRootItem)->childCount(KStorageBus_SCSI) <
-                    vboxGlobal().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_SCSI));
+            return (m_enmConfigurationAccessLevel == ConfigurationAccessLevel_Full) &&
+                   (qobject_cast<RootItem*>(m_pRootItem)->childCount(KStorageBus_SCSI) <
+                    uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_SCSI));
         }
         case R_IsMoreFloppyControllersPossible:
         {
-            return (m_configurationAccessLevel == ConfigurationAccessLevel_Full) &&
-                   (static_cast<RootItem*>(mRootItem)->childCount(KStorageBus_Floppy) <
-                    vboxGlobal().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_Floppy));
+            return (m_enmConfigurationAccessLevel == ConfigurationAccessLevel_Full) &&
+                   (qobject_cast<RootItem*>(m_pRootItem)->childCount(KStorageBus_Floppy) <
+                    uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_Floppy));
         }
         case R_IsMoreSASControllersPossible:
         {
-            return (m_configurationAccessLevel == ConfigurationAccessLevel_Full) &&
-                   (static_cast<RootItem*>(mRootItem)->childCount(KStorageBus_SAS) <
-                    vboxGlobal().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_SAS));
+            return (m_enmConfigurationAccessLevel == ConfigurationAccessLevel_Full) &&
+                   (qobject_cast<RootItem*>(m_pRootItem)->childCount(KStorageBus_SAS) <
+                    uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_SAS));
         }
         case R_IsMoreUSBControllersPossible:
         {
-            return (m_configurationAccessLevel == ConfigurationAccessLevel_Full) &&
-                   (static_cast<RootItem*>(mRootItem)->childCount(KStorageBus_USB) <
-                    vboxGlobal().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_USB));
+            return (m_enmConfigurationAccessLevel == ConfigurationAccessLevel_Full) &&
+                   (qobject_cast<RootItem*>(m_pRootItem)->childCount(KStorageBus_USB) <
+                    uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_USB));
         }
         case R_IsMoreNVMeControllersPossible:
         {
-            return (m_configurationAccessLevel == ConfigurationAccessLevel_Full) &&
-                   (static_cast<RootItem*>(mRootItem)->childCount(KStorageBus_PCIe) <
-                    vboxGlobal().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_PCIe));
+            return (m_enmConfigurationAccessLevel == ConfigurationAccessLevel_Full) &&
+                   (qobject_cast<RootItem*>(m_pRootItem)->childCount(KStorageBus_PCIe) <
+                    uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_PCIe));
+        }
+        case R_IsMoreVirtioSCSIControllersPossible:
+        {
+            return (m_enmConfigurationAccessLevel == ConfigurationAccessLevel_Full) &&
+                   (qobject_cast<RootItem*>(m_pRootItem)->childCount(KStorageBus_VirtioSCSI) <
+                    uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), KStorageBus_VirtioSCSI));
         }
         case R_IsMoreAttachmentsPossible:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
             {
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
                 {
-                    ControllerItem *ctr = static_cast <ControllerItem*> (item);
-                    CSystemProperties sp = vboxGlobal().virtualBox().GetSystemProperties();
-                    const bool fIsMoreAttachmentsPossible = (ULONG)rowCount(aIndex) <
-                                                            (sp.GetMaxPortCountForStorageBus(ctr->ctrBusType()) *
-                                                             sp.GetMaxDevicesPerPortForStorageBus(ctr->ctrBusType()));
+                    ControllerItem *pItemController = qobject_cast<ControllerItem*>(pItem);
+                    CSystemProperties comProps = uiCommon().virtualBox().GetSystemProperties();
+                    const bool fIsMoreAttachmentsPossible = (ULONG)rowCount(specifiedIndex) <
+                                                            (comProps.GetMaxPortCountForStorageBus(pItemController->bus()) *
+                                                             comProps.GetMaxDevicesPerPortForStorageBus(pItemController->bus()));
                     if (fIsMoreAttachmentsPossible)
                     {
-                        switch (m_configurationAccessLevel)
+                        switch (m_enmConfigurationAccessLevel)
                         {
                             case ConfigurationAccessLevel_Full:
                                 return true;
                             case ConfigurationAccessLevel_Partial_Running:
                             {
-                                switch (ctr->ctrBusType())
+                                switch (pItemController->bus())
                                 {
                                     case KStorageBus_USB:
                                         return true;
                                     case KStorageBus_SATA:
-                                        return (uint)rowCount(aIndex) < ctr->portCount();
+                                        return (uint)rowCount(specifiedIndex) < pItemController->portCount();
                                     default:
                                         break;
                                 }
@@ -1280,180 +2058,202 @@ QVariant StorageModel::data (const QModelIndex &aIndex, int aRole) const
             return false;
         }
 
+        case R_CtrOldName:
+        {
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    return qobject_cast<ControllerItem*>(pItem)->oldName();
+            return QString();
+        }
         case R_CtrName:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
-                    return static_cast <ControllerItem*> (item)->ctrName();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    return qobject_cast<ControllerItem*>(pItem)->name();
             return QString();
         }
         case R_CtrType:
         {
-            QVariant result (QVariant::fromValue (KStorageControllerType_Null));
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
-                    result.setValue (static_cast <ControllerItem*> (item)->ctrType());
+            QVariant result(QVariant::fromValue(KStorageControllerType_Null));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    result.setValue(qobject_cast<ControllerItem*>(pItem)->type());
             return result;
         }
-        case R_CtrTypes:
+        case R_CtrTypesForIDE:
+        case R_CtrTypesForSATA:
+        case R_CtrTypesForSCSI:
+        case R_CtrTypesForFloppy:
+        case R_CtrTypesForSAS:
+        case R_CtrTypesForUSB:
+        case R_CtrTypesForPCIe:
+        case R_CtrTypesForVirtioSCSI:
         {
-            QVariant result (QVariant::fromValue (ControllerTypeList()));
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
-                    result.setValue (static_cast <ControllerItem*> (item)->ctrTypes());
+            QVariant result(QVariant::fromValue(ControllerTypeList()));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    result.setValue(qobject_cast<ControllerItem*>(pItem)->types(roleToBus((StorageModel::DataRole)iRole)));
             return result;
         }
         case R_CtrDevices:
         {
-            QVariant result (QVariant::fromValue (DeviceTypeList()));
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
-                    result.setValue (static_cast <ControllerItem*> (item)->ctrDeviceTypeList());
+            QVariant result(QVariant::fromValue(DeviceTypeList()));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    result.setValue(qobject_cast<ControllerItem*>(pItem)->deviceTypeList());
             return result;
         }
         case R_CtrBusType:
         {
-            QVariant result (QVariant::fromValue (KStorageBus_Null));
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
-                    result.setValue (static_cast <ControllerItem*> (item)->ctrBusType());
+            QVariant result(QVariant::fromValue(KStorageBus_Null));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    result.setValue(qobject_cast<ControllerItem*>(pItem)->bus());
+            return result;
+        }
+        case R_CtrBusTypes:
+        {
+            QVariant result(QVariant::fromValue(ControllerBusList()));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    result.setValue(qobject_cast<ControllerItem*>(pItem)->buses());
             return result;
         }
         case R_CtrPortCount:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
-                    return static_cast <ControllerItem*> (item)->portCount();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    return qobject_cast<ControllerItem*>(pItem)->portCount();
             return 0;
         }
         case R_CtrMaxPortCount:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
-                    return static_cast <ControllerItem*> (item)->maxPortCount();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    return qobject_cast<ControllerItem*>(pItem)->maxPortCount();
             return 0;
         }
         case R_CtrIoCache:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
-                    return static_cast <ControllerItem*> (item)->ctrUseIoCache();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                    return qobject_cast<ControllerItem*>(pItem)->useIoCache();
             return false;
         }
 
         case R_AttSlot:
         {
-            QVariant result (QVariant::fromValue (StorageSlot()));
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    result.setValue (static_cast <AttachmentItem*> (item)->attSlot());
+            QVariant result(QVariant::fromValue(StorageSlot()));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    result.setValue(qobject_cast<AttachmentItem*>(pItem)->storageSlot());
             return result;
         }
         case R_AttSlots:
         {
-            QVariant result (QVariant::fromValue (SlotsList()));
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    result.setValue (static_cast <AttachmentItem*> (item)->attSlots());
+            QVariant result(QVariant::fromValue(SlotsList()));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    result.setValue(qobject_cast<AttachmentItem*>(pItem)->storageSlots());
             return result;
         }
         case R_AttDevice:
         {
-            QVariant result (QVariant::fromValue (KDeviceType_Null));
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    result.setValue (static_cast <AttachmentItem*> (item)->attDeviceType());
+            QVariant result(QVariant::fromValue(KDeviceType_Null));
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    result.setValue(qobject_cast<AttachmentItem*>(pItem)->deviceType());
             return result;
         }
         case R_AttMediumId:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attMediumId();
-            return QString();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->mediumId();
+            return QUuid();
         }
         case R_AttIsHostDrive:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attIsHostDrive();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->isHostDrive();
             return false;
         }
         case R_AttIsPassthrough:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attIsPassthrough();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->isPassthrough();
             return false;
         }
         case R_AttIsTempEject:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attIsTempEject();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->isTempEject();
             return false;
         }
         case R_AttIsNonRotational:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attIsNonRotational();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->isNonRotational();
             return false;
         }
         case R_AttIsHotPluggable:
         {
-            if (AbstractItem *item = static_cast<AbstractItem*>(aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast<AttachmentItem*>(item)->attIsHotPluggable();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->isHotPluggable();
             return false;
         }
         case R_AttSize:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attSize();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->size();
             return QString();
         }
         case R_AttLogicalSize:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attLogicalSize();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->logicalSize();
             return QString();
         }
         case R_AttLocation:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attLocation();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->location();
             return QString();
         }
         case R_AttFormat:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attFormat();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->format();
             return QString();
         }
         case R_AttDetails:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attDetails();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->details();
             return QString();
         }
         case R_AttUsage:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast <AttachmentItem*> (item)->attUsage();
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
+                    return qobject_cast<AttachmentItem*>(pItem)->usage();
             return QString();
         }
         case R_AttEncryptionPasswordID:
         {
-            if (AbstractItem *pItem = static_cast<AbstractItem*>(aIndex.internalPointer()))
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
                 if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
-                    return static_cast<AttachmentItem*>(pItem)->attEncryptionPasswordID();
+                    return qobject_cast<AttachmentItem*>(pItem)->encryptionPasswordId();
             return QString();
         }
         case R_Margin:
@@ -1508,22 +2308,22 @@ QVariant StorageModel::data (const QModelIndex &aIndex, int aRole) const
         }
         case R_HDPixmapRect:
         {
-            int margin = data (aIndex, R_Margin).toInt();
-            int width = data (aIndex, R_IconSize).toInt();
-            return QRect (0 - width - margin, margin, width, width);
+            int iMargin = data(specifiedIndex, R_Margin).toInt();
+            int iWidth = data(specifiedIndex, R_IconSize).toInt();
+            return QRect(0 - iWidth - iMargin, iMargin, iWidth, iWidth);
         }
         case R_CDPixmapRect:
         {
-            int margin = data (aIndex, R_Margin).toInt();
-            int spacing = data (aIndex, R_Spacing).toInt();
-            int width = data (aIndex, R_IconSize).toInt();
-            return QRect (0 - width - spacing - width - margin, margin, width, width);
+            int iMargin = data(specifiedIndex, R_Margin).toInt();
+            int iSpacing = data(specifiedIndex, R_Spacing).toInt();
+            int iWidth = data(specifiedIndex, R_IconSize).toInt();
+            return QRect(0 - iWidth - iSpacing - iWidth - iMargin, iMargin, iWidth, iWidth);
         }
         case R_FDPixmapRect:
         {
-            int margin = data (aIndex, R_Margin).toInt();
-            int width = data (aIndex, R_IconSize).toInt();
-            return QRect (0 - width - margin, margin, width, width);
+            int iMargin = data(specifiedIndex, R_Margin).toInt();
+            int iWidth = data(specifiedIndex, R_IconSize).toInt();
+            return QRect(0 - iWidth - iMargin, iMargin, iWidth, iWidth);
         }
 
         default:
@@ -1532,70 +2332,127 @@ QVariant StorageModel::data (const QModelIndex &aIndex, int aRole) const
     return QVariant();
 }
 
-bool StorageModel::setData (const QModelIndex &aIndex, const QVariant &aValue, int aRole)
+bool StorageModel::setData(const QModelIndex &specifiedIndex, const QVariant &aValue, int iRole)
 {
-    if (!aIndex.isValid())
-        return QAbstractItemModel::setData (aIndex, aValue, aRole);
+    if (!specifiedIndex.isValid())
+        return QAbstractItemModel::setData(specifiedIndex, aValue, iRole);
 
-    switch (aRole)
+    switch (iRole)
     {
         case R_ToolTipType:
         {
-            mToolTipType = aValue.value <ToolTipType>();
-            emit dataChanged (aIndex, aIndex);
+            m_enmToolTipType = aValue.value<ToolTipType>();
+            emit dataChanged(specifiedIndex, specifiedIndex);
             return true;
         }
         case R_CtrName:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
                 {
-                    static_cast <ControllerItem*> (item)->setCtrName (aValue.toString());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<ControllerItem*>(pItem)->setName(aValue.toString());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
+                    return true;
+                }
+            return false;
+        }
+        case R_CtrBusType:
+        {
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
+                {
+                    /* Acquire controller item and requested storage bus type: */
+                    ControllerItem *pItemController = qobject_cast<ControllerItem*>(pItem);
+                    const KStorageBus enmNewCtrBusType = aValue.value<KStorageBus>();
+
+                    /* PCIe devices allows for hard-drives attachments only,
+                     * no optical devices. So, lets make sure that rule is fulfilled. */
+                    if (enmNewCtrBusType == KStorageBus_PCIe)
+                    {
+                        const QList<QUuid> opticalIds = pItemController->attachmentIDs(KDeviceType_DVD);
+                        if (!opticalIds.isEmpty())
+                        {
+                            if (!msgCenter().confirmStorageBusChangeWithOpticalRemoval(qobject_cast<QWidget*>(QObject::parent())))
+                                return false;
+                            foreach (const QUuid &uId, opticalIds)
+                                delAttachment(pItemController->id(), uId);
+                        }
+                    }
+
+                    /* Lets make sure there is enough of place for all the remaining attachments: */
+                    const uint uMaxPortCount =
+                        (uint)uiCommon().virtualBox().GetSystemProperties().GetMaxPortCountForStorageBus(enmNewCtrBusType);
+                    const uint uMaxDevicePerPortCount =
+                        (uint)uiCommon().virtualBox().GetSystemProperties().GetMaxDevicesPerPortForStorageBus(enmNewCtrBusType);
+                    const QList<QUuid> ids = pItemController->attachmentIDs();
+                    if (uMaxPortCount * uMaxDevicePerPortCount < (uint)ids.size())
+                    {
+                        if (!msgCenter().confirmStorageBusChangeWithExcessiveRemoval(qobject_cast<QWidget*>(QObject::parent())))
+                            return false;
+                        for (int i = uMaxPortCount * uMaxDevicePerPortCount; i < ids.size(); ++i)
+                            delAttachment(pItemController->id(), ids.at(i));
+                    }
+
+                    /* Push new bus/controller type: */
+                    pItemController->setBus(enmNewCtrBusType);
+                    pItemController->setType(pItemController->types(enmNewCtrBusType).first());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
+
+                    /* Make sure each of remaining attachments has valid slot: */
+                    foreach (AbstractItem *pChildItem, pItemController->attachments())
+                    {
+                        AttachmentItem *pChildItemAttachment = qobject_cast<AttachmentItem*>(pChildItem);
+                        const SlotsList availableSlots = pChildItemAttachment->storageSlots();
+                        const StorageSlot currentSlot = pChildItemAttachment->storageSlot();
+                        if (!availableSlots.isEmpty() && !availableSlots.contains(currentSlot))
+                            pChildItemAttachment->setStorageSlot(availableSlots.first());
+                    }
+
+                    /* This means success: */
                     return true;
                 }
             return false;
         }
         case R_CtrType:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
                 {
-                    static_cast <ControllerItem*> (item)->setCtrType (aValue.value <KStorageControllerType>());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<ControllerItem*>(pItem)->setType(aValue.value<KStorageControllerType>());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
         }
         case R_CtrPortCount:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
                 {
-                    static_cast <ControllerItem*> (item)->setPortCount (aValue.toUInt());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<ControllerItem*>(pItem)->setPortCount(aValue.toUInt());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
         }
         case R_CtrIoCache:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_ControllerItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_ControllerItem)
                 {
-                    static_cast <ControllerItem*> (item)->setCtrUseIoCache (aValue.toBool());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<ControllerItem*>(pItem)->setUseIoCache(aValue.toBool());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
         }
         case R_AttSlot:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
                 {
-                    static_cast <AttachmentItem*> (item)->setAttSlot (aValue.value <StorageSlot>());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<AttachmentItem*>(pItem)->setStorageSlot(aValue.value<StorageSlot>());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     sort();
                     return true;
                 }
@@ -1603,66 +2460,66 @@ bool StorageModel::setData (const QModelIndex &aIndex, const QVariant &aValue, i
         }
         case R_AttDevice:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
                 {
-                    static_cast <AttachmentItem*> (item)->setAttDevice (aValue.value <KDeviceType>());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<AttachmentItem*>(pItem)->setDeviceType(aValue.value<KDeviceType>());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
         }
         case R_AttMediumId:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
                 {
-                    static_cast <AttachmentItem*> (item)->setAttMediumId (aValue.toString());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<AttachmentItem*>(pItem)->setMediumId(aValue.toUuid());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
         }
         case R_AttIsPassthrough:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
                 {
-                    static_cast <AttachmentItem*> (item)->setAttIsPassthrough (aValue.toBool());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<AttachmentItem*>(pItem)->setPassthrough(aValue.toBool());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
         }
         case R_AttIsTempEject:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
                 {
-                    static_cast <AttachmentItem*> (item)->setAttIsTempEject (aValue.toBool());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<AttachmentItem*>(pItem)->setTempEject(aValue.toBool());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
         }
         case R_AttIsNonRotational:
         {
-            if (AbstractItem *item = static_cast <AbstractItem*> (aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
                 {
-                    static_cast <AttachmentItem*> (item)->setAttIsNonRotational (aValue.toBool());
-                    emit dataChanged (aIndex, aIndex);
+                    qobject_cast<AttachmentItem*>(pItem)->setNonRotational(aValue.toBool());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
         }
         case R_AttIsHotPluggable:
         {
-            if (AbstractItem *item = static_cast<AbstractItem*>(aIndex.internalPointer()))
-                if (item->rtti() == AbstractItem::Type_AttachmentItem)
+            if (AbstractItem *pItem = static_cast<AbstractItem*>(specifiedIndex.internalPointer()))
+                if (pItem->rtti() == AbstractItem::Type_AttachmentItem)
                 {
-                    static_cast<AttachmentItem*>(item)->setAttIsHotPluggable(aValue.toBool());
-                    emit dataChanged(aIndex, aIndex);
+                    qobject_cast<AttachmentItem*>(pItem)->setHotPluggable(aValue.toBool());
+                    emit dataChanged(specifiedIndex, specifiedIndex);
                     return true;
                 }
             return false;
@@ -1674,71 +2531,149 @@ bool StorageModel::setData (const QModelIndex &aIndex, const QVariant &aValue, i
     return false;
 }
 
-QModelIndex StorageModel::addController (const QString &aCtrName, KStorageBus aBusType, KStorageControllerType aCtrType)
+QModelIndex StorageModel::addController(const QString &aCtrName, KStorageBus enmBus, KStorageControllerType enmType)
 {
-    beginInsertRows (root(), mRootItem->childCount(), mRootItem->childCount());
-    new ControllerItem (mRootItem, aCtrName, aBusType, aCtrType);
+    beginInsertRows(root(), m_pRootItem->childCount(), m_pRootItem->childCount());
+    new ControllerItem(m_pRootItem, aCtrName, enmBus, enmType);
     endInsertRows();
-    return index (mRootItem->childCount() - 1, 0, root());
+    return index(m_pRootItem->childCount() - 1, 0, root());
 }
 
-void StorageModel::delController (const QUuid &aCtrId)
+void StorageModel::delController(const QUuid &uCtrId)
 {
-    if (AbstractItem *item = mRootItem->childItemById (aCtrId))
+    if (AbstractItem *pItem = m_pRootItem->childItemById(uCtrId))
     {
-        int itemPosition = mRootItem->posOfChild (item);
-        beginRemoveRows (root(), itemPosition, itemPosition);
-        delete item;
+        int iItemPosition = m_pRootItem->posOfChild(pItem);
+        beginRemoveRows(root(), iItemPosition, iItemPosition);
+        delete pItem;
         endRemoveRows();
     }
 }
 
-QModelIndex StorageModel::addAttachment (const QUuid &aCtrId, KDeviceType aDeviceType, const QString &strMediumId)
+QModelIndex StorageModel::addAttachment(const QUuid &uCtrId, KDeviceType enmDeviceType, const QUuid &uMediumId)
 {
-    if (AbstractItem *parent = mRootItem->childItemById (aCtrId))
+    if (AbstractItem *pParentItem = m_pRootItem->childItemById(uCtrId))
     {
-        int parentPosition = mRootItem->posOfChild (parent);
-        QModelIndex parentIndex = index (parentPosition, 0, root());
-        beginInsertRows (parentIndex, parent->childCount(), parent->childCount());
-        AttachmentItem *pItem = new AttachmentItem (parent, aDeviceType);
-        pItem->setAttIsHotPluggable(m_configurationAccessLevel != ConfigurationAccessLevel_Full);
-        pItem->setAttMediumId(strMediumId);
+        int iParentPosition = m_pRootItem->posOfChild(pParentItem);
+        QModelIndex parentIndex = index(iParentPosition, 0, root());
+        beginInsertRows(parentIndex, pParentItem->childCount(), pParentItem->childCount());
+        AttachmentItem *pItem = new AttachmentItem(pParentItem, enmDeviceType);
+        pItem->setHotPluggable(m_enmConfigurationAccessLevel != ConfigurationAccessLevel_Full);
+        pItem->setMediumId(uMediumId);
         endInsertRows();
-        return index (parent->childCount() - 1, 0, parentIndex);
+        return index(pParentItem->childCount() - 1, 0, parentIndex);
     }
     return QModelIndex();
 }
 
-void StorageModel::delAttachment (const QUuid &aCtrId, const QUuid &aAttId)
+void StorageModel::delAttachment(const QUuid &uCtrId, const QUuid &uAttId)
 {
-    if (AbstractItem *parent = mRootItem->childItemById (aCtrId))
+    if (AbstractItem *pParentItem = m_pRootItem->childItemById(uCtrId))
     {
-        int parentPosition = mRootItem->posOfChild (parent);
-        if (AbstractItem *item = parent->childItemById (aAttId))
+        int iParentPosition = m_pRootItem->posOfChild(pParentItem);
+        if (AbstractItem *pItem = pParentItem->childItemById(uAttId))
         {
-            int itemPosition = parent->posOfChild (item);
-            beginRemoveRows (index (parentPosition, 0, root()), itemPosition, itemPosition);
-            delete item;
+            int iItemPosition = pParentItem->posOfChild(pItem);
+            beginRemoveRows(index(iParentPosition, 0, root()), iItemPosition, iItemPosition);
+            delete pItem;
             endRemoveRows();
         }
     }
 }
 
-void StorageModel::setMachineId (const QString &aMachineId)
+void StorageModel::moveAttachment(const QUuid &uAttId, const QUuid &uCtrOldId, const QUuid &uCtrNewId)
 {
-    mRootItem->setMachineId (aMachineId);
+    /* No known info about attachment device type and medium ID: */
+    KDeviceType enmDeviceType = KDeviceType_Null;
+    QUuid uMediumId;
+
+    /* First of all we are looking for old controller item: */
+    AbstractItem *pOldItem = m_pRootItem->childItemById(uCtrOldId);
+    if (pOldItem)
+    {
+        /* And acquire controller position: */
+        const int iOldCtrPosition = m_pRootItem->posOfChild(pOldItem);
+
+        /* Then we are looking for an attachment item: */
+        if (AbstractItem *pSubItem = pOldItem->childItemById(uAttId))
+        {
+            /* And make sure this is really an attachment: */
+            AttachmentItem *pSubItemAttachment = qobject_cast<AttachmentItem*>(pSubItem);
+            if (pSubItemAttachment)
+            {
+                /* This way we can acquire actual attachment device type and medium ID: */
+                enmDeviceType = pSubItemAttachment->deviceType();
+                uMediumId = pSubItemAttachment->mediumId();
+
+                /* And delete atachment item finally: */
+                const int iAttPosition = pOldItem->posOfChild(pSubItem);
+                beginRemoveRows(index(iOldCtrPosition, 0, root()), iAttPosition, iAttPosition);
+                delete pSubItem;
+                endRemoveRows();
+            }
+        }
+    }
+
+    /* As the last step we are looking for new controller item: */
+    AbstractItem *pNewItem = m_pRootItem->childItemById(uCtrNewId);
+    if (pNewItem)
+    {
+        /* And acquire controller position: */
+        const int iNewCtrPosition = m_pRootItem->posOfChild(pNewItem);
+
+        /* Then we have to make sure moved attachment is valid: */
+        if (enmDeviceType != KDeviceType_Null)
+        {
+            /* And create new attachment item finally: */
+            QModelIndex newCtrIndex = index(iNewCtrPosition, 0, root());
+            beginInsertRows(newCtrIndex, pNewItem->childCount(), pNewItem->childCount());
+            AttachmentItem *pItem = new AttachmentItem(pNewItem, enmDeviceType);
+            pItem->setHotPluggable(m_enmConfigurationAccessLevel != ConfigurationAccessLevel_Full);
+            pItem->setMediumId(uMediumId);
+            endInsertRows();
+        }
+    }
 }
 
-void StorageModel::sort(int /* iColumn */, Qt::SortOrder order)
+KDeviceType StorageModel::attachmentDeviceType(const QUuid &uCtrId, const QUuid &uAttId) const
+{
+    /* First of all we are looking for top-level (controller) item: */
+    AbstractItem *pTopLevelItem = m_pRootItem->childItemById(uCtrId);
+    if (pTopLevelItem)
+    {
+        /* Then we are looking for sub-level (attachment) item: */
+        AbstractItem *pSubLevelItem = pTopLevelItem->childItemById(uAttId);
+        if (pSubLevelItem)
+        {
+            /* And make sure this is really an attachment: */
+            AttachmentItem *pAttachmentItem = qobject_cast<AttachmentItem*>(pSubLevelItem);
+            if (pAttachmentItem)
+            {
+                /* This way we can acquire actual attachment device type: */
+                return pAttachmentItem->deviceType();
+            }
+        }
+    }
+
+    /* Null by default: */
+    return KDeviceType_Null;
+}
+
+void StorageModel::setMachineId(const QUuid &uMachineId)
+{
+    m_pRootItem->setMachineId(uMachineId);
+}
+
+void StorageModel::sort(int /* iColumn */, Qt::SortOrder enmOrder)
 {
     /* Count of controller items: */
-    int iItemLevel1Count = mRootItem->childCount();
+    int iItemLevel1Count = m_pRootItem->childCount();
     /* For each of controller items: */
     for (int iItemLevel1Pos = 0; iItemLevel1Pos < iItemLevel1Count; ++iItemLevel1Pos)
     {
         /* Get iterated controller item: */
-        AbstractItem *pItemLevel1 = mRootItem->childItem(iItemLevel1Pos);
-        ControllerItem *pControllerItem = static_cast<ControllerItem*>(pItemLevel1);
+        AbstractItem *pItemLevel1 = m_pRootItem->childItem(iItemLevel1Pos);
+        ControllerItem *pControllerItem = qobject_cast<ControllerItem*>(pItemLevel1);
         /* Count of attachment items: */
         int iItemLevel2Count = pItemLevel1->childCount();
         /* Prepare empty list for sorted attachments: */
@@ -1748,20 +2683,20 @@ void StorageModel::sort(int /* iColumn */, Qt::SortOrder order)
         {
             /* Get iterated attachment item: */
             AbstractItem *pItemLevel2 = pItemLevel1->childItem(iItemLevel2Pos);
-            AttachmentItem *pAttachmentItem = static_cast<AttachmentItem*>(pItemLevel2);
+            AttachmentItem *pAttachmentItem = qobject_cast<AttachmentItem*>(pItemLevel2);
             /* Get iterated attachment storage slot: */
-            StorageSlot attachmentSlot = pAttachmentItem->attSlot();
+            StorageSlot attachmentSlot = pAttachmentItem->storageSlot();
             int iInsertPosition = 0;
             for (; iInsertPosition < newAttachments.size(); ++iInsertPosition)
             {
                 /* Get sorted attachment item: */
                 AbstractItem *pNewItemLevel2 = newAttachments[iInsertPosition];
-                AttachmentItem *pNewAttachmentItem = static_cast<AttachmentItem*>(pNewItemLevel2);
+                AttachmentItem *pNewAttachmentItem = qobject_cast<AttachmentItem*>(pNewItemLevel2);
                 /* Get sorted attachment storage slot: */
-                StorageSlot newAttachmentSlot = pNewAttachmentItem->attSlot();
+                StorageSlot newAttachmentSlot = pNewAttachmentItem->storageSlot();
                 /* Apply sorting rule: */
-                if (((order == Qt::AscendingOrder) && (attachmentSlot < newAttachmentSlot)) ||
-                    ((order == Qt::DescendingOrder) && (attachmentSlot > newAttachmentSlot)))
+                if (((enmOrder == Qt::AscendingOrder) && (attachmentSlot < newAttachmentSlot)) ||
+                    ((enmOrder == Qt::DescendingOrder) && (attachmentSlot > newAttachmentSlot)))
                     break;
             }
             /* Insert iterated attachment into sorted position: */
@@ -1806,25 +2741,25 @@ QModelIndex StorageModel::attachmentBySlot(QModelIndex controllerIndex, StorageS
 
 KChipsetType StorageModel::chipsetType() const
 {
-    return m_chipsetType;
+    return m_enmChipsetType;
 }
 
-void StorageModel::setChipsetType(KChipsetType type)
+void StorageModel::setChipsetType(KChipsetType enmChipsetType)
 {
-    m_chipsetType = type;
+    m_enmChipsetType = enmChipsetType;
 }
 
-void StorageModel::setConfigurationAccessLevel(ConfigurationAccessLevel newConfigurationAccessLevel)
+void StorageModel::setConfigurationAccessLevel(ConfigurationAccessLevel enmConfigurationAccessLevel)
 {
-    m_configurationAccessLevel = newConfigurationAccessLevel;
+    m_enmConfigurationAccessLevel = enmConfigurationAccessLevel;
 }
 
 void StorageModel::clear()
 {
-    while (mRootItem->childCount())
+    while (m_pRootItem->childCount())
     {
         beginRemoveRows(root(), 0, 0);
-        delete mRootItem->childItem(0);
+        delete m_pRootItem->childItem(0);
         endRemoveRows();
     }
 }
@@ -1832,10 +2767,10 @@ void StorageModel::clear()
 QMap<KStorageBus, int> StorageModel::currentControllerTypes() const
 {
     QMap<KStorageBus, int> currentMap;
-    for (int iStorageBusType = KStorageBus_IDE; iStorageBusType <= KStorageBus_USB; ++iStorageBusType)
+    for (int iStorageBusType = KStorageBus_IDE; iStorageBusType < KStorageBus_Max; ++iStorageBusType)
     {
         currentMap.insert((KStorageBus)iStorageBusType,
-                          static_cast<RootItem*>(mRootItem)->childCount((KStorageBus)iStorageBusType));
+                          qobject_cast<RootItem*>(m_pRootItem)->childCount((KStorageBus)iStorageBusType));
     }
     return currentMap;
 }
@@ -1843,490 +2778,401 @@ QMap<KStorageBus, int> StorageModel::currentControllerTypes() const
 QMap<KStorageBus, int> StorageModel::maximumControllerTypes() const
 {
     QMap<KStorageBus, int> maximumMap;
-    for (int iStorageBusType = KStorageBus_IDE; iStorageBusType <= KStorageBus_USB; ++iStorageBusType)
+    for (int iStorageBusType = KStorageBus_IDE; iStorageBusType < KStorageBus_Max; ++iStorageBusType)
     {
         maximumMap.insert((KStorageBus)iStorageBusType,
-                          vboxGlobal().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), (KStorageBus)iStorageBusType));
+                          uiCommon().virtualBox().GetSystemProperties().GetMaxInstancesOfStorageBus(chipsetType(), (KStorageBus)iStorageBusType));
     }
     return maximumMap;
 }
 
-Qt::ItemFlags StorageModel::flags (const QModelIndex &aIndex) const
+/* static */
+KStorageBus StorageModel::roleToBus(StorageModel::DataRole enmRole)
 {
-    return !aIndex.isValid() ? QAbstractItemModel::flags (aIndex) :
+    QMap<StorageModel::DataRole, KStorageBus> typeRoles;
+    typeRoles[StorageModel::R_CtrTypesForIDE]        = KStorageBus_IDE;
+    typeRoles[StorageModel::R_CtrTypesForSATA]       = KStorageBus_SATA;
+    typeRoles[StorageModel::R_CtrTypesForSCSI]       = KStorageBus_SCSI;
+    typeRoles[StorageModel::R_CtrTypesForFloppy]     = KStorageBus_Floppy;
+    typeRoles[StorageModel::R_CtrTypesForSAS]        = KStorageBus_SAS;
+    typeRoles[StorageModel::R_CtrTypesForUSB]        = KStorageBus_USB;
+    typeRoles[StorageModel::R_CtrTypesForPCIe]       = KStorageBus_PCIe;
+    typeRoles[StorageModel::R_CtrTypesForVirtioSCSI] = KStorageBus_VirtioSCSI;
+    return typeRoles.value(enmRole);
+}
+
+/* static */
+StorageModel::DataRole StorageModel::busToRole(KStorageBus enmBus)
+{
+    QMap<KStorageBus, StorageModel::DataRole> typeRoles;
+    typeRoles[KStorageBus_IDE]        = StorageModel::R_CtrTypesForIDE;
+    typeRoles[KStorageBus_SATA]       = StorageModel::R_CtrTypesForSATA;
+    typeRoles[KStorageBus_SCSI]       = StorageModel::R_CtrTypesForSCSI;
+    typeRoles[KStorageBus_Floppy]     = StorageModel::R_CtrTypesForFloppy;
+    typeRoles[KStorageBus_SAS]        = StorageModel::R_CtrTypesForSAS;
+    typeRoles[KStorageBus_USB]        = StorageModel::R_CtrTypesForUSB;
+    typeRoles[KStorageBus_PCIe]       = StorageModel::R_CtrTypesForPCIe;
+    typeRoles[KStorageBus_VirtioSCSI] = StorageModel::R_CtrTypesForVirtioSCSI;
+    return typeRoles.value(enmBus);
+}
+
+Qt::ItemFlags StorageModel::flags(const QModelIndex &specifiedIndex) const
+{
+    return !specifiedIndex.isValid() ? QAbstractItemModel::flags(specifiedIndex) :
            Qt::ItemIsEnabled | Qt::ItemIsSelectable;
 }
 
-/* Storage Delegate */
-StorageDelegate::StorageDelegate (QObject *aParent)
-    : QItemDelegate (aParent)
+
+/*********************************************************************************************************************************
+*   Class StorageDelegate implementation.                                                                                        *
+*********************************************************************************************************************************/
+
+StorageDelegate::StorageDelegate(QObject *pParent)
+    : QItemDelegate(pParent)
 {
 }
 
-void StorageDelegate::paint (QPainter *aPainter, const QStyleOptionViewItem &aOption, const QModelIndex &aIndex) const
+void StorageDelegate::paint(QPainter *pPainter, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    if (!aIndex.isValid()) return;
+    if (!index.isValid()) return;
 
-    /* Initialize variables */
-    QStyle::State state = aOption.state;
-    QRect rect = aOption.rect;
-    const StorageModel *model = qobject_cast <const StorageModel*> (aIndex.model());
-    Assert (model);
+    /* Initialize variables: */
+    QStyle::State enmState = option.state;
+    QRect rect = option.rect;
+    const StorageModel *pModel = qobject_cast<const StorageModel*>(index.model());
+    Assert(pModel);
 
-    aPainter->save();
+    pPainter->save();
 
-    /* Draw item background */
-    QItemDelegate::drawBackground (aPainter, aOption, aIndex);
+    /* Draw item background: */
+    QItemDelegate::drawBackground(pPainter, option, index);
 
-    /* Setup foreground settings */
-    QPalette::ColorGroup cg = state & QStyle::State_Active ? QPalette::Active : QPalette::Inactive;
-    bool isSelected = state & QStyle::State_Selected;
-    bool isFocused = state & QStyle::State_HasFocus;
-    bool isGrayOnLoosingFocus = QApplication::style()->styleHint (QStyle::SH_ItemView_ChangeHighlightOnFocus, &aOption) != 0;
-    aPainter->setPen (aOption.palette.color (cg, isSelected && (isFocused || !isGrayOnLoosingFocus) ?
-                                             QPalette::HighlightedText : QPalette::Text));
+    /* Setup foreground settings: */
+    QPalette::ColorGroup cg = enmState & QStyle::State_Active ? QPalette::Active : QPalette::Inactive;
+    bool fSelected = enmState & QStyle::State_Selected;
+    bool fFocused = enmState & QStyle::State_HasFocus;
+    bool fGrayOnLoosingFocus = QApplication::style()->styleHint(QStyle::SH_ItemView_ChangeHighlightOnFocus, &option) != 0;
+    pPainter->setPen(option.palette.color(cg, fSelected &&(fFocused || !fGrayOnLoosingFocus) ?
+                                          QPalette::HighlightedText : QPalette::Text));
 
-    aPainter->translate (rect.x(), rect.y());
+    pPainter->translate(rect.x(), rect.y());
 
-    /* Draw Item Pixmap */
-    aPainter->drawPixmap (model->data (aIndex, StorageModel::R_ItemPixmapRect).toRect().topLeft(),
-                          model->data (aIndex, StorageModel::R_ItemPixmap).value <QPixmap>());
+    /* Draw Item Pixmap: */
+    pPainter->drawPixmap(pModel->data(index, StorageModel::R_ItemPixmapRect).toRect().topLeft(),
+                         pModel->data(index, StorageModel::R_ItemPixmap).value<QPixmap>());
 
-    /* Draw compressed item name */
-    int margin = model->data (aIndex, StorageModel::R_Margin).toInt();
-    int iconWidth = model->data (aIndex, StorageModel::R_IconSize).toInt();
-    int spacing = model->data (aIndex, StorageModel::R_Spacing).toInt();
-    QPoint textPosition = model->data (aIndex, StorageModel::R_ItemNamePoint).toPoint();
-    int textWidth = rect.width() - textPosition.x();
-    if (model->data (aIndex, StorageModel::R_IsController).toBool() && state & QStyle::State_Selected)
+    /* Draw compressed item name: */
+    int iMargin = pModel->data(index, StorageModel::R_Margin).toInt();
+    int iIconWidth = pModel->data(index, StorageModel::R_IconSize).toInt();
+    int iSpacing = pModel->data(index, StorageModel::R_Spacing).toInt();
+    QPoint textPosition = pModel->data(index, StorageModel::R_ItemNamePoint).toPoint();
+    int iTextWidth = rect.width() - textPosition.x();
+    if (pModel->data(index, StorageModel::R_IsController).toBool() && enmState & QStyle::State_Selected)
     {
-        textWidth -= (2 * spacing + iconWidth + margin);
-        if (model->data (aIndex, StorageModel::R_CtrBusType).value <KStorageBus>() != KStorageBus_Floppy)
-            textWidth -= (spacing + iconWidth);
+        iTextWidth -= (2 * iSpacing + iIconWidth + iMargin);
+        if (pModel->data(index, StorageModel::R_CtrBusType).value<KStorageBus>() != KStorageBus_Floppy)
+            iTextWidth -= (iSpacing + iIconWidth);
     }
-    QString text (model->data (aIndex, StorageModel::R_ItemName).toString());
-    QString shortText (text);
-    QFont font = model->data (aIndex, Qt::FontRole).value <QFont>();
-    QFontMetrics fm (font);
-    while ((shortText.size() > 1) && (fm.width (shortText) + fm.width ("...") > textWidth))
-        shortText.truncate (shortText.size() - 1);
-    if (shortText != text)
-        shortText += "...";
-    aPainter->setFont (font);
-    aPainter->drawText (textPosition, shortText);
+    QString strText(pModel->data(index, StorageModel::R_ItemName).toString());
+    QString strShortText(strText);
+    QFont font = pModel->data(index, Qt::FontRole).value<QFont>();
+    QFontMetrics fm(font);
+    while ((strShortText.size() > 1) && (fm.width(strShortText) + fm.width("...") > iTextWidth))
+        strShortText.truncate(strShortText.size() - 1);
+    if (strShortText != strText)
+        strShortText += "...";
+    pPainter->setFont(font);
+    pPainter->drawText(textPosition, strShortText);
 
-    /* Draw Controller Additions */
-    if (model->data (aIndex, StorageModel::R_IsController).toBool() && state & QStyle::State_Selected)
+    /* Draw Controller Additions: */
+    if (pModel->data(index, StorageModel::R_IsController).toBool() && enmState & QStyle::State_Selected)
     {
-        DeviceTypeList devicesList (model->data (aIndex, StorageModel::R_CtrDevices).value <DeviceTypeList>());
+        DeviceTypeList devicesList(pModel->data(index, StorageModel::R_CtrDevices).value<DeviceTypeList>());
         for (int i = 0; i < devicesList.size(); ++ i)
         {
-            KDeviceType deviceType = devicesList [i];
+            KDeviceType enmDeviceType = devicesList[i];
 
             QRect deviceRect;
             QPixmap devicePixmap;
-            switch (deviceType)
+            switch (enmDeviceType)
             {
                 case KDeviceType_HardDisk:
                 {
-                    deviceRect = model->data (aIndex, StorageModel::R_HDPixmapRect).value <QRect>();
-                    devicePixmap = model->data (aIndex, StorageModel::R_IsMoreAttachmentsPossible).toBool() ?
-                                   model->data (aIndex, StorageModel::R_HDPixmapAddEn).value <QPixmap>() :
-                                   model->data (aIndex, StorageModel::R_HDPixmapAddDis).value <QPixmap>();
+                    deviceRect = pModel->data(index, StorageModel::R_HDPixmapRect).value<QRect>();
+                    devicePixmap = pModel->data(index, StorageModel::R_IsMoreAttachmentsPossible).toBool() ?
+                                   pModel->data(index, StorageModel::R_HDPixmapAddEn).value<QPixmap>() :
+                                   pModel->data(index, StorageModel::R_HDPixmapAddDis).value<QPixmap>();
                     break;
                 }
                 case KDeviceType_DVD:
                 {
-                    deviceRect = model->data (aIndex, StorageModel::R_CDPixmapRect).value <QRect>();
-                    devicePixmap = model->data (aIndex, StorageModel::R_IsMoreAttachmentsPossible).toBool() ?
-                                   model->data (aIndex, StorageModel::R_CDPixmapAddEn).value <QPixmap>() :
-                                   model->data (aIndex, StorageModel::R_CDPixmapAddDis).value <QPixmap>();
+                    deviceRect = pModel->data(index, StorageModel::R_CDPixmapRect).value<QRect>();
+                    devicePixmap = pModel->data(index, StorageModel::R_IsMoreAttachmentsPossible).toBool() ?
+                                   pModel->data(index, StorageModel::R_CDPixmapAddEn).value<QPixmap>() :
+                                   pModel->data(index, StorageModel::R_CDPixmapAddDis).value<QPixmap>();
                     break;
                 }
                 case KDeviceType_Floppy:
                 {
-                    deviceRect = model->data (aIndex, StorageModel::R_FDPixmapRect).value <QRect>();
-                    devicePixmap = model->data (aIndex, StorageModel::R_IsMoreAttachmentsPossible).toBool() ?
-                                   model->data (aIndex, StorageModel::R_FDPixmapAddEn).value <QPixmap>() :
-                                   model->data (aIndex, StorageModel::R_FDPixmapAddDis).value <QPixmap>();
+                    deviceRect = pModel->data(index, StorageModel::R_FDPixmapRect).value<QRect>();
+                    devicePixmap = pModel->data(index, StorageModel::R_IsMoreAttachmentsPossible).toBool() ?
+                                   pModel->data(index, StorageModel::R_FDPixmapAddEn).value<QPixmap>() :
+                                   pModel->data(index, StorageModel::R_FDPixmapAddDis).value<QPixmap>();
                     break;
                 }
                 default:
                     break;
             }
 
-            aPainter->drawPixmap (QPoint (rect.width() + deviceRect.x(), deviceRect.y()), devicePixmap);
+            pPainter->drawPixmap(QPoint(rect.width() + deviceRect.x(), deviceRect.y()), devicePixmap);
         }
     }
 
-    aPainter->restore();
+    pPainter->restore();
 
-    drawFocus (aPainter, aOption, rect);
+    drawFocus(pPainter, option, rect);
 }
 
-/**
- * UI Medium ID Holder.
- * Used for compliance with other storage page widgets
- * which caching and holding corresponding information.
- */
-class UIMediumIDHolder : public QObject
-{
-    Q_OBJECT;
 
-public:
+/*********************************************************************************************************************************
+*   Class UIMachineSettingsStorage implementation.                                                                               *
+*********************************************************************************************************************************/
 
-    UIMediumIDHolder(QWidget *pParent) : QObject(pParent) {}
+/* static */
+const QString UIMachineSettingsStorage::s_strControllerMimeType = QString("application/virtualbox;value=StorageControllerID");
+const QString UIMachineSettingsStorage::s_strAttachmentMimeType = QString("application/virtualbox;value=StorageAttachmentID");
 
-    QString id() const { return m_strId; }
-    void setId(const QString &strId) { m_strId = strId; emit sigChanged(); }
-
-    UIMediumType type() const { return m_type; }
-    void setType(UIMediumType type) { m_type = type; }
-
-    bool isNull() const { return m_strId == UIMedium().id(); }
-
-signals:
-
-    void sigChanged();
-
-private:
-
-    QString m_strId;
-    UIMediumType m_type;
-};
-
-/**
- * QWidget class reimplementation.
- * Used as HD Settings widget.
- */
 UIMachineSettingsStorage::UIMachineSettingsStorage()
-    : mStorageModel(0)
-    , mAddCtrAction(0), mDelCtrAction(0)
-    , mAddIDECtrAction(0), mAddSATACtrAction(0), mAddSCSICtrAction(0), mAddSASCtrAction(0), mAddFloppyCtrAction(0), mAddUSBCtrAction(0), mAddNVMeCtrAction(0)
-    , mAddAttAction(0), mDelAttAction(0)
-    , mAddHDAttAction(0), mAddCDAttAction(0), mAddFDAttAction(0)
+    : m_pModelStorage(0)
     , m_pMediumIdHolder(new UIMediumIDHolder(this))
-    , mIsLoadingInProgress(0)
-    , mIsPolished(false)
-    , mDisableStaticControls(0)
+    , m_fLoadingInProgress(0)
+    , m_pCache(0)
+    , m_pSplitter(0)
+    , m_pWidgetLeftPane(0)
+    , m_pLabelSeparatorLeftPane(0)
+    , m_pLayoutTree(0)
+    , m_pTreeViewStorage(0)
+    , m_pLayoutToolbar(0)
+    , m_pToolbar(0)
+    , m_pActionAddController(0)
+    , m_pActionRemoveController(0)
+    , m_pActionAddAttachment(0)
+    , m_pActionRemoveAttachment(0)
+    , m_pActionAddAttachmentHD(0)
+    , m_pActionAddAttachmentCD(0)
+    , m_pActionAddAttachmentFD(0)
+    , m_pStackRightPane(0)
+    , m_pLabelSeparatorEmpty(0)
+    , m_pLabelInfo(0)
+    , m_pLabelSeparatorParameters(0)
+    , m_pLabelName(0)
+    , m_pEditorName(0)
+    , m_pLabelType(0)
+    , m_pComboType(0)
+    , m_pLabelPortCount(0)
+    , m_pSpinboxPortCount(0)
+    , m_pCheckBoxIoCache(0)
+    , m_pLabelSeparatorAttributes(0)
+    , m_pLabelMedium(0)
+    , m_pComboSlot(0)
+    , m_pToolButtonOpen(0)
+    , m_pCheckBoxPassthrough(0)
+    , m_pCheckBoxTempEject(0)
+    , m_pCheckBoxNonRotational(0)
+    , m_pCheckBoxHotPluggable(0)
+    , m_pLabelSeparatorInformation(0)
+    , m_pLabelHDFormat(0)
+    , m_pFieldHDFormat(0)
+    , m_pLabelCDFDType(0)
+    , m_pFieldCDFDType(0)
+    , m_pLabelHDVirtualSize(0)
+    , m_pFieldHDVirtualSize(0)
+    , m_pLabelHDActualSize(0)
+    , m_pFieldHDActualSize(0)
+    , m_pLabelCDFDSize(0)
+    , m_pFieldCDFDSize(0)
+    , m_pLabelHDDetails(0)
+    , m_pFieldHDDetails(0)
+    , m_pLabelLocation(0)
+    , m_pFieldLocation(0)
+    , m_pLabelUsage(0)
+    , m_pFieldUsage(0)
+    , m_pLabelEncryption(0)
+    , m_pFieldEncryption(0)
 {
-    /* Apply UI decorations */
-    Ui::UIMachineSettingsStorage::setupUi (this);
-
-    /* Enumerate Mediums. We need at least the MediaList filled, so this is the
-     * lasted point, where we can start. The rest of the media checking is done
-     * in a background thread. */
-    vboxGlobal().startMediumEnumeration();
-
-    /* Create icon-pool: */
-    UIIconPoolStorageSettings::create();
-
-    /* Controller Actions */
-    mAddCtrAction = new QAction (this);
-    mAddCtrAction->setIcon(iconPool()->icon(ControllerAddEn, ControllerAddDis));
-
-    mAddIDECtrAction = new QAction (this);
-    mAddIDECtrAction->setIcon(iconPool()->icon(IDEControllerAddEn, IDEControllerAddDis));
-
-    mAddSATACtrAction = new QAction (this);
-    mAddSATACtrAction->setIcon(iconPool()->icon(SATAControllerAddEn, SATAControllerAddDis));
-
-    mAddSCSICtrAction = new QAction (this);
-    mAddSCSICtrAction->setIcon(iconPool()->icon(SCSIControllerAddEn, SCSIControllerAddDis));
-
-    mAddFloppyCtrAction = new QAction (this);
-    mAddFloppyCtrAction->setIcon(iconPool()->icon(FloppyControllerAddEn, FloppyControllerAddDis));
-
-    mAddSASCtrAction = new QAction (this);
-    mAddSASCtrAction->setIcon(iconPool()->icon(SATAControllerAddEn, SATAControllerAddDis));
-
-    mAddUSBCtrAction = new QAction (this);
-    mAddUSBCtrAction->setIcon(iconPool()->icon(USBControllerAddEn, USBControllerAddDis));
-
-    mAddNVMeCtrAction = new QAction (this);
-    mAddNVMeCtrAction->setIcon(iconPool()->icon(NVMeControllerAddEn, NVMeControllerAddDis));
-
-    mDelCtrAction = new QAction (this);
-    mDelCtrAction->setIcon(iconPool()->icon(ControllerDelEn, ControllerDelDis));
-
-    /* Attachment Actions */
-    mAddAttAction = new QAction (this);
-    mAddAttAction->setIcon(iconPool()->icon(AttachmentAddEn, AttachmentAddDis));
-
-    mAddHDAttAction = new QAction (this);
-    mAddHDAttAction->setIcon(iconPool()->icon(HDAttachmentAddEn, HDAttachmentAddDis));
-
-    mAddCDAttAction = new QAction (this);
-    mAddCDAttAction->setIcon(iconPool()->icon(CDAttachmentAddEn, CDAttachmentAddDis));
-
-    mAddFDAttAction = new QAction (this);
-    mAddFDAttAction->setIcon(iconPool()->icon(FDAttachmentAddEn, FDAttachmentAddDis));
-
-    mDelAttAction = new QAction (this);
-    mDelAttAction->setIcon(iconPool()->icon(AttachmentDelEn, AttachmentDelDis));
-
-    /* Create storage-view: */
-    mTwStorageTree = new QITreeView(this);
-    {
-        /* Configure storage-view: */
-        mLsLeftPane->setBuddy(mTwStorageTree);
-        /* Add storage-view into layout: */
-        mLtStorage->insertWidget(0, mTwStorageTree);
-    }
-
-    /* Create storage-model: */
-    mStorageModel = new StorageModel (mTwStorageTree);
-    StorageDelegate *storageDelegate = new StorageDelegate (mTwStorageTree);
-    mTwStorageTree->setMouseTracking (true);
-    mTwStorageTree->setContextMenuPolicy (Qt::CustomContextMenu);
-    mTwStorageTree->setModel (mStorageModel);
-    mTwStorageTree->setItemDelegate (storageDelegate);
-    mTwStorageTree->setRootIndex (mStorageModel->root());
-    mTwStorageTree->setCurrentIndex (mStorageModel->root());
-
-    /* Determine icon metric: */
-    const QStyle *pStyle = QApplication::style();
-    const int iIconMetric = pStyle->pixelMetric(QStyle::PM_SmallIconSize);
-
-    /* Storage ToolBar */
-    mTbStorageBar->setIconSize (QSize (iIconMetric, iIconMetric));
-    mTbStorageBar->addAction (mAddAttAction);
-    mTbStorageBar->addAction (mDelAttAction);
-    mTbStorageBar->addAction (mAddCtrAction);
-    mTbStorageBar->addAction (mDelCtrAction);
-
-#ifdef VBOX_WS_MAC
-    /* We need a little more space for the focus rect. */
-    mLtStorage->setContentsMargins (3, 0, 3, 0);
-    mLtStorage->setSpacing (3);
-#endif /* VBOX_WS_MAC */
-
-    /* Setup choose-medium button: */
-    QMenu *pOpenMediumMenu = new QMenu(mTbOpen);
-    mTbOpen->setMenu(pOpenMediumMenu);
-
-    /* Controller pane initialization: */
-    mSbPortCount->setValue(0);
-
-    /* Info Pane initialization */
-    mLbHDFormatValue->setFullSizeSelection (true);
-    mLbCDFDTypeValue->setFullSizeSelection (true);
-    mLbHDVirtualSizeValue->setFullSizeSelection (true);
-    mLbHDActualSizeValue->setFullSizeSelection (true);
-    mLbSizeValue->setFullSizeSelection (true);
-    mLbHDDetailsValue->setFullSizeSelection (true);
-    mLbLocationValue->setFullSizeSelection (true);
-    mLbUsageValue->setFullSizeSelection (true);
-    m_pLabelEncryptionValue->setFullSizeSelection(true);
-
-    /* Setup connections: */
-    connect(&vboxGlobal(), SIGNAL(sigMediumEnumerated(const QString&)),
-            this, SLOT(sltHandleMediumEnumerated(const QString&)));
-    connect(&vboxGlobal(), SIGNAL(sigMediumDeleted(const QString&)),
-            this, SLOT(sltHandleMediumDeleted(const QString&)));
-    connect (mAddCtrAction, SIGNAL (triggered (bool)), this, SLOT (addController()));
-    connect (mAddIDECtrAction, SIGNAL (triggered (bool)), this, SLOT (addIDEController()));
-    connect (mAddSATACtrAction, SIGNAL (triggered (bool)), this, SLOT (addSATAController()));
-    connect (mAddSCSICtrAction, SIGNAL (triggered (bool)), this, SLOT (addSCSIController()));
-    connect (mAddSASCtrAction, SIGNAL (triggered (bool)), this, SLOT (addSASController()));
-    connect (mAddFloppyCtrAction, SIGNAL (triggered (bool)), this, SLOT (addFloppyController()));
-    connect (mAddUSBCtrAction, SIGNAL (triggered (bool)), this, SLOT (addUSBController()));
-    connect (mAddNVMeCtrAction, SIGNAL (triggered (bool)), this, SLOT (addNVMeController()));
-    connect (mDelCtrAction, SIGNAL (triggered (bool)), this, SLOT (delController()));
-    connect (mAddAttAction, SIGNAL (triggered (bool)), this, SLOT (addAttachment()));
-    connect (mAddHDAttAction, SIGNAL (triggered (bool)), this, SLOT (addHDAttachment()));
-    connect (mAddCDAttAction, SIGNAL (triggered (bool)), this, SLOT (addCDAttachment()));
-    connect (mAddFDAttAction, SIGNAL (triggered (bool)), this, SLOT (addFDAttachment()));
-    connect (mDelAttAction, SIGNAL (triggered (bool)), this, SLOT (delAttachment()));
-    connect (mStorageModel, SIGNAL (rowsInserted (const QModelIndex&, int, int)),
-             this, SLOT (onRowInserted (const QModelIndex&, int)));
-    connect (mStorageModel, SIGNAL (rowsRemoved (const QModelIndex&, int, int)),
-             this, SLOT (onRowRemoved()));
-    connect (mTwStorageTree, SIGNAL (currentItemChanged (const QModelIndex&, const QModelIndex&)),
-             this, SLOT (onCurrentItemChanged()));
-    connect (mTwStorageTree, SIGNAL (customContextMenuRequested (const QPoint&)),
-             this, SLOT (onContextMenuRequested (const QPoint&)));
-    connect (mTwStorageTree, SIGNAL (drawItemBranches (QPainter*, const QRect&, const QModelIndex&)),
-             this, SLOT (onDrawItemBranches (QPainter *, const QRect &, const QModelIndex &)));
-    connect (mTwStorageTree, SIGNAL (mouseMoved (QMouseEvent*)),
-             this, SLOT (onMouseMoved (QMouseEvent*)));
-    connect (mTwStorageTree, SIGNAL (mousePressed (QMouseEvent*)),
-             this, SLOT (onMouseClicked (QMouseEvent*)));
-    connect (mTwStorageTree, SIGNAL (mouseDoubleClicked (QMouseEvent*)),
-             this, SLOT (onMouseClicked (QMouseEvent*)));
-    connect (mLeName, SIGNAL (textEdited (const QString&)), this, SLOT (setInformation()));
-    connect (mCbType, SIGNAL (activated (int)), this, SLOT (setInformation()));
-    connect (mCbSlot, SIGNAL (activated (int)), this, SLOT (setInformation()));
-    connect (mSbPortCount, SIGNAL (valueChanged (int)), this, SLOT (setInformation()));
-    connect (mCbIoCache, SIGNAL (stateChanged (int)), this, SLOT (setInformation()));
-    connect (m_pMediumIdHolder, SIGNAL (sigChanged()), this, SLOT (setInformation()));
-    connect (mTbOpen, SIGNAL (clicked (bool)), mTbOpen, SLOT (showMenu()));
-    connect (pOpenMediumMenu, SIGNAL (aboutToShow()), this, SLOT (sltPrepareOpenMediumMenu()));
-    connect (mCbPassthrough, SIGNAL (stateChanged (int)), this, SLOT (setInformation()));
-    connect (mCbTempEject, SIGNAL (stateChanged (int)), this, SLOT (setInformation()));
-    connect (mCbNonRotational, SIGNAL (stateChanged (int)), this, SLOT (setInformation()));
-    connect(m_pCheckBoxHotPluggable, SIGNAL(stateChanged(int)), this, SLOT(setInformation()));
-
-    /* Applying language settings */
-    retranslateUi();
-
-    /* Initial setup */
-    setMinimumWidth (500);
-    mSplitter->setSizes (QList<int>() << (int) (0.45 * minimumWidth()) << (int) (0.55 * minimumWidth()));
+    /* Prepare: */
+    prepare();
 }
 
 UIMachineSettingsStorage::~UIMachineSettingsStorage()
 {
-    /* Destroy icon-pool: */
-    UIIconPoolStorageSettings::destroy();
+    /* Cleanup: */
+    cleanup();
 }
 
-void UIMachineSettingsStorage::setChipsetType(KChipsetType type)
+void UIMachineSettingsStorage::setChipsetType(KChipsetType enmType)
 {
     /* Make sure chipset type has changed: */
-    if (mStorageModel->chipsetType() == type)
+    if (m_pModelStorage->chipsetType() == enmType)
         return;
 
     /* Update chipset type value: */
-    mStorageModel->setChipsetType(type);
-    updateActionsState();
+    m_pModelStorage->setChipsetType(enmType);
+    sltUpdateActionStates();
 
     /* Revalidate: */
     revalidate();
 }
 
-/* Load data to cache from corresponding external object(s),
- * this task COULD be performed in other than GUI thread: */
+bool UIMachineSettingsStorage::changed() const
+{
+    return m_pCache->wasChanged();
+}
+
 void UIMachineSettingsStorage::loadToCacheFrom(QVariant &data)
 {
     /* Fetch data to machine: */
     UISettingsPageMachine::fetchData(data);
 
     /* Clear cache initially: */
-    m_cache.clear();
+    m_pCache->clear();
 
-    /* Gather storage data: */
-    m_strMachineId = m_machine.GetId();
+    /* Prepare old storage data: */
+    UIDataSettingsMachineStorage oldStorageData;
+
+    /* Gather old common data: */
+    m_uMachineId = m_machine.GetId();
     m_strMachineSettingsFilePath = m_machine.GetSettingsFilePath();
+    m_strMachineName = m_machine.GetName();
     m_strMachineGuestOSTypeId = m_machine.GetOSTypeId();
 
     /* For each controller: */
     const CStorageControllerVector &controllers = m_machine.GetStorageControllers();
     for (int iControllerIndex = 0; iControllerIndex < controllers.size(); ++iControllerIndex)
     {
-        /* Prepare storage controller data: */
-        UIDataSettingsMachineStorageController storageControllerData;
+        /* Prepare old controller data & cache key: */
+        UIDataSettingsMachineStorageController oldControllerData;
+        QString strControllerKey = QString::number(iControllerIndex);
 
-        /* Check if controller is valid: */
-        const CStorageController &controller = controllers[iControllerIndex];
-        if (!controller.isNull())
+        /* Check whether controller is valid: */
+        const CStorageController &comController = controllers.at(iControllerIndex);
+        if (!comController.isNull())
         {
-            /* Gather storage controller data: */
-            storageControllerData.m_strControllerName = controller.GetName();
-            storageControllerData.m_controllerBus = controller.GetBus();
-            storageControllerData.m_controllerType = controller.GetControllerType();
-            storageControllerData.m_uPortCount = controller.GetPortCount();
-            storageControllerData.m_fUseHostIOCache = controller.GetUseHostIOCache();
+            /* Gather old controller data: */
+            oldControllerData.m_strName = comController.GetName();
+            oldControllerData.m_enmBus = comController.GetBus();
+            oldControllerData.m_enmType = comController.GetControllerType();
+            oldControllerData.m_uPortCount = comController.GetPortCount();
+            oldControllerData.m_fUseHostIOCache = comController.GetUseHostIOCache();
+            /* Override controller cache key: */
+            strControllerKey = oldControllerData.m_strName;
 
             /* Sort attachments before caching/fetching: */
             const CMediumAttachmentVector &attachmentVector =
-                    m_machine.GetMediumAttachmentsOfController(storageControllerData.m_strControllerName);
+                m_machine.GetMediumAttachmentsOfController(oldControllerData.m_strName);
             QMap<StorageSlot, CMediumAttachment> attachmentMap;
-            foreach (const CMediumAttachment &attachment, attachmentVector)
+            foreach (const CMediumAttachment &comAttachment, attachmentVector)
             {
-                StorageSlot storageSlot(storageControllerData.m_controllerBus,
-                                        attachment.GetPort(), attachment.GetDevice());
-                attachmentMap.insert(storageSlot, attachment);
+                const StorageSlot storageSlot(oldControllerData.m_enmBus,
+                                              comAttachment.GetPort(), comAttachment.GetDevice());
+                attachmentMap.insert(storageSlot, comAttachment);
             }
             const QList<CMediumAttachment> &attachments = attachmentMap.values();
 
             /* For each attachment: */
             for (int iAttachmentIndex = 0; iAttachmentIndex < attachments.size(); ++iAttachmentIndex)
             {
-                /* Prepare storage attachment data: */
-                UIDataSettingsMachineStorageAttachment storageAttachmentData;
+                /* Prepare old attachment data & cache key: */
+                UIDataSettingsMachineStorageAttachment oldAttachmentData;
+                QString strAttachmentKey = QString::number(iAttachmentIndex);
 
-                /* Check if attachment is valid: */
-                const CMediumAttachment &attachment = attachments[iAttachmentIndex];
-                if (!attachment.isNull())
+                /* Check whether attachment is valid: */
+                const CMediumAttachment &comAttachment = attachments.at(iAttachmentIndex);
+                if (!comAttachment.isNull())
                 {
-                    /* Gather storage attachment data: */
-                    storageAttachmentData.m_attachmentType = attachment.GetType();
-                    storageAttachmentData.m_iAttachmentPort = attachment.GetPort();
-                    storageAttachmentData.m_iAttachmentDevice = attachment.GetDevice();
-                    storageAttachmentData.m_fAttachmentPassthrough = attachment.GetPassthrough();
-                    storageAttachmentData.m_fAttachmentTempEject = attachment.GetTemporaryEject();
-                    storageAttachmentData.m_fAttachmentNonRotational = attachment.GetNonRotational();
-                    storageAttachmentData.m_fAttachmentHotPluggable = attachment.GetHotPluggable();
-                    const CMedium cmedium = attachment.GetMedium();
-                    storageAttachmentData.m_strAttachmentMediumId = cmedium.isNull() ? UIMedium::nullID() : cmedium.GetId();
+                    /* Gather old attachment data: */
+                    oldAttachmentData.m_enmDeviceType = comAttachment.GetType();
+                    oldAttachmentData.m_iPort = comAttachment.GetPort();
+                    oldAttachmentData.m_iDevice = comAttachment.GetDevice();
+                    oldAttachmentData.m_fPassthrough = comAttachment.GetPassthrough();
+                    oldAttachmentData.m_fTempEject = comAttachment.GetTemporaryEject();
+                    oldAttachmentData.m_fNonRotational = comAttachment.GetNonRotational();
+                    oldAttachmentData.m_fHotPluggable = comAttachment.GetHotPluggable();
+                    const CMedium comMedium = comAttachment.GetMedium();
+                    oldAttachmentData.m_uMediumId = comMedium.isNull() ? UIMedium::nullID() : comMedium.GetId();
+                    /* Override controller cache key: */
+                    strAttachmentKey = QString("%1:%2").arg(oldAttachmentData.m_iPort).arg(oldAttachmentData.m_iDevice);
                 }
 
-                /* Cache storage attachment data: */
-                m_cache.child(iControllerIndex).child(iAttachmentIndex).cacheInitialData(storageAttachmentData);
+                /* Cache old attachment data: */
+                m_pCache->child(strControllerKey).child(strAttachmentKey).cacheInitialData(oldAttachmentData);
             }
         }
 
-        /* Cache storage controller data: */
-        m_cache.child(iControllerIndex).cacheInitialData(storageControllerData);
+        /* Cache old controller data: */
+        m_pCache->child(strControllerKey).cacheInitialData(oldControllerData);
     }
+
+    /* Cache old storage data: */
+    m_pCache->cacheInitialData(oldStorageData);
 
     /* Upload machine to data: */
     UISettingsPageMachine::uploadData(data);
 }
 
-/* Load data to corresponding widgets from cache,
- * this task SHOULD be performed in GUI thread only: */
 void UIMachineSettingsStorage::getFromCache()
 {
     /* Clear model initially: */
-    mStorageModel->clear();
+    m_pModelStorage->clear();
 
-    /* Load storage data to page: */
-    mStorageModel->setMachineId(m_strMachineId);
+    /* Load old common data from the cache: */
+    m_pModelStorage->setMachineId(m_uMachineId);
 
-    /* For each storage controller: */
-    for (int iControllerIndex = 0; iControllerIndex < m_cache.childCount(); ++iControllerIndex)
+    /* For each controller: */
+    for (int iControllerIndex = 0; iControllerIndex < m_pCache->childCount(); ++iControllerIndex)
     {
-        /* Get storage controller cache: */
-        const UICacheSettingsMachineStorageController &controllerCache = m_cache.child(iControllerIndex);
-        /* Get storage controller data from cache: */
-        const UIDataSettingsMachineStorageController &controllerData = controllerCache.base();
+        /* Get controller cache: */
+        const UISettingsCacheMachineStorageController &controllerCache = m_pCache->child(iControllerIndex);
+        /* Get old controller data from the cache: */
+        const UIDataSettingsMachineStorageController &oldControllerData = controllerCache.base();
 
-        /* Load storage controller data to page: */
-        QModelIndex controllerIndex = mStorageModel->addController(controllerData.m_strControllerName,
-                                                                   controllerData.m_controllerBus,
-                                                                   controllerData.m_controllerType);
-        QUuid controllerId = QUuid(mStorageModel->data(controllerIndex, StorageModel::R_ItemId).toString());
-        mStorageModel->setData(controllerIndex, controllerData.m_uPortCount, StorageModel::R_CtrPortCount);
-        mStorageModel->setData(controllerIndex, controllerData.m_fUseHostIOCache, StorageModel::R_CtrIoCache);
+        /* Load old controller data from the cache: */
+        const QModelIndex controllerIndex = m_pModelStorage->addController(oldControllerData.m_strName,
+                                                                           oldControllerData.m_enmBus,
+                                                                           oldControllerData.m_enmType);
+        const QUuid controllerId = QUuid(m_pModelStorage->data(controllerIndex, StorageModel::R_ItemId).toString());
+        m_pModelStorage->setData(controllerIndex, oldControllerData.m_uPortCount, StorageModel::R_CtrPortCount);
+        m_pModelStorage->setData(controllerIndex, oldControllerData.m_fUseHostIOCache, StorageModel::R_CtrIoCache);
 
-        /* For each storage attachment: */
+        /* For each attachment: */
         for (int iAttachmentIndex = 0; iAttachmentIndex < controllerCache.childCount(); ++iAttachmentIndex)
         {
-            /* Get storage attachment cache: */
-            const UICacheSettingsMachineStorageAttachment &attachmentCache = controllerCache.child(iAttachmentIndex);
-            /* Get storage controller data from cache: */
-            const UIDataSettingsMachineStorageAttachment &attachmentData = attachmentCache.base();
+            /* Get attachment cache: */
+            const UISettingsCacheMachineStorageAttachment &attachmentCache = controllerCache.child(iAttachmentIndex);
+            /* Get old attachment data from the cache: */
+            const UIDataSettingsMachineStorageAttachment &oldAttachmentData = attachmentCache.base();
 
-            /* Load storage attachment data to page: */
-            QModelIndex attachmentIndex = mStorageModel->addAttachment(controllerId, attachmentData.m_attachmentType, attachmentData.m_strAttachmentMediumId);
-            StorageSlot attachmentStorageSlot(controllerData.m_controllerBus,
-                                              attachmentData.m_iAttachmentPort,
-                                              attachmentData.m_iAttachmentDevice);
-            mStorageModel->setData(attachmentIndex, QVariant::fromValue(attachmentStorageSlot), StorageModel::R_AttSlot);
-            mStorageModel->setData(attachmentIndex, attachmentData.m_fAttachmentPassthrough, StorageModel::R_AttIsPassthrough);
-            mStorageModel->setData(attachmentIndex, attachmentData.m_fAttachmentTempEject, StorageModel::R_AttIsTempEject);
-            mStorageModel->setData(attachmentIndex, attachmentData.m_fAttachmentNonRotational, StorageModel::R_AttIsNonRotational);
-            mStorageModel->setData(attachmentIndex, attachmentData.m_fAttachmentHotPluggable, StorageModel::R_AttIsHotPluggable);
+            /* Load old attachment data from the cache: */
+            const QModelIndex attachmentIndex = m_pModelStorage->addAttachment(controllerId,
+                                                                               oldAttachmentData.m_enmDeviceType,
+                                                                               oldAttachmentData.m_uMediumId);
+            const StorageSlot attachmentStorageSlot(oldControllerData.m_enmBus,
+                                                    oldAttachmentData.m_iPort,
+                                                    oldAttachmentData.m_iDevice);
+            m_pModelStorage->setData(attachmentIndex, QVariant::fromValue(attachmentStorageSlot), StorageModel::R_AttSlot);
+            m_pModelStorage->setData(attachmentIndex, oldAttachmentData.m_fPassthrough, StorageModel::R_AttIsPassthrough);
+            m_pModelStorage->setData(attachmentIndex, oldAttachmentData.m_fTempEject, StorageModel::R_AttIsTempEject);
+            m_pModelStorage->setData(attachmentIndex, oldAttachmentData.m_fNonRotational, StorageModel::R_AttIsNonRotational);
+            m_pModelStorage->setData(attachmentIndex, oldAttachmentData.m_fHotPluggable, StorageModel::R_AttIsHotPluggable);
         }
     }
-    /* Set the first controller as current if present */
-    if (mStorageModel->rowCount(mStorageModel->root()) > 0)
-        mTwStorageTree->setCurrentIndex(mStorageModel->index(0, 0, mStorageModel->root()));
 
-    /* Update actions: */
-    updateActionsState();
+    /* Choose first controller as current: */
+    if (m_pModelStorage->rowCount(m_pModelStorage->root()) > 0)
+        m_pTreeViewStorage->setCurrentIndex(m_pModelStorage->index(0, 0, m_pModelStorage->root()));
+
+    /* Fetch recent information: */
+    sltHandleCurrentItemChange();
 
     /* Polish page finally: */
     polishPage();
@@ -2335,67 +3181,65 @@ void UIMachineSettingsStorage::getFromCache()
     revalidate();
 }
 
-/* Save data from corresponding widgets to cache,
- * this task SHOULD be performed in GUI thread only: */
 void UIMachineSettingsStorage::putToCache()
 {
-    /* Prepare storage data: */
-    UIDataSettingsMachineStorage storageData = m_cache.base();
+    /* Prepare new storage data: */
+    UIDataSettingsMachineStorage newStorageData;
 
-    /* For each storage controller: */
-    QModelIndex rootIndex = mStorageModel->root();
-    for (int iControllerIndex = 0; iControllerIndex < mStorageModel->rowCount(rootIndex); ++iControllerIndex)
+    /* For each controller: */
+    const QModelIndex rootIndex = m_pModelStorage->root();
+    for (int iControllerIndex = 0; iControllerIndex < m_pModelStorage->rowCount(rootIndex); ++iControllerIndex)
     {
-        /* Prepare storage controller data & key: */
-        UIDataSettingsMachineStorageController controllerData;
+        /* Prepare new controller data & key: */
+        UIDataSettingsMachineStorageController newControllerData;
 
-        /* Gather storage controller data: */
-        QModelIndex controllerIndex = mStorageModel->index(iControllerIndex, 0, rootIndex);
-        controllerData.m_strControllerName = mStorageModel->data(controllerIndex, StorageModel::R_CtrName).toString();
-        controllerData.m_controllerBus = mStorageModel->data(controllerIndex, StorageModel::R_CtrBusType).value<KStorageBus>();
-        controllerData.m_controllerType = mStorageModel->data(controllerIndex, StorageModel::R_CtrType).value<KStorageControllerType>();
-        controllerData.m_uPortCount = mStorageModel->data(controllerIndex, StorageModel::R_CtrPortCount).toUInt();
-        controllerData.m_fUseHostIOCache = mStorageModel->data(controllerIndex, StorageModel::R_CtrIoCache).toBool();
+        /* Gather new controller data & cache key from model: */
+        const QModelIndex controllerIndex = m_pModelStorage->index(iControllerIndex, 0, rootIndex);
+        newControllerData.m_strName = m_pModelStorage->data(controllerIndex, StorageModel::R_CtrName).toString();
+        newControllerData.m_enmBus = m_pModelStorage->data(controllerIndex, StorageModel::R_CtrBusType).value<KStorageBus>();
+        newControllerData.m_enmType = m_pModelStorage->data(controllerIndex, StorageModel::R_CtrType).value<KStorageControllerType>();
+        newControllerData.m_uPortCount = m_pModelStorage->data(controllerIndex, StorageModel::R_CtrPortCount).toUInt();
+        newControllerData.m_fUseHostIOCache = m_pModelStorage->data(controllerIndex, StorageModel::R_CtrIoCache).toBool();
+        const QString strControllerKey = m_pModelStorage->data(controllerIndex, StorageModel::R_CtrOldName).toString();
 
-        /* For each storage attachment: */
-        for (int iAttachmentIndex = 0; iAttachmentIndex < mStorageModel->rowCount(controllerIndex); ++iAttachmentIndex)
+        /* For each attachment: */
+        for (int iAttachmentIndex = 0; iAttachmentIndex < m_pModelStorage->rowCount(controllerIndex); ++iAttachmentIndex)
         {
-            /* Prepare storage attachment data & key: */
-            UIDataSettingsMachineStorageAttachment attachmentData;
+            /* Prepare new attachment data & key: */
+            UIDataSettingsMachineStorageAttachment newAttachmentData;
 
-            /* Gather storage controller data: */
-            QModelIndex attachmentIndex = mStorageModel->index(iAttachmentIndex, 0, controllerIndex);
-            attachmentData.m_attachmentType = mStorageModel->data(attachmentIndex, StorageModel::R_AttDevice).value<KDeviceType>();
-            StorageSlot attachmentSlot = mStorageModel->data(attachmentIndex, StorageModel::R_AttSlot).value<StorageSlot>();
-            attachmentData.m_iAttachmentPort = attachmentSlot.port;
-            attachmentData.m_iAttachmentDevice = attachmentSlot.device;
-            attachmentData.m_fAttachmentPassthrough = mStorageModel->data(attachmentIndex, StorageModel::R_AttIsPassthrough).toBool();
-            attachmentData.m_fAttachmentTempEject = mStorageModel->data(attachmentIndex, StorageModel::R_AttIsTempEject).toBool();
-            attachmentData.m_fAttachmentNonRotational = mStorageModel->data(attachmentIndex, StorageModel::R_AttIsNonRotational).toBool();
-            attachmentData.m_fAttachmentHotPluggable = mStorageModel->data(attachmentIndex, StorageModel::R_AttIsHotPluggable).toBool();
-            attachmentData.m_strAttachmentMediumId = mStorageModel->data(attachmentIndex, StorageModel::R_AttMediumId).toString();
+            /* Gather new attachment data & cache key from model: */
+            const QModelIndex attachmentIndex = m_pModelStorage->index(iAttachmentIndex, 0, controllerIndex);
+            newAttachmentData.m_enmDeviceType = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttDevice).value<KDeviceType>();
+            const StorageSlot attachmentSlot = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttSlot).value<StorageSlot>();
+            newAttachmentData.m_iPort = attachmentSlot.port;
+            newAttachmentData.m_iDevice = attachmentSlot.device;
+            newAttachmentData.m_fPassthrough = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttIsPassthrough).toBool();
+            newAttachmentData.m_fTempEject = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttIsTempEject).toBool();
+            newAttachmentData.m_fNonRotational = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttIsNonRotational).toBool();
+            newAttachmentData.m_fHotPluggable = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttIsHotPluggable).toBool();
+            newAttachmentData.m_uMediumId = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttMediumId).toString();
+            const QString strAttachmentKey = QString("%1:%2").arg(newAttachmentData.m_iPort).arg(newAttachmentData.m_iDevice);
 
-            /* Recache storage attachment data: */
-            m_cache.child(iControllerIndex).child(iAttachmentIndex).cacheCurrentData(attachmentData);
+            /* Cache new attachment data: */
+            m_pCache->child(strControllerKey).child(strAttachmentKey).cacheCurrentData(newAttachmentData);
         }
 
-        /* Recache storage controller data: */
-        m_cache.child(iControllerIndex).cacheCurrentData(controllerData);
+        /* Cache new controller data: */
+        m_pCache->child(strControllerKey).cacheCurrentData(newControllerData);
     }
 
-    /* Recache storage data: */
-    m_cache.cacheCurrentData(storageData);
+    /* Cache new storage data: */
+    m_pCache->cacheCurrentData(newStorageData);
 }
 
-/* Save data from cache to corresponding external object(s),
- * this task COULD be performed in other than GUI thread: */
 void UIMachineSettingsStorage::saveFromCacheTo(QVariant &data)
 {
     /* Fetch data to machine: */
     UISettingsPageMachine::fetchData(data);
 
-    /* Update storage data, update failing state: */
-    setFailed(!updateStorageData());
+    /* Update storage data and failing state: */
+    setFailed(!saveStorageData());
 
     /* Upload machine to data: */
     UISettingsPageMachine::uploadData(data);
@@ -2411,14 +3255,14 @@ bool UIMachineSettingsStorage::validate(QList<UIValidationMessage> &messages)
 
     /* Check controllers for name emptiness & coincidence.
      * Check attachments for the hd presence / uniqueness. */
-    QModelIndex rootIndex = mStorageModel->root();
-    QMap <QString, QString> config;
+    const QModelIndex rootIndex = m_pModelStorage->root();
+    QMap<QString, QString> config;
     QMap<int, QString> names;
     /* For each controller: */
-    for (int i = 0; i < mStorageModel->rowCount (rootIndex); ++ i)
+    for (int i = 0; i < m_pModelStorage->rowCount(rootIndex); ++i)
     {
-        QModelIndex ctrIndex = rootIndex.child (i, 0);
-        QString ctrName = mStorageModel->data (ctrIndex, StorageModel::R_CtrName).toString();
+        const QModelIndex controllerIndex = m_pModelStorage->index(i, 0, rootIndex);
+        const QString ctrName = m_pModelStorage->data(controllerIndex, StorageModel::R_CtrName).toString();
 
         /* Check for name emptiness: */
         if (ctrName.isEmpty())
@@ -2437,36 +3281,36 @@ bool UIMachineSettingsStorage::validate(QList<UIValidationMessage> &messages)
             names.insert(i, ctrName);
 
         /* For each attachment: */
-        for (int j = 0; j < mStorageModel->rowCount (ctrIndex); ++ j)
+        for (int j = 0; j < m_pModelStorage->rowCount(controllerIndex); ++j)
         {
-            QModelIndex attIndex = ctrIndex.child (j, 0);
-            StorageSlot attSlot = mStorageModel->data (attIndex, StorageModel::R_AttSlot).value <StorageSlot>();
-            KDeviceType attDevice = mStorageModel->data (attIndex, StorageModel::R_AttDevice).value <KDeviceType>();
-            QString key (mStorageModel->data (attIndex, StorageModel::R_AttMediumId).toString());
-            QString value (QString ("%1 (%2)").arg (ctrName, gpConverter->toString (attSlot)));
+            const QModelIndex attachmentIndex = m_pModelStorage->index(j, 0, controllerIndex);
+            const StorageSlot attSlot = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttSlot).value<StorageSlot>();
+            const KDeviceType enmDeviceType = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttDevice).value<KDeviceType>();
+            const QString key(m_pModelStorage->data(attachmentIndex, StorageModel::R_AttMediumId).toString());
+            const QString value(QString("%1 (%2)").arg(ctrName, gpConverter->toString(attSlot)));
             /* Check for emptiness: */
-            if (vboxGlobal().medium(key).isNull() && attDevice == KDeviceType_HardDisk)
+            if (uiCommon().medium(key).isNull() && enmDeviceType == KDeviceType_HardDisk)
             {
-                message.second << tr("No hard disk is selected for <i>%1</i>.").arg (value);
+                message.second << tr("No hard disk is selected for <i>%1</i>.").arg(value);
                 fPass = false;
             }
             /* Check for coincidence: */
-            if (!vboxGlobal().medium(key).isNull() && config.contains (key))
+            if (!uiCommon().medium(key).isNull() && config.contains(key) && enmDeviceType != KDeviceType_DVD)
             {
                 message.second << tr("<i>%1</i> is using a disk that is already attached to <i>%2</i>.")
-                                     .arg (value).arg (config [key]);
+                                     .arg(value).arg(config[key]);
                 fPass = false;
             }
             else
-                config.insert (key, value);
+                config.insert(key, value);
         }
     }
 
     /* Check for excessive controllers on Storage page controllers list: */
     QStringList excessiveList;
-    QMap<KStorageBus, int> currentType = mStorageModel->currentControllerTypes();
-    QMap<KStorageBus, int> maximumType = mStorageModel->maximumControllerTypes();
-    for (int iStorageBusType = KStorageBus_IDE; iStorageBusType <= KStorageBus_USB; ++iStorageBusType)
+    const QMap<KStorageBus, int> currentType = m_pModelStorage->currentControllerTypes();
+    const QMap<KStorageBus, int> maximumType = m_pModelStorage->maximumControllerTypes();
+    for (int iStorageBusType = KStorageBus_IDE; iStorageBusType < KStorageBus_Max; ++iStorageBusType)
     {
         if (currentType[(KStorageBus)iStorageBusType] > maximumType[(KStorageBus)iStorageBusType])
         {
@@ -2483,7 +3327,7 @@ bool UIMachineSettingsStorage::validate(QList<UIValidationMessage> &messages)
         message.second << tr("The machine currently has more storage controllers assigned than a %1 chipset supports. "
                              "Please change the chipset type on the System settings page or reduce the number "
                              "of the following storage controllers on the Storage settings page: %2")
-                             .arg(gpConverter->toString(mStorageModel->chipsetType()))
+                             .arg(gpConverter->toString(m_pModelStorage->chipsetType()))
                              .arg(excessiveList.join(", "));
         fPass = false;
     }
@@ -2496,92 +3340,167 @@ bool UIMachineSettingsStorage::validate(QList<UIValidationMessage> &messages)
     return fPass;
 }
 
+void UIMachineSettingsStorage::setConfigurationAccessLevel(ConfigurationAccessLevel enmLevel)
+{
+    /* Update model 'configuration access level': */
+    m_pModelStorage->setConfigurationAccessLevel(enmLevel);
+    /* Update 'configuration access level' of base class: */
+    UISettingsPageMachine::setConfigurationAccessLevel(enmLevel);
+}
+
 void UIMachineSettingsStorage::retranslateUi()
 {
-    /* Translate uic generated strings: */
-    Ui::UIMachineSettingsStorage::retranslateUi(this);
+    m_pLabelSeparatorLeftPane->setText(tr("&Storage Devices"));
+    m_pLabelSeparatorEmpty->setText(tr("Information"));
+    m_pLabelInfo->setText(tr("The Storage Tree can contain several controllers of different types. This machine currently has no controllers."));
+    m_pLabelSeparatorParameters->setText(tr("Attributes"));
+    m_pLabelName->setText(tr("&Name:"));
+    m_pEditorName->setWhatsThis(tr("Holds the name of the storage controller currently selected in the Storage Tree."));
+    m_pLabelType->setText(tr("&Type:"));
+    m_pComboType->setWhatsThis(tr("Selects the sub-type of the storage controller currently selected in the Storage Tree."));
+    m_pLabelPortCount->setText(tr("&Port Count:"));
+    m_pSpinboxPortCount->setWhatsThis(tr("Selects the port count of the SATA storage controller currently selected in the"
+                                         "Storage Tree. This must be at least one more than the highest port number you need to use."));
+    m_pCheckBoxIoCache->setWhatsThis(tr("When checked, allows to use host I/O caching capabilities."));
+    m_pCheckBoxIoCache->setText(tr("Use Host I/O Cache"));
+    m_pLabelSeparatorAttributes->setText(tr("Attributes"));
+    m_pComboSlot->setWhatsThis(tr("Selects the slot on the storage controller used by this attachment. The available slots depend"
+                                     "on the type of the controller and other attachments on it."));
+    m_pToolButtonOpen->setText(QString());
+    m_pCheckBoxPassthrough->setWhatsThis(tr("When checked, allows the guest to send ATAPI commands directly to the host-drive"
+                                            "which makes it possible to use CD/DVD writers connected to the host inside the VM."
+                                            "Note that writing audio CD inside the VM is not yet supported."));
+    m_pCheckBoxPassthrough->setText(tr("&Passthrough"));
+    m_pCheckBoxTempEject->setWhatsThis(tr("When checked, the virtual disk will not be removed when the guest system ejects it."));
+    m_pCheckBoxTempEject->setText(tr("&Live CD/DVD"));
+    m_pCheckBoxNonRotational->setWhatsThis(tr("When checked, the guest system will see the virtual disk as a solid-state device."));
+    m_pCheckBoxNonRotational->setText(tr("&Solid-state Drive"));
+    m_pCheckBoxHotPluggable->setWhatsThis(tr("When checked, the guest system will see the virtual disk as a hot-pluggable device."));
+    m_pCheckBoxHotPluggable->setText(tr("&Hot-pluggable"));
+    m_pLabelSeparatorInformation->setText(tr("Information"));
+    m_pLabelHDFormat->setText(tr("Type (Format):"));
+    m_pLabelCDFDType->setText(tr("Type:"));
+    m_pLabelHDVirtualSize->setText(tr("Virtual Size:"));
+    m_pLabelHDActualSize->setText(tr("Actual Size:"));
+    m_pLabelCDFDSize->setText(tr("Size:"));
+    m_pLabelHDDetails->setText(tr("Details:"));
+    m_pLabelLocation->setText(tr("Location:"));
+    m_pLabelUsage->setText(tr("Attached to:"));
+    m_pLabelEncryption->setText(tr("Encrypted with key:"));
 
     /* Translate storage-view: */
-    mTwStorageTree->setWhatsThis(tr("Lists all storage controllers for this machine and "
+    m_pTreeViewStorage->setWhatsThis(tr("Lists all storage controllers for this machine and "
                                     "the virtual images and host drives attached to them."));
 
     /* Translate tool-bar: */
-    mAddCtrAction->setShortcut(QKeySequence("Ins"));
-    mDelCtrAction->setShortcut(QKeySequence("Del"));
-    mAddAttAction->setShortcut(QKeySequence("+"));
-    mDelAttAction->setShortcut(QKeySequence("-"));
+    m_pActionAddController->setShortcut(QKeySequence("Ins"));
+    m_pActionRemoveController->setShortcut(QKeySequence("Del"));
+    m_pActionAddAttachment->setShortcut(QKeySequence("+"));
+    m_pActionRemoveAttachment->setShortcut(QKeySequence("-"));
 
-    mAddCtrAction->setText(tr("Add Controller"));
-    mAddIDECtrAction->setText(tr("Add IDE Controller"));
-    mAddSATACtrAction->setText(tr("Add SATA Controller"));
-    mAddSCSICtrAction->setText(tr("Add SCSI Controller"));
-    mAddSASCtrAction->setText(tr("Add SAS Controller"));
-    mAddFloppyCtrAction->setText(tr("Add Floppy Controller"));
-    mAddUSBCtrAction->setText(tr("Add USB Controller"));
-    mAddNVMeCtrAction->setText(tr("Add NVMe Controller"));
-    mDelCtrAction->setText(tr("Remove Controller"));
-    mAddAttAction->setText(tr("Add Attachment"));
-    mAddHDAttAction->setText(tr("Add Hard Disk"));
-    mAddCDAttAction->setText(tr("Add Optical Drive"));
-    mAddFDAttAction->setText(tr("Add Floppy Drive"));
-    mDelAttAction->setText(tr("Remove Attachment"));
+    m_pActionAddController->setText(tr("Add Controller"));
+    m_addControllerActions.value(KStorageControllerType_PIIX3)->setText(tr("PIIX3 (IDE)"));
+    m_addControllerActions.value(KStorageControllerType_PIIX4)->setText(tr("PIIX4 (Default IDE)"));
+    m_addControllerActions.value(KStorageControllerType_ICH6)->setText(tr("ICH6 (IDE)"));
+    m_addControllerActions.value(KStorageControllerType_IntelAhci)->setText(tr("AHCI (SATA)"));
+    m_addControllerActions.value(KStorageControllerType_LsiLogic)->setText(tr("LsiLogic (Default SCSI)"));
+    m_addControllerActions.value(KStorageControllerType_BusLogic)->setText(tr("BusLogic (SCSI)"));
+    m_addControllerActions.value(KStorageControllerType_LsiLogicSas)->setText(tr("LsiLogic SAS (SAS)"));
+    m_addControllerActions.value(KStorageControllerType_I82078)->setText(tr("I82078 (Floppy)"));
+    m_addControllerActions.value(KStorageControllerType_USB)->setText(tr("USB"));
+    m_addControllerActions.value(KStorageControllerType_NVMe)->setText(tr("NVMe (PCIe)"));
+    m_addControllerActions.value(KStorageControllerType_VirtioSCSI)->setText(tr("virtio-scsi"));
+    m_pActionRemoveController->setText(tr("Remove Controller"));
+    m_pActionAddAttachment->setText(tr("Add Attachment"));
+    m_pActionAddAttachmentHD->setText(tr("Hard Disk"));
+    m_pActionAddAttachmentCD->setText(tr("Optical Drive"));
+    m_pActionAddAttachmentFD->setText(tr("Floppy Drive"));
+    m_pActionRemoveAttachment->setText(tr("Remove Attachment"));
 
-    mAddCtrAction->setWhatsThis(tr("Adds new storage controller."));
-    mDelCtrAction->setWhatsThis(tr("Removes selected storage controller."));
-    mAddAttAction->setWhatsThis(tr("Adds new storage attachment."));
-    mDelAttAction->setWhatsThis(tr("Removes selected storage attachment."));
+    m_pActionAddController->setWhatsThis(tr("Adds new storage controller."));
+    m_pActionRemoveController->setWhatsThis(tr("Removes selected storage controller."));
+    m_pActionAddAttachment->setWhatsThis(tr("Adds new storage attachment."));
+    m_pActionRemoveAttachment->setWhatsThis(tr("Removes selected storage attachment."));
 
-    mAddCtrAction->setToolTip(mAddCtrAction->whatsThis());
-    mDelCtrAction->setToolTip(mDelCtrAction->whatsThis());
-    mAddAttAction->setToolTip(mAddAttAction->whatsThis());
-    mDelAttAction->setToolTip(mDelAttAction->whatsThis());
+    m_pActionAddController->setToolTip(m_pActionAddController->whatsThis());
+    m_pActionRemoveController->setToolTip(m_pActionRemoveController->whatsThis());
+    m_pActionAddAttachment->setToolTip(m_pActionAddAttachment->whatsThis());
+    m_pActionRemoveAttachment->setToolTip(m_pActionRemoveAttachment->whatsThis());
 }
 
-void UIMachineSettingsStorage::showEvent (QShowEvent *aEvent)
+void UIMachineSettingsStorage::polishPage()
 {
-    if (!mIsPolished)
-    {
-        mIsPolished = true;
+    /* Declare required variables: */
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
+    const KDeviceType enmDeviceType = m_pModelStorage->data(index, StorageModel::R_AttDevice).value<KDeviceType>();
 
-        /* First column indent */
-        mLtEmpty->setColumnMinimumWidth (0, 10);
-        mLtController->setColumnMinimumWidth (0, 10);
-        mLtAttachment->setColumnMinimumWidth (0, 10);
-#if 0
-        /* Second column indent minimum width */
-        QList <QLabel*> labelsList;
-        labelsList << mLbMedium << mLbHDFormat << mLbCDFDType
-                   << mLbHDVirtualSize << mLbHDActualSize << mLbSize
-                   << mLbLocation << mLbUsage;
-        int maxWidth = 0;
-        QFontMetrics metrics (font());
-        foreach (QLabel *label, labelsList)
-        {
-            int width = metrics.width (label->text());
-            maxWidth = width > maxWidth ? width : maxWidth;
-        }
-        mLtAttachment->setColumnMinimumWidth (1, maxWidth);
-#endif
-    }
-    UISettingsPageMachine::showEvent (aEvent);
+    /* Polish left pane availability: */
+    m_pLabelSeparatorLeftPane->setEnabled(isMachineInValidMode());
+    m_pTreeViewStorage->setEnabled(isMachineInValidMode());
+
+    /* Polish empty information pane availability: */
+    m_pLabelSeparatorEmpty->setEnabled(isMachineInValidMode());
+    m_pLabelInfo->setEnabled(isMachineInValidMode());
+
+    /* Polish controllers pane availability: */
+    m_pLabelSeparatorParameters->setEnabled(isMachineInValidMode());
+    m_pLabelName->setEnabled(isMachineOffline());
+    m_pEditorName->setEnabled(isMachineOffline());
+    m_pLabelType->setEnabled(isMachineOffline());
+    m_pComboType->setEnabled(isMachineOffline());
+    m_pLabelPortCount->setEnabled(isMachineOffline());
+    m_pSpinboxPortCount->setEnabled(isMachineOffline());
+    m_pCheckBoxIoCache->setEnabled(isMachineOffline());
+
+    /* Polish attachments pane availability: */
+    m_pLabelSeparatorAttributes->setEnabled(isMachineInValidMode());
+    m_pLabelMedium->setEnabled(isMachineOffline() || (isMachineOnline() && enmDeviceType != KDeviceType_HardDisk));
+    m_pComboSlot->setEnabled(isMachineOffline());
+    m_pToolButtonOpen->setEnabled(isMachineOffline() || (isMachineOnline() && enmDeviceType != KDeviceType_HardDisk));
+    m_pCheckBoxPassthrough->setEnabled(isMachineOffline());
+    m_pCheckBoxTempEject->setEnabled(isMachineInValidMode());
+    m_pCheckBoxNonRotational->setEnabled(isMachineOffline());
+    m_pCheckBoxHotPluggable->setEnabled(isMachineOffline());
+    m_pLabelSeparatorInformation->setEnabled(isMachineInValidMode());
+    m_pLabelHDFormat->setEnabled(isMachineInValidMode());
+    m_pFieldHDFormat->setEnabled(isMachineInValidMode());
+    m_pLabelCDFDType->setEnabled(isMachineInValidMode());
+    m_pFieldCDFDType->setEnabled(isMachineInValidMode());
+    m_pLabelHDVirtualSize->setEnabled(isMachineInValidMode());
+    m_pFieldHDVirtualSize->setEnabled(isMachineInValidMode());
+    m_pLabelHDActualSize->setEnabled(isMachineInValidMode());
+    m_pFieldHDActualSize->setEnabled(isMachineInValidMode());
+    m_pLabelCDFDSize->setEnabled(isMachineInValidMode());
+    m_pFieldCDFDSize->setEnabled(isMachineInValidMode());
+    m_pLabelHDDetails->setEnabled(isMachineInValidMode());
+    m_pFieldHDDetails->setEnabled(isMachineInValidMode());
+    m_pLabelLocation->setEnabled(isMachineInValidMode());
+    m_pFieldLocation->setEnabled(isMachineInValidMode());
+    m_pLabelUsage->setEnabled(isMachineInValidMode());
+    m_pFieldUsage->setEnabled(isMachineInValidMode());
+    m_pLabelEncryption->setEnabled(isMachineInValidMode());
+    m_pFieldEncryption->setEnabled(isMachineInValidMode());
+
+    /* Update action states: */
+    sltUpdateActionStates();
 }
 
-void UIMachineSettingsStorage::sltHandleMediumEnumerated(const QString &strMediumID)
+void UIMachineSettingsStorage::sltHandleMediumEnumerated(const QUuid &uMediumId)
 {
     /* Search for corresponding medium: */
-    UIMedium medium = vboxGlobal().medium(strMediumID);
+    const UIMedium medium = uiCommon().medium(uMediumId);
 
-    QModelIndex rootIndex = mStorageModel->root();
-    for (int i = 0; i < mStorageModel->rowCount(rootIndex); ++i)
+    const QModelIndex rootIndex = m_pModelStorage->root();
+    for (int i = 0; i < m_pModelStorage->rowCount(rootIndex); ++i)
     {
-        QModelIndex ctrIndex = rootIndex.child(i, 0);
-        for (int j = 0; j < mStorageModel->rowCount(ctrIndex); ++j)
+        const QModelIndex controllerIndex = m_pModelStorage->index(i, 0, rootIndex);
+        for (int j = 0; j < m_pModelStorage->rowCount(controllerIndex); ++j)
         {
-            QModelIndex attIndex = ctrIndex.child(j, 0);
-            QString attMediumId = mStorageModel->data(attIndex, StorageModel::R_AttMediumId).toString();
+            const QModelIndex attachmentIndex = m_pModelStorage->index(j, 0, controllerIndex);
+            const QUuid attMediumId = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttMediumId).toString();
             if (attMediumId == medium.id())
             {
-                mStorageModel->setData(attIndex, attMediumId, StorageModel::R_AttMediumId);
+                m_pModelStorage->setData(attachmentIndex, attMediumId, StorageModel::R_AttMediumId);
 
                 /* Revalidate: */
                 revalidate();
@@ -2590,19 +3509,19 @@ void UIMachineSettingsStorage::sltHandleMediumEnumerated(const QString &strMediu
     }
 }
 
-void UIMachineSettingsStorage::sltHandleMediumDeleted(const QString &strMediumID)
+void UIMachineSettingsStorage::sltHandleMediumDeleted(const QUuid &uMediumId)
 {
-    QModelIndex rootIndex = mStorageModel->root();
-    for (int i = 0; i < mStorageModel->rowCount(rootIndex); ++i)
+    QModelIndex rootIndex = m_pModelStorage->root();
+    for (int i = 0; i < m_pModelStorage->rowCount(rootIndex); ++i)
     {
-        QModelIndex ctrIndex = rootIndex.child(i, 0);
-        for (int j = 0; j < mStorageModel->rowCount(ctrIndex); ++j)
+        QModelIndex controllerIndex = m_pModelStorage->index(i, 0, rootIndex);
+        for (int j = 0; j < m_pModelStorage->rowCount(controllerIndex); ++j)
         {
-            QModelIndex attIndex = ctrIndex.child(j, 0);
-            QString attMediumId = mStorageModel->data(attIndex, StorageModel::R_AttMediumId).toString();
-            if (attMediumId == strMediumID)
+            QModelIndex attachmentIndex = m_pModelStorage->index(j, 0, controllerIndex);
+            QUuid attMediumId = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttMediumId).toString();
+            if (attMediumId == uMediumId)
             {
-                mStorageModel->setData(attIndex, UIMedium().id(), StorageModel::R_AttMediumId);
+                m_pModelStorage->setData(attachmentIndex, UIMedium().id(), StorageModel::R_AttMediumId);
 
                 /* Revalidate: */
                 revalidate();
@@ -2611,223 +3530,263 @@ void UIMachineSettingsStorage::sltHandleMediumDeleted(const QString &strMediumID
     }
 }
 
-void UIMachineSettingsStorage::addController()
+void UIMachineSettingsStorage::sltAddController()
 {
+    /* Load currently supported storage buses and types: */
+    CSystemProperties comProperties = uiCommon().virtualBox().GetSystemProperties();
+    const QVector<KStorageBus> supportedBuses = comProperties.GetSupportedStorageBuses();
+    const QVector<KStorageControllerType> supportedTypes = comProperties.GetSupportedStorageControllerTypes();
+
+    /* Prepare menu: */
     QMenu menu;
-    menu.addAction (mAddIDECtrAction);
-    menu.addAction (mAddSATACtrAction);
-    menu.addAction (mAddSCSICtrAction);
-    menu.addAction (mAddSASCtrAction);
-    menu.addAction (mAddFloppyCtrAction);
-    menu.addAction (mAddUSBCtrAction);
-    menu.addAction (mAddNVMeCtrAction);
-    menu.exec (QCursor::pos());
+    foreach (const KStorageControllerType &enmType, supportedTypes)
+    {
+        QAction *pAction = m_addControllerActions.value(enmType);
+        if (supportedBuses.contains(comProperties.GetStorageBusForStorageControllerType(enmType)))
+            menu.addAction(pAction);
+    }
+
+    /* Popup it finally: */
+    menu.exec(QCursor::pos());
 }
 
-void UIMachineSettingsStorage::addIDEController()
+void UIMachineSettingsStorage::sltAddControllerPIIX3()
 {
-    addControllerWrapper (generateUniqueName ("IDE"), KStorageBus_IDE, KStorageControllerType_PIIX4);
+    addControllerWrapper(generateUniqueControllerName("PIIX3"), KStorageBus_IDE, KStorageControllerType_PIIX3);
 }
 
-void UIMachineSettingsStorage::addSATAController()
+void UIMachineSettingsStorage::sltAddControllerPIIX4()
 {
-    addControllerWrapper (generateUniqueName ("SATA"), KStorageBus_SATA, KStorageControllerType_IntelAhci);
+    addControllerWrapper(generateUniqueControllerName("PIIX4"), KStorageBus_IDE, KStorageControllerType_PIIX4);
 }
 
-void UIMachineSettingsStorage::addSCSIController()
+void UIMachineSettingsStorage::sltAddControllerICH6()
 {
-    addControllerWrapper (generateUniqueName ("SCSI"), KStorageBus_SCSI, KStorageControllerType_LsiLogic);
+    addControllerWrapper(generateUniqueControllerName("ICH6"), KStorageBus_IDE, KStorageControllerType_ICH6);
 }
 
-void UIMachineSettingsStorage::addFloppyController()
+void UIMachineSettingsStorage::sltAddControllerAHCI()
 {
-    addControllerWrapper (generateUniqueName ("Floppy"), KStorageBus_Floppy, KStorageControllerType_I82078);
+    addControllerWrapper(generateUniqueControllerName("AHCI"), KStorageBus_SATA, KStorageControllerType_IntelAhci);
 }
 
-void UIMachineSettingsStorage::addSASController()
+void UIMachineSettingsStorage::sltAddControllerLsiLogic()
 {
-    addControllerWrapper (generateUniqueName ("SAS"), KStorageBus_SAS, KStorageControllerType_LsiLogicSas);
+    addControllerWrapper(generateUniqueControllerName("LsiLogic"), KStorageBus_SCSI, KStorageControllerType_LsiLogic);
 }
 
-void UIMachineSettingsStorage::addUSBController()
+void UIMachineSettingsStorage::sltAddControllerBusLogic()
 {
-    addControllerWrapper (generateUniqueName ("USB"), KStorageBus_USB, KStorageControllerType_USB);
+    addControllerWrapper(generateUniqueControllerName("BusLogic"), KStorageBus_SCSI, KStorageControllerType_BusLogic);
 }
 
-void UIMachineSettingsStorage::addNVMeController()
+void UIMachineSettingsStorage::sltAddControllerFloppy()
 {
-    addControllerWrapper (generateUniqueName ("NVMe"), KStorageBus_PCIe, KStorageControllerType_NVMe);
+    addControllerWrapper(generateUniqueControllerName("Floppy"), KStorageBus_Floppy, KStorageControllerType_I82078);
 }
 
-void UIMachineSettingsStorage::delController()
+void UIMachineSettingsStorage::sltAddControllerLsiLogicSAS()
 {
-    QModelIndex index = mTwStorageTree->currentIndex();
-    if (!mStorageModel->data (index, StorageModel::R_IsController).toBool()) return;
+    addControllerWrapper(generateUniqueControllerName("LsiLogic SAS"), KStorageBus_SAS, KStorageControllerType_LsiLogicSas);
+}
 
-    mStorageModel->delController (QUuid (mStorageModel->data (index, StorageModel::R_ItemId).toString()));
-    emit storageChanged();
+void UIMachineSettingsStorage::sltAddControllerUSB()
+{
+    addControllerWrapper(generateUniqueControllerName("USB"), KStorageBus_USB, KStorageControllerType_USB);
+}
+
+void UIMachineSettingsStorage::sltAddControllerNVMe()
+{
+    addControllerWrapper(generateUniqueControllerName("NVMe"), KStorageBus_PCIe, KStorageControllerType_NVMe);
+}
+
+void UIMachineSettingsStorage::sltAddControllerVirtioSCSI()
+{
+    addControllerWrapper(generateUniqueControllerName("VirtIO"), KStorageBus_VirtioSCSI, KStorageControllerType_VirtioSCSI);
+}
+
+void UIMachineSettingsStorage::sltRemoveController()
+{
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
+    if (!m_pModelStorage->data(index, StorageModel::R_IsController).toBool())
+        return;
+
+    m_pModelStorage->delController(QUuid(m_pModelStorage->data(index, StorageModel::R_ItemId).toString()));
+    emit sigStorageChanged();
 
     /* Revalidate: */
     revalidate();
 }
 
-void UIMachineSettingsStorage::addAttachment()
+void UIMachineSettingsStorage::sltAddAttachment()
 {
-    QModelIndex index = mTwStorageTree->currentIndex();
-    Assert (mStorageModel->data (index, StorageModel::R_IsController).toBool());
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
+    Assert(m_pModelStorage->data(index, StorageModel::R_IsController).toBool());
 
-    DeviceTypeList deviceTypeList (mStorageModel->data (index, StorageModel::R_CtrDevices).value <DeviceTypeList>());
-    bool justTrigger = deviceTypeList.size() == 1;
-    bool showMenu = deviceTypeList.size() > 1;
+    const DeviceTypeList deviceTypeList(m_pModelStorage->data(index, StorageModel::R_CtrDevices).value<DeviceTypeList>());
+    const bool fJustTrigger = deviceTypeList.size() == 1;
+    const bool fShowMenu = deviceTypeList.size() > 1;
     QMenu menu;
-    foreach (const KDeviceType &deviceType, deviceTypeList)
+    foreach (const KDeviceType &enmDeviceType, deviceTypeList)
     {
-        switch (deviceType)
+        switch (enmDeviceType)
         {
             case KDeviceType_HardDisk:
-                if (justTrigger)
-                    mAddHDAttAction->trigger();
-                if (showMenu)
-                    menu.addAction (mAddHDAttAction);
+                if (fJustTrigger)
+                    m_pActionAddAttachmentHD->trigger();
+                if (fShowMenu)
+                    menu.addAction(m_pActionAddAttachmentHD);
                 break;
             case KDeviceType_DVD:
-                if (justTrigger)
-                    mAddCDAttAction->trigger();
-                if (showMenu)
-                    menu.addAction (mAddCDAttAction);
+                if (fJustTrigger)
+                    m_pActionAddAttachmentCD->trigger();
+                if (fShowMenu)
+                    menu.addAction(m_pActionAddAttachmentCD);
                 break;
             case KDeviceType_Floppy:
-                if (justTrigger)
-                    mAddFDAttAction->trigger();
-                if (showMenu)
-                    menu.addAction (mAddFDAttAction);
+                if (fJustTrigger)
+                    m_pActionAddAttachmentFD->trigger();
+                if (fShowMenu)
+                    menu.addAction(m_pActionAddAttachmentFD);
                 break;
             default:
                 break;
         }
     }
-    if (showMenu)
-        menu.exec (QCursor::pos());
+    if (fShowMenu)
+        menu.exec(QCursor::pos());
 }
 
-void UIMachineSettingsStorage::addHDAttachment()
+void UIMachineSettingsStorage::sltAddAttachmentHD()
 {
-    addAttachmentWrapper (KDeviceType_HardDisk);
+    addAttachmentWrapper(KDeviceType_HardDisk);
 }
 
-void UIMachineSettingsStorage::addCDAttachment()
+void UIMachineSettingsStorage::sltAddAttachmentCD()
 {
-    addAttachmentWrapper (KDeviceType_DVD);
+    addAttachmentWrapper(KDeviceType_DVD);
 }
 
-void UIMachineSettingsStorage::addFDAttachment()
+void UIMachineSettingsStorage::sltAddAttachmentFD()
 {
-    addAttachmentWrapper (KDeviceType_Floppy);
+    addAttachmentWrapper(KDeviceType_Floppy);
 }
 
-void UIMachineSettingsStorage::delAttachment()
+void UIMachineSettingsStorage::sltRemoveAttachment()
 {
-    QModelIndex index = mTwStorageTree->currentIndex();
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
 
-    KDeviceType device = mStorageModel->data (index, StorageModel::R_AttDevice).value <KDeviceType>();
+    const KDeviceType enmDeviceType = m_pModelStorage->data(index, StorageModel::R_AttDevice).value<KDeviceType>();
     /* Check if this would be the last DVD. If so let the user confirm this again. */
-    if (   device == KDeviceType_DVD
-        && deviceCount (KDeviceType_DVD) == 1)
+    if (   enmDeviceType == KDeviceType_DVD
+        && deviceCount(KDeviceType_DVD) == 1)
     {
         if (!msgCenter().confirmRemovingOfLastDVDDevice(this))
             return;
     }
 
-    QModelIndex parent = index.parent();
-    if (!index.isValid() || !parent.isValid() ||
-        !mStorageModel->data (index, StorageModel::R_IsAttachment).toBool() ||
-        !mStorageModel->data (parent, StorageModel::R_IsController).toBool())
+    const QModelIndex parentIndex = index.parent();
+    if (!index.isValid() || !parentIndex.isValid() ||
+        !m_pModelStorage->data(index, StorageModel::R_IsAttachment).toBool() ||
+        !m_pModelStorage->data(parentIndex, StorageModel::R_IsController).toBool())
         return;
 
-    mStorageModel->delAttachment (QUuid (mStorageModel->data (parent, StorageModel::R_ItemId).toString()),
-                                  QUuid (mStorageModel->data (index, StorageModel::R_ItemId).toString()));
-    emit storageChanged();
+    m_pModelStorage->delAttachment(QUuid(m_pModelStorage->data(parentIndex, StorageModel::R_ItemId).toString()),
+                                   QUuid(m_pModelStorage->data(index, StorageModel::R_ItemId).toString()));
+    emit sigStorageChanged();
 
     /* Revalidate: */
     revalidate();
 }
 
-void UIMachineSettingsStorage::getInformation()
+void UIMachineSettingsStorage::sltGetInformation()
 {
-    mIsLoadingInProgress = true;
+    m_fLoadingInProgress = true;
 
-    QModelIndex index = mTwStorageTree->currentIndex();
-    if (!index.isValid() || index == mStorageModel->root())
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
+    if (!index.isValid() || index == m_pModelStorage->root())
     {
-        /* Showing Initial Page */
-        mSwRightPane->setCurrentIndex (0);
+        /* Showing Initial Page: */
+        m_pStackRightPane->setCurrentIndex(0);
     }
     else
     {
-        switch (mStorageModel->data (index, StorageModel::R_ItemType).value <AbstractItem::ItemType>())
+        switch (m_pModelStorage->data(index, StorageModel::R_ItemType).value<AbstractItem::ItemType>())
         {
             case AbstractItem::Type_ControllerItem:
             {
-                /* Getting Controller Name */
-                mLeName->setText (mStorageModel->data (index, StorageModel::R_CtrName).toString());
+                /* Getting Controller Name: */
+                const QString strCtrName = m_pModelStorage->data(index, StorageModel::R_CtrName).toString();
+                if (m_pEditorName->text() != strCtrName)
+                    m_pEditorName->setText(strCtrName);
 
-                /* Getting Controller Sub type */
-                mCbType->clear();
-                ControllerTypeList controllerTypeList (mStorageModel->data (index, StorageModel::R_CtrTypes).value <ControllerTypeList>());
-                for (int i = 0; i < controllerTypeList.size(); ++ i)
-                    mCbType->insertItem (mCbType->count(), gpConverter->toString (controllerTypeList [i]));
-                KStorageControllerType type = mStorageModel->data (index, StorageModel::R_CtrType).value <KStorageControllerType>();
-                int ctrPos = mCbType->findText (gpConverter->toString (type));
-                mCbType->setCurrentIndex (ctrPos == -1 ? 0 : ctrPos);
+                /* Rebuild type combo: */
+                m_pComboType->clear();
+                /* Getting controller buses: */
+                const ControllerBusList controllerBusList(m_pModelStorage->data(index, StorageModel::R_CtrBusTypes).value<ControllerBusList>());
+                foreach (const KStorageBus &enmCurrentBus, controllerBusList)
+                {
+                    /* Getting controller types: */
+                    const ControllerTypeList controllerTypeList(m_pModelStorage->data(index, m_pModelStorage->busToRole(enmCurrentBus)).value<ControllerTypeList>());
+                    foreach (const KStorageControllerType &enmCurrentType, controllerTypeList)
+                    {
+                        m_pComboType->addItem(gpConverter->toString(enmCurrentType));
+                        m_pComboType->setItemData(m_pComboType->count() - 1, QVariant::fromValue(enmCurrentBus), StorageModel::R_CtrBusType);
+                        m_pComboType->setItemData(m_pComboType->count() - 1, QVariant::fromValue(enmCurrentType), StorageModel::R_CtrType);
+                    }
+                }
+                const KStorageControllerType enmType = m_pModelStorage->data(index, StorageModel::R_CtrType).value<KStorageControllerType>();
+                const int iCtrPos = m_pComboType->findData(enmType, StorageModel::R_CtrType);
+                m_pComboType->setCurrentIndex(iCtrPos == -1 ? 0 : iCtrPos);
 
-                KStorageBus bus = mStorageModel->data (index, StorageModel::R_CtrBusType).value <KStorageBus>();
-                mLbPortCount->setVisible (bus == KStorageBus_SATA || bus == KStorageBus_SAS);
-                mSbPortCount->setVisible (bus == KStorageBus_SATA || bus == KStorageBus_SAS);
-                uint uPortCount = mStorageModel->data (index, StorageModel::R_CtrPortCount).toUInt();
-                uint uMaxPortCount = mStorageModel->data (index, StorageModel::R_CtrMaxPortCount).toUInt();
-                mSbPortCount->setMaximum(uMaxPortCount);
-                mSbPortCount->setValue (uPortCount);
+                const KStorageBus enmBus = m_pModelStorage->data(index, StorageModel::R_CtrBusType).value<KStorageBus>();
+                m_pLabelPortCount->setVisible(enmBus == KStorageBus_SATA || enmBus == KStorageBus_SAS);
+                m_pSpinboxPortCount->setVisible(enmBus == KStorageBus_SATA || enmBus == KStorageBus_SAS);
+                const uint uPortCount = m_pModelStorage->data(index, StorageModel::R_CtrPortCount).toUInt();
+                const uint uMaxPortCount = m_pModelStorage->data(index, StorageModel::R_CtrMaxPortCount).toUInt();
+                m_pSpinboxPortCount->setMaximum(uMaxPortCount);
+                m_pSpinboxPortCount->setValue(uPortCount);
 
-                bool isUseIoCache = mStorageModel->data (index, StorageModel::R_CtrIoCache).toBool();
-                mCbIoCache->setChecked(isUseIoCache);
+                const bool fUseIoCache = m_pModelStorage->data(index, StorageModel::R_CtrIoCache).toBool();
+                m_pCheckBoxIoCache->setChecked(fUseIoCache);
 
-                /* Showing Controller Page */
-                mSwRightPane->setCurrentIndex (1);
+                /* Showing Controller Page: */
+                m_pStackRightPane->setCurrentIndex(1);
                 break;
             }
             case AbstractItem::Type_AttachmentItem:
             {
-                /* Getting Attachment Slot */
-                mCbSlot->clear();
-                SlotsList slotsList (mStorageModel->data (index, StorageModel::R_AttSlots).value <SlotsList>());
-                for (int i = 0; i < slotsList.size(); ++ i)
-                    mCbSlot->insertItem (mCbSlot->count(), gpConverter->toString (slotsList [i]));
-                StorageSlot slt = mStorageModel->data (index, StorageModel::R_AttSlot).value <StorageSlot>();
-                int attSlotPos = mCbSlot->findText (gpConverter->toString (slt));
-                mCbSlot->setCurrentIndex (attSlotPos == -1 ? 0 : attSlotPos);
-                mCbSlot->setToolTip (mCbSlot->itemText (mCbSlot->currentIndex()));
+                /* Getting Attachment Slot: */
+                m_pComboSlot->clear();
+                const SlotsList slotsList(m_pModelStorage->data(index, StorageModel::R_AttSlots).value<SlotsList>());
+                for (int i = 0; i < slotsList.size(); ++i)
+                    m_pComboSlot->insertItem(m_pComboSlot->count(), gpConverter->toString(slotsList[i]));
+                const StorageSlot slt = m_pModelStorage->data(index, StorageModel::R_AttSlot).value<StorageSlot>();
+                const int iAttSlotPos = m_pComboSlot->findText(gpConverter->toString(slt));
+                m_pComboSlot->setCurrentIndex(iAttSlotPos == -1 ? 0 : iAttSlotPos);
+                m_pComboSlot->setToolTip(m_pComboSlot->itemText(m_pComboSlot->currentIndex()));
 
-                /* Getting Attachment Medium */
-                KDeviceType device = mStorageModel->data (index, StorageModel::R_AttDevice).value <KDeviceType>();
-                switch (device)
+                /* Getting Attachment Medium: */
+                const KDeviceType enmDeviceType = m_pModelStorage->data(index, StorageModel::R_AttDevice).value<KDeviceType>();
+                switch (enmDeviceType)
                 {
                     case KDeviceType_HardDisk:
-                        mLbMedium->setText(tr("Hard &Disk:"));
-                        mTbOpen->setIcon(iconPool()->icon(HDAttachmentNormal));
-                        mTbOpen->setWhatsThis(tr("Choose or create a virtual hard disk file. The virtual machine will see "
+                        m_pLabelMedium->setText(tr("Hard &Disk:"));
+                        m_pToolButtonOpen->setIcon(iconPool()->icon(HDAttachmentNormal));
+                        m_pToolButtonOpen->setWhatsThis(tr("Choose or create a virtual hard disk file. The virtual machine will see "
                                                  "the data in the file as the contents of the virtual hard disk."));
                         break;
                     case KDeviceType_DVD:
-                        mLbMedium->setText(tr("Optical &Drive:"));
-                        mTbOpen->setIcon(iconPool()->icon(CDAttachmentNormal));
-                        mTbOpen->setWhatsThis(tr("Choose a virtual optical disk or a physical drive to use with the virtual drive. "
+                        m_pLabelMedium->setText(tr("Optical &Drive:"));
+                        m_pToolButtonOpen->setIcon(iconPool()->icon(CDAttachmentNormal));
+                        m_pToolButtonOpen->setWhatsThis(tr("Choose a virtual optical disk or a physical drive to use with the virtual drive. "
                                                  "The virtual machine will see a disk inserted into the drive with the data "
                                                  "in the file or on the disk in the physical drive as its contents."));
                         break;
                     case KDeviceType_Floppy:
-                        mLbMedium->setText(tr("Floppy &Drive:"));
-                        mTbOpen->setIcon(iconPool()->icon(FDAttachmentNormal));
-                        mTbOpen->setWhatsThis(tr("Choose a virtual floppy disk or a physical drive to use with the virtual drive. "
+                        m_pLabelMedium->setText(tr("Floppy &Drive:"));
+                        m_pToolButtonOpen->setIcon(iconPool()->icon(FDAttachmentNormal));
+                        m_pToolButtonOpen->setWhatsThis(tr("Choose a virtual floppy disk or a physical drive to use with the virtual drive. "
                                                  "The virtual machine will see a disk inserted into the drive with the data "
                                                  "in the file or on the disk in the physical drive as its contents."));
                         break;
@@ -2836,52 +3795,52 @@ void UIMachineSettingsStorage::getInformation()
                 }
 
                 /* Get hot-pluggable state: */
-                bool fIsHotPluggable = mStorageModel->data(index, StorageModel::R_AttIsHotPluggable).toBool();
+                const bool fIsHotPluggable = m_pModelStorage->data(index, StorageModel::R_AttIsHotPluggable).toBool();
 
                 /* Fetch device-type, medium-id: */
-                m_pMediumIdHolder->setType(mediumTypeToLocal(device));
-                m_pMediumIdHolder->setId(mStorageModel->data(index, StorageModel::R_AttMediumId).toString());
+                m_pMediumIdHolder->setType(mediumTypeToLocal(enmDeviceType));
+                m_pMediumIdHolder->setId(m_pModelStorage->data(index, StorageModel::R_AttMediumId).toString());
 
                 /* Get/fetch editable state: */
-                bool fIsEditable =    (isMachineOffline())
-                                   || (isMachineOnline() && device != KDeviceType_HardDisk)
-                                   || (isMachineOnline() && device == KDeviceType_HardDisk && fIsHotPluggable);
-                mLbMedium->setEnabled(fIsEditable);
-                mTbOpen->setEnabled(fIsEditable);
+                const bool fIsEditable =    (isMachineOffline())
+                                         || (isMachineOnline() && enmDeviceType != KDeviceType_HardDisk)
+                                         || (isMachineOnline() && enmDeviceType == KDeviceType_HardDisk && fIsHotPluggable);
+                m_pLabelMedium->setEnabled(fIsEditable);
+                m_pToolButtonOpen->setEnabled(fIsEditable);
 
-                /* Getting Passthrough state */
-                bool isHostDrive = mStorageModel->data (index, StorageModel::R_AttIsHostDrive).toBool();
-                mCbPassthrough->setVisible (device == KDeviceType_DVD && isHostDrive);
-                mCbPassthrough->setChecked (isHostDrive && mStorageModel->data (index, StorageModel::R_AttIsPassthrough).toBool());
+                /* Getting Passthrough state: */
+                const bool fHostDrive = m_pModelStorage->data(index, StorageModel::R_AttIsHostDrive).toBool();
+                m_pCheckBoxPassthrough->setVisible(enmDeviceType == KDeviceType_DVD && fHostDrive);
+                m_pCheckBoxPassthrough->setChecked(fHostDrive && m_pModelStorage->data(index, StorageModel::R_AttIsPassthrough).toBool());
 
-                /* Getting TempEject state */
-                mCbTempEject->setVisible (device == KDeviceType_DVD && !isHostDrive);
-                mCbTempEject->setChecked (!isHostDrive && mStorageModel->data (index, StorageModel::R_AttIsTempEject).toBool());
+                /* Getting TempEject state: */
+                m_pCheckBoxTempEject->setVisible(enmDeviceType == KDeviceType_DVD && !fHostDrive);
+                m_pCheckBoxTempEject->setChecked(!fHostDrive && m_pModelStorage->data(index, StorageModel::R_AttIsTempEject).toBool());
 
-                /* Getting NonRotational state */
-                mCbNonRotational->setVisible (device == KDeviceType_HardDisk);
-                mCbNonRotational->setChecked (mStorageModel->data (index, StorageModel::R_AttIsNonRotational).toBool());
+                /* Getting NonRotational state: */
+                m_pCheckBoxNonRotational->setVisible(enmDeviceType == KDeviceType_HardDisk);
+                m_pCheckBoxNonRotational->setChecked(m_pModelStorage->data(index, StorageModel::R_AttIsNonRotational).toBool());
 
                 /* Fetch hot-pluggable state: */
                 m_pCheckBoxHotPluggable->setVisible((slt.bus == KStorageBus_SATA) || (slt.bus == KStorageBus_USB));
                 m_pCheckBoxHotPluggable->setChecked(fIsHotPluggable);
 
-                /* Update optional widgets visibility */
-                updateAdditionalObjects (device);
+                /* Update optional widgets visibility: */
+                updateAdditionalDetails(enmDeviceType);
 
-                /* Getting Other Information */
-                mLbHDFormatValue->setText (compressText (mStorageModel->data (index, StorageModel::R_AttFormat).toString()));
-                mLbCDFDTypeValue->setText (compressText (mStorageModel->data (index, StorageModel::R_AttFormat).toString()));
-                mLbHDVirtualSizeValue->setText (compressText (mStorageModel->data (index, StorageModel::R_AttLogicalSize).toString()));
-                mLbHDActualSizeValue->setText (compressText (mStorageModel->data (index, StorageModel::R_AttSize).toString()));
-                mLbSizeValue->setText (compressText (mStorageModel->data (index, StorageModel::R_AttSize).toString()));
-                mLbHDDetailsValue->setText (compressText (mStorageModel->data (index, StorageModel::R_AttDetails).toString()));
-                mLbLocationValue->setText (compressText (mStorageModel->data (index, StorageModel::R_AttLocation).toString()));
-                mLbUsageValue->setText (compressText (mStorageModel->data (index, StorageModel::R_AttUsage).toString()));
-                m_pLabelEncryptionValue->setText(compressText(mStorageModel->data(index, StorageModel::R_AttEncryptionPasswordID).toString()));
+                /* Getting Other Information: */
+                m_pFieldHDFormat->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttFormat).toString()));
+                m_pFieldCDFDType->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttFormat).toString()));
+                m_pFieldHDVirtualSize->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttLogicalSize).toString()));
+                m_pFieldHDActualSize->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttSize).toString()));
+                m_pFieldCDFDSize->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttSize).toString()));
+                m_pFieldHDDetails->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttDetails).toString()));
+                m_pFieldLocation->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttLocation).toString()));
+                m_pFieldUsage->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttUsage).toString()));
+                m_pFieldEncryption->setText(compressText(m_pModelStorage->data(index, StorageModel::R_AttEncryptionPasswordID).toString()));
 
-                /* Showing Attachment Page */
-                mSwRightPane->setCurrentIndex (2);
+                /* Showing Attachment Page: */
+                m_pStackRightPane->setCurrentIndex(2);
                 break;
             }
             default:
@@ -2892,64 +3851,71 @@ void UIMachineSettingsStorage::getInformation()
     /* Revalidate: */
     revalidate();
 
-    mIsLoadingInProgress = false;
+    m_fLoadingInProgress = false;
 }
 
-void UIMachineSettingsStorage::setInformation()
+void UIMachineSettingsStorage::sltSetInformation()
 {
-    QModelIndex index = mTwStorageTree->currentIndex();
-    if (mIsLoadingInProgress || !index.isValid() || index == mStorageModel->root()) return;
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
+    if (m_fLoadingInProgress || !index.isValid() || index == m_pModelStorage->root())
+        return;
 
-    QObject *sdr = sender();
-    switch (mStorageModel->data (index, StorageModel::R_ItemType).value <AbstractItem::ItemType>())
+    QObject *pSender = sender();
+    switch (m_pModelStorage->data(index, StorageModel::R_ItemType).value<AbstractItem::ItemType>())
     {
         case AbstractItem::Type_ControllerItem:
         {
-            /* Setting Controller Name */
-            if (sdr == mLeName)
-                mStorageModel->setData (index, mLeName->text(), StorageModel::R_CtrName);
-            /* Setting Controller Sub-Type */
-            else if (sdr == mCbType)
-                mStorageModel->setData (index, QVariant::fromValue (gpConverter->fromString<KStorageControllerType> (mCbType->currentText())),
-                                        StorageModel::R_CtrType);
-            else if (sdr == mSbPortCount)
-                mStorageModel->setData (index, mSbPortCount->value(), StorageModel::R_CtrPortCount);
-            else if (sdr == mCbIoCache)
-                mStorageModel->setData (index, mCbIoCache->isChecked(), StorageModel::R_CtrIoCache);
+            /* Setting Controller Name: */
+            if (pSender == m_pEditorName)
+                m_pModelStorage->setData(index, m_pEditorName->text(), StorageModel::R_CtrName);
+            /* Setting Controller Sub-Type: */
+            else if (pSender == m_pComboType)
+            {
+                const KStorageBus enmBus = m_pComboType->currentData(StorageModel::R_CtrBusType).value<KStorageBus>();
+                const KStorageControllerType enmType = m_pComboType->currentData(StorageModel::R_CtrType).value<KStorageControllerType>();
+                const bool fResult =
+                    m_pModelStorage->setData(index, QVariant::fromValue(enmBus), StorageModel::R_CtrBusType);
+                if (fResult)
+                    m_pModelStorage->setData(index, QVariant::fromValue(enmType), StorageModel::R_CtrType);
+            }
+            else if (pSender == m_pSpinboxPortCount)
+                m_pModelStorage->setData(index, m_pSpinboxPortCount->value(), StorageModel::R_CtrPortCount);
+            else if (pSender == m_pCheckBoxIoCache)
+                m_pModelStorage->setData(index, m_pCheckBoxIoCache->isChecked(), StorageModel::R_CtrIoCache);
             break;
         }
         case AbstractItem::Type_AttachmentItem:
         {
-            /* Setting Attachment Slot */
-            if (sdr == mCbSlot)
+            /* Setting Attachment Slot: */
+            if (pSender == m_pComboSlot)
             {
-                QModelIndex controllerIndex = mStorageModel->parent(index);
-                StorageSlot attachmentStorageSlot = gpConverter->fromString<StorageSlot>(mCbSlot->currentText());
-                mStorageModel->setData(index, QVariant::fromValue(attachmentStorageSlot), StorageModel::R_AttSlot);
-                QModelIndex theSameIndexAtNewPosition = mStorageModel->attachmentBySlot(controllerIndex, attachmentStorageSlot);
+                QModelIndex controllerIndex = m_pModelStorage->parent(index);
+                StorageSlot attachmentStorageSlot = gpConverter->fromString<StorageSlot>(m_pComboSlot->currentText());
+                m_pModelStorage->setData(index, QVariant::fromValue(attachmentStorageSlot), StorageModel::R_AttSlot);
+                QModelIndex theSameIndexAtNewPosition = m_pModelStorage->attachmentBySlot(controllerIndex, attachmentStorageSlot);
                 AssertMsg(theSameIndexAtNewPosition.isValid(), ("Current attachment disappears!\n"));
-                mTwStorageTree->setCurrentIndex(theSameIndexAtNewPosition);
+                m_pTreeViewStorage->setCurrentIndex(theSameIndexAtNewPosition);
             }
-            /* Setting Attachment Medium */
-            else if (sdr == m_pMediumIdHolder)
-                mStorageModel->setData (index, m_pMediumIdHolder->id(), StorageModel::R_AttMediumId);
-            else if (sdr == mCbPassthrough)
+            /* Setting Attachment Medium: */
+            else if (pSender == m_pMediumIdHolder)
+                m_pModelStorage->setData(index, m_pMediumIdHolder->id(), StorageModel::R_AttMediumId);
+            else if (pSender == m_pCheckBoxPassthrough)
             {
-                if (mStorageModel->data (index, StorageModel::R_AttIsHostDrive).toBool())
-                    mStorageModel->setData (index, mCbPassthrough->isChecked(), StorageModel::R_AttIsPassthrough);
+                if (m_pModelStorage->data(index, StorageModel::R_AttIsHostDrive).toBool())
+                    m_pModelStorage->setData(index, m_pCheckBoxPassthrough->isChecked(), StorageModel::R_AttIsPassthrough);
             }
-            else if (sdr == mCbTempEject)
+            else if (pSender == m_pCheckBoxTempEject)
             {
-                if (!mStorageModel->data (index, StorageModel::R_AttIsHostDrive).toBool())
-                    mStorageModel->setData (index, mCbTempEject->isChecked(), StorageModel::R_AttIsTempEject);
+                if (!m_pModelStorage->data(index, StorageModel::R_AttIsHostDrive).toBool())
+                    m_pModelStorage->setData(index, m_pCheckBoxTempEject->isChecked(), StorageModel::R_AttIsTempEject);
             }
-            else if (sdr == mCbNonRotational)
+            else if (pSender == m_pCheckBoxNonRotational)
             {
-                mStorageModel->setData (index, mCbNonRotational->isChecked(), StorageModel::R_AttIsNonRotational);
+                m_pModelStorage->setData(index, m_pCheckBoxNonRotational->isChecked(), StorageModel::R_AttIsNonRotational);
             }
-            else if (sdr == m_pCheckBoxHotPluggable)
+            else if (pSender == m_pCheckBoxHotPluggable)
             {
-                mStorageModel->setData(index, m_pCheckBoxHotPluggable->isChecked(), StorageModel::R_AttIsHotPluggable);
+                m_pModelStorage->setData(index, m_pCheckBoxHotPluggable->isChecked(), StorageModel::R_AttIsHotPluggable);
             }
             break;
         }
@@ -2957,8 +3923,9 @@ void UIMachineSettingsStorage::setInformation()
             break;
     }
 
-    emit storageChanged();
-    getInformation();
+    emit sigStorageChanged();
+    sltUpdateActionStates();
+    sltGetInformation();
 }
 
 void UIMachineSettingsStorage::sltPrepareOpenMediumMenu()
@@ -2968,66 +3935,61 @@ void UIMachineSettingsStorage::sltPrepareOpenMediumMenu()
     AssertMsg(pOpenMediumMenu, ("Can't access open-medium menu!\n"));
     if (pOpenMediumMenu)
     {
-        /* Eraze menu initially: */
+        /* Erase menu initially: */
         pOpenMediumMenu->clear();
         /* Depending on current medium type: */
         switch (m_pMediumIdHolder->type())
         {
-            case UIMediumType_HardDisk:
+            case UIMediumDeviceType_HardDisk:
             {
-                /* Add "Create a new virtual hard disk" action: */
-                QAction *pCreateNewHardDisk = pOpenMediumMenu->addAction(tr("Create New Hard Disk..."));
-                pCreateNewHardDisk->setIcon(iconPool()->icon(HDNewEn, HDNewDis));
-                connect(pCreateNewHardDisk, SIGNAL(triggered(bool)), this, SLOT(sltCreateNewHardDisk()));
-                /* Add "Choose a virtual hard disk file" action: */
-                addChooseExistingMediumAction(pOpenMediumMenu, tr("Choose Virtual Hard Disk File..."));
-                /* Add recent mediums list: */
+                /* Add "Choose a virtual hard disk" action: */
+                addChooseExistingMediumAction(pOpenMediumMenu, tr("Choose/Create a Virtual Hard Disk..."));
+                addChooseDiskFileAction(pOpenMediumMenu, tr("Choose a disk file..."));
+                pOpenMediumMenu->addSeparator();
+                /* Add recent media list: */
                 addRecentMediumActions(pOpenMediumMenu, m_pMediumIdHolder->type());
                 break;
             }
-            case UIMediumType_DVD:
+            case UIMediumDeviceType_DVD:
             {
-                /* Add "Choose a virtual optical disk file" action: */
-                addChooseExistingMediumAction(pOpenMediumMenu, tr("Choose Virtual Optical Disk File..."));
+                /* Add "Choose a virtual optical disk" action: */
+                addChooseExistingMediumAction(pOpenMediumMenu, tr("Choose/Create a Virtual Optical Disk..."));
+                addChooseDiskFileAction(pOpenMediumMenu, tr("Choose a disk file..."));
                 /* Add "Choose a physical drive" actions: */
                 addChooseHostDriveActions(pOpenMediumMenu);
-                /* Add recent mediums list: */
+                pOpenMediumMenu->addSeparator();
+                /* Add recent media list: */
                 addRecentMediumActions(pOpenMediumMenu, m_pMediumIdHolder->type());
                 /* Add "Eject current medium" action: */
                 pOpenMediumMenu->addSeparator();
                 QAction *pEjectCurrentMedium = pOpenMediumMenu->addAction(tr("Remove Disk from Virtual Drive"));
                 pEjectCurrentMedium->setEnabled(!m_pMediumIdHolder->isNull());
                 pEjectCurrentMedium->setIcon(iconPool()->icon(CDUnmountEnabled, CDUnmountDisabled));
-                connect(pEjectCurrentMedium, SIGNAL(triggered(bool)), this, SLOT(sltUnmountDevice()));
+                connect(pEjectCurrentMedium, &QAction::triggered, this, &UIMachineSettingsStorage::sltUnmountDevice);
                 break;
             }
-            case UIMediumType_Floppy:
+            case UIMediumDeviceType_Floppy:
             {
-                /* Add "Choose a virtual floppy disk file" action: */
-                addChooseExistingMediumAction(pOpenMediumMenu, tr("Choose Virtual Floppy Disk File..."));
+                /* Add "Choose a virtual floppy disk" action: */
+                addChooseExistingMediumAction(pOpenMediumMenu, tr("Choose/Create a Virtual Floppy Disk..."));
+                addChooseDiskFileAction(pOpenMediumMenu, tr("Choose a disk file..."));
                 /* Add "Choose a physical drive" actions: */
                 addChooseHostDriveActions(pOpenMediumMenu);
-                /* Add recent mediums list: */
+                pOpenMediumMenu->addSeparator();
+                /* Add recent media list: */
                 addRecentMediumActions(pOpenMediumMenu, m_pMediumIdHolder->type());
                 /* Add "Eject current medium" action: */
                 pOpenMediumMenu->addSeparator();
                 QAction *pEjectCurrentMedium = pOpenMediumMenu->addAction(tr("Remove Disk from Virtual Drive"));
                 pEjectCurrentMedium->setEnabled(!m_pMediumIdHolder->isNull());
                 pEjectCurrentMedium->setIcon(iconPool()->icon(FDUnmountEnabled, FDUnmountDisabled));
-                connect(pEjectCurrentMedium, SIGNAL(triggered(bool)), this, SLOT(sltUnmountDevice()));
+                connect(pEjectCurrentMedium, &QAction::triggered, this, &UIMachineSettingsStorage::sltUnmountDevice);
                 break;
             }
             default:
                 break;
         }
     }
-}
-
-void UIMachineSettingsStorage::sltCreateNewHardDisk()
-{
-    QString strMediumId = getWithNewHDWizard();
-    if (!strMediumId.isNull())
-        m_pMediumIdHolder->setId(strMediumId);
 }
 
 void UIMachineSettingsStorage::sltUnmountDevice()
@@ -3037,10 +3999,36 @@ void UIMachineSettingsStorage::sltUnmountDevice()
 
 void UIMachineSettingsStorage::sltChooseExistingMedium()
 {
-    QString strMachineFolder(QFileInfo(m_strMachineSettingsFilePath).absolutePath());
-    QString strMediumId = vboxGlobal().openMediumWithFileOpenDialog(m_pMediumIdHolder->type(), this, strMachineFolder);
-    if (!strMediumId.isNull())
-        m_pMediumIdHolder->setId(strMediumId);
+    const QString strMachineFolder(QFileInfo(m_strMachineSettingsFilePath).absolutePath());
+
+
+    QUuid uCurrentMediumId;
+    if (m_pMediumIdHolder)
+        uCurrentMediumId = m_pMediumIdHolder->id();
+    QUuid uSelectedMediumId;
+    int iResult = uiCommon().openMediumSelectorDialog(this, m_pMediumIdHolder->type(), uCurrentMediumId, uSelectedMediumId,
+                                                      strMachineFolder, m_strMachineName,
+                                                      m_strMachineGuestOSTypeId,
+                                                      true /* enable create action: */, m_uMachineId);
+
+    if (iResult == UIMediumSelector::ReturnCode_Rejected ||
+        (iResult == UIMediumSelector::ReturnCode_Accepted && uSelectedMediumId.isNull()))
+        return;
+    if (iResult == static_cast<int>(UIMediumSelector::ReturnCode_LeftEmpty) &&
+        (m_pMediumIdHolder->type() != UIMediumDeviceType_DVD && m_pMediumIdHolder->type() != UIMediumDeviceType_Floppy))
+        return;
+
+    m_pMediumIdHolder->setId(uSelectedMediumId);
+}
+
+void UIMachineSettingsStorage::sltChooseDiskFile()
+{
+    const QString strMachineFolder(QFileInfo(m_strMachineSettingsFilePath).absolutePath());
+
+    QUuid uMediumId = uiCommon().openMediumWithFileOpenDialog(m_pMediumIdHolder->type(), this, strMachineFolder);
+    if (uMediumId.isNull())
+        return;
+    m_pMediumIdHolder->setId(uMediumId);
 }
 
 void UIMachineSettingsStorage::sltChooseHostDrive()
@@ -3060,236 +4048,249 @@ void UIMachineSettingsStorage::sltChooseRecentMedium()
     if (pChooseRecentMediumAction)
     {
         /* Get recent medium type & name: */
-        QStringList mediumInfoList = pChooseRecentMediumAction->data().toString().split(',');
-        UIMediumType mediumType = (UIMediumType)mediumInfoList[0].toUInt();
-        QString strMediumLocation = mediumInfoList[1];
-        QString strMediumId = vboxGlobal().openMedium(mediumType, strMediumLocation, this);
-        if (!strMediumId.isNull())
-            m_pMediumIdHolder->setId(strMediumId);
+        const QStringList mediumInfoList = pChooseRecentMediumAction->data().toString().split(',');
+        const UIMediumDeviceType enmMediumType = (UIMediumDeviceType)mediumInfoList[0].toUInt();
+        const QString strMediumLocation = mediumInfoList[1];
+        const QUuid uMediumId = uiCommon().openMedium(enmMediumType, strMediumLocation, this);
+        if (!uMediumId.isNull())
+            m_pMediumIdHolder->setId(uMediumId);
     }
 }
 
-void UIMachineSettingsStorage::updateActionsState()
+void UIMachineSettingsStorage::sltUpdateActionStates()
 {
-    QModelIndex index = mTwStorageTree->currentIndex();
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
 
-    bool isIDEPossible = mStorageModel->data (index, StorageModel::R_IsMoreIDEControllersPossible).toBool();
-    bool isSATAPossible = mStorageModel->data (index, StorageModel::R_IsMoreSATAControllersPossible).toBool();
-    bool isSCSIPossible = mStorageModel->data (index, StorageModel::R_IsMoreSCSIControllersPossible).toBool();
-    bool isFloppyPossible = mStorageModel->data (index, StorageModel::R_IsMoreFloppyControllersPossible).toBool();
-    bool isSASPossible = mStorageModel->data (index, StorageModel::R_IsMoreSASControllersPossible).toBool();
-    bool isUSBPossible = mStorageModel->data (index, StorageModel::R_IsMoreUSBControllersPossible).toBool();
-    bool isNVMePossible = mStorageModel->data (index, StorageModel::R_IsMoreNVMeControllersPossible).toBool();
+    const bool fIDEPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreIDEControllersPossible).toBool();
+    const bool fSATAPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreSATAControllersPossible).toBool();
+    const bool fSCSIPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreSCSIControllersPossible).toBool();
+    const bool fFloppyPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreFloppyControllersPossible).toBool();
+    const bool fSASPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreSASControllersPossible).toBool();
+    const bool fUSBPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreUSBControllersPossible).toBool();
+    const bool fNVMePossible = m_pModelStorage->data(index, StorageModel::R_IsMoreNVMeControllersPossible).toBool();
+    const bool fVirtioSCSIPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreVirtioSCSIControllersPossible).toBool();
 
-    bool isController = mStorageModel->data (index, StorageModel::R_IsController).toBool();
-    bool isAttachment = mStorageModel->data (index, StorageModel::R_IsAttachment).toBool();
-    bool isAttachmentsPossible = mStorageModel->data (index, StorageModel::R_IsMoreAttachmentsPossible).toBool();
-    bool fIsAttachmentHotPluggable = mStorageModel->data(index, StorageModel::R_AttIsHotPluggable).toBool();
+    const bool fController = m_pModelStorage->data(index, StorageModel::R_IsController).toBool();
+    const bool fAttachment = m_pModelStorage->data(index, StorageModel::R_IsAttachment).toBool();
+    const bool fAttachmentsPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreAttachmentsPossible).toBool();
+    const bool fIsAttachmentHotPluggable = m_pModelStorage->data(index, StorageModel::R_AttIsHotPluggable).toBool();
 
     /* Configure "add controller" actions: */
-    mAddCtrAction->setEnabled (isIDEPossible || isSATAPossible || isSCSIPossible || isFloppyPossible || isSASPossible || isUSBPossible || isNVMePossible);
-    mAddIDECtrAction->setEnabled (isIDEPossible);
-    mAddSATACtrAction->setEnabled (isSATAPossible);
-    mAddSCSICtrAction->setEnabled (isSCSIPossible);
-    mAddFloppyCtrAction->setEnabled (isFloppyPossible);
-    mAddSASCtrAction->setEnabled (isSASPossible);
-    mAddUSBCtrAction->setEnabled (isUSBPossible);
-    mAddNVMeCtrAction->setEnabled (isNVMePossible);
+    m_pActionAddController->setEnabled(fIDEPossible || fSATAPossible || fSCSIPossible || fFloppyPossible || fSASPossible || fUSBPossible || fNVMePossible || fVirtioSCSIPossible);
+    m_addControllerActions.value(KStorageControllerType_PIIX3)->setEnabled(fIDEPossible);
+    m_addControllerActions.value(KStorageControllerType_PIIX4)->setEnabled(fIDEPossible);
+    m_addControllerActions.value(KStorageControllerType_ICH6)->setEnabled(fIDEPossible);
+    m_addControllerActions.value(KStorageControllerType_IntelAhci)->setEnabled(fSATAPossible);
+    m_addControllerActions.value(KStorageControllerType_LsiLogic)->setEnabled(fSCSIPossible);
+    m_addControllerActions.value(KStorageControllerType_BusLogic)->setEnabled(fSCSIPossible);
+    m_addControllerActions.value(KStorageControllerType_I82078)->setEnabled(fFloppyPossible);
+    m_addControllerActions.value(KStorageControllerType_LsiLogicSas)->setEnabled(fSASPossible);
+    m_addControllerActions.value(KStorageControllerType_USB)->setEnabled(fUSBPossible);
+    m_addControllerActions.value(KStorageControllerType_NVMe)->setEnabled(fNVMePossible);
+    m_addControllerActions.value(KStorageControllerType_VirtioSCSI)->setEnabled(fVirtioSCSIPossible);
 
     /* Configure "add attachment" actions: */
-    mAddAttAction->setEnabled (isController && isAttachmentsPossible);
-    mAddHDAttAction->setEnabled (isController && isAttachmentsPossible);
-    mAddCDAttAction->setEnabled (isController && isAttachmentsPossible);
-    mAddFDAttAction->setEnabled (isController && isAttachmentsPossible);
+    m_pActionAddAttachment->setEnabled(fController && fAttachmentsPossible);
+    m_pActionAddAttachmentHD->setEnabled(fController && fAttachmentsPossible);
+    m_pActionAddAttachmentCD->setEnabled(fController && fAttachmentsPossible);
+    m_pActionAddAttachmentFD->setEnabled(fController && fAttachmentsPossible);
 
     /* Configure "delete controller" action: */
-    bool fControllerInSuitableState = isMachineOffline();
-    mDelCtrAction->setEnabled(isController && fControllerInSuitableState);
+    const bool fControllerInSuitableState = isMachineOffline();
+    m_pActionRemoveController->setEnabled(fController && fControllerInSuitableState);
 
     /* Configure "delete attachment" action: */
-    bool fAttachmentInSuitableState = isMachineOffline() ||
-                                      (isMachineOnline() && fIsAttachmentHotPluggable);
-    mDelAttAction->setEnabled(isAttachment && fAttachmentInSuitableState);
+    const bool fAttachmentInSuitableState = isMachineOffline() ||
+                                            (isMachineOnline() && fIsAttachmentHotPluggable);
+    m_pActionRemoveAttachment->setEnabled(fAttachment && fAttachmentInSuitableState);
 }
 
-void UIMachineSettingsStorage::onRowInserted (const QModelIndex &aParent, int aPosition)
+void UIMachineSettingsStorage::sltHandleRowInsertion(const QModelIndex &parentIndex, int iPosition)
 {
-    QModelIndex index = mStorageModel->index (aPosition, 0, aParent);
+    const QModelIndex index = m_pModelStorage->index(iPosition, 0, parentIndex);
 
-    switch (mStorageModel->data (index, StorageModel::R_ItemType).value <AbstractItem::ItemType>())
+    switch (m_pModelStorage->data(index, StorageModel::R_ItemType).value<AbstractItem::ItemType>())
     {
         case AbstractItem::Type_ControllerItem:
         {
-            /* Select the newly created Controller Item */
-            mTwStorageTree->setCurrentIndex (index);
+            /* Select the newly created Controller Item: */
+            m_pTreeViewStorage->setCurrentIndex(index);
             break;
         }
         case AbstractItem::Type_AttachmentItem:
         {
-            /* Expand parent if it is not expanded yet */
-            if (!mTwStorageTree->isExpanded (aParent))
-                mTwStorageTree->setExpanded (aParent, true);
+            /* Expand parent if it is not expanded yet: */
+            if (!m_pTreeViewStorage->isExpanded(parentIndex))
+                m_pTreeViewStorage->setExpanded(parentIndex, true);
             break;
         }
         default:
             break;
     }
 
-    updateActionsState();
-    getInformation();
+    sltUpdateActionStates();
+    sltGetInformation();
 }
 
-void UIMachineSettingsStorage::onRowRemoved()
+void UIMachineSettingsStorage::sltHandleRowRemoval()
 {
-    if (mStorageModel->rowCount (mStorageModel->root()) == 0)
-        mTwStorageTree->setCurrentIndex (mStorageModel->root());
+    if (m_pModelStorage->rowCount (m_pModelStorage->root()) == 0)
+        m_pTreeViewStorage->setCurrentIndex (m_pModelStorage->root());
 
-    updateActionsState();
-    getInformation();
+    sltUpdateActionStates();
+    sltGetInformation();
 }
 
-void UIMachineSettingsStorage::onCurrentItemChanged()
+void UIMachineSettingsStorage::sltHandleCurrentItemChange()
 {
-    updateActionsState();
-    getInformation();
+    sltUpdateActionStates();
+    sltGetInformation();
 }
 
-void UIMachineSettingsStorage::onContextMenuRequested (const QPoint &aPosition)
+void UIMachineSettingsStorage::sltHandleContextMenuRequest(const QPoint &position)
 {
-    QModelIndex index = mTwStorageTree->indexAt (aPosition);
-    if (!index.isValid()) return addController();
+    /* Forget last mouse press position: */
+    m_mousePressPosition = QPoint();
+
+    const QModelIndex index = m_pTreeViewStorage->indexAt(position);
+    if (!index.isValid())
+        return sltAddController();
 
     QMenu menu;
-    switch (mStorageModel->data (index, StorageModel::R_ItemType).value <AbstractItem::ItemType>())
+    switch (m_pModelStorage->data(index, StorageModel::R_ItemType).value<AbstractItem::ItemType>())
     {
         case AbstractItem::Type_ControllerItem:
         {
-            DeviceTypeList deviceTypeList (mStorageModel->data (index, StorageModel::R_CtrDevices).value <DeviceTypeList>());
-            foreach (KDeviceType deviceType, deviceTypeList)
+            const DeviceTypeList deviceTypeList(m_pModelStorage->data(index, StorageModel::R_CtrDevices).value<DeviceTypeList>());
+            foreach (KDeviceType enmDeviceType, deviceTypeList)
             {
-                switch (deviceType)
+                switch (enmDeviceType)
                 {
                     case KDeviceType_HardDisk:
-                        menu.addAction (mAddHDAttAction);
+                        menu.addAction(m_pActionAddAttachmentHD);
                         break;
                     case KDeviceType_DVD:
-                        menu.addAction (mAddCDAttAction);
+                        menu.addAction(m_pActionAddAttachmentCD);
                         break;
                     case KDeviceType_Floppy:
-                        menu.addAction (mAddFDAttAction);
+                        menu.addAction(m_pActionAddAttachmentFD);
                         break;
                     default:
                         break;
                 }
             }
-            menu.addAction (mDelCtrAction);
+            menu.addAction(m_pActionRemoveController);
             break;
         }
         case AbstractItem::Type_AttachmentItem:
         {
-            menu.addAction (mDelAttAction);
+            menu.addAction(m_pActionRemoveAttachment);
             break;
         }
         default:
             break;
     }
     if (!menu.isEmpty())
-        menu.exec (mTwStorageTree->viewport()->mapToGlobal (aPosition));
+        menu.exec(m_pTreeViewStorage->viewport()->mapToGlobal(position));
 }
 
-void UIMachineSettingsStorage::onDrawItemBranches (QPainter *aPainter, const QRect &aRect, const QModelIndex &aIndex)
+void UIMachineSettingsStorage::sltHandleDrawItemBranches(QPainter *pPainter, const QRect &rect, const QModelIndex &index)
 {
-    if (!aIndex.parent().isValid() || !aIndex.parent().parent().isValid()) return;
+    if (!index.parent().isValid() || !index.parent().parent().isValid())
+        return;
 
-    aPainter->save();
+    pPainter->save();
     QStyleOption options;
-    options.initFrom (mTwStorageTree);
-    options.rect = aRect;
+    options.initFrom(m_pTreeViewStorage);
+    options.rect = rect;
     options.state |= QStyle::State_Item;
-    if (aIndex.row() < mStorageModel->rowCount (aIndex.parent()) - 1)
+    if (index.row() < m_pModelStorage->rowCount(index.parent()) - 1)
         options.state |= QStyle::State_Sibling;
     /* This pen is commonly used by different
      * look and feel styles to paint tree-view branches. */
-    QPen pen (QBrush (options.palette.dark().color(), Qt::Dense4Pattern), 0);
-    aPainter->setPen (pen);
+    const QPen pen(QBrush(options.palette.dark().color(), Qt::Dense4Pattern), 0);
+    pPainter->setPen(pen);
     /* If we want tree-view branches to be always painted we have to use QCommonStyle::drawPrimitive()
      * because QCommonStyle performs branch painting as opposed to particular inherited sub-classing styles. */
-    qobject_cast <QCommonStyle*> (style())->QCommonStyle::drawPrimitive (QStyle::PE_IndicatorBranch, &options, aPainter);
-    aPainter->restore();
+    qobject_cast<QCommonStyle*>(style())->QCommonStyle::drawPrimitive(QStyle::PE_IndicatorBranch, &options, pPainter);
+    pPainter->restore();
 }
 
-void UIMachineSettingsStorage::onMouseMoved (QMouseEvent *aEvent)
+void UIMachineSettingsStorage::sltHandleMouseMove(QMouseEvent *pEvent)
 {
-    QModelIndex index = mTwStorageTree->indexAt (aEvent->pos());
-    QRect indexRect = mTwStorageTree->visualRect (index);
+    /* Make sure event is valid: */
+    AssertPtrReturnVoid(pEvent);
 
-    /* Expander tool-tip */
-    if (mStorageModel->data (index, StorageModel::R_IsController).toBool())
+    const QModelIndex index = m_pTreeViewStorage->indexAt(pEvent->pos());
+    const QRect indexRect = m_pTreeViewStorage->visualRect(index);
+
+    /* Expander tool-tip: */
+    if (m_pModelStorage->data(index, StorageModel::R_IsController).toBool())
     {
-        QRect expanderRect = mStorageModel->data (index, StorageModel::R_ItemPixmapRect).toRect();
-        expanderRect.translate (indexRect.x(), indexRect.y());
-        if (expanderRect.contains (aEvent->pos()))
+        QRect expanderRect = m_pModelStorage->data(index, StorageModel::R_ItemPixmapRect).toRect();
+        expanderRect.translate(indexRect.x(), indexRect.y());
+        if (expanderRect.contains(pEvent->pos()))
         {
-            aEvent->setAccepted (true);
-            if (mStorageModel->data (index, StorageModel::R_ToolTipType).value <StorageModel::ToolTipType>() != StorageModel::ExpanderToolTip)
-                mStorageModel->setData (index, QVariant::fromValue (StorageModel::ExpanderToolTip), StorageModel::R_ToolTipType);
+            pEvent->setAccepted(true);
+            if (m_pModelStorage->data(index, StorageModel::R_ToolTipType).value<StorageModel::ToolTipType>() != StorageModel::ExpanderToolTip)
+                m_pModelStorage->setData(index, QVariant::fromValue(StorageModel::ExpanderToolTip), StorageModel::R_ToolTipType);
             return;
         }
     }
 
-    /* Adder tool-tip */
-    if (mStorageModel->data (index, StorageModel::R_IsController).toBool() &&
-        mTwStorageTree->currentIndex() == index)
+    /* Adder tool-tip: */
+    if (m_pModelStorage->data(index, StorageModel::R_IsController).toBool() &&
+        m_pTreeViewStorage->currentIndex() == index)
     {
-        DeviceTypeList devicesList (mStorageModel->data (index, StorageModel::R_CtrDevices).value <DeviceTypeList>());
+        const DeviceTypeList devicesList(m_pModelStorage->data(index, StorageModel::R_CtrDevices).value<DeviceTypeList>());
         for (int i = 0; i < devicesList.size(); ++ i)
         {
-            KDeviceType deviceType = devicesList [i];
+            const KDeviceType enmDeviceType = devicesList[i];
 
             QRect deviceRect;
-            switch (deviceType)
+            switch (enmDeviceType)
             {
                 case KDeviceType_HardDisk:
                 {
-                    deviceRect = mStorageModel->data (index, StorageModel::R_HDPixmapRect).toRect();
+                    deviceRect = m_pModelStorage->data(index, StorageModel::R_HDPixmapRect).toRect();
                     break;
                 }
                 case KDeviceType_DVD:
                 {
-                    deviceRect = mStorageModel->data (index, StorageModel::R_CDPixmapRect).toRect();
+                    deviceRect = m_pModelStorage->data(index, StorageModel::R_CDPixmapRect).toRect();
                     break;
                 }
                 case KDeviceType_Floppy:
                 {
-                    deviceRect = mStorageModel->data (index, StorageModel::R_FDPixmapRect).toRect();
+                    deviceRect = m_pModelStorage->data(index, StorageModel::R_FDPixmapRect).toRect();
                     break;
                 }
                 default:
                     break;
             }
-            deviceRect.translate (indexRect.x() + indexRect.width(), indexRect.y());
+            deviceRect.translate(indexRect.x() + indexRect.width(), indexRect.y());
 
-            if (deviceRect.contains (aEvent->pos()))
+            if (deviceRect.contains(pEvent->pos()))
             {
-                aEvent->setAccepted (true);
-                switch (deviceType)
+                pEvent->setAccepted(true);
+                switch (enmDeviceType)
                 {
                     case KDeviceType_HardDisk:
                     {
-                        if (mStorageModel->data (index, StorageModel::R_ToolTipType).value <StorageModel::ToolTipType>() != StorageModel::HDAdderToolTip)
-                            mStorageModel->setData (index, QVariant::fromValue (StorageModel::HDAdderToolTip), StorageModel::R_ToolTipType);
+                        if (m_pModelStorage->data(index, StorageModel::R_ToolTipType).value<StorageModel::ToolTipType>() != StorageModel::HDAdderToolTip)
+                            m_pModelStorage->setData(index, QVariant::fromValue(StorageModel::HDAdderToolTip), StorageModel::R_ToolTipType);
                         break;
                     }
                     case KDeviceType_DVD:
                     {
-                        if (mStorageModel->data (index, StorageModel::R_ToolTipType).value <StorageModel::ToolTipType>() != StorageModel::CDAdderToolTip)
-                            mStorageModel->setData (index, QVariant::fromValue (StorageModel::CDAdderToolTip), StorageModel::R_ToolTipType);
+                        if (m_pModelStorage->data(index, StorageModel::R_ToolTipType).value<StorageModel::ToolTipType>() != StorageModel::CDAdderToolTip)
+                            m_pModelStorage->setData(index, QVariant::fromValue(StorageModel::CDAdderToolTip), StorageModel::R_ToolTipType);
                         break;
                     }
                     case KDeviceType_Floppy:
                     {
-                        if (mStorageModel->data (index, StorageModel::R_ToolTipType).value <StorageModel::ToolTipType>() != StorageModel::FDAdderToolTip)
-                            mStorageModel->setData (index, QVariant::fromValue (StorageModel::FDAdderToolTip), StorageModel::R_ToolTipType);
+                        if (m_pModelStorage->data(index, StorageModel::R_ToolTipType).value<StorageModel::ToolTipType>() != StorageModel::FDAdderToolTip)
+                            m_pModelStorage->setData(index, QVariant::fromValue(StorageModel::FDAdderToolTip), StorageModel::R_ToolTipType);
                         break;
                     }
                     default:
@@ -3300,229 +4301,1003 @@ void UIMachineSettingsStorage::onMouseMoved (QMouseEvent *aEvent)
         }
     }
 
-    /* Default tool-tip */
-    if (mStorageModel->data (index, StorageModel::R_ToolTipType).value <StorageModel::ToolTipType>() != StorageModel::DefaultToolTip)
-        mStorageModel->setData (index, StorageModel::DefaultToolTip, StorageModel::R_ToolTipType);
+    /* Default tool-tip: */
+    if (m_pModelStorage->data(index, StorageModel::R_ToolTipType).value<StorageModel::ToolTipType>() != StorageModel::DefaultToolTip)
+        m_pModelStorage->setData(index, StorageModel::DefaultToolTip, StorageModel::R_ToolTipType);
+
+    /* Check whether we should initiate dragging: */
+    if (   !m_mousePressPosition.isNull()
+        && QLineF(pEvent->screenPos(), m_mousePressPosition).length() >= QApplication::startDragDistance())
+    {
+        /* Forget last mouse press position: */
+        m_mousePressPosition = QPoint();
+
+        /* Check what item we are hovering currently: */
+        QModelIndex index = m_pTreeViewStorage->indexAt(pEvent->pos());
+        AbstractItem *pItem = static_cast<AbstractItem*>(index.internalPointer());
+        /* And make sure this is attachment item, we are supporting dragging for this kind only: */
+        AttachmentItem *pItemAttachment = qobject_cast<AttachmentItem*>(pItem);
+        if (pItemAttachment)
+        {
+            /* Initialize dragging: */
+            pEvent->setAccepted(true);
+            QDrag *pDrag = new QDrag(this);
+            if (pDrag)
+            {
+                /* Assign pixmap: */
+                pDrag->setPixmap(pItem->pixmap());
+                /* Prepare mime: */
+                QMimeData *pMimeData = new QMimeData;
+                if (pMimeData)
+                {
+                    pMimeData->setData(s_strControllerMimeType, pItemAttachment->parent()->id().toString().toLatin1());
+                    pMimeData->setData(s_strAttachmentMimeType, pItemAttachment->id().toString().toLatin1());
+                    pDrag->setMimeData(pMimeData);
+                }
+                /* Start dragging: */
+                pDrag->exec();
+            }
+        }
+    }
 }
 
-void UIMachineSettingsStorage::onMouseClicked (QMouseEvent *aEvent)
+void UIMachineSettingsStorage::sltHandleMouseClick(QMouseEvent *pEvent)
 {
-    QModelIndex index = mTwStorageTree->indexAt (aEvent->pos());
-    QRect indexRect = mTwStorageTree->visualRect (index);
+    /* Make sure event is valid: */
+    AssertPtrReturnVoid(pEvent);
 
-    /* Expander icon */
-    if (mStorageModel->data (index, StorageModel::R_IsController).toBool())
+    /* Remember last mouse press position: */
+    m_mousePressPosition = pEvent->globalPos();
+
+    const QModelIndex index = m_pTreeViewStorage->indexAt(pEvent->pos());
+    const QRect indexRect = m_pTreeViewStorage->visualRect(index);
+
+    /* Expander icon: */
+    if (m_pModelStorage->data(index, StorageModel::R_IsController).toBool())
     {
-        QRect expanderRect = mStorageModel->data (index, StorageModel::R_ItemPixmapRect).toRect();
-        expanderRect.translate (indexRect.x(), indexRect.y());
-        if (expanderRect.contains (aEvent->pos()))
+        QRect expanderRect = m_pModelStorage->data(index, StorageModel::R_ItemPixmapRect).toRect();
+        expanderRect.translate(indexRect.x(), indexRect.y());
+        if (expanderRect.contains(pEvent->pos()))
         {
-            aEvent->setAccepted (true);
-            mTwStorageTree->setExpanded (index, !mTwStorageTree->isExpanded (index));
+            pEvent->setAccepted(true);
+            m_pTreeViewStorage->setExpanded(index, !m_pTreeViewStorage->isExpanded(index));
             return;
         }
     }
 
-    /* Adder icons */
-    if (mStorageModel->data (index, StorageModel::R_IsController).toBool() &&
-        mTwStorageTree->currentIndex() == index)
+    /* Adder icons: */
+    if (m_pModelStorage->data(index, StorageModel::R_IsController).toBool() &&
+        m_pTreeViewStorage->currentIndex() == index)
     {
-        DeviceTypeList devicesList (mStorageModel->data (index, StorageModel::R_CtrDevices).value <DeviceTypeList>());
+        const DeviceTypeList devicesList(m_pModelStorage->data(index, StorageModel::R_CtrDevices).value<DeviceTypeList>());
         for (int i = 0; i < devicesList.size(); ++ i)
         {
-            KDeviceType deviceType = devicesList [i];
+            const KDeviceType enmDeviceType = devicesList[i];
 
             QRect deviceRect;
-            switch (deviceType)
+            switch (enmDeviceType)
             {
                 case KDeviceType_HardDisk:
                 {
-                    deviceRect = mStorageModel->data (index, StorageModel::R_HDPixmapRect).toRect();
+                    deviceRect = m_pModelStorage->data(index, StorageModel::R_HDPixmapRect).toRect();
                     break;
                 }
                 case KDeviceType_DVD:
                 {
-                    deviceRect = mStorageModel->data (index, StorageModel::R_CDPixmapRect).toRect();
+                    deviceRect = m_pModelStorage->data(index, StorageModel::R_CDPixmapRect).toRect();
                     break;
                 }
                 case KDeviceType_Floppy:
                 {
-                    deviceRect = mStorageModel->data (index, StorageModel::R_FDPixmapRect).toRect();
+                    deviceRect = m_pModelStorage->data(index, StorageModel::R_FDPixmapRect).toRect();
                     break;
                 }
                 default:
                     break;
             }
-            deviceRect.translate (indexRect.x() + indexRect.width(), indexRect.y());
+            deviceRect.translate(indexRect.x() + indexRect.width(), indexRect.y());
 
-            if (deviceRect.contains (aEvent->pos()))
+            if (deviceRect.contains(pEvent->pos()))
             {
-                aEvent->setAccepted (true);
-                if (mAddAttAction->isEnabled())
-                    addAttachmentWrapper (deviceType);
+                pEvent->setAccepted(true);
+                if (m_pActionAddAttachment->isEnabled())
+                    addAttachmentWrapper(enmDeviceType);
                 return;
             }
         }
     }
 }
 
-void UIMachineSettingsStorage::addControllerWrapper (const QString &aName, KStorageBus aBus, KStorageControllerType aType)
+void UIMachineSettingsStorage::sltHandleMouseRelease(QMouseEvent *)
+{
+    /* Forget last mouse press position: */
+    m_mousePressPosition = QPoint();
+}
+
+void UIMachineSettingsStorage::sltHandleDragEnter(QDragEnterEvent *pEvent)
+{
+    /* Make sure event is valid: */
+    AssertPtrReturnVoid(pEvent);
+
+    /* Accept event but not the proposed action: */
+    pEvent->accept();
+}
+
+void UIMachineSettingsStorage::sltHandleDragMove(QDragMoveEvent *pEvent)
+{
+    /* Make sure event is valid: */
+    AssertPtrReturnVoid(pEvent);
+    /* And mime-data is set: */
+    const QMimeData *pMimeData = pEvent->mimeData();
+    AssertPtrReturnVoid(pMimeData);
+
+    /* Make sure mime-data format is valid: */
+    if (   !pMimeData->hasFormat(UIMachineSettingsStorage::s_strControllerMimeType)
+        || !pMimeData->hasFormat(UIMachineSettingsStorage::s_strAttachmentMimeType))
+        return;
+
+    /* Get controller/attachment ids: */
+    const QString strControllerId = pMimeData->data(UIMachineSettingsStorage::s_strControllerMimeType);
+    const QString strAttachmentId = pMimeData->data(UIMachineSettingsStorage::s_strAttachmentMimeType);
+
+    /* Check what item we are hovering currently: */
+    QModelIndex index = m_pTreeViewStorage->indexAt(pEvent->pos());
+    AbstractItem *pItem = static_cast<AbstractItem*>(index.internalPointer());
+    /* And make sure this is controller item, we are supporting dropping for this kind only: */
+    ControllerItem *pItemController = qobject_cast<ControllerItem*>(pItem);
+    if (!pItemController || pItemController->id().toString() == strControllerId)
+        return;
+    /* Then make sure we support such attachment device type: */
+    const DeviceTypeList devicesList(m_pModelStorage->data(index, StorageModel::R_CtrDevices).value<DeviceTypeList>());
+    if (!devicesList.contains(m_pModelStorage->attachmentDeviceType(strControllerId, strAttachmentId)))
+        return;
+    /* Also make sure there is enough place for new attachment: */
+    const bool fIsMoreAttachmentsPossible = m_pModelStorage->data(index, StorageModel::R_IsMoreAttachmentsPossible).toBool();
+    if (!fIsMoreAttachmentsPossible)
+        return;
+
+    /* Accept drag-enter event: */
+    pEvent->acceptProposedAction();
+}
+
+void UIMachineSettingsStorage::sltHandleDragDrop(QDropEvent *pEvent)
+{
+    /* Make sure event is valid: */
+    AssertPtrReturnVoid(pEvent);
+    /* And mime-data is set: */
+    const QMimeData *pMimeData = pEvent->mimeData();
+    AssertPtrReturnVoid(pMimeData);
+
+    /* Check what item we are hovering currently: */
+    QModelIndex index = m_pTreeViewStorage->indexAt(pEvent->pos());
+    AbstractItem *pItem = static_cast<AbstractItem*>(index.internalPointer());
+    /* And make sure this is controller item, we are supporting dropping for this kind only: */
+    ControllerItem *pItemController = qobject_cast<ControllerItem*>(pItem);
+    if (pItemController)
+    {
+        /* Get controller/attachment ids: */
+        const QString strControllerId = pMimeData->data(UIMachineSettingsStorage::s_strControllerMimeType);
+        const QString strAttachmentId = pMimeData->data(UIMachineSettingsStorage::s_strAttachmentMimeType);
+        m_pModelStorage->moveAttachment(strAttachmentId, strControllerId, pItemController->id());
+    }
+}
+
+void UIMachineSettingsStorage::prepare()
+{
+    /* Prepare cache: */
+    m_pCache = new UISettingsCacheMachineStorage;
+    AssertPtrReturnVoid(m_pCache);
+
+    /* Create icon-pool: */
+    UIIconPoolStorageSettings::create();
+
+    /* Start full medium-enumeration (if necessary): */
+    if (!uiCommon().isFullMediumEnumerationRequested())
+        uiCommon().enumerateMedia();
+
+    /* Prepare everything: */
+    prepareWidgets();
+    prepareConnections();
+
+    /* Apply language settings: */
+    retranslateUi();
+
+    /* Initial setup (after first retranslateUi() call): */
+    setMinimumWidth(500);
+    m_pSplitter->setSizes(QList<int>() << (int)(0.45 * minimumWidth()) << (int)(0.55 * minimumWidth()));
+}
+
+void UIMachineSettingsStorage::prepareWidgets()
+{
+    /* Create main layout: */
+    QVBoxLayout *pLayoutMain = new QVBoxLayout(this);
+    if (pLayoutMain)
+    {
+        /* Create splitter: */
+        m_pSplitter = new QISplitter(this);
+        if (m_pSplitter)
+        {
+            m_pSplitter->setOrientation(Qt::Horizontal);
+            m_pSplitter->setHandleWidth(4);
+
+            /* Prepare panes: */
+            prepareLeftPane();
+            prepareRightPane();
+
+            pLayoutMain->addWidget(m_pSplitter);
+        }
+    }
+}
+
+void UIMachineSettingsStorage::prepareLeftPane()
+{
+    /* Prepare left pane: */
+    m_pWidgetLeftPane = new QWidget(m_pSplitter);
+    if (m_pWidgetLeftPane)
+    {
+        /* Prepare left pane layout: */
+        QVBoxLayout *pLayoutLeftPane = new QVBoxLayout(m_pWidgetLeftPane);
+        if (pLayoutLeftPane)
+        {
+            pLayoutLeftPane->setContentsMargins(0, 0, 10, 0);
+
+            /* Prepare left separator: */
+            m_pLabelSeparatorLeftPane = new QILabelSeparator(m_pWidgetLeftPane);
+            if (m_pLabelSeparatorLeftPane)
+                pLayoutLeftPane->addWidget(m_pLabelSeparatorLeftPane);
+
+            /* Prepare storage layout: */
+            m_pLayoutTree = new QVBoxLayout;
+            if (m_pLayoutTree)
+            {
+#ifdef VBOX_WS_MAC
+                m_pLayoutTree->setContentsMargins(3, 0, 3, 0);
+                m_pLayoutTree->setSpacing(3);
+#else
+                m_pLayoutTree->setContentsMargins(0, 0, 0, 0);
+                m_pLayoutTree->setSpacing(qApp->style()->pixelMetric(QStyle::PM_LayoutVerticalSpacing) / 3);
+#endif
+
+                /* Prepare tree-view: */
+                prepareTreeView();
+
+                /* Prepare toolbar layout: */
+                m_pLayoutToolbar = new QHBoxLayout;
+                if (m_pLayoutToolbar)
+                {
+                    m_pLayoutToolbar->addStretch();
+
+                    /* Prepare toolbar: */
+                    prepareToolBar();
+
+                    m_pLayoutTree->addLayout(m_pLayoutToolbar);
+                }
+
+                pLayoutLeftPane->addLayout(m_pLayoutTree);
+            }
+        }
+
+        m_pSplitter->addWidget(m_pWidgetLeftPane);
+    }
+}
+
+void UIMachineSettingsStorage::prepareTreeView()
+{
+    /* Prepare tree-view: */
+    m_pTreeViewStorage = new QITreeView(m_pWidgetLeftPane);
+    if (m_pTreeViewStorage)
+    {
+        if (m_pLabelSeparatorLeftPane)
+            m_pLabelSeparatorLeftPane->setBuddy(m_pTreeViewStorage);
+        m_pTreeViewStorage->setMouseTracking(true);
+        m_pTreeViewStorage->setAcceptDrops(true);
+        m_pTreeViewStorage->setContextMenuPolicy(Qt::CustomContextMenu);
+
+        /* Prepare storage model: */
+        m_pModelStorage = new StorageModel(m_pTreeViewStorage);
+        if (m_pModelStorage)
+        {
+            m_pTreeViewStorage->setModel(m_pModelStorage);
+            m_pTreeViewStorage->setRootIndex(m_pModelStorage->root());
+            m_pTreeViewStorage->setCurrentIndex(m_pModelStorage->root());
+        }
+
+        /* Prepare storage delegate: */
+        StorageDelegate *pStorageDelegate = new StorageDelegate(m_pTreeViewStorage);
+        if (pStorageDelegate)
+            m_pTreeViewStorage->setItemDelegate(pStorageDelegate);
+
+        m_pLayoutTree->addWidget(m_pTreeViewStorage);
+    }
+}
+
+void UIMachineSettingsStorage::prepareToolBar()
+{
+    /* Prepare toolbar: */
+    m_pToolbar = new QIToolBar(m_pWidgetLeftPane);
+    if (m_pToolbar)
+    {
+        /* Configure toolbar: */
+        const int iIconMetric = QApplication::style()->pixelMetric(QStyle::PM_SmallIconSize);
+        m_pToolbar->setIconSize(QSize(iIconMetric, iIconMetric));
+
+        /* Prepare 'Add Controller' action: */
+        m_pActionAddController = new QAction(this);
+        if (m_pActionAddController)
+        {
+            m_pActionAddController->setIcon(iconPool()->icon(ControllerAddEn, ControllerAddDis));
+            m_pToolbar->addAction(m_pActionAddController);
+        }
+
+        /* Prepare 'Add PIIX3 Controller' action: */
+        m_addControllerActions[KStorageControllerType_PIIX3] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_PIIX3))
+            m_addControllerActions.value(KStorageControllerType_PIIX3)->setIcon(iconPool()->icon(IDEControllerAddEn, IDEControllerAddDis));
+        /* Prepare 'Add PIIX4 Controller' action: */
+        m_addControllerActions[KStorageControllerType_PIIX4] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_PIIX4))
+            m_addControllerActions.value(KStorageControllerType_PIIX4)->setIcon(iconPool()->icon(IDEControllerAddEn, IDEControllerAddDis));
+        /* Prepare 'Add ICH6 Controller' action: */
+        m_addControllerActions[KStorageControllerType_ICH6] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_ICH6))
+            m_addControllerActions.value(KStorageControllerType_ICH6)->setIcon(iconPool()->icon(IDEControllerAddEn, IDEControllerAddDis));
+        /* Prepare 'Add AHCI Controller' action: */
+        m_addControllerActions[KStorageControllerType_IntelAhci] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_IntelAhci))
+            m_addControllerActions.value(KStorageControllerType_IntelAhci)->setIcon(iconPool()->icon(SATAControllerAddEn, SATAControllerAddDis));
+        /* Prepare 'Add LsiLogic Controller' action: */
+        m_addControllerActions[KStorageControllerType_LsiLogic] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_LsiLogic))
+            m_addControllerActions.value(KStorageControllerType_LsiLogic)->setIcon(iconPool()->icon(SCSIControllerAddEn, SCSIControllerAddDis));
+        /* Prepare 'Add BusLogic Controller' action: */
+        m_addControllerActions[KStorageControllerType_BusLogic] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_BusLogic))
+            m_addControllerActions.value(KStorageControllerType_BusLogic)->setIcon(iconPool()->icon(SCSIControllerAddEn, SCSIControllerAddDis));
+        /* Prepare 'Add Floppy Controller' action: */
+        m_addControllerActions[KStorageControllerType_I82078] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_I82078))
+            m_addControllerActions.value(KStorageControllerType_I82078)->setIcon(iconPool()->icon(FloppyControllerAddEn, FloppyControllerAddDis));
+        /* Prepare 'Add LsiLogic SAS Controller' action: */
+        m_addControllerActions[KStorageControllerType_LsiLogicSas] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_LsiLogicSas))
+            m_addControllerActions.value(KStorageControllerType_LsiLogicSas)->setIcon(iconPool()->icon(SASControllerAddEn, SASControllerAddDis));
+        /* Prepare 'Add USB Controller' action: */
+        m_addControllerActions[KStorageControllerType_USB] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_USB))
+            m_addControllerActions.value(KStorageControllerType_USB)->setIcon(iconPool()->icon(USBControllerAddEn, USBControllerAddDis));
+        /* Prepare 'Add NVMe Controller' action: */
+        m_addControllerActions[KStorageControllerType_NVMe] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_NVMe))
+            m_addControllerActions.value(KStorageControllerType_NVMe)->setIcon(iconPool()->icon(NVMeControllerAddEn, NVMeControllerAddDis));
+        /* Prepare 'Add virtio-scsi Controller' action: */
+        m_addControllerActions[KStorageControllerType_VirtioSCSI] = new QAction(this);
+        if (m_addControllerActions.value(KStorageControllerType_VirtioSCSI))
+            m_addControllerActions.value(KStorageControllerType_VirtioSCSI)->setIcon(iconPool()->icon(VirtioSCSIControllerAddEn, VirtioSCSIControllerAddDis));
+
+        /* Prepare 'Remove Controller' action: */
+        m_pActionRemoveController = new QAction(this);
+        if (m_pActionRemoveController)
+        {
+            m_pActionRemoveController->setIcon(iconPool()->icon(ControllerDelEn, ControllerDelDis));
+            m_pToolbar->addAction(m_pActionRemoveController);
+        }
+
+        /* Prepare 'Add Attachment' action: */
+        m_pActionAddAttachment = new QAction(this);
+        if (m_pActionAddAttachment)
+        {
+            m_pActionAddAttachment->setIcon(iconPool()->icon(AttachmentAddEn, AttachmentAddDis));
+            m_pToolbar->addAction(m_pActionAddAttachment);
+        }
+
+        /* Prepare 'Add HD Attachment' action: */
+        m_pActionAddAttachmentHD = new QAction(this);
+        if (m_pActionAddAttachmentHD)
+            m_pActionAddAttachmentHD->setIcon(iconPool()->icon(HDAttachmentAddEn, HDAttachmentAddDis));
+        /* Prepare 'Add CD Attachment' action: */
+        m_pActionAddAttachmentCD = new QAction(this);
+        if (m_pActionAddAttachmentCD)
+            m_pActionAddAttachmentCD->setIcon(iconPool()->icon(CDAttachmentAddEn, CDAttachmentAddDis));
+        /* Prepare 'Add FD Attachment' action: */
+        m_pActionAddAttachmentFD = new QAction(this);
+        if (m_pActionAddAttachmentFD)
+            m_pActionAddAttachmentFD->setIcon(iconPool()->icon(FDAttachmentAddEn, FDAttachmentAddDis));
+
+        /* Prepare 'Remove Attachment' action: */
+        m_pActionRemoveAttachment = new QAction(this);
+        if (m_pActionRemoveAttachment)
+        {
+            m_pActionRemoveAttachment->setIcon(iconPool()->icon(AttachmentDelEn, AttachmentDelDis));
+            m_pToolbar->addAction(m_pActionRemoveAttachment);
+        }
+
+        m_pLayoutToolbar->addWidget(m_pToolbar);
+    }
+}
+
+void UIMachineSettingsStorage::prepareRightPane()
+{
+    /* Prepare right pane: */
+    m_pStackRightPane = new QStackedWidget(m_pSplitter);
+    if (m_pStackRightPane)
+    {
+        /* Prepare stack contents: */
+        prepareEmptyWidget();
+        prepareControllerWidget();
+        prepareAttachmentWidget();
+
+        m_pSplitter->addWidget(m_pStackRightPane);
+    }
+}
+
+void UIMachineSettingsStorage::prepareEmptyWidget()
+{
+    /* Prepare widget for empty case: */
+    QWidget *pWidgetEmpty = new QWidget;
+    if (pWidgetEmpty)
+    {
+        /* Create widget layout for empty case: */
+        QGridLayout *pLayoutEmpty = new QGridLayout(pWidgetEmpty);
+        if (pLayoutEmpty)
+        {
+            pLayoutEmpty->setContentsMargins(10, 0, 0, 0);
+            pLayoutEmpty->setRowStretch(2, 1);
+
+            /* Prepare separator for empty case: */
+            m_pLabelSeparatorEmpty = new QILabelSeparator(pWidgetEmpty);
+            if (m_pLabelSeparatorEmpty)
+                pLayoutEmpty->addWidget(m_pLabelSeparatorEmpty, 0, 0, 1, 2);
+
+            /* Prepare label for empty case: */
+            m_pLabelInfo = new QLabel(pWidgetEmpty);
+            if (m_pLabelInfo)
+            {
+                m_pLabelInfo->setWordWrap(true);
+                pLayoutEmpty->addWidget(m_pLabelInfo, 1, 1);
+            }
+
+            pLayoutEmpty->setColumnMinimumWidth(0, 10);
+        }
+
+        m_pStackRightPane->addWidget(pWidgetEmpty);
+    }
+}
+
+void UIMachineSettingsStorage::prepareControllerWidget()
+{
+    /* Create widget for controller case: */
+    QWidget *pWidgetController = new QWidget;
+    if (pWidgetController)
+    {
+        /* Create widget layout for controller case: */
+        QGridLayout *m_pLayoutController = new QGridLayout(pWidgetController);
+        if (m_pLayoutController)
+        {
+            m_pLayoutController->setContentsMargins(10, 0, 0, 0);
+            m_pLayoutController->setRowStretch(5, 1);
+
+            /* Prepare separator for controller case: */
+            m_pLabelSeparatorParameters = new QILabelSeparator(pWidgetController);
+            if (m_pLabelSeparatorParameters)
+                m_pLayoutController->addWidget(m_pLabelSeparatorParameters, 0, 0, 1, 3);
+
+            /* Prepare name label: */
+            m_pLabelName = new QLabel(pWidgetController);
+            if (m_pLabelName)
+            {
+                m_pLabelName->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutController->addWidget(m_pLabelName, 1, 1);
+            }
+            /* Prepare name editor: */
+            m_pEditorName = new QLineEdit(pWidgetController);
+            if (m_pEditorName)
+            {
+                if (m_pLabelName)
+                    m_pLabelName->setBuddy(m_pEditorName);
+                m_pLayoutController->addWidget(m_pEditorName, 1, 2);
+            }
+
+            /* Prepare type label: */
+            m_pLabelType = new QLabel(pWidgetController);
+            if (m_pLabelType)
+            {
+                m_pLabelType->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutController->addWidget(m_pLabelType, 2, 1);
+            }
+            /* Prepare type combo: */
+            m_pComboType = new QComboBox(pWidgetController);
+            if (m_pComboType)
+            {
+                if (m_pLabelType)
+                    m_pLabelType->setBuddy(m_pComboType);
+                m_pComboType->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+                m_pLayoutController->addWidget(m_pComboType, 2, 2);
+            }
+
+            /* Prepare port count label: */
+            m_pLabelPortCount = new QLabel(pWidgetController);
+            if (m_pLabelPortCount)
+            {
+                m_pLabelPortCount->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutController->addWidget(m_pLabelPortCount, 3, 1);
+            }
+            /* Prepare port count spinbox: */
+            m_pSpinboxPortCount = new QSpinBox(pWidgetController);
+            if (m_pSpinboxPortCount)
+            {
+                if (m_pLabelPortCount)
+                    m_pLabelPortCount->setBuddy(m_pSpinboxPortCount);
+                m_pLayoutController->addWidget(m_pSpinboxPortCount, 3, 2);
+            }
+
+            /* Prepare port count check-box: */
+            m_pCheckBoxIoCache = new QCheckBox(pWidgetController);
+            if (m_pCheckBoxIoCache)
+                m_pLayoutController->addWidget(m_pCheckBoxIoCache, 4, 2);
+
+            m_pLayoutController->setColumnMinimumWidth(0, 10);
+        }
+
+        m_pStackRightPane->addWidget(pWidgetController);
+    }
+}
+
+void UIMachineSettingsStorage::prepareAttachmentWidget()
+{
+    /* Create widget for attachment case: */
+    QWidget *pWidgetAttachment = new QWidget;
+    if (pWidgetAttachment)
+    {
+        /* Create widget layout for attachment case: */
+        QGridLayout *m_pLayoutAttachment = new QGridLayout(pWidgetAttachment);
+        if (m_pLayoutAttachment)
+        {
+            m_pLayoutAttachment->setContentsMargins(10, 0, 0, 0);
+            m_pLayoutAttachment->setColumnStretch(2, 1);
+            m_pLayoutAttachment->setRowStretch(13, 1);
+
+            /* Prepare separator for attachment case: */
+            m_pLabelSeparatorAttributes = new QILabelSeparator(pWidgetAttachment);
+            if (m_pLabelSeparatorAttributes)
+                m_pLayoutAttachment->addWidget(m_pLabelSeparatorAttributes, 0, 0, 1, 3);
+
+            /* Prepare medium label: */
+            m_pLabelMedium = new QLabel(pWidgetAttachment);
+            if (m_pLabelMedium)
+            {
+                m_pLabelMedium->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelMedium, 1, 1);
+            }
+
+            /* Prepare slot layout: */
+            QHBoxLayout *pLayoutContainer = new QHBoxLayout;
+            if (pLayoutContainer)
+            {
+                pLayoutContainer->setContentsMargins(0, 0, 0, 0);
+                pLayoutContainer->setSpacing(1);
+
+                /* Prepare slot combo: */
+                m_pComboSlot = new QComboBox(pWidgetAttachment);
+                if (m_pComboSlot)
+                    pLayoutContainer->addWidget(m_pComboSlot);
+
+                /* Prepare slot combo: */
+                m_pToolButtonOpen = new QIToolButton(pWidgetAttachment);
+                if (m_pToolButtonOpen)
+                {
+                    if (m_pLabelMedium)
+                        m_pLabelMedium->setBuddy(m_pToolButtonOpen);
+
+                    /* Prepare open medium menu: */
+                    QMenu *pOpenMediumMenu = new QMenu(m_pToolButtonOpen);
+                    if (pOpenMediumMenu)
+                        m_pToolButtonOpen->setMenu(pOpenMediumMenu);
+
+                    pLayoutContainer->addWidget(m_pToolButtonOpen);
+                }
+
+                m_pLayoutAttachment->addLayout(pLayoutContainer, 1, 2);
+            }
+
+            /* Prepare attachment settings layout: */
+            QVBoxLayout *pLayoutAttachmentSettings = new QVBoxLayout;
+            if (pLayoutAttachmentSettings)
+            {
+                pLayoutAttachmentSettings->setContentsMargins(0, 0, 0, 0);
+                pLayoutAttachmentSettings->setSpacing(0);
+
+                /* Prepare attachment passthrough check-box: */
+                m_pCheckBoxPassthrough = new QCheckBox(pWidgetAttachment);
+                if (m_pCheckBoxPassthrough)
+                    pLayoutAttachmentSettings->addWidget(m_pCheckBoxPassthrough);
+
+                /* Prepare attachment temporary eject check-box: */
+                m_pCheckBoxTempEject = new QCheckBox(pWidgetAttachment);
+                if (m_pCheckBoxTempEject)
+                    pLayoutAttachmentSettings->addWidget(m_pCheckBoxTempEject);
+
+                /* Prepare attachment non rotational check-box: */
+                m_pCheckBoxNonRotational = new QCheckBox(pWidgetAttachment);
+                if (m_pCheckBoxNonRotational)
+                    pLayoutAttachmentSettings->addWidget(m_pCheckBoxNonRotational);
+
+                /* Prepare attachment hot pluggable check-box: */
+                m_pCheckBoxHotPluggable = new QCheckBox(pWidgetAttachment);
+                if (m_pCheckBoxHotPluggable)
+                    pLayoutAttachmentSettings->addWidget(m_pCheckBoxHotPluggable);
+
+                m_pLayoutAttachment->addLayout(pLayoutAttachmentSettings, 2, 2);
+            }
+
+            /* Prepare separator for attachment case: */
+            m_pLabelSeparatorInformation = new QILabelSeparator(pWidgetAttachment);
+            if (m_pLabelSeparatorInformation)
+                m_pLayoutAttachment->addWidget(m_pLabelSeparatorInformation, 3, 0, 1, 3);
+
+            /* Prepare HD format label: */
+            m_pLabelHDFormat = new QLabel(pWidgetAttachment);
+            if (m_pLabelHDFormat)
+            {
+                m_pLabelHDFormat->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelHDFormat, 4, 1);
+            }
+            /* Prepare HD format field: */
+            m_pFieldHDFormat = new QILabel(pWidgetAttachment);
+            if (m_pFieldHDFormat)
+            {
+                m_pFieldHDFormat->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldHDFormat, 4, 2);
+            }
+
+            /* Prepare CD/FD type label: */
+            m_pLabelCDFDType = new QLabel(pWidgetAttachment);
+            if (m_pLabelCDFDType)
+            {
+                m_pLabelCDFDType->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelCDFDType, 5, 1);
+            }
+            /* Prepare CD/FD type field: */
+            m_pFieldCDFDType = new QILabel(pWidgetAttachment);
+            if (m_pFieldCDFDType)
+            {
+                m_pFieldCDFDType->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldCDFDType, 5, 2);
+            }
+
+            /* Prepare HD virtual size label: */
+            m_pLabelHDVirtualSize = new QLabel(pWidgetAttachment);
+            if (m_pLabelHDVirtualSize)
+            {
+                m_pLabelHDVirtualSize->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelHDVirtualSize, 6, 1);
+            }
+            /* Prepare HD virtual size field: */
+            m_pFieldHDVirtualSize = new QILabel(pWidgetAttachment);
+            if (m_pFieldHDVirtualSize)
+            {
+                m_pFieldHDVirtualSize->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldHDVirtualSize, 6, 2);
+            }
+
+            /* Prepare HD actual size label: */
+            m_pLabelHDActualSize = new QLabel(pWidgetAttachment);
+            if (m_pLabelHDActualSize)
+            {
+                m_pLabelHDActualSize->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelHDActualSize, 7, 1);
+            }
+            /* Prepare HD actual size field: */
+            m_pFieldHDActualSize = new QILabel(pWidgetAttachment);
+            if (m_pFieldHDActualSize)
+            {
+                m_pFieldHDActualSize->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldHDActualSize, 7, 2);
+            }
+
+            /* Prepare CD/FD size label: */
+            m_pLabelCDFDSize = new QLabel(pWidgetAttachment);
+            if (m_pLabelCDFDSize)
+            {
+                m_pLabelCDFDSize->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelCDFDSize, 8, 1);
+            }
+            /* Prepare CD/FD size field: */
+            m_pFieldCDFDSize = new QILabel(pWidgetAttachment);
+            if (m_pFieldCDFDSize)
+            {
+                m_pFieldCDFDSize->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldCDFDSize, 8, 2);
+            }
+
+            /* Prepare HD details label: */
+            m_pLabelHDDetails = new QLabel(pWidgetAttachment);
+            if (m_pLabelHDDetails)
+            {
+                m_pLabelHDDetails->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelHDDetails, 9, 1);
+            }
+            /* Prepare HD details field: */
+            m_pFieldHDDetails = new QILabel(pWidgetAttachment);
+            if (m_pFieldHDDetails)
+            {
+                m_pFieldHDDetails->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldHDDetails, 9, 2);
+            }
+
+            /* Prepare location label: */
+            m_pLabelLocation = new QLabel(pWidgetAttachment);
+            if (m_pLabelLocation)
+            {
+                m_pLabelLocation->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelLocation, 10, 1);
+            }
+            /* Prepare location field: */
+            m_pFieldLocation = new QILabel(pWidgetAttachment);
+            if (m_pFieldLocation)
+            {
+                m_pFieldLocation->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldLocation, 10, 2);
+            }
+
+            /* Prepare usage label: */
+            m_pLabelUsage = new QLabel(pWidgetAttachment);
+            if (m_pLabelUsage)
+            {
+                m_pLabelUsage->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelUsage, 11, 1);
+            }
+            /* Prepare usage field: */
+            m_pFieldUsage = new QILabel(pWidgetAttachment);
+            if (m_pFieldUsage)
+            {
+                m_pFieldUsage->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldUsage, 11, 2);
+            }
+
+            /* Prepare encryption label: */
+            m_pLabelEncryption = new QLabel(pWidgetAttachment);
+            if (m_pLabelEncryption)
+            {
+                m_pLabelEncryption->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                m_pLayoutAttachment->addWidget(m_pLabelEncryption, 12, 1);
+            }
+            /* Prepare encryption field: */
+            m_pFieldEncryption = new QILabel(pWidgetAttachment);
+            if (m_pFieldEncryption)
+            {
+                m_pFieldEncryption->setFullSizeSelection(true);
+                m_pLayoutAttachment->addWidget(m_pFieldEncryption, 12, 2);
+            }
+
+            m_pLayoutAttachment->setColumnMinimumWidth(0, 10);
+        }
+
+        m_pStackRightPane->addWidget(pWidgetAttachment);
+    }
+}
+
+void UIMachineSettingsStorage::prepareConnections()
+{
+    /* Configure this: */
+    connect(&uiCommon(), &UICommon::sigMediumEnumerated,
+            this, &UIMachineSettingsStorage::sltHandleMediumEnumerated);
+    connect(&uiCommon(), &UICommon::sigMediumDeleted,
+            this, &UIMachineSettingsStorage::sltHandleMediumDeleted);
+
+    /* Configure tree-view: */
+    connect(m_pTreeViewStorage, &QITreeView::currentItemChanged,
+             this, &UIMachineSettingsStorage::sltHandleCurrentItemChange);
+    connect(m_pTreeViewStorage, &QITreeView::customContextMenuRequested,
+            this, &UIMachineSettingsStorage::sltHandleContextMenuRequest);
+    connect(m_pTreeViewStorage, &QITreeView::drawItemBranches,
+            this, &UIMachineSettingsStorage::sltHandleDrawItemBranches);
+    connect(m_pTreeViewStorage, &QITreeView::mouseMoved,
+            this, &UIMachineSettingsStorage::sltHandleMouseMove);
+    connect(m_pTreeViewStorage, &QITreeView::mousePressed,
+            this, &UIMachineSettingsStorage::sltHandleMouseClick);
+    connect(m_pTreeViewStorage, &QITreeView::mouseReleased,
+            this, &UIMachineSettingsStorage::sltHandleMouseRelease);
+    connect(m_pTreeViewStorage, &QITreeView::mouseDoubleClicked,
+            this, &UIMachineSettingsStorage::sltHandleMouseClick);
+    connect(m_pTreeViewStorage, &QITreeView::dragEntered,
+            this, &UIMachineSettingsStorage::sltHandleDragEnter);
+    connect(m_pTreeViewStorage, &QITreeView::dragMoved,
+            this, &UIMachineSettingsStorage::sltHandleDragMove);
+    connect(m_pTreeViewStorage, &QITreeView::dragDropped,
+            this, &UIMachineSettingsStorage::sltHandleDragDrop);
+
+    /* Create model: */
+    connect(m_pModelStorage, &StorageModel::rowsInserted,
+            this, &UIMachineSettingsStorage::sltHandleRowInsertion);
+    connect(m_pModelStorage, &StorageModel::rowsRemoved,
+            this, &UIMachineSettingsStorage::sltHandleRowRemoval);
+
+    /* Configure actions: */
+    connect(m_pActionAddController, &QAction::triggered, this, &UIMachineSettingsStorage::sltAddController);
+    connect(m_addControllerActions.value(KStorageControllerType_PIIX3), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerPIIX3);
+    connect(m_addControllerActions.value(KStorageControllerType_PIIX4), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerPIIX4);
+    connect(m_addControllerActions.value(KStorageControllerType_ICH6), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerICH6);
+    connect(m_addControllerActions.value(KStorageControllerType_IntelAhci), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerAHCI);
+    connect(m_addControllerActions.value(KStorageControllerType_LsiLogic), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerLsiLogic);
+    connect(m_addControllerActions.value(KStorageControllerType_BusLogic), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerBusLogic);
+    connect(m_addControllerActions.value(KStorageControllerType_I82078), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerFloppy);
+    connect(m_addControllerActions.value(KStorageControllerType_LsiLogicSas), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerLsiLogicSAS);
+    connect(m_addControllerActions.value(KStorageControllerType_USB), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerUSB);
+    connect(m_addControllerActions.value(KStorageControllerType_NVMe), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerNVMe);
+    connect(m_addControllerActions.value(KStorageControllerType_VirtioSCSI), &QAction::triggered, this, &UIMachineSettingsStorage::sltAddControllerVirtioSCSI);
+    connect(m_pActionRemoveController, &QAction::triggered, this, &UIMachineSettingsStorage::sltRemoveController);
+    connect(m_pActionAddAttachment, &QAction::triggered, this, &UIMachineSettingsStorage::sltAddAttachment);
+    connect(m_pActionAddAttachmentHD, &QAction::triggered, this, &UIMachineSettingsStorage::sltAddAttachmentHD);
+    connect(m_pActionAddAttachmentCD, &QAction::triggered, this, &UIMachineSettingsStorage::sltAddAttachmentCD);
+    connect(m_pActionAddAttachmentFD, &QAction::triggered, this, &UIMachineSettingsStorage::sltAddAttachmentFD);
+    connect(m_pActionRemoveAttachment, &QAction::triggered, this, &UIMachineSettingsStorage::sltRemoveAttachment);
+
+    /* Configure tool-button: */
+    connect(m_pToolButtonOpen, &QIToolButton::clicked, m_pToolButtonOpen, &QIToolButton::showMenu);
+    /* Configure menu: */
+    connect(m_pToolButtonOpen->menu(), &QMenu::aboutToShow, this, &UIMachineSettingsStorage::sltPrepareOpenMediumMenu);
+
+    /* Configure widgets: */
+    connect(m_pMediumIdHolder, &UIMediumIDHolder::sigChanged,
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pSpinboxPortCount, static_cast<void(QSpinBox::*)(int)>(&QSpinBox::valueChanged),
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pEditorName, &QLineEdit::textEdited,
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pComboType, static_cast<void(QComboBox::*)(int)>(&QComboBox::activated),
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pComboSlot, static_cast<void(QComboBox::*)(int)>(&QComboBox::activated),
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pCheckBoxIoCache, &QCheckBox::stateChanged,
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pCheckBoxPassthrough, &QCheckBox::stateChanged,
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pCheckBoxTempEject, &QCheckBox::stateChanged,
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pCheckBoxNonRotational, &QCheckBox::stateChanged,
+            this, &UIMachineSettingsStorage::sltSetInformation);
+    connect(m_pCheckBoxHotPluggable, &QCheckBox::stateChanged,
+            this, &UIMachineSettingsStorage::sltSetInformation);
+}
+
+void UIMachineSettingsStorage::cleanup()
+{
+    /* Destroy icon-pool: */
+    UIIconPoolStorageSettings::destroy();
+
+    /* Cleanup cache: */
+    delete m_pCache;
+    m_pCache = 0;
+}
+
+void UIMachineSettingsStorage::addControllerWrapper(const QString &strName, KStorageBus enmBus, KStorageControllerType enmType)
 {
 #ifdef RT_STRICT
-    QModelIndex index = mTwStorageTree->currentIndex();
-    switch (aBus)
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
+    switch (enmBus)
     {
         case KStorageBus_IDE:
-            Assert (mStorageModel->data (index, StorageModel::R_IsMoreIDEControllersPossible).toBool());
+            Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreIDEControllersPossible).toBool());
             break;
         case KStorageBus_SATA:
-            Assert (mStorageModel->data (index, StorageModel::R_IsMoreSATAControllersPossible).toBool());
+            Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreSATAControllersPossible).toBool());
             break;
         case KStorageBus_SCSI:
-            Assert (mStorageModel->data (index, StorageModel::R_IsMoreSCSIControllersPossible).toBool());
+            Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreSCSIControllersPossible).toBool());
             break;
         case KStorageBus_SAS:
-            Assert (mStorageModel->data (index, StorageModel::R_IsMoreSASControllersPossible).toBool());
+            Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreSASControllersPossible).toBool());
             break;
         case KStorageBus_Floppy:
-            Assert (mStorageModel->data (index, StorageModel::R_IsMoreFloppyControllersPossible).toBool());
+            Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreFloppyControllersPossible).toBool());
             break;
         case KStorageBus_USB:
-            Assert (mStorageModel->data (index, StorageModel::R_IsMoreUSBControllersPossible).toBool());
+            Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreUSBControllersPossible).toBool());
             break;
         case KStorageBus_PCIe:
-            Assert (mStorageModel->data (index, StorageModel::R_IsMoreNVMeControllersPossible).toBool());
+            Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreNVMeControllersPossible).toBool());
+            break;
+        case KStorageBus_VirtioSCSI:
+            Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreVirtioSCSIControllersPossible).toBool());
             break;
         default:
             break;
     }
 #endif
 
-    mStorageModel->addController (aName, aBus, aType);
-    emit storageChanged();
+    m_pModelStorage->addController(strName, enmBus, enmType);
+    emit sigStorageChanged();
 }
 
-void UIMachineSettingsStorage::addAttachmentWrapper(KDeviceType deviceType)
+void UIMachineSettingsStorage::addAttachmentWrapper(KDeviceType enmDeviceType)
 {
-    QModelIndex index = mTwStorageTree->currentIndex();
-    Assert(mStorageModel->data(index, StorageModel::R_IsController).toBool());
-    Assert(mStorageModel->data(index, StorageModel::R_IsMoreAttachmentsPossible).toBool());
-    QString strControllerName(mStorageModel->data(index, StorageModel::R_CtrName).toString());
-    QString strMachineFolder(QFileInfo(m_strMachineSettingsFilePath).absolutePath());
+    const QModelIndex index = m_pTreeViewStorage->currentIndex();
+    Assert(m_pModelStorage->data(index, StorageModel::R_IsController).toBool());
+    Assert(m_pModelStorage->data(index, StorageModel::R_IsMoreAttachmentsPossible).toBool());
+    // const QString strControllerName(m_pModelStorage->data(index, StorageModel::R_CtrName).toString());
+    const QString strMachineFolder(QFileInfo(m_strMachineSettingsFilePath).absolutePath());
 
-    QString strMediumId;
-    switch (deviceType)
+    QUuid uMediumId;
+    int iResult = uiCommon().openMediumSelectorDialog(this, UIMediumDefs::mediumTypeToLocal(enmDeviceType),
+                                                      QUuid() /* current medium Id */, uMediumId,
+                                                      strMachineFolder, m_strMachineName,
+                                                      m_strMachineGuestOSTypeId,
+                                                      true /* enable cr1eate action: */, m_uMachineId);
+
+    /* Continue only if iResult is either UIMediumSelector::ReturnCode_Accepted or UIMediumSelector::ReturnCode_LeftEmpty: */
+    /* If iResult is UIMediumSelector::ReturnCode_Accepted then we have to have a valid uMediumId: */
+    if (iResult == UIMediumSelector::ReturnCode_Rejected ||
+        (iResult == UIMediumSelector::ReturnCode_Accepted && uMediumId.isNull()))
+        return;
+
+    /* Only DVDs and floppy can be created empty: */
+    if (iResult == static_cast<int>(UIMediumSelector::ReturnCode_LeftEmpty) &&
+        (enmDeviceType != KDeviceType_DVD && enmDeviceType != KDeviceType_Floppy))
+        return;
+
+    m_pModelStorage->addAttachment(QUuid(m_pModelStorage->data(index, StorageModel::R_ItemId).toString()), enmDeviceType, uMediumId);
+    m_pModelStorage->sort();
+    emit sigStorageChanged();
+
+    /* Revalidate: */
+    revalidate();
+}
+
+void UIMachineSettingsStorage::updateAdditionalDetails(KDeviceType enmType)
+{
+    m_pLabelHDFormat->setVisible(enmType == KDeviceType_HardDisk);
+    m_pFieldHDFormat->setVisible(enmType == KDeviceType_HardDisk);
+
+    m_pLabelCDFDType->setVisible(enmType != KDeviceType_HardDisk);
+    m_pFieldCDFDType->setVisible(enmType != KDeviceType_HardDisk);
+
+    m_pLabelHDVirtualSize->setVisible(enmType == KDeviceType_HardDisk);
+    m_pFieldHDVirtualSize->setVisible(enmType == KDeviceType_HardDisk);
+
+    m_pLabelHDActualSize->setVisible(enmType == KDeviceType_HardDisk);
+    m_pFieldHDActualSize->setVisible(enmType == KDeviceType_HardDisk);
+
+    m_pLabelCDFDSize->setVisible(enmType != KDeviceType_HardDisk);
+    m_pFieldCDFDSize->setVisible(enmType != KDeviceType_HardDisk);
+
+    m_pLabelHDDetails->setVisible(enmType == KDeviceType_HardDisk);
+    m_pFieldHDDetails->setVisible(enmType == KDeviceType_HardDisk);
+
+    m_pLabelEncryption->setVisible(enmType == KDeviceType_HardDisk);
+    m_pFieldEncryption->setVisible(enmType == KDeviceType_HardDisk);
+}
+
+QString UIMachineSettingsStorage::generateUniqueControllerName(const QString &strTemplate) const
+{
+    int iMaxNumber = 0;
+    const QModelIndex rootIndex = m_pModelStorage->root();
+    for (int i = 0; i < m_pModelStorage->rowCount(rootIndex); ++i)
     {
-        case KDeviceType_HardDisk:
+        const QModelIndex controllerIndex = m_pModelStorage->index(i, 0, rootIndex);
+        const QString strName = m_pModelStorage->data(controllerIndex, StorageModel::R_CtrName).toString();
+        if (strName.startsWith(strTemplate))
         {
-            int iAnswer = msgCenter().confirmHardDiskAttachmentCreation(strControllerName, this);
-            if (iAnswer == AlertButton_Choice1)
-                strMediumId = getWithNewHDWizard();
-            else if (iAnswer == AlertButton_Choice2)
-                strMediumId = vboxGlobal().openMediumWithFileOpenDialog(UIMediumType_HardDisk, this, strMachineFolder);
-            break;
-        }
-        case KDeviceType_DVD:
-        {
-            int iAnswer = msgCenter().confirmOpticalAttachmentCreation(strControllerName, this);
-            if (iAnswer == AlertButton_Choice1)
-                strMediumId = vboxGlobal().medium(strMediumId).id();
-            else if (iAnswer == AlertButton_Choice2)
-                strMediumId = vboxGlobal().openMediumWithFileOpenDialog(UIMediumType_DVD, this, strMachineFolder);
-            break;
-        }
-        case KDeviceType_Floppy:
-        {
-            int iAnswer = msgCenter().confirmFloppyAttachmentCreation(strControllerName, this);
-            if (iAnswer == AlertButton_Choice1)
-                strMediumId = vboxGlobal().medium(strMediumId).id();
-            else if (iAnswer == AlertButton_Choice2)
-                strMediumId = vboxGlobal().openMediumWithFileOpenDialog(UIMediumType_Floppy, this, strMachineFolder);
-            break;
-        }
-        default: break; /* Shut up, MSC! */
-    }
-
-    if (!strMediumId.isEmpty())
-    {
-        mStorageModel->addAttachment(QUuid(mStorageModel->data(index, StorageModel::R_ItemId).toString()), deviceType, strMediumId);
-        mStorageModel->sort();
-        emit storageChanged();
-
-        /* Revalidate: */
-        revalidate();
-    }
-}
-
-QString UIMachineSettingsStorage::getWithNewHDWizard()
-{
-    /* Initialize variables: */
-    CGuestOSType guestOSType = vboxGlobal().virtualBox().GetGuestOSType(m_strMachineGuestOSTypeId);
-    QFileInfo fileInfo(m_strMachineSettingsFilePath);
-    /* Show New VD wizard: */
-    UISafePointerWizardNewVD pWizard = new UIWizardNewVD(this, QString(), fileInfo.absolutePath(), guestOSType.GetRecommendedHDD());
-    pWizard->prepare();
-    QString strResult = pWizard->exec() == QDialog::Accepted ? pWizard->virtualDisk().GetId() : QString();
-    if (pWizard)
-        delete pWizard;
-    return strResult;
-}
-
-void UIMachineSettingsStorage::updateAdditionalObjects (KDeviceType aType)
-{
-    mLbHDFormat->setVisible (aType == KDeviceType_HardDisk);
-    mLbHDFormatValue->setVisible (aType == KDeviceType_HardDisk);
-
-    mLbCDFDType->setVisible (aType != KDeviceType_HardDisk);
-    mLbCDFDTypeValue->setVisible (aType != KDeviceType_HardDisk);
-
-    mLbHDVirtualSize->setVisible (aType == KDeviceType_HardDisk);
-    mLbHDVirtualSizeValue->setVisible (aType == KDeviceType_HardDisk);
-
-    mLbHDActualSize->setVisible (aType == KDeviceType_HardDisk);
-    mLbHDActualSizeValue->setVisible (aType == KDeviceType_HardDisk);
-
-    mLbSize->setVisible (aType != KDeviceType_HardDisk);
-    mLbSizeValue->setVisible (aType != KDeviceType_HardDisk);
-
-    mLbHDDetails->setVisible (aType == KDeviceType_HardDisk);
-    mLbHDDetailsValue->setVisible (aType == KDeviceType_HardDisk);
-
-    m_pLabelEncryption->setVisible(aType == KDeviceType_HardDisk);
-    m_pLabelEncryptionValue->setVisible(aType == KDeviceType_HardDisk);
-}
-
-QString UIMachineSettingsStorage::generateUniqueName (const QString &aTemplate) const
-{
-    int maxNumber = 0;
-    QModelIndex rootIndex = mStorageModel->root();
-    for (int i = 0; i < mStorageModel->rowCount (rootIndex); ++ i)
-    {
-        QModelIndex ctrIndex = rootIndex.child (i, 0);
-        QString ctrName = mStorageModel->data (ctrIndex, StorageModel::R_CtrName).toString();
-        if (ctrName.startsWith (aTemplate))
-        {
-            QString stringNumber (ctrName.right (ctrName.size() - aTemplate.size()));
-            bool isConverted = false;
-            int number = stringNumber.toInt (&isConverted);
-            maxNumber = isConverted && (number > maxNumber) ? number : 1;
+            const QString strNumber(strName.right(strName.size() - strTemplate.size()));
+            bool fConverted = false;
+            const int iNumber = strNumber.toInt(&fConverted);
+            iMaxNumber = fConverted && (iNumber > iMaxNumber) ? iNumber : 1;
         }
     }
-    return maxNumber ? QString ("%1 %2").arg (aTemplate).arg (++ maxNumber) : aTemplate;
+    return iMaxNumber ? QString("%1 %2").arg(strTemplate).arg(++iMaxNumber) : strTemplate;
 }
 
-uint32_t UIMachineSettingsStorage::deviceCount (KDeviceType aType) const
+uint32_t UIMachineSettingsStorage::deviceCount(KDeviceType enmType) const
 {
     uint32_t cDevices = 0;
-    QModelIndex rootIndex = mStorageModel->root();
-    for (int i = 0; i < mStorageModel->rowCount (rootIndex); ++ i)
+    const QModelIndex rootIndex = m_pModelStorage->root();
+    for (int i = 0; i < m_pModelStorage->rowCount(rootIndex); ++i)
     {
-        QModelIndex ctrIndex = rootIndex.child (i, 0);
-        for (int j = 0; j < mStorageModel->rowCount (ctrIndex); ++ j)
+        const QModelIndex controllerIndex = m_pModelStorage->index(i, 0, rootIndex);
+        for (int j = 0; j < m_pModelStorage->rowCount(controllerIndex); ++j)
         {
-            QModelIndex attIndex = ctrIndex.child (j, 0);
-            KDeviceType attDevice = mStorageModel->data (attIndex, StorageModel::R_AttDevice).value <KDeviceType>();
-            if (attDevice == aType)
+            const QModelIndex attachmentIndex = m_pModelStorage->index(j, 0, controllerIndex);
+            const KDeviceType enmDeviceType = m_pModelStorage->data(attachmentIndex, StorageModel::R_AttDevice).value<KDeviceType>();
+            if (enmDeviceType == enmType)
                 ++cDevices;
         }
     }
@@ -3534,239 +5309,223 @@ void UIMachineSettingsStorage::addChooseExistingMediumAction(QMenu *pOpenMediumM
 {
     QAction *pChooseExistingMedium = pOpenMediumMenu->addAction(strActionName);
     pChooseExistingMedium->setIcon(iconPool()->icon(ChooseExistingEn, ChooseExistingDis));
-    connect(pChooseExistingMedium, SIGNAL(triggered(bool)), this, SLOT(sltChooseExistingMedium()));
+    connect(pChooseExistingMedium, &QAction::triggered, this, &UIMachineSettingsStorage::sltChooseExistingMedium);
+}
+
+void UIMachineSettingsStorage::addChooseDiskFileAction(QMenu *pOpenMediumMenu, const QString &strActionName)
+{
+    QAction *pChooseDiskFile = pOpenMediumMenu->addAction(strActionName);
+    pChooseDiskFile->setIcon(iconPool()->icon(ChooseExistingEn, ChooseExistingDis));
+    connect(pChooseDiskFile, &QAction::triggered, this, &UIMachineSettingsStorage::sltChooseDiskFile);
 }
 
 void UIMachineSettingsStorage::addChooseHostDriveActions(QMenu *pOpenMediumMenu)
 {
-    foreach (const QString &strMediumID, vboxGlobal().mediumIDs())
+    foreach (const QUuid &uMediumId, uiCommon().mediumIDs())
     {
-        const UIMedium medium = vboxGlobal().medium(strMediumID);
-        if (medium.isHostDrive() && m_pMediumIdHolder->type() == medium.type())
+        const UIMedium guiMedium = uiCommon().medium(uMediumId);
+        if (guiMedium.isHostDrive() && m_pMediumIdHolder->type() == guiMedium.type())
         {
-            QAction *pHostDriveAction = pOpenMediumMenu->addAction(medium.name());
-            pHostDriveAction->setData(medium.id());
-            connect(pHostDriveAction, SIGNAL(triggered(bool)), this, SLOT(sltChooseHostDrive()));
+            QAction *pHostDriveAction = pOpenMediumMenu->addAction(guiMedium.name());
+            pHostDriveAction->setData(guiMedium.id());
+            connect(pHostDriveAction, &QAction::triggered, this, &UIMachineSettingsStorage::sltChooseHostDrive);
         }
     }
 }
 
-void UIMachineSettingsStorage::addRecentMediumActions(QMenu *pOpenMediumMenu, UIMediumType recentMediumType)
+void UIMachineSettingsStorage::addRecentMediumActions(QMenu *pOpenMediumMenu, UIMediumDeviceType enmRecentMediumType)
 {
     /* Get recent-medium list: */
     QStringList recentMediumList;
-    switch (recentMediumType)
+    switch (enmRecentMediumType)
     {
-        case UIMediumType_HardDisk: recentMediumList = gEDataManager->recentListOfHardDrives(); break;
-        case UIMediumType_DVD:      recentMediumList = gEDataManager->recentListOfOpticalDisks(); break;
-        case UIMediumType_Floppy:   recentMediumList = gEDataManager->recentListOfFloppyDisks(); break;
+        case UIMediumDeviceType_HardDisk: recentMediumList = gEDataManager->recentListOfHardDrives(); break;
+        case UIMediumDeviceType_DVD:      recentMediumList = gEDataManager->recentListOfOpticalDisks(); break;
+        case UIMediumDeviceType_Floppy:   recentMediumList = gEDataManager->recentListOfFloppyDisks(); break;
         default: break;
     }
     /* For every list-item: */
-    for (int index = 0; index < recentMediumList.size(); ++index)
+    for (int iIndex = 0; iIndex < recentMediumList.size(); ++iIndex)
     {
         /* Prepare corresponding action: */
-        QString strRecentMediumLocation = recentMediumList[index];
+        const QString &strRecentMediumLocation = recentMediumList.at(iIndex);
         if (QFile::exists(strRecentMediumLocation))
         {
             QAction *pChooseRecentMediumAction = pOpenMediumMenu->addAction(QFileInfo(strRecentMediumLocation).fileName(),
                                                                             this, SLOT(sltChooseRecentMedium()));
-            pChooseRecentMediumAction->setData(QString("%1,%2").arg(recentMediumType).arg(strRecentMediumLocation));
+            pChooseRecentMediumAction->setData(QString("%1,%2").arg(enmRecentMediumType).arg(strRecentMediumLocation));
         }
     }
 }
 
-bool UIMachineSettingsStorage::updateStorageData()
+bool UIMachineSettingsStorage::saveStorageData()
 {
     /* Prepare result: */
-    bool fSuccess = m_machine.isOk();
-    if (fSuccess)
+    bool fSuccess = true;
+    /* Save storage settings from the cache: */
+    if (fSuccess && isMachineInValidMode() && m_pCache->wasChanged())
     {
-        /* Check if storage data was changed: */
-        if (m_cache.wasChanged())
+        /* For each controller ('removing' step): */
+        // We need to separately remove controllers first because
+        // there could be limited amount of controllers available.
+        for (int iControllerIndex = 0; fSuccess && iControllerIndex < m_pCache->childCount(); ++iControllerIndex)
         {
-            /* For each controller (removing step): */
-            for (int iControllerIndex = 0; fSuccess && iControllerIndex < m_cache.childCount(); ++iControllerIndex)
-            {
-                /* Get controller cache: */
-                const UICacheSettingsMachineStorageController &controllerCache = m_cache.child(iControllerIndex);
+            /* Get controller cache: */
+            const UISettingsCacheMachineStorageController &controllerCache = m_pCache->child(iControllerIndex);
 
-                /* Remove controllers marked for 'remove' and 'update' (if they can't be updated): */
-                if (controllerCache.wasRemoved() || (controllerCache.wasUpdated() && !isControllerCouldBeUpdated(controllerCache)))
-                    fSuccess = removeStorageController(controllerCache);
+            /* Remove controller marked for 'remove' or 'update' (if it can't be updated): */
+            if (controllerCache.wasRemoved() || (controllerCache.wasUpdated() && !isControllerCouldBeUpdated(controllerCache)))
+                fSuccess = removeStorageController(controllerCache);
+        }
 
-                else
+        /* For each controller ('updating' step): */
+        // We need to separately update controllers first because
+        // attachments should be removed/updated/created same separate way.
+        for (int iControllerIndex = 0; fSuccess && iControllerIndex < m_pCache->childCount(); ++iControllerIndex)
+        {
+            /* Get controller cache: */
+            const UISettingsCacheMachineStorageController &controllerCache = m_pCache->child(iControllerIndex);
 
-                /* Update controllers marked for 'update' (if they can be updated): */
-                if (controllerCache.wasUpdated() && isControllerCouldBeUpdated(controllerCache))
-                {
-                    /* For each attachment (removing step): */
-                    for (int iAttachmentIndex = 0; fSuccess && iAttachmentIndex < controllerCache.childCount(); ++iAttachmentIndex)
-                    {
-                        /* Get attachment cache: */
-                        const UICacheSettingsMachineStorageAttachment &attachmentCache = controllerCache.child(iAttachmentIndex);
+            /* Update controller marked for 'update' (if it can be updated): */
+            if (controllerCache.wasUpdated() && isControllerCouldBeUpdated(controllerCache))
+                fSuccess = updateStorageController(controllerCache, true);
+        }
+        for (int iControllerIndex = 0; fSuccess && iControllerIndex < m_pCache->childCount(); ++iControllerIndex)
+        {
+            /* Get controller cache: */
+            const UISettingsCacheMachineStorageController &controllerCache = m_pCache->child(iControllerIndex);
 
-                        /* Remove attachments marked for 'remove' and 'update' (if they can't be updated): */
-                        if (attachmentCache.wasRemoved() || (attachmentCache.wasUpdated() && !isAttachmentCouldBeUpdated(attachmentCache)))
-                            fSuccess = removeStorageAttachment(controllerCache, attachmentCache);
-                    }
-                }
-            }
+            /* Update controller marked for 'update' (if it can be updated): */
+            if (controllerCache.wasUpdated() && isControllerCouldBeUpdated(controllerCache))
+                fSuccess = updateStorageController(controllerCache, false);
+        }
 
-            /* For each controller (creating step): */
-            for (int iControllerIndex = 0; fSuccess && iControllerIndex < m_cache.childCount(); ++iControllerIndex)
-            {
-                /* Get controller cache: */
-                const UICacheSettingsMachineStorageController &controllerCache = m_cache.child(iControllerIndex);
+        /* For each controller ('creating' step): */
+        // Finally we are creating new controllers,
+        // with attachments which were released for sure.
+        for (int iControllerIndex = 0; fSuccess && iControllerIndex < m_pCache->childCount(); ++iControllerIndex)
+        {
+            /* Get controller cache: */
+            const UISettingsCacheMachineStorageController &controllerCache = m_pCache->child(iControllerIndex);
 
-                /* Create controllers marked for 'create' or 'update' (if they can't be updated): */
-                if (controllerCache.wasCreated() || (controllerCache.wasUpdated() && !isControllerCouldBeUpdated(controllerCache)))
-                    fSuccess = createStorageController(controllerCache);
-
-                else
-
-                /* Update controllers marked for 'update' (if they can be updated): */
-                if (controllerCache.wasUpdated() && isControllerCouldBeUpdated(controllerCache))
-                    fSuccess = updateStorageController(controllerCache);
-            }
+            /* Create controller marked for 'create' or 'update' (if it can't be updated): */
+            if (controllerCache.wasCreated() || (controllerCache.wasUpdated() && !isControllerCouldBeUpdated(controllerCache)))
+                fSuccess = createStorageController(controllerCache);
         }
     }
     /* Return result: */
     return fSuccess;
 }
 
-bool UIMachineSettingsStorage::removeStorageController(const UICacheSettingsMachineStorageController &controllerCache)
+bool UIMachineSettingsStorage::removeStorageController(const UISettingsCacheMachineStorageController &controllerCache)
 {
     /* Prepare result: */
-    bool fSuccess = m_machine.isOk();
-    if (fSuccess)
+    bool fSuccess = true;
+    /* Remove controller: */
+    if (fSuccess && isMachineOffline())
     {
-        /* Get storage controller data form cache: */
-        const UIDataSettingsMachineStorageController &controllerData = controllerCache.base();
+        /* Get old controller data from the cache: */
+        const UIDataSettingsMachineStorageController &oldControllerData = controllerCache.base();
 
-        /* Get storage controller name: */
-        QString strControllerName = controllerData.m_strControllerName;
+        /* Search for a controller with the same name: */
+        const CStorageController &comController = m_machine.GetStorageControllerByName(oldControllerData.m_strName);
+        fSuccess = m_machine.isOk() && comController.isNotNull();
 
-        /* Check that storage controller exists: */
-        const CStorageController &controller = m_machine.GetStorageControllerByName(strControllerName);
-        /* Check that machine is OK: */
-        fSuccess = m_machine.isOk();
-        /* If controller exists: */
-        if (fSuccess && !controller.isNull())
+        /* Make sure controller really exists: */
+        if (fSuccess)
         {
-            /*remove controller with all the attachments at one shot*/
-            m_machine.RemoveStorageController(strControllerName);
-            /* Check that machine is OK: */
+            /* Remove controller with all the attachments at one shot: */
+            m_machine.RemoveStorageController(oldControllerData.m_strName);
             fSuccess = m_machine.isOk();
         }
+
+        /* Show error message if necessary: */
+        if (!fSuccess)
+            notifyOperationProgressError(UIErrorString::formatErrorInfo(m_machine));
     }
     /* Return result: */
     return fSuccess;
 }
 
-bool UIMachineSettingsStorage::createStorageController(const UICacheSettingsMachineStorageController &controllerCache)
+bool UIMachineSettingsStorage::createStorageController(const UISettingsCacheMachineStorageController &controllerCache)
 {
     /* Prepare result: */
-    bool fSuccess = m_machine.isOk();
-    if (fSuccess)
+    bool fSuccess = true;
+    /* Create controller: */
+    if (fSuccess && isMachineOffline())
     {
-        /* Get controller data form cache: */
-        const UIDataSettingsMachineStorageController &controllerData = controllerCache.data();
+        /* Get new controller data from the cache: */
+        const UIDataSettingsMachineStorageController &newControllerData = controllerCache.data();
 
-        /* Get storage controller attributes: */
-        QString strControllerName = controllerData.m_strControllerName;
-        KStorageBus controllerBus = controllerData.m_controllerBus;
-        KStorageControllerType controllerType = controllerData.m_controllerType;
-        ULONG uPortCount = controllerData.m_uPortCount;
-        bool fUseHostIOCache = controllerData.m_fUseHostIOCache;
+        /* Search for a controller with the same name: */
+        const CMachine comMachine(m_machine);
+        CStorageController comController = comMachine.GetStorageControllerByName(newControllerData.m_strName);
+        fSuccess = !comMachine.isOk() && comController.isNull();
+        AssertReturn(fSuccess, false);
 
-        /* Check that storage controller doesn't exists: */
-        CStorageController controller = m_machine.GetStorageControllerByName(strControllerName);
-        /* Check that machine is not OK: */
-        fSuccess = !m_machine.isOk();
-        /* If controller doesn't exists: */
-        if (fSuccess && controller.isNull())
+        /* Make sure controller doesn't exist: */
+        if (fSuccess)
         {
-            /* Create new storage controller: */
-            controller = m_machine.AddStorageController(strControllerName, controllerBus);
-            /* Check that machine is OK: */
-            fSuccess = m_machine.isOk();
-            /* If controller exists: */
-            if (fSuccess && !controller.isNull())
-            {
-                /* Set storage controller attributes: */
-                controller.SetControllerType(controllerType);
-                controller.SetUseHostIOCache(fUseHostIOCache);
-                if (controllerBus == KStorageBus_SATA || controllerBus == KStorageBus_SAS || controllerBus == KStorageBus_PCIe)
-                {
-                    uPortCount = qMax(uPortCount, controller.GetMinPortCount());
-                    uPortCount = qMin(uPortCount, controller.GetMaxPortCount());
-                    controller.SetPortCount(uPortCount);
-                }
-                /* For each storage attachment: */
-                for (int iAttachmentIndex = 0; fSuccess && iAttachmentIndex < controllerCache.childCount(); ++iAttachmentIndex)
-                {
-                    /* Get storage attachment cache: */
-                    const UICacheSettingsMachineStorageAttachment &attachmentCache = controllerCache.child(iAttachmentIndex);
-
-                    /* Create attachment if it was not just 'removed': */
-                    if (!attachmentCache.wasRemoved())
-                        fSuccess = createStorageAttachment(controllerCache, attachmentCache);
-                }
-            }
+            /* Create controller: */
+            comController = m_machine.AddStorageController(newControllerData.m_strName, newControllerData.m_enmBus);
+            fSuccess = m_machine.isOk() && comController.isNotNull();
         }
-    }
-    /* Return result: */
-    return fSuccess;
-}
 
-bool UIMachineSettingsStorage::updateStorageController(const UICacheSettingsMachineStorageController &controllerCache)
-{
-    /* Prepare result: */
-    bool fSuccess = m_machine.isOk();
-    if (fSuccess)
-    {
-        /* Get controller data form cache: */
-        const UIDataSettingsMachineStorageController &controllerData = controllerCache.data();
-
-        /* Get storage controller attributes: */
-        QString strControllerName = controllerData.m_strControllerName;
-        KStorageBus controllerBus = controllerData.m_controllerBus;
-        KStorageControllerType controllerType = controllerData.m_controllerType;
-        ULONG uPortCount = controllerData.m_uPortCount;
-        bool fUseHostIOCache = controllerData.m_fUseHostIOCache;
-
-        /* Check that controller exists: */
-        CStorageController controller = m_machine.GetStorageControllerByName(strControllerName);
-        /* Check that machine is OK: */
-        fSuccess = m_machine.isOk();
-        /* If controller exists: */
-        if (fSuccess && !controller.isNull())
+        /* Show error message if necessary: */
+        if (!fSuccess)
+            notifyOperationProgressError(UIErrorString::formatErrorInfo(m_machine));
+        else
         {
-            /* Set storage controller attributes: */
-            controller.SetControllerType(controllerType);
-            controller.SetUseHostIOCache(fUseHostIOCache);
-            if (controllerBus == KStorageBus_SATA || controllerBus == KStorageBus_SAS)
+            /* Save controller type: */
+            if (fSuccess)
             {
-                uPortCount = qMax(uPortCount, controller.GetMinPortCount());
-                uPortCount = qMin(uPortCount, controller.GetMaxPortCount());
-                controller.SetPortCount(uPortCount);
+                comController.SetControllerType(newControllerData.m_enmType);
+                fSuccess = comController.isOk();
             }
-            /* For each storage attachment: */
+            /* Save whether controller uses host IO cache: */
+            if (fSuccess)
+            {
+                comController.SetUseHostIOCache(newControllerData.m_fUseHostIOCache);
+                fSuccess = comController.isOk();
+            }
+            /* Save controller port number: */
+            if (   fSuccess
+                && (   newControllerData.m_enmBus == KStorageBus_SATA
+                    || newControllerData.m_enmBus == KStorageBus_SAS
+                    || newControllerData.m_enmBus == KStorageBus_PCIe
+                    || newControllerData.m_enmBus == KStorageBus_VirtioSCSI))
+            {
+                ULONG uNewPortCount = newControllerData.m_uPortCount;
+                if (fSuccess)
+                {
+                    uNewPortCount = qMax(uNewPortCount, comController.GetMinPortCount());
+                    fSuccess = comController.isOk();
+                }
+                if (fSuccess)
+                {
+                    uNewPortCount = qMin(uNewPortCount, comController.GetMaxPortCount());
+                    fSuccess = comController.isOk();
+                }
+                if (fSuccess)
+                {
+                    comController.SetPortCount(uNewPortCount);
+                    fSuccess = comController.isOk();
+                }
+            }
+
+            /* Show error message if necessary: */
+            if (!fSuccess)
+                notifyOperationProgressError(UIErrorString::formatErrorInfo(comController));
+
+            /* For each attachment: */
             for (int iAttachmentIndex = 0; fSuccess && iAttachmentIndex < controllerCache.childCount(); ++iAttachmentIndex)
             {
-                /* Get storage attachment cache: */
-                const UICacheSettingsMachineStorageAttachment &attachmentCache = controllerCache.child(iAttachmentIndex);
+                /* Get attachment cache: */
+                const UISettingsCacheMachineStorageAttachment &attachmentCache = controllerCache.child(iAttachmentIndex);
 
-                /* Create attachments marked for 'create' and 'update' (if they can't be updated): */
-                if (attachmentCache.wasCreated() || (attachmentCache.wasUpdated() && !isAttachmentCouldBeUpdated(attachmentCache)))
+                /* Create attachment if it was not 'removed': */
+                if (!attachmentCache.wasRemoved())
                     fSuccess = createStorageAttachment(controllerCache, attachmentCache);
-
-                else
-
-                /* Update attachments marked for 'update' (if they can be updated): */
-                if (attachmentCache.wasUpdated() && isAttachmentCouldBeUpdated(attachmentCache))
-                    fSuccess = updateStorageAttachment(controllerCache, attachmentCache);
             }
         }
     }
@@ -3774,123 +5533,103 @@ bool UIMachineSettingsStorage::updateStorageController(const UICacheSettingsMach
     return fSuccess;
 }
 
-bool UIMachineSettingsStorage::removeStorageAttachment(const UICacheSettingsMachineStorageController &controllerCache,
-                                                       const UICacheSettingsMachineStorageAttachment &attachmentCache)
+bool UIMachineSettingsStorage::updateStorageController(const UISettingsCacheMachineStorageController &controllerCache,
+                                                       bool fRemovingStep)
 {
     /* Prepare result: */
-    bool fSuccess = m_machine.isOk();
+    bool fSuccess = true;
+    /* Update controller: */
     if (fSuccess)
     {
-        /* Get storage controller data from cache: */
-        const UIDataSettingsMachineStorageController &controllerData = controllerCache.base();
-        /* Get storage attachment data from cache: */
-        const UIDataSettingsMachineStorageAttachment &attachmentData = attachmentCache.base();
+        /* Get old controller data from the cache: */
+        const UIDataSettingsMachineStorageController &oldControllerData = controllerCache.base();
+        /* Get new controller data from the cache: */
+        const UIDataSettingsMachineStorageController &newControllerData = controllerCache.data();
 
-        /* Get storage controller attributes: */
-        QString strControllerName = controllerData.m_strControllerName;
-        /* Get storage attachment attributes: */
-        int iAttachmentPort = attachmentData.m_iAttachmentPort;
-        int iAttachmentDevice = attachmentData.m_iAttachmentDevice;
+        /* Search for a controller with the same name: */
+        CStorageController comController = m_machine.GetStorageControllerByName(oldControllerData.m_strName);
+        fSuccess = m_machine.isOk() && comController.isNotNull();
 
-        /* Check that storage attachment exists: */
-        const CMediumAttachment &attachment = m_machine.GetMediumAttachment(strControllerName, iAttachmentPort, iAttachmentDevice);
-        /* Check that machine is OK: */
-        fSuccess = m_machine.isOk();
-        /* If attachment exists: */
-        if (fSuccess && !attachment.isNull())
+        /* Show error message if necessary: */
+        if (!fSuccess)
+            notifyOperationProgressError(UIErrorString::formatErrorInfo(m_machine));
+        else
         {
-            /* Remove storage attachment: */
-            m_machine.DetachDevice(strControllerName, iAttachmentPort, iAttachmentDevice);
-            /* Check that machine is OK: */
-            fSuccess = m_machine.isOk();
-        }
-    }
-    /* Return result: */
-    return fSuccess;
-}
-
-bool UIMachineSettingsStorage::createStorageAttachment(const UICacheSettingsMachineStorageController &controllerCache,
-                                                       const UICacheSettingsMachineStorageAttachment &attachmentCache)
-{
-    /* Prepare result: */
-    bool fSuccess = m_machine.isOk();
-    if (fSuccess)
-    {
-        /* Get storage controller data from cache: */
-        const UIDataSettingsMachineStorageController &controllerData = controllerCache.data();
-        /* Get storage attachment data from cache: */
-        const UIDataSettingsMachineStorageAttachment &attachmentData = attachmentCache.data();
-
-        /* Get storage controller attributes: */
-        QString strControllerName = controllerData.m_strControllerName;
-        KStorageBus controllerBus = controllerData.m_controllerBus;
-        /* Get storage attachment attributes: */
-        int iAttachmentPort = attachmentData.m_iAttachmentPort;
-        int iAttachmentDevice = attachmentData.m_iAttachmentDevice;
-        KDeviceType attachmentDeviceType = attachmentData.m_attachmentType;
-        QString strAttachmentMediumId = attachmentData.m_strAttachmentMediumId;
-        bool fAttachmentPassthrough = attachmentData.m_fAttachmentPassthrough;
-        bool fAttachmentTempEject = attachmentData.m_fAttachmentTempEject;
-        bool fAttachmentNonRotational = attachmentData.m_fAttachmentNonRotational;
-        bool fAttachmentHotPluggable = attachmentData.m_fAttachmentHotPluggable;
-        /* Get GUI medium object: */
-        UIMedium vboxMedium = vboxGlobal().medium(strAttachmentMediumId);
-        /* Get COM medium object: */
-        CMedium comMedium = vboxMedium.medium();
-
-        /* Check that storage attachment doesn't exists: */
-        const CMediumAttachment &attachment = m_machine.GetMediumAttachment(strControllerName, iAttachmentPort, iAttachmentDevice);
-        /* Check that machine is not OK: */
-        fSuccess = !m_machine.isOk();
-        /* If attachment doesn't exists: */
-        if (fSuccess && attachment.isNull())
-        {
-            /* Create storage attachment: */
-            m_machine.AttachDevice(strControllerName, iAttachmentPort, iAttachmentDevice, attachmentDeviceType, comMedium);
-            /* Check that machine is OK: */
-            fSuccess = m_machine.isOk();
-            if (fSuccess)
+            /* Save controller type: */
+            if (fSuccess && newControllerData.m_enmType != oldControllerData.m_enmType)
             {
-                if (attachmentDeviceType == KDeviceType_DVD)
+                comController.SetControllerType(newControllerData.m_enmType);
+                fSuccess = comController.isOk();
+            }
+            /* Save whether controller uses IO cache: */
+            if (fSuccess && newControllerData.m_fUseHostIOCache != oldControllerData.m_fUseHostIOCache)
+            {
+                comController.SetUseHostIOCache(newControllerData.m_fUseHostIOCache);
+                fSuccess = comController.isOk();
+            }
+            /* Save controller port number: */
+            if (   fSuccess
+                && newControllerData.m_uPortCount != oldControllerData.m_uPortCount
+                && (   newControllerData.m_enmBus == KStorageBus_SATA
+                    || newControllerData.m_enmBus == KStorageBus_SAS
+                    || newControllerData.m_enmBus == KStorageBus_PCIe
+                    || newControllerData.m_enmBus == KStorageBus_VirtioSCSI))
+            {
+                ULONG uNewPortCount = newControllerData.m_uPortCount;
+                if (fSuccess)
                 {
-                    if (fSuccess && isMachineOffline())
-                    {
-                        m_machine.PassthroughDevice(strControllerName, iAttachmentPort, iAttachmentDevice, fAttachmentPassthrough);
-                        /* Check that machine is OK: */
-                        fSuccess = m_machine.isOk();
-                    }
-                    if (fSuccess && isMachineInValidMode())
-                    {
-                        m_machine.TemporaryEjectDevice(strControllerName, iAttachmentPort, iAttachmentDevice, fAttachmentTempEject);
-                        /* Check that machine is OK: */
-                        fSuccess = m_machine.isOk();
-                    }
+                    uNewPortCount = qMax(uNewPortCount, comController.GetMinPortCount());
+                    fSuccess = comController.isOk();
                 }
-                else if (attachmentDeviceType == KDeviceType_HardDisk)
+                if (fSuccess)
                 {
-                    if (fSuccess && isMachineOffline())
-                    {
-                        m_machine.NonRotationalDevice(strControllerName, iAttachmentPort, iAttachmentDevice, fAttachmentNonRotational);
-                        /* Check that machine is OK: */
-                        fSuccess = m_machine.isOk();
-                    }
+                    uNewPortCount = qMin(uNewPortCount, comController.GetMaxPortCount());
+                    fSuccess = comController.isOk();
                 }
-                if ((controllerBus == KStorageBus_SATA) || (controllerBus == KStorageBus_USB))
+                if (fSuccess)
                 {
-                    if (fSuccess && isMachineOffline())
-                    {
-                        m_machine.SetHotPluggableForDevice(strControllerName, iAttachmentPort, iAttachmentDevice, fAttachmentHotPluggable);
-                        /* Check that machine is OK: */
-                        fSuccess = m_machine.isOk();
-                    }
+                    comController.SetPortCount(uNewPortCount);
+                    fSuccess = comController.isOk();
+                }
+            }
+
+            /* Show error message if necessary: */
+            if (!fSuccess)
+                notifyOperationProgressError(UIErrorString::formatErrorInfo(comController));
+
+            // We need to separately remove attachments first because
+            // there could be limited amount of attachments or media available.
+            if (fRemovingStep)
+            {
+                /* For each attachment ('removing' step): */
+                for (int iAttachmentIndex = 0; fSuccess && iAttachmentIndex < controllerCache.childCount(); ++iAttachmentIndex)
+                {
+                    /* Get attachment cache: */
+                    const UISettingsCacheMachineStorageAttachment &attachmentCache = controllerCache.child(iAttachmentIndex);
+
+                    /* Remove attachment marked for 'remove' or 'update' (if it can't be updated): */
+                    if (attachmentCache.wasRemoved() || (attachmentCache.wasUpdated() && !isAttachmentCouldBeUpdated(attachmentCache)))
+                        fSuccess = removeStorageAttachment(controllerCache, attachmentCache);
                 }
             }
             else
             {
-                /* Show error message: */
-                msgCenter().cannotAttachDevice(m_machine, mediumTypeToLocal(attachmentDeviceType),
-                                               vboxMedium.location(),
-                                               StorageSlot(controllerBus, iAttachmentPort, iAttachmentDevice), this);
+                /* For each attachment ('creating' step): */
+                for (int iAttachmentIndex = 0; fSuccess && iAttachmentIndex < controllerCache.childCount(); ++iAttachmentIndex)
+                {
+                    /* Get attachment cache: */
+                    const UISettingsCacheMachineStorageAttachment &attachmentCache = controllerCache.child(iAttachmentIndex);
+
+                    /* Create attachment marked for 'create' or 'update' (if it can't be updated): */
+                    if (attachmentCache.wasCreated() || (attachmentCache.wasUpdated() && !isAttachmentCouldBeUpdated(attachmentCache)))
+                        fSuccess = createStorageAttachment(controllerCache, attachmentCache);
+
+                    else
+
+                    /* Update attachment marked for 'update' (if it can be updated): */
+                    if (attachmentCache.wasUpdated() && isAttachmentCouldBeUpdated(attachmentCache))
+                        fSuccess = updateStorageAttachment(controllerCache, attachmentCache);
+                }
             }
         }
     }
@@ -3898,188 +5637,251 @@ bool UIMachineSettingsStorage::createStorageAttachment(const UICacheSettingsMach
     return fSuccess;
 }
 
-bool UIMachineSettingsStorage::updateStorageAttachment(const UICacheSettingsMachineStorageController &controllerCache,
-                                                       const UICacheSettingsMachineStorageAttachment &attachmentCache)
+bool UIMachineSettingsStorage::removeStorageAttachment(const UISettingsCacheMachineStorageController &controllerCache,
+                                                       const UISettingsCacheMachineStorageAttachment &attachmentCache)
 {
     /* Prepare result: */
-    bool fSuccess = m_machine.isOk();
+    bool fSuccess = true;
+    /* Remove attachment: */
     if (fSuccess)
     {
-        /* Get storage controller data from cache: */
-        const UIDataSettingsMachineStorageController &controllerData = controllerCache.data();
-        /* Get current storage attachment data from cache: */
-        const UIDataSettingsMachineStorageAttachment &attachmentData = attachmentCache.data();
+        /* Get old controller data from the cache: */
+        const UIDataSettingsMachineStorageController &oldControllerData = controllerCache.base();
+        /* Get old attachment data from the cache: */
+        const UIDataSettingsMachineStorageAttachment &oldAttachmentData = attachmentCache.base();
 
-        /* Get storage controller attributes: */
-        QString strControllerName = controllerData.m_strControllerName;
-        KStorageBus controllerBus = controllerData.m_controllerBus;
-        /* Get storage attachment attributes: */
-        int iAttachmentPort = attachmentData.m_iAttachmentPort;
-        int iAttachmentDevice = attachmentData.m_iAttachmentDevice;
-        QString strAttachmentMediumId = attachmentData.m_strAttachmentMediumId;
-        bool fAttachmentPassthrough = attachmentData.m_fAttachmentPassthrough;
-        bool fAttachmentTempEject = attachmentData.m_fAttachmentTempEject;
-        bool fAttachmentNonRotational = attachmentData.m_fAttachmentNonRotational;
-        bool fAttachmentHotPluggable = attachmentData.m_fAttachmentHotPluggable;
-        KDeviceType attachmentDeviceType = attachmentData.m_attachmentType;
+        /* Search for an attachment with the same parameters: */
+        const CMediumAttachment &comAttachment = m_machine.GetMediumAttachment(oldControllerData.m_strName,
+                                                                               oldAttachmentData.m_iPort,
+                                                                               oldAttachmentData.m_iDevice);
+        fSuccess = m_machine.isOk() && comAttachment.isNotNull();
 
-        /* Check that storage attachment exists: */
-        CMediumAttachment attachment = m_machine.GetMediumAttachment(strControllerName, iAttachmentPort, iAttachmentDevice);
-        /* Check that machine is OK: */
-        fSuccess = m_machine.isOk();
-        /* If attachment exists: */
-        if (fSuccess && !attachment.isNull())
+        /* Make sure attachment really exists: */
+        if (fSuccess)
         {
-            /* Get GUI medium object: */
-            UIMedium vboxMedium = vboxGlobal().medium(strAttachmentMediumId);
-            /* Get COM medium object: */
-            CMedium comMedium = vboxMedium.medium();
-            /* Remount storage attachment: */
-            m_machine.MountMedium(strControllerName, iAttachmentPort, iAttachmentDevice, comMedium, true /* force? */);
-            /* Check that machine is OK: */
+            /* Remove attachment: */
+            m_machine.DetachDevice(oldControllerData.m_strName,
+                                   oldAttachmentData.m_iPort,
+                                   oldAttachmentData.m_iDevice);
             fSuccess = m_machine.isOk();
-            if (fSuccess)
-            {
-                if (attachmentDeviceType == KDeviceType_DVD)
-                {
-                    if (fSuccess && isMachineOffline())
-                    {
-                        m_machine.PassthroughDevice(strControllerName, iAttachmentPort, iAttachmentDevice, fAttachmentPassthrough);
-                        /* Check that machine is OK: */
-                        fSuccess = m_machine.isOk();
-                    }
-                    if (fSuccess && isMachineInValidMode())
-                    {
-                        m_machine.TemporaryEjectDevice(strControllerName, iAttachmentPort, iAttachmentDevice, fAttachmentTempEject);
-                        /* Check that machine is OK: */
-                        fSuccess = m_machine.isOk();
-                    }
-                }
-                else if (attachmentDeviceType == KDeviceType_HardDisk)
-                {
-                    if (fSuccess && isMachineOffline())
-                    {
-                        m_machine.NonRotationalDevice(strControllerName, iAttachmentPort, iAttachmentDevice, fAttachmentNonRotational);
-                        /* Check that machine is OK: */
-                        fSuccess = m_machine.isOk();
-                    }
-                }
-                if ((controllerBus == KStorageBus_SATA) || (controllerBus == KStorageBus_USB))
-                {
-                    if (fSuccess && isMachineOffline())
-                    {
-                        m_machine.SetHotPluggableForDevice(strControllerName, iAttachmentPort, iAttachmentDevice, fAttachmentHotPluggable);
-                        /* Check that machine is OK: */
-                        fSuccess = m_machine.isOk();
-                    }
-                }
-            }
-            else
-            {
-                /* Show error message: */
-                msgCenter().cannotAttachDevice(m_machine, mediumTypeToLocal(attachmentDeviceType),
-                                               vboxMedium.location(),
-                                               StorageSlot(controllerBus, iAttachmentPort, iAttachmentDevice), this);
-            }
         }
+
+        /* Show error message if necessary: */
+        if (!fSuccess)
+            notifyOperationProgressError(UIErrorString::formatErrorInfo(m_machine));
     }
     /* Return result: */
     return fSuccess;
 }
 
-bool UIMachineSettingsStorage::isControllerCouldBeUpdated(const UICacheSettingsMachineStorageController &controllerCache) const
+bool UIMachineSettingsStorage::createStorageAttachment(const UISettingsCacheMachineStorageController &controllerCache,
+                                                       const UISettingsCacheMachineStorageAttachment &attachmentCache)
 {
-    /* IController interface doesn't allows to change 'name' and 'bus' attributes.
-     * But those attributes could be changed in GUI directly or indirectly.
+    /* Prepare result: */
+    bool fSuccess = true;
+    /* Create attachment: */
+    if (fSuccess)
+    {
+        /* Get new controller data from the cache: */
+        const UIDataSettingsMachineStorageController &newControllerData = controllerCache.data();
+        /* Get new attachment data from the cache: */
+        const UIDataSettingsMachineStorageAttachment &newAttachmentData = attachmentCache.data();
+
+        /* Search for an attachment with the same parameters: */
+        const CMachine comMachine(m_machine);
+        const CMediumAttachment &comAttachment = comMachine.GetMediumAttachment(newControllerData.m_strName,
+                                                                                newAttachmentData.m_iPort,
+                                                                                newAttachmentData.m_iDevice);
+        fSuccess = !comMachine.isOk() && comAttachment.isNull();
+        AssertReturn(fSuccess, false);
+
+        /* Make sure attachment doesn't exist: */
+        if (fSuccess)
+        {
+            /* Create attachment: */
+            const UIMedium vboxMedium = uiCommon().medium(newAttachmentData.m_uMediumId);
+            const CMedium comMedium = vboxMedium.medium();
+            m_machine.AttachDevice(newControllerData.m_strName,
+                                   newAttachmentData.m_iPort,
+                                   newAttachmentData.m_iDevice,
+                                   newAttachmentData.m_enmDeviceType,
+                                   comMedium);
+            fSuccess = m_machine.isOk();
+        }
+
+        if (newAttachmentData.m_enmDeviceType == KDeviceType_DVD)
+        {
+            /* Save whether this is a passthrough device: */
+            if (fSuccess && isMachineOffline())
+            {
+                m_machine.PassthroughDevice(newControllerData.m_strName,
+                                            newAttachmentData.m_iPort,
+                                            newAttachmentData.m_iDevice,
+                                            newAttachmentData.m_fPassthrough);
+                fSuccess = m_machine.isOk();
+            }
+            /* Save whether this is a live cd device: */
+            if (fSuccess)
+            {
+                m_machine.TemporaryEjectDevice(newControllerData.m_strName,
+                                               newAttachmentData.m_iPort,
+                                               newAttachmentData.m_iDevice,
+                                               newAttachmentData.m_fTempEject);
+                fSuccess = m_machine.isOk();
+            }
+        }
+        else if (newAttachmentData.m_enmDeviceType == KDeviceType_HardDisk)
+        {
+            /* Save whether this is a ssd device: */
+            if (fSuccess && isMachineOffline())
+            {
+                m_machine.NonRotationalDevice(newControllerData.m_strName,
+                                              newAttachmentData.m_iPort,
+                                              newAttachmentData.m_iDevice,
+                                              newAttachmentData.m_fNonRotational);
+                fSuccess = m_machine.isOk();
+            }
+        }
+
+        if (newControllerData.m_enmBus == KStorageBus_SATA || newControllerData.m_enmBus == KStorageBus_USB)
+        {
+            /* Save whether this device is hot-pluggable: */
+            if (fSuccess && isMachineOffline())
+            {
+                m_machine.SetHotPluggableForDevice(newControllerData.m_strName,
+                                                   newAttachmentData.m_iPort,
+                                                   newAttachmentData.m_iDevice,
+                                                   newAttachmentData.m_fHotPluggable);
+                fSuccess = m_machine.isOk();
+            }
+        }
+
+        /* Show error message if necessary: */
+        if (!fSuccess)
+            notifyOperationProgressError(UIErrorString::formatErrorInfo(m_machine));
+    }
+    /* Return result: */
+    return fSuccess;
+}
+
+bool UIMachineSettingsStorage::updateStorageAttachment(const UISettingsCacheMachineStorageController &controllerCache,
+                                                       const UISettingsCacheMachineStorageAttachment &attachmentCache)
+{
+    /* Prepare result: */
+    bool fSuccess = true;
+    /* Update attachment: */
+    if (fSuccess)
+    {
+        /* Get new controller data from the cache: */
+        const UIDataSettingsMachineStorageController &newControllerData = controllerCache.data();
+        /* Get new attachment data from the cache: */
+        const UIDataSettingsMachineStorageAttachment &newAttachmentData = attachmentCache.data();
+
+        /* Search for an attachment with the same parameters: */
+        const CMediumAttachment &comAttachment = m_machine.GetMediumAttachment(newControllerData.m_strName,
+                                                                               newAttachmentData.m_iPort,
+                                                                               newAttachmentData.m_iDevice);
+        fSuccess = m_machine.isOk() && comAttachment.isNotNull();
+
+        /* Make sure attachment doesn't exist: */
+        if (fSuccess)
+        {
+            /* Remount attachment: */
+            const UIMedium vboxMedium = uiCommon().medium(newAttachmentData.m_uMediumId);
+            const CMedium comMedium = vboxMedium.medium();
+            m_machine.MountMedium(newControllerData.m_strName,
+                                  newAttachmentData.m_iPort,
+                                  newAttachmentData.m_iDevice,
+                                  comMedium,
+                                  true /* force? */);
+            fSuccess = m_machine.isOk();
+        }
+
+        if (newAttachmentData.m_enmDeviceType == KDeviceType_DVD)
+        {
+            /* Save whether this is a passthrough device: */
+            if (fSuccess && isMachineOffline())
+            {
+                m_machine.PassthroughDevice(newControllerData.m_strName,
+                                            newAttachmentData.m_iPort,
+                                            newAttachmentData.m_iDevice,
+                                            newAttachmentData.m_fPassthrough);
+                fSuccess = m_machine.isOk();
+            }
+            /* Save whether this is a live cd device: */
+            if (fSuccess)
+            {
+                m_machine.TemporaryEjectDevice(newControllerData.m_strName,
+                                               newAttachmentData.m_iPort,
+                                               newAttachmentData.m_iDevice,
+                                               newAttachmentData.m_fTempEject);
+                fSuccess = m_machine.isOk();
+            }
+        }
+        else if (newAttachmentData.m_enmDeviceType == KDeviceType_HardDisk)
+        {
+            /* Save whether this is a ssd device: */
+            if (fSuccess && isMachineOffline())
+            {
+                m_machine.NonRotationalDevice(newControllerData.m_strName,
+                                              newAttachmentData.m_iPort,
+                                              newAttachmentData.m_iDevice,
+                                              newAttachmentData.m_fNonRotational);
+                fSuccess = m_machine.isOk();
+            }
+        }
+
+        if (newControllerData.m_enmBus == KStorageBus_SATA || newControllerData.m_enmBus == KStorageBus_USB)
+        {
+            /* Save whether this device is hot-pluggable: */
+            if (fSuccess && isMachineOffline())
+            {
+                m_machine.SetHotPluggableForDevice(newControllerData.m_strName,
+                                                   newAttachmentData.m_iPort,
+                                                   newAttachmentData.m_iDevice,
+                                                   newAttachmentData.m_fHotPluggable);
+                fSuccess = m_machine.isOk();
+            }
+        }
+
+        /* Show error message if necessary: */
+        if (!fSuccess)
+            notifyOperationProgressError(UIErrorString::formatErrorInfo(m_machine));
+    }
+    /* Return result: */
+    return fSuccess;
+}
+
+bool UIMachineSettingsStorage::isControllerCouldBeUpdated(const UISettingsCacheMachineStorageController &controllerCache) const
+{
+    /* IController interface doesn't allow to change 'bus' attribute but allows
+     * to change 'name' attribute which can conflict with another one controller.
+     * Both those attributes could be changed in GUI directly or indirectly.
      * For such cases we have to recreate IController instance,
      * for other cases we will update controller attributes only. */
     const UIDataSettingsMachineStorageController &oldControllerData = controllerCache.base();
     const UIDataSettingsMachineStorageController &newControllerData = controllerCache.data();
-    return newControllerData.m_controllerBus == oldControllerData.m_controllerBus &&
-           newControllerData.m_strControllerName == oldControllerData.m_strControllerName;
+    return true
+           && (newControllerData.m_strName == oldControllerData.m_strName)
+           && (newControllerData.m_enmBus == oldControllerData.m_enmBus)
+           ;
 }
 
-bool UIMachineSettingsStorage::isAttachmentCouldBeUpdated(const UICacheSettingsMachineStorageAttachment &attachmentCache) const
+bool UIMachineSettingsStorage::isAttachmentCouldBeUpdated(const UISettingsCacheMachineStorageAttachment &attachmentCache) const
 {
     /* IMediumAttachment could be indirectly updated through IMachine
      * only if attachment type, device and port were NOT changed and is one of the next types:
      * KDeviceType_Floppy or KDeviceType_DVD.
      * For other cases we will recreate attachment fully: */
-    const UIDataSettingsMachineStorageAttachment &initialAttachmentData = attachmentCache.base();
-    const UIDataSettingsMachineStorageAttachment &currentAttachmentData = attachmentCache.data();
-    KDeviceType initialAttachmentDeviceType = initialAttachmentData.m_attachmentType;
-    KDeviceType currentAttachmentDeviceType = currentAttachmentData.m_attachmentType;
-    LONG iInitialAttachmentDevice = initialAttachmentData.m_iAttachmentDevice;
-    LONG iCurrentAttachmentDevice = currentAttachmentData.m_iAttachmentDevice;
-    LONG iInitialAttachmentPort = initialAttachmentData.m_iAttachmentPort;
-    LONG iCurrentAttachmentPort = currentAttachmentData.m_iAttachmentPort;
-    return (currentAttachmentDeviceType == initialAttachmentDeviceType) &&
-           (iCurrentAttachmentDevice == iInitialAttachmentDevice) &&
-           (iCurrentAttachmentPort == iInitialAttachmentPort) &&
-           (currentAttachmentDeviceType == KDeviceType_Floppy || currentAttachmentDeviceType == KDeviceType_DVD);
+    const UIDataSettingsMachineStorageAttachment &oldAttachmentData = attachmentCache.base();
+    const UIDataSettingsMachineStorageAttachment &newAttachmentData = attachmentCache.data();
+    return true
+           && (newAttachmentData.m_enmDeviceType == oldAttachmentData.m_enmDeviceType)
+           && (newAttachmentData.m_iPort == oldAttachmentData.m_iPort)
+           && (newAttachmentData.m_iDevice == oldAttachmentData.m_iDevice)
+           && (newAttachmentData.m_enmDeviceType == KDeviceType_Floppy || newAttachmentData.m_enmDeviceType == KDeviceType_DVD)
+           ;
 }
 
-void UIMachineSettingsStorage::setConfigurationAccessLevel(ConfigurationAccessLevel newConfigurationAccessLevel)
-{
-    /* Update model 'configuration access level': */
-    mStorageModel->setConfigurationAccessLevel(newConfigurationAccessLevel);
-    /* Update 'configuration access level' of base class: */
-    UISettingsPageMachine::setConfigurationAccessLevel(newConfigurationAccessLevel);
-}
-
-void UIMachineSettingsStorage::polishPage()
-{
-    /* Declare required variables: */
-    QModelIndex index = mTwStorageTree->currentIndex();
-    KDeviceType device = mStorageModel->data(index, StorageModel::R_AttDevice).value<KDeviceType>();
-
-    /* Left pane: */
-    mLsLeftPane->setEnabled(isMachineInValidMode());
-    mTwStorageTree->setEnabled(isMachineInValidMode());
-    /* Empty information pane: */
-    mLsEmpty->setEnabled(isMachineInValidMode());
-    mLbInfo->setEnabled(isMachineInValidMode());
-    /* Controllers pane: */
-    mLsParameters->setEnabled(isMachineInValidMode());
-    mLbName->setEnabled(isMachineOffline());
-    mLeName->setEnabled(isMachineOffline());
-    mLbType->setEnabled(isMachineOffline());
-    mCbType->setEnabled(isMachineOffline());
-    mLbPortCount->setEnabled(isMachineOffline());
-    mSbPortCount->setEnabled(isMachineOffline());
-    mCbIoCache->setEnabled(isMachineOffline());
-    /* Attachments pane: */
-    mLsAttributes->setEnabled(isMachineInValidMode());
-    mLbMedium->setEnabled(isMachineOffline() || (isMachineOnline() && device != KDeviceType_HardDisk));
-    mCbSlot->setEnabled(isMachineOffline());
-    mTbOpen->setEnabled(isMachineOffline() || (isMachineOnline() && device != KDeviceType_HardDisk));
-    mCbPassthrough->setEnabled(isMachineOffline());
-    mCbTempEject->setEnabled(isMachineInValidMode());
-    mCbNonRotational->setEnabled(isMachineOffline());
-    m_pCheckBoxHotPluggable->setEnabled(isMachineOffline());
-    mLsInformation->setEnabled(isMachineInValidMode());
-    mLbHDFormat->setEnabled(isMachineInValidMode());
-    mLbHDFormatValue->setEnabled(isMachineInValidMode());
-    mLbCDFDType->setEnabled(isMachineInValidMode());
-    mLbCDFDTypeValue->setEnabled(isMachineInValidMode());
-    mLbHDVirtualSize->setEnabled(isMachineInValidMode());
-    mLbHDVirtualSizeValue->setEnabled(isMachineInValidMode());
-    mLbHDActualSize->setEnabled(isMachineInValidMode());
-    mLbHDActualSizeValue->setEnabled(isMachineInValidMode());
-    mLbSize->setEnabled(isMachineInValidMode());
-    mLbSizeValue->setEnabled(isMachineInValidMode());
-    mLbHDDetails->setEnabled(isMachineInValidMode());
-    mLbHDDetailsValue->setEnabled(isMachineInValidMode());
-    mLbLocation->setEnabled(isMachineInValidMode());
-    mLbLocationValue->setEnabled(isMachineInValidMode());
-    mLbUsage->setEnabled(isMachineInValidMode());
-    mLbUsageValue->setEnabled(isMachineInValidMode());
-    m_pLabelEncryption->setEnabled(isMachineInValidMode());
-    m_pLabelEncryptionValue->setEnabled(isMachineInValidMode());
-
-    /* Update action states: */
-    updateActionsState();
-}
 
 # include "UIMachineSettingsStorage.moc"
-

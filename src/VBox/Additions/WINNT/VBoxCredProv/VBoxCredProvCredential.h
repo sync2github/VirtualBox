@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCredProvCredential.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxCredProvCredential - Class for keeping and handling the passed credentials.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBOX_CREDPROV_CREDENTIAL_H___
-#define ___VBOX_CREDPROV_CREDENTIAL_H___
+#ifndef GA_INCLUDED_SRC_WINNT_VBoxCredProv_VBoxCredProvCredential_h
+#define GA_INCLUDED_SRC_WINNT_VBoxCredProv_VBoxCredProvCredential_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 /*******************************************************************************
@@ -86,6 +89,8 @@ public:
                                 CREDENTIAL_PROVIDER_STATUS_ICON* pcpsiOptionalStatusIcon);
     /** @} */
 
+    PCRTUTF16 getField(DWORD dwFieldID);
+    HRESULT setField(DWORD dwFieldID, const PRTUTF16 pcwszString, bool fNotifyUI);
     HRESULT Reset(void);
     HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus);
     int RetrieveCredentials(void);
@@ -94,9 +99,13 @@ public:
 
 protected:
     HRESULT RTUTF16ToUnicode(PUNICODE_STRING pUnicodeDest, PRTUTF16 pwszSource, bool fCopy);
-    HRESULT kerberosLogonInit(KERB_INTERACTIVE_LOGON *pLogonIn,
-                              CREDENTIAL_PROVIDER_USAGE_SCENARIO enmUsage,
-                              PRTUTF16 pwszUser, PRTUTF16 pwszPassword, PRTUTF16 pwszDomain);
+    HRESULT RTUTF16ToUnicodeA(PUNICODE_STRING pUnicodeDest, PRTUTF16 pwszSource);
+    void UnicodeStringFree(PUNICODE_STRING pUnicode);
+
+    HRESULT kerberosLogonCreate(KERB_INTERACTIVE_LOGON *pLogon,
+                                CREDENTIAL_PROVIDER_USAGE_SCENARIO enmUsage,
+                                PRTUTF16 pwszUser, PRTUTF16 pwszPassword, PRTUTF16 pwszDomain);
+    void    kerberosLogonDestroy(KERB_INTERACTIVE_LOGON *pLogon);
     HRESULT kerberosLogonSerialize(const KERB_INTERACTIVE_LOGON *pLogon, PBYTE *ppPackage, DWORD *pcbPackage);
 
 private:
@@ -104,12 +113,15 @@ private:
     LONG                                  m_cRefs;
     /** The usage scenario for which we were enumerated. */
     CREDENTIAL_PROVIDER_USAGE_SCENARIO    m_enmUsageScenario;
-    /** The actual credential strings. */
-    PRTUTF16                              m_apwszCredentials[VBOXCREDPROV_NUM_FIELDS];
+    /** The actual credential provider fields.
+     *  Must be allocated as long as the credential provider is in charge. */
+    PRTUTF16                              m_apwszFields[VBOXCREDPROV_NUM_FIELDS];
     /** Pointer to event handler. */
     ICredentialProviderCredentialEvents  *m_pEvents;
     /** Flag indicating whether credentials already were retrieved. */
     bool                                  m_fHaveCreds;
+    /** Flag indicating wheter a profile (user tile) current is selected or not. */
+    bool                                  m_fIsSelected;
 };
-#endif /* !___VBOX_CREDPROV_CREDENTIAL_H___ */
+#endif /* !GA_INCLUDED_SRC_WINNT_VBoxCredProv_VBoxCredProvCredential_h */
 

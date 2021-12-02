@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIDnDHandler.h 85681 2020-08-11 09:36:37Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIDnDHandler class declaration..
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIDnDHandler_h___
-#define ___UIDnDHandler_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_UIDnDHandler_h
+#define FEQT_INCLUDED_SRC_runtime_UIDnDHandler_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QMimeData>
@@ -34,6 +37,9 @@ class QMimeData;
 class UIDnDMIMEData;
 class UISession;
 
+/**
+ * Main class for implementing Drag'n'Drop in the frontend.
+ */
 class UIDnDHandler: public QObject
 {
     Q_OBJECT;
@@ -160,5 +166,5 @@ protected:
     friend class UIDnDMIMEData;
 #endif
 };
-#endif /* ___UIDnDHandler_h___ */
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIDnDHandler_h */
 

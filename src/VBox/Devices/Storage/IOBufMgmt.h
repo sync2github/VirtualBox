@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: IOBufMgmt.h 85124 2020-07-08 21:13:30Z vboxsync $ */
 /** @file
  * VBox storage devices: I/O buffer management API.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,8 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-#ifndef __IOBufMgmt_h
-#define __IOBufMgmt_h
+
+#ifndef VBOX_INCLUDED_SRC_Storage_IOBufMgmt_h
+#define VBOX_INCLUDED_SRC_Storage_IOBufMgmt_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <iprt/sg.h>
@@ -91,8 +95,7 @@ DECLHIDDEN(int) IOBUFMgrDestroy(IOBUFMGR hIoBufMgr);
  *                             if there is not enough free memory to satisfy the complete request.
  *                             NULL if partial allocations are not supported.
  */
-DECLHIDDEN(int) IOBUFMgrAllocBuf(IOBUFMGR hIoBufMgr, PIOBUFDESC pIoBufDesc, size_t cbIoBuf,
-                                 size_t *pcbIoBufAllocated);
+DECLHIDDEN(int) IOBUFMgrAllocBuf(IOBUFMGR hIoBufMgr, PIOBUFDESC pIoBufDesc, size_t cbIoBuf, size_t *pcbIoBufAllocated);
 
 /**
  * Frees a given I/O buffer.
@@ -104,4 +107,4 @@ DECLHIDDEN(void) IOBUFMgrFreeBuf(PIOBUFDESC pIoBufDesc);
 
 RT_C_DECLS_END
 
-#endif /* __HBDMgmt_h */
+#endif /* !VBOX_INCLUDED_SRC_Storage_IOBufMgmt_h */

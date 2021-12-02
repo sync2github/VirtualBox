@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstMMHyperHeap.cpp 86375 2020-10-01 12:39:20Z vboxsync $ */
 /** @file
  * MM Hypervisor Heap testcase.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,12 +20,15 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <VBox/vmm/mm.h>
+#include <VBox/vmm/dbgf.h>
+#include <VBox/vmm/ssm.h>
 #include <VBox/vmm/stam.h>
 #include <VBox/vmm/vm.h>
 #include <VBox/vmm/uvm.h>
+#include <VBox/vmm/gvm.h>
 #include <VBox/sup.h>
 #include <VBox/param.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 #include <VBox/log.h>
 #include <iprt/initterm.h>
@@ -34,9 +37,9 @@
 #include <iprt/stream.h>
 #include <iprt/string.h>
 
-/* does not work for more CPUs as SUPR3LowAlloc() would refuse to allocate more pages */
 #define NUM_CPUS  16
 
+#define OUTPUT(a) do { Log(a); RTPrintf a; } while (0)
 
 /**
  *  Entry point.
@@ -48,33 +51,51 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
     /*
      * Init runtime.
      */
-    RTR3InitExe(argc, &argv, 0);
+    int rc = RTR3InitExe(argc, &argv, 0);
+    AssertRCReturn(rc, RTEXITCODE_INIT);
 
     /*
      * Create empty VM structure and call MMR3Init().
      */
-    PVM         pVM = NULL;
+    void       *pvVM = NULL;
     RTR0PTR     pvR0 = NIL_RTR0PTR;
-    SUPPAGE     aPages[RT_ALIGN_Z(sizeof(*pVM) + NUM_CPUS * sizeof(VMCPU), PAGE_SIZE) >> PAGE_SHIFT];
-    int rc = SUPR3Init(NULL);
-    if (RT_SUCCESS(rc))
-        rc = SUPR3LowAlloc(RT_ELEMENTS(aPages), (void **)&pVM, &pvR0, &aPages[0]);
+    SUPPAGE     aPages[(sizeof(GVM) + NUM_CPUS * sizeof(GVMCPU)) >> PAGE_SHIFT];
+    rc = SUPR3Init(NULL);
     if (RT_FAILURE(rc))
     {
-        RTPrintf("Fatal error: SUP Failure! rc=%Rrc\n", rc);
-        return 1;
+        RTPrintf("Fatal error: SUP failure! rc=%Rrc\n", rc);
+        return RTEXITCODE_FAILURE;
     }
-    memset(pVM, 0, sizeof(*pVM)); /* wtf? */
+    rc = SUPR3PageAllocEx(RT_ELEMENTS(aPages), 0, &pvVM, &pvR0, &aPages[0]);
+    if (RT_FAILURE(rc))
+    {
+        RTPrintf("Fatal error: Allocation failure! rc=%Rrc\n", rc);
+        return RTEXITCODE_FAILURE;
+    }
+    RT_BZERO(pvVM, RT_ELEMENTS(aPages) * PAGE_SIZE); /* SUPR3PageAllocEx doesn't necessarily zero the memory. */
+    PVM  pVM = (PVM)pvVM;
     pVM->paVMPagesR3 = aPages;
-    pVM->pVMR0 = pvR0;
+    pVM->pVMR0ForCall = pvR0;
 
-    static UVM s_UVM;
-    PUVM pUVM = &s_UVM;
+    PUVM pUVM = (PUVM)RTMemPageAllocZ(RT_ALIGN_Z(sizeof(*pUVM), PAGE_SIZE));
+    if (!pUVM)
+    {
+        RTPrintf("Fatal error: RTMEmPageAllocZ failed\n");
+        return RTEXITCODE_FAILURE;
+    }
+    pUVM->u32Magic = UVM_MAGIC;
     pUVM->pVM = pVM;
     pVM->pUVM = pUVM;
 
     pVM->cCpus = NUM_CPUS;
-    pVM->cbSelf = RT_UOFFSETOF(VM, aCpus[pVM->cCpus]);
+    pVM->cbSelf = sizeof(VM);
+    pVM->cbVCpu = sizeof(VMCPU);
+    PVMCPU pVCpu = (PVMCPU)((uintptr_t)pVM + sizeof(GVM));
+    for (VMCPUID idCpu = 0; idCpu < NUM_CPUS; idCpu++)
+    {
+        pVM->apCpusR3[idCpu] = pVCpu;
+        pVCpu = (PVMCPU)((uintptr_t)pVCpu + sizeof(GVMCPU));
+    }
 
     rc = STAMR3InitUVM(pUVM);
     if (RT_FAILURE(rc))
@@ -163,19 +184,22 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
     }
 
     /* free and allocate the same node again. */
+#ifdef DEBUG
+    MMHyperHeapDump(pVM);
+#endif
     for (i = 0; i < RT_ELEMENTS(aOps); i++)
     {
         if (    !aOps[i].pvAlloc
             ||  aOps[i].uAlignment == PAGE_SIZE)
             continue;
-        //size_t cbBeforeSub = MMHyperHeapGetFreeSize(pVM);
+        size_t cbBeforeSub = MMHyperHeapGetFreeSize(pVM);
         rc = MMHyperFree(pVM, aOps[i].pvAlloc);
         if (RT_FAILURE(rc))
         {
             RTPrintf("Failure: MMHyperFree(, %p,) -> %d i=%d\n", aOps[i].pvAlloc, rc, i);
             return 1;
         }
-        //RTPrintf("debug: i=%d cbBeforeSub=%d now=%d\n", i, cbBeforeSub, MMHyperHeapGetFreeSize(pVM));
+        size_t const cbFreed = MMHyperHeapGetFreeSize(pVM);
         void *pv;
         rc = MMHyperAlloc(pVM, aOps[i].cb, aOps[i].uAlignment, MM_TAG_VM_REQ, &pv);
         if (RT_FAILURE(rc))
@@ -189,14 +213,15 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
             //return 1;
         }
         aOps[i].pvAlloc = pv;
-        #if 0 /* won't work :/ */
+        OUTPUT(("debug: i=%02d cbBeforeSub=%d cbFreed=%d now=%d\n", i, cbBeforeSub, cbFreed, MMHyperHeapGetFreeSize(pVM)));
+#if 0 /* won't work :/ */
         size_t cbAfterSub = MMHyperHeapGetFreeSize(pVM);
         if (cbBeforeSub != cbAfterSub)
         {
             RTPrintf("Failure: cbBeforeSub=%d cbAfterSub=%d. i=%d\n", cbBeforeSub, cbAfterSub, i);
             return 1;
         }
-        #endif
+#endif
     }
 
     /* free it in a specific order. */
@@ -209,7 +234,7 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
             if (    aOps[j].iFreeOrder != i
                 ||  !aOps[j].pvAlloc)
                 continue;
-            RTPrintf("j=%d i=%d free=%d cb=%d pv=%p\n", j, i, MMHyperHeapGetFreeSize(pVM), aOps[j].cb, aOps[j].pvAlloc);
+            OUTPUT(("j=%02d i=%02d free=%d cb=%5u pv=%p\n", j, i, MMHyperHeapGetFreeSize(pVM), aOps[j].cb, aOps[j].pvAlloc));
             if (aOps[j].uAlignment == PAGE_SIZE)
                 cbBefore -= aOps[j].cb;
             else
@@ -226,14 +251,14 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
         }
     }
     Assert(cFreed == RT_ELEMENTS(aOps));
-    RTPrintf("i=done free=%d\n", MMHyperHeapGetFreeSize(pVM));
+    OUTPUT(("i=done free=%d\n", MMHyperHeapGetFreeSize(pVM)));
 
     /* check that we're back at the right amount of free memory. */
     size_t cbAfter = MMHyperHeapGetFreeSize(pVM);
     if (cbBefore != cbAfter)
     {
-        RTPrintf("Warning: Either we've split out an alignment chunk at the start, or we've got\n"
-                 "         an alloc/free accounting bug: cbBefore=%d cbAfter=%d\n", cbBefore, cbAfter);
+        OUTPUT(("Warning: Either we've split out an alignment chunk at the start, or we've got\n"
+                "         an alloc/free accounting bug: cbBefore=%d cbAfter=%d\n", cbBefore, cbAfter));
 #ifdef DEBUG
         MMHyperHeapDump(pVM);
 #endif
@@ -243,6 +268,12 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
 #ifdef LOG_ENABLED
     RTLogFlush(NULL);
 #endif
+    SSMR3Term(pVM);
+    STAMR3TermUVM(pUVM);
+    DBGFR3TermUVM(pUVM);
+    MMR3TermUVM(pUVM);
+    SUPR3PageFreeEx(pVM, RT_ELEMENTS(aPages));
+    RTMemPageFree(pUVM, RT_ALIGN_Z(sizeof(*pUVM), PAGE_SIZE));
     return 0;
 }
 

@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxMPCommon.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Miniport common utils
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,7 +16,7 @@
  */
 
 #include "VBoxMPCommon.h"
-#include <VBox/Hardware/VBoxVideoVBE.h>
+#include <VBoxVideoVBE.h>
 
 int VBoxMPCmnMapAdapterMemory(PVBOXMP_COMMON pCommon, void **ppv, uint32_t ulOffset, uint32_t ulSize)
 {

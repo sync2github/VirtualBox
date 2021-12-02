@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: time2-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Time, Windows.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,9 +35,10 @@
 #include "internal/iprt.h"
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include "internal/time.h"
 
+#include "internal-r3-win.h"
 
 
 RTDECL(int) RTTimeSet(PCRTTIMESPEC pTime)
@@ -55,27 +56,36 @@ RTDECL(int) RTTimeSet(PCRTTIMESPEC pTime)
 
 RTDECL(PRTTIME) RTTimeLocalExplode(PRTTIME pTime, PCRTTIMESPEC pTimeSpec)
 {
-    /*
-     * FileTimeToLocalFileTime does not do the right thing, so we'll have
-     * to convert to system time and SystemTimeToTzSpecificLocalTime instead.
-     */
     RTTIMESPEC LocalTime;
-    SYSTEMTIME SystemTimeIn;
-    FILETIME FileTime;
-    if (FileTimeToSystemTime(RTTimeSpecGetNtFileTime(pTimeSpec, &FileTime), &SystemTimeIn))
+    if (g_pfnSystemTimeToTzSpecificLocalTime)
     {
-        SYSTEMTIME SystemTimeOut;
-        if (SystemTimeToTzSpecificLocalTime(NULL /* use current TZI */,
-                                            &SystemTimeIn,
-                                            &SystemTimeOut))
+        /*
+         * FileTimeToLocalFileTime does not do the right thing, so we'll have
+         * to convert to system time and SystemTimeToTzSpecificLocalTime instead.
+         *
+         * Note! FileTimeToSystemTime drops resoultion down to milliseconds, thus
+         *       we have to do the offUTC calculation using milliseconds and adjust
+         *       u32Nanosecons by sub milliseconds digits.
+         */
+        SYSTEMTIME SystemTimeIn;
+        FILETIME FileTime;
+        if (FileTimeToSystemTime(RTTimeSpecGetNtFileTime(pTimeSpec, &FileTime), &SystemTimeIn))
         {
-            if (SystemTimeToFileTime(&SystemTimeOut, &FileTime))
+            SYSTEMTIME SystemTimeOut;
+            if (g_pfnSystemTimeToTzSpecificLocalTime(NULL /* use current TZI */, &SystemTimeIn, &SystemTimeOut))
             {
-                RTTimeSpecSetNtFileTime(&LocalTime, &FileTime);
-                pTime = RTTimeExplode(pTime, &LocalTime);
-                if (pTime)
-                    pTime->fFlags = (pTime->fFlags & ~RTTIME_FLAGS_TYPE_MASK) | RTTIME_FLAGS_TYPE_LOCAL;
-                return pTime;
+                if (SystemTimeToFileTime(&SystemTimeOut, &FileTime))
+                {
+                    RTTimeSpecSetNtFileTime(&LocalTime, &FileTime);
+                    pTime = RTTimeExplode(pTime, &LocalTime);
+                    if (pTime)
+                    {
+                        pTime->fFlags = (pTime->fFlags & ~RTTIME_FLAGS_TYPE_MASK) | RTTIME_FLAGS_TYPE_LOCAL;
+                        pTime->offUTC = (RTTimeSpecGetMilli(&LocalTime) - RTTimeSpecGetMilli(pTimeSpec)) / RT_MS_1MIN;
+                        pTime->u32Nanosecond += RTTimeSpecGetNano(pTimeSpec) % RT_NS_1MS;
+                    }
+                    return pTime;
+                }
             }
         }
     }
@@ -85,10 +95,60 @@ RTDECL(PRTTIME) RTTimeLocalExplode(PRTTIME pTime, PCRTTIMESPEC pTimeSpec)
      * (A better fallback would be to use the offset of the same time of the year.)
      */
     LocalTime = *pTimeSpec;
-    RTTimeSpecAddNano(&LocalTime, RTTimeLocalDeltaNano());
+    int64_t cNsUtcOffset = RTTimeLocalDeltaNano();
+    RTTimeSpecAddNano(&LocalTime, cNsUtcOffset);
     pTime = RTTimeExplode(pTime, &LocalTime);
     if (pTime)
+    {
         pTime->fFlags = (pTime->fFlags & ~RTTIME_FLAGS_TYPE_MASK) | RTTIME_FLAGS_TYPE_LOCAL;
+        pTime->offUTC = cNsUtcOffset / RT_NS_1MIN;
+    }
     return pTime;
+}
+
+
+/**
+ * Gets the delta between UTC and local time at the given time.
+ *
+ * @code
+ *      RTTIMESPEC LocalTime;
+ *      RTTimeNow(&LocalTime);
+ *      RTTimeSpecAddNano(&LocalTime, RTTimeLocalDeltaNanoFor(&LocalTime));
+ * @endcode
+ *
+ * @param   pTimeSpec   The time spec giving the time to get the delta for.
+ * @returns Returns the nanosecond delta between UTC and local time.
+ */
+RTDECL(int64_t) RTTimeLocalDeltaNanoFor(PCRTTIMESPEC pTimeSpec)
+{
+    RTTIMESPEC LocalTime;
+    if (g_pfnSystemTimeToTzSpecificLocalTime)
+    {
+        /*
+         * FileTimeToLocalFileTime does not do the right thing, so we'll have
+         * to convert to system time and SystemTimeToTzSpecificLocalTime instead.
+         *
+         * Note! FileTimeToSystemTime drops resoultion down to milliseconds, thus
+         *       we have to do the offUTC calculation using milliseconds and adjust
+         *       u32Nanosecons by sub milliseconds digits.
+         */
+        SYSTEMTIME SystemTimeIn;
+        FILETIME FileTime;
+        if (FileTimeToSystemTime(RTTimeSpecGetNtFileTime(pTimeSpec, &FileTime), &SystemTimeIn))
+        {
+            SYSTEMTIME SystemTimeOut;
+            if (g_pfnSystemTimeToTzSpecificLocalTime(NULL /* use current TZI */, &SystemTimeIn, &SystemTimeOut))
+            {
+                if (SystemTimeToFileTime(&SystemTimeOut, &FileTime))
+                {
+                    RTTimeSpecSetNtFileTime(&LocalTime, &FileTime);
+
+                    return (RTTimeSpecGetMilli(&LocalTime) - RTTimeSpecGetMilli(pTimeSpec)) * RT_NS_1MS;
+                }
+            }
+        }
+    }
+
+    return RTTimeLocalDeltaNano();
 }
 

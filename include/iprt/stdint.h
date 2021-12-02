@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef __iprt_stdint_h
-#define __iprt_stdint_h
+#ifndef IPRT_INCLUDED_stdint_h
+#define IPRT_INCLUDED_stdint_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 
@@ -115,7 +118,9 @@
 # endif
 
     /* x-bit types */
-#  if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86) || defined(RT_ARCH_SPARC) || defined(RT_ARCH_SPARC64)
+#  if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86) \
+   || defined(RT_ARCH_ARM32) || defined(RT_ARCH_ARM64) \
+   || defined(RT_ARCH_SPARC) || defined(RT_ARCH_SPARC64)
 #   if !defined(_INT8_T_DECLARED)   && !defined(_INT8_T)
 typedef signed char         int8_t;
 #   endif
@@ -191,17 +196,17 @@ typedef uint64_t            uintmax_t;
 #  if ARCH_BITS == 32 \
    || defined(RT_OS_LINUX) \
    || defined(RT_OS_FREEBSD)
-#   if !defined(_INTPTR_T_DECLARED)  && !defined(_INTPTR_T)
+#   if !defined(_INTPTR_T_DECLARED)  && !defined(_INTPTR_T) && !defined(_INTPTR_T_DEFINED)
 typedef signed long         intptr_t;
 #   endif
-#   if !defined(_UINTPTR_T_DECLARED) && !defined(_UINTPTR_T)
+#   if !defined(_UINTPTR_T_DECLARED) && !defined(_UINTPTR_T) && !defined(_UINTPTR_T_DEFINED)
 typedef unsigned long       uintptr_t;
 #   endif
 #  else
-#   if !defined(_INTPTR_T_DECLARED)  && !defined(_INTPTR_T)
+#   if !defined(_INTPTR_T_DECLARED)  && !defined(_INTPTR_T) && !defined(_INTPTR_T_DEFINED)
 typedef int64_t             intptr_t;
 #   endif
-#   if !defined(_UINTPTR_T_DECLARED) && !defined(_UINTPTR_T)
+#   if !defined(_UINTPTR_T_DECLARED) && !defined(_UINTPTR_T) && !defined(_UINTPTR_T_DEFINED)
 typedef uint64_t            uintptr_t;
 #   endif
 #  endif
@@ -280,5 +285,5 @@ typedef uint64_t            uintptr_t;
 # define UINTMAX_MAX        UINT64_MAX
 #endif
 
-#endif
+#endif /* !IPRT_INCLUDED_stdint_h */
 

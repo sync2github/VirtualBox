@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvHostBase-solaris.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DrvHostBase - Host base drive access driver, Solaris specifics.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,11 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DRV_HOST_BASE
 #include <fcntl.h>
 #include <errno.h>
@@ -31,7 +36,9 @@
 
 extern "C" char *getfullblkname(char *);
 
+#include <VBox/err.h>
 #include <iprt/file.h>
+#include <iprt/string.h>
 
 /**
  * Host backend specific data.
@@ -52,6 +59,14 @@ typedef DRVHOSTBASEOS *PDRVHOSBASEOS;
 
 #define DRVHOSTBASE_OS_INT_DECLARED
 #include "DrvHostBase.h"
+
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
+/** Maximum buffer size we support, check whether darwin has some real upper limit. */
+#define SOL_SCSI_MAX_BUFFER_SIZE (100 * _1K)
+
 
 #ifdef VBOX_WITH_SUID_WRAPPER
 /* These functions would have to go into a separate solaris binary with
@@ -201,6 +216,15 @@ DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, s
 
     return rc;
 }
+
+
+DECLHIDDEN(size_t) drvHostBaseScsiCmdGetBufLimitOs(PDRVHOSTBASE pThis)
+{
+    RT_NOREF(pThis);
+
+    return SOL_SCSI_MAX_BUFFER_SIZE;
+}
+
 
 DECLHIDDEN(int) drvHostBaseGetMediaSizeOs(PDRVHOSTBASE pThis, uint64_t *pcb)
 {

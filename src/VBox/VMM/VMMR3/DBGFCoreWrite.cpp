@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFCoreWrite.cpp 91281 2021-09-16 13:32:18Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, Guest Core Dump.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -52,6 +52,7 @@
 #include <iprt/param.h>
 #include <iprt/file.h>
 #include <iprt/mem.h>
+#include <iprt/formats/elf64.h>
 
 #include "DBGFInternal.h"
 
@@ -67,8 +68,6 @@
 #include <VBox/err.h>
 #include <VBox/log.h>
 #include <VBox/version.h>
-
-#include "../../Runtime/include/internal/ldrELF64.h"
 
 
 /*********************************************************************************************************************************
@@ -377,12 +376,13 @@ static void dbgfR3GetCoreCpu(PVMCPU pVCpu, PDBGFCORECPU pDbgfCpu)
     pDbgfCpu->msrSFMASK       = pCtx->msrSFMASK;
     pDbgfCpu->msrKernelGSBase = pCtx->msrKERNELGSBASE;
     pDbgfCpu->msrApicBase     = APICGetBaseMsrNoCheck(pVCpu);
+    pDbgfCpu->msrTscAux       = CPUMGetGuestTscAux(pVCpu);
     pDbgfCpu->aXcr[0]         = pCtx->aXcr[0];
     pDbgfCpu->aXcr[1]         = pCtx->aXcr[1];
-    AssertCompile(sizeof(pDbgfCpu->ext) == sizeof(*pCtx->pXStateR3));
+    AssertCompile(sizeof(pDbgfCpu->ext) == sizeof(pCtx->XState));
     pDbgfCpu->cbExt = pVM->cpum.ro.GuestFeatures.cbMaxExtendedState;
     if (RT_LIKELY(pDbgfCpu->cbExt))
-        memcpy(&pDbgfCpu->ext, pCtx->pXStateR3, pDbgfCpu->cbExt);
+        memcpy(&pDbgfCpu->ext, &pCtx->XState, pDbgfCpu->cbExt);
 
 #undef DBGFCOPYSEL
 }
@@ -517,16 +517,16 @@ static int dbgfR3CoreWriteWorker(PVM pVM, RTFILE hFile)
         return VERR_NO_MEMORY;
     }
 
-    for (uint32_t iCpu = 0; iCpu < pVM->cCpus; iCpu++)
+    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
     {
-        PVMCPU pVCpu = &pVM->aCpus[iCpu];
+        PVMCPU pVCpu = pVM->apCpusR3[idCpu];
         RT_BZERO(pDbgfCoreCpu, sizeof(*pDbgfCoreCpu));
         dbgfR3GetCoreCpu(pVCpu, pDbgfCoreCpu);
 
         rc = Elf64WriteNoteHdr(hFile, NT_VBOXCPU, g_pcszCoreVBoxCpu, pDbgfCoreCpu, sizeof(*pDbgfCoreCpu));
         if (RT_FAILURE(rc))
         {
-            LogRel((DBGFLOG_NAME ": Elf64WriteNoteHdr failed for vCPU[%u] rc=%Rrc\n", iCpu, rc));
+            LogRel((DBGFLOG_NAME ": Elf64WriteNoteHdr failed for vCPU[%u] rc=%Rrc\n", idCpu, rc));
             RTMemFree(pDbgfCoreCpu);
             return rc;
         }

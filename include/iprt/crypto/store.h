@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_crypto_store_h
-#define ___iprt_crypto_store_h
+#ifndef IPRT_INCLUDED_crypto_store_h
+#define IPRT_INCLUDED_crypto_store_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/crypto/x509.h>
 #include <iprt/crypto/taf.h>
@@ -155,6 +158,7 @@ RTDECL(int) RTCrStoreCreateSnapshotById(PRTCRSTORE phStore, RTCRSTOREID enmStore
 RTDECL(int) RTCrStoreCreateSnapshotOfUserAndSystemTrustedCAsAndCerts(PRTCRSTORE phStore, PRTERRINFO pErrInfo);
 
 RTDECL(int) RTCrStoreCreateInMem(PRTCRSTORE phStore, uint32_t cSizeHint);
+RTDECL(int) RTCrStoreCreateInMemEx(PRTCRSTORE phStore, uint32_t cSizeHint, RTCRSTORE hParentStore);
 
 RTDECL(uint32_t) RTCrStoreRetain(RTCRSTORE hStore);
 RTDECL(uint32_t) RTCrStoreRelease(RTCRSTORE hStore);
@@ -176,6 +180,24 @@ RTDECL(PCRTCRCERTCTX) RTCrStoreCertByIssuerAndSerialNo(RTCRSTORE hStore, PCRTCRX
  *                              Optional.
  */
 RTDECL(int) RTCrStoreCertAddEncoded(RTCRSTORE hStore, uint32_t fFlags, void const *pvSrc, size_t cbSrc, PRTERRINFO pErrInfo);
+
+/**
+ * Add an X.509 packaged certificate to the store.
+ *
+ * @returns IPRT status code.
+ * @retval  VWRN_ALREADY_EXISTS if the certificate is already present and
+ *          RTCRCERTCTX_F_ADD_IF_NOT_FOUND was specified.
+ * @retval  VERR_WRITE_PROTECT if the store doesn't support adding.
+ * @param   hStore              The store to add the certificate to.
+ * @param   fFlags              RTCRCERTCTX_F_XXX. Encoding must is optional,
+ *                              but must be RTCRCERTCTX_F_ENC_X509_DER if given.
+ *                              RTCRCERTCTX_F_ADD_IF_NOT_FOUND is supported.
+ * @param   pCertificate        The certificate to add.  We may have to encode
+ *                              it, thus not const.
+ * @param   pErrInfo            Where to return additional error/warning info.
+ *                              Optional.
+ */
+RTDECL(int) RTCrStoreCertAddX509(RTCRSTORE hStore, uint32_t fFlags, PRTCRX509CERTIFICATE pCertificate, PRTERRINFO pErrInfo);
 
 /**
  * Adds certificates from files in the specified directory.
@@ -306,8 +328,8 @@ RTDECL(int) RTCrStoreCertFindBySubjectOrAltSubjectByRfc5280(RTCRSTORE hStore, PC
 RTDECL(PCRTCRCERTCTX) RTCrStoreCertSearchNext(RTCRSTORE hStore, PRTCRSTORECERTSEARCH pSearch);
 RTDECL(int) RTCrStoreCertSearchDestroy(RTCRSTORE hStore, PRTCRSTORECERTSEARCH pSearch);
 
-RTDECL(int) RTCrStoreConvertToOpenSslCertStore(RTCRSTORE hStore, uint32_t fFlags, void **ppvOpenSslStore);
-RTDECL(int) RTCrStoreConvertToOpenSslCertStack(RTCRSTORE hStore, uint32_t fFlags, void **ppvOpenSslStack);
+RTDECL(int) RTCrStoreConvertToOpenSslCertStore(RTCRSTORE hStore, uint32_t fFlags, void **ppvOpenSslStore, PRTERRINFO pErrInfo);
+RTDECL(int) RTCrStoreConvertToOpenSslCertStack(RTCRSTORE hStore, uint32_t fFlags, void **ppvOpenSslStack, PRTERRINFO pErrInfo);
 
 
 /** @} */
@@ -370,5 +392,5 @@ RTDECL(uint32_t) RTCrCertCtxRelease(PCRTCRCERTCTX pCertCtx);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_crypto_store_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VHDX.cpp 90802 2021-08-23 19:08:27Z vboxsync $ */
 /** @file
  * VHDX - VHDX Disk image, Core Code.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,7 @@
 #include <iprt/crc.h>
 
 #include "VDBackends.h"
+#include "VDBackendsInline.h"
 
 
 /*********************************************************************************************************************************
@@ -549,7 +550,8 @@ typedef struct VHDXIMAGE
     PVhdxBatEntry       paBat;
     /** Chunk ratio. */
     uint32_t            uChunkRatio;
-
+    /** The static region list. */
+    VDREGIONLIST        RegionList;
 } VHDXIMAGE, *PVHDXIMAGE;
 
 /**
@@ -633,7 +635,11 @@ DECLINLINE(void) vhdxConvUuidEndianess(VHDXECONV enmConv, PRTUUID pUuidConv, PRT
 {
     RT_NOREF1(enmConv);
 #if 1
-    memcpy(pUuidConv, pUuid, sizeof(RTUUID));
+    /** @todo r=andy Code looks temporary disabled to me, fixes strict release builds:
+     *        "accessing 16 bytes at offsets 0 and 0 overlaps 16 bytes at offset 0 [-Werror=restrict]" */
+    RTUUID uuidTmp;
+    memcpy(&uuidTmp,  pUuid,    sizeof(RTUUID));
+    memcpy(pUuidConv, &uuidTmp, sizeof(RTUUID));
 #else
     pUuidConv->Gen.u32TimeLow              = SET_ENDIAN_U32(pUuid->Gen.u32TimeLow);
     pUuidConv->Gen.u16TimeMid              = SET_ENDIAN_U16(pUuid->Gen.u16TimeMid);
@@ -1743,7 +1749,21 @@ static int vhdxOpenImage(PVHDXIMAGE pImage, unsigned uOpenFlags)
             rc = VERR_VD_GEN_INVALID_HEADER;
     }
 
-    if (RT_FAILURE(rc))
+    if (RT_SUCCESS(rc))
+    {
+        PVDREGIONDESC pRegion = &pImage->RegionList.aRegions[0];
+        pImage->RegionList.fFlags   = 0;
+        pImage->RegionList.cRegions = 1;
+
+        pRegion->offRegion            = 0; /* Disk start. */
+        pRegion->cbBlock              = pImage->cbLogicalSector;
+        pRegion->enmDataForm          = VDREGIONDATAFORM_RAW;
+        pRegion->enmMetadataForm      = VDREGIONMETADATAFORM_NONE;
+        pRegion->cbData               = pImage->cbLogicalSector;
+        pRegion->cbMetadata           = 0;
+        pRegion->cRegionBlocksOrBytes = pImage->cbSize;
+    }
+    else
         vhdxFreeImage(pImage, false);
 
     LogFlowFunc(("returns rc=%Rrc\n", rc));
@@ -1753,9 +1773,9 @@ static int vhdxOpenImage(PVHDXIMAGE pImage, unsigned uOpenFlags)
 
 /** @copydoc VDIMAGEBACKEND::pfnProbe */
 static DECLCALLBACK(int) vhdxProbe(const char *pszFilename, PVDINTERFACE pVDIfsDisk,
-                                   PVDINTERFACE pVDIfsImage, VDTYPE *penmType)
+                                   PVDINTERFACE pVDIfsImage, VDTYPE enmDesiredType, VDTYPE *penmType)
 {
-    RT_NOREF1(pVDIfsDisk);
+    RT_NOREF(pVDIfsDisk, enmDesiredType);
     LogFlowFunc(("pszFilename=\"%s\" pVDIfsDisk=%#p pVDIfsImage=%#p\n", pszFilename, pVDIfsDisk, pVDIfsImage));
     PVDIOSTORAGE pStorage = NULL;
     uint64_t cbFile;
@@ -1765,7 +1785,7 @@ static DECLCALLBACK(int) vhdxProbe(const char *pszFilename, PVDINTERFACE pVDIfsD
     PVDINTERFACEIOINT pIfIo = VDIfIoIntGet(pVDIfsImage);
     AssertPtrReturn(pIfIo, VERR_INVALID_PARAMETER);
 
-    if (   !VALID_PTR(pszFilename)
+    if (   !RT_VALID_PTR(pszFilename)
         || !*pszFilename)
         rc = VERR_INVALID_PARAMETER;
     else
@@ -1822,12 +1842,12 @@ static DECLCALLBACK(int) vhdxOpen(const char *pszFilename, unsigned uOpenFlags,
 
     /* Check open flags. All valid flags are supported. */
     if (   uOpenFlags & ~VD_OPEN_FLAGS_MASK
-        || !VALID_PTR(pszFilename)
+        || !RT_VALID_PTR(pszFilename)
         || !*pszFilename)
         rc = VERR_INVALID_PARAMETER;
     else
     {
-        pImage = (PVHDXIMAGE)RTMemAllocZ(sizeof(VHDXIMAGE));
+        pImage = (PVHDXIMAGE)RTMemAllocZ(RT_UOFFSETOF(VHDXIMAGE, RegionList.aRegions[1]));
         if (!pImage)
             rc = VERR_NO_MEMORY;
         else
@@ -2041,38 +2061,6 @@ static DECLCALLBACK(unsigned) vhdxGetVersion(void *pBackendData)
         return 0;
 }
 
-/** @copydoc VDIMAGEBACKEND::pfnGetSectorSize */
-static DECLCALLBACK(uint32_t) vhdxGetSectorSize(void *pBackendData)
-{
-    LogFlowFunc(("pBackendData=%#p\n", pBackendData));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    uint32_t cb = 0;
-
-    AssertPtr(pImage);
-
-    if (pImage && pImage->pStorage)
-        cb = pImage->cbLogicalSector;
-
-    LogFlowFunc(("returns %u\n", cb));
-    return cb;
-}
-
-/** @copydoc VDIMAGEBACKEND::pfnGetSize */
-static DECLCALLBACK(uint64_t) vhdxGetSize(void *pBackendData)
-{
-    LogFlowFunc(("pBackendData=%#p\n", pBackendData));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    uint64_t cb = 0;
-
-    AssertPtr(pImage);
-
-    if (pImage && pImage->pStorage)
-        cb = pImage->cbSize;
-
-    LogFlowFunc(("returns %llu\n", cb));
-    return cb;
-}
-
 /** @copydoc VDIMAGEBACKEND::pfnGetFileSize */
 static DECLCALLBACK(uint64_t) vhdxGetFileSize(void *pBackendData)
 {
@@ -2196,6 +2184,30 @@ static DECLCALLBACK(int) vhdxSetLCHSGeometry(void *pBackendData,
     return rc;
 }
 
+/** @copydoc VDIMAGEBACKEND::pfnQueryRegions */
+static DECLCALLBACK(int) vhdxQueryRegions(void *pBackendData, PCVDREGIONLIST *ppRegionList)
+{
+    LogFlowFunc(("pBackendData=%#p ppRegionList=%#p\n", pBackendData, ppRegionList));
+    PVHDXIMAGE pThis = (PVHDXIMAGE)pBackendData;
+
+    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
+
+    *ppRegionList = &pThis->RegionList;
+    LogFlowFunc(("returns %Rrc\n", VINF_SUCCESS));
+    return VINF_SUCCESS;
+}
+
+/** @copydoc VDIMAGEBACKEND::pfnRegionListRelease */
+static DECLCALLBACK(void) vhdxRegionListRelease(void *pBackendData, PCVDREGIONLIST pRegionList)
+{
+    RT_NOREF1(pRegionList);
+    LogFlowFunc(("pBackendData=%#p pRegionList=%#p\n", pBackendData, pRegionList));
+    PVHDXIMAGE pThis = (PVHDXIMAGE)pBackendData;
+    AssertPtr(pThis); RT_NOREF(pThis);
+
+    /* Nothing to do here. */
+}
+
 /** @copydoc VDIMAGEBACKEND::pfnGetImageFlags */
 static DECLCALLBACK(unsigned) vhdxGetImageFlags(void *pBackendData)
 {
@@ -2255,221 +2267,34 @@ static DECLCALLBACK(int) vhdxSetOpenFlags(void *pBackendData, unsigned uOpenFlag
 }
 
 /** @copydoc VDIMAGEBACKEND::pfnGetComment */
-static DECLCALLBACK(int) vhdxGetComment(void *pBackendData, char *pszComment,
-                                        size_t cbComment)
-{
-    RT_NOREF2(pszComment, cbComment);
-    LogFlowFunc(("pBackendData=%#p pszComment=%#p cbComment=%zu\n", pBackendData, pszComment, cbComment));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc comment='%s'\n", rc, pszComment));
-    return rc;
-}
+VD_BACKEND_CALLBACK_GET_COMMENT_DEF_NOT_SUPPORTED(vhdxGetComment);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetComment */
-static DECLCALLBACK(int) vhdxSetComment(void *pBackendData, const char *pszComment)
-{
-    RT_NOREF1(pszComment);
-    LogFlowFunc(("pBackendData=%#p pszComment=\"%s\"\n", pBackendData, pszComment));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-    {
-        if (pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-            rc = VERR_VD_IMAGE_READ_ONLY;
-        else
-            rc = VERR_NOT_SUPPORTED;
-    }
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_COMMENT_DEF_NOT_SUPPORTED(vhdxSetComment, PVHDXIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetUuid */
-static DECLCALLBACK(int) vhdxGetUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", rc, pUuid));
-    return rc;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(vhdxGetUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetUuid */
-static DECLCALLBACK(int) vhdxSetUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    LogFlowFunc(("%RTuuid\n", pUuid));
-    AssertPtr(pImage);
-
-    if (pImage)
-    {
-        if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-            rc = VERR_NOT_SUPPORTED;
-        else
-            rc = VERR_VD_IMAGE_READ_ONLY;
-    }
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(vhdxSetUuid, PVHDXIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetModificationUuid */
-static DECLCALLBACK(int) vhdxGetModificationUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", rc, pUuid));
-    return rc;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(vhdxGetModificationUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetModificationUuid */
-static DECLCALLBACK(int) vhdxSetModificationUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-    {
-        if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-            rc = VERR_NOT_SUPPORTED;
-        else
-            rc = VERR_VD_IMAGE_READ_ONLY;
-    }
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(vhdxSetModificationUuid, PVHDXIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetParentUuid */
-static DECLCALLBACK(int) vhdxGetParentUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", rc, pUuid));
-    return rc;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(vhdxGetParentUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetParentUuid */
-static DECLCALLBACK(int) vhdxSetParentUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-    {
-        if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-            rc = VERR_NOT_SUPPORTED;
-        else
-            rc = VERR_VD_IMAGE_READ_ONLY;
-    }
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(vhdxSetParentUuid, PVHDXIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetParentModificationUuid */
-static DECLCALLBACK(int) vhdxGetParentModificationUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-        rc = VERR_NOT_SUPPORTED;
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", rc, pUuid));
-    return rc;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(vhdxGetParentModificationUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetParentModificationUuid */
-static DECLCALLBACK(int) vhdxSetParentModificationUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PVHDXIMAGE pImage = (PVHDXIMAGE)pBackendData;
-    int rc;
-
-    AssertPtr(pImage);
-
-    if (pImage)
-    {
-        if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
-            rc = VERR_NOT_SUPPORTED;
-        else
-            rc = VERR_VD_IMAGE_READ_ONLY;
-    }
-    else
-        rc = VERR_VD_NOT_OPENED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(vhdxSetParentModificationUuid, PVHDXIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnDump */
 static DECLCALLBACK(void) vhdxDump(void *pBackendData)
@@ -2519,10 +2344,6 @@ const VDIMAGEBACKEND g_VhdxBackend =
     NULL,
     /* pfnGetVersion */
     vhdxGetVersion,
-    /* pfnGetSectorSize */
-    vhdxGetSectorSize,
-    /* pfnGetSize */
-    vhdxGetSize,
     /* pfnGetFileSize */
     vhdxGetFileSize,
     /* pfnGetPCHSGeometry */
@@ -2533,6 +2354,10 @@ const VDIMAGEBACKEND g_VhdxBackend =
     vhdxGetLCHSGeometry,
     /* pfnSetLCHSGeometry */
     vhdxSetLCHSGeometry,
+    /* pfnQueryRegions */
+    vhdxQueryRegions,
+    /* pfnRegionListRelease */
+    vhdxRegionListRelease,
     /* pfnGetImageFlags */
     vhdxGetImageFlags,
     /* pfnGetOpenFlags */

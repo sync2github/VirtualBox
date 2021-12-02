@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxAutostart.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxAutostart - VirtualBox Autostart service.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __VBoxAutostart_h__
-#define __VBoxAutostart_h__
+#ifndef VBOX_INCLUDED_SRC_VBoxAutostart_VBoxAutostart_h
+#define VBOX_INCLUDED_SRC_VBoxAutostart_VBoxAutostart_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /*******************************************************************************
 *   Header Files                                                               *
@@ -249,7 +252,7 @@ DECLHIDDEN(void) autostartSvcLogInfo(const char *pszFormat, ...);
  *
  * @todo    This should later be replaced by the release logger and callback destination(s).
  */
-DECLHIDDEN(void) autostartSvcLogErrorV(const char *pszFormat, va_list va);
+DECLHIDDEN(RTEXITCODE) autostartSvcLogErrorV(const char *pszFormat, va_list va);
 
 /**
  * Logs the error message to the appropriate system log.
@@ -261,7 +264,7 @@ DECLHIDDEN(void) autostartSvcLogErrorV(const char *pszFormat, va_list va);
  *
  * @todo    This should later be replaced by the release logger and callback destination(s).
  */
-DECLHIDDEN(void) autostartSvcLogError(const char *pszFormat, ...);
+DECLHIDDEN(RTEXITCODE) autostartSvcLogError(const char *pszFormat, ...);
 
 /**
  * Deals with RTGetOpt failure, bitching in the system log.
@@ -293,7 +296,7 @@ DECLHIDDEN(RTEXITCODE) autostartSvcLogTooManyArgsError(const char *pszAction, in
  * @param   pszFormat   The message format string.
  * @param   va          Format arguments.
  */
-DECLHIDDEN(void) autostartSvcDisplayErrorV(const char *pszFormat, va_list va);
+DECLHIDDEN(RTEXITCODE) autostartSvcDisplayErrorV(const char *pszFormat, va_list va);
 
 /**
  * Prints an error message to the screen.
@@ -301,35 +304,20 @@ DECLHIDDEN(void) autostartSvcDisplayErrorV(const char *pszFormat, va_list va);
  * @param   pszFormat   The message format string.
  * @param   ...         Format arguments.
  */
-DECLHIDDEN(void) autostartSvcDisplayError(const char *pszFormat, ...);
+DECLHIDDEN(RTEXITCODE) autostartSvcDisplayError(const char *pszFormat, ...);
 
 /**
- * Deals with RTGetOpt failure.
+ * Deals with RTGetOpt failure, i.e. an syntax error.
  *
- * @returns 1
+ * @returns RTEXITCODE_SYNTAX
  * @param   pszAction       The action name.
  * @param   rc              The RTGetOpt return value.
- * @param   argc            The argument count.
- * @param   argv            The argument vector.
- * @param   iArg            The argument index.
  * @param   pValue          The value returned by RTGetOpt.
  */
-DECLHIDDEN(RTEXITCODE) autostartSvcDisplayGetOptError(const char *pszAction, int rc, int argc, char **argv, int iArg, PCRTGETOPTUNION pValue);
-
-/**
- * Bitch about too many arguments (after RTGetOpt stops).
- *
- * @returns RTEXITCODE_FAILURE
- * @param   pszAction       The action name.
- * @param   argc            The argument count.
- * @param   argv            The argument vector.
- * @param   iArg            The argument index.
- */
-DECLHIDDEN(RTEXITCODE) autostartSvcDisplayTooManyArgsError(const char *pszAction, int argc, char **argv, int iArg);
+DECLHIDDEN(RTEXITCODE) autostartSvcDisplayGetOptError(const char *pszAction, int rc, PCRTGETOPTUNION pValue);
 
 DECLHIDDEN(int) autostartSetup();
 
 DECLHIDDEN(void) autostartShutdown();
 
-#endif /* __VBoxAutostart_h__ */
-
+#endif /* !VBOX_INCLUDED_SRC_VBoxAutostart_VBoxAutostart_h */

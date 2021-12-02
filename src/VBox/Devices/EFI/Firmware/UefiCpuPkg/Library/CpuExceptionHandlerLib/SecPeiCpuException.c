@@ -1,24 +1,15 @@
 /** @file
   CPU exception handler library implemenation for SEC/PEIM modules.
 
-Copyright (c) 2012 - 2013, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials are licensed and made available under
-the terms and conditions of the BSD License that accompanies this distribution.
-The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php.
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2012 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
 #include <PiPei.h>
+#include <Library/VmgExitLib.h>
 #include "CpuExceptionCommon.h"
 
-//
-// Image Aglinment size for SEC/PEI phase
-//
-CONST UINTN    mImageAlignSize   = 4;
 CONST UINTN    mDoFarReturnFlag  = 0;
 
 /**
@@ -34,10 +25,32 @@ CommonExceptionHandler (
   IN EFI_SYSTEM_CONTEXT   SystemContext
   )
 {
+  if (ExceptionType == VC_EXCEPTION) {
+    EFI_STATUS  Status;
+    //
+    // #VC needs to be handled immediately upon enabling exception handling
+    // and therefore can't use the RegisterCpuInterruptHandler() interface
+    // (which isn't supported under Sec and Pei anyway).
+    //
+    // Handle the #VC:
+    //   On EFI_SUCCESS - Exception has been handled, return
+    //   On other       - ExceptionType contains (possibly new) exception
+    //                    value
+    //
+    Status = VmgExitHandleVc (&ExceptionType, SystemContext);
+    if (!EFI_ERROR (Status)) {
+      return;
+    }
+  }
+
+  //
+  // Initialize the serial port before dumping.
+  //
+  SerialPortInitialize ();
   //
   // Display ExceptionType, CPU information and Image information
   //
-  DumpCpuContent (ExceptionType, SystemContext);
+  DumpImageAndCpuContent (ExceptionType, SystemContext);
 
   //
   // Enter a dead loop.
@@ -93,7 +106,7 @@ InitializeCpuExceptionHandlers (
   IdtEntryCount = (IdtDescriptor.Limit + 1) / sizeof (IA32_IDT_GATE_DESCRIPTOR);
   if (IdtEntryCount > CPU_EXCEPTION_NUM) {
     //
-    // CPU exeption library only setup CPU_EXCEPTION_NUM exception handler at most
+    // CPU exception library only setup CPU_EXCEPTION_NUM exception handler at most
     //
     IdtEntryCount = CPU_EXCEPTION_NUM;
   }
@@ -180,4 +193,36 @@ RegisterCpuInterruptHandler (
   )
 {
   return EFI_UNSUPPORTED;
+}
+
+/**
+  Initializes all CPU exceptions entries with optional extra initializations.
+
+  By default, this method should include all functionalities implemented by
+  InitializeCpuExceptionHandlers(), plus extra initialization works, if any.
+  This could be done by calling InitializeCpuExceptionHandlers() directly
+  in this method besides the extra works.
+
+  InitData is optional and its use and content are processor arch dependent.
+  The typical usage of it is to convey resources which have to be reserved
+  elsewhere and are necessary for the extra initializations of exception.
+
+  @param[in]  VectorInfo    Pointer to reserved vector list.
+  @param[in]  InitData      Pointer to data optional for extra initializations
+                            of exception.
+
+  @retval EFI_SUCCESS             The exceptions have been successfully
+                                  initialized.
+  @retval EFI_INVALID_PARAMETER   VectorInfo or InitData contains invalid
+                                  content.
+
+**/
+EFI_STATUS
+EFIAPI
+InitializeCpuExceptionHandlersEx (
+  IN EFI_VECTOR_HANDOFF_INFO            *VectorInfo OPTIONAL,
+  IN CPU_EXCEPTION_INIT_DATA            *InitData OPTIONAL
+  )
+{
+  return InitializeCpuExceptionHandlers (VectorInfo);
 }

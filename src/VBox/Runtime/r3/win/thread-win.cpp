@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: thread-win.cpp 88688 2021-04-23 19:24:05Z vboxsync $ */
 /** @file
  * IPRT - Threads, Windows.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP RTLOGGROUP_THREAD
-#include <iprt/win/windows.h>
+#include <iprt/nt/nt-and-windows.h>
 
 #include <errno.h>
 #include <process.h>
@@ -41,23 +41,51 @@
 #include <iprt/assert.h>
 #include <iprt/cpuset.h>
 #include <iprt/err.h>
+#include <iprt/ldr.h>
 #include <iprt/log.h>
 #include <iprt/mem.h>
+#include <iprt/param.h>
 #include "internal/thread.h"
+#include "internal-r3-win.h"
 
 
 /*********************************************************************************************************************************
-*   Defined Constants And Macros                                                                                                 *
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
+/** SetThreadDescription */
+typedef HRESULT (WINAPI *PFNSETTHREADDESCRIPTION)(HANDLE hThread, WCHAR *pwszName); /* Since W10 1607 */
+
+/** CoInitializeEx */
+typedef HRESULT (WINAPI *PFNCOINITIALIZEEX)(LPVOID, DWORD);
+/** CoUninitialize */
+typedef void (WINAPI *PFNCOUNINITIALIZE)(void);
+/** OleUninitialize */
+typedef void (WINAPI *PFNOLEUNINITIALIZE)(void);
+
+
+
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
 /** The TLS index allocated for storing the RTTHREADINT pointer. */
-static DWORD g_dwSelfTLS = TLS_OUT_OF_INDEXES;
+static DWORD                    g_dwSelfTLS = TLS_OUT_OF_INDEXES;
+/** Pointer to SetThreadDescription (KERNEL32.DLL) if available. */
+static PFNSETTHREADDESCRIPTION  g_pfnSetThreadDescription = NULL;
+
+/** Pointer to CoInitializeEx (OLE32.DLL / combase.dll) if available. */
+static PFNCOINITIALIZEEX volatile   g_pfnCoInitializeEx  = NULL;
+/** Pointer to CoUninitialize (OLE32.DLL / combase.dll) if available. */
+static PFNCOUNINITIALIZE volatile   g_pfnCoUninitialize  = NULL;
+/** Pointer to OleUninitialize (OLE32.DLL / combase.dll) if available. */
+static PFNOLEUNINITIALIZE volatile  g_pfnOleUninitialize = NULL;
 
 
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
 *********************************************************************************************************************************/
-static unsigned __stdcall rtThreadNativeMain(void *pvArgs);
+static unsigned __stdcall rtThreadNativeMain(void *pvArgs) RT_NOTHROW_PROTO;
 static void rtThreadWinTellDebuggerThreadName(uint32_t idThread, const char *pszName);
+DECLINLINE(void) rtThreadWinSetThreadName(PRTTHREADINT pThread, DWORD idThread);
 
 
 DECLHIDDEN(int) rtThreadNativeInit(void)
@@ -65,6 +93,8 @@ DECLHIDDEN(int) rtThreadNativeInit(void)
     g_dwSelfTLS = TlsAlloc();
     if (g_dwSelfTLS == TLS_OUT_OF_INDEXES)
         return VERR_NO_TLS_FOR_SELF;
+
+    g_pfnSetThreadDescription = (PFNSETTHREADDESCRIPTION)GetProcAddress(g_hModKernel32, "SetThreadDescription");
     return VINF_SUCCESS;
 }
 
@@ -107,8 +137,7 @@ DECLHIDDEN(int) rtThreadNativeAdopt(PRTTHREADINT pThread)
 {
     if (!TlsSetValue(g_dwSelfTLS, pThread))
         return VERR_FAILED_TO_SET_SELF_TLS;
-    if (IsDebuggerPresent())
-        rtThreadWinTellDebuggerThreadName(GetCurrentThreadId(), pThread->szName);
+    rtThreadWinSetThreadName(pThread, GetCurrentThreadId());
     return VINF_SUCCESS;
 }
 
@@ -145,6 +174,31 @@ static void rtThreadWinTellDebuggerThreadName(uint32_t idThread, const char *psz
     __except(EXCEPTION_CONTINUE_EXECUTION)
     {
 
+    }
+}
+
+
+/**
+ * Sets the thread name as best as we can.
+ */
+DECLINLINE(void) rtThreadWinSetThreadName(PRTTHREADINT pThread, DWORD idThread)
+{
+    if (IsDebuggerPresent())
+        rtThreadWinTellDebuggerThreadName(idThread, &pThread->szName[0]);
+
+    /* The SetThreadDescription API introduced in windows 10 1607 / server 2016
+       allows setting the thread name while the debugger isn't attached.  Works
+       with WinDbgX, VisualStudio 2017 v15.6+, and presumeably some recent windbg
+       version. */
+    if (g_pfnSetThreadDescription)
+    {
+        /* The name should be ASCII, so we just need to expand 'char' to 'WCHAR'. */
+        WCHAR wszName[RTTHREAD_NAME_LEN];
+        for (size_t i = 0; i < RTTHREAD_NAME_LEN; i++)
+            wszName[i] = pThread->szName[i];
+
+        HRESULT hrc = g_pfnSetThreadDescription(GetCurrentThread(), wszName);
+        Assert(SUCCEEDED(hrc)); RT_NOREF(hrc);
     }
 }
 
@@ -212,16 +266,21 @@ static void rtThreadNativeUninitComAndOle(void)
         AssertMsgFailed(("cComInits=%u (%#x) cOleInits=%u (%#x) - dangling COM/OLE inits!\n",
                          cComInits, cComInits, cOleInits, cOleInits));
 
-        HMODULE hOle32 = GetModuleHandle("ole32.dll");
-        AssertReturnVoid(hOle32 != NULL);
+        PFNOLEUNINITIALIZE  pfnOleUninitialize = g_pfnOleUninitialize;
+        PFNCOUNINITIALIZE   pfnCoUninitialize  = g_pfnCoUninitialize;
+        if (pfnCoUninitialize && pfnOleUninitialize)
+        { /* likely */ }
+        else
+        {
+            HMODULE hOle32 = GetModuleHandle("ole32.dll");
+            AssertReturnVoid(hOle32 != NULL);
 
-        typedef void (WINAPI *PFNOLEUNINITIALIZE)(void);
-        PFNOLEUNINITIALIZE  pfnOleUninitialize = (PFNOLEUNINITIALIZE)GetProcAddress(hOle32, "OleUninitialize");
-        AssertReturnVoid(pfnOleUninitialize);
+            pfnOleUninitialize = (PFNOLEUNINITIALIZE)GetProcAddress(hOle32, "OleUninitialize");
+            AssertReturnVoid(pfnOleUninitialize);
 
-        typedef void (WINAPI *PFNCOUNINITIALIZE)(void);
-        PFNCOUNINITIALIZE   pfnCoUninitialize  = (PFNCOUNINITIALIZE)GetProcAddress(hOle32, "CoUninitialize");
-        AssertReturnVoid(pfnCoUninitialize);
+            pfnCoUninitialize  = (PFNCOUNINITIALIZE)GetProcAddress(hOle32, "CoUninitialize");
+            AssertReturnVoid(pfnCoUninitialize);
+        }
 
         while (cOleInits-- > 0)
         {
@@ -237,19 +296,74 @@ static void rtThreadNativeUninitComAndOle(void)
 
 
 /**
+ * Implements the RTTHREADFLAGS_COM_MTA and RTTHREADFLAGS_COM_STA flags.
+ *
+ * @returns true if COM uninitialization should be done, false if not.
+ * @param   fFlags      The thread flags.
+ */
+static bool rtThreadNativeWinCoInitialize(unsigned fFlags)
+{
+    /*
+     * Resolve the ole32 init and uninit functions dynamically.
+     */
+    PFNCOINITIALIZEEX pfnCoInitializeEx = g_pfnCoInitializeEx;
+    PFNCOUNINITIALIZE pfnCoUninitialize = g_pfnCoUninitialize;
+    if (pfnCoInitializeEx && pfnCoUninitialize)
+    { /* likely */ }
+    else
+    {
+        RTLDRMOD hModOle32 = NIL_RTLDRMOD;
+        int rc = RTLdrLoadSystem("ole32.dll", true /*fNoUnload*/, &hModOle32);
+        AssertRCReturn(rc, false);
+
+        PFNOLEUNINITIALIZE pfnOleUninitialize;
+        pfnOleUninitialize = (PFNOLEUNINITIALIZE)RTLdrGetFunction(hModOle32, "OleUninitialize");
+        pfnCoUninitialize  = (PFNCOUNINITIALIZE )RTLdrGetFunction(hModOle32, "CoUninitialize");
+        pfnCoInitializeEx  = (PFNCOINITIALIZEEX )RTLdrGetFunction(hModOle32, "CoInitializeEx");
+
+        RTLdrClose(hModOle32);
+        AssertReturn(pfnCoInitializeEx && pfnCoUninitialize, false);
+
+        if (pfnOleUninitialize && !g_pfnOleUninitialize)
+            g_pfnOleUninitialize = pfnOleUninitialize;
+        g_pfnCoInitializeEx = pfnCoInitializeEx;
+        g_pfnCoUninitialize = pfnCoUninitialize;
+    }
+
+    /*
+     * Do the initializating.
+     */
+    DWORD fComInit;
+    if (fFlags & RTTHREADFLAGS_COM_MTA)
+        fComInit = COINIT_MULTITHREADED     | COINIT_SPEED_OVER_MEMORY | COINIT_DISABLE_OLE1DDE;
+    else
+        fComInit = COINIT_APARTMENTTHREADED | COINIT_SPEED_OVER_MEMORY;
+    HRESULT hrc = pfnCoInitializeEx(NULL, fComInit);
+    AssertMsg(SUCCEEDED(hrc), ("%Rhrc fComInit=%#x\n", hrc, fComInit));
+    return SUCCEEDED(hrc);
+}
+
+
+/**
  * Wrapper which unpacks the param stuff and calls thread function.
  */
-static unsigned __stdcall rtThreadNativeMain(void *pvArgs)
+static unsigned __stdcall rtThreadNativeMain(void *pvArgs) RT_NOTHROW_DEF
 {
     DWORD           dwThreadId = GetCurrentThreadId();
     PRTTHREADINT    pThread = (PRTTHREADINT)pvArgs;
 
     if (!TlsSetValue(g_dwSelfTLS, pThread))
         AssertReleaseMsgFailed(("failed to set self TLS. lasterr=%d thread '%s'\n", GetLastError(), pThread->szName));
-    if (IsDebuggerPresent())
-        rtThreadWinTellDebuggerThreadName(dwThreadId, &pThread->szName[0]);
+    rtThreadWinSetThreadName(pThread, dwThreadId);
+
+    bool fUninitCom = (pThread->fFlags & (RTTHREADFLAGS_COM_MTA | RTTHREADFLAGS_COM_STA)) != 0;
+    if (fUninitCom)
+        fUninitCom = rtThreadNativeWinCoInitialize(pThread->fFlags);
 
     int rc = rtThreadMain(pThread, dwThreadId, &pThread->szName[0]);
+
+    if (fUninitCom && g_pfnCoUninitialize)
+        g_pfnCoUninitialize();
 
     TlsSetValue(g_dwSelfTLS, NULL);
     rtThreadNativeUninitComAndOle();
@@ -263,11 +377,19 @@ DECLHIDDEN(int) rtThreadNativeCreate(PRTTHREADINT pThread, PRTNATIVETHREAD pNati
     AssertReturn(pThread->cbStack < ~(unsigned)0, VERR_INVALID_PARAMETER);
 
     /*
+     * If a stack size is given, make sure it's not a multiple of 64KB so that we
+     * get one or more pages for overflow protection.  (ASSUMES 64KB alloc align.)
+     */
+    unsigned cbStack = (unsigned)pThread->cbStack;
+    if (cbStack > 0 && RT_ALIGN_T(cbStack, _64K, unsigned) == cbStack)
+        cbStack += PAGE_SIZE;
+
+    /*
      * Create the thread.
      */
     pThread->hThread = (uintptr_t)INVALID_HANDLE_VALUE;
     unsigned    uThreadId = 0;
-    uintptr_t   hThread = _beginthreadex(NULL, (unsigned)pThread->cbStack, rtThreadNativeMain, pThread, 0, &uThreadId);
+    uintptr_t   hThread   = _beginthreadex(NULL, cbStack, rtThreadNativeMain, pThread, 0, &uThreadId);
     if (hThread != 0 && hThread != ~0U)
     {
         pThread->hThread = hThread;
@@ -275,6 +397,16 @@ DECLHIDDEN(int) rtThreadNativeCreate(PRTTHREADINT pThread, PRTNATIVETHREAD pNati
         return VINF_SUCCESS;
     }
     return RTErrConvertFromErrno(errno);
+}
+
+
+DECLHIDDEN(bool) rtThreadNativeIsAliveKludge(PRTTHREADINT pThread)
+{
+    PPEB_COMMON pPeb = NtCurrentPeb();
+    if (!pPeb || !pPeb->Ldr || !pPeb->Ldr->ShutdownInProgress)
+        return true;
+    DWORD rcWait = WaitForSingleObject((HANDLE)pThread->hThread, 0);
+    return rcWait != WAIT_OBJECT_0;
 }
 
 
@@ -364,5 +496,47 @@ RTR3DECL(int) RTThreadGetExecutionTimeMilli(uint64_t *pKernelTime, uint64_t *pUs
     int iLastError = GetLastError();
     AssertMsgFailed(("GetThreadTimes failed, LastError=%d\n", iLastError));
     return RTErrConvertFromWin32(iLastError);
+}
+
+
+/**
+ * Gets the native thread handle for a IPRT thread.
+ *
+ * @returns The thread handle. INVALID_HANDLE_VALUE on failure.
+ * @param   hThread     The IPRT thread handle.
+ *
+ * @note    Windows only.
+ * @note    Only valid after parent returns from the thread creation call.
+ */
+RTDECL(uintptr_t) RTThreadGetNativeHandle(RTTHREAD hThread)
+{
+    PRTTHREADINT pThread = rtThreadGet(hThread);
+    if (pThread)
+    {
+        uintptr_t hHandle = pThread->hThread;
+        rtThreadRelease(pThread);
+        return hHandle;
+    }
+    return (uintptr_t)INVALID_HANDLE_VALUE;
+}
+RT_EXPORT_SYMBOL(RTThreadGetNativeHandle);
+
+
+RTDECL(int) RTThreadPoke(RTTHREAD hThread)
+{
+    AssertReturn(hThread != RTThreadSelf(), VERR_INVALID_PARAMETER);
+    if (g_pfnNtAlertThread)
+    {
+        PRTTHREADINT pThread = rtThreadGet(hThread);
+        AssertReturn(pThread, VERR_INVALID_HANDLE);
+
+        NTSTATUS rcNt = g_pfnNtAlertThread((HANDLE)pThread->hThread);
+
+        rtThreadRelease(pThread);
+        if (NT_SUCCESS(rcNt))
+            return VINF_SUCCESS;
+        return RTErrConvertFromNtStatus(rcNt);
+    }
+    return VERR_NOT_IMPLEMENTED;
 }
 

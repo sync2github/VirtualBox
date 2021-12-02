@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPVModes.cpp 83842 2020-04-20 09:24:40Z vboxsync $ */
 /** @file
  * VBox WDDM Miniport driver
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,9 @@
 
 #include "VBoxMPWddm.h"
 #include "common/VBoxMPCommon.h"
+#include <iprt/param.h> /* PAGE_OFFSET_MASK */
+#include <iprt/utf16.h>
 
-#include <stdio.h>
 
 
 int VBoxVModesInit(VBOX_VMODES *pModes, uint32_t cTargets)
@@ -187,15 +188,15 @@ static void vboxWddmVModesSaveTransient(PVBOXMP_DEVEXT pExt, uint32_t u32Target,
     }
     else
     {
-        wchar_t keyname[32];
-        swprintf(keyname, L"CustomXRes%d", u32Target);
-        rc = VBoxMPCmnRegSetDword(Registry, keyname, pResolution->cx);
+        wchar_t wszKeyName[32];
+        RTUtf16Printf(wszKeyName, RT_ELEMENTS(wszKeyName), "CustomXRes%d", u32Target);
+        rc = VBoxMPCmnRegSetDword(Registry, wszKeyName, pResolution->cx);
         VBOXMP_WARN_VPS(rc);
-        swprintf(keyname, L"CustomYRes%d", u32Target);
-        rc = VBoxMPCmnRegSetDword(Registry, keyname, pResolution->cy);
+        RTUtf16Printf(wszKeyName, RT_ELEMENTS(wszKeyName), "CustomYRes%d", u32Target);
+        rc = VBoxMPCmnRegSetDword(Registry, wszKeyName, pResolution->cy);
         VBOXMP_WARN_VPS(rc);
-        swprintf(keyname, L"CustomBPP%d", u32Target);
-        rc = VBoxMPCmnRegSetDword(Registry, keyname, 32); /* <- just in case for older driver usage */
+        RTUtf16Printf(wszKeyName, RT_ELEMENTS(wszKeyName), "CustomBPP%d", u32Target);
+        rc = VBoxMPCmnRegSetDword(Registry, wszKeyName, 32); /* <- just in case for older driver usage */
         VBOXMP_WARN_VPS(rc);
     }
 
@@ -219,9 +220,7 @@ int vboxWddmVModesAdd(PVBOXMP_DEVEXT pExt, VBOXWDDM_VMODES *pModes, uint32_t u32
 
     ULONG vramSize = vboxWddmVramCpuVisibleSegmentSize(pExt);
     vramSize /= pExt->u.primary.commonInfo.cDisplays;
-# ifdef VBOX_WDDM_WIN8
     if (!g_VBoxDisplayOnly)
-# endif
     {
         /* at least two surfaces will be needed: primary & shadow */
         vramSize /= 2;
@@ -229,18 +228,25 @@ int vboxWddmVModesAdd(PVBOXMP_DEVEXT pExt, VBOXWDDM_VMODES *pModes, uint32_t u32
     vramSize &= ~PAGE_OFFSET_MASK;
 
     /* prevent potensial overflow */
-    if (pResolution->cx > 0x7fff
-            || pResolution->cy > 0x7fff)
+    if (   pResolution->cx > 0x7fff
+        || pResolution->cy > 0x7fff)
     {
-        WARN(("too big resolution"));
+        WARN(("resolution %dx%d insane", pResolution->cx, pResolution->cy));
         return VERR_INVALID_PARAMETER;
     }
+
     uint32_t cbSurfMem = pResolution->cx * pResolution->cy * 4;
     if (cbSurfMem > vramSize)
+    {
+        WARN(("resolution %dx%d too big for available VRAM (%d bytes)\n", pResolution->cx, pResolution->cy, vramSize));
         return VERR_NOT_SUPPORTED;
+    }
 
     if (!VBoxLikesVideoMode(u32Target, pResolution->cx, pResolution->cy, 32))
+    {
+        WARN(("resolution %dx%d not accepted by the frontend\n", pResolution->cx, pResolution->cy));
         return VERR_NOT_SUPPORTED;
+    }
 
     if (pModes->aTransientResolutions[u32Target] == CR_RSIZE2U64(*pResolution))
     {
@@ -330,12 +336,12 @@ int voxWddmVModesInitForTarget(PVBOXMP_DEVEXT pExt, VBOXWDDM_VMODES *pModes, uin
     }
     else
     {
-        wchar_t keyname[32];
-        swprintf(keyname, L"CustomXRes%d", u32Target);
-        vpRc = VBoxMPCmnRegQueryDword(Registry, keyname, &CustomXRes);
+        wchar_t wszKeyName[32];
+        RTUtf16Printf(wszKeyName, RT_ELEMENTS(wszKeyName), "CustomXRes%d", u32Target);
+        vpRc = VBoxMPCmnRegQueryDword(Registry, wszKeyName, &CustomXRes);
         VBOXMP_WARN_VPS_NOBP(vpRc);
-        swprintf(keyname, L"CustomYRes%d", u32Target);
-        vpRc = VBoxMPCmnRegQueryDword(Registry, keyname, &CustomYRes);
+        RTUtf16Printf(wszKeyName, RT_ELEMENTS(wszKeyName), "CustomYRes%d", u32Target);
+        vpRc = VBoxMPCmnRegQueryDword(Registry, wszKeyName, &CustomYRes);
         VBOXMP_WARN_VPS_NOBP(vpRc);
     }
 
@@ -355,14 +361,14 @@ int voxWddmVModesInitForTarget(PVBOXMP_DEVEXT pExt, VBOXWDDM_VMODES *pModes, uin
 
     for (int curKey=0; curKey<128; curKey++)
     {
-        wchar_t keyname[24];
+        wchar_t wszKeyName[24];
 
-        swprintf(keyname, L"CustomMode%dWidth", curKey);
-        vpRc = VBoxMPCmnRegQueryDword(Registry, keyname, &CustomXRes);
+        RTUtf16Printf(wszKeyName, RT_ELEMENTS(wszKeyName), "CustomMode%dWidth", curKey);
+        vpRc = VBoxMPCmnRegQueryDword(Registry, wszKeyName, &CustomXRes);
         VBOXMP_CHECK_VPS_BREAK(vpRc);
 
-        swprintf(keyname, L"CustomMode%dHeight", curKey);
-        vpRc = VBoxMPCmnRegQueryDword(Registry, keyname, &CustomYRes);
+        RTUtf16Printf(wszKeyName, RT_ELEMENTS(wszKeyName), "CustomMode%dHeight", curKey);
+        vpRc = VBoxMPCmnRegQueryDword(Registry, wszKeyName, &CustomYRes);
         VBOXMP_CHECK_VPS_BREAK(vpRc);
 
         LOG(("got custom mode[%u]=%ux%u", curKey, CustomXRes, CustomYRes));
@@ -540,94 +546,8 @@ static NTSTATUS vboxWddmChildStatusHandleRequest(PVBOXMP_DEVEXT pDevExt, VBOXVDM
     return Status;
 }
 
-#ifdef VBOX_WDDM_MONITOR_REPLUG_IRQ
-typedef struct VBOXWDDMCHILDSTATUSCB
-{
-    PVBOXVDMACBUF_DR pDr;
-    PKEVENT pEvent;
-} VBOXWDDMCHILDSTATUSCB, *PVBOXWDDMCHILDSTATUSCB;
-
-static DECLCALLBACK(VOID) vboxWddmChildStatusReportCompletion(PVBOXMP_DEVEXT pDevExt, PVBOXVDMADDI_CMD pCmd, PVOID pvContext)
-{
-    /* we should be called from our DPC routine */
-    Assert(KeGetCurrentIrql() == DISPATCH_LEVEL);
-
-    PVBOXWDDMCHILDSTATUSCB pCtx = (PVBOXWDDMCHILDSTATUSCB)pvContext;
-    PVBOXVDMACBUF_DR pDr = pCtx->pDr;
-    PVBOXVDMACMD pHdr = VBOXVDMACBUF_DR_TAIL(pDr, VBOXVDMACMD);
-    VBOXVDMACMD_CHILD_STATUS_IRQ *pBody = VBOXVDMACMD_BODY(pHdr, VBOXVDMACMD_CHILD_STATUS_IRQ);
-
-    vboxWddmChildStatusHandleRequest(pDevExt, pBody);
-
-    vboxVdmaCBufDrFree(&pDevExt->u.primary.Vdma, pDr);
-
-    if (pCtx->pEvent)
-    {
-        KeSetEvent(pCtx->pEvent, 0, FALSE);
-    }
-}
-#endif
-
 NTSTATUS VBoxWddmChildStatusReportReconnected(PVBOXMP_DEVEXT pDevExt, uint32_t iChild)
 {
-#ifdef VBOX_WDDM_MONITOR_REPLUG_IRQ
-    NTSTATUS Status = STATUS_UNSUCCESSFUL;
-    UINT cbCmd = VBOXVDMACMD_SIZE_FROMBODYSIZE(sizeof (VBOXVDMACMD_CHILD_STATUS_IRQ));
-
-    PVBOXVDMACBUF_DR pDr = vboxVdmaCBufDrCreate(&pDevExt->u.primary.Vdma, cbCmd);
-    if (pDr)
-    {
-        // vboxVdmaCBufDrCreate zero initializes the pDr
-        /* the command data follows the descriptor */
-        pDr->fFlags = VBOXVDMACBUF_FLAG_BUF_FOLLOWS_DR;
-        pDr->cbBuf = cbCmd;
-        pDr->rc = VERR_NOT_IMPLEMENTED;
-
-        PVBOXVDMACMD pHdr = VBOXVDMACBUF_DR_TAIL(pDr, VBOXVDMACMD);
-        pHdr->enmType = VBOXVDMACMD_TYPE_CHILD_STATUS_IRQ;
-        pHdr->u32CmdSpecific = 0;
-        PVBOXVDMACMD_CHILD_STATUS_IRQ pBody = VBOXVDMACMD_BODY(pHdr, VBOXVDMACMD_CHILD_STATUS_IRQ);
-        pBody->cInfos = 1;
-        if (iChild == D3DDDI_ID_ALL)
-        {
-            pBody->fFlags |= VBOXVDMACMD_CHILD_STATUS_IRQ_F_APPLY_TO_ALL;
-        }
-        pBody->aInfos[0].iChild = iChild;
-        pBody->aInfos[0].fFlags = VBOXVDMA_CHILD_STATUS_F_DISCONNECTED | VBOXVDMA_CHILD_STATUS_F_CONNECTED;
-        /* we're going to KeWaitForSingleObject */
-        Assert(KeGetCurrentIrql() < DISPATCH_LEVEL);
-
-        PVBOXVDMADDI_CMD pDdiCmd = VBOXVDMADDI_CMD_FROM_BUF_DR(pDr);
-        VBOXWDDMCHILDSTATUSCB Ctx;
-        KEVENT Event;
-        KeInitializeEvent(&Event, NotificationEvent, FALSE);
-        Ctx.pDr = pDr;
-        Ctx.pEvent = &Event;
-        vboxVdmaDdiCmdInit(pDdiCmd, 0, 0, vboxWddmChildStatusReportCompletion, &Ctx);
-        /* mark command as submitted & invisible for the dx runtime since dx did not originate it */
-        vboxVdmaDdiCmdSubmittedNotDx(pDdiCmd);
-        int rc = vboxVdmaCBufDrSubmit(pDevExt, &pDevExt->u.primary.Vdma, pDr);
-        Assert(rc == VINF_SUCCESS);
-        if (RT_SUCCESS(rc))
-        {
-            Status = KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-            AssertNtStatusSuccess(Status);
-            return STATUS_SUCCESS;
-        }
-
-        Status = STATUS_UNSUCCESSFUL;
-
-        vboxVdmaCBufDrFree(&pDevExt->u.primary.Vdma, pDr);
-    }
-    else
-    {
-        /** @todo try flushing.. */
-        WARN(("vboxVdmaCBufDrCreate returned NULL"));
-        Status = STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    return Status;
-#else
     VBOXVDMACMD_CHILD_STATUS_IRQ Body = {0};
     Body.cInfos = 1;
     if (iChild == D3DDDI_ID_ALL)
@@ -638,14 +558,10 @@ NTSTATUS VBoxWddmChildStatusReportReconnected(PVBOXMP_DEVEXT pDevExt, uint32_t i
     Body.aInfos[0].fFlags = VBOXVDMA_CHILD_STATUS_F_DISCONNECTED | VBOXVDMA_CHILD_STATUS_F_CONNECTED;
     Assert(KeGetCurrentIrql() <= DISPATCH_LEVEL);
     return vboxWddmChildStatusHandleRequest(pDevExt, &Body);
-#endif
 }
 
 NTSTATUS VBoxWddmChildStatusConnect(PVBOXMP_DEVEXT pDevExt, uint32_t iChild, BOOLEAN fConnect)
 {
-#ifdef VBOX_WDDM_MONITOR_REPLUG_IRQ
-# error "port me!"
-#else
     Assert(iChild < (uint32_t)VBoxCommonFromDeviceExt(pDevExt)->cDisplays);
     NTSTATUS Status = STATUS_SUCCESS;
     VBOXVDMACMD_CHILD_STATUS_IRQ Body = {0};
@@ -658,5 +574,4 @@ NTSTATUS VBoxWddmChildStatusConnect(PVBOXMP_DEVEXT pDevExt, uint32_t iChild, BOO
         WARN(("vboxWddmChildStatusHandleRequest failed Status 0x%x", Status));
 
     return Status;
-#endif
 }

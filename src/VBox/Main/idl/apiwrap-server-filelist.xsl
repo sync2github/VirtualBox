@@ -7,7 +7,7 @@
         the lists of files that apiwrap-server.xsl produces
         from VirtualBox.xidl.
 
-    Copyright (C) 2015-2016 Oracle Corporation
+    Copyright (C) 2015-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -27,6 +27,13 @@
 <xsl:output method="text"/>
 
 <xsl:strip-space elements="*"/>
+
+<!-- - - - - - - - - - - - - - - - - - - - - - -
+   XSLT parameters
+ - - - - - - - - - - - - - - - - - - - - - - -->
+
+<!-- Whether to generate wrappers for VBoxSDS-->
+<xsl:param name="g_fVBoxWithSDS" select="'no'"/>
 
 <!-- - - - - - - - - - - - - - - - - - - - - - -
   global XSLT variables
@@ -57,19 +64,19 @@
  - - - - - - - - - - - - - - - - - - - - - - -->
 
 <xsl:template match="interface" mode="filelist-even-sources">
-    <xsl:if test="not(@internal='yes') and not(@supportsErrorInfo='no') and (position() mod 2) = 0">
+    <xsl:if test="not(@internal='yes') and not(@autogen='VBoxEvent') and not(@supportsErrorInfo='no') and (position() mod 2) = 0">
         <xsl:value-of select="concat(' \', $G_sNewLine, '&#9;$(VBOX_MAIN_APIWRAPPER_DIR)/', substring(@name, 2), 'Wrap.cpp')"/>
     </xsl:if>
 </xsl:template>
 
 <xsl:template match="interface" mode="filelist-odd-sources">
-    <xsl:if test="not(@internal='yes') and not(@supportsErrorInfo='no') and (position() mod 2) = 1">
+    <xsl:if test="not(@internal='yes') and not(@autogen='VBoxEvent') and not(@supportsErrorInfo='no') and (position() mod 2) = 1">
         <xsl:value-of select="concat(' \', $G_sNewLine, '&#9;$(VBOX_MAIN_APIWRAPPER_DIR)/', substring(@name, 2), 'Wrap.cpp')"/>
     </xsl:if>
 </xsl:template>
 
 <xsl:template match="interface" mode="filelist-headers">
-    <xsl:if test="not(@internal='yes') and not(@supportsErrorInfo='no')">
+    <xsl:if test="not(@internal='yes') and not(@autogen='VBoxEvent') and not(@supportsErrorInfo='no')">
         <xsl:value-of select="concat(' \', $G_sNewLine, '&#9;$(VBOX_MAIN_APIWRAPPER_DIR)/', substring(@name, 2), 'Wrap.h')"/>
     </xsl:if>
 </xsl:template>
@@ -94,6 +101,22 @@
     <xsl:if test="(@target = 'xpidl') or (@target = 'midl')">
         <xsl:apply-templates mode="filelist-headers"/>
     </xsl:if>
+</xsl:template>
+
+<!-- - - - - - - - - - - - - - - - - - - - - - -
+  application match
+ - - - - - - - - - - - - - - - - - - - - - - -->
+
+<xsl:template match="application" mode="filelist-even-sources" name="template_app_filelist_even_sources">
+    <xsl:apply-templates mode="filelist-even-sources"/>
+</xsl:template>
+
+<xsl:template match="application" mode="filelist-odd-sources" name="template_app_filelist_odd_sources">
+    <xsl:apply-templates mode="filelist-odd-sources"/>
+</xsl:template>
+
+<xsl:template match="application" mode="filelist-headers" name="template_app_filelist_headers">
+    <xsl:apply-templates mode="filelist-headers"/>
 </xsl:template>
 
 <!-- - - - - - - - - - - - - - - - - - - - - - -
@@ -132,6 +155,26 @@
     <xsl:apply-templates mode="filelist-headers"/>
     <xsl:value-of select="concat($G_sNewLine, $G_sNewLine)"/>
 </xsl:template>
+
+
+    <xsl:template match="application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']" mode="filelist-even-sources" >
+        <xsl:if test="$g_fVBoxWithSDS='yes'" >
+            <xsl:call-template name="template_app_filelist_even_sources" />
+        </xsl:if>
+    </xsl:template>
+
+    <xsl:template match="application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']" mode="filelist-headers" >
+        <xsl:if test="$g_fVBoxWithSDS='yes'" >
+            <xsl:call-template name="template_app_filelist_headers" />
+        </xsl:if>
+    </xsl:template>
+
+    <xsl:template match="application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']" mode="filelist-odd-sources" >
+        <xsl:if test="$g_fVBoxWithSDS='yes'" >
+            <xsl:call-template name="template_app_filelist_odd_sources" />
+        </xsl:if>
+    </xsl:template>
+
 
 </xsl:stylesheet>
 <!-- vi: set tabstop=4 shiftwidth=4 expandtab: -->

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstVD.cpp 87239 2021-01-13 13:43:00Z vboxsync $ */
 /** @file
  * Simple VBox HDD container test utility.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,9 +20,11 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <VBox/vd.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
-#include <iprt/asm-amd64-x86.h>
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
+# include <iprt/asm-amd64-x86.h>
+#endif
 #include <iprt/dir.h>
 #include <iprt/string.h>
 #include <iprt/stream.h>
@@ -66,7 +68,7 @@ static int tstVDCreateDelete(const char *pszBackend, const char *pszFilename,
                              uint64_t cbSize, unsigned uFlags, bool fDelete)
 {
     int rc;
-    PVBOXHDD pVD = NULL;
+    PVDISK pVD = NULL;
     VDGEOMETRY       PCHS = { 0, 0, 0 };
     VDGEOMETRY       LCHS = { 0, 0, 0 };
     PVDINTERFACE     pVDIfs = NULL;
@@ -121,7 +123,7 @@ static int tstVDCreateDelete(const char *pszBackend, const char *pszFilename,
 static int tstVDOpenDelete(const char *pszBackend, const char *pszFilename)
 {
     int rc;
-    PVBOXHDD         pVD = NULL;
+    PVDISK         pVD = NULL;
     PVDINTERFACE     pVDIfs = NULL;
     VDINTERFACEERROR VDIfError;
 
@@ -243,7 +245,11 @@ typedef RNDCTX *PRNDCTX;
 RTDECL(int) RTPRandInit(PRNDCTX pCtx, uint32_t u32Seed)
 {
     if (u32Seed == 0)
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
         u32Seed = (uint32_t)(ASMReadTSC() >> 8);
+#else
+        u32Seed = (uint32_t)(RTTimeNanoTS() >> 19);
+#endif
     /* Zero is not a good seed. */
     if (u32Seed == 0)
         u32Seed = 362436069;
@@ -361,7 +367,7 @@ static void initializeRandomGenerator(PRNDCTX pCtx, uint32_t u32Seed)
     }
 }
 
-static int compareSegments(const void *left, const void *right)
+static int compareSegments(const void *left, const void *right) RT_NOTHROW_DEF
 {
     /* Note that no duplicates are allowed in the array being sorted. */
     return ((PSEGMENT)left)->u64Offset < ((PSEGMENT)right)->u64Offset ? -1 : 1;
@@ -453,7 +459,7 @@ static void mergeSegments(PSEGMENT pBaseSegment, PSEGMENT pDiffSegment, PSEGMENT
     }
 }
 
-static void writeSegmentsToDisk(PVBOXHDD pVD, void *pvBuf, PSEGMENT pSegment)
+static void writeSegmentsToDisk(PVDISK pVD, void *pvBuf, PSEGMENT pSegment)
 {
     while (pSegment->u32Length)
     {
@@ -464,7 +470,7 @@ static void writeSegmentsToDisk(PVBOXHDD pVD, void *pvBuf, PSEGMENT pSegment)
     }
 }
 
-static int readAndCompareSegments(PVBOXHDD pVD, void *pvBuf, PSEGMENT pSegment)
+static int readAndCompareSegments(PVDISK pVD, void *pvBuf, PSEGMENT pSegment)
 {
     while (pSegment->u32Length)
     {
@@ -500,7 +506,7 @@ static int tstVDOpenCreateWriteMerge(const char *pszBackend,
                                      uint32_t u32Seed)
 {
     int rc;
-    PVBOXHDD pVD = NULL;
+    PVDISK pVD = NULL;
     char *pszFormat;
     VDTYPE enmType = VDTYPE_INVALID;
     VDGEOMETRY PCHS = { 0, 0, 0 };
@@ -543,7 +549,7 @@ static int tstVDOpenCreateWriteMerge(const char *pszBackend,
     {
         RTFileClose(File);
         rc = VDGetFormat(NULL /* pVDIfsDisk */, NULL /* pVDIfsImage */,
-                         pszBaseFilename, &pszFormat, &enmType);
+                         pszBaseFilename, VDTYPE_INVALID, &pszFormat, &enmType);
         RTPrintf("VDGetFormat() pszFormat=%s rc=%Rrc\n", pszFormat, rc);
         if (RT_SUCCESS(rc) && strcmp(pszFormat, pszBackend))
         {
@@ -624,7 +630,7 @@ static int tstVDCreateWriteOpenRead(const char *pszBackend,
                                     uint32_t u32Seed)
 {
     int rc;
-    PVBOXHDD pVD = NULL;
+    PVDISK pVD = NULL;
     VDGEOMETRY PCHS = { 0, 0, 0 };
     VDGEOMETRY LCHS = { 0, 0, 0 };
     uint64_t u64DiskSize = 1000 * _1M;
@@ -703,7 +709,7 @@ static int tstVDCreateWriteOpenRead(const char *pszBackend,
 static int tstVmdkRename(const char *src, const char *dst)
 {
     int rc;
-    PVBOXHDD pVD = NULL;
+    PVDISK pVD = NULL;
     PVDINTERFACE     pVDIfs = NULL;
     VDINTERFACEERROR VDIfError;
 
@@ -751,7 +757,7 @@ static int tstVmdkCreateRenameOpen(const char *src, const char *dst,
     if (RT_FAILURE(rc))
         return rc;
 
-    PVBOXHDD pVD = NULL;
+    PVDISK pVD = NULL;
     PVDINTERFACE     pVDIfs = NULL;
     VDINTERFACEERROR VDIfError;
 

@@ -1,9 +1,9 @@
-/* $Id$ */
+/* $Id: VBoxUsbMon.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox USB Monitor
  */
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -12,9 +12,22 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
-#ifndef ___VBoxUsbMon_h___
-#define ___VBoxUsbMon_h___
+
+#ifndef VBOX_INCLUDED_SRC_VBoxUSB_win_mon_VBoxUsbMon_h
+#define VBOX_INCLUDED_SRC_VBoxUSB_win_mon_VBoxUsbMon_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -46,16 +59,9 @@ NTSTATUS VBoxUsbMonQueryBusRelations(PDEVICE_OBJECT pDevObj, PFILE_OBJECT pFileO
 
 void vboxUsbDbgPrintUnicodeString(PUNICODE_STRING pUnicodeString);
 
-/* visit usbhub-originated device PDOs */
-#define VBOXUSBMONHUBWALK_F_PDO 0x00000001
-/* visit usbhub device FDOs */
-#define VBOXUSBMONHUBWALK_F_FDO 0x00000002
-/* visit all usbhub-originated device objects */
-#define VBOXUSBMONHUBWALK_F_ALL (VBOXUSBMONHUBWALK_F_FDO | VBOXUSBMONHUBWALK_F_PDO)
-
-typedef DECLCALLBACK(BOOLEAN) FNVBOXUSBMONDEVWALKER(PFILE_OBJECT pFile, PDEVICE_OBJECT pTopDo, PDEVICE_OBJECT pHubDo, PVOID pvContext);
+typedef DECLCALLBACKTYPE(BOOLEAN, FNVBOXUSBMONDEVWALKER,(PFILE_OBJECT pHubFile, PDEVICE_OBJECT pHubDo, PVOID pvContext));
 typedef FNVBOXUSBMONDEVWALKER *PFNVBOXUSBMONDEVWALKER;
 
-VOID vboxUsbMonHubDevWalk(PFNVBOXUSBMONDEVWALKER pfnWalker, PVOID pvWalker, ULONG fFlags);
+VOID vboxUsbMonHubDevWalk(PFNVBOXUSBMONDEVWALKER pfnWalker, PVOID pvWalker);
 
-#endif /* #ifndef ___VBoxUsbMon_h___ */
+#endif /* !VBOX_INCLUDED_SRC_VBoxUSB_win_mon_VBoxUsbMon_h */

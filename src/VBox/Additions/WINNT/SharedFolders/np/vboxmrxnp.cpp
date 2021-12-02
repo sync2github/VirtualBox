@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vboxmrxnp.cpp 83825 2020-04-19 01:23:28Z vboxsync $ */
 /** @file
  * VirtualBox Windows Guest Shared Folders - Network provider dll
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,10 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <iprt/win/windows.h>
 #include <winsvc.h>
 #include <winnetwk.h>
@@ -22,14 +26,13 @@
 #include <devioctl.h>
 #include <stdio.h>
 
-#include "..\driver\vbsfshared.h"
+#include "../driver/vbsfshared.h"
 
 #include <iprt/alloc.h>
 #include <iprt/initterm.h>
 #include <iprt/string.h>
 #include <iprt/log.h>
 #include <VBox/version.h>
-#include <VBox/VMMDev.h>
 #include <VBox/VBoxGuestLib.h>
 #include <VBox/Log.h>
 
@@ -1141,7 +1144,7 @@ DWORD APIENTRY NPGetResourceParent(LPNETRESOURCE pNetResource,
         || pLastSlash == pParent->lpRemoteName + 1)
     {
         /* It is a leading backslash. Construct "no parent" NETRESOURCE. */
-        NETRESOURCE *pNetResource = (NETRESOURCE *)pBuffer;
+        NETRESOURCE *pNetResourceNP = (NETRESOURCE *)pBuffer;
 
         cbEntry = sizeof(NETRESOURCE);
         cbEntry += sizeof(MRX_VBOX_PROVIDER_NAME_U); /* remote name */
@@ -1155,20 +1158,20 @@ DWORD APIENTRY NPGetResourceParent(LPNETRESOURCE pNetResource,
         }
         else
         {
-            memset (pNetResource, 0, sizeof (*pNetResource));
+            memset (pNetResourceNP, 0, sizeof (*pNetResourceNP));
 
-            pNetResource->dwType = RESOURCETYPE_ANY;
-            pNetResource->dwDisplayType = RESOURCEDISPLAYTYPE_NETWORK;
-            pNetResource->dwUsage = RESOURCEUSAGE_CONTAINER;
+            pNetResourceNP->dwType = RESOURCETYPE_ANY;
+            pNetResourceNP->dwDisplayType = RESOURCEDISPLAYTYPE_NETWORK;
+            pNetResourceNP->dwUsage = RESOURCEUSAGE_CONTAINER;
 
             WCHAR *pStrings = (WCHAR *)((PBYTE)pBuffer + *pBufferSize);
             pStrings = (PWCHAR)((PBYTE)pStrings - (cbEntry - sizeof(NETRESOURCE)));
 
-            pNetResource->lpRemoteName = pStrings;
+            pNetResourceNP->lpRemoteName = pStrings;
             CopyMemory (pStrings, MRX_VBOX_PROVIDER_NAME_U, sizeof(MRX_VBOX_PROVIDER_NAME_U));
             pStrings += sizeof(MRX_VBOX_PROVIDER_NAME_U) / sizeof(WCHAR);
 
-            pNetResource->lpProvider = pStrings;
+            pNetResourceNP->lpProvider = pStrings;
             CopyMemory (pStrings, MRX_VBOX_PROVIDER_NAME_U, sizeof(MRX_VBOX_PROVIDER_NAME_U));
             pStrings += sizeof(MRX_VBOX_PROVIDER_NAME_U) / sizeof(WCHAR);
 

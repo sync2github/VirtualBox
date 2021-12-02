@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineViewNormal.h 84790 2020-06-11 10:30:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineViewNormal class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineViewNormal_h___
-#define ___UIMachineViewNormal_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_normal_UIMachineViewNormal_h
+#define FEQT_INCLUDED_SRC_runtime_normal_UIMachineViewNormal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Local includes */
 #include "UIMachineView.h"
@@ -28,12 +31,7 @@ class UIMachineViewNormal : public UIMachineView
 protected:
 
     /* Normal machine-view constructor: */
-    UIMachineViewNormal(  UIMachineWindow *pMachineWindow
-                        , ulong uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                        , bool bAccelerate2DVideo
-#endif
-    );
+    UIMachineViewNormal(UIMachineWindow *pMachineWindow, ulong uScreenId);
     /* Normal machine-view destructor: */
     virtual ~UIMachineViewNormal() {}
 
@@ -80,5 +78,5 @@ private:
     friend class UIMachineView;
 };
 
-#endif // !___UIMachineViewNormal_h___
+#endif /* !FEQT_INCLUDED_SRC_runtime_normal_UIMachineViewNormal_h */
 

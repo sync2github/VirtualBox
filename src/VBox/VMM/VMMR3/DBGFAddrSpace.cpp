@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFAddrSpace.cpp 89619 2021-06-11 08:09:52Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, Address Space Management.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -42,9 +42,6 @@
 #include <VBox/vmm/hm.h>
 #include <VBox/vmm/pdmapi.h>
 #include <VBox/vmm/mm.h>
-#ifdef VBOX_WITH_RAW_MODE
-# include <VBox/vmm/patm.h>
-#endif
 #include "DBGFInternal.h"
 #include <VBox/vmm/uvm.h>
 #include <VBox/vmm/vm.h>
@@ -158,7 +155,7 @@ int dbgfR3AsInit(PUVM pUVM)
      * Create the debugging config instance and set it up, defaulting to
      * deferred loading in order to keep things fast.
      */
-    rc = RTDbgCfgCreate(&pUVM->dbgf.s.hDbgCfg, NULL, true /*fNativePaths*/);
+    rc = RTDbgCfgCreate(&pUVM->dbgf.s.hDbgCfg, "VBOXDBG_", true /*fNativePaths*/);
     AssertRCReturn(rc, rc);
     rc = RTDbgCfgChangeUInt(pUVM->dbgf.s.hDbgCfg, RTDBGCFGPROP_FLAGS, RTDBGCFGOP_PREPEND,
                             RTDBGCFG_FLAGS_DEFERRED);
@@ -203,6 +200,7 @@ int dbgfR3AsInit(PUVM pUVM)
             if (RT_FAILURE(rc))
                 return VMR3SetError(pUVM, rc, RT_SRC_POS,
                                     "DBGF Config Error: /DBGF/%s=%s -> %Rrc", s_aProps[i].pszCfgName, pszCfgValue, rc);
+            MMR3HeapFree(pszCfgValue);
         }
     }
 
@@ -232,7 +230,6 @@ int dbgfR3AsInit(PUVM pUVM)
     AssertRCReturn(rc, rc);
     rc = DBGFR3AsAdd(pUVM, hDbgAs, NIL_RTPROCESS);
     AssertRCReturn(rc, rc);
-    RTDbgAsRetain(hDbgAs);
     pUVM->dbgf.s.ahAsAliases[DBGF_AS_ALIAS_2_INDEX(DBGF_AS_GLOBAL)] = hDbgAs;
 
     RTDbgAsRetain(hDbgAs);
@@ -242,14 +239,12 @@ int dbgfR3AsInit(PUVM pUVM)
     AssertRCReturn(rc, rc);
     rc = DBGFR3AsAdd(pUVM, hDbgAs, NIL_RTPROCESS);
     AssertRCReturn(rc, rc);
-    RTDbgAsRetain(hDbgAs);
     pUVM->dbgf.s.ahAsAliases[DBGF_AS_ALIAS_2_INDEX(DBGF_AS_PHYS)] = hDbgAs;
 
     rc = RTDbgAsCreate(&hDbgAs, 0, RTRCPTR_MAX, "HyperRawMode");
     AssertRCReturn(rc, rc);
     rc = DBGFR3AsAdd(pUVM, hDbgAs, NIL_RTPROCESS);
     AssertRCReturn(rc, rc);
-    RTDbgAsRetain(hDbgAs);
     pUVM->dbgf.s.ahAsAliases[DBGF_AS_ALIAS_2_INDEX(DBGF_AS_RC)] = hDbgAs;
     RTDbgAsRetain(hDbgAs);
     pUVM->dbgf.s.ahAsAliases[DBGF_AS_ALIAS_2_INDEX(DBGF_AS_RC_AND_GC_GLOBAL)] = hDbgAs;
@@ -258,7 +253,6 @@ int dbgfR3AsInit(PUVM pUVM)
     AssertRCReturn(rc, rc);
     rc = DBGFR3AsAdd(pUVM, hDbgAs, NIL_RTPROCESS);
     AssertRCReturn(rc, rc);
-    RTDbgAsRetain(hDbgAs);
     pUVM->dbgf.s.ahAsAliases[DBGF_AS_ALIAS_2_INDEX(DBGF_AS_R0)] = hDbgAs;
 
     return VINF_SUCCESS;
@@ -307,6 +301,12 @@ void dbgfR3AsTerm(PUVM pUVM)
         RTDbgAsRelease(pUVM->dbgf.s.ahAsAliases[i]);
         pUVM->dbgf.s.ahAsAliases[i] = NIL_RTDBGAS;
     }
+
+    /*
+     * Release the reference to the debugging config.
+     */
+    rc = RTDbgCfgRelease(pUVM->dbgf.s.hDbgCfg);
+    AssertRC(rc);
 }
 
 
@@ -541,7 +541,7 @@ VMMR3DECL(int) DBGFR3AsSetAlias(PUVM pUVM, RTDBGAS hAlias, RTDBGAS hAliasFor)
         return VERR_INVALID_HANDLE;
 
     /*
-     * Make sure the handle has is already in the database.
+     * Make sure the handle is already in the database.
      */
     int rc = VERR_NOT_FOUND;
     DBGF_AS_DB_LOCK_WRITE(pUVM);
@@ -556,6 +556,8 @@ VMMR3DECL(int) DBGFR3AsSetAlias(PUVM pUVM, RTDBGAS hAlias, RTDBGAS hAliasFor)
         Assert(cRefs > 0); Assert(cRefs != UINT32_MAX); NOREF(cRefs);
         rc = VINF_SUCCESS;
     }
+    else
+        RTDbgAsRelease(hRealAliasFor);
     DBGF_AS_DB_UNLOCK_WRITE(pUVM);
 
     return rc;
@@ -633,13 +635,10 @@ static void dbgfR3AsLazyPopulate(PUVM pUVM, RTDBGAS hAlias)
         RTDBGAS hDbgAs = pUVM->dbgf.s.ahAsAliases[iAlias];
         if (hAlias == DBGF_AS_R0 && pUVM->pVM)
             PDMR3LdrEnumModules(pUVM->pVM, dbgfR3AsLazyPopulateR0Callback, hDbgAs);
-        else if (hAlias == DBGF_AS_RC && pUVM->pVM && !HMIsEnabled(pUVM->pVM))
+        else if (hAlias == DBGF_AS_RC && pUVM->pVM && VM_IS_RAW_MODE_ENABLED(pUVM->pVM))
         {
             LogRel(("DBGF: Lazy init of RC address space\n"));
             PDMR3LdrEnumModules(pUVM->pVM, dbgfR3AsLazyPopulateRCCallback, hDbgAs);
-#ifdef VBOX_WITH_RAW_MODE
-            PATMR3DbgPopulateAddrSpace(pUVM->pVM, hDbgAs);
-#endif
         }
         else if (hAlias == DBGF_AS_PHYS && pUVM->pVM)
         {
@@ -954,7 +953,7 @@ static int dbgfR3AsSearchCfgPath(PUVM pUVM, const char *pszFilename, const char 
  * @param   pModAddress     The load address of the module.
  * @param   iModSeg         The segment to load, pass NIL_RTDBGSEGIDX to load
  *                          the whole image.
- * @param   fFlags          Flags reserved for future extensions, must be 0.
+ * @param   fFlags          For DBGFR3AsLinkModule, see RTDBGASLINK_FLAGS_*.
  */
 VMMR3DECL(int) DBGFR3AsLoadImage(PUVM pUVM, RTDBGAS hDbgAs, const char *pszFilename, const char *pszModName, RTLDRARCH enmArch,
                                  PCDBGFADDRESS pModAddress, RTDBGSEGIDX iModSeg, uint32_t fFlags)
@@ -966,7 +965,7 @@ VMMR3DECL(int) DBGFR3AsLoadImage(PUVM pUVM, RTDBGAS hDbgAs, const char *pszFilen
     AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
     AssertReturn(*pszFilename, VERR_INVALID_PARAMETER);
     AssertReturn(DBGFR3AddrIsValid(pUVM, pModAddress), VERR_INVALID_PARAMETER);
-    AssertReturn(fFlags == 0, VERR_INVALID_PARAMETER);
+    AssertReturn(!(fFlags & ~RTDBGASLINK_FLAGS_VALID_MASK), VERR_INVALID_PARAMETER);
     RTDBGAS hRealAS = DBGFR3AsResolveAndRetain(pUVM, hDbgAs);
     if (hRealAS == NIL_RTDBGAS)
         return VERR_INVALID_HANDLE;
@@ -975,7 +974,7 @@ VMMR3DECL(int) DBGFR3AsLoadImage(PUVM pUVM, RTDBGAS hDbgAs, const char *pszFilen
     int rc = RTDbgModCreateFromImage(&hDbgMod, pszFilename, pszModName, enmArch, pUVM->dbgf.s.hDbgCfg);
     if (RT_SUCCESS(rc))
     {
-        rc = DBGFR3AsLinkModule(pUVM, hRealAS, hDbgMod, pModAddress, iModSeg, 0);
+        rc = DBGFR3AsLinkModule(pUVM, hRealAS, hDbgMod, pModAddress, iModSeg, fFlags & RTDBGASLINK_FLAGS_VALID_MASK);
         if (RT_FAILURE(rc))
             RTDbgModRelease(hDbgMod);
     }
@@ -1206,8 +1205,11 @@ VMMR3DECL(int) DBGFR3AsSymbolByAddr(PUVM pUVM, RTDBGAS hDbgAs, PCDBGFADDRESS pAd
         dbgfR3AsSymbolJoinNames(pSymbol, hMod);
         if (!phMod)
             RTDbgModRelease(hMod);
+        else
+            *phMod = hMod;
     }
 
+    RTDbgAsRelease(hRealAS);
     return rc;
 }
 
@@ -1294,6 +1296,7 @@ VMMR3DECL(int) DBGFR3AsSymbolByName(PUVM pUVM, RTDBGAS hDbgAs, const char *pszSy
             RTDbgModRelease(hMod);
     }
 
+    RTDbgAsRelease(hRealAS);
     return rc;
 }
 
@@ -1331,7 +1334,10 @@ VMMR3DECL(int)          DBGFR3AsLineByAddr(PUVM pUVM, RTDBGAS hDbgAs, PCDBGFADDR
     /*
      * Do the lookup.
      */
-    return RTDbgAsLineByAddr(hRealAS, pAddress->FlatPtr, poffDisp, pLine, phMod);
+    int rc = RTDbgAsLineByAddr(hRealAS, pAddress->FlatPtr, poffDisp, pLine, phMod);
+
+    RTDbgAsRelease(hRealAS);
+    return rc;
 }
 
 

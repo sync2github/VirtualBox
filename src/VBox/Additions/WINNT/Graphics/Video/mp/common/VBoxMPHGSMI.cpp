@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPHGSMI.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Miniport HGSMI related functions
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,7 +17,6 @@
 
 #include "VBoxMPHGSMI.h"
 #include "VBoxMPCommon.h"
-#include <VBox/VMMDev.h>
 #include <iprt/alloc.h>
 
 static DECLCALLBACK(void *) hgsmiEnvAlloc(void *pvEnv, HGSMISIZE cb)

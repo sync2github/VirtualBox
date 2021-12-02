@@ -1,12 +1,10 @@
-/* $Id$ */
-
+/* $Id: PerformanceSolaris.cpp 88297 2021-03-26 12:29:59Z vboxsync $ */
 /** @file
- *
  * VBox Solaris-specific Performance Classes implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_PERFORMANCECOLLECTOR
 #undef _FILE_OFFSET_BITS
 #include <procfs.h>
 #include <stdio.h>
@@ -37,7 +36,7 @@
 #include <iprt/path.h>
 #include <iprt/system.h>
 
-#include "Logging.h"
+#include "LoggingNew.h"
 #include "Performance.h"
 
 #include <dlfcn.h>
@@ -307,7 +306,7 @@ int CollectorSolaris::getProcessMemoryUsage(RTPROCESS process, ULONG *used)
     {
         /* psinfo_t keeps growing, so only read what we need to maximize
          * cross-version compatibility. The structures are compatible. */
-        ssize_t cb = RT_OFFSETOF(psinfo_t, pr_rssize) + RT_SIZEOFMEMB(psinfo_t, pr_rssize);
+        ssize_t cb = RT_UOFFSETOF(psinfo_t, pr_rssize) + RT_SIZEOFMEMB(psinfo_t, pr_rssize);
         AssertCompile(RTASSERT_OFFSET_OF(psinfo_t, pr_rssize) > RTASSERT_OFFSET_OF(psinfo_t, pr_pid));
         if (read(h, &psinfo, cb) == cb)
         {
@@ -336,9 +335,9 @@ uint32_t CollectorSolaris::getInstance(const char *pszIfaceName, char *pszDevNam
      * Get the instance number from the interface name, then clip it off.
      */
     int cbInstance = 0;
-    int cbIface = strlen(pszIfaceName);
+    size_t cbIface = strlen(pszIfaceName);
     const char *pszEnd = pszIfaceName + cbIface - 1;
-    for (int i = 0; i < cbIface - 1; i++)
+    for (size_t i = 0; i < cbIface - 1; i++)
     {
         if (!RT_C_IS_DIGIT(*pszEnd))
             break;

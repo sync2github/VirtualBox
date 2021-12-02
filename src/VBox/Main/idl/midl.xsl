@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
-<!-- $Id$ -->
+<!-- $Id: midl.xsl 82969 2020-02-04 10:54:12Z vboxsync $ -->
 
 <!--
  *  A template to generate a MS IDL compatible interface definition file
  *  from the generic interface definition expressed in XML.
 
-    Copyright (C) 2006-2016 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -24,6 +24,9 @@
 <!-- Whether to generate proxy code and type library ('yes'), or just the type-library. -->
 <xsl:param name="g_fGenProxy" select="'no'"/>
 
+<!-- Whether to generate coclass and interfaces for VBoxSDS-->
+<xsl:param name="g_fVBoxWithSDS" select="'no'"/>
+
 <xsl:include href="typemap-shared.inc.xsl"/>
 
 
@@ -41,8 +44,8 @@
 <!--
  *  header
 -->
-<xsl:template match="/idl">
-  <xsl:text>
+    <xsl:template match="/idl">
+        <xsl:text>
 /*
  *  DO NOT EDIT! This is a generated file.
  *
@@ -123,25 +126,25 @@ import "unknwn.idl";
          http://msdn.microsoft.com/en-us/library/windows/desktop/aa366841(v=vs.85).aspx -->
     <xsl:text>&#x0A;</xsl:text>
     <!-- forward declarations -->
-    <xsl:apply-templates select="if | interface" mode="forward"/>
+    <xsl:apply-templates select="descendant::application/if   | descendant::application/interface" mode="forward"/>
     <xsl:text>&#x0A;</xsl:text>
     <!-- all enums go first -->
-    <xsl:apply-templates select="enum | if/enum"/>
+    <xsl:apply-templates select="descendant::application/enum | descendant::application/if[enum]"/>
     <!-- declare the interfaces -->
-    <xsl:apply-templates select="if | interface"/>
+    <xsl:apply-templates select="descendant::application/if   | descendant::application/interface"/>
   </xsl:if>
 
 [
     uuid(<xsl:value-of select="@uuid"/>),
     version(<xsl:value-of select="@version"/>),
-    helpstring("<xsl:value-of select="@desc"/>")
+    helpstring("<xsl:value-of select="@name"/> Type Library")
 ]
 <xsl:text>library </xsl:text>
   <xsl:value-of select="@name"/>
   <xsl:text>&#x0A;{&#x0A;</xsl:text>
   <xsl:text>&#x0A;importlib("stdole2.tlb");&#x0A;&#x0A;</xsl:text>
   <!-- result codes -->
-  <xsl:for-each select="result">
+  <xsl:for-each select="application/result">
     <xsl:apply-templates select="."/>
   </xsl:for-each>
   <xsl:text>&#x0A;</xsl:text>
@@ -149,25 +152,36 @@ import "unknwn.idl";
   <xsl:choose>
     <xsl:when test="$g_fGenProxy = 'yes'">
       <!-- reference enums and interfaces -->
-      <xsl:apply-templates select="if | interface" mode="forward"/>
-      <xsl:apply-templates select="enum | if/enum" mode="forward"/>
+      <xsl:apply-templates select="descendant::application/if          | descendant::application/interface" mode="forward"/>
+      <xsl:apply-templates select="descendant::application/enum        | descendant::application/if[enum]" mode="forward"/>
       <!-- the modules (i.e. everything else) -->
-      <xsl:apply-templates select="module | if/module"/>
+      <xsl:apply-templates select="descendant::application/module      | descendant::application/if[module]"/>
     </xsl:when>
     <xsl:otherwise>
       <!-- forward declarations -->
-      <xsl:apply-templates select="if | interface" mode="forward"/>
+      <xsl:apply-templates select="descendant::application/if          | descendant::application/interface" mode="forward"/>
       <!-- all enums go first -->
-      <xsl:apply-templates select="enum | if/enum"/>
+      <xsl:apply-templates select="descendant::application/enum        | descendant::application/if[enum]"/>
       <!-- everything else but result codes and enums -->
-      <xsl:apply-templates select="*[not(self::result or self::enum) and
-                                     not(self::if[result] or self::if[enum])]"/>
+      <xsl:apply-templates select="  descendant::application/interface | descendant::application/if[interface]
+                                   | descendant::application/module    | descendant::application/if[module]"/>
     </xsl:otherwise>
   </xsl:choose>
   <!-- -->
   <xsl:text>}; /* library </xsl:text>
   <xsl:value-of select="@name"/>
   <xsl:text> */&#x0A;&#x0A;</xsl:text>
+</xsl:template>
+
+
+<!--
+ *  applications
+-->
+<xsl:template match="application">
+  <xsl:apply-templates/>
+</xsl:template>
+<xsl:template match="application" mode="forward">
+  <xsl:apply-templates mode="forward"/>
 </xsl:template>
 
 
@@ -184,7 +198,7 @@ import "unknwn.idl";
 <!--
  *  forward declarations
 -->
-<xsl:template match="interface" mode="forward">
+<xsl:template match="interface" mode="forward" name="template_interface_forward">
   <xsl:text>interface </xsl:text>
   <xsl:value-of select="@name"/>
   <xsl:text>;&#x0A;</xsl:text>
@@ -201,10 +215,10 @@ import "unknwn.idl";
 <!--
  *  interfaces
 -->
-<xsl:template match="interface">[
+<xsl:template match="interface" name="template_interface">[
     uuid(<xsl:value-of select="@uuid"/>),
     object,
-    dual,
+<xsl:if test="not(@notdual = 'yes')">    dual,</xsl:if>
     oleautomation
 <xsl:if test="$g_fGenProxy = 'yes'">
   <!-- Indicates to the typelib that we are using a proxy stub DLL and that interfaces
@@ -217,6 +231,7 @@ import "unknwn.idl";
   <xsl:value-of select="$name"/>
   <xsl:text> : </xsl:text>
   <xsl:choose>
+    <xsl:when test="(@extends = '$unknown') and (@notdual = 'yes')">IUnknown</xsl:when>
     <xsl:when test="@extends='$unknown'">IDispatch</xsl:when>
     <xsl:when test="@extends='$errorinfo'">IErrorInfo</xsl:when>
     <!-- TODO/FIXME/BUGBUG: The above $errorinfo value causes the following warning (/W4):
@@ -645,7 +660,7 @@ warning MIDL2460 : dual interface should be derived from IDispatch : IVirtualBox
 <!--
  *  co-classes
 -->
-<xsl:template match="module/class">[
+<xsl:template match="module/class" name="template_class">[
     uuid(<xsl:value-of select="@uuid"/>)
 ]
 <xsl:text>coclass </xsl:text>
@@ -841,15 +856,19 @@ warning MIDL2460 : dual interface should be derived from IDispatch : IVirtualBox
           <xsl:choose>
             <!-- enum types -->
             <xsl:when test="
-              (ancestor::library/enum[@name=current()]) or
-              (ancestor::library/if[@target=$self_target]/enum[@name=current()])
+                 (ancestor::library/application/enum[@name=current()])
+              or (ancestor::library/if/application/enum[@name=current()])
+              or (ancestor::library/application/if[@target=$self_target]/enum[@name=current()])
+              or (ancestor::library/if/application/if[@target=$self_target]/enum[@name=current()])
             ">
               <xsl:value-of select="."/>
             </xsl:when>
             <!-- custom interface types -->
             <xsl:when test="
-              ((ancestor::library/interface[@name=current()]) or
-               (ancestor::library/if[@target=$self_target]/interface[@name=current()])
+              (    (ancestor::library/application/interface[@name=current()])
+                or (ancestor::library/if/application/interface[@name=current()])
+                or (ancestor::library/application/if[@target=$self_target]/interface[@name=current()])
+                or (ancestor::library/if/application/if[@target=$self_target]/interface[@name=current()])
               )
             ">
               <xsl:value-of select="."/><xsl:text> *</xsl:text>
@@ -867,5 +886,28 @@ warning MIDL2460 : dual interface should be derived from IDispatch : IVirtualBox
     </xsl:otherwise>
   </xsl:choose>
 </xsl:template>
+
+
+<!-- Filters for switch on/off VBoxSDS definitions -->
+
+<xsl:template match="if[@target='midl']/application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']//module/class" >
+    <xsl:if test="$g_fVBoxWithSDS='yes'" >
+        <xsl:call-template name="template_class" />
+    </xsl:if>
+</xsl:template>
+
+<xsl:template match="if[@target='midl']/application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']/if//interface
+                                | application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']//interface" >
+    <xsl:if test="$g_fVBoxWithSDS='yes'" >
+        <xsl:call-template name="template_interface" />
+    </xsl:if>
+</xsl:template>
+
+<xsl:template match="if[@target='midl']/application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']//interface" mode="forward" >
+    <xsl:if test="$g_fVBoxWithSDS='yes'" >
+        <xsl:call-template name="template_interface_forward" />
+    </xsl:if>
+</xsl:template>
+
 
 </xsl:stylesheet>

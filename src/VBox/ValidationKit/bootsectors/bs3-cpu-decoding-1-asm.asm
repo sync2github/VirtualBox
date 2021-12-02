@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-cpu-decoding-1-asm.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - bs3-cpu-decoding-1, assembly helpers and template instantiation.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -35,4 +35,5 @@
 ; Instantiate code templates.
 ;
 BS3_INSTANTIATE_TEMPLATE_ESSENTIALS      "bs3-cpu-decoding-1-template.mac"
+BS3_INSTANTIATE_COMMON_TEMPLATE          "bs3-cpu-decoding-1-template.mac"
 

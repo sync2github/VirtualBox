@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 89675 2021-06-14 10:08:24Z vboxsync $
 ## @file
 # Sub-Makefile for the Windows Guest Additions Installer.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -28,6 +28,7 @@ VBOX_PATH_ADDITIONS.win.x86 := $(PATH_OUT_BASE)/win.x86/$(KBUILD_TYPE)/bin/addit
 VBOX_WITH_GUEST_INSTALL_HELPER := 1 # Use our guest install helper DLL.
 
 ## @todo VBOX_WIN_ADD_INS_OUT_DIR := $(PATH_TARGET)/Additions/Installer/win
+
 
 PROGRAMS += VBoxDrvInst
 VBoxDrvInst_TEMPLATE= VBoxGuestR3Exe
@@ -68,6 +69,8 @@ OTHER_CLEAN += \
 	$(PATH_STAGE_BIN)/additions/VBoxWindowsAdditions-$(KBUILD_TARGET_ARCH).exe \
 	$(PATH_STAGE_BIN)/additions/VBoxWHQLFake.exe
 
+## @todo r=andy Rename DRIVER_FILES to INST_FILES or something, as those files are not strictly driver-related files.
+
 DRIVER_FILES := \
 	$(PATH_STAGE_BIN)/additions/VBoxGuestDrvInst.exe \
 	$(PATH_STAGE_BIN)/additions/RegCleanup.exe \
@@ -90,7 +93,7 @@ endif
 ifeq ($(KBUILD_TARGET_ARCH),x86)
 DRIVER_FILES += \
 	$(PATH_STAGE_BIN)/additions/VBoxMouseNT.sys \
-	$(PATH_STAGE_BIN)/additions/VBoxGuestNT.sys
+	$(PATH_STAGE_BIN)/additions/VBoxSFW2K.sys
 endif
 DRIVER_FILES += \
 	$(PATH_STAGE_BIN)/additions/VBoxVideo.inf \
@@ -100,76 +103,39 @@ DRIVER_FILES += \
 	$(PATH_STAGE_BIN)/additions/VBoxVideo.cat \
 	$(PATH_STAGE_BIN)/additions/VBoxGuest.cat
 endif
-ifdef VBOX_WITH_CROGL
-DRIVER_FILES += \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLarrayspu.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLcrutil.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLerrorspu.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLpackspu.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLpassthroughspu.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLfeedbackspu.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGL.dll \
-	$(PATH_STAGE_BIN)/additions/wined3d.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxD3D9.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxD3D8.dll
- ifeq ($(KBUILD_TARGET_ARCH),amd64)
-	# Also include 32-bit DLLs on 64-bit guests to enable
-	# running 32-bit OpenGL apps on that.
-	DRIVER_FILES += \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxOGLarrayspu.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxOGLcrutil.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxOGLerrorspu.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxOGLpackspu.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxOGLpassthroughspu.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxOGLfeedbackspu.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxOGL.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/wined3d.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxD3D9.dll \
-		$(VBOX_PATH_ADDITIONS.win.x86)/VBoxD3D8.dll
-
- endif
-endif
 ifdef VBOX_WITH_WDDM
 DRIVER_FILES += \
-	$(PATH_STAGE_BIN)/additions/VBoxVideoWddm.sys \
-	$(PATH_STAGE_BIN)/additions/VBoxVideoWddm.inf \
+	$(PATH_STAGE_BIN)/additions/VBoxWddm.sys \
+	$(PATH_STAGE_BIN)/additions/VBoxWddm.inf \
 	$(PATH_STAGE_BIN)/additions/VBoxDispD3D.dll
- ifdef VBOX_WITH_WDDM_W8
+ ifdef VBOX_WITH_MESA3D
 DRIVER_FILES += \
-	$(PATH_STAGE_BIN)/additions/VBoxVideoW8.sys \
-	$(PATH_STAGE_BIN)/additions/VBoxVideoW8.inf
- endif
- ifdef VBOX_WITH_CROGL
-DRIVER_FILES += \
-	$(PATH_STAGE_BIN)/additions/wined3dwddm.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxD3D9wddm.dll
+	$(PATH_STAGE_BIN)/additions/VBoxNine.dll \
+	$(PATH_STAGE_BIN)/additions/VBoxSVGA.dll \
+	$(PATH_STAGE_BIN)/additions/VBoxICD.dll \
+	$(PATH_STAGE_BIN)/additions/VBoxGL.dll
  endif
  ifdef VBOX_SIGN_ADDITIONS
 DRIVER_FILES += \
-	$(PATH_STAGE_BIN)/additions/VBoxVideoWddm.cat
-  ifdef VBOX_WITH_WDDM_W8
-DRIVER_FILES += \
-	$(PATH_STAGE_BIN)/additions/VBoxVideoW8.cat
-  endif
+	$(PATH_STAGE_BIN)/additions/VBoxWddm.cat
  endif
  ifeq ($(KBUILD_TARGET_ARCH),amd64)
 DRIVER_FILES += \
 	$(PATH_STAGE_BIN)/additions/VBoxDispD3D-x86.dll
-  ifdef VBOX_WITH_CROGL
+  ifdef VBOX_WITH_MESA3D
 DRIVER_FILES += \
-	$(PATH_STAGE_BIN)/additions/wined3dwddm-x86.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxD3D9wddm-x86.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGL-x86.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLarrayspu-x86.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLcrutil-x86.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLerrorspu-x86.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLfeedbackspu-x86.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLpackspu-x86.dll \
-	$(PATH_STAGE_BIN)/additions/VBoxOGLpassthroughspu-x86.dll
+	$(PATH_STAGE_BIN)/additions/VBoxNine-x86.dll \
+	$(PATH_STAGE_BIN)/additions/VBoxSVGA-x86.dll \
+	$(PATH_STAGE_BIN)/additions/VBoxICD-x86.dll \
+	$(PATH_STAGE_BIN)/additions/VBoxGL-x86.dll
   endif
  endif
 endif
 
+ifdef env.VBOX_WITH_ADDITIONS_SHIPPING_AUDIO_TEST
+ DRIVER_FILES += \
+  $(PATH_STAGE_BIN)/additions/VBoxAudioTest.exe
+endif
 
 VB_WIN_ADD_NSIS_ENV := \
 	-E 'PATH_OUT=$(subst /,\,$(PATH_OUT))' \
@@ -189,16 +155,17 @@ VB_WIN_ADD_NSIS_ENV := \
 	-E 'VBOX_SVN_REV=$(VBOX_SVN_REV)' \
 	-E 'VBOX_WINDOWS_ADDITIONS_ICON_FILE=$(subst /,\,$(VBOX_WINDOWS_ADDITIONS_ICON_FILE))' \
 	-E 'VBOX_NSIS_ICON_FILE=$(subst /,\,$(VBOX_NSIS_ICON_FILE))' \
-	-E 'VBOX_WITH_CROGL=$(if $(VBOX_WITH_CROGL),1,0)' \
 	-E 'VBOX_WITH_GUEST_INSTALL_HELPER=$(if $(VBOX_WITH_GUEST_INSTALL_HELPER),1,0)' \
+	-E 'VBOX_WITH_GUEST_INSTALLER_UNICODE=$(if $(VBOX_WITH_GUEST_INSTALLER_UNICODE),1,0)' \
+	-E 'VBOX_WITH_ADDITIONS_SHIPPING_AUDIO_TEST=$(if $(VBOX_WITH_ADDITIONS_SHIPPING_AUDIO_TEST),1,0)' \
 	-E 'VBOX_WITH_LICENSE_INSTALL_RTF=$(if $(VBOX_BRAND_LICENSE_RTF),1,0)' \
 	-E 'VBOX_WITH_WDDM=$(if $(VBOX_WITH_WDDM),1,0)' \
-	-E 'VBOX_WITH_WDDM_W8=$(if $(VBOX_WITH_WDDM_W8),1,0)' \
+	-E 'VBOX_WITH_MESA3D=$(if $(VBOX_WITH_MESA3D),1,0)' \
 	-E 'VBOX_BRAND_WIN_ADD_INST_DLGBMP=$(subst /,\,$(VBOX_BRAND_WIN_ADD_INST_DLGBMP))' \
 	-E 'VBOX_BRAND_LICENSE_RTF=$(subst /,\,$(VBOX_BRAND_LICENSE_RTF))' \
 	$(foreach lang,$(VBOX_INSTALLER_ADD_LANGUAGES),-E 'VBOX_BRAND_$(lang)_LICENSE_RTF=$(VBOX_BRAND_$(lang)_LICENSE_RTF)') \
-	-E 'BUILD_TYPE=$(KBUILD_TYPE)' \
-	-E 'BUILD_TARGET_ARCH=$(KBUILD_TARGET_ARCH)'
+	-E 'KBUILD_TYPE=$(KBUILD_TYPE)' \
+	-E 'KBUILD_TARGET_ARCH=$(KBUILD_TARGET_ARCH)'
 
 ifdef VBOX_SIGNING_MODE
 #
@@ -209,6 +176,14 @@ OTHER_CLEAN += $(PATH_TARGET)/VBoxWindowsAdditions-$(KBUILD_TARGET_ARCH)-uninst.
 
 $(PATH_TARGET)/VBoxWindowsAdditions-$(KBUILD_TARGET_ARCH)-uninst.exe: \
 		$(PATH_SUB_CURRENT)/VBoxGuestAdditions.nsi \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsCommon.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsExternal.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsLog.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsUninstall.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsUninstallOld.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsW2KXP.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsVista.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsNT4.nsh \
 		$(DRIVER_FILES) \
 		$(VBOX_WINDOWS_ADDITIONS_ICON_FILE) \
 		$(VBOX_NSIS_ICON_FILE) \
@@ -247,6 +222,14 @@ $(PATH_STAGE_BIN)/additions/VBoxWHQLFake.exe:
 
 $(PATH_STAGE_BIN)/additions/VBoxWindowsAdditions-$(KBUILD_TARGET_ARCH).exe: \
 		$(PATH_SUB_CURRENT)/VBoxGuestAdditions.nsi \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsCommon.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsExternal.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsLog.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsUninstall.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsUninstallOld.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsW2KXP.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsVista.nsh \
+		$(PATH_SUB_CURRENT)/VBoxGuestAdditionsNT4.nsh \
 		$(DRIVER_FILES) \
 		$(VBOX_WINDOWS_ADDITIONS_ICON_FILE) \
 		$(VBOX_NSIS_ICON_FILE) \
@@ -264,5 +247,100 @@ $(PATH_STAGE_BIN)/additions/VBoxWindowsAdditions-$(KBUILD_TARGET_ARCH).exe: \
 			'$(subst /,\,$<)'
 	$(call VBOX_SIGN_FILE_FN,$@)
 
-include $(FILE_KBUILD_SUB_FOOTER)
+#
+# Repackaging scripts and files.
+#
+INSTALLS += RePackScriptsAdd
+RePackScriptsAdd_TEMPLATE = DUMMY
+RePackScriptsAdd_INST = repackadd/
+RePackScriptsAdd_INSTTYPE = stage
+RePackScriptsAdd_SOURCES = \
+	../../../Installer/win/Scripts/UnpackBlessedDrivers.cmd \
+	$(RePackScriptsAdd_0_OUTDIR)/PackDriversForSubmission.cmd \
+	$(RePackScriptsAdd_0_OUTDIR)/Combined-1-Prepare.cmd \
+	$(RePackScriptsAdd_0_OUTDIR)/Combined-3-RepackAdditions.cmd \
+	$(RePackScriptsAdd_0_OUTDIR)/sign-ev.cmd
+RePackScriptsAdd_CLEAN = \
+	$(RePackScriptsAdd_0_OUTDIR)/sign-ev.cmd
 
+ifndef VBOX_OSE
+RePackScriptsAdd_SOURCES += \
+	$(RePackScriptsAdd_0_OUTDIR)/Combined-0-Additions.cmd \
+	$(RePackScriptsAdd_0_OUTDIR)/Combined-2-SignAdditions.cmd \
+	../../../Installer/win/Scripts/sign-attestation.sh
+endif
+
+$(call VBOX_EDIT_VERSION_AND_BUILD_RULE_FN,RePackScriptsAdd,../../../Installer/win/Scripts/PackDriversForSubmission.cmd,PackDriversForSubmission.cmd)
+$(call VBOX_EDIT_VERSION_AND_BUILD_RULE_FN,RePackScriptsAdd,../../../Installer/win/Scripts/Combined-1-Prepare.cmd,Combined-1-Prepare.cmd)
+ifndef VBOX_OSE
+$(call VBOX_EDIT_VERSION_AND_BUILD_RULE_FN,RePackScriptsAdd,../../../Installer/win/Scripts/Combined-0-Additions.cmd,Combined-0-Additions.cmd)
+$(call VBOX_EDIT_VERSION_AND_BUILD_RULE_FN,RePackScriptsAdd,../../../Installer/win/Scripts/Combined-2-SignAdditions.cmd,Combined-2-SignAdditions.cmd)
+endif
+$(call VBOX_EDIT_VERSION_AND_BUILD_RULE_FN,RePackScriptsAdd,../../../Installer/win/Scripts/Combined-3-RepackAdditions.cmd,Combined-3-RepackAdditions.cmd)
+
+# The %~dp1\ oddity is working around otherwise ending with \" during
+# expansion of the CCS command line which for a reason I cannot immediately
+# understand appends a " to the path.
+$$(RePackScriptsAdd_0_OUTDIR)/sign-ev.cmd: | $$(dir $$@)
+	$(APPEND) -nt "$@" \
+		'if ".%KBUILD_DEVTOOLS%" == "." (echo KBUILD_DEVTOOLS is not set & exit /b 1)' \
+		'if ".%KBUILD_BIN_PATH%" == "." (echo KBUILD_BIN_PATH is not set & exit /b 1)' \
+		'if ".%1" == "." (echo No .cab file specified & exit /b 1)' \
+		$(subst $(KBUILD_BIN_PATH),%KBUILD_BIN_PATH%,$(subst $(KBUILD_DEVTOOLS),%KBUILD_DEVTOOLS%, \
+		'( $(call VBOX_SIGN_EV_FILE_FN,%1,%~dp1\) ) || exit /b1' \
+		) )
+
+#
+# Repacking resources.
+#
+INSTALLS += RePackScriptsAddResources
+RePackScriptsAddResources_TEMPLATE = DUMMY
+RePackScriptsAddResources_INST = repackadd/resources/
+RePackScriptsAddResources_INSTTYPE = stage
+RePackScriptsAddResources_DIRS = Languages
+RePackScriptsAddResources_SOURCES = \
+	welcome.bmp \
+	$(VBOX_WINDOWS_ADDITIONS_ICON_FILE)=>VirtualBoxGA-vista.ico \
+	$(VBOX_NSIS_ICON_FILE)=>VirtualBoxGA-nsis.ico \
+	iexplore.ico \
+	$(PATH_ROOT)/doc/License-gpl-2.0.rtf \
+	VBoxGuestAdditions.nsi \
+	dumplog.nsh \
+	ReplaceDLL.nsh \
+	servicepack.nsh \
+	strstr.nsh \
+	VBoxGuestAdditionsCommon.nsh \
+	VBoxGuestAdditionsExternal.nsh \
+	VBoxGuestAdditionsLog.nsh\
+	VBoxGuestAdditionsNT4.nsh \
+	VBoxGuestAdditionsUninstall.nsh \
+	VBoxGuestAdditionsUninstallOld.nsh \
+	VBoxGuestAdditionsVista.nsh\
+	VBoxGuestAdditionsW2KXP.nsh\
+	winver.nsh \
+	ISO/AUTORUN.INF \
+	ISO/NT3xReadme.txt \
+       \
+	Languages/English.nsh=>Languages/English.nsh \
+	Languages/French.nsh=>Languages/French.nsh \
+	Languages/German.nsh=>Languages/German.nsh
+
+
+#
+# NT3.x installer.
+#
+# Just for fun, this one does not use the CRT more than it really really needs
+# to.  This saves space and avoid compatiblity issues, it also makes for a
+# fun challenge.
+#
+PROGRAMS.win.x86 += VBoxAddInstallNt3x
+VBoxAddInstallNt3x_TEMPLATE := VBoxGuestR3NoCrtExe
+#VBoxAddInstallNt3x_TEMPLATE := VBoxGuestR3Exe
+VBoxAddInstallNt3x_SOURCES  := \
+	VBoxAddInstallNt3x.cpp \
+
+
+VBoxAddInstallNt3x.cpp_DEPS = $(VBOX_SVN_REV_HEADER)
+
+
+include $(FILE_KBUILD_SUB_FOOTER)

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_fs_h
-#define ___iprt_fs_h
+#ifndef IPRT_INCLUDED_fs_h
+#define IPRT_INCLUDED_fs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -233,6 +236,10 @@ typedef enum RTFSTYPE
      * limiting the file size (except, perhaps for the 64KB cluster case on
      * non-Windows hosts). */
     RTFSTYPE_FAT,
+    /** Extended File Allocation Table, main target are flash drives. */
+    RTFSTYPE_EXFAT,
+    /** Resilient File System. */
+    RTFSTYPE_REFS,
 
     /* Solaris: */
     /** Zettabyte File System.  */
@@ -246,6 +253,7 @@ typedef enum RTFSTYPE
     /** Hierarchical File System. */
     RTFSTYPE_HFS,
     /** @todo RTFSTYPE_HFS_PLUS? */
+    RTFSTYPE_APFS,
     RTFSTYPE_AUTOFS,
     RTFSTYPE_DEVFS,
 
@@ -301,11 +309,11 @@ typedef enum RTFSOBJATTRADD
 typedef struct RTFSOBJATTRUNIX
 {
     /** The user owning the filesystem object (st_uid).
-     * This field is NIL_UID if not supported. */
+     * This field is NIL_RTUID if not supported. */
     RTUID           uid;
 
     /** The group the filesystem object is assigned (st_gid).
-     * This field is NIL_GID if not supported. */
+     * This field is NIL_RTGID if not supported. */
     RTGID           gid;
 
     /** Number of hard links to this filesystem object (st_nlink).
@@ -615,7 +623,7 @@ RTR3DECL(bool) RTFsIsCaseSensitive(const char *pszFsPath);
  * @param   pszMountpoint   The mountpoint name.
  * @param   pvUser          The user argument.
  */
-typedef DECLCALLBACK(int) FNRTFSMOUNTPOINTENUM(const char *pszMountpoint, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNRTFSMOUNTPOINTENUM,(const char *pszMountpoint, void *pvUser));
 /** Pointer to a FNRTFSMOUNTPOINTENUM(). */
 typedef FNRTFSMOUNTPOINTENUM *PFNRTFSMOUNTPOINTENUM;
 
@@ -629,11 +637,22 @@ typedef FNRTFSMOUNTPOINTENUM *PFNRTFSMOUNTPOINTENUM;
 RTR3DECL(int) RTFsMountpointsEnum(PFNRTFSMOUNTPOINTENUM pfnCallback, void *pvUser);
 
 
+/**
+ * A /bin/ls clone.
+ *
+ * @returns Program exit code.
+ *
+ * @param   cArgs               The number of arguments.
+ * @param   papszArgs           The argument vector.  (Note that this may be
+ *                              reordered, so the memory must be writable.)
+ */
+RTR3DECL(RTEXITCODE) RTFsCmdLs(unsigned cArgs, char **papszArgs);
+
 #endif /* IN_RING3 */
 
 /** @} */
 
 RT_C_DECLS_END
 
-#endif /* !___iprt_fs_h */
+#endif /* !IPRT_INCLUDED_fs_h */
 

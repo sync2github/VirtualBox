@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMenuBar.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMenuBar class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,21 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QPainter>
-# include <QPaintEvent>
-# include <QPixmapCache>
+#include <QPainter>
+#include <QPaintEvent>
+#include <QPixmapCache>
 
 /* GUI includes: */
-# include "UIMenuBar.h"
-# include "UIImageTools.h"
-# include "VBoxGlobal.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "UICommon.h"
+#include "UIImageTools.h"
+#include "UIMenuBar.h"
 
 
 UIMenuBar::UIMenuBar(QWidget *pParent /* = 0 */)
@@ -37,13 +31,16 @@ UIMenuBar::UIMenuBar(QWidget *pParent /* = 0 */)
     , m_fShowBetaLabel(false)
 {
     /* Check for beta versions: */
-    if (vboxGlobal().isBeta())
+    if (uiCommon().isBeta())
         m_fShowBetaLabel = true;
 }
 
 void UIMenuBar::paintEvent(QPaintEvent *pEvent)
 {
+    /* Call to base-class: */
     QMenuBar::paintEvent(pEvent);
+
+    /* Draw BETA label if necessary: */
     if (m_fShowBetaLabel)
     {
         QPixmap betaLabel;
@@ -59,4 +56,3 @@ void UIMenuBar::paintEvent(QPaintEvent *pEvent)
         painter.drawPixmap(s.width() - betaLabel.width() - 10, (height() - betaLabel.height()) / 2, betaLabel);
     }
 }
-

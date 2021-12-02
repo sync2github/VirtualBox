@@ -1,5 +1,10 @@
+/* $Id: system.c 92290 2021-11-09 12:49:35Z vboxsync $ */
+/** @file
+ * PC BIOS - ???
+ */
+
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -38,7 +43,17 @@
  *
  */
 
+/*
+ * Oracle LGPL Disclaimer: For the avoidance of doubt, except that if any license choice
+ * other than GPL or LGPL is available it will apply instead, Oracle elects to use only
+ * the Lesser General Public License version 2.1 (LGPLv2) at this time for any software where
+ * a choice of LGPL license versions is made available with the language indicating
+ * that LGPLv2 or any later version may be used, or where a choice of which version
+ * of the LGPL is applied is otherwise unspecified.
+ */
 
+
+#include <iprt/cdefs.h>
 #include <stdint.h>
 #include "biosint.h"
 #include "inlines.h"
@@ -56,8 +71,6 @@
 
 #define ACPI_DATA_SIZE    0x00010000L   /** @todo configurable? put elsewhere? */
 
-#define BX_CPU                  3
-
 extern  int pmode_IDT;
 extern  int rmode_IDT;
 
@@ -70,42 +83,47 @@ uint16_t read_ss(void);
  * Quite straightforward.
  */
 
-void pm_stack_save(uint16_t cx, uint16_t es, uint16_t si, uint16_t frame);
+void pm_stack_save(uint16_t cx, uint16_t es, uint16_t si);
 #pragma aux pm_stack_save =     \
     ".386"                      \
     "push   ds"                 \
     "push   eax"                \
-    "xor    eax, eax"           \
+    "xor    ax, ax"             \
     "mov    ds, ax"             \
     "mov    ds:[467h], sp"      \
     "mov    ds:[469h], ss"      \
-    parm [cx] [es] [si] [ax] modify nomemory;
+    parm [cx] [es] [si] modify nomemory;
 
-/* Uses position independent code... because it was too hard to figure
- * out how to code the far call in inline assembler.
+/* Uses position independent code to build a far return... because it was
+ * too hard to figure out how to code the far call in inline assembler.
+ *
+ * NB: It would be lovely to do 'add [sp],N' instead of 'pop ax; add ax,M;
+ * push ax'. Unfortunately the former cannot be encoded, though 'add [esp],N'
+ * can be on 386 and later -- but it may be unwise to assume that the high
+ * bits of ESP are all zero.
  */
 void pm_enter(void);
 #pragma aux pm_enter =              \
     ".386p"                         \
-    "call   pentry"                 \
-    "pentry:"                       \
-    "pop    di"                     \
-    "add    di, 1Bh"                \
-    "push   20h"                    \
-    "push   di"                     \
     "lgdt   fword ptr es:[si+8]"    \
     "lidt   fword ptr cs:pmode_IDT" \
+    "push   20h"                    \
+    "call   pentry"                 \
+    "pentry:"                       \
+    "pop    ax"                     \
+    "add    ax, 0Eh"                \
+    "push   ax"                     \
     "mov    eax, cr0"               \
     "or     al, 1"                  \
     "mov    cr0, eax"               \
     "retf"                          \
     "pm_pm:"                        \
-    "mov    ax, 28h"                \
-    "mov    ss, ax"                 \
     "mov    ax, 10h"                \
     "mov    ds, ax"                 \
-    "mov    ax, 18h"                \
+    "add    al, 08h"                \
     "mov    es, ax"                 \
+    "add    al, 10h"                \
+    "mov    ss, ax"                 \
     modify nomemory;
 
 /* Restore segment limits to real mode compatible values and
@@ -114,15 +132,15 @@ void pm_enter(void);
 void pm_exit(void);
 #pragma aux pm_exit =               \
     ".386p"                         \
-    "call   pexit"                  \
-    "pexit:"                        \
-    "pop    ax"                     \
-    "push   0F000h"                 \
-    "add    ax, 18h"                \
-    "push   ax"                     \
     "mov    ax, 28h"                \
     "mov    ds, ax"                 \
     "mov    es, ax"                 \
+    "push   0F000h"                 \
+    "call   pexit"                  \
+    "pexit:"                        \
+    "pop    ax"                     \
+    "add    ax, 0Eh"                \
+    "push   ax"                     \
     "mov    eax, cr0"               \
     "and    al, 0FEh"               \
     "mov    cr0, eax"               \
@@ -161,29 +179,29 @@ void pm_stack_save(uint16_t cx, uint16_t es, uint16_t si, uint16_t frame);
 
 /* Uses position independent code... because it was too hard to figure
  * out how to code the far call in inline assembler.
- * NB: Trashes MSW bits but the CPU will be reset anyway.
  */
 void pm_enter(void);
 #pragma aux pm_enter =              \
     ".286p"                         \
-    "call   pentry"                 \
-    "pentry:"                       \
-    "pop    di"                     \
-    "add    di, 18h"                \
-    "push   20h"                    \
-    "push   di"                     \
     "lgdt   fword ptr es:[si+8]"    \
     "lidt   fword ptr cs:pmode_IDT" \
+    "push   20h"                    \
+    "call   pentry"                 \
+    "pentry:"                       \
+    "pop    ax"                     \
+    "add    ax, 0Eh"                \
+    "push   ax"                     \
+    "smsw   ax"                     \
     "or     al, 1"                  \
     "lmsw   ax"                     \
     "retf"                          \
     "pm_pm:"                        \
-    "mov    ax, 28h"                \
-    "mov    ss, ax"                 \
     "mov    ax, 10h"                \
     "mov    ds, ax"                 \
-    "mov    ax, 18h"                \
+    "add    al, 08h"                \
     "mov    es, ax"                 \
+    "add    al, 10h"                \
+    "mov    ss, ax"                 \
     modify nomemory;
 
 /* Set up shutdown status and reset the CPU. The POST code
@@ -212,13 +230,14 @@ void pm_stack_restore(void);
 
 #endif
 
+/* NB: CX is set earlier in pm_stack_save */
 void pm_copy(void);
 #pragma aux pm_copy =               \
     "xor    si, si"                 \
     "xor    di, di"                 \
     "cld"                           \
     "rep    movsw"                  \
-    modify nomemory;
+    modify [si di cx] nomemory;
 
 /* The pm_switch has a few crucial differences from pm_enter, hence
  * it is replicated here. Uses LMSW to avoid trashing high word of eax.
@@ -226,24 +245,25 @@ void pm_copy(void);
 void pm_switch(uint16_t reg_si);
 #pragma aux pm_switch =             \
     ".286p"                         \
-    "call   pentry"                 \
-    "pentry:"                       \
-    "pop    di"                     \
-    "add    di, 18h"                \
-    "push   38h"                    \
-    "push   di"                     \
     "lgdt   fword ptr es:[si+08h]"  \
     "lidt   fword ptr es:[si+10h]"  \
-    "mov    ax, 1"                  \
+    "push   38h"                    \
+    "call   pentry"                 \
+    "pentry:"                       \
+    "pop    ax"                     \
+    "add    ax, 0Eh"                \
+    "push   ax"                     \
+    "smsw   ax"                     \
+    "or     al, 1"                  \
     "lmsw   ax"                     \
     "retf"                          \
     "pm_pm:"                        \
-    "mov    ax, 28h"                \
-    "mov    ss, ax"                 \
     "mov    ax, 18h"                \
     "mov    ds, ax"                 \
-    "mov    ax, 20h"                \
+    "add    al, 08h"                \
     "mov    es, ax"                 \
+    "add    al, 08h"                \
+    "mov    ss, ax"                 \
     parm [si] modify nomemory;
 
 /* Return to caller - we do not use IRET because we should not enable
@@ -265,27 +285,6 @@ void pm_unwind(uint16_t args);
     "retf"                  \
     parm [ax] modify nomemory aborts;
 
-/// @todo This method is silly. The RTC should be programmed to fire an interrupt
-// instead of hogging the CPU with inaccurate code.
-void timer_wait(uint32_t usec_wait)
-{
-    uint32_t    cycles;
-    uint8_t     old_val;
-    uint8_t     cur_val;
-
-    /* We wait in 15 usec increments. */
-    cycles = usec_wait / 15;
-
-    old_val = inp(0x61) & 0x10;
-    while (cycles--) {
-        /* Wait 15us. */
-        do {
-            cur_val = inp(0x61) & 0x10;
-        } while (cur_val != old_val);
-        old_val = cur_val;
-    }
-}
-
 bx_bool set_enable_a20(bx_bool val)
 {
     uint8_t     oldval;
@@ -302,29 +301,6 @@ bx_bool set_enable_a20(bx_bool val)
         outb(0x92, oldval & 0xfd);
 
     return((oldval & 0x02) != 0);
-}
-
-typedef struct {
-    uint32_t    start;
-    uint32_t    xstart;
-    uint32_t    len;
-    uint32_t    xlen;
-    uint32_t    type;
-} mem_range_t;
-
-void set_e820_range(uint16_t ES, uint16_t DI, uint32_t start, uint32_t end,
-                    uint8_t extra_start, uint8_t extra_end, uint16_t type)
-{
-    mem_range_t __far   *range;
-
-    range = ES :> (mem_range_t *)DI;
-    range->start  = start;
-    range->xstart = extra_start;
-    end -= start;
-    extra_end -= extra_start;
-    range->len    = end;
-    range->xlen   = extra_end;
-    range->type   = type;
 }
 
 /// @todo move elsewhere?
@@ -394,7 +370,10 @@ void BIOSCALL int15_function(sys_regs_t r)
         }
         break;
 
-    case 0x41:
+        /* These are here just to avoid warnings being logged. */
+    case 0x22:  /* Locate ROM BASIC (tough when we don't have any.) */
+    case 0x41:  /* PC Convertible, wait for external events. */
+    case 0xC7:  /* PS/2, get memory map. */
         SET_CF();
         SET_AH(UNSUPPORTED_FUNCTION);
         break;
@@ -403,10 +382,10 @@ void BIOSCALL int15_function(sys_regs_t r)
     //       but not handle this as an unknown function (regardless of CPU type).
     case 0x4f:
         /* keyboard intercept */
-#if BX_CPU < 2
-        SET_AH(UNSUPPORTED_FUNCTION);
-#else
+#if VBOX_BIOS_CPU >= 80286
         // nop
+#else
+        SET_AH(UNSUPPORTED_FUNCTION);
 #endif
         SET_CF();
         break;
@@ -427,15 +406,16 @@ void BIOSCALL int15_function(sys_regs_t r)
                 write_word( 0x40, 0x9C, DX ); // Low word, delay
                 write_word( 0x40, 0x9E, CX ); // High word, delay.
                 CLEAR_CF( );
+                // Unmask IRQ8 so INT70 will get through.
                 irqDisable = inb( 0xA1 );
                 outb( 0xA1, irqDisable & 0xFE );
-                bRegister = inb_cmos( 0xB );  // Unmask IRQ8 so INT70 will get through.
-                outb_cmos( 0xB, bRegister | 0x40 ); // Turn on the Periodic Interrupt timer
+                bRegister = inb_cmos( 0xB );
+                // Turn on the Periodic Interrupt timer
+                outb_cmos( 0xB, bRegister | 0x40 );
             } else {
                 // Interval already set.
                 BX_DEBUG_INT15("int15: Func 83h, failed, already waiting.\n" );
-                SET_CF();
-                SET_AH(UNSUPPORTED_FUNCTION);
+                SET_CF();   // AH is left unmodified
             }
         } else if( GET_AL() == 1 ) {
             // Clear Interval requested
@@ -453,20 +433,59 @@ void BIOSCALL int15_function(sys_regs_t r)
         break;
         }
 
+    case 0x86:
+        // Set Interval requested.
+        if( ( read_byte( 0x40, 0xA0 ) & 1 ) == 0 ) {
+            // Interval not already set.
+            write_byte( 0x40, 0xA0, 1 );    // Set status byte.
+            write_word( 0x40, 0x98, 0x40 ); // Byte location, segment
+            write_word( 0x40, 0x9A, 0xA0 ); // Byte location, offset
+            write_word( 0x40, 0x9C, DX );   // Low word, delay
+            write_word( 0x40, 0x9E, CX );   // High word, delay.
+            // Unmask IRQ8 so INT70 will get through.
+            irqDisable = inb( 0xA1 );
+            outb( 0xA1, irqDisable & 0xFE );
+            bRegister = inb_cmos( 0xB );
+            // Turn on the Periodic Interrupt timer
+            outb_cmos( 0xB, bRegister | 0x40 );
+            // Now wait until timer interrupt says wait is done.
+            int_enable();
+            do {
+                halt();
+                bRegister = read_byte( 0x40, 0xA0 );
+            }
+            while( !(bRegister & 0x80) );
+            write_byte( 0x40, 0xA0, 0 );    // Deactivate wait.
+            CLEAR_CF( );
+        } else {
+            // Interval already set.
+            BX_DEBUG_INT15("int15: Func 86h, failed, already waiting.\n" );
+            SET_CF();   // AH is left unmodified
+        }
+        break;
+
     case 0x88:
         // Get the amount of extended memory (above 1M)
-#if BX_CPU < 2
-        SET_AH(UNSUPPORTED_FUNCTION);
-        SET_CF();
-#else
-        AX = (inb_cmos(0x31) << 8) | inb_cmos(0x30);
+#if VBOX_BIOS_CPU >= 80286
+        AX = get_cmos_word(0x30 /*, 0x31*/);
 
+#if VBOX_BIOS_CPU >= 80386
         // According to Ralf Brown's interrupt the limit should be 15M,
         // but real machines mostly return max. 63M.
         if(AX > 0xffc0)
             AX = 0xffc0;
+#else
+        // An AT compatible cannot have more than 15M extended memory.
+        // If more is reported, some software (e.g. Windows 3.1) gets
+        // quite upset.
+        if(AX > 0x3c00)
+            AX = 0x3c00;
+#endif
 
         CLEAR_CF();
+#else
+        SET_AH(UNSUPPORTED_FUNCTION);
+        SET_CF();
 #endif
         break;
 
@@ -563,23 +582,43 @@ undecoded:
     }
 }
 
+#if VBOX_BIOS_CPU >= 80386
+
+typedef struct {
+    uint32_t    start;
+    uint32_t    xstart;
+    uint32_t    len;
+    uint32_t    xlen;
+    uint32_t    type;
+} mem_range_t;
+
+static void set_e820_range_len(uint16_t reg_ES, uint16_t reg_DI, uint32_t start, uint32_t len, uint8_t type)
+{
+    mem_range_t __far *fpRange = reg_ES :> (mem_range_t *)reg_DI;
+    fpRange->start  = start;
+    fpRange->len    = len;
+    fpRange->type   = type;
+    fpRange->xlen   = 0;
+    fpRange->xstart = 0;
+}
+
+#define set_e820_range_end(reg_ES, reg_DI, start, end, type) set_e820_range_len(reg_ES, reg_DI, start, end - start, type)
+
+static void set_e820_range_above_4g(uint16_t reg_ES, uint16_t reg_DI, uint16_t c64k_above_4G_low, uint16_t c64k_above_4G_high)
+{
+    mem_range_t __far *fpRange = reg_ES :> (mem_range_t *)reg_DI;
+    fpRange->start  = 0;        /* Starts at 4G, so low start address dword is zero */
+    fpRange->xstart = 1;        /* And the high start dword is 1. */
+    fpRange->len    = (uint32_t)c64k_above_4G_low << 16;
+    fpRange->xlen   = c64k_above_4G_high;
+    fpRange->type   = 1;        /* type is usable */
+}
+
 void BIOSCALL int15_function32(sys32_regs_t r)
 {
-    uint32_t    extended_memory_size=0; // 64bits long
-    uint32_t    extra_lowbits_memory_size=0;
-    uint8_t     extra_highbits_memory_size=0;
-    uint32_t    mcfgStart, mcfgSize;
-
     BX_DEBUG_INT15("int15 AX=%04x\n",AX);
 
     switch (GET_AH()) {
-    case 0x86:
-        // Wait for CX:DX microseconds. currently using the
-        // refresh request port 0x61 bit4, toggling every 15usec
-        int_enable();
-        timer_wait(((uint32_t)CX << 16) | DX);
-        break;
-
     case 0xd0:
         if (GET_AL() != 0x4f)
             goto int15_unimplemented;
@@ -598,69 +637,48 @@ void BIOSCALL int15_function32(sys32_regs_t r)
         switch(GET_AL()) {
         case 0x20: // coded by osmaker aka K.J.
             if(EDX == 0x534D4150) {
-                extended_memory_size = inb_cmos(0x35);
-                extended_memory_size <<= 8;
-                extended_memory_size |= inb_cmos(0x34);
-                extended_memory_size *= 64;
-#ifndef VBOX /* The following excludes 0xf0000000 thru 0xffffffff. Trust DevPcBios.cpp to get this right. */
-                // greater than EFF00000???
-                if(extended_memory_size > 0x3bc000) {
-                    extended_memory_size = 0x3bc000; // everything after this is reserved memory until we get to 0x100000000
+                uint32_t extended_memory_size; // 64bits long
+                uint16_t c64k_above_4G_low;
+                uint16_t c64k_above_4G_high;
+#ifdef BIOS_WITH_MCFG_E820
+                uint32_t mcfgStart, mcfgSize;
+#endif
+
+                /* Go for the amount of memory above 16MB first. */
+                extended_memory_size  = get_cmos_word(0x34 /*, 0x35*/);
+                if (extended_memory_size > 0)
+                {
+                    extended_memory_size  += _16M / _64K;
+                    extended_memory_size <<= 16;
                 }
-#endif /* !VBOX */
-                extended_memory_size *= 1024;
-                extended_memory_size += (16L * 1024 * 1024);
-
-                if(extended_memory_size <= (16L * 1024 * 1024)) {
-                    extended_memory_size = inb_cmos(0x31);
-                    extended_memory_size <<= 8;
-                    extended_memory_size |= inb_cmos(0x30);
-                    extended_memory_size *= 1024;
-                    extended_memory_size += (1L * 1024 * 1024);
+                else
+                {
+                    /* No memory above 16MB, query memory above 1MB ASSUMING we have at least 1MB. */
+                    extended_memory_size  = get_cmos_word(0x30 /*, 0x31*/);
+                    extended_memory_size += _1M / _1K;
+                    extended_memory_size *= _1K;
                 }
 
-#ifdef VBOX     /* We've already used the CMOS entries for SATA.
-                   BTW. This is the amount of memory above 4GB measured in 64KB units. */
-                extra_lowbits_memory_size = inb_cmos(0x62);
-                extra_lowbits_memory_size <<= 8;
-                extra_lowbits_memory_size |= inb_cmos(0x61);
-                extra_lowbits_memory_size <<= 16;
-                extra_highbits_memory_size = inb_cmos(0x63);
-                /* 0x64 and 0x65 can be used if we need to dig 1 TB or more at a later point. */
-#else
-                extra_lowbits_memory_size = inb_cmos(0x5c);
-                extra_lowbits_memory_size <<= 8;
-                extra_lowbits_memory_size |= inb_cmos(0x5b);
-                extra_lowbits_memory_size *= 64;
-                extra_lowbits_memory_size *= 1024;
-                extra_highbits_memory_size = inb_cmos(0x5d);
-#endif /* !VBOX */
+                /* This is the amount of memory above 4GB measured in 64KB units.
+                   Note! 0x65 can be used when we need to go beyond 255 TiB */
+                c64k_above_4G_low  = get_cmos_word(0x61 /*, 0x62*/);
+                c64k_above_4G_high = get_cmos_word(0x63 /*, 0x64*/);
 
+#ifdef BIOS_WITH_MCFG_E820 /** @todo Actually implement the mcfg reporting. */
                 mcfgStart = 0;
                 mcfgSize  = 0;
-
-                switch(BX)
+#endif
+                switch (BX)
                 {
                     case 0:
-                        set_e820_range(ES, DI,
-#ifndef VBOX /** @todo Upstream suggests the following, needs checking. (see next as well) */
-                                       0x0000000L, 0x0009f000L, 0, 0, 1);
-#else
-                                       0x0000000L, 0x0009fc00L, 0, 0, 1);
-#endif
+                        set_e820_range_end(ES, DI, 0x0000000L, 0x0009fc00L, 1);
                         EBX = 1;
                         break;
                     case 1:
-                        set_e820_range(ES, DI,
-#ifndef VBOX /** @todo Upstream suggests the following, needs checking. (see next as well) */
-                                       0x0009f000L, 0x000a0000L, 0, 0, 2);
-#else
-                                       0x0009fc00L, 0x000a0000L, 0, 0, 2);
-#endif
+                        set_e820_range_end(ES, DI, 0x0009fc00L, 0x000a0000L, 2);
                         EBX = 2;
                         break;
                     case 2:
-#ifdef VBOX
                         /* Mark the BIOS as reserved. VBox doesn't currently
                          * use the 0xe0000-0xeffff area. It does use the
                          * 0xd0000-0xdffff area for the BIOS logo, but it's
@@ -672,97 +690,57 @@ void BIOSCALL int15_function32(sys32_regs_t r)
                          * they trigger the "Too many similar traps" assertion)
                          * a single reserved range from 0xd0000 to 0xffffff.
                          * A 128K area starting from 0xd0000 works. */
-                        set_e820_range(ES, DI,
-                                       0x000f0000L, 0x00100000L, 0, 0, 2);
-#else /* !VBOX */
-                        set_e820_range(ES, DI,
-                                       0x000e8000L, 0x00100000L, 0, 0, 2);
-#endif /* !VBOX */
+                        set_e820_range_end(ES, DI, 0x000f0000L, 0x00100000L, 2);
                         EBX = 3;
                         break;
                     case 3:
-#if BX_ROMBIOS32 || defined(VBOX)
-                        set_e820_range(ES, DI,
-                                       0x00100000L,
-                                       extended_memory_size - ACPI_DATA_SIZE, 0, 0, 1);
+                        set_e820_range_end(ES, DI, 0x00100000L, extended_memory_size - ACPI_DATA_SIZE, 1);
                         EBX = 4;
-#else
-                        set_e820_range(ES, DI,
-                                       0x00100000L,
-                                       extended_memory_size, 1);
-                        EBX = 5;
-#endif
                         break;
                     case 4:
-                        set_e820_range(ES, DI,
-                                       extended_memory_size - ACPI_DATA_SIZE,
-                                       extended_memory_size, 0, 0, 3); // ACPI RAM
+                        set_e820_range_len(ES, DI, extended_memory_size - ACPI_DATA_SIZE, ACPI_DATA_SIZE, 3); // ACPI RAM
                         EBX = 5;
                         break;
                     case 5:
-                        set_e820_range(ES, DI,
-                                       0xfec00000,
-                                       0xfec00000 + 0x1000, 0, 0, 2); // I/O APIC
+                        set_e820_range_len(ES, DI, 0xfec00000, 0x1000, 2); // I/O APIC
                         EBX = 6;
                         break;
                     case 6:
-                        set_e820_range(ES, DI,
-                                       0xfee00000,
-                                       0xfee00000 + 0x1000, 0, 0, 2); // Local APIC
+                        set_e820_range_len(ES, DI, 0xfee00000, 0x1000, 2); // Local APIC
                         EBX = 7;
                         break;
                     case 7:
                         /* 256KB BIOS area at the end of 4 GB */
-#ifdef VBOX
-                        /* We don't set the end to 1GB here and rely on the 32-bit
-                           unsigned wrap around effect (0-0xfffc0000L). */
-#endif
-                        set_e820_range(ES, DI,
-                                       0xfffc0000L, 0x00000000L, 0, 0, 2);
+                        set_e820_range_len(ES, DI, 0xfffc0000L, 0x40000, 2);
+#ifdef BIOS_WITH_MCFG_E820
                         if (mcfgStart != 0)
                             EBX = 8;
                         else
-                        {
-                            if (extra_highbits_memory_size || extra_lowbits_memory_size)
-                                EBX = 9;
-                            else
-                                EBX = 0;
-                        }
-                        break;
-                     case 8:
-                        /* PCI MMIO config space (MCFG) */
-                        set_e820_range(ES, DI,
-                                       mcfgStart, mcfgStart + mcfgSize, 0, 0, 2);
-
-                        if (extra_highbits_memory_size || extra_lowbits_memory_size)
+#endif
+                        if (c64k_above_4G_low || c64k_above_4G_high)
                             EBX = 9;
                         else
                             EBX = 0;
                         break;
-                    case 9:
-#ifdef VBOX /* Don't succeeded if no memory above 4 GB.  */
-                        /* Mapping of memory above 4 GB if present.
-                           Note1: set_e820_range needs do no borrowing in the
-                                  subtraction because of the nice numbers.
-                           Note2* works only up to 1TB because of uint8_t for
-                                  the upper bits!*/
-                        if (extra_highbits_memory_size || extra_lowbits_memory_size)
-                        {
-                            set_e820_range(ES, DI,
-                                           0x00000000L, extra_lowbits_memory_size,
-                                           1 /*x4GB*/, extra_highbits_memory_size + 1 /*x4GB*/, 1);
+#ifdef BIOS_WITH_MCFG_E820
+                     case 8:
+                        /* PCI MMIO config space (MCFG) */
+                        set_e820_range_len(ES, DI, mcfgStart, mcfgSize, 2);
+                        if (c64k_above_4G_low || c64k_above_4G_high)
+                            EBX = 9;
+                        else
                             EBX = 0;
+                        break;
+#endif
+                    case 9:
+                        /* Mapping of memory above 4 GB if present. */
+                        if (c64k_above_4G_low || c64k_above_4G_high)
+                        {
+                            set_e820_range_above_4g(ES, DI, c64k_above_4G_low, c64k_above_4G_high);
+                            EBX = 0;
+                            break;
                         }
-                        break;
                         /* fall thru */
-#else  /* !VBOX */
-                        /* Mapping of memory above 4 GB */
-                        set_e820_range(ES, DI, 0x00000000L,
-                        extra_lowbits_memory_size, 1, extra_highbits_memory_size
-                                       + 1, 1);
-                        EBX = 0;
-                        break;
-#endif /* !VBOX */
                     default:  /* AX=E820, DX=534D4150, BX unrecognized */
                         goto int15_unimplemented;
                         break;
@@ -788,14 +766,14 @@ void BIOSCALL int15_function32(sys32_regs_t r)
             // regs.u.r16.bx = 0;
 
             // Get the amount of extended memory (above 1M)
-            CX = (inb_cmos(0x31) << 8) | inb_cmos(0x30);
+            CX = get_cmos_word(0x30 /*, 0x31*/);
 
             // limit to 15M
             if(CX > 0x3c00)
                 CX = 0x3c00;
 
             // Get the amount of extended memory above 16M in 64k blocks
-            DX = (inb_cmos(0x35) << 8) | inb_cmos(0x34);
+            DX = get_cmos_word(0x34 /*, 0x35*/);
 
             // Set configured memory equal to extended memory
             AX = CX;
@@ -815,6 +793,7 @@ void BIOSCALL int15_function32(sys32_regs_t r)
         break;
     }
 }
+#endif  /* VBOX_BIOS_CPU >= 80386 */
 
 #if VBOX_BIOS_CPU >= 80286
 
@@ -824,7 +803,6 @@ void BIOSCALL int15_function32(sys32_regs_t r)
 /* Function 0x87 handled separately due to specific stack layout requirements. */
 void BIOSCALL int15_blkmove(disk_regs_t r)
 {
-    bx_bool     prev_a20_enable;
     uint16_t    base15_00;
     uint8_t     base23_16;
     uint16_t    ss;
@@ -835,7 +813,7 @@ void BIOSCALL int15_blkmove(disk_regs_t r)
     // turn off interrupts
     int_disable();    /// @todo aren't they disabled already?
 
-    prev_a20_enable = set_enable_a20(1); // enable A20 line
+    set_enable_a20(1);  // enable A20 line
 
     // 128K max of transfer on 386+ ???
     // source == destination ???
@@ -844,7 +822,7 @@ void BIOSCALL int15_blkmove(disk_regs_t r)
     // offset   use     initially  comments
     // ==============================================
     // 00..07   Unused  zeros      Null descriptor
-    // 08..0f   GDT     zeros      filled in by BIOS
+    // 08..0f   scratch zeros      work area used by BIOS
     // 10..17   source  ssssssss   source of data
     // 18..1f   dest    dddddddd   destination of data
     // 20..27   CS      zeros      filled in by BIOS
@@ -885,13 +863,20 @@ void BIOSCALL int15_blkmove(disk_regs_t r)
     write_byte(ES, SI+0x28+5, 0x93);     // access
     write_word(ES, SI+0x28+6, 0x0000);   // base 31:24/reserved/limit 19:16
 
+#if VBOX_BIOS_CPU >= 80386
+    /* Not taking the address of the parameter allows the code generator
+     * produce slightly better code for some unknown reason.
+     */
+    pm_stack_save(CX, ES, SI);
+#else
     pm_stack_save(CX, ES, SI, FP_OFF(&r));
+#endif
     pm_enter();
     pm_copy();
     pm_exit();
     pm_stack_restore();
 
-    set_enable_a20(prev_a20_enable);
+    set_enable_a20(0);  // unconditionally disable A20 line
 
     // turn interrupts back on
     int_enable();
@@ -899,4 +884,4 @@ void BIOSCALL int15_blkmove(disk_regs_t r)
     SET_AH(0);
     CLEAR_CF();
 }
-#endif
+#endif  /* VBOX_BIOS_CPU >= 80286 */

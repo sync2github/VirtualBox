@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: x509-internal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Crypto - X.509, Internal Header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,12 +24,14 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___common_crypto_x509_internal_h
-#define ___common_crypto_x509_internal_h
+#ifndef IPRT_INCLUDED_SRC_common_crypto_x509_internal_h
+#define IPRT_INCLUDED_SRC_common_crypto_x509_internal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #define RTASN1TMPL_TEMPLATE_FILE "../common/crypto/x509-template.h"
 #include <iprt/asn1-generator-internal-header.h>
 
-#endif
+#endif /* !IPRT_INCLUDED_SRC_common_crypto_x509_internal_h */
 

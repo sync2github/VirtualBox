@@ -1,11 +1,10 @@
-/** $Id$ */
+/* $Id: VDScriptAst.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * VBox HDD container test utility - scripting engine AST node related functions.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -348,7 +347,7 @@ DECLHIDDEN(PVDSCRIPTASTCORE) vdScriptAstNodeAlloc(VDSCRIPTASTCLASS enmClass)
 
 DECLHIDDEN(PVDSCRIPTASTIDE) vdScriptAstNodeIdeAlloc(size_t cchIde)
 {
-    PVDSCRIPTASTIDE pAstNode = (PVDSCRIPTASTIDE)RTMemAllocZ(RT_OFFSETOF(VDSCRIPTASTIDE, aszIde[cchIde + 1]));
+    PVDSCRIPTASTIDE pAstNode = (PVDSCRIPTASTIDE)RTMemAllocZ(RT_UOFFSETOF_DYN(VDSCRIPTASTIDE, aszIde[cchIde + 1]));
     if (pAstNode)
     {
         pAstNode->Core.enmClass = VDSCRIPTASTCLASS_IDENTIFIER;

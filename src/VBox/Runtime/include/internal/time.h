@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: time.h 85127 2020-07-08 23:42:18Z vboxsync $ */
 /** @file
  * IPRT - Internal RTTime header
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_time_h
-#define ___internal_time_h
+#ifndef IPRT_INCLUDED_INTERNAL_time_h
+#define IPRT_INCLUDED_INTERNAL_time_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -33,12 +36,10 @@ RT_C_DECLS_BEGIN
 
 #if defined(IN_RING3) || defined(IN_RC)
 
-extern DECLHIDDEN(uint64_t) g_u64ProgramStartNanoTS;
-extern DECLHIDDEN(uint64_t) g_u64ProgramStartMicroTS;
-extern DECLHIDDEN(uint64_t) g_u64ProgramStartMilliTS;
+extern DECL_HIDDEN_DATA(uint64_t) g_u64ProgramStartNanoTS;
 
 #endif
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_time_h */

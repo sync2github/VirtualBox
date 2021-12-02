@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIFilePathSelector.cpp 92031 2021-10-25 13:19:48Z vboxsync $ */
 /** @file
- * VBox Qt GUI - VirtualBox Qt extensions: UIFilePathSelector class implementation.
+ * VBox Qt GUI - UIFilePathSelector class implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,35 +15,30 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QAction>
-# include <QApplication>
-# include <QClipboard>
-# include <QDir>
-# include <QFocusEvent>
-# include <QHBoxLayout>
-# include <QLineEdit>
-# ifdef VBOX_WS_WIN
-#  include <QListView>
-# endif /* VBOX_WS_WIN */
+#include <QAction>
+#include <QApplication>
+#include <QClipboard>
+#include <QDir>
+#include <QFocusEvent>
+#include <QHBoxLayout>
+#include <QLineEdit>
+#ifdef VBOX_WS_WIN
+# include <QListView>
+#endif
 
 /* GUI includes: */
-# include "QIFileDialog.h"
-# include "QILabel.h"
-# include "QILineEdit.h"
-# include "QIToolButton.h"
-# include "UIIconPool.h"
-# include "UIFilePathSelector.h"
-# include "VBoxGlobal.h"
+#include "QIFileDialog.h"
+#include "QILabel.h"
+#include "QILineEdit.h"
+#include "QIToolButton.h"
+#include "UICommon.h"
+#include "UIExtraDataManager.h"
+#include "UIIconPool.h"
+#include "UIFilePathSelector.h"
 
 /* Other VBox includes: */
-# include <iprt/assert.h>
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include <iprt/assert.h>
 
 
 /** Returns first position of difference between passed strings. */
@@ -63,13 +58,16 @@ static int differFrom(const QString &str1, const QString &str2)
 UIFilePathSelector::UIFilePathSelector(QWidget *pParent /* = 0 */)
     : QIWithRetranslateUI<QIComboBox>(pParent)
     , m_enmMode(Mode_Folder)
-    , m_strHomeDir(QDir::current().absolutePath())
+    , m_strInitialPath(QDir::current().absolutePath())
+    , m_fResetEnabled(true)
     , m_fEditable(true)
     , m_fModified(false)
     , m_fEditableMode(false)
     , m_fMouseAwaited(false)
     , m_fToolTipOverriden(false)
     , m_pCopyAction(new QAction(this))
+    , m_iRecentListSeparatorPosition(ResetId + 1)
+    , m_enmRecentMediaListType(UIMediumDeviceType_Invalid)
 {
 #ifdef VBOX_WS_WIN
     // WORKAROUND:
@@ -101,8 +99,9 @@ UIFilePathSelector::UIFilePathSelector(QWidget *pParent /* = 0 */)
     setMinimumWidth(200);
 
     /* Setup connections: */
-    connect(this, SIGNAL(activated(int)), this, SLOT(onActivated(int)));
-    connect(m_pCopyAction, SIGNAL(triggered(bool)), this, SLOT(copyToClipboard()));
+    connect(this, static_cast<void(UIFilePathSelector::*)(int)>(&UIFilePathSelector::activated), this, &UIFilePathSelector::onActivated);
+    connect(m_pCopyAction, &QAction::triggered, this, &UIFilePathSelector::copyToClipboard);
+    connect(&uiCommon(), &UICommon::sigRecentMediaListUpdated, this, &UIFilePathSelector::sltRecentMediaListUpdated);
 
     /* Editable by default: */
     setEditable(true);
@@ -125,21 +124,30 @@ void UIFilePathSelector::setEditable(bool fEditable)
     if (m_fEditable)
     {
         QIComboBox::setEditable(true);
-        Assert(lineEdit());
-        connect(lineEdit(), SIGNAL(textEdited(const QString &)),
-                this, SLOT(onTextEdited(const QString &)));
 
-        /* Installing necessary event filters: */
+        /* Install combo-box event-filter: */
+        Assert(comboBox());
+        comboBox()->installEventFilter(this);
+
+        /* Install line-edit connection/event-filter: */
+        Assert(lineEdit());
+        connect(lineEdit(), &QLineEdit::textEdited,
+                this, &UIFilePathSelector::onTextEdited);
         lineEdit()->installEventFilter(this);
     }
     else
     {
         if (lineEdit())
         {
-            /* Installing necessary event filters: */
-            lineEdit()->installEventFilter(this);
-            disconnect(lineEdit(), SIGNAL(textEdited(const QString &)),
-                       this, SLOT(onTextEdited(const QString &)));
+            /* Remove line-edit event-filter/connection: */
+            lineEdit()->removeEventFilter(this);
+            disconnect(lineEdit(), &QLineEdit::textEdited,
+                       this, &UIFilePathSelector::onTextEdited);
+        }
+        if (comboBox())
+        {
+            /* Remove combo-box event-filter: */
+            comboBox()->removeEventFilter(this);
         }
         QIComboBox::setEditable(false);
     }
@@ -147,6 +155,12 @@ void UIFilePathSelector::setEditable(bool fEditable)
 
 void UIFilePathSelector::setResetEnabled(bool fEnabled)
 {
+    /* Cache requested state: */
+    m_fResetEnabled = fEnabled;
+
+    /* Update recent list separator position: */
+    m_iRecentListSeparatorPosition = fEnabled ? ResetId + 1 : ResetId;
+
     if (!fEnabled && count() - 1 == ResetId)
         removeItem(ResetId);
     else if (fEnabled && count() - 1 == ResetId - 1)
@@ -154,7 +168,19 @@ void UIFilePathSelector::setResetEnabled(bool fEnabled)
         insertItem(ResetId, "");
         setItemIcon(ResetId, UIIconPool::iconSet(":/eraser_16px.png"));
     }
+
+    sltRecentMediaListUpdated(m_enmRecentMediaListType);
     retranslateUi();
+}
+
+bool UIFilePathSelector::isValid() const
+{
+    if (m_strPath.isNull() || m_strPath.isEmpty())
+        return false;
+    QFileInfo fileInfo(m_strPath);
+    if (!fileInfo.exists() || !fileInfo.isReadable())
+        return false;
+    return true;
 }
 
 void UIFilePathSelector::setToolTip(const QString &strToolTip)
@@ -166,9 +192,34 @@ void UIFilePathSelector::setToolTip(const QString &strToolTip)
     m_fToolTipOverriden = !toolTip().isEmpty();
 }
 
+void UIFilePathSelector::setDefaultPath(const QString &strDefaultPath)
+{
+    if (m_strDefaultPath == strDefaultPath)
+        return;
+    m_strDefaultPath = strDefaultPath;
+    if (currentIndex() == ResetId)
+        setPath(m_strDefaultPath);
+}
+
+const QString& UIFilePathSelector::defaultPath() const
+{
+    return m_strDefaultPath;
+}
+
+void UIFilePathSelector::setRecentMediaListType(UIMediumDeviceType enmMediumType)
+{
+    m_enmRecentMediaListType = enmMediumType;
+    sltRecentMediaListUpdated(enmMediumType);
+}
+
+UIMediumDeviceType UIFilePathSelector::recentMediaListType() const
+{
+    return m_enmRecentMediaListType;
+}
+
 void UIFilePathSelector::setPath(const QString &strPath, bool fRefreshText /* = true */)
 {
-    m_strPath = strPath.isEmpty() ? QString::null :
+    m_strPath = strPath.isEmpty() ? QString() :
             QDir::toNativeSeparators(strPath);
     if (fRefreshText)
         refreshText();
@@ -176,9 +227,26 @@ void UIFilePathSelector::setPath(const QString &strPath, bool fRefreshText /* = 
 
 bool UIFilePathSelector::eventFilter(QObject *pObject, QEvent *pEvent)
 {
-    if (m_fMouseAwaited && (pEvent->type() == QEvent::MouseButtonPress))
-        QMetaObject::invokeMethod(this, "refreshText", Qt::QueuedConnection);
+    /* If the object is private combo-box: */
+    if (pObject == comboBox())
+    {
+        /* Handle focus events related to private child: */
+        switch (pEvent->type())
+        {
+            case QEvent::FocusIn:  focusInEvent(static_cast<QFocusEvent*>(pEvent)); break;
+            case QEvent::FocusOut: focusOutEvent(static_cast<QFocusEvent*>(pEvent)); break;
+            default: break;
+        }
+    }
 
+    /* If the object is private line-edit: */
+    if (pObject == lineEdit())
+    {
+        if (m_fMouseAwaited && (pEvent->type() == QEvent::MouseButtonPress))
+            QMetaObject::invokeMethod(this, "refreshText", Qt::QueuedConnection);
+    }
+
+    /* Call to base-class: */
     return QIWithRetranslateUI<QIComboBox>::eventFilter(pObject, pEvent);
 }
 
@@ -285,21 +353,25 @@ void UIFilePathSelector::retranslateUi()
 
 void UIFilePathSelector::onActivated(int iIndex)
 {
-    switch (iIndex)
+    /* Since the presence of ResetId and position of recent list separator
+     * are dynamical now, we should control condition more carefully: */
+    if (iIndex == SelectId)
+        selectPath();
+    else if (m_fResetEnabled && iIndex == ResetId)
     {
-        case SelectId:
-        {
-            selectPath();
-            break;
-        }
-        case ResetId:
-        {
-            changePath(QString::null);
-            break;
-        }
-        default:
-            break;
+        if (m_strDefaultPath.isEmpty())
+            changePath(QString());
+        else
+            changePath(m_strDefaultPath);
     }
+    else if (iIndex >= m_iRecentListSeparatorPosition)
+    {
+        /* Switch back to Path item early, lineEdit() in refreshText()
+         * should be related to this exactly item: */
+        setCurrentIndex(PathId);
+        changePath(itemText(iIndex));
+    }
+
     setCurrentIndex(PathId);
     setFocus();
 }
@@ -321,7 +393,7 @@ void UIFilePathSelector::copyToClipboard()
 void UIFilePathSelector::changePath(const QString &strPath,
                                     bool fRefreshText /* = true */)
 {
-    const QString strOldPath = m_strPath;
+    const QString strOldPath = QDir::toNativeSeparators(m_strPath);
     setPath(strPath, fRefreshText);
     if (!m_fModified && m_strPath != strOldPath)
         m_fModified = true;
@@ -331,7 +403,7 @@ void UIFilePathSelector::changePath(const QString &strPath,
 void UIFilePathSelector::selectPath()
 {
     /* Prepare initial directory: */
-    QString strInitDir;
+    QString strInitPath;
     /* If something already chosen: */
     if (!m_strPath.isEmpty())
     {
@@ -339,31 +411,31 @@ void UIFilePathSelector::selectPath()
         const QString strObjectName = QFileInfo(m_strPath).fileName();
         if (strObjectName == m_strPath)
         {
-            /* Use the home directory: */
-            strInitDir = m_strHomeDir;
+            /* Use the initial path: */
+            strInitPath = m_strInitialPath;
         }
         /* If that is full file/folder (object) path: */
         else
         {
             /* Use the first existing dir of m_strPath: */
-            strInitDir = QIFileDialog::getFirstExistingDir(m_strPath);
+            strInitPath = QIFileDialog::getFirstExistingDir(m_strPath);
         }
         /* Finally, append object name itself: */
-        strInitDir = QDir(strInitDir).absoluteFilePath(strObjectName);
+        strInitPath = QDir(strInitPath).absoluteFilePath(strObjectName);
     }
-    /* Use the home directory by default: */
-    if (strInitDir.isNull())
-        strInitDir = m_strHomeDir;
+    /* Use the initial path by default: */
+    if (strInitPath.isNull())
+        strInitPath = m_strInitialPath;
 
     /* Open the choose-file/folder dialog: */
     QString strSelPath;
     switch (m_enmMode)
     {
         case Mode_File_Open:
-            strSelPath = QIFileDialog::getOpenFileName(strInitDir, m_strFileDialogFilters, parentWidget(), m_strFileDialogTitle); break;
+            strSelPath = QIFileDialog::getOpenFileName(strInitPath, m_strFileDialogFilters, window(), m_strFileDialogTitle); break;
         case Mode_File_Save:
         {
-            strSelPath = QIFileDialog::getSaveFileName(strInitDir, m_strFileDialogFilters, parentWidget(), m_strFileDialogTitle);
+            strSelPath = QIFileDialog::getSaveFileName(strInitPath, m_strFileDialogFilters, window(), m_strFileDialogTitle);
             if (!strSelPath.isEmpty() && QFileInfo(strSelPath).suffix().isEmpty())
             {
                 if (m_strFileDialogDefaultSaveExtension.isEmpty())
@@ -374,7 +446,7 @@ void UIFilePathSelector::selectPath()
             break;
         }
         case Mode_Folder:
-            strSelPath = QIFileDialog::getExistingDirectory(strInitDir, parentWidget(), m_strFileDialogTitle); break;
+            strSelPath = QIFileDialog::getExistingDirectory(strInitPath, window(), m_strFileDialogTitle); break;
     }
 
     /* Do nothing if nothing chosen: */
@@ -391,9 +463,9 @@ void UIFilePathSelector::selectPath()
 QIcon UIFilePathSelector::defaultIcon() const
 {
     if (m_enmMode == Mode_Folder)
-        return vboxGlobal().icon(QFileIconProvider::Folder);
+        return generalIconPool().defaultSystemIcon(QFileIconProvider::Folder);
     else
-        return vboxGlobal().icon(QFileIconProvider::File);
+        return generalIconPool().defaultSystemIcon(QFileIconProvider::File);
 }
 
 QString UIFilePathSelector::fullPath(bool fAbsolute /* = true */) const
@@ -531,7 +603,7 @@ void UIFilePathSelector::refreshText()
 
         /* Attach corresponding icon: */
         setItemIcon(PathId, QFileInfo(m_strPath).exists() ?
-                            vboxGlobal().icon(QFileInfo(m_strPath)) :
+                            generalIconPool().defaultFileIcon(QFileInfo(m_strPath)) :
                             defaultIcon());
 
         /* Set the tool-tip: */
@@ -541,3 +613,43 @@ void UIFilePathSelector::refreshText()
     }
 }
 
+void UIFilePathSelector::sltRecentMediaListUpdated(UIMediumDeviceType enmMediumType)
+{
+    /* Remove the recent media list from the end of the combo: */
+    while (count() > m_iRecentListSeparatorPosition)
+        removeItem(count() - 1);
+
+    if (enmMediumType != m_enmRecentMediaListType)
+        return;
+    QStringList recentMedia;
+
+    switch (enmMediumType)
+    {
+        case UIMediumDeviceType_DVD:
+            recentMedia = gEDataManager->recentListOfOpticalDisks();
+            break;
+        case UIMediumDeviceType_Floppy:
+            recentMedia = gEDataManager->recentListOfFloppyDisks();
+            break;
+        case UIMediumDeviceType_HardDisk:
+            recentMedia = gEDataManager->recentListOfHardDrives();
+            break;
+        default:
+            break;
+    }
+
+    /* Remove the media which is not there not not readable: */
+    QStringList existingMedia;
+    foreach (QString strMediaPath, recentMedia)
+    {
+        QFileInfo info(strMediaPath);
+        if (info.exists() && info.isReadable())
+            existingMedia << strMediaPath;
+    }
+    if (existingMedia.isEmpty())
+        return;
+
+    insertSeparator(m_iRecentListSeparatorPosition);
+    foreach (const QString strPath, existingMedia)
+        addItem(strPath);
+}

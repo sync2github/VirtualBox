@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UISession.cpp 92082 2021-10-26 12:22:50Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UISession class implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,75 +15,73 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QApplication>
-# include <QBitmap>
-# include <QWidget>
-# ifdef VBOX_WS_MAC
-#  include <QTimer>
-# endif /* VBOX_WS_MAC */
-
-/* GUI includes: */
-# include "VBoxGlobal.h"
-# include "UIDesktopWidgetWatchdog.h"
-# include "UIExtraDataManager.h"
-# include "UISession.h"
-# include "UIMachine.h"
-# include "UIMedium.h"
-# include "UIActionPoolRuntime.h"
-# include "UIMachineLogic.h"
-# include "UIMachineView.h"
-# include "UIMachineWindow.h"
-# include "UIMessageCenter.h"
-# include "UIPopupCenter.h"
-# include "UIWizardFirstRun.h"
-# include "UIConsoleEventHandler.h"
-# include "UIFrameBuffer.h"
-# include "UISettingsDialogSpecific.h"
-# ifdef VBOX_WITH_VIDEOHWACCEL
-#  include "VBoxFBOverlay.h"
-# endif /* VBOX_WITH_VIDEOHWACCEL */
-# ifdef VBOX_WS_MAC
-#  include "UIMenuBar.h"
-#  include "VBoxUtils-darwin.h"
-# endif /* VBOX_WS_MAC */
-
-# ifdef VBOX_GUI_WITH_KEYS_RESET_HANDLER
-#  include "UIKeyboardHandler.h"
-#  include <signal.h>
-# endif /* VBOX_GUI_WITH_KEYS_RESET_HANDLER */
-
-/* COM includes: */
-# include "CSystemProperties.h"
-# include "CStorageController.h"
-# include "CMediumAttachment.h"
-# include "CNetworkAdapter.h"
-# include "CHostNetworkInterface.h"
-# include "CVRDEServer.h"
-# include "CUSBController.h"
-# include "CUSBDeviceFilters.h"
-# include "CHostVideoInputDevice.h"
-# include "CSnapshot.h"
-# include "CMedium.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
-/* Qt includes: */
+#include <QApplication>
+#include <QBitmap>
+#include <QMenuBar>
+#include <QWidget>
+#ifdef VBOX_WS_MAC
+# include <QTimer>
+#endif
 #ifdef VBOX_WS_WIN
-# if QT_VERSION >= 0x050000
-#  include <QtWin>
-# endif /* QT_VERSION >= 0x050000 */
-#endif /* VBOX_WS_WIN */
-
+# include <iprt/win/windows.h> /* Workaround for compile errors if included directly by QtWin. */
+# include <QtWin>
+#endif
 #ifdef VBOX_WS_X11
 # include <QX11Info>
+#endif
+
+/* GUI includes: */
+#include "UICommon.h"
+#include "UIDesktopWidgetWatchdog.h"
+#include "UIExtraDataManager.h"
+#include "UIIconPool.h"
+#include "UISession.h"
+#include "UIMachine.h"
+#include "UIMedium.h"
+#include "UIActionPoolRuntime.h"
+#include "UIMachineLogic.h"
+#include "UIMachineView.h"
+#include "UIMachineWindow.h"
+#include "UIMessageCenter.h"
+#include "UIMousePointerShapeData.h"
+#include "UINotificationCenter.h"
+#include "UIConsoleEventHandler.h"
+#include "UIFrameBuffer.h"
+#include "UISettingsDialogSpecific.h"
+#ifdef VBOX_WS_MAC
+# include "UICocoaApplication.h"
+# include "VBoxUtils-darwin.h"
+#endif
+#ifdef VBOX_GUI_WITH_KEYS_RESET_HANDLER
+# include "UIKeyboardHandler.h"
+# include <signal.h>
+#endif
+
+/* COM includes: */
+#include "CAudioAdapter.h"
+#include "CGraphicsAdapter.h"
+#include "CHostUSBDevice.h"
+#include "CRecordingSettings.h"
+#include "CSystemProperties.h"
+#include "CStorageController.h"
+#include "CMediumAttachment.h"
+#include "CNetworkAdapter.h"
+#include "CHostNetworkInterface.h"
+#include "CVRDEServer.h"
+#include "CUSBController.h"
+#include "CUSBDeviceFilter.h"
+#include "CUSBDeviceFilters.h"
+#include "CHostVideoInputDevice.h"
+#include "CSnapshot.h"
+#include "CMedium.h"
+
+/* External includes: */
+#ifdef VBOX_WS_X11
 # include <X11/Xlib.h>
 # include <X11/Xutil.h>
-#endif /* VBOX_WS_X11 */
+#endif
+
 
 #ifdef VBOX_GUI_WITH_KEYS_RESET_HANDLER
 static void signalHandlerSIGUSR1(int sig, siginfo_t *, void *);
@@ -166,50 +164,36 @@ bool UISession::initialize()
         return false;
 
     /* Notify user about mouse&keyboard auto-capturing: */
-    if (vboxGlobal().settings().autoCapture())
-        popupCenter().remindAboutAutoCapture(machineLogic()->activeMachineWindow());
+    if (gEDataManager->autoCaptureEnabled())
+        UINotificationMessage::remindAboutAutoCapture();
 
-    /* Check if we are in teleportation waiting mode.
-     * In that case no first run wizard is necessary. */
     m_machineState = machine().GetState();
-    if (   isFirstTimeStarted()
-        && !((   m_machineState == KMachineState_PoweredOff
-              || m_machineState == KMachineState_Aborted
-              || m_machineState == KMachineState_Teleported)
-             && machine().GetTeleporterEnabled()))
-    {
-        UISafePointerWizard pWizard = new UIWizardFirstRun(mainMachineWindow(), machine());
-        pWizard->prepare();
-        pWizard->exec();
-        if (pWizard)
-            delete pWizard;
-    }
 
     /* Apply debug settings from the command line. */
     if (!debugger().isNull() && debugger().isOk())
     {
-        if (vboxGlobal().isPatmDisabled())
+        if (uiCommon().isPatmDisabled())
             debugger().SetPATMEnabled(false);
-        if (vboxGlobal().isCsamDisabled())
+        if (uiCommon().isCsamDisabled())
             debugger().SetCSAMEnabled(false);
-        if (vboxGlobal().isSupervisorCodeExecedRecompiled())
+        if (uiCommon().isSupervisorCodeExecedRecompiled())
             debugger().SetRecompileSupervisor(true);
-        if (vboxGlobal().isUserCodeExecedRecompiled())
+        if (uiCommon().isUserCodeExecedRecompiled())
             debugger().SetRecompileUser(true);
-        if (vboxGlobal().areWeToExecuteAllInIem())
+        if (uiCommon().areWeToExecuteAllInIem())
             debugger().SetExecuteAllInIEM(true);
-        if (!vboxGlobal().isDefaultWarpPct())
-            debugger().SetVirtualTimeRate(vboxGlobal().getWarpPct());
+        if (!uiCommon().isDefaultWarpPct())
+            debugger().SetVirtualTimeRate(uiCommon().getWarpPct());
     }
 
     /* Apply ad-hoc reconfigurations from the command line: */
-    if (vboxGlobal().hasFloppyImageToMount())
-        mountAdHocImage(KDeviceType_Floppy, UIMediumType_Floppy, vboxGlobal().getFloppyImage());
-    if (vboxGlobal().hasDvdImageToMount())
-        mountAdHocImage(KDeviceType_DVD, UIMediumType_DVD, vboxGlobal().getDvdImage());
+    if (uiCommon().hasFloppyImageToMount())
+        mountAdHocImage(KDeviceType_Floppy, UIMediumDeviceType_Floppy, uiCommon().getFloppyImage().toString());
+    if (uiCommon().hasDvdImageToMount())
+        mountAdHocImage(KDeviceType_DVD, UIMediumDeviceType_DVD, uiCommon().getDvdImage().toString());
 
     /* Power UP if this is NOT separate process: */
-    if (!vboxGlobal().isSeparateProcess())
+    if (!uiCommon().isSeparateProcess())
         if (!powerUp())
             return false;
 
@@ -232,7 +216,7 @@ bool UISession::initialize()
         return false;
 
     /* Fetch corresponding states: */
-    if (vboxGlobal().isSeparateProcess())
+    if (uiCommon().isSeparateProcess())
     {
         m_fIsMouseSupportsAbsolute = mouse().GetAbsoluteSupported();
         m_fIsMouseSupportsRelative = mouse().GetRelativeSupported();
@@ -245,13 +229,6 @@ bool UISession::initialize()
     /* Load VM settings: */
     loadVMSettings();
 
-#ifdef VBOX_WITH_VIDEOHWACCEL
-    /* Log whether 2D video acceleration is enabled: */
-    LogRel(("GUI: 2D video acceleration is %s\n",
-           machine().GetAccelerate2DVideoEnabled() && VBoxGlobal::isAcceleration2DVideoAvailable()
-           ? "enabled" : "disabled"));
-#endif /* VBOX_WITH_VIDEOHWACCEL */
-
 /* Log whether HID LEDs sync is enabled: */
 #if defined(VBOX_WS_MAC) || defined(VBOX_WS_WIN)
     LogRel(("GUI: HID LEDs sync is %s\n",
@@ -262,10 +239,11 @@ bool UISession::initialize()
 #endif /* !VBOX_WS_MAC && !VBOX_WS_WIN */
 
 #ifdef VBOX_GUI_WITH_PIDFILE
-    vboxGlobal().createPidfile();
+    uiCommon().createPidfile();
 #endif /* VBOX_GUI_WITH_PIDFILE */
 
     /* Warn listeners about we are initialized: */
+    m_fInitialized = true;
     emit sigInitialized();
 
     /* True by default: */
@@ -275,24 +253,27 @@ bool UISession::initialize()
 bool UISession::powerUp()
 {
     /* Power UP machine: */
-    CProgress progress = vboxGlobal().shouldStartPaused() ? console().PowerUpPaused() : console().PowerUp();
+    CProgress progress = uiCommon().shouldStartPaused() ? console().PowerUpPaused() : console().PowerUp();
 
     /* Check for immediate failure: */
     if (!console().isOk() || progress.isNull())
     {
-        if (vboxGlobal().showStartVMErrors())
+        if (uiCommon().showStartVMErrors())
             msgCenter().cannotStartMachine(console(), machineName());
         LogRel(("GUI: Aborting startup due to power up issue detected...\n"));
         return false;
     }
-    
-    LogRel(("Qt version: %s\n", VBoxGlobal::qtRTVersionString().toUtf8().constData()));
+
+    /* Some logging right after we powered up: */
+    LogRel(("Qt version: %s\n", UICommon::qtRTVersionString().toUtf8().constData()));
+#ifdef VBOX_WS_X11
+    LogRel(("X11 Window Manager code: %d\n", (int)uiCommon().typeOfWindowManager()));
+#endif
 
     /* Enable 'manual-override',
      * preventing automatic Runtime UI closing
      * and visual representation mode changes: */
-    if (machineLogic())
-        machineLogic()->setManualOverrideMode(true);
+    setManualOverrideMode(true);
 
     /* Show "Starting/Restoring" progress dialog: */
     if (isSaved())
@@ -311,177 +292,81 @@ bool UISession::powerUp()
     /* Check for progress failure: */
     if (!progress.isOk() || progress.GetResultCode() != 0)
     {
-        if (vboxGlobal().showStartVMErrors())
+        if (uiCommon().showStartVMErrors())
             msgCenter().cannotStartMachine(progress, machineName());
         LogRel(("GUI: Aborting startup due to power up progress issue detected...\n"));
         return false;
     }
 
     /* Disable 'manual-override' finally: */
-    if (machineLogic())
-        machineLogic()->setManualOverrideMode(false);
+    setManualOverrideMode(false);
 
     /* True by default: */
     return true;
 }
 
-bool UISession::detach()
+void UISession::detachUi()
 {
-    /* Nothing here for now: */
-    return true;
+    /* Enable 'manual-override',
+     * preventing automatic Runtime UI closing: */
+    setManualOverrideMode(true);
+
+    /* Manually close Runtime UI: */
+    LogRel(("GUI: Detaching UI..\n"));
+    closeRuntimeUI();
 }
 
-bool UISession::saveState()
+void UISession::saveState()
 {
-    /* Prepare the saving progress: */
-    CProgress progress = machine().SaveState();
-    if (machine().isOk())
+    /* Saving state? */
+    bool fSaveState = true;
+
+    /* If VM is not paused, we should pause it first: */
+    if (!isPaused())
+        fSaveState = pause();
+
+    /* Save state: */
+    if (fSaveState)
     {
-        /* Show the saving progress: */
-        msgCenter().showModalProgressDialog(progress, machineName(), ":/progress_state_save_90px.png");
-        if (!progress.isOk() || progress.GetResultCode() != 0)
-        {
-            /* Failed in progress: */
-            msgCenter().cannotSaveMachineState(progress, machineName());
-            return false;
-        }
+        /* Enable 'manual-override',
+         * preventing automatic Runtime UI closing: */
+        setManualOverrideMode(true);
+
+        /* Now, do the magic: */
+        LogRel(("GUI: Saving VM state..\n"));
+        UINotificationProgressMachineSaveState *pNotification = new UINotificationProgressMachineSaveState(machine());
+        connect(pNotification, &UINotificationProgressMachineSaveState::sigMachineStateSaved,
+                this, &UISession::sltHandleMachineStateSaved);
+        gpNotificationCenter->append(pNotification);
     }
-    else
-    {
-        /* Failed in console: */
-        msgCenter().cannotSaveMachineState(machine());
-        return false;
-    }
-    /* Passed: */
-    return true;
 }
 
-bool UISession::shutdown()
+void UISession::shutdown()
 {
+    /* Warn the user about ACPI is not available if so: */
+    if (!console().GetGuestEnteredACPIMode())
+        return UINotificationMessage::cannotSendACPIToMachine();
+
     /* Send ACPI shutdown signal if possible: */
+    LogRel(("GUI: Sending ACPI shutdown signal..\n"));
     console().PowerButton();
     if (!console().isOk())
-    {
-        /* Failed in console: */
-        msgCenter().cannotACPIShutdownMachine(console());
-        return false;
-    }
-    /* Passed: */
-    return true;
+        UINotificationMessage::cannotACPIShutdownMachine(console());
 }
 
-bool UISession::powerOff(bool fIncludingDiscard, bool &fServerCrashed)
+void UISession::powerOff(bool fIncludingDiscard)
 {
-    /* Prepare the power-off progress: */
-    LogRel(("GUI: Powering VM down on UI session power off request...\n"));
-    CProgress progress = console().PowerDown();
-    if (console().isOk())
-    {
-        /* Show the power-off progress: */
-        msgCenter().showModalProgressDialog(progress, machineName(), ":/progress_poweroff_90px.png");
-        if (progress.isOk() && progress.GetResultCode() == 0)
-        {
-            /* Discard the current state if requested: */
-            if (fIncludingDiscard)
-                return restoreCurrentSnapshot();
-        }
-        else
-        {
-            /* Failed in progress: */
-            msgCenter().cannotPowerDownMachine(progress, machineName());
-            return false;
-        }
-    }
-    else
-    {
-        /* Check the machine state, it might be already gone: */
-        if (!console().isNull())
-        {
-           /* Failed in console: */
-           COMResult res(console());
-           /* This can happen if VBoxSVC is not running: */
-           if (FAILED_DEAD_INTERFACE(res.rc()))
-               fServerCrashed = true;
-           else
-               msgCenter().cannotPowerDownMachine(console());
-           return false;
-        }
-    }
-    /* Passed: */
-    return true;
-}
+    /* Enable 'manual-override',
+     * preventing automatic Runtime UI closing: */
+    setManualOverrideMode(true);
 
-bool UISession::restoreCurrentSnapshot()
-{
-    /* Prepare result: */
-    bool fResult = false;
-
-    /* Simulate try-catch block: */
-    do
-    {
-        /* Search for corresponding VM: */
-        CVirtualBox vbox = vboxGlobal().virtualBox();
-        const QString strMachineID = vboxGlobal().managedVMUuid();
-        const CMachine mach = vbox.FindMachine(strMachineID);
-        if (!vbox.isOk() || mach.isNull())
-        {
-            /* Unable to find VM: */
-            msgCenter().cannotFindMachineById(vbox, strMachineID);
-            break;
-        }
-
-        /* Open a direct session to modify that VM: */
-        CSession sess = vboxGlobal().openSession(vboxGlobal().managedVMUuid(),
-                                                 vboxGlobal().isSeparateProcess()
-                                                 ? KLockType_Write : KLockType_Shared);
-        if (sess.isNull())
-        {
-            /* Unable to open session: */
-            break;
-        }
-
-        /* Simulate try-catch block: */
-        do
-        {
-            /* Acquire machine for this session: */
-            CMachine machine = sess.GetMachine();
-            if (machine.isNull())
-            {
-                /* Unable to acquire machine: */
-                break;
-            }
-
-            /* Prepare the snapshot-discard progress: */
-            const CSnapshot snap = machine.GetCurrentSnapshot();
-            CProgress prog = machine.RestoreSnapshot(snap);
-            if (!machine.isOk() || prog.isNull())
-            {
-                /* Unable to restore snapshot: */
-                msgCenter().cannotRestoreSnapshot(machine, snap.GetName(), machineName());
-                break;
-            }
-
-            /* Show the snapshot-discard progress: */
-            msgCenter().showModalProgressDialog(prog, machine.GetName(), ":/progress_snapshot_discard_90px.png");
-            if (prog.GetResultCode() != 0)
-            {
-                /* Unable to restore snapshot: */
-                msgCenter().cannotRestoreSnapshot(prog, snap.GetName(), machine.GetName());
-                break;
-            }
-
-            /* Success: */
-            fResult = true;
-        }
-        while (0);
-
-        /* Unlock machine finally: */
-        sess.UnlockMachine();
-    }
-    while (0);
-
-    /* Return result: */
-    return fResult;
+    /* Now, do the magic: */
+    LogRel(("GUI: Powering VM off..\n"));
+    UINotificationProgressMachinePowerOff *pNotification =
+        new UINotificationProgressMachinePowerOff(machine(), console(), fIncludingDiscard);
+    connect(pNotification, &UINotificationProgressMachinePowerOff::sigMachinePoweredOff,
+            this, &UISession::sltHandleMachinePoweredOff);
+    gpNotificationCenter->append(pNotification);
 }
 
 UIMachineLogic* UISession::machineLogic() const
@@ -499,6 +384,11 @@ WId UISession::mainMachineWindowId() const
     return mainMachineWindow()->winId();
 }
 
+UIMachineWindow *UISession::activeMachineWindow() const
+{
+    return machineLogic() ? machineLogic()->activeMachineWindow() : 0;
+}
+
 bool UISession::isVisualStateAllowed(UIVisualStateType state) const
 {
     return m_pMachine->isVisualStateAllowed(state);
@@ -507,6 +397,16 @@ bool UISession::isVisualStateAllowed(UIVisualStateType state) const
 void UISession::changeVisualState(UIVisualStateType visualStateType)
 {
     m_pMachine->asyncChangeVisualState(visualStateType);
+}
+
+void UISession::setRequestedVisualState(UIVisualStateType visualStateType)
+{
+    m_pMachine->setRequestedVisualState(visualStateType);
+}
+
+UIVisualStateType UISession::requestedVisualState() const
+{
+    return m_pMachine->requestedVisualState();
 }
 
 bool UISession::setPause(bool fOn)
@@ -520,9 +420,9 @@ bool UISession::setPause(bool fOn)
     if (!ok)
     {
         if (fOn)
-            msgCenter().cannotPauseMachine(console());
+            UINotificationMessage::cannotPauseMachine(console());
         else
-            msgCenter().cannotResumeMachine(console());
+            UINotificationMessage::cannotResumeMachine(console());
     }
 
     return ok;
@@ -530,132 +430,62 @@ bool UISession::setPause(bool fOn)
 
 void UISession::sltInstallGuestAdditionsFrom(const QString &strSource)
 {
-    /* This flag indicates whether we want to do the usual .ISO mounting or not.
-     * First try updating the Guest Additions directly without mounting the .ISO. */
-    bool fDoMount = false;
-
-    /* Auto-update in GUI currently is disabled. */
-#ifndef VBOX_WITH_ADDITIONS_AUTOUPDATE_UI
-    fDoMount = true;
-#else /* VBOX_WITH_ADDITIONS_AUTOUPDATE_UI */
-    QVector<KAdditionsUpdateFlag> aFlagsUpdate;
-    QVector<QString> aArgs;
-    CProgress progressInstall = guest().UpdateGuestAdditions(strSource,
-                                                             aArgs, aFlagsUpdate);
-    bool fResult = guest().isOk();
-    if (fResult)
-    {
-        msgCenter().showModalProgressDialog(progressInstall, tr("Updating Guest Additions"),
-                                            ":/progress_install_guest_additions_90px.png",
-                                            0, 500 /* 500ms delay. */);
-        if (progressInstall.GetCanceled())
-            return;
-
-        HRESULT rc = progressInstall.GetResultCode();
-        if (!progressInstall.isOk() || rc != S_OK)
-        {
-            /* If we got back a VBOX_E_NOT_SUPPORTED we don't complain (guest OS
-             * simply isn't supported yet), so silently fall back to "old" .ISO
-             * mounting method. */
-            if (   !SUCCEEDED_WARNING(rc)
-                && rc != VBOX_E_NOT_SUPPORTED)
-            {
-                msgCenter().cannotUpdateGuestAdditions(progressInstall);
-
-                /* Log the error message in the release log. */
-                QString strErr = progressInstall.GetErrorInfo().GetText();
-                if (!strErr.isEmpty())
-                    LogRel(("%s\n", strErr.toLatin1().constData()));
-            }
-            fDoMount = true; /* Since automatic updating failed, fall back to .ISO mounting. */
-        }
-    }
-#endif /* VBOX_WITH_ADDITIONS_AUTOUPDATE_UI */
-
-    /* Do we still want mounting? */
-    if (!fDoMount)
-        return;
-
-    /* Open corresponding medium: */
-    QString strMediumID;
-    CVirtualBox vbox = vboxGlobal().virtualBox();
-    CMedium image = vbox.OpenMedium(strSource, KDeviceType_DVD, KAccessMode_ReadWrite, false /* fForceNewUuid */);
-    if (vbox.isOk() && !image.isNull())
-        strMediumID = image.GetId();
-    else
-    {
-        msgCenter().cannotOpenMedium(vbox, UIMediumType_DVD, strSource, mainMachineWindow());
-        return;
-    }
-
-    /* Make sure GA medium ID is valid: */
-    AssertReturnVoid(!strMediumID.isNull());
-
-    /* Search for a suitable storage slots: */
-    QList<ExactStorageSlot> freeStorageSlots;
-    QList<ExactStorageSlot> busyStorageSlots;
-    foreach (const CStorageController &controller, machine().GetStorageControllers())
-    {
-        foreach (const CMediumAttachment &attachment, machine().GetMediumAttachmentsOfController(controller.GetName()))
-        {
-            /* Look for an optical device: */
-            if (attachment.GetType() == KDeviceType_DVD)
-            {
-                /* Append storage slot to corresponding list: */
-                if (attachment.GetMedium().isNull())
-                    freeStorageSlots << ExactStorageSlot(controller.GetName(), controller.GetBus(),
-                                                         attachment.GetPort(), attachment.GetDevice());
-                else
-                    busyStorageSlots << ExactStorageSlot(controller.GetName(), controller.GetBus(),
-                                                         attachment.GetPort(), attachment.GetDevice());
-            }
-        }
-    }
-
-    /* Make sure at least one storage slot found: */
-    QList<ExactStorageSlot> storageSlots = freeStorageSlots + busyStorageSlots;
-    if (storageSlots.isEmpty())
-    {
-        msgCenter().cannotMountGuestAdditions(machineName());
-        return;
-    }
-
-    /* Try to find UIMedium among cached: */
-    UIMedium medium = vboxGlobal().medium(strMediumID);
-    if (medium.isNull())
-    {
-        /* Create new one if necessary: */
-        medium = UIMedium(image, UIMediumType_DVD, KMediumState_Created);
-        vboxGlobal().createMedium(medium);
-    }
-
-    /* Try to mount medium to first storage slot: */
-    bool fMounted = false;
-    while (!storageSlots.isEmpty() && !fMounted)
-    {
-        const ExactStorageSlot storageSlot = storageSlots.takeFirst();
-        machine().MountMedium(storageSlot.controller, storageSlot.port, storageSlot.device, medium.medium(), false /* force */);
-        if (machine().isOk())
-            fMounted = true;
-    }
-    if (!machine().isOk())
-    {
-        msgCenter().cannotRemountMedium(machine(), medium, true /* mount? */,
-                                        false /* retry? */, mainMachineWindow());
-    }
+    /* Install guest additions: */
+    UINotificationProgressGuestAdditionsInstall *pNotification =
+            new UINotificationProgressGuestAdditionsInstall(guest(), strSource);
+    connect(pNotification, &UINotificationProgressGuestAdditionsInstall::sigGuestAdditionsInstallationFailed,
+            this, &UISession::sltMountDVDAdHoc);
+    gpNotificationCenter->append(pNotification);
 }
 
-void UISession::sltCloseRuntimeUI()
+void UISession::sltMountDVDAdHoc(const QString &strSource)
 {
-    /* Ask UIMachine to close Runtime UI: */
-    uimachine()->closeRuntimeUI();
+    mountAdHocImage(KDeviceType_DVD, UIMediumDeviceType_DVD, strSource);
+}
+
+void UISession::closeRuntimeUI()
+{
+    /* First, we have to hide any opened modal/popup widgets.
+     * They then should unlock their event-loops asynchronously.
+     * If all such loops are unlocked, we can close Runtime UI. */
+    QWidget *pWidget = QApplication::activeModalWidget()
+                     ? QApplication::activeModalWidget()
+                     : QApplication::activePopupWidget()
+                     ? QApplication::activePopupWidget()
+                     : 0;
+    if (pWidget)
+    {
+        /* First we should try to close this widget: */
+        pWidget->close();
+        /* If widget rejected the 'close-event' we can
+         * still hide it and hope it will behave correctly
+         * and unlock his event-loop if any: */
+        if (!pWidget->isHidden())
+            pWidget->hide();
+        /* Asynchronously restart this slot: */
+        QMetaObject::invokeMethod(this, "closeRuntimeUI", Qt::QueuedConnection);
+        return;
+    }
+
+    /* Asynchronously ask UIMachine to close Runtime UI: */
+    LogRel(("GUI: Passing request to close Runtime UI from UI session to UI machine.\n"));
+    QMetaObject::invokeMethod(uimachine(), "closeRuntimeUI", Qt::QueuedConnection);
+}
+
+void UISession::sltDetachCOM()
+{
+    /* Cleanup everything COM related: */
+    cleanupFramebuffers();
+    cleanupConsoleEventHandlers();
+    cleanupNotificationCenter();
+    cleanupSession();
 }
 
 #ifdef RT_OS_DARWIN
-void UISession::sltHandleMenuBarConfigurationChange(const QString &strMachineID)
+void UISession::sltHandleMenuBarConfigurationChange(const QUuid &uMachineID)
 {
     /* Skip unrelated machine IDs: */
-    if (vboxGlobal().managedVMUuid() != strMachineID)
+    if (uiCommon().managedVMUuid() != uMachineID)
         return;
 
     /* Update Mac OS X menu-bar: */
@@ -663,29 +493,27 @@ void UISession::sltHandleMenuBarConfigurationChange(const QString &strMachineID)
 }
 #endif /* RT_OS_DARWIN */
 
-void UISession::sltMousePointerShapeChange(bool fVisible, bool fAlpha, QPoint hotCorner, QSize size, QVector<uint8_t> shape)
+void UISession::sltMousePointerShapeChange(const UIMousePointerShapeData &shapeData)
 {
-    /* In case of shape data is present: */
-    if (shape.size() > 0)
+    /* In case if shape itself is present: */
+    if (shapeData.shape().size() > 0)
     {
         /* We are ignoring visibility flag: */
         m_fIsHidingHostPointer = false;
 
-        /* And updating current cursor shape: */
-        setPointerShape(shape.data(), fAlpha,
-                        hotCorner.x(), hotCorner.y(),
-                        size.width(), size.height());
+        /* And updating current shape data: */
+        m_shapeData = shapeData;
+        updateMousePointerShape();
     }
-    /* In case of shape data is NOT present: */
+    /* In case if shape itself is NOT present: */
     else
     {
         /* Remember if we should hide the cursor: */
-        m_fIsHidingHostPointer = !fVisible;
+        m_fIsHidingHostPointer = !shapeData.isVisible();
     }
 
     /* Notify listeners about mouse capability changed: */
     emit sigMousePointerShapeChange();
-
 }
 
 void UISession::sltMouseCapabilityChange(bool fSupportsAbsolute, bool fSupportsRelative, bool fSupportsMultiTouch, bool fNeedsHostCursor)
@@ -710,6 +538,26 @@ void UISession::sltMouseCapabilityChange(bool fSupportsAbsolute, bool fSupportsR
 
         /* Notify listeners about mouse capability changed: */
         emit sigMouseCapabilityChange();
+    }
+}
+
+void UISession::sltCursorPositionChange(bool fContainsData, unsigned long uX, unsigned long uY)
+{
+    LogRelFlow(("GUI: UISession::sltCursorPositionChange: "
+                "Cursor position valid: %d, Cursor position: %dx%d\n",
+                fContainsData ? "TRUE" : "FALSE", uX, uY));
+
+    /* Check if something had changed: */
+    if (   m_fIsValidCursorPositionPresent != fContainsData
+        || m_cursorPosition.x() != (int)uX
+        || m_cursorPosition.y() != (int)uY)
+    {
+        /* Store new data: */
+        m_fIsValidCursorPositionPresent = fContainsData;
+        m_cursorPosition = QPoint(uX, uY);
+
+        /* Notify listeners about cursor position changed: */
+        emit sigCursorPositionChange();
     }
 }
 
@@ -775,15 +623,17 @@ void UISession::sltVRDEChange()
     emit sigVRDEChange();
 }
 
-void UISession::sltVideoCaptureChange()
+void UISession::sltRecordingChange()
 {
-    /* Check/Uncheck Video Capture action depending on feature status: */
-    actionPool()->action(UIActionIndexRT_M_View_M_VideoCapture_T_Start)->blockSignals(true);
-    actionPool()->action(UIActionIndexRT_M_View_M_VideoCapture_T_Start)->setChecked(machine().GetVideoCaptureEnabled());
-    actionPool()->action(UIActionIndexRT_M_View_M_VideoCapture_T_Start)->blockSignals(false);
+    CRecordingSettings comRecordingSettings = machine().GetRecordingSettings();
 
-    /* Notify listeners about Video Capture change: */
-    emit sigVideoCaptureChange();
+    /* Check/Uncheck Capture action depending on feature status: */
+    actionPool()->action(UIActionIndexRT_M_View_M_Recording_T_Start)->blockSignals(true);
+    actionPool()->action(UIActionIndexRT_M_View_M_Recording_T_Start)->setChecked(comRecordingSettings.GetEnabled());
+    actionPool()->action(UIActionIndexRT_M_View_M_Recording_T_Start)->blockSignals(false);
+
+    /* Notify listeners about Recording change: */
+    emit sigRecordingChange();
 }
 
 void UISession::sltGuestMonitorChange(KGuestMonitorChangedEventType changeType, ulong uScreenId, QRect screenGeo)
@@ -816,6 +666,36 @@ void UISession::sltHandleStorageDeviceChange(const CMediumAttachment &attachment
 
     /* Notify listeners about storage device change: */
     emit sigStorageDeviceChange(attachment, fRemoved, fSilent);
+}
+
+void UISession::sltAudioAdapterChange()
+{
+    /* Make sure Audio adapter is present: */
+    const CAudioAdapter comAdapter = machine().GetAudioAdapter();
+    AssertMsgReturnVoid(machine().isOk() && comAdapter.isNotNull(),
+                        ("Audio adapter should NOT be null!\n"));
+
+    /* Check/Uncheck Audio adapter output/input actions depending on features status: */
+    actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Output)->blockSignals(true);
+    actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Output)->setChecked(comAdapter.GetEnabledOut());
+    actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Output)->blockSignals(false);
+    actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Input)->blockSignals(true);
+    actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Input)->setChecked(comAdapter.GetEnabledIn());
+    actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Input)->blockSignals(false);
+
+    /* Notify listeners about Audio adapter change: */
+    emit sigAudioAdapterChange();
+
+}
+
+void UISession::sltClipboardModeChange(KClipboardMode enmMode)
+{
+    emit sigClipboardModeChange(enmMode);
+}
+
+void UISession::sltDnDModeChange(KDnDMode enmMode)
+{
+    emit sigDnDModeChange(enmMode);
 }
 
 #ifdef RT_OS_DARWIN
@@ -912,6 +792,44 @@ void UISession::sltHandleHostScreenAvailableAreaChange()
     emit sigHostScreenAvailableAreaChange();
 }
 
+void UISession::sltHandleMachineStateSaved(bool fSuccess)
+{
+    /* Disable 'manual-override' finally: */
+    setManualOverrideMode(false);
+
+    /* Close Runtime UI if state was saved: */
+    if (fSuccess)
+        closeRuntimeUI();
+}
+
+void UISession::sltHandleMachinePoweredOff(bool fSuccess, bool fIncludingDiscard)
+{
+    /* Disable 'manual-override' finally: */
+    setManualOverrideMode(false);
+
+    /* Do we have other tasks? */
+    if (fSuccess)
+    {
+        if (!fIncludingDiscard)
+            closeRuntimeUI();
+        else
+        {
+            /* Now, do more magic! */
+            UINotificationProgressSnapshotRestore *pNotification =
+                new UINotificationProgressSnapshotRestore(uiCommon().managedVMUuid());
+            connect(pNotification, &UINotificationProgressSnapshotRestore::sigSnapshotRestored,
+                    this, &UISession::sltHandleSnapshotRestored);
+            gpNotificationCenter->append(pNotification);
+        }
+    }
+}
+
+void UISession::sltHandleSnapshotRestored(bool)
+{
+    /* Close Runtime UI independent of snapshot restoring state: */
+    closeRuntimeUI();
+}
+
 void UISession::sltAdditionsChange()
 {
     /* Variable flags: */
@@ -931,13 +849,16 @@ void UISession::sltAdditionsChange()
         m_fIsGuestSupportsGraphics = fIsGuestSupportsGraphics;
         m_fIsGuestSupportsSeamless = fIsGuestSupportsSeamless;
 
+        /* Make sure action-pool knows whether GA supports graphics: */
+        actionPool()->toRuntime()->setGuestSupportsGraphics(m_fIsGuestSupportsGraphics);
+
         /* Notify listeners about GA state really changed: */
-        LogRel(("GUI: UISession::sltAdditionsChange: GA state really changed, notifying listeners.\n"));
+        LogRel(("GUI: UISession::sltAdditionsChange: GA state really changed, notifying listeners\n"));
         emit sigAdditionsStateActualChange();
     }
 
     /* Notify listeners about GA state change event came: */
-    LogRel(("GUI: UISession::sltAdditionsChange: GA state change event came, notifying listeners.\n"));
+    LogRel(("GUI: UISession::sltAdditionsChange: GA state change event came, notifying listeners\n"));
     emit sigAdditionsStateChange();
 }
 
@@ -952,13 +873,7 @@ UISession::UISession(UIMachine *pMachine)
     /* Common variables: */
     , m_machineStatePrevious(KMachineState_Null)
     , m_machineState(KMachineState_Null)
-#ifndef VBOX_WS_MAC
     , m_pMachineWindowIcon(0)
-#endif /* !VBOX_WS_MAC */
-    , m_requestedVisualStateType(UIVisualStateType_Invalid)
-#ifdef VBOX_WS_WIN
-    , m_alphaCursor(0)
-#endif /* VBOX_WS_WIN */
 #ifdef VBOX_WS_MAC
     , m_pWatchdogDisplayChange(0)
 #endif /* VBOX_WS_MAC */
@@ -967,9 +882,9 @@ UISession::UISession(UIMachine *pMachine)
     , m_fAllCloseActionsRestricted(false)
     /* Common flags: */
     , m_fInitialized(false)
-    , m_fIsFirstTimeStarted(false)
     , m_fIsGuestResizeIgnored(false)
     , m_fIsAutoCaptureDisabled(false)
+    , m_fIsManualOverride(false)
     /* Guest additions flags: */
     , m_ulGuestAdditionsRunLevel(0)
     , m_fIsGuestSupportsGraphics(false)
@@ -989,8 +904,9 @@ UISession::UISession(UIMachine *pMachine)
     , m_fIsMouseIntegrated(true)
     , m_fIsValidPointerShapePresent(false)
     , m_fIsHidingHostPointer(true)
+    , m_fIsValidCursorPositionPresent(false)
+    , m_enmVMExecutionEngine(KVMExecutionEngine_NotSet)
     /* CPU hardware virtualization features for VM: */
-    , m_fIsHWVirtExEnabled(false)
     , m_fIsHWVirtExNestedPagingEnabled(false)
     , m_fIsHWVirtExUXEnabled(false)
     /* VM's effective paravirtualization provider: */
@@ -1004,35 +920,22 @@ UISession::~UISession()
 
 bool UISession::prepare()
 {
-    /* Prepare session: */
+    /* Prepare COM stuff: */
     if (!prepareSession())
         return false;
-
-    /* Prepare actions: */
-    prepareActions();
-
-    /* Prepare connections: */
-    prepareConnections();
-
-    /* Prepare console event-handlers: */
+    prepareNotificationCenter();
     prepareConsoleEventHandlers();
-
-    /* Prepare screens: */
-    prepareScreens();
-
-    /* Prepare framebuffers: */
     prepareFramebuffers();
+
+    /* Prepare GUI stuff: */
+    prepareActions();
+    prepareConnections();
+    prepareMachineWindowIcon();
+    prepareScreens();
+    prepareSignalHandling();
 
     /* Load settings: */
     loadSessionSettings();
-
-#ifdef VBOX_GUI_WITH_KEYS_RESET_HANDLER
-    struct sigaction sa;
-    sa.sa_sigaction = &signalHandlerSIGUSR1;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART | SA_SIGINFO;
-    sigaction(SIGUSR1, &sa, NULL);
-#endif /* VBOX_GUI_WITH_KEYS_RESET_HANDLER */
 
     /* True by default: */
     return true;
@@ -1041,9 +944,10 @@ bool UISession::prepare()
 bool UISession::prepareSession()
 {
     /* Open session: */
-    m_session = vboxGlobal().openSession(vboxGlobal().managedVMUuid(),
-                                         vboxGlobal().isSeparateProcess()
-                                         ? KLockType_Shared : KLockType_VM);
+    m_session = uiCommon().openSession(uiCommon().managedVMUuid(),
+                                         uiCommon().isSeparateProcess()
+                                       ? KLockType_Shared
+                                       : KLockType_VM);
     if (m_session.isNull())
         return false;
 
@@ -1092,26 +996,88 @@ bool UISession::prepareSession()
     return true;
 }
 
+void UISession::prepareNotificationCenter()
+{
+    UINotificationCenter::create();
+}
+
+void UISession::prepareConsoleEventHandlers()
+{
+    /* Create console event-handler: */
+    UIConsoleEventHandler::create(this);
+
+    /* Add console event connections: */
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigMousePointerShapeChange,
+            this, &UISession::sltMousePointerShapeChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigMouseCapabilityChange,
+            this, &UISession::sltMouseCapabilityChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigCursorPositionChange,
+            this, &UISession::sltCursorPositionChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigKeyboardLedsChangeEvent,
+            this, &UISession::sltKeyboardLedsChangeEvent);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigStateChange,
+            this, &UISession::sltStateChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigAdditionsChange,
+            this, &UISession::sltAdditionsChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigVRDEChange,
+            this, &UISession::sltVRDEChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigRecordingChange,
+            this, &UISession::sltRecordingChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigNetworkAdapterChange,
+            this, &UISession::sigNetworkAdapterChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigStorageDeviceChange,
+            this, &UISession::sltHandleStorageDeviceChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigMediumChange,
+            this, &UISession::sigMediumChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigUSBControllerChange,
+            this, &UISession::sigUSBControllerChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigUSBDeviceStateChange,
+            this, &UISession::sigUSBDeviceStateChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigSharedFolderChange,
+            this, &UISession::sigSharedFolderChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigRuntimeError,
+            this, &UISession::sigRuntimeError);
+#ifdef VBOX_WS_MAC
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigShowWindow,
+            this, &UISession::sigShowWindows, Qt::QueuedConnection);
+#endif /* VBOX_WS_MAC */
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigCPUExecutionCapChange,
+            this, &UISession::sigCPUExecutionCapChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigGuestMonitorChange,
+            this, &UISession::sltGuestMonitorChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigAudioAdapterChange,
+            this, &UISession::sltAudioAdapterChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigClipboardModeChange,
+            this, &UISession::sltClipboardModeChange);
+    connect(gConsoleEvents, &UIConsoleEventHandler::sigDnDModeChange,
+            this, &UISession::sltDnDModeChange);
+}
+
+void UISession::prepareFramebuffers()
+{
+    /* Each framebuffer will be really prepared on first UIMachineView creation: */
+    m_frameBufferVector.resize(machine().GetGraphicsAdapter().GetMonitorCount());
+}
+
 void UISession::prepareActions()
 {
     /* Create action-pool: */
     m_pActionPool = UIActionPool::create(UIActionPoolType_Runtime);
-    AssertPtrReturnVoid(actionPool());
+    if (actionPool())
     {
-        /* Configure action-pool: */
-        actionPool()->toRuntime()->setSession(this);
-
+        /* Make sure action-pool knows guest-screen count: */
+        actionPool()->toRuntime()->setGuestScreenCount(m_frameBufferVector.size());
         /* Update action restrictions: */
         updateActionRestrictions();
 
 #ifdef VBOX_WS_MAC
         /* Create Mac OS X menu-bar: */
-        m_pMenuBar = new UIMenuBar;
-        AssertPtrReturnVoid(m_pMenuBar);
+        m_pMenuBar = new QMenuBar;
+        if (m_pMenuBar)
         {
             /* Configure Mac OS X menu-bar: */
-            connect(gEDataManager, SIGNAL(sigMenuBarConfigurationChange(const QString&)),
-                    this, SLOT(sltHandleMenuBarConfigurationChange(const QString&)));
+            connect(gEDataManager, &UIExtraDataManager::sigMenuBarConfigurationChange,
+                    this, &UISession::sltHandleMenuBarConfigurationChange);
             /* Update Mac OS X menu-bar: */
             updateMenu();
         }
@@ -1121,85 +1087,40 @@ void UISession::prepareActions()
 
 void UISession::prepareConnections()
 {
-    connect(this, SIGNAL(sigInitialized()), this, SLOT(sltMarkInitialized()));
+    /* UICommon connections: */
+    connect(&uiCommon(), &UICommon::sigAskToDetachCOM, this, &UISession::sltDetachCOM);
 
 #ifdef VBOX_WS_MAC
     /* Install native display reconfiguration callback: */
     CGDisplayRegisterReconfigurationCallback(cgDisplayReconfigurationCallback, this);
 #else /* !VBOX_WS_MAC */
     /* Install Qt display reconfiguration callbacks: */
-    connect(gpDesktop, SIGNAL(sigHostScreenCountChanged(int)),
-            this, SLOT(sltHandleHostScreenCountChange()));
-    connect(gpDesktop, SIGNAL(sigHostScreenResized(int)),
-            this, SLOT(sltHandleHostScreenGeometryChange()));
-# ifdef VBOX_WS_X11
-    connect(gpDesktop, SIGNAL(sigHostScreenWorkAreaRecalculated(int)),
-            this, SLOT(sltHandleHostScreenAvailableAreaChange()));
-# else /* !VBOX_WS_X11 */
-    connect(gpDesktop, SIGNAL(sigHostScreenWorkAreaResized(int)),
-            this, SLOT(sltHandleHostScreenAvailableAreaChange()));
-# endif /* !VBOX_WS_X11 */
+    connect(gpDesktop, &UIDesktopWidgetWatchdog::sigHostScreenCountChanged,
+            this, &UISession::sltHandleHostScreenCountChange);
+    connect(gpDesktop, &UIDesktopWidgetWatchdog::sigHostScreenResized,
+            this, &UISession::sltHandleHostScreenGeometryChange);
+# if defined(VBOX_WS_X11) && !defined(VBOX_GUI_WITH_CUSTOMIZATIONS1)
+    connect(gpDesktop, &UIDesktopWidgetWatchdog::sigHostScreenWorkAreaRecalculated,
+            this, &UISession::sltHandleHostScreenAvailableAreaChange);
+# else /* !VBOX_WS_X11 || VBOX_GUI_WITH_CUSTOMIZATIONS1 */
+    connect(gpDesktop, &UIDesktopWidgetWatchdog::sigHostScreenWorkAreaResized,
+            this, &UISession::sltHandleHostScreenAvailableAreaChange);
+# endif /* !VBOX_WS_X11 || VBOX_GUI_WITH_CUSTOMIZATIONS1 */
 #endif /* !VBOX_WS_MAC */
 }
 
-void UISession::prepareConsoleEventHandlers()
+void UISession::prepareMachineWindowIcon()
 {
-    /* Create console event-handler: */
-    UIConsoleEventHandler::create(this);
-
-    /* Add console event connections: */
-    connect(gConsoleEvents, SIGNAL(sigMousePointerShapeChange(bool, bool, QPoint, QSize, QVector<uint8_t>)),
-            this, SLOT(sltMousePointerShapeChange(bool, bool, QPoint, QSize, QVector<uint8_t>)));
-
-    connect(gConsoleEvents, SIGNAL(sigMouseCapabilityChange(bool, bool, bool, bool)),
-            this, SLOT(sltMouseCapabilityChange(bool, bool, bool, bool)));
-
-    connect(gConsoleEvents, SIGNAL(sigKeyboardLedsChangeEvent(bool, bool, bool)),
-            this, SLOT(sltKeyboardLedsChangeEvent(bool, bool, bool)));
-
-    connect(gConsoleEvents, SIGNAL(sigStateChange(KMachineState)),
-            this, SLOT(sltStateChange(KMachineState)));
-
-    connect(gConsoleEvents, SIGNAL(sigAdditionsChange()),
-            this, SLOT(sltAdditionsChange()));
-
-    connect(gConsoleEvents, SIGNAL(sigVRDEChange()),
-            this, SLOT(sltVRDEChange()));
-
-    connect(gConsoleEvents, SIGNAL(sigVideoCaptureChange()),
-            this, SLOT(sltVideoCaptureChange()));
-
-    connect(gConsoleEvents, SIGNAL(sigNetworkAdapterChange(CNetworkAdapter)),
-            this, SIGNAL(sigNetworkAdapterChange(CNetworkAdapter)));
-
-    connect(gConsoleEvents, SIGNAL(sigStorageDeviceChange(CMediumAttachment, bool, bool)),
-            this, SLOT(sltHandleStorageDeviceChange(CMediumAttachment, bool, bool)));
-
-    connect(gConsoleEvents, SIGNAL(sigMediumChange(CMediumAttachment)),
-            this, SIGNAL(sigMediumChange(CMediumAttachment)));
-
-    connect(gConsoleEvents, SIGNAL(sigUSBControllerChange()),
-            this, SIGNAL(sigUSBControllerChange()));
-
-    connect(gConsoleEvents, SIGNAL(sigUSBDeviceStateChange(CUSBDevice, bool, CVirtualBoxErrorInfo)),
-            this, SIGNAL(sigUSBDeviceStateChange(CUSBDevice, bool, CVirtualBoxErrorInfo)));
-
-    connect(gConsoleEvents, SIGNAL(sigSharedFolderChange()),
-            this, SIGNAL(sigSharedFolderChange()));
-
-    connect(gConsoleEvents, SIGNAL(sigRuntimeError(bool, QString, QString)),
-            this, SIGNAL(sigRuntimeError(bool, QString, QString)));
-
-#ifdef VBOX_WS_MAC
-    connect(gConsoleEvents, SIGNAL(sigShowWindow()),
-            this, SIGNAL(sigShowWindows()), Qt::QueuedConnection);
-#endif /* VBOX_WS_MAC */
-
-    connect(gConsoleEvents, SIGNAL(sigCPUExecutionCapChange()),
-            this, SIGNAL(sigCPUExecutionCapChange()));
-
-    connect(gConsoleEvents, SIGNAL(sigGuestMonitorChange(KGuestMonitorChangedEventType, ulong, QRect)),
-            this, SLOT(sltGuestMonitorChange(KGuestMonitorChangedEventType, ulong, QRect)));
+    /* Acquire user machine-window icon: */
+    QIcon icon = generalIconPool().userMachineIcon(machine());
+    /* Use the OS type icon if user one was not set: */
+    if (icon.isNull())
+        icon = generalIconPool().guestOSTypeIcon(machine().GetOSTypeId());
+    /* Use the default icon if nothing else works: */
+    if (icon.isNull())
+        icon = QIcon(":/VirtualBox_48px.png");
+    /* Store the icon dynamically: */
+    m_pMachineWindowIcon = new QIcon(icon);
 }
 
 void UISession::prepareScreens()
@@ -1213,18 +1134,18 @@ void UISession::prepareScreens()
     {
         m_pWatchdogDisplayChange->setInterval(500);
         m_pWatchdogDisplayChange->setSingleShot(true);
-        connect(m_pWatchdogDisplayChange, SIGNAL(timeout()),
-                this, SLOT(sltCheckIfHostDisplayChanged()));
+        connect(m_pWatchdogDisplayChange, &QTimer::timeout,
+                this, &UISession::sltCheckIfHostDisplayChanged);
     }
 #endif /* VBOX_WS_MAC */
 
     /* Prepare initial screen visibility status: */
-    m_monitorVisibilityVector.resize(machine().GetMonitorCount());
+    m_monitorVisibilityVector.resize(machine().GetGraphicsAdapter().GetMonitorCount());
     m_monitorVisibilityVector.fill(false);
     m_monitorVisibilityVector[0] = true;
 
     /* Prepare empty last full-screen size vector: */
-    m_monitorLastFullScreenSizeVector.resize(machine().GetMonitorCount());
+    m_monitorLastFullScreenSizeVector.resize(machine().GetGraphicsAdapter().GetMonitorCount());
     m_monitorLastFullScreenSizeVector.fill(QSize(-1, -1));
 
     /* If machine is in 'saved' state: */
@@ -1244,7 +1165,7 @@ void UISession::prepareScreens()
         if (countOfVisibleWindows() < 1)
             m_monitorVisibilityVector[0] = true;
     }
-    else if (vboxGlobal().isSeparateProcess())
+    else if (uiCommon().isSeparateProcess())
     {
         /* Update screen visibility status from display directly: */
         for (int iScreenIndex = 0; iScreenIndex < m_monitorVisibilityVector.size(); ++iScreenIndex)
@@ -1263,18 +1184,25 @@ void UISession::prepareScreens()
             m_monitorVisibilityVector[0] = true;
     }
 
-    /* Prepare initial screen visibility status of host-desires.
-     * This is mostly dummy initialization as host-desires should get updated later in multi-screen layout.
-     * By default making host-desires same as facts. */
-    m_monitorVisibilityVectorHostDesires.resize(machine().GetMonitorCount());
+    /* Prepare initial screen visibility status of host-desires (same as facts): */
+    m_monitorVisibilityVectorHostDesires.resize(machine().GetGraphicsAdapter().GetMonitorCount());
     for (int iScreenIndex = 0; iScreenIndex < m_monitorVisibilityVector.size(); ++iScreenIndex)
         m_monitorVisibilityVectorHostDesires[iScreenIndex] = m_monitorVisibilityVector[iScreenIndex];
+
+    /* Make sure action-pool knows guest-screen visibility status: */
+    for (int iScreenIndex = 0; iScreenIndex < m_monitorVisibilityVector.size(); ++iScreenIndex)
+        actionPool()->toRuntime()->setGuestScreenVisible(iScreenIndex, m_monitorVisibilityVector.at(iScreenIndex));
 }
 
-void UISession::prepareFramebuffers()
+void UISession::prepareSignalHandling()
 {
-    /* Each framebuffer will be really prepared on first UIMachineView creation: */
-    m_frameBufferVector.resize(machine().GetMonitorCount());
+#ifdef VBOX_GUI_WITH_KEYS_RESET_HANDLER
+    struct sigaction sa;
+    sa.sa_sigaction = &signalHandlerSIGUSR1;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART | SA_SIGINFO;
+    sigaction(SIGUSR1, &sa, NULL);
+#endif /* VBOX_GUI_WITH_KEYS_RESET_HANDLER */
 }
 
 void UISession::loadSessionSettings()
@@ -1282,33 +1210,29 @@ void UISession::loadSessionSettings()
     /* Load extra-data settings: */
     {
         /* Get machine ID: */
-        const QString strMachineID = vboxGlobal().managedVMUuid();
+        const QUuid uMachineID = uiCommon().managedVMUuid();
 
 #ifndef VBOX_WS_MAC
-        /* Load/prepare user's machine-window icon: */
-        QIcon icon;
-        foreach (const QString &strIconName, gEDataManager->machineWindowIconNames(strMachineID))
-            if (!strIconName.isEmpty() && QFile::exists(strIconName))
-                icon.addFile(strIconName);
-        if (!icon.isNull())
-            m_pMachineWindowIcon = new QIcon(icon);
-
         /* Load user's machine-window name postfix: */
-        m_strMachineWindowNamePostfix = gEDataManager->machineWindowNamePostfix(strMachineID);
-#endif /* !VBOX_WS_MAC */
-
-        /* Is there should be First RUN Wizard? */
-        m_fIsFirstTimeStarted = gEDataManager->machineFirstTimeStarted(strMachineID);
+        m_strMachineWindowNamePostfix = gEDataManager->machineWindowNamePostfix(uMachineID);
+#endif
 
         /* Should guest autoresize? */
         QAction *pGuestAutoresizeSwitch = actionPool()->action(UIActionIndexRT_M_View_T_GuestAutoresize);
-        pGuestAutoresizeSwitch->setChecked(gEDataManager->guestScreenAutoResizeEnabled(strMachineID));
+        pGuestAutoresizeSwitch->setChecked(gEDataManager->guestScreenAutoResizeEnabled(uMachineID));
 
-#ifndef VBOX_WS_MAC
+#ifdef VBOX_WS_MAC
+        /* User-element (Menu-bar and Dock) options: */
+        {
+            const bool fDisabled = gEDataManager->guiFeatureEnabled(GUIFeatureType_NoUserElements);
+            if (fDisabled)
+                UICocoaApplication::instance()->hideUserElements();
+        }
+#else /* !VBOX_WS_MAC */
         /* Menu-bar options: */
         {
-            const bool fEnabledGlobally = !vboxGlobal().settings().isFeatureActive("noMenuBar");
-            const bool fEnabledForMachine = gEDataManager->menuBarEnabled(strMachineID);
+            const bool fEnabledGlobally = !gEDataManager->guiFeatureEnabled(GUIFeatureType_NoMenuBar);
+            const bool fEnabledForMachine = gEDataManager->menuBarEnabled(uMachineID);
             const bool fEnabled = fEnabledGlobally && fEnabledForMachine;
             QAction *pActionMenuBarSettings = actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_S_Settings);
             pActionMenuBarSettings->setEnabled(fEnabled);
@@ -1321,8 +1245,8 @@ void UISession::loadSessionSettings()
 
         /* Status-bar options: */
         {
-            const bool fEnabledGlobally = !vboxGlobal().settings().isFeatureActive("noStatusBar");
-            const bool fEnabledForMachine = gEDataManager->statusBarEnabled(strMachineID);
+            const bool fEnabledGlobally = !gEDataManager->guiFeatureEnabled(GUIFeatureType_NoStatusBar);
+            const bool fEnabledForMachine = gEDataManager->statusBarEnabled(uMachineID);
             const bool fEnabled = fEnabledGlobally && fEnabledForMachine;
             QAction *pActionStatusBarSettings = actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_S_Settings);
             pActionStatusBarSettings->setEnabled(fEnabled);
@@ -1335,66 +1259,32 @@ void UISession::loadSessionSettings()
         /* Input options: */
         actionPool()->action(UIActionIndexRT_M_Input_M_Mouse_T_Integration)->setChecked(isMouseIntegrated());
 
+        /* Devices options: */
+        {
+            const CAudioAdapter comAudio = m_machine.GetAudioAdapter();
+            actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Output)->blockSignals(true);
+            actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Output)->setChecked(comAudio.GetEnabledOut());
+            actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Output)->blockSignals(false);
+            actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Input)->blockSignals(true);
+            actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Input)->setChecked(comAudio.GetEnabledIn());
+            actionPool()->action(UIActionIndexRT_M_Devices_M_Audio_T_Input)->blockSignals(false);
+        }
+
         /* What is the default close action and the restricted are? */
-        m_defaultCloseAction = gEDataManager->defaultMachineCloseAction(strMachineID);
-        m_restrictedCloseActions = gEDataManager->restrictedMachineCloseActions(strMachineID);
-        /* We decided to keep the Detach close-action hidden and provide the user with the separate Machine menu action instead: */
-        m_restrictedCloseActions = static_cast<MachineCloseAction>(m_restrictedCloseActions | MachineCloseAction_Detach);
-        m_fAllCloseActionsRestricted =  (!vboxGlobal().isSeparateProcess() || (m_restrictedCloseActions & MachineCloseAction_Detach))
+        m_defaultCloseAction = gEDataManager->defaultMachineCloseAction(uMachineID);
+        m_restrictedCloseActions = gEDataManager->restrictedMachineCloseActions(uMachineID);
+        m_fAllCloseActionsRestricted =  (!uiCommon().isSeparateProcess() || (m_restrictedCloseActions & MachineCloseAction_Detach))
                                      && (m_restrictedCloseActions & MachineCloseAction_SaveState)
                                      && (m_restrictedCloseActions & MachineCloseAction_Shutdown)
                                      && (m_restrictedCloseActions & MachineCloseAction_PowerOff);
-                                     // Close VM Dialog hides PowerOff_RestoringSnapshot implicitly if PowerOff is hidden..
-                                     // && (m_restrictedCloseActions & MachineCloseAction_PowerOff_RestoringSnapshot);
     }
 }
 
-void UISession::saveSessionSettings()
+void UISession::cleanupMachineWindowIcon()
 {
-    /* Save extra-data settings: */
-    {
-        /* Disable First RUN Wizard: */
-        gEDataManager->setMachineFirstTimeStarted(false, vboxGlobal().managedVMUuid());
-
-        /* Remember if guest should autoresize: */
-        if (actionPool())
-        {
-            const QAction *pGuestAutoresizeSwitch = actionPool()->action(UIActionIndexRT_M_View_T_GuestAutoresize);
-            gEDataManager->setGuestScreenAutoResizeEnabled(pGuestAutoresizeSwitch->isChecked(), vboxGlobal().managedVMUuid());
-        }
-
-#ifndef VBOX_WS_MAC
-        /* Cleanup user's machine-window icon: */
-        delete m_pMachineWindowIcon;
-        m_pMachineWindowIcon = 0;
-#endif /* !VBOX_WS_MAC */
-    }
-}
-
-void UISession::cleanupFramebuffers()
-{
-    /* Cleanup framebuffers finally: */
-    for (int i = m_frameBufferVector.size() - 1; i >= 0; --i)
-    {
-        UIFrameBuffer *pFrameBuffer = m_frameBufferVector[i];
-        if (pFrameBuffer)
-        {
-            /* Mark framebuffer as unused: */
-            pFrameBuffer->setMarkAsUnused(true);
-            /* Detach framebuffer from Display: */
-            pFrameBuffer->detach();
-            /* Delete framebuffer reference: */
-            delete pFrameBuffer;
-        }
-    }
-    m_frameBufferVector.clear();
-}
-
-void UISession::cleanupConsoleEventHandlers()
-{
-    /* Destroy console event-handler if necessary: */
-    if (gConsoleEvents)
-        UIConsoleEventHandler::destroy();
+    /* Cleanup machine-window icon: */
+    delete m_pMachineWindowIcon;
+    m_pMachineWindowIcon = 0;
 }
 
 void UISession::cleanupConnections()
@@ -1416,6 +1306,41 @@ void UISession::cleanupActions()
     /* Destroy action-pool if necessary: */
     if (actionPool())
         UIActionPool::destroy(actionPool());
+}
+
+void UISession::cleanupFramebuffers()
+{
+    /* Cleanup framebuffers finally: */
+    for (int i = m_frameBufferVector.size() - 1; i >= 0; --i)
+    {
+        UIFrameBuffer *pFrameBuffer = m_frameBufferVector[i];
+        if (pFrameBuffer)
+        {
+            /* Mark framebuffer as unused: */
+            pFrameBuffer->setMarkAsUnused(true);
+            /* Detach framebuffer from Display: */
+            pFrameBuffer->detach();
+            /* Delete framebuffer reference: */
+            delete pFrameBuffer;
+        }
+    }
+    m_frameBufferVector.clear();
+
+    /* Make sure action-pool knows guest-screen count: */
+    if (actionPool())
+        actionPool()->toRuntime()->setGuestScreenCount(m_frameBufferVector.size());
+}
+
+void UISession::cleanupConsoleEventHandlers()
+{
+    /* Destroy console event-handler if necessary: */
+    if (gConsoleEvents)
+        UIConsoleEventHandler::destroy();
+}
+
+void UISession::cleanupNotificationCenter()
+{
+    UINotificationCenter::destroy();
 }
 
 void UISession::cleanupSession()
@@ -1449,7 +1374,7 @@ void UISession::cleanupSession()
         m_machine.detach();
 
     /* Close session: */
-    if (!m_session.isNull() && vboxGlobal().isVBoxSVCAvailable())
+    if (!m_session.isNull() && uiCommon().isVBoxSVCAvailable())
     {
         m_session.UnlockMachine();
         m_session.detach();
@@ -1458,29 +1383,12 @@ void UISession::cleanupSession()
 
 void UISession::cleanup()
 {
-#ifdef VBOX_WS_WIN
-    /* Destroy alpha cursor: */
-    if (m_alphaCursor)
-        DestroyIcon(m_alphaCursor);
-#endif /* VBOX_WS_WIN */
-
-    /* Save settings: */
-    saveSessionSettings();
-
-    /* Cleanup framebuffers: */
-    cleanupFramebuffers();
-
-    /* Cleanup console event-handlers: */
-    cleanupConsoleEventHandlers();
-
-    /* Cleanup connections: */
+    /* Cleanup GUI stuff: */
+    //cleanupSignalHandling();
+    //cleanupScreens();
+    cleanupMachineWindowIcon();
     cleanupConnections();
-
-    /* Cleanup actions: */
     cleanupActions();
-
-    /* Cleanup session: */
-    cleanupSession();
 }
 
 #ifdef VBOX_WS_MAC
@@ -1496,6 +1404,9 @@ void UISession::updateMenu()
         if (pMenuUI->isConsumable() && !pMenuUI->isConsumed())
             pMenuUI->setConsumed(true);
     }
+    /* Update the dock menu as well: */
+    if (machineLogic())
+        machineLogic()->updateDock();
 }
 #endif /* VBOX_WS_MAC */
 
@@ -1597,7 +1508,7 @@ static void renderCursorPixels(const uint32_t *pu32XOR, const uint8_t *pu8AND,
     }
 }
 
-#if defined(VBOX_WS_WIN) && QT_VERSION >= 0x050000
+#ifdef VBOX_WS_WIN
 static bool isPointer1bpp(const uint8_t *pu8XorMask,
                           uint uWidth,
                           uint uHeight)
@@ -1621,170 +1532,53 @@ static bool isPointer1bpp(const uint8_t *pu8XorMask,
 
     return true;
 }
-#endif
+#endif /* VBOX_WS_WIN */
 
-void UISession::setPointerShape(const uchar *pShapeData, bool fHasAlpha,
-                                uint uXHot, uint uYHot, uint uWidth, uint uHeight)
+void UISession::updateMousePointerShape()
 {
-    AssertMsg(pShapeData, ("Shape data must not be NULL!\n"));
+    /* Fetch incoming shape data: */
+    const bool fHasAlpha = m_shapeData.hasAlpha();
+    const uint uWidth = m_shapeData.shapeSize().width();
+    const uint uHeight = m_shapeData.shapeSize().height();
+    const uchar *pShapeData = m_shapeData.shape().constData();
+    AssertMsgReturnVoid(pShapeData, ("Shape data must not be NULL!\n"));
 
+    /* Invalidate mouse pointer shape initially: */
     m_fIsValidPointerShapePresent = false;
-    const uchar *srcAndMaskPtr = pShapeData;
-    uint andMaskSize = (uWidth + 7) / 8 * uHeight;
-    const uchar *srcShapePtr = pShapeData + ((andMaskSize + 3) & ~3);
-    uint srcShapePtrScan = uWidth * 4;
+    m_cursorShapePixmap = QPixmap();
+    m_cursorMaskPixmap = QPixmap();
+
+    /* Parse incoming shape data: */
+    const uchar *pSrcAndMaskPtr = pShapeData;
+    const uint uAndMaskSize = (uWidth + 7) / 8 * uHeight;
+    const uchar *pSrcShapePtr = pShapeData + ((uAndMaskSize + 3) & ~3);
 
 #if defined (VBOX_WS_WIN)
 
-# if QT_VERSION < 0x050000
-    BITMAPV5HEADER bi;
-    HBITMAP hBitmap;
-    void *lpBits;
+    /* Create an ARGB image out of the shape data: */
 
-    ::ZeroMemory(&bi, sizeof (BITMAPV5HEADER));
-    bi.bV5Size = sizeof(BITMAPV5HEADER);
-    bi.bV5Width = uWidth;
-    bi.bV5Height = - (LONG)uHeight;
-    bi.bV5Planes = 1;
-    bi.bV5BitCount = 32;
-    bi.bV5Compression = BI_BITFIELDS;
-    bi.bV5RedMask   = 0x00FF0000;
-    bi.bV5GreenMask = 0x0000FF00;
-    bi.bV5BlueMask  = 0x000000FF;
-    if (fHasAlpha)
-        bi.bV5AlphaMask = 0xFF000000;
-    else
-        bi.bV5AlphaMask = 0;
-
-    HDC hdc = GetDC(NULL);
-
-    /* Create the DIB section with an alpha channel: */
-    hBitmap = CreateDIBSection(hdc, (BITMAPINFO *)&bi, DIB_RGB_COLORS, (void **)&lpBits, NULL, (DWORD) 0);
-
-    ReleaseDC(NULL, hdc);
-
-    HBITMAP hMonoBitmap = NULL;
-    if (fHasAlpha)
-    {
-        /* Create an empty mask bitmap: */
-        hMonoBitmap = CreateBitmap(uWidth, uHeight, 1, 1, NULL);
-    }
-    else
-    {
-        /* Word aligned AND mask. Will be allocated and created if necessary. */
-        uint8_t *pu8AndMaskWordAligned = NULL;
-
-        /* Width in bytes of the original AND mask scan line. */
-        uint32_t cbAndMaskScan = (uWidth + 7) / 8;
-
-        if (cbAndMaskScan & 1)
-        {
-            /* Original AND mask is not word aligned. */
-
-            /* Allocate memory for aligned AND mask. */
-            pu8AndMaskWordAligned = (uint8_t *)RTMemTmpAllocZ((cbAndMaskScan + 1) * uHeight);
-
-            Assert(pu8AndMaskWordAligned);
-
-            if (pu8AndMaskWordAligned)
-            {
-                /* According to MSDN the padding bits must be 0.
-                 * Compute the bit mask to set padding bits to 0 in the last byte of original AND mask. */
-                uint32_t u32PaddingBits = cbAndMaskScan * 8  - uWidth;
-                Assert(u32PaddingBits < 8);
-                uint8_t u8LastBytesPaddingMask = (uint8_t)(0xFF << u32PaddingBits);
-
-                Log(("u8LastBytesPaddingMask = %02X, aligned w = %d, width = %d, cbAndMaskScan = %d\n",
-                      u8LastBytesPaddingMask, (cbAndMaskScan + 1) * 8, uWidth, cbAndMaskScan));
-
-                uint8_t *src = (uint8_t *)srcAndMaskPtr;
-                uint8_t *dst = pu8AndMaskWordAligned;
-
-                unsigned i;
-                for (i = 0; i < uHeight; i++)
-                {
-                    memcpy(dst, src, cbAndMaskScan);
-
-                    dst[cbAndMaskScan - 1] &= u8LastBytesPaddingMask;
-
-                    src += cbAndMaskScan;
-                    dst += cbAndMaskScan + 1;
-                }
-            }
-        }
-
-        /* Create the AND mask bitmap: */
-        hMonoBitmap = ::CreateBitmap(uWidth, uHeight, 1, 1,
-                                     pu8AndMaskWordAligned? pu8AndMaskWordAligned: srcAndMaskPtr);
-
-        if (pu8AndMaskWordAligned)
-        {
-            RTMemTmpFree(pu8AndMaskWordAligned);
-        }
-    }
-
-    Assert(hBitmap);
-    Assert(hMonoBitmap);
-    if (hBitmap && hMonoBitmap)
-    {
-        DWORD *dstShapePtr = (DWORD *) lpBits;
-
-        for (uint y = 0; y < uHeight; y ++)
-        {
-            memcpy(dstShapePtr, srcShapePtr, srcShapePtrScan);
-            srcShapePtr += srcShapePtrScan;
-            dstShapePtr += uWidth;
-        }
-
-        ICONINFO ii;
-        ii.fIcon = FALSE;
-        ii.xHotspot = uXHot;
-        ii.yHotspot = uYHot;
-        ii.hbmMask = hMonoBitmap;
-        ii.hbmColor = hBitmap;
-
-        HCURSOR hAlphaCursor = CreateIconIndirect(&ii);
-        Assert(hAlphaCursor);
-        if (hAlphaCursor)
-        {
-            /* Set the new cursor: */
-            m_cursor = QCursor(hAlphaCursor);
-            if (m_alphaCursor)
-                DestroyIcon(m_alphaCursor);
-            m_alphaCursor = hAlphaCursor;
-            m_fIsValidPointerShapePresent = true;
-        }
-    }
-
-    if (hMonoBitmap)
-        DeleteObject(hMonoBitmap);
-    if (hBitmap)
-        DeleteObject(hBitmap);
-# else /* QT_VERSION >= 0x050000 */
-    /* Create a ARGB image out of the shape data: */
-
-    /*
-     * Qt5 QCursor recommends 32 x 32 cursor, therefore the original data is copied to
-     * a larger QImage if necessary. Cursors like 10x16 did not work correctly (Solaris 10 guest).
-     */
-    uint uCursorWidth = uWidth >= 32? uWidth: 32;
-    uint uCursorHeight = uHeight >= 32? uHeight: 32;
-    uint x, y;
+    // WORKAROUND:
+    // Qt5 QCursor recommends 32 x 32 cursor, therefore the original data is copied to
+    // a larger QImage if necessary. Cursors like 10x16 did not work correctly (Solaris 10 guest).
+    // Align the cursor dimensions to 32 bit pixels, because for example a 56x56 monochrome cursor
+    // did not work correctly on Windows host.
+    const uint uCursorWidth = RT_ALIGN_32(uWidth, 32);
+    const uint uCursorHeight = RT_ALIGN_32(uHeight, 32);
 
     if (fHasAlpha)
     {
         QImage image(uCursorWidth, uCursorHeight, QImage::Format_ARGB32);
         memset(image.bits(), 0, image.byteCount());
 
-        const uint32_t *pu32SrcShapeScanline = (uint32_t *)srcShapePtr;
-        for (y = 0; y < uHeight; ++y, pu32SrcShapeScanline += uWidth)
+        const uint32_t *pu32SrcShapeScanline = (uint32_t *)pSrcShapePtr;
+        for (uint y = 0; y < uHeight; ++y, pu32SrcShapeScanline += uWidth)
             memcpy(image.scanLine(y), pu32SrcShapeScanline, uWidth * sizeof(uint32_t));
 
-        m_cursor = QCursor(QPixmap::fromImage(image), uXHot, uYHot);
+        m_cursorShapePixmap = QPixmap::fromImage(image);
     }
     else
     {
-        if (isPointer1bpp(srcShapePtr, uWidth, uHeight))
+        if (isPointer1bpp(pSrcShapePtr, uWidth, uHeight))
         {
             /* Incoming data consist of 32 bit BGR XOR mask and 1 bit AND mask.
              * XOR pixels contain either 0x00000000 or 0x00FFFFFF.
@@ -1818,11 +1612,11 @@ void UISession::setPointerShape(const uchar *pShapeData, bool fHasAlpha,
             mask.setColorTable(colors);
             memset(mask.bits(), 0xFF, mask.byteCount());
 
-            const uint8_t *pu8SrcAndScanline = srcAndMaskPtr;
-            const uint32_t *pu32SrcShapeScanline = (uint32_t *)srcShapePtr;
-            for (y = 0; y < uHeight; ++y)
+            const uint8_t *pu8SrcAndScanline = pSrcAndMaskPtr;
+            const uint32_t *pu32SrcShapeScanline = (uint32_t *)pSrcShapePtr;
+            for (uint y = 0; y < uHeight; ++y)
             {
-                for (x = 0; x < uWidth; ++x)
+                for (uint x = 0; x < uWidth; ++x)
                 {
                     const uint8_t u8Bit = (uint8_t)(1 << (7 - x % 8));
 
@@ -1869,7 +1663,8 @@ void UISession::setPointerShape(const uchar *pShapeData, bool fHasAlpha,
                 pu32SrcShapeScanline += uWidth;
             }
 
-            m_cursor = QCursor(QBitmap::fromImage(bitmap), QBitmap::fromImage(mask), uXHot, uYHot);
+            m_cursorShapePixmap = QBitmap::fromImage(bitmap);
+            m_cursorMaskPixmap = QBitmap::fromImage(mask);
         }
         else
         {
@@ -1877,14 +1672,14 @@ void UISession::setPointerShape(const uchar *pShapeData, bool fHasAlpha,
             QImage image(uCursorWidth, uCursorHeight, QImage::Format_ARGB32);
             memset(image.bits(), 0, image.byteCount());
 
-            const uint8_t *pu8SrcAndScanline = srcAndMaskPtr;
-            const uint32_t *pu32SrcShapeScanline = (uint32_t *)srcShapePtr;
+            const uint8_t *pu8SrcAndScanline = pSrcAndMaskPtr;
+            const uint32_t *pu32SrcShapeScanline = (uint32_t *)pSrcShapePtr;
 
-            for (y = 0; y < uHeight; ++y)
+            for (uint y = 0; y < uHeight; ++y)
             {
                 uint32_t *pu32DstPixel = (uint32_t *)image.scanLine(y);
 
-                for (x = 0; x < uWidth; ++x)
+                for (uint x = 0; x < uWidth; ++x)
                 {
                     const uint8_t u8Bit = (uint8_t)(1 << (7 - x % 8));
                     const uint8_t u8SrcMaskByte = pu8SrcAndScanline[x / 8];
@@ -1899,59 +1694,44 @@ void UISession::setPointerShape(const uchar *pShapeData, bool fHasAlpha,
                 pu8SrcAndScanline += (uWidth + 7) / 8;
             }
 
-            m_cursor = QCursor(QPixmap::fromImage(image), uXHot, uYHot);
+            m_cursorShapePixmap = QPixmap::fromImage(image);
         }
     }
 
+    /* Mark mouse pointer shape valid: */
     m_fIsValidPointerShapePresent = true;
-    NOREF(srcShapePtrScan);
-# endif /* QT_VERSION >= 0x050000 */
 
 #elif defined(VBOX_WS_X11) || defined(VBOX_WS_MAC)
 
-    /* Create a ARGB image out of the shape data: */
+    /* Create an ARGB image out of the shape data: */
     QImage image(uWidth, uHeight, QImage::Format_ARGB32);
 
     if (fHasAlpha)
     {
-        memcpy(image.bits(), srcShapePtr, uHeight * uWidth * 4);
+        memcpy(image.bits(), pSrcShapePtr, uHeight * uWidth * 4);
     }
     else
     {
-        renderCursorPixels((uint32_t *)srcShapePtr, srcAndMaskPtr,
+        renderCursorPixels((uint32_t *)pSrcShapePtr, pSrcAndMaskPtr,
                            uWidth, uHeight,
                            (uint32_t *)image.bits(), uHeight * uWidth * 4);
     }
 
     /* Create cursor-pixmap from the image: */
-    QPixmap cursorPixmap = QPixmap::fromImage(image);
-# ifdef VBOX_WS_MAC
-#  ifdef VBOX_GUI_WITH_HIDPI
-    /* Adjust backing-scale-factor: */
-    /// @todo In case of multi-monitor setup check whether backing-scale factor and cursor are screen specific.
-    /* Get screen-id of main-window: */
-    const ulong uScreenID = machineLogic()->activeMachineWindow()->screenId();
-    /* Get backing-scale-factor: */
-    const double dBackingScaleFactor = frameBuffer(uScreenID)->backingScaleFactor();
-    /* Adjust backing-scale-factor if necessary: */
-    if (dBackingScaleFactor > 1.0 && frameBuffer(uScreenID)->useUnscaledHiDPIOutput())
-    {
-        uXHot /= dBackingScaleFactor;
-        uYHot /= dBackingScaleFactor;
-        cursorPixmap.setDevicePixelRatio(dBackingScaleFactor);
-    }
-#  endif /* VBOX_GUI_WITH_HIDPI */
-# endif /* VBOX_WS_MAC */
-    /* Set the new cursor: */
-    m_cursor = QCursor(cursorPixmap, uXHot, uYHot);
+    m_cursorShapePixmap = QPixmap::fromImage(image);
+
+    /* Mark mouse pointer shape valid: */
     m_fIsValidPointerShapePresent = true;
-    NOREF(srcShapePtrScan);
 
 #else
 
 # warning "port me"
 
 #endif
+
+    /* Cache cursor pixmap size and hotspot: */
+    m_cursorSize = m_cursorShapePixmap.size();
+    m_cursorHotspot = m_shapeData.hotSpot();
 }
 
 bool UISession::preprocessInitialization()
@@ -1971,13 +1751,13 @@ bool UISession::preprocessInitialization()
     QStringList availableInterfaceNames;
 
     /* Create host network interface names list */
-    foreach (const CHostNetworkInterface &iface, vboxGlobal().host().GetNetworkInterfaces())
+    foreach (const CHostNetworkInterface &iface, uiCommon().host().GetNetworkInterfaces())
     {
         availableInterfaceNames << iface.GetName();
         availableInterfaceNames << iface.GetShortName();
     }
 
-    ulong cCount = vboxGlobal().virtualBox().GetSystemProperties().GetMaxNetworkAdapters(machine().GetChipsetType());
+    ulong cCount = uiCommon().virtualBox().GetSystemProperties().GetMaxNetworkAdapters(machine().GetChipsetType());
     for (ulong uAdapterIndex = 0; uAdapterIndex < cCount; ++uAdapterIndex)
     {
         CNetworkAdapter na = machine().GetNetworkAdapter(uAdapterIndex);
@@ -1993,9 +1773,11 @@ bool UISession::preprocessInitialization()
                 case KNetworkAttachmentType_Bridged:
                     strIfName = na.GetBridgedInterface();
                     break;
+#ifndef VBOX_WITH_VMNET
                 case KNetworkAttachmentType_HostOnly:
                     strIfName = na.GetHostOnlyInterface();
                     break;
+#endif /* !VBOX_WITH_VMNET */
                 default: break; /* Shut up, MSC! */
             }
 
@@ -2011,7 +1793,7 @@ bool UISession::preprocessInitialization()
     /* Check if non-existent interfaces found */
     if (!failedInterfaceNames.isEmpty())
     {
-        if (msgCenter().cannotStartWithoutNetworkIf(machineName(), failedInterfaceNames.join(", ")))
+        if (msgCenter().warnAboutNetworkInterfaceNotFound(machineName(), failedInterfaceNames.join(", ")))
             machineLogic()->openNetworkSettingsDialog();
         else
         {
@@ -2021,71 +1803,127 @@ bool UISession::preprocessInitialization()
     }
 #endif /* VBOX_WITH_NETFLT */
 
+    /* Check for USB enumeration warning. Don't return false even if we have a warning: */
+    CHost comHost = uiCommon().host();
+    if (comHost.GetUSBDevices().isEmpty() && comHost.isWarning())
+    {
+        /* Do not bitch if USB disabled: */
+        if (!machine().GetUSBControllers().isEmpty())
+        {
+            /* Do not bitch if there are no filters (check if enabled too?): */
+            if (!machine().GetUSBDeviceFilters().GetDeviceFilters().isEmpty())
+                UINotificationMessage::cannotEnumerateHostUSBDevices(comHost);
+        }
+    }
+
     /* True by default: */
     return true;
 }
 
-bool UISession::mountAdHocImage(KDeviceType enmDeviceType, UIMediumType enmMediumType, const QString &strImage)
+bool UISession::mountAdHocImage(KDeviceType enmDeviceType, UIMediumDeviceType enmMediumType, const QString &strMediumName)
 {
-    /* The 'none' image name means ejecting what ever is in the drive,
-     * so leave the image variables null. */
-    CVirtualBox vbox = vboxGlobal().virtualBox();
-    UIMedium uiImage;
-    if (strImage != "none")
+    /* Get VBox: */
+    CVirtualBox comVBox = uiCommon().virtualBox();
+
+    /* Prepare medium to mount: */
+    UIMedium guiMedium;
+
+    /* The 'none' medium name means ejecting what ever is in the drive,
+     * in that case => leave the guiMedium variable null. */
+    if (strMediumName != "none")
     {
-        /* Open the image: */
-        CVirtualBox vbox = vboxGlobal().virtualBox();
-        CMedium vboxImage = vbox.OpenMedium(strImage, enmDeviceType, KAccessMode_ReadWrite, false /* fForceNewUuid */);
-        if (!vbox.isOk() || vboxImage.isNull())
+        /* Open the medium: */
+        const CMedium comMedium = comVBox.OpenMedium(strMediumName, enmDeviceType, KAccessMode_ReadWrite, false /* fForceNewUuid */);
+        if (!comVBox.isOk() || comMedium.isNull())
         {
-            msgCenter().cannotOpenMedium(vbox, enmMediumType, strImage);
+            UINotificationMessage::cannotOpenMedium(comVBox, strMediumName);
             return false;
         }
 
-        /* Work the cache and use the cached image if possible: */
-        uiImage = vboxGlobal().medium(vboxImage.GetId());
-        if (uiImage.isNull())
+        /* Make sure medium ID is valid: */
+        const QUuid uMediumId = comMedium.GetId();
+        AssertReturn(!uMediumId.isNull(), false);
+
+        /* Try to find UIMedium among cached: */
+        guiMedium = uiCommon().medium(uMediumId);
+        if (guiMedium.isNull())
         {
-            uiImage = UIMedium(vboxImage, enmMediumType, KMediumState_Created);
-            vboxGlobal().createMedium(uiImage);
+            /* Cache new one if necessary: */
+            guiMedium = UIMedium(comMedium, enmMediumType, KMediumState_Created);
+            uiCommon().createMedium(guiMedium);
         }
     }
-    if (vbox.isOk())
+
+    /* Search for a suitable storage slots: */
+    QList<ExactStorageSlot> aFreeStorageSlots;
+    QList<ExactStorageSlot> aBusyStorageSlots;
+    foreach (const CStorageController &comController, machine().GetStorageControllers())
     {
-        /* Find suitable storage controller: */
-        foreach (const CStorageController &controller, machine().GetStorageControllers())
+        foreach (const CMediumAttachment &comAttachment, machine().GetMediumAttachmentsOfController(comController.GetName()))
         {
-            foreach (const CMediumAttachment &attachment, machine().GetMediumAttachmentsOfController(controller.GetName()))
+            /* Look for an optical devices only: */
+            if (comAttachment.GetType() == enmDeviceType)
             {
-                if (attachment.GetType() == enmDeviceType)
-                {
-                    /* Mount the image: */
-                    machine().MountMedium(controller.GetName(), attachment.GetPort(), attachment.GetDevice(), uiImage.medium(), true /* force */);
-                    if (machine().isOk())
-                        return true;
-                    msgCenter().cannotRemountMedium(machine(), uiImage, !uiImage.isNull() /* mount */, false /* retry */);
-                    return false;
-                }
+                /* Append storage slot to corresponding list: */
+                if (comAttachment.GetMedium().isNull())
+                    aFreeStorageSlots << ExactStorageSlot(comController.GetName(), comController.GetBus(),
+                                                          comAttachment.GetPort(), comAttachment.GetDevice());
+                else
+                    aBusyStorageSlots << ExactStorageSlot(comController.GetName(), comController.GetBus(),
+                                                          comAttachment.GetPort(), comAttachment.GetDevice());
             }
         }
-        msgCenter().cannotRemountMedium(machine(), uiImage, !uiImage.isNull() /* mount */, false /* retry */);
     }
-    else
-        msgCenter().cannotOpenMedium(vbox, enmMediumType, strImage);
-    return false;
+
+    /* Make sure at least one storage slot found: */
+    QList<ExactStorageSlot> sStorageSlots = aFreeStorageSlots + aBusyStorageSlots;
+    if (sStorageSlots.isEmpty())
+    {
+        UINotificationMessage::cannotMountImage(machineName(), strMediumName);
+        return false;
+    }
+
+    /* Try to mount medium into first available storage slot: */
+    while (!sStorageSlots.isEmpty())
+    {
+        const ExactStorageSlot storageSlot = sStorageSlots.takeFirst();
+        machine().MountMedium(storageSlot.controller, storageSlot.port, storageSlot.device, guiMedium.medium(), false /* force */);
+        if (machine().isOk())
+            break;
+    }
+
+    /* Show error message if necessary: */
+    if (!machine().isOk())
+    {
+        msgCenter().cannotRemountMedium(machine(), guiMedium, true /* mount? */, false /* retry? */, activeMachineWindow());
+        return false;
+    }
+
+    /* Save machine settings: */
+    machine().SaveSettings();
+
+    /* Show error message if necessary: */
+    if (!machine().isOk())
+    {
+        UINotificationMessage::cannotSaveMachineSettings(machine());
+        return false;
+    }
+
+    /* True by default: */
+    return true;
 }
 
 bool UISession::postprocessInitialization()
 {
     /* Check if the required virtualization features are active. We get this info only when the session is active. */
-    const bool fIs64BitsGuest = vboxGlobal().virtualBox().GetGuestOSType(guest().GetOSTypeId()).GetIs64Bit();
-    const bool fRecommendVirtEx = vboxGlobal().virtualBox().GetGuestOSType(guest().GetOSTypeId()).GetRecommendedVirtEx();
+    const bool fIs64BitsGuest = uiCommon().virtualBox().GetGuestOSType(guest().GetOSTypeId()).GetIs64Bit();
+    const bool fRecommendVirtEx = uiCommon().virtualBox().GetGuestOSType(guest().GetOSTypeId()).GetRecommendedVirtEx();
     AssertMsg(!fIs64BitsGuest || fRecommendVirtEx, ("Virtualization support missed for 64bit guest!\n"));
-    const bool fIsVirtActive = debugger().GetHWVirtExEnabled();
-    if (fRecommendVirtEx && !fIsVirtActive)
+    const KVMExecutionEngine enmEngine = debugger().GetExecutionEngine();
+    if (fRecommendVirtEx && enmEngine == KVMExecutionEngine_RawMode)
     {
         /* Check whether vt-x / amd-v supported: */
-        bool fVTxAMDVSupported = vboxGlobal().host().GetProcessorFeature(KProcessorFeature_HWVirtEx);
+        bool fVTxAMDVSupported = uiCommon().host().GetProcessorFeature(KProcessorFeature_HWVirtEx);
 
         /* Pause VM: */
         setPause(true);
@@ -2102,12 +1940,10 @@ bool UISession::postprocessInitialization()
         {
             /* Enable 'manual-override',
              * preventing automatic Runtime UI closing: */
-            if (machineLogic())
-                machineLogic()->setManualOverrideMode(true);
+            setManualOverrideMode(true);
             /* Power off VM: */
-            bool fServerCrashed = false;
             LogRel(("GUI: Aborting startup due to postprocess initialization issue detected...\n"));
-            powerOff(false, fServerCrashed);
+            powerOff(false /* do NOT restore current snapshot */);
             return false;
         }
 
@@ -2135,6 +1971,10 @@ void UISession::setScreenVisibleHostDesires(ulong uScreenId, bool fIsMonitorVisi
 
     /* Remember 'actual' (host-desire) visibility status: */
     m_monitorVisibilityVectorHostDesires[(int)uScreenId] = fIsMonitorVisible;
+
+    /* And remember the request in extra data for guests with VMSVGA: */
+    /* This should be done before the actual hint is sent in case the guest overrides it. */
+    gEDataManager->setLastGuestScreenVisibilityStatus(uScreenId, fIsMonitorVisible, uiCommon().managedVMUuid());
 }
 
 bool UISession::isScreenVisible(ulong uScreenId) const
@@ -2154,7 +1994,12 @@ void UISession::setScreenVisible(ulong uScreenId, bool fIsMonitorVisible)
     /* Remember 'actual' visibility status: */
     m_monitorVisibilityVector[(int)uScreenId] = fIsMonitorVisible;
     /* Remember 'desired' visibility status: */
-    gEDataManager->setLastGuestScreenVisibilityStatus(uScreenId, fIsMonitorVisible, vboxGlobal().managedVMUuid());
+    /* See note in UIMachineView::sltHandleNotifyChange() regarding the graphics controller check. */
+    if (machine().GetGraphicsAdapter().GetGraphicsControllerType() != KGraphicsControllerType_VMSVGA)
+        gEDataManager->setLastGuestScreenVisibilityStatus(uScreenId, fIsMonitorVisible, uiCommon().managedVMUuid());
+
+    /* Make sure action-pool knows guest-screen visibility status: */
+    actionPool()->toRuntime()->setGuestScreenVisible(uScreenId, fIsMonitorVisible);
 }
 
 QSize UISession::lastFullScreenSize(ulong uScreenId) const
@@ -2184,10 +2029,43 @@ int UISession::countOfVisibleWindows()
     return cCountOfVisibleWindows;
 }
 
+QList<int> UISession::listOfVisibleWindows() const
+{
+    QList<int> visibleWindows;
+    for (int i = 0; i < m_monitorVisibilityVector.size(); ++i)
+        if (m_monitorVisibilityVector.at(i))
+            visibleWindows.push_back(i);
+    return visibleWindows;
+}
+
+CMediumVector UISession::machineMedia() const
+{
+    CMediumVector comMedia;
+    /* Enumerate all the controllers: */
+    foreach (const CStorageController &comController, m_machine.GetStorageControllers())
+    {
+        /* Enumerate all the attachments: */
+        foreach (const CMediumAttachment &comAttachment, m_machine.GetMediumAttachmentsOfController(comController.GetName()))
+        {
+            /* Skip unrelated device types: */
+            const KDeviceType enmDeviceType = comAttachment.GetType();
+            if (   enmDeviceType != KDeviceType_HardDisk
+                && enmDeviceType != KDeviceType_Floppy
+                && enmDeviceType != KDeviceType_DVD)
+                continue;
+            if (   comAttachment.GetIsEjected()
+                || comAttachment.GetMedium().isNull())
+                continue;
+            comMedia.append(comAttachment.GetMedium());
+        }
+    }
+    return comMedia;
+}
+
 void UISession::loadVMSettings()
 {
-    /* Load CPU hardware virtualization extension: */
-    m_fIsHWVirtExEnabled = m_debugger.GetHWVirtExEnabled();
+    /* Cache IMachine::ExecutionEngine value. */
+    m_enmVMExecutionEngine = m_debugger.GetExecutionEngine();
     /* Load nested-paging CPU hardware virtualization extension: */
     m_fIsHWVirtExNestedPagingEnabled = m_debugger.GetHWVirtExNestedPagingEnabled();
     /* Load whether the VM is currently making use of the unrestricted execution feature of VT-x: */
@@ -2211,15 +2089,19 @@ void UISession::setFrameBuffer(ulong uScreenId, UIFrameBuffer* pFrameBuffer)
 
 void UISession::updateHostScreenData()
 {
+    /* Rebuild host-screen data vector: */
     m_hostScreens.clear();
     for (int iScreenIndex = 0; iScreenIndex < gpDesktop->screenCount(); ++iScreenIndex)
         m_hostScreens << gpDesktop->screenGeometry(iScreenIndex);
+
+    /* Make sure action-pool knows host-screen count: */
+    actionPool()->toRuntime()->setHostScreenCount(m_hostScreens.size());
 }
 
 void UISession::updateActionRestrictions()
 {
     /* Get host and prepare restrictions: */
-    const CHost host = vboxGlobal().host();
+    const CHost host = uiCommon().host();
     UIExtraDataMetaDefs::RuntimeMenuMachineActionType restrictionForMachine = UIExtraDataMetaDefs::RuntimeMenuMachineActionType_Invalid;
     UIExtraDataMetaDefs::RuntimeMenuViewActionType restrictionForView = UIExtraDataMetaDefs::RuntimeMenuViewActionType_Invalid;
     UIExtraDataMetaDefs::RuntimeMenuDevicesActionType restrictionForDevices = UIExtraDataMetaDefs::RuntimeMenuDevicesActionType_Invalid;
@@ -2227,7 +2109,7 @@ void UISession::updateActionRestrictions()
     /* Separate process stuff: */
     {
         /* Initialize 'Machine' menu: */
-        if (!vboxGlobal().isSeparateProcess())
+        if (!uiCommon().isSeparateProcess())
             restrictionForMachine = (UIExtraDataMetaDefs::RuntimeMenuMachineActionType)(restrictionForMachine | UIExtraDataMetaDefs::RuntimeMenuMachineActionType_Detach);
     }
 
@@ -2261,12 +2143,20 @@ void UISession::updateActionRestrictions()
             restrictionForDevices = (UIExtraDataMetaDefs::RuntimeMenuDevicesActionType)(restrictionForDevices | UIExtraDataMetaDefs::RuntimeMenuDevicesActionType_FloppyDevices);
     }
 
+    /* Audio stuff: */
+    {
+        /* Check whether audio controller is enabled. */
+        const CAudioAdapter &comAdapter = machine().GetAudioAdapter();
+        if (comAdapter.isNull() || !comAdapter.GetEnabled())
+            restrictionForDevices = (UIExtraDataMetaDefs::RuntimeMenuDevicesActionType)(restrictionForDevices | UIExtraDataMetaDefs::RuntimeMenuDevicesActionType_Audio);
+    }
+
     /* Network stuff: */
     {
         /* Initialize Network menu: */
         bool fAtLeastOneAdapterActive = false;
         const KChipsetType chipsetType = machine().GetChipsetType();
-        ULONG uSlots = vboxGlobal().virtualBox().GetSystemProperties().GetMaxNetworkAdapters(chipsetType);
+        ULONG uSlots = uiCommon().virtualBox().GetSystemProperties().GetMaxNetworkAdapters(chipsetType);
         for (ULONG uSlot = 0; uSlot < uSlots; ++uSlot)
         {
             const CNetworkAdapter &adapter = machine().GetNetworkAdapter(uSlot);
@@ -2323,4 +2213,3 @@ static void signalHandlerSIGUSR1(int sig, siginfo_t * /* pInfo */, void * /*pSec
             gpMachine->uisession()->machineLogic()->keyboardHandler()->releaseAllPressedKeys();
 }
 #endif /* VBOX_GUI_WITH_KEYS_RESET_HANDLER */
-

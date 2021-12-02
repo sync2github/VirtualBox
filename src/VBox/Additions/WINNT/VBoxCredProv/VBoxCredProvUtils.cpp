@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCredProvUtils.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxCredProvUtils - Misc. utility functions for VBoxCredProv.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,8 +20,12 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <iprt/win/windows.h>
+
 #include <iprt/string.h>
 #include <VBox/log.h>
+#ifdef LOG_ENABLED
+# include <iprt/stream.h>
+#endif
 #include <VBox/VBoxGuestLib.h>
 
 
@@ -35,7 +39,7 @@ DWORD g_dwVerbosity = 0;
 /**
  * Displays a verbose message.
  *
- * @param   iLevel      Minimum log level required to display this message.
+ * @param   dwLevel     Minimum log level required to display this message.
  * @param   pszFormat   The message text.
  * @param   ...         Format arguments.
  */
@@ -52,6 +56,15 @@ void VBoxCredProvVerbose(DWORD dwLevel, const char *pszFormat, ...)
         AssertPtr(psz);
         LogRel(("%s", psz));
 
+#ifdef LOG_ENABLED
+        PRTSTREAM pStream;
+        int rc2 = RTStrmOpen("C:\\VBoxCredProvLog.txt", "a", &pStream);
+        if (RT_SUCCESS(rc2))
+        {
+            RTStrmPrintf(pStream, "%s", psz);
+            RTStrmClose(pStream);
+        }
+#endif
         RTStrFree(psz);
     }
 }

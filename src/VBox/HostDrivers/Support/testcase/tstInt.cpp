@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstInt.cpp 90804 2021-08-23 19:08:53Z vboxsync $ */
 /** @file
  * SUP Testcase - Test the interrupt gate feature of the support library.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,11 +29,16 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <VBox/sup.h>
-#include <VBox/vmm/vm.h>
 #include <VBox/vmm/vmm.h>
-#include <VBox/err.h>
+#include <VBox/vmm/gvmm.h>
+#include <VBox/vmm/vm.h>
+#include <iprt/errcore.h>
 #include <VBox/param.h>
-#include <iprt/asm-amd64-x86.h>
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
+# include <iprt/asm-amd64-x86.h>
+#else
+# define ASMReadTSC RTTimeSystemNanoTS
+#endif
 #include <iprt/initterm.h>
 #include <iprt/stream.h>
 #include <iprt/string.h>
@@ -75,33 +80,34 @@ int main(int argc, char **argv)
         /*
          * Load VMM code.
          */
-        rc = SUPR3LoadVMM(szAbsFile);
+        RTERRINFOSTATIC ErrInfo;
+        rc = SUPR3LoadVMM(szAbsFile, RTErrInfoInitStatic(&ErrInfo));
         if (RT_SUCCESS(rc))
         {
             /*
-             * Create a fake 'VM'.
+             * Create a tiny dummy VM so we can do NOP calls into it using the fast I/O control path.
              */
-            PVMR0 pVMR0 = NIL_RTR0PTR;
-            PVM pVM = NULL;
-            const unsigned cPages = RT_ALIGN_Z(sizeof(*pVM), PAGE_SIZE) >> PAGE_SHIFT;
-            PSUPPAGE paPages = (PSUPPAGE)RTMemAllocZ(cPages * sizeof(SUPPAGE));
-            if (paPages)
-                rc = SUPR3LowAlloc(cPages, (void **)&pVM, &pVMR0, &paPages[0]);
-            else
-                rc = VERR_NO_MEMORY;
+            GVMMCREATEVMREQ CreateVMReq;
+            CreateVMReq.Hdr.u32Magic    = SUPVMMR0REQHDR_MAGIC;
+            CreateVMReq.Hdr.cbReq       = sizeof(CreateVMReq);
+            CreateVMReq.pSession        = pSession;
+            CreateVMReq.pVMR0           = NIL_RTR0PTR;
+            CreateVMReq.pVMR3           = NULL;
+            CreateVMReq.cCpus           = 1;
+            rc = SUPR3CallVMMR0Ex(NIL_RTR0PTR, NIL_VMCPUID, VMMR0_DO_GVMM_CREATE_VM, 0, &CreateVMReq.Hdr);
             if (RT_SUCCESS(rc))
             {
-                pVM->pVMRC = 0;
-                pVM->pVMR3 = pVM;
-                pVM->pVMR0 = pVMR0;
-                pVM->paVMPagesR3 = paPages;
-                pVM->pSession = pSession;
+                PVM pVM = CreateVMReq.pVMR3;
+                AssertRelease(RT_VALID_PTR(pVM));
+                AssertRelease(pVM->pVMR0ForCall == CreateVMReq.pVMR0);
+                AssertRelease(pVM->pSession == pSession);
+                AssertRelease(pVM->cCpus == 1);
                 pVM->enmVMState = VMSTATE_CREATED;
+                PVMR0 const pVMR0 = CreateVMReq.pVMR0;
 
                 rc = SUPR3SetVMForFastIOCtl(pVMR0);
                 if (!rc)
                 {
-
                     /*
                      * Call VMM code with invalid function.
                      */
@@ -181,10 +187,17 @@ int main(int argc, char **argv)
                     RTPrintf("tstInt: SUPR3SetVMForFastIOCtl failed: %Rrc\n", rc);
                     rcRet++;
                 }
+
+                rc = SUPR3CallVMMR0Ex(pVMR0, 0 /*idCpu*/, VMMR0_DO_GVMM_DESTROY_VM, 0, NULL);
+                if (RT_FAILURE(rc))
+                {
+                    RTPrintf("tstInt: VMMR0_DO_GVMM_DESTROY_VM failed: %Rrc\n", rc);
+                    rcRet++;
+                }
             }
             else
             {
-                RTPrintf("tstInt: SUPR3ContAlloc(%#zx,,) failed\n", sizeof(*pVM));
+                RTPrintf("tstInt: VMMR0_DO_GVMM_CREATE_VM failed\n");
                 rcRet++;
             }
 
@@ -200,7 +213,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            RTPrintf("tstInt: SUPR3LoadVMM failed with rc=%Rrc\n", rc);
+            RTPrintf("tstInt: SUPR3LoadVMM failed with rc=%Rrc%#RTeim\n", rc, &ErrInfo.Core);
             rcRet++;
         }
 

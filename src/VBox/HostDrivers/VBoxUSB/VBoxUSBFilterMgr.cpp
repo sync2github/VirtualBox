@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxUSBFilterMgr.cpp 90804 2021-08-23 19:08:53Z vboxsync $ */
 /** @file
  * VirtualBox Ring-0 USB Filter Manager.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -22,6 +31,7 @@
 #include <VBox/usbfilter.h>
 #include "VBoxUSBFilterMgr.h"
 
+#include <iprt/err.h>
 #include <iprt/handletable.h>
 #include <iprt/mem.h>
 #ifdef VBOXUSBFILTERMGR_USB_SPINLOCK
@@ -225,7 +235,7 @@ int VBoxUSBFilterAdd(PCUSBFILTER pFilter, VBOXUSBFILTER_CONTEXT Owner, uintptr_t
         return rc;
     if (!Owner || Owner == VBOXUSBFILTER_CONTEXT_NIL)
         return VERR_INVALID_PARAMETER;
-    if (!VALID_PTR(puId))
+    if (!RT_VALID_PTR(puId))
         return VERR_INVALID_POINTER;
 
     /*

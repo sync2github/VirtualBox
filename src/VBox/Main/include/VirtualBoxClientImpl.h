@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VirtualBoxClientImpl.h 91592 2021-10-06 15:07:03Z vboxsync $ */
 /** @file
  * Header file for the VirtualBoxClient (IVirtualBoxClient) class, VBoxC.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,11 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_VIRTUALBOXCLIENTIMPL
-#define ____H_VIRTUALBOXCLIENTIMPL
+#ifndef MAIN_INCLUDED_VirtualBoxClientImpl_h
+#define MAIN_INCLUDED_VirtualBoxClientImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VirtualBoxClientWrap.h"
 #include "EventImpl.h"
+#include "VirtualBoxTranslator.h"
 
 #ifdef RT_OS_WINDOWS
 # include "win/resource.h"
@@ -70,11 +73,22 @@ private:
     virtual HRESULT i_investigateVirtualBoxObjectCreationFailure(HRESULT hrc);
 #endif
 
+#ifdef VBOX_WITH_SDS
+    int     i_getServiceAccountAndStartType(const wchar_t *pwszServiceName,
+                                            wchar_t *pwszAccountName, size_t cwcAccountName, uint32_t *puStartType);
+#endif
+
     static DECLCALLBACK(int) SVCWatcherThread(RTTHREAD ThreadSelf, void *pvUser);
 
     struct Data
     {
-        Data() : m_ThreadWatcher(NIL_RTTHREAD), m_SemEvWatcher(NIL_RTSEMEVENT)
+        Data()
+            : m_ThreadWatcher(NIL_RTTHREAD)
+            , m_SemEvWatcher(NIL_RTSEMEVENT)
+#ifdef VBOX_WITH_MAIN_NLS
+            , m_pVBoxTranslator(NULL)
+            , m_pTrComponent(NULL)
+#endif
         {}
 
         ~Data()
@@ -88,10 +102,17 @@ private:
         }
 
         ComPtr<IVirtualBox> m_pVirtualBox;
+        ComPtr<IToken> m_pToken;
         const ComObjPtr<EventSource> m_pEventSource;
+        ComPtr<IEventSource> m_pVBoxEventSource;
+        ComPtr<IEventListener> m_pVBoxEventListener;
 
         RTTHREAD m_ThreadWatcher;
         RTSEMEVENT m_SemEvWatcher;
+#ifdef VBOX_WITH_MAIN_NLS
+        VirtualBoxTranslator *m_pVBoxTranslator;
+        PTRCOMPONENT          m_pTrComponent;
+#endif
     };
 
     Data mData;
@@ -101,7 +122,13 @@ public:
      * DllCanUnloadNow().  This is incremented to 1 when init() initialized
      * m_pEventSource and is decremented by the Data destructor (above). */
     static LONG s_cUnnecessaryAtlModuleLocks;
+
+#ifdef VBOX_WITH_MAIN_NLS
+    HRESULT i_reloadApiLanguage();
+    HRESULT i_registerEventListener();
+    void    i_unregisterEventListener();
+#endif
 };
 
-#endif
+#endif /* !MAIN_INCLUDED_VirtualBoxClientImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

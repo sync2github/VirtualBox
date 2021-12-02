@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTAvl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - AVL trees.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -73,7 +73,7 @@ static RTRAND g_hRand;
 static PTRACKER TrackerCreate(uint32_t MaxKey)
 {
     uint32_t cbBitmap = (MaxKey + sizeof(uint32_t) * sizeof(uint8_t) - 1) / sizeof(uint8_t);
-    PTRACKER pTracker = (PTRACKER)RTMemAllocZ(RT_OFFSETOF(TRACKER, abBitmap[cbBitmap]));
+    PTRACKER pTracker = (PTRACKER)RTMemAllocZ(RT_UOFFSETOF_DYN(TRACKER, abBitmap[cbBitmap]));
     if (pTracker)
     {
         pTracker->MaxKey = MaxKey;
@@ -962,8 +962,8 @@ int avlul(void)
             RTTestIFailed("linear remove i=%d\n", i);
             return 1;
         }
-        pNode->pLeft     = (PAVLULNODECORE)0xaaaaaaaa;
-        pNode->pRight    = (PAVLULNODECORE)0xbbbbbbbb;
+        pNode->pLeft     = (PAVLULNODECORE)(uintptr_t)0xaaaaaaaa;
+        pNode->pRight    = (PAVLULNODECORE)(uintptr_t)0xbbbbbbbb;
         pNode->uchHeight = 'e';
         RTMemFree(pNode);
 
@@ -1012,8 +1012,8 @@ int avlul(void)
                 RTTestIFailed("sparse remove i=%d j=%d\n", i, j);
                 return 1;
             }
-            pNode->pLeft     = (PAVLULNODECORE)0xdddddddd;
-            pNode->pRight    = (PAVLULNODECORE)0xcccccccc;
+            pNode->pLeft     = (PAVLULNODECORE)(uintptr_t)0xdddddddd;
+            pNode->pRight    = (PAVLULNODECORE)(uintptr_t)0xcccccccc;
             pNode->uchHeight = 'E';
             RTMemFree(pNode);
         }

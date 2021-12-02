@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GIMAllHv.cpp 87766 2021-02-16 14:27:43Z vboxsync $ */
 /** @file
  * GIM - Guest Interface Manager, Microsoft Hyper-V, All Contexts.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,9 +29,10 @@
 #include <VBox/vmm/pdmapi.h>
 #include <VBox/vmm/pgm.h>
 #include <VBox/vmm/apic.h>
+#include <VBox/vmm/em.h>
 #include "GIMHvInternal.h"
 #include "GIMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 
 #include <VBox/err.h>
 
@@ -145,7 +146,7 @@ static int gimHvReadSlowHypercallParamsInOut(PVM pVM, PCPUMCTX pCtx, bool fIs64B
  *
  * @thread  EMT(pVCpu).
  */
-VMM_INT_DECL(VBOXSTRICTRC) gimHvHypercall(PVMCPU pVCpu, PCPUMCTX pCtx)
+VMM_INT_DECL(VBOXSTRICTRC) gimHvHypercall(PVMCPUCC pVCpu, PCPUMCTX pCtx)
 {
     VMCPU_ASSERT_EMT(pVCpu);
 
@@ -160,7 +161,7 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvHypercall(PVMCPU pVCpu, PCPUMCTX pCtx)
     /*
      * Verify that hypercalls are enabled by the guest.
      */
-    if (!gimHvAreHypercallsEnabled(pVCpu))
+    if (!gimHvAreHypercallsEnabled(pVM))
         return VERR_GIM_HYPERCALLS_NOT_ENABLED;
 
     /*
@@ -175,14 +176,18 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvHypercall(PVMCPU pVCpu, PCPUMCTX pCtx)
 
     /*
      * Get the hypercall operation code and modes.
+     * Fast hypercalls have only two or fewer inputs but no output parameters.
      */
     const bool       fIs64BitMode     = CPUMIsGuestIn64BitCodeEx(pCtx);
     const uint64_t   uHyperIn         = fIs64BitMode ? pCtx->rcx : (pCtx->rdx << 32) | pCtx->eax;
     const uint16_t   uHyperOp         = GIM_HV_HYPERCALL_IN_CALL_CODE(uHyperIn);
     const bool       fHyperFast       = GIM_HV_HYPERCALL_IN_IS_FAST(uHyperIn);
-    /*const uint16_t   cHyperReps       = GIM_HV_HYPERCALL_IN_REP_COUNT(uHyperIn); - unused */
-    /*const uint16_t   idxHyperRepStart = GIM_HV_HYPERCALL_IN_REP_START_IDX(uHyperIn); - unused */
+    const uint16_t   cHyperReps       = GIM_HV_HYPERCALL_IN_REP_COUNT(uHyperIn);
+    const uint16_t   idxHyperRepStart = GIM_HV_HYPERCALL_IN_REP_START_IDX(uHyperIn);
     uint64_t         cHyperRepsDone   = 0;
+
+    /* Currently no repeating hypercalls are supported. */
+    RT_NOREF2(cHyperReps, idxHyperRepStart);
 
     int rc     = VINF_SUCCESS;
     int rcHv   = GIM_HV_STATUS_OPERATION_DENIED;
@@ -331,6 +336,44 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvHypercall(PVMCPU pVCpu, PCPUMCTX pCtx)
                 break;
             }
 
+            case GIM_HV_EXT_HYPERCALL_OP_QUERY_CAP:              /* Non-rep, extended hypercall. */
+            {
+                if (pHv->uPartFlags & GIM_HV_PART_FLAGS_EXTENDED_HYPERCALLS)
+                {
+                    rc = gimHvReadSlowHypercallParam(pVM, pCtx, fIs64BitMode, GIMHVHYPERCALLPARAM_OUT, &rcHv);
+                    if (   RT_SUCCESS(rc)
+                        && rcHv == GIM_HV_STATUS_SUCCESS)
+                    {
+                        rc = gimR3HvHypercallExtQueryCap(pVM, &rcHv);
+                    }
+                }
+                else
+                {
+                    LogRel(("GIM: HyperV: Denied HvExtCallQueryCapabilities when the feature is not exposed\n"));
+                    rcHv = GIM_HV_STATUS_ACCESS_DENIED;
+                }
+                break;
+            }
+
+            case GIM_HV_EXT_HYPERCALL_OP_GET_BOOT_ZEROED_MEM:    /* Non-rep, extended hypercall. */
+            {
+                if (pHv->uPartFlags & GIM_HV_PART_FLAGS_EXTENDED_HYPERCALLS)
+                {
+                    rc = gimHvReadSlowHypercallParam(pVM, pCtx, fIs64BitMode, GIMHVHYPERCALLPARAM_OUT, &rcHv);
+                    if (   RT_SUCCESS(rc)
+                        && rcHv == GIM_HV_STATUS_SUCCESS)
+                    {
+                        rc = gimR3HvHypercallExtGetBootZeroedMem(pVM, &rcHv);
+                    }
+                }
+                else
+                {
+                    LogRel(("GIM: HyperV: Denied HvExtCallGetBootZeroedMemory when the feature is not exposed\n"));
+                    rcHv = GIM_HV_STATUS_ACCESS_DENIED;
+                }
+                break;
+            }
+
             default:
             {
                 LogRel(("GIM: HyperV: Unknown/invalid hypercall opcode %#x (%u)\n", uHyperOp, uHyperOp));
@@ -362,15 +405,33 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvHypercall(PVMCPU pVCpu, PCPUMCTX pCtx)
 
 
 /**
+ * Returns a pointer to the MMIO2 regions supported by Hyper-V.
+ *
+ * @returns Pointer to an array of MMIO2 regions.
+ * @param   pVM         The cross context VM structure.
+ * @param   pcRegions   Where to store the number of regions in the array.
+ */
+VMM_INT_DECL(PGIMMMIO2REGION) gimHvGetMmio2Regions(PVM pVM, uint32_t *pcRegions)
+{
+    Assert(GIMIsEnabled(pVM));
+    PGIMHV pHv = &pVM->gim.s.u.Hv;
+
+    AssertCompile(RT_ELEMENTS(pHv->aMmio2Regions) <= 8);
+    *pcRegions = RT_ELEMENTS(pHv->aMmio2Regions);
+    return pHv->aMmio2Regions;
+}
+
+
+/**
  * Returns whether the guest has configured and enabled the use of Hyper-V's
  * hypercall interface.
  *
  * @returns true if hypercalls are enabled, false otherwise.
- * @param   pVCpu       The cross context virtual CPU structure.
+ * @param   pVM     The cross context VM structure.
  */
-VMM_INT_DECL(bool) gimHvAreHypercallsEnabled(PVMCPU pVCpu)
+VMM_INT_DECL(bool) gimHvAreHypercallsEnabled(PCVM pVM)
 {
-    return RT_BOOL(pVCpu->CTX_SUFF(pVM)->gim.s.u.Hv.u64GuestOsIdMsr != 0);
+    return RT_BOOL(pVM->gim.s.u.Hv.u64GuestOsIdMsr != 0);
 }
 
 
@@ -423,7 +484,7 @@ static const char *gimHvGetGuestOsIdVariantName(uint64_t uGuestOsIdMsr)
  * @returns The time reference count.
  * @param   pVCpu       The cross context virtual CPU structure.
  */
-DECLINLINE(uint64_t) gimHvGetTimeRefCount(PVMCPU pVCpu)
+DECLINLINE(uint64_t) gimHvGetTimeRefCount(PVMCPUCC pVCpu)
 {
     /* Hyper-V reports the time in 100 ns units (10 MHz). */
     VMCPU_ASSERT_EMT_OR_NOT_RUNNING(pVCpu);
@@ -445,10 +506,11 @@ DECLINLINE(uint64_t) gimHvGetTimeRefCount(PVMCPU pVCpu)
  * @remarks Caller needs to hold the timer critical section.
  * @thread  Any.
  */
-VMM_INT_DECL(void) gimHvStartStimer(PVMCPU pVCpu, PCGIMHVSTIMER pHvStimer)
+VMM_INT_DECL(void) gimHvStartStimer(PVMCPUCC pVCpu, PCGIMHVSTIMER pHvStimer)
 {
-    PTMTIMER pTimer = pHvStimer->CTX_SUFF(pTimer);
-    Assert(TMTimerIsLockOwner(pTimer));
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
+    TMTIMERHANDLE hTimer = pHvStimer->hTimer;
+    Assert(TMTimerIsLockOwner(pVM, hTimer));
 
     uint64_t const uTimerCount = pHvStimer->uStimerCountMsr;
     if (uTimerCount)
@@ -458,7 +520,7 @@ VMM_INT_DECL(void) gimHvStartStimer(PVMCPU pVCpu, PCGIMHVSTIMER pHvStimer)
         /* For periodic timers, 'uTimerCountNS' represents the relative interval. */
         if (MSR_GIM_HV_STIMER_IS_PERIODIC(pHvStimer->uStimerConfigMsr))
         {
-            TMTimerSetNano(pTimer, uTimerCountNS);
+            TMTimerSetNano(pVM, hTimer, uTimerCountNS);
             LogFlow(("GIM%u: HyperV: Started relative periodic STIMER%u with uTimerCountNS=%RU64\n", pVCpu->idCpu,
                      pHvStimer->idxStimer, uTimerCountNS));
         }
@@ -470,7 +532,7 @@ VMM_INT_DECL(void) gimHvStartStimer(PVMCPU pVCpu, PCGIMHVSTIMER pHvStimer)
             if (uTimerCountNS > uCurRefTimeNS)
             {
                 uint64_t const uRelativeNS = uTimerCountNS - uCurRefTimeNS;
-                TMTimerSetNano(pTimer, uRelativeNS);
+                TMTimerSetNano(pVM, hTimer, uRelativeNS);
                 LogFlow(("GIM%u: HyperV: Started one-shot relative STIMER%u with uRelativeNS=%RU64\n", pVCpu->idCpu,
                          pHvStimer->idxStimer, uRelativeNS));
             }
@@ -489,17 +551,16 @@ VMM_INT_DECL(void) gimHvStartStimer(PVMCPU pVCpu, PCGIMHVSTIMER pHvStimer)
  * @remarks Caller needs to the hold the timer critical section.
  * @thread  EMT(pVCpu).
  */
-static void gimHvStopStimer(PVMCPU pVCpu, PGIMHVSTIMER pHvStimer)
+static void gimHvStopStimer(PVMCPUCC pVCpu, PGIMHVSTIMER pHvStimer)
 {
     VMCPU_ASSERT_EMT_OR_NOT_RUNNING(pVCpu);
-    RT_NOREF(pVCpu);
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
 
-    PTMTIMER pTimer = pHvStimer->CTX_SUFF(pTimer);
-    Assert(TMTimerIsLockOwner(pTimer));
-    RT_NOREF(pTimer);
+    TMTIMERHANDLE hTimer = pHvStimer->hTimer;
+    Assert(TMTimerIsLockOwner(pVM, hTimer));
 
-    if (TMTimerIsActive(pHvStimer->CTX_SUFF(pTimer)))
-        TMTimerStop(pHvStimer->CTX_SUFF(pTimer));
+    if (TMTimerIsActive(pVM, hTimer))
+        TMTimerStop(pVM, hTimer);
 }
 
 
@@ -517,10 +578,10 @@ static void gimHvStopStimer(PVMCPU pVCpu, PGIMHVSTIMER pHvStimer)
  *
  * @thread  EMT.
  */
-VMM_INT_DECL(VBOXSTRICTRC) gimHvReadMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t *puValue)
+VMM_INT_DECL(VBOXSTRICTRC) gimHvReadMsr(PVMCPUCC pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t *puValue)
 {
     NOREF(pRange);
-    PVM     pVM = pVCpu->CTX_SUFF(pVM);
+    PVMCC   pVM = pVCpu->CTX_SUFF(pVM);
     PCGIMHV pHv = &pVM->gim.s.u.Hv;
 
     switch (idMsr)
@@ -692,10 +753,10 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvReadMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRR
  *
  * @thread  EMT.
  */
-VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t uRawValue)
+VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPUCC pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t uRawValue)
 {
     NOREF(pRange);
-    PVM    pVM = pVCpu->CTX_SUFF(pVM);
+    PVMCC  pVM = pVCpu->CTX_SUFF(pVM);
     PGIMHV pHv = &pVM->gim.s.u.Hv;
 
     switch (idMsr)
@@ -750,15 +811,14 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSR
             pHv->u64GuestOsIdMsr = uRawValue;
 
             /*
-             * Notify VMM that hypercalls are now disabled/enabled.
+             * Update EM on hypercall instruction enabled state.
              */
-            for (VMCPUID i = 0; i < pVM->cCpus; i++)
-            {
-                if (uRawValue)
-                    VMMHypercallsEnable(&pVM->aCpus[i]);
-                else
-                    VMMHypercallsDisable(&pVM->aCpus[i]);
-            }
+            if (uRawValue)
+                for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
+                    EMSetHypercallInstructionsEnabled(pVM->CTX_SUFF(apCpus)[idCpu], true);
+            else
+                for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
+                    EMSetHypercallInstructionsEnabled(pVM->CTX_SUFF(apCpus)[idCpu], false);
 
             return VINF_SUCCESS;
 #endif /* IN_RING3 */
@@ -777,7 +837,7 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSR
             /* Hypercall page can only be enabled when the guest has enabled hypercalls. */
             bool fEnable = MSR_GIM_HV_HYPERCALL_PAGE_IS_ENABLED(uRawValue);
             if (   fEnable
-                && !gimHvAreHypercallsEnabled(pVCpu))
+                && !gimHvAreHypercallsEnabled(pVM))
             {
                 return VINF_SUCCESS;
             }
@@ -891,9 +951,8 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSR
             {
                 LogRel(("GIM: HyperV: Guest indicates a fatal condition! P0=%#RX64 P1=%#RX64 P2=%#RX64 P3=%#RX64 P4=%#RX64\n",
                         pHv->uCrashP0Msr, pHv->uCrashP1Msr, pHv->uCrashP2Msr, pHv->uCrashP3Msr, pHv->uCrashP4Msr));
-
-                if (DBGF_IS_EVENT_ENABLED(pVM, DBGFEVENT_BSOD_MSR))
-                    DBGFEventGenericWithArg(pVM, pVCpu, DBGFEVENT_BSOD_MSR, pHv->uCrashP0Msr, DBGFEVENTCTX_OTHER);
+                DBGFR3ReportBugCheck(pVM, pVCpu, DBGFEVENT_BSOD_MSR, pHv->uCrashP0Msr, pHv->uCrashP1Msr,
+                                     pHv->uCrashP2Msr, pHv->uCrashP3Msr, pHv->uCrashP4Msr);
                 /* (Do not try pass VINF_EM_DBG_EVENT, doesn't work from here!) */
             }
             return VINF_SUCCESS;
@@ -1093,10 +1152,9 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSR
             {
                 Assert(idxStimer < RT_ELEMENTS(pHvCpu->aStimers));
                 PGIMHVSTIMER pHvStimer = &pHvCpu->aStimers[idxStimer];
-                PTMTIMER     pTimer    = pHvStimer->CTX_SUFF(pTimer);
 
                 /* Lock to prevent concurrent access from the timer callback. */
-                int rc = TMTimerLock(pTimer, VERR_IGNORED);
+                int rc = TMTimerLock(pVM, pHvStimer->hTimer, VERR_IGNORED);
                 if (rc == VINF_SUCCESS)
                 {
                     /* Update the MSR value. */
@@ -1116,7 +1174,7 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSR
                         /* Auto-enable implies writing to the STIMERx_COUNT MSR is what starts the timer. */
                         if (!MSR_GIM_HV_STIMER_IS_AUTO_ENABLED(uRawValue))
                         {
-                            if (!TMTimerIsActive(pHvStimer->CTX_SUFF(pTimer)))
+                            if (!TMTimerIsActive(pVM, pHvStimer->hTimer))
                             {
                                 gimHvStartStimer(pVCpu, pHvStimer);
                                 Log(("GIM%u: HyperV: Started STIMER%u\n", pVCpu->idCpu, idxStimer));
@@ -1137,7 +1195,7 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSR
                         }
                     }
 
-                    TMTimerUnlock(pTimer);
+                    TMTimerUnlock(pVM, pHvStimer->hTimer);
                 }
                 return rc;
             }
@@ -1179,13 +1237,12 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSR
              */
             if (MSR_GIM_HV_STIMER_IS_AUTO_ENABLED(pHvStimer->uStimerConfigMsr))
             {
-                PTMTIMER pTimer = pHvStimer->CTX_SUFF(pTimer);
-                int rc = TMTimerLock(pTimer, rcBusy);
+                int rc = TMTimerLock(pVM, pHvStimer->hTimer, rcBusy);
                 if (rc == VINF_SUCCESS)
                 {
                     pHvStimer->uStimerCountMsr = uRawValue;
                     gimHvStartStimer(pVCpu, pHvStimer);
-                    TMTimerUnlock(pTimer);
+                    TMTimerUnlock(pVM, pHvStimer->hTimer);
                     Log(("GIM%u: HyperV: Set STIMER_COUNT%u=%RU64 %RU64 msec, auto-started timer\n", pVCpu->idCpu, idxStimer,
                          uRawValue, (uRawValue * 100) / RT_NS_1MS_64));
                 }
@@ -1322,53 +1379,51 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSR
 /**
  * Whether we need to trap \#UD exceptions in the guest.
  *
- * We only need to trap \#UD exceptions for raw-mode guests when hypercalls are
- * enabled. For HM VMs, the hypercall would be handled via the
+ * We only needed to trap \#UD exceptions for the old raw-mode guests when
+ * hypercalls are enabled. For HM VMs, the hypercall would be handled via the
  * VMCALL/VMMCALL VM-exit.
  *
  * @param   pVCpu       The cross context virtual CPU structure.
  */
 VMM_INT_DECL(bool) gimHvShouldTrapXcptUD(PVMCPU pVCpu)
 {
-    PVM pVM = pVCpu->CTX_SUFF(pVM);
-    if (   !HMIsEnabled(pVM)
-        && gimHvAreHypercallsEnabled(pVCpu))
-        return true;
+    RT_NOREF(pVCpu);
     return false;
 }
 
 
 /**
- * Checks the currently disassembled instruction and executes the hypercall if
- * it's a hypercall instruction.
+ * Checks the instruction and executes the hypercall if it's a valid hypercall
+ * instruction.
+ *
+ * This interface is used by \#UD handlers and IEM.
  *
  * @returns Strict VBox status code.
  * @param   pVCpu       The cross context virtual CPU structure.
  * @param   pCtx        Pointer to the guest-CPU context.
- * @param   pDis        Pointer to the disassembled instruction state at RIP.
+ * @param   uDisOpcode  The disassembler opcode.
+ * @param   cbInstr     The instruction length.
  *
  * @thread  EMT(pVCpu).
- *
- * @todo    Make this function static when @bugref{7270#c168} is addressed.
  */
-VMM_INT_DECL(VBOXSTRICTRC) gimHvExecHypercallInstr(PVMCPU pVCpu, PCPUMCTX pCtx, PDISCPUSTATE pDis)
+VMM_INT_DECL(VBOXSTRICTRC) gimHvHypercallEx(PVMCPUCC pVCpu, PCPUMCTX pCtx, unsigned uDisOpcode, uint8_t cbInstr)
 {
     Assert(pVCpu);
     Assert(pCtx);
-    Assert(pDis);
     VMCPU_ASSERT_EMT(pVCpu);
 
     PVM pVM = pVCpu->CTX_SUFF(pVM);
-    CPUMCPUVENDOR const enmGuestCpuVendor = CPUMGetGuestCpuVendor(pVM);
-    if (   (   pDis->pCurInstr->uOpcode == OP_VMCALL
+    CPUMCPUVENDOR const enmGuestCpuVendor = (CPUMCPUVENDOR)pVM->cpum.ro.GuestFeatures.enmCpuVendor;
+    if (   (   uDisOpcode == OP_VMCALL
             && (   enmGuestCpuVendor == CPUMCPUVENDOR_INTEL
-                || enmGuestCpuVendor == CPUMCPUVENDOR_VIA))
-        || (   pDis->pCurInstr->uOpcode == OP_VMMCALL
-            && enmGuestCpuVendor == CPUMCPUVENDOR_AMD))
-    {
+                || enmGuestCpuVendor == CPUMCPUVENDOR_VIA
+                || enmGuestCpuVendor == CPUMCPUVENDOR_SHANGHAI))
+        || (   uDisOpcode == OP_VMMCALL
+            && (   enmGuestCpuVendor == CPUMCPUVENDOR_AMD
+                || enmGuestCpuVendor == CPUMCPUVENDOR_HYGON)) )
         return gimHvHypercall(pVCpu, pCtx);
-    }
 
+    RT_NOREF_PV(cbInstr);
     return VERR_GIM_INVALID_HYPERCALL_INSTR;
 }
 
@@ -1395,7 +1450,7 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvExecHypercallInstr(PVMCPU pVCpu, PCPUMCTX pCtx, 
  *
  * @thread  EMT(pVCpu).
  */
-VMM_INT_DECL(VBOXSTRICTRC) gimHvXcptUD(PVMCPU pVCpu, PCPUMCTX pCtx, PDISCPUSTATE pDis, uint8_t *pcbInstr)
+VMM_INT_DECL(VBOXSTRICTRC) gimHvXcptUD(PVMCPUCC pVCpu, PCPUMCTX pCtx, PDISCPUSTATE pDis, uint8_t *pcbInstr)
 {
     VMCPU_ASSERT_EMT(pVCpu);
 
@@ -1418,13 +1473,13 @@ VMM_INT_DECL(VBOXSTRICTRC) gimHvXcptUD(PVMCPU pVCpu, PCPUMCTX pCtx, PDISCPUSTATE
         {
             if (pcbInstr)
                 *pcbInstr = (uint8_t)cbInstr;
-            return gimHvExecHypercallInstr(pVCpu, pCtx, &Dis);
+            return gimHvHypercallEx(pVCpu, pCtx, Dis.pCurInstr->uOpcode, Dis.cbInstr);
         }
 
         Log(("GIM: HyperV: Failed to disassemble instruction at CS:RIP=%04x:%08RX64. rc=%Rrc\n", pCtx->cs.Sel, pCtx->rip, rc));
         return rc;
     }
 
-    return gimHvExecHypercallInstr(pVCpu, pCtx, pDis);
+    return gimHvHypercallEx(pVCpu, pCtx, pDis->pCurInstr->uOpcode, pDis->cbInstr);
 }
 

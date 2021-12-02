@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QITreeView.cpp 88447 2021-04-09 18:11:58Z vboxsync $ */
 /** @file
- * VBox Qt GUI - VirtualBox Qt extensions: QITreeView class implementation.
+ * VBox Qt GUI - Qt extensions: QITreeView class implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,23 +15,20 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QAccessibleWidget>
-# include <QMouseEvent>
-# include <QPainter>
-# include <QSortFilterProxyModel>
+#include <QAccessibleWidget>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QSortFilterProxyModel>
 
 /* GUI includes: */
-# include "QITreeView.h"
+#include "QITreeView.h"
 
 /* Other VBox includes: */
-# include "iprt/assert.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "iprt/assert.h"
 
 
 /** QAccessibleObject extension used as an accessibility interface for QITreeViewItem. */
@@ -160,7 +157,7 @@ QAccessibleInterface *QIAccessibilityInterfaceForQITreeViewItem::child(int iInde
     /* Acquire item model-index: */
     const QModelIndex itemIndex = item()->modelIndex();
     /* Acquire child model-index: */
-    const QModelIndex childIndex = itemIndex.child(iIndex, 0);
+    const QModelIndex childIndex = item()->parentTree()->model()->index(iIndex, 0, itemIndex);
 
     /* Check whether we have proxy model set or source one otherwise: */
     const QSortFilterProxyModel *pProxyModel = qobject_cast<const QSortFilterProxyModel*>(item()->parentTree()->model());
@@ -251,6 +248,7 @@ QAccessibleInterface *QIAccessibilityInterfaceForQITreeView::child(int iIndex) c
 {
     /* Sanity check: */
     AssertPtrReturn(tree(), 0);
+    AssertPtrReturn(tree()->model(), 0);
     AssertReturn(iIndex >= 0, 0);
     if (iIndex >= childCount())
     {
@@ -264,9 +262,6 @@ QAccessibleInterface *QIAccessibilityInterfaceForQITreeView::child(int iIndex) c
         // visible children like they are a part of the list, not tree.
         // printf("Invalid index: %d\n", iIndex);
 
-        // Sanity check:
-        AssertPtrReturn(tree()->model(), 0);
-
         // Take into account we also have header with 'column count' indexes,
         // so we should start enumerating tree indexes since 'column count'.
         const int iColumnCount = tree()->model()->columnCount();
@@ -275,8 +270,8 @@ QAccessibleInterface *QIAccessibilityInterfaceForQITreeView::child(int iIndex) c
         // Set iterator to root model-index initially:
         QModelIndex index = tree()->rootIndex();
         // But if it has child, go deeper:
-        if (index.child(0, 0).isValid())
-            index = index.child(0, 0);
+        if (tree()->model()->index(0, 0, index).isValid())
+            index = tree()->model()->index(0, 0, index);
 
         // Search for sibling with corresponding index:
         while (index.isValid() && iCurrentIndex < iIndex)
@@ -302,7 +297,7 @@ QAccessibleInterface *QIAccessibilityInterfaceForQITreeView::child(int iIndex) c
     /* Acquire root model-index: */
     const QModelIndex rootIndex = tree()->rootIndex();
     /* Acquire child model-index: */
-    const QModelIndex childIndex = rootIndex.child(iIndex, 0);
+    const QModelIndex childIndex = tree()->model()->index(iIndex, 0, rootIndex);
 
     /* Check whether we have proxy model set or source one otherwise: */
     const QSortFilterProxyModel *pProxyModel = qobject_cast<const QSortFilterProxyModel*>(tree()->model());
@@ -370,7 +365,7 @@ QModelIndex QITreeViewItem::modelIndex() const
     for (int i = 0; i < pModel->rowCount(parentIndex); ++i)
     {
         /* Acquire child model-index: */
-        const QModelIndex childIndex = parentIndex.child(i, 0);
+        const QModelIndex childIndex = pModel->index(i, 0, parentIndex);
         /* Acquire source child model-index, which can be the same as child model-index: */
         const QModelIndex sourceChildModelIndex = pProxyModel ? pProxyModel->mapToSource(childIndex) : childIndex;
 
@@ -387,7 +382,7 @@ QModelIndex QITreeViewItem::modelIndex() const
         return QModelIndex();
 
     /* Return model-index as child of parent model-index: */
-    return parentIndex.child(iPositionInParent, 0);
+    return pModel->index(iPositionInParent, 0, parentIndex);
 }
 
 
@@ -440,6 +435,17 @@ void QITreeView::mousePressEvent(QMouseEvent *pEvent)
         QTreeView::mousePressEvent(pEvent);
 }
 
+void QITreeView::mouseReleaseEvent(QMouseEvent *pEvent)
+{
+    /* Reject event initially: */
+    pEvent->setAccepted(false);
+    /* Notify listeners about event allowing them to handle it: */
+    emit mouseReleased(pEvent);
+    /* Call to base-class only if event was not yet accepted: */
+    if (!pEvent->isAccepted())
+        QTreeView::mouseReleaseEvent(pEvent);
+}
+
 void QITreeView::mouseDoubleClickEvent(QMouseEvent *pEvent)
 {
     /* Reject event initially: */
@@ -449,6 +455,50 @@ void QITreeView::mouseDoubleClickEvent(QMouseEvent *pEvent)
     /* Call to base-class only if event was not yet accepted: */
     if (!pEvent->isAccepted())
         QTreeView::mouseDoubleClickEvent(pEvent);
+}
+
+void QITreeView::dragEnterEvent(QDragEnterEvent *pEvent)
+{
+    /* Reject event initially: */
+    pEvent->setAccepted(false);
+    /* Notify listeners about event allowing them to handle it: */
+    emit dragEntered(pEvent);
+    /* Call to base-class only if event was not yet accepted: */
+    if (!pEvent->isAccepted())
+        QTreeView::dragEnterEvent(pEvent);
+}
+
+void QITreeView::dragMoveEvent(QDragMoveEvent *pEvent)
+{
+    /* Reject event initially: */
+    pEvent->setAccepted(false);
+    /* Notify listeners about event allowing them to handle it: */
+    emit dragMoved(pEvent);
+    /* Call to base-class only if event was not yet accepted: */
+    if (!pEvent->isAccepted())
+        QTreeView::dragMoveEvent(pEvent);
+}
+
+void QITreeView::dragLeaveEvent(QDragLeaveEvent *pEvent)
+{
+    /* Reject event initially: */
+    pEvent->setAccepted(false);
+    /* Notify listeners about event allowing them to handle it: */
+    emit dragLeft(pEvent);
+    /* Call to base-class only if event was not yet accepted: */
+    if (!pEvent->isAccepted())
+        QTreeView::dragLeaveEvent(pEvent);
+}
+
+void QITreeView::dropEvent(QDropEvent *pEvent)
+{
+    /* Reject event initially: */
+    pEvent->setAccepted(false);
+    /* Notify listeners about event allowing them to handle it: */
+    emit dragDropped(pEvent);
+    /* Call to base-class only if event was not yet accepted: */
+    if (!pEvent->isAccepted())
+        QTreeView::dropEvent(pEvent);
 }
 
 void QITreeView::prepare()
@@ -463,4 +513,3 @@ void QITreeView::prepare()
     /* Mark root hidden: */
     setRootIsDecorated(false);
 }
-

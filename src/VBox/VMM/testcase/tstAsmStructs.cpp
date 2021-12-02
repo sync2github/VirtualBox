@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstAsmStructs.cpp 87500 2021-02-01 14:16:43Z vboxsync $ */
 /** @file
  * Testcase for checking offsets in the assembly structures shared with C/C++.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -21,17 +21,23 @@
 *********************************************************************************************************************************/
 #include <VBox/vmm/cpum.h>
 #include "CPUMInternal.h"
-#include <VBox/vmm/trpm.h>
-#include "TRPMInternal.h"
+#define IPRT_WITHOUT_NAMED_UNIONS_AND_STRUCTS 1 /* For HMInternal */
 #include "HMInternal.h"
-#include "VMMSwitcher.h"
+#undef  IPRT_WITHOUT_NAMED_UNIONS_AND_STRUCTS /* probably not necessary */
 #include "VMMInternal.h"
 #include <VBox/vmm/vm.h>
+#define GVM_C_STYLE_STRUCTURES
+#include <VBox/vmm/gvm.h>
 #include <VBox/vmm/hm_vmx.h>
 
 #include "tstHelp.h"
 #include <stdio.h>
 
+/* Hack for validating nested HMCPU structures. */
+typedef HMCPU::HMCPUVMX HMCPUVMX;
+typedef HMCPU::HMCPUSVM HMCPUSVM;
+typedef HMR0PERVCPU::HMR0CPUVMX HMR0CPUVMX;
+typedef HMR0PERVCPU::HMR0CPUSVM HMR0CPUSVM;
 
 /* For sup.mac simplifications. */
 #define SUPDRVTRACERUSRCTX32    SUPDRVTRACERUSRCTX

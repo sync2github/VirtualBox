@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIDialog.cpp 91109 2021-09-03 15:31:49Z vboxsync $ */
 /** @file
- * VBox Qt GUI - VirtualBox Qt extensions: QIDialog class implementation.
+ * VBox Qt GUI - Qt extensions: QIDialog class implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,19 +15,17 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
+/* Qt includes: */
+#include <QEventLoop>
 
 /* GUI includes: */
-# include "QIDialog.h"
-# include "VBoxGlobal.h"
+#include "QIDialog.h"
+#include "UICommon.h"
+#include "UIDesktopWidgetWatchdog.h"
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
 
-
-QIDialog::QIDialog(QWidget *pParent /* = 0 */, Qt::WindowFlags flags /* = 0 */)
-    : QDialog(pParent, flags)
+QIDialog::QIDialog(QWidget *pParent /* = 0 */, Qt::WindowFlags enmFlags /* = Qt::WindowFlags() */)
+    : QDialog(pParent, enmFlags)
     , m_fPolished(false)
 {
     /* Do not count that window as important for application,
@@ -126,6 +124,5 @@ void QIDialog::polishEvent(QShowEvent *)
 #endif /* VBOX_WS_MAC */
 
     /* Explicit centering according to our parent: */
-    VBoxGlobal::centerWidget(this, parentWidget(), false);
+    UIDesktopWidgetWatchdog::centerWidget(this, parentWidget(), false);
 }
-

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_ExtPack_ExtPack_h
-#define ___VBox_ExtPack_ExtPack_h
+#ifndef VBOX_INCLUDED_ExtPack_ExtPack_h
+#define VBOX_INCLUDED_ExtPack_ExtPack_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 
@@ -38,16 +41,21 @@
 # define VBOXEXTPACK_IF_CS(I)   struct I
 #endif
 
+VBOXEXTPACK_IF_CS(IUnknown);
 VBOXEXTPACK_IF_CS(IConsole);
 VBOXEXTPACK_IF_CS(IMachine);
 VBOXEXTPACK_IF_CS(IVirtualBox);
+VBOXEXTPACK_IF_CS(IProgress);
+VBOXEXTPACK_IF_CS(IEvent);
+VBOXEXTPACK_IF_CS(IVetoEvent);
+VBOXEXTPACK_IF_CS(IEventSource);
 
 /**
  * Module kind for use with VBOXEXTPACKHLP::pfnFindModule.
  */
 typedef enum VBOXEXTPACKMODKIND
 {
-    /** Zero is invalid as alwasy. */
+    /** Zero is invalid as always. */
     VBOXEXTPACKMODKIND_INVALID = 0,
     /** Raw-mode context module. */
     VBOXEXTPACKMODKIND_RC,
@@ -66,15 +74,14 @@ typedef enum VBOXEXTPACKMODKIND
  */
 typedef enum VBOXEXTPACKCTX
 {
-    /** Zero is invalid as alwasy. */
+    /** Zero is invalid as always. */
     VBOXEXTPACKCTX_INVALID = 0,
     /** The per-user daemon process (VBoxSVC). */
     VBOXEXTPACKCTX_PER_USER_DAEMON,
-    /** A VM process.
-     * @remarks This will also include the client processes in v4.0.  */
+    /** A VM process. */
     VBOXEXTPACKCTX_VM_PROCESS,
-    /** A API client process.
-     * @remarks This will not be returned by VirtualBox 4.0. */
+    /** An API client process.
+     * @remarks This will not be returned by VirtualBox yet. */
     VBOXEXTPACKCTX_CLIENT_PROCESS,
     /** End of the valid values (exclusive). */
     VBOXEXTPACKCTX_END,
@@ -190,162 +197,156 @@ typedef struct VBOXEXTPACKHLP
     DECLR3CALLBACKMEMBER(int, pfnUnloadVDPlugin,(PCVBOXEXTPACKHLP pHlp, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox,
                                                  const char *pszPluginLibrary));
 
-    DECLR3CALLBACKMEMBER(int, pfnReserved1,(PCVBOXEXTPACKHLP pHlp)); /**< Reserved for minor structure revisions. */
-    DECLR3CALLBACKMEMBER(int, pfnReserved2,(PCVBOXEXTPACKHLP pHlp)); /**< Reserved for minor structure revisions. */
-    DECLR3CALLBACKMEMBER(int, pfnReserved3,(PCVBOXEXTPACKHLP pHlp)); /**< Reserved for minor structure revisions. */
-    DECLR3CALLBACKMEMBER(int, pfnReserved4,(PCVBOXEXTPACKHLP pHlp)); /**< Reserved for minor structure revisions. */
-    DECLR3CALLBACKMEMBER(int, pfnReserved5,(PCVBOXEXTPACKHLP pHlp)); /**< Reserved for minor structure revisions. */
-    DECLR3CALLBACKMEMBER(int, pfnReserved6,(PCVBOXEXTPACKHLP pHlp)); /**< Reserved for minor structure revisions. */
-
-    /** End of structure marker (VBOXEXTPACKHLP_VERSION). */
-    uint32_t                    u32EndMarker;
-} VBOXEXTPACKHLP;
-/** Current version of the VBOXEXTPACKHLP structure.  */
-#define VBOXEXTPACKHLP_VERSION          RT_MAKE_U32(2, 1)
-
-
-/** Pointer to the extension pack callback table. */
-typedef struct VBOXEXTPACKREG const *PCVBOXEXTPACKREG;
-/**
- * Callback table returned by VBoxExtPackRegister.
- *
- * This must be valid until the extension pack main module is unloaded.
- */
-typedef struct VBOXEXTPACKREG
-{
-    /** Interface version.
-     * This is set to VBOXEXTPACKREG_VERSION. */
-    uint32_t                    u32Version;
-    /** The VirtualBox version this extension pack was built against.  */
-    uint32_t                    uVBoxVersion;
+    /**
+     * Creates an IProgress object instance for a long running extension
+     * pack provided API operation which is executed asynchronously.
+     *
+     * This implicitly creates a cancellable progress object, since anything
+     * else is user unfriendly. You need to design your code to handle
+     * cancellation with reasonable response time.
+     *
+     * @returns COM status code.
+     * @param   pHlp            Pointer to this helper structure.
+     * @param   pInitiator      Pointer to the initiating object.
+     * @param   pcszDescription Description of the overall task.
+     * @param   cOperations     Number of operations for this task.
+     * @param   uTotalOperationsWeight        Overall weight for the entire task.
+     * @param   pcszFirstOperationDescription Description of the first operation.
+     * @param   uFirstOperationWeight         Weight for the first operation.
+     * @param   ppProgressOut   Output parameter for the IProgress object reference.
+     */
+    DECLR3CALLBACKMEMBER(uint32_t, pfnCreateProgress,(PCVBOXEXTPACKHLP pHlp, VBOXEXTPACK_IF_CS(IUnknown) *pInitiator,
+                                                      const char *pcszDescription, uint32_t cOperations,
+                                                      uint32_t uTotalOperationsWeight, const char *pcszFirstOperationDescription,
+                                                      uint32_t uFirstOperationWeight, VBOXEXTPACK_IF_CS(IProgress) **ppProgressOut));
 
     /**
-     * Hook for doing setups after the extension pack was installed.
+     * Checks if the Progress object is marked as canceled.
      *
-     * This is called in the context of the per-user service (VBoxSVC).
-     *
-     * @returns VBox status code.
-     * @retval  VERR_EXTPACK_UNSUPPORTED_HOST_UNINSTALL if the extension pack
-     *          requires some different host version or a prerequisite is
-     *          missing from the host.  Automatic uninstall will be attempted.
-     *          Must set error info.
-     *
-     * @param   pThis       Pointer to this structure.
-     * @param   pVirtualBox The VirtualBox interface.
-     * @param   pErrInfo    Where to return extended error information.
+     * @returns COM status code.
+     * @param   pHlp            Pointer to this helper structure.
+     * @param   pProgress       Pointer to the IProgress object reference returned
+     *                          by pfnCreateProgress.
+     * @param   pfCanceled      @c true if canceled, @c false otherwise.
      */
-    DECLCALLBACKMEMBER(int, pfnInstalled)(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox,
-                                          PRTERRINFO pErrInfo);
+    DECLR3CALLBACKMEMBER(uint32_t, pfnGetCanceledProgress,(PCVBOXEXTPACKHLP pHlp, VBOXEXTPACK_IF_CS(IProgress) *pProgress,
+                                                           bool *pfCanceled));
 
     /**
-     * Hook for cleaning up before the extension pack is uninstalled.
+     * Updates the percentage value of the current operation of the
+     * Progress object.
      *
-     * This is called in the context of the per-user service (VBoxSVC).
-     *
-     * @returns VBox status code.
-     * @param   pThis       Pointer to this structure.
-     * @param   pVirtualBox The VirtualBox interface.
-     *
-     * @todo    This is currently called holding locks making pVirtualBox
-     *          relatively unusable.
+     * @returns COM status code.
+     * @param   pHlp            Pointer to this helper structure.
+     * @param   pProgress       Pointer to the IProgress object reference returned
+     *                          by pfnCreateProgress.
+     * @param   uPercent        Result of the overall task.
      */
-    DECLCALLBACKMEMBER(int, pfnUninstall)(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox);
+    DECLR3CALLBACKMEMBER(uint32_t, pfnUpdateProgress,(PCVBOXEXTPACKHLP pHlp, VBOXEXTPACK_IF_CS(IProgress) *pProgress,
+                                                      uint32_t uPercent));
 
     /**
-     * Hook for doing work after the VirtualBox object is ready.
+     * Signals that the current operation is successfully completed and
+     * advances to the next operation. The operation percentage is reset
+     * to 0.
      *
-     * This is called in the context of the per-user service (VBoxSVC).  The
-     * pfnConsoleReady method is the equivalent for the VM/client process.
+     * If the operation count is exceeded this returns an error.
      *
-     * @param   pThis       Pointer to this structure.
-     * @param   pVirtualBox The VirtualBox interface.
+     * @returns COM status code.
+     * @param   pHlp            Pointer to this helper structure.
+     * @param   pProgress       Pointer to the IProgress object reference returned
+     *                          by pfnCreateProgress.
+     * @param   pcszNextOperationDescription Description of the next operation.
+     * @param   uNextOperationWeight         Weight for the next operation.
      */
-    DECLCALLBACKMEMBER(void, pfnVirtualBoxReady)(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox);
+    DECLR3CALLBACKMEMBER(uint32_t, pfnNextOperationProgress,(PCVBOXEXTPACKHLP pHlp, VBOXEXTPACK_IF_CS(IProgress) *pProgress,
+                                                             const char *pcszNextOperationDescription,
+                                                             uint32_t uNextOperationWeight));
 
     /**
-     * Hook for doing work after the Console object is ready.
+     * Waits until the other task is completed (including all sub-operations)
+     * and forward all changes from the other progress to this progress. This
+     * means sub-operation number, description, percent and so on.
      *
-     * This is called in the context of the VM/client process.  The
-     * pfnVirtualBoxReady method is the equivalent for the per-user service
-     * (VBoxSVC).
+     * The caller is responsible for having at least the same count of
+     * sub-operations in this progress object as there are in the other
+     * progress object.
      *
-     * @param   pThis       Pointer to this structure.
-     * @param   pConsole    The Console interface.
+     * If the other progress object supports cancel and this object gets any
+     * cancel request (when here enabled as well), it will be forwarded to
+     * the other progress object.
+     *
+     * Error information is automatically preserved (by transferring it to
+     * the current thread's error information). If the caller wants to set it
+     * as the completion state of this progress it needs to be done separately.
+     *
+     * @returns COM status code.
+     * @param   pHlp            Pointer to this helper structure.
+     * @param   pProgress       Pointer to the IProgress object reference returned
+     *                          by pfnCreateProgress.
+     * @param   pProgressOther  Pointer to an IProgress object reference, the one
+     *                          to be waited for.
+     * @param   cTimeoutMS      Timeout in milliseconds, 0 for indefinite wait.
      */
-    DECLCALLBACKMEMBER(void, pfnConsoleReady)(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IConsole) *pConsole);
+    DECLR3CALLBACKMEMBER(uint32_t, pfnWaitOtherProgress,(PCVBOXEXTPACKHLP pHlp, VBOXEXTPACK_IF_CS(IProgress) *pProgress,
+                                                         VBOXEXTPACK_IF_CS(IProgress) *pProgressOther,
+                                                         uint32_t cTimeoutMS));
 
     /**
-     * Hook for doing work before unloading.
+     * Marks the whole task as complete and sets the result code.
      *
-     * This is called both in the context of the per-user service (VBoxSVC) and
-     * in context of the VM process (VBoxC).
+     * If the result code indicates a failure then this method will store
+     * the currently set COM error info from the current thread in the
+     * the errorInfo attribute of this Progress object instance. If there
+     * is no error information available then an error is returned.
      *
-     * @param   pThis       Pointer to this structure.
+     * If the result code indicates success then the task is terminated,
+     * without paying attention to the current operation being the last.
      *
-     * @remarks The helpers are not available at this point in time.
-     * @remarks This is not called on uninstall, then pfnUninstall will be the
-     *          last callback.
+     * Note that this must be called only once for the given Progress
+     * object. Subsequent calls will return errors.
+     *
+     * @returns COM status code.
+     * @param   pHlp            Pointer to this helper structure.
+     * @param   pProgress       Pointer to the IProgress object reference returned
+     *                          by pfnCreateProgress.
+     * @param   uResultCode     Result of the overall task.
      */
-    DECLCALLBACKMEMBER(void, pfnUnload)(PCVBOXEXTPACKREG pThis);
+    DECLR3CALLBACKMEMBER(uint32_t, pfnCompleteProgress,(PCVBOXEXTPACKHLP pHlp, VBOXEXTPACK_IF_CS(IProgress) *pProgress,
+                                                        uint32_t uResultCode));
+
+
+    DECLR3CALLBACKMEMBER(uint32_t, pfnCreateEvent,(PCVBOXEXTPACKHLP pHlp,
+                                                   VBOXEXTPACK_IF_CS(IEventSource) *aSource,
+                                                   /* VBoxEventType_T */ uint32_t aType, bool aWaitable,
+                                                   VBOXEXTPACK_IF_CS(IEvent) **ppEventOut));
+
+    DECLR3CALLBACKMEMBER(uint32_t, pfnCreateVetoEvent,(PCVBOXEXTPACKHLP pHlp,
+                                                       VBOXEXTPACK_IF_CS(IEventSource) *aSource,
+                                                       /* VBoxEventType_T */ uint32_t aType,
+                                                       VBOXEXTPACK_IF_CS(IVetoEvent) **ppEventOut));
 
     /**
-     * Hook for changing the default VM configuration upon creation.
+     * Translate the string using registered translation files.
      *
-     * This is called in the context of the per-user service (VBoxSVC).
+     * Translation files are excluded from translation engine. Although
+     * the already loaded translation remains in the translation cache the new
+     * translation will not be loaded after returning from the function if the
+     * user changes the language.
      *
-     * @returns VBox status code.
-     * @param   pThis       Pointer to this structure.
-     * @param   pVirtualBox The VirtualBox interface.
-     * @param   pMachine    The machine interface.
+     * @returns Translated string on success the pszSourceText otherwise.
+     * @param   pHlp                      Pointer to this helper structure.
+     * @param   aComponent                Translation context e.g. class name
+     * @param   pszSourceText             String to translate
+     * @param   pszComment                Comment to the string to resolve possible ambiguities
+     *                                    (NULL means no comment).
+     * @param   aNum                      Number used to define plural form of the translation
      */
-    DECLCALLBACKMEMBER(int, pfnVMCreated)(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox,
-                                          VBOXEXTPACK_IF_CS(IMachine) *pMachine);
-
-    /**
-     * Hook for configuring the VMM for a VM.
-     *
-     * This is called in the context of the VM process (VBoxC).
-     *
-     * @returns VBox status code.
-     * @param   pThis       Pointer to this structure.
-     * @param   pConsole    The console interface.
-     * @param   pVM         The cross context VM structure.
-     */
-    DECLCALLBACKMEMBER(int, pfnVMConfigureVMM)(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IConsole) *pConsole, PVM pVM);
-
-    /**
-     * Hook for doing work right before powering on the VM.
-     *
-     * This is called in the context of the VM process (VBoxC).
-     *
-     * @returns VBox status code.
-     * @param   pThis       Pointer to this structure.
-     * @param   pConsole    The console interface.
-     * @param   pVM         The cross context VM structure.
-     */
-    DECLCALLBACKMEMBER(int, pfnVMPowerOn)(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IConsole) *pConsole, PVM pVM);
-
-    /**
-     * Hook for doing work after powering on the VM.
-     *
-     * This is called in the context of the VM process (VBoxC).
-     *
-     * @param   pThis       Pointer to this structure.
-     * @param   pConsole    The console interface.
-     * @param   pVM         The cross context VM structure. Can be NULL.
-     */
-    DECLCALLBACKMEMBER(void, pfnVMPowerOff)(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IConsole) *pConsole, PVM pVM);
-
-    /**
-     * Query the IUnknown interface to an object in the main module.
-     *
-     * This is can be called in any context.
-     *
-     * @returns IUnknown pointer (referenced) on success, NULL on failure.
-     * @param   pThis       Pointer to this structure.
-     * @param   pObjectId   Pointer to the object ID (UUID).
-     */
-    DECLCALLBACKMEMBER(void *, pfnQueryObject)(PCVBOXEXTPACKREG pThis, PCRTUUID pObjectId);
+    DECLR3CALLBACKMEMBER(const char *, pfnTranslate,(PCVBOXEXTPACKHLP pHlp,
+                                                     const char  *pszComponent,
+                                                     const char  *pszSourceText,
+                                                     const char  *pszComment,
+                                                     const size_t aNum));
 
     DECLR3CALLBACKMEMBER(int, pfnReserved1,(PCVBOXEXTPACKHLP pHlp)); /**< Reserved for minor structure revisions. */
     DECLR3CALLBACKMEMBER(int, pfnReserved2,(PCVBOXEXTPACKHLP pHlp)); /**< Reserved for minor structure revisions. */
@@ -357,18 +358,122 @@ typedef struct VBOXEXTPACKREG
     /** Reserved for minor structure revisions. */
     uint32_t                    uReserved7;
 
+    /** End of structure marker (VBOXEXTPACKHLP_VERSION). */
+    uint32_t                    u32EndMarker;
+} VBOXEXTPACKHLP;
+/** Current version of the VBOXEXTPACKHLP structure.  */
+#define VBOXEXTPACKHLP_VERSION          RT_MAKE_U32(0, 5)
+
+
+/** Pointer to the extension pack callback table. */
+typedef struct VBOXEXTPACKREG const *PCVBOXEXTPACKREG;
+/**
+ * Callback table returned by VBoxExtPackRegister.
+ *
+ * All the callbacks are called the context of the per-user service (VBoxSVC).
+ *
+ * This must be valid until the extension pack main module is unloaded.
+ */
+typedef struct VBOXEXTPACKREG
+{
+    /** Interface version.
+     * This is set to VBOXEXTPACKREG_VERSION. */
+    uint32_t                    u32Version;
+    /** The VirtualBox version this extension pack was built against.  */
+    uint32_t                    uVBoxVersion;
+    /** Translation files base name. Set to NULL if no translation files. */
+    const char                 *pszNlsBaseName;
+
+    /**
+     * Hook for doing setups after the extension pack was installed.
+     *
+     * @returns VBox status code.
+     * @retval  VERR_EXTPACK_UNSUPPORTED_HOST_UNINSTALL if the extension pack
+     *          requires some different host version or a prerequisite is
+     *          missing from the host.  Automatic uninstall will be attempted.
+     *          Must set error info.
+     *
+     * @param   pThis       Pointer to this structure.
+     * @param   pVirtualBox The VirtualBox interface.
+     * @param   pErrInfo    Where to return extended error information.
+     */
+    DECLCALLBACKMEMBER(int, pfnInstalled,(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox,
+                                          PRTERRINFO pErrInfo));
+
+    /**
+     * Hook for cleaning up before the extension pack is uninstalled.
+     *
+     * @returns VBox status code.
+     * @param   pThis       Pointer to this structure.
+     * @param   pVirtualBox The VirtualBox interface.
+     *
+     * @todo    This is currently called holding locks making pVirtualBox
+     *          relatively unusable.
+     */
+    DECLCALLBACKMEMBER(int, pfnUninstall,(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox));
+
+    /**
+     * Hook for doing work after the VirtualBox object is ready.
+     *
+     * @param   pThis       Pointer to this structure.
+     * @param   pVirtualBox The VirtualBox interface.
+     */
+    DECLCALLBACKMEMBER(void, pfnVirtualBoxReady,(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox));
+
+    /**
+     * Hook for doing work before unloading.
+     *
+     * @param   pThis       Pointer to this structure.
+     *
+     * @remarks The helpers are not available at this point in time.
+     * @remarks This is not called on uninstall, then pfnUninstall will be the
+     *          last callback.
+     */
+    DECLCALLBACKMEMBER(void, pfnUnload,(PCVBOXEXTPACKREG pThis));
+
+    /**
+     * Hook for changing the default VM configuration upon creation.
+     *
+     * @returns VBox status code.
+     * @param   pThis       Pointer to this structure.
+     * @param   pVirtualBox The VirtualBox interface.
+     * @param   pMachine    The machine interface.
+     */
+    DECLCALLBACKMEMBER(int, pfnVMCreated,(PCVBOXEXTPACKREG pThis, VBOXEXTPACK_IF_CS(IVirtualBox) *pVirtualBox,
+                                          VBOXEXTPACK_IF_CS(IMachine) *pMachine));
+
+    /**
+     * Query the IUnknown interface to an object in the main module.
+     *
+     * @returns IUnknown pointer (referenced) on success, NULL on failure.
+     * @param   pThis       Pointer to this structure.
+     * @param   pObjectId   Pointer to the object ID (UUID).
+     */
+    DECLCALLBACKMEMBER(void *, pfnQueryObject,(PCVBOXEXTPACKREG pThis, PCRTUUID pObjectId));
+
+    DECLR3CALLBACKMEMBER(int, pfnReserved1,(PCVBOXEXTPACKREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved2,(PCVBOXEXTPACKREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved3,(PCVBOXEXTPACKREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved4,(PCVBOXEXTPACKREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved5,(PCVBOXEXTPACKREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved6,(PCVBOXEXTPACKREG pThis)); /**< Reserved for minor structure revisions. */
+
+    /** Reserved for minor structure revisions. */
+    uint32_t                    uReserved7;
+
     /** End of structure marker (VBOXEXTPACKREG_VERSION). */
     uint32_t                    u32EndMarker;
 } VBOXEXTPACKREG;
 /** Current version of the VBOXEXTPACKREG structure.  */
-#define VBOXEXTPACKREG_VERSION        RT_MAKE_U32(1, 1)
+#define VBOXEXTPACKREG_VERSION        RT_MAKE_U32(0, 3)
 
 
 /**
  * The VBoxExtPackRegister callback function.
  *
- * PDM will invoke this function after loading a driver module and letting
- * the module decide which drivers to register and how to handle conflicts.
+ * The Main API (as in VBoxSVC) will invoke this function after loading an
+ * extension pack Main module. Its job is to do version compatibility checking
+ * and returning the extension pack registration structure.
  *
  * @returns VBox status code.
  * @param   pHlp            Pointer to the extension pack helper function
@@ -379,12 +484,127 @@ typedef struct VBOXEXTPACKREG
  *                          (i.e. use some static const data for it).
  * @param   pErrInfo        Where to return extended error information.
  */
-typedef DECLCALLBACK(int) FNVBOXEXTPACKREGISTER(PCVBOXEXTPACKHLP pHlp, PCVBOXEXTPACKREG *ppReg, PRTERRINFO pErrInfo);
+typedef DECLCALLBACKTYPE(int, FNVBOXEXTPACKREGISTER,(PCVBOXEXTPACKHLP pHlp, PCVBOXEXTPACKREG *ppReg, PRTERRINFO pErrInfo));
 /** Pointer to a FNVBOXEXTPACKREGISTER. */
 typedef FNVBOXEXTPACKREGISTER *PFNVBOXEXTPACKREGISTER;
 
 /** The name of the main module entry point. */
 #define VBOX_EXTPACK_MAIN_MOD_ENTRY_POINT   "VBoxExtPackRegister"
+
+
+/** Pointer to the extension pack VM callback table. */
+typedef struct VBOXEXTPACKVMREG const *PCVBOXEXTPACKVMREG;
+/**
+ * Callback table returned by VBoxExtPackVMRegister.
+ *
+ * All the callbacks are called the context of a VM process.
+ *
+ * This must be valid until the extension pack main VM module is unloaded.
+ */
+typedef struct VBOXEXTPACKVMREG
+{
+    /** Interface version.
+     * This is set to VBOXEXTPACKVMREG_VERSION. */
+    uint32_t                    u32Version;
+    /** The VirtualBox version this extension pack was built against.  */
+    uint32_t                    uVBoxVersion;
+    /** Translation files base name.  Set to NULL if no translation files.  */
+    const char                 *pszNlsBaseName;
+
+    /**
+     * Hook for doing work after the Console object is ready.
+     *
+     * @param   pThis       Pointer to this structure.
+     * @param   pConsole    The Console interface.
+     */
+    DECLCALLBACKMEMBER(void, pfnConsoleReady,(PCVBOXEXTPACKVMREG pThis, VBOXEXTPACK_IF_CS(IConsole) *pConsole));
+
+    /**
+     * Hook for doing work before unloading.
+     *
+     * @param   pThis       Pointer to this structure.
+     *
+     * @remarks The helpers are not available at this point in time.
+     */
+    DECLCALLBACKMEMBER(void, pfnUnload,(PCVBOXEXTPACKVMREG pThis));
+
+    /**
+     * Hook for configuring the VMM for a VM.
+     *
+     * @returns VBox status code.
+     * @param   pThis       Pointer to this structure.
+     * @param   pConsole    The console interface.
+     * @param   pVM         The cross context VM structure.
+     */
+    DECLCALLBACKMEMBER(int, pfnVMConfigureVMM,(PCVBOXEXTPACKVMREG pThis, VBOXEXTPACK_IF_CS(IConsole) *pConsole, PVM pVM));
+
+    /**
+     * Hook for doing work right before powering on the VM.
+     *
+     * @returns VBox status code.
+     * @param   pThis       Pointer to this structure.
+     * @param   pConsole    The console interface.
+     * @param   pVM         The cross context VM structure.
+     */
+    DECLCALLBACKMEMBER(int, pfnVMPowerOn,(PCVBOXEXTPACKVMREG pThis, VBOXEXTPACK_IF_CS(IConsole) *pConsole, PVM pVM));
+
+    /**
+     * Hook for doing work after powering off the VM.
+     *
+     * @param   pThis       Pointer to this structure.
+     * @param   pConsole    The console interface.
+     * @param   pVM         The cross context VM structure. Can be NULL.
+     */
+    DECLCALLBACKMEMBER(void, pfnVMPowerOff,(PCVBOXEXTPACKVMREG pThis, VBOXEXTPACK_IF_CS(IConsole) *pConsole, PVM pVM));
+
+    /**
+     * Query the IUnknown interface to an object in the main VM module.
+     *
+     * @returns IUnknown pointer (referenced) on success, NULL on failure.
+     * @param   pThis       Pointer to this structure.
+     * @param   pObjectId   Pointer to the object ID (UUID).
+     */
+    DECLCALLBACKMEMBER(void *, pfnQueryObject,(PCVBOXEXTPACKVMREG pThis, PCRTUUID pObjectId));
+
+    DECLR3CALLBACKMEMBER(int, pfnReserved1,(PCVBOXEXTPACKVMREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved2,(PCVBOXEXTPACKVMREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved3,(PCVBOXEXTPACKVMREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved4,(PCVBOXEXTPACKVMREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved5,(PCVBOXEXTPACKVMREG pThis)); /**< Reserved for minor structure revisions. */
+    DECLR3CALLBACKMEMBER(int, pfnReserved6,(PCVBOXEXTPACKVMREG pThis)); /**< Reserved for minor structure revisions. */
+
+    /** Reserved for minor structure revisions. */
+    uint32_t                    uReserved7;
+
+    /** End of structure marker (VBOXEXTPACKVMREG_VERSION). */
+    uint32_t                    u32EndMarker;
+} VBOXEXTPACKVMREG;
+/** Current version of the VBOXEXTPACKVMREG structure.  */
+#define VBOXEXTPACKVMREG_VERSION      RT_MAKE_U32(0, 3)
+
+
+/**
+ * The VBoxExtPackVMRegister callback function.
+ *
+ * The Main API (in a VM process) will invoke this function after loading an
+ * extension pack VM module. Its job is to do version compatibility checking
+ * and returning the extension pack registration structure for a VM.
+ *
+ * @returns VBox status code.
+ * @param   pHlp            Pointer to the extension pack helper function
+ *                          table.  This is valid until the module is unloaded.
+ * @param   ppReg           Where to return the pointer to the registration
+ *                          structure containing all the hooks.  This structure
+ *                          be valid and unchanged until the module is unloaded
+ *                          (i.e. use some static const data for it).
+ * @param   pErrInfo        Where to return extended error information.
+ */
+typedef DECLCALLBACKTYPE(int, FNVBOXEXTPACKVMREGISTER,(PCVBOXEXTPACKHLP pHlp, PCVBOXEXTPACKVMREG *ppReg, PRTERRINFO pErrInfo));
+/** Pointer to a FNVBOXEXTPACKVMREGISTER. */
+typedef FNVBOXEXTPACKVMREGISTER *PFNVBOXEXTPACKVMREGISTER;
+
+/** The name of the main VM module entry point. */
+#define VBOX_EXTPACK_MAIN_VM_MOD_ENTRY_POINT   "VBoxExtPackVMRegister"
 
 
 /**
@@ -407,5 +627,5 @@ typedef FNVBOXEXTPACKREGISTER *PFNVBOXEXTPACKREGISTER;
  */
 #define VBOXEXTPACK_IS_MAJOR_VER_EQUAL(u32Ver1, u32Ver2)  (RT_HIWORD(u32Ver1) == RT_HIWORD(u32Ver2))
 
-#endif
+#endif /* !VBOX_INCLUDED_ExtPack_ExtPack_h */
 

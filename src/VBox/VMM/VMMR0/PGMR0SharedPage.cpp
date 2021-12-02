@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PGMR0SharedPage.cpp 86473 2020-10-07 17:30:25Z vboxsync $ */
 /** @file
  * PGM - Page Manager and Monitor, Page Sharing, Ring-0.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,10 +20,12 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_PGM_SHARED
+#define VBOX_WITHOUT_PAGING_BIT_FIELDS /* 64-bit bitfields are just asking for trouble. See @bugref{9841} and others. */
 #include <VBox/vmm/pgm.h>
 #include <VBox/vmm/gmm.h>
 #include "PGMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
+#include <VBox/vmm/gvm.h>
 #include "PGMInline.h"
 #include <VBox/log.h>
 #include <VBox/err.h>
@@ -47,9 +49,9 @@
  *                              addresses of the regions in the calling
  *                              process.
  */
-VMMR0DECL(int) PGMR0SharedModuleCheck(PVM pVM, PGVM pGVM, VMCPUID idCpu, PGMMSHAREDMODULE pModule, PCRTGCPTR64 paRegionsGCPtrs)
+VMMR0DECL(int) PGMR0SharedModuleCheck(PVMCC pVM, PGVM pGVM, VMCPUID idCpu, PGMMSHAREDMODULE pModule, PCRTGCPTR64 paRegionsGCPtrs)
 {
-    PVMCPU              pVCpu         = &pVM->aCpus[idCpu];
+    PVMCPUCC            pVCpu         = &pGVM->aCpus[idCpu];
     int                 rc            = VINF_SUCCESS;
     bool                fFlushTLBs    = false;
     bool                fFlushRemTLBs = false;
@@ -133,7 +135,7 @@ VMMR0DECL(int) PGMR0SharedModuleCheck(PVM pVM, PGVM pGVM, VMCPUID idCpu, PGMMSHA
 
 # ifdef VBOX_STRICT /* check sum hack */
                         pPage->s.u2Unused0 = PageDesc.u32StrictChecksum        & 3;
-                        pPage->s.u2Unused1 = (PageDesc.u32StrictChecksum >> 8) & 3;
+                        //pPage->s.u2Unused1 = (PageDesc.u32StrictChecksum >> 8) & 3;
 # endif
                     }
                 }
@@ -161,8 +163,8 @@ VMMR0DECL(int) PGMR0SharedModuleCheck(PVM pVM, PGVM pGVM, VMCPUID idCpu, PGMMSHA
         PGM_INVL_ALL_VCPU_TLBS(pVM);
 
     if (fFlushRemTLBs)
-        for (VMCPUID idCurCpu = 0; idCurCpu < pVM->cCpus; idCurCpu++)
-            CPUMSetChangedFlags(&pVM->aCpus[idCurCpu], CPUM_CHANGED_GLOBAL_TLB_FLUSH);
+        for (VMCPUID idCurCpu = 0; idCurCpu < pGVM->cCpus; idCurCpu++)
+            CPUMSetChangedFlags(&pGVM->aCpus[idCurCpu], CPUM_CHANGED_GLOBAL_TLB_FLUSH);
 
     return rc;
 }

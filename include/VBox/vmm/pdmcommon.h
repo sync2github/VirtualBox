@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmcommon_h
-#define ___VBox_vmm_pdmcommon_h
+#ifndef VBOX_INCLUDED_vmm_pdmcommon_h
+#define VBOX_INCLUDED_vmm_pdmcommon_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 
@@ -86,17 +89,17 @@
     )
 
 
-/** PDM Attach/Detach Callback Flags.
+/** @name PDM Attach/Detach Callback Flags.
  * Used by PDMDeviceAttach, PDMDeviceDetach, PDMDriverAttach, PDMDriverDetach,
  * FNPDMDEVATTACH, FNPDMDEVDETACH, FNPDMDRVATTACH, FNPDMDRVDETACH and
  * FNPDMDRVCONSTRUCT.
- @{ */
+ * @{ */
 /** The attach/detach command is not a hotplug event. */
 #define PDM_TACH_FLAGS_NOT_HOT_PLUG     RT_BIT_32(0)
 /** Indicates that no attach or detach callbacks should be made.
  * This is mostly for internal use.  */
 #define PDM_TACH_FLAGS_NO_CALLBACKS     RT_BIT_32(1)
-/* @} */
+/** @} */
 
 
 /**
@@ -111,7 +114,7 @@
  *
  * @thread  EMT(0)
  */
-typedef DECLCALLBACK(bool) FNPDMUSBASYNCNOTIFY(PPDMUSBINS pUsbIns);
+typedef DECLCALLBACKTYPE(bool, FNPDMUSBASYNCNOTIFY,(PPDMUSBINS pUsbIns));
 /** Pointer to a FNPDMUSBASYNCNOTIFY. */
 typedef FNPDMUSBASYNCNOTIFY *PFNPDMUSBASYNCNOTIFY;
 
@@ -127,7 +130,7 @@ typedef FNPDMUSBASYNCNOTIFY *PFNPDMUSBASYNCNOTIFY;
  * @remarks The caller will enter the device critical section.
  * @thread  EMT(0)
  */
-typedef DECLCALLBACK(bool) FNPDMDEVASYNCNOTIFY(PPDMDEVINS pDevIns);
+typedef DECLCALLBACKTYPE(bool, FNPDMDEVASYNCNOTIFY,(PPDMDEVINS pDevIns));
 /** Pointer to a FNPDMDEVASYNCNOTIFY. */
 typedef FNPDMDEVASYNCNOTIFY *PFNPDMDEVASYNCNOTIFY;
 
@@ -143,7 +146,7 @@ typedef FNPDMDEVASYNCNOTIFY *PFNPDMDEVASYNCNOTIFY;
  *
  * @thread  EMT(0)
  */
-typedef DECLCALLBACK(bool) FNPDMDRVASYNCNOTIFY(PPDMDRVINS pDrvIns);
+typedef DECLCALLBACKTYPE(bool, FNPDMDRVASYNCNOTIFY,(PPDMDRVINS pDrvIns));
 /** Pointer to a FNPDMDRVASYNCNOTIFY. */
 typedef FNPDMDRVASYNCNOTIFY *PFNPDMDRVASYNCNOTIFY;
 
@@ -156,7 +159,7 @@ typedef FNPDMDRVASYNCNOTIFY *PFNPDMDRVASYNCNOTIFY;
  * @param   uOperation  The operation.
  * @param   u64Arg      Optional integer argument for the operation.
  */
-typedef DECLCALLBACK(int) FNPDMDEVREQHANDLERR0(PPDMDEVINS pDevIns, uint32_t uOperation, uint64_t u64Arg);
+typedef DECLCALLBACKTYPE(int, FNPDMDEVREQHANDLERR0,(PPDMDEVINS pDevIns, uint32_t uOperation, uint64_t u64Arg));
 /** Ring-0 pointer to a FNPDMDEVREQHANDLERR0. */
 typedef R0PTRTYPE(FNPDMDEVREQHANDLERR0 *) PFNPDMDEVREQHANDLERR0;
 
@@ -168,12 +171,12 @@ typedef R0PTRTYPE(FNPDMDEVREQHANDLERR0 *) PFNPDMDEVREQHANDLERR0;
  * @param   uOperation  The operation.
  * @param   u64Arg      Optional integer argument for the operation.
  */
-typedef DECLCALLBACK(int) FNPDMDRVREQHANDLERR0(PPDMDRVINS pDrvIns, uint32_t uOperation, uint64_t u64Arg);
+typedef DECLCALLBACKTYPE(int, FNPDMDRVREQHANDLERR0,(PPDMDRVINS pDrvIns, uint32_t uOperation, uint64_t u64Arg));
 /** Ring-0 pointer to a FNPDMDRVREQHANDLERR0. */
 typedef R0PTRTYPE(FNPDMDRVREQHANDLERR0 *) PFNPDMDRVREQHANDLERR0;
 
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_pdmcommon_h */
 

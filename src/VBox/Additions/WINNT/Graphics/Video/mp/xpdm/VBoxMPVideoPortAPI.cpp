@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPVideoPortAPI.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox XPDM Miniport video port api
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -96,7 +96,7 @@ void VBoxSetupVideoPortAPI(PVBOXMP_DEVEXT pExt, PVIDEO_PORT_CONFIG_INFO pConfigI
     VBOXVIDEOPORTPROCS *pAPI = &pExt->u.primary.VideoPortProcs;
     VideoPortZeroMemory(pAPI, sizeof(VBOXVIDEOPORTPROCS));
 
-    if (VBoxQueryWinVersion() <= WINVERSION_NT4)
+    if (VBoxQueryWinVersion(NULL) <= WINVERSION_NT4)
     {
         /* VideoPortGetProcAddress is available for >= win2k */
         pAPI->pfnWaitForSingleObject = vboxWaitForSingleObjectVoid;

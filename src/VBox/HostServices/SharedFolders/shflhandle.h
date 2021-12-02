@@ -1,11 +1,10 @@
+/* $Id: shflhandle.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
- * Shared Folders:
- * Handles helper functions header.
+ * Shared Folders Host Service - Handles helper functions header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __SHFLHANDLE__H
-#define __SHFLHANDLE__H
+#ifndef VBOX_INCLUDED_SRC_SharedFolders_shflhandle_h
+#define VBOX_INCLUDED_SRC_SharedFolders_shflhandle_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "shfl.h"
 #include <VBox/shflsvc.h>
@@ -43,17 +45,19 @@ typedef struct _SHFLHANDLEHDR
 typedef struct _SHFLFILEHANDLE
 {
     SHFLHANDLEHDR Header;
+    SHFLROOT root; /* Where the handle has been opened. */
     union
     {
         struct
         {
             RTFILE        Handle;
+            uint64_t      fOpenFlags;       /**< RTFILE_O_XXX. */
         } file;
         struct
         {
-            PRTDIR        Handle;
-            PRTDIR        SearchHandle;
-            PRTDIRENTRYEX pLastValidEntry; /* last found file in a directory search */
+            RTDIR         Handle;
+            RTDIR         SearchHandle;
+            PRTDIRENTRYEX pLastValidEntry;  /**< last found file in a directory search */
         } dir;
     };
 } SHFLFILEHANDLE;
@@ -74,4 +78,4 @@ SHFLFILEHANDLE *vbsfQueryDirHandle(PSHFLCLIENTDATA pClient, SHFLHANDLE handle);
 uint32_t        vbsfQueryHandleType(PSHFLCLIENTDATA pClient,
                                     SHFLHANDLE handle);
 
-#endif /* __SHFLHANDLE__H */
+#endif /* !VBOX_INCLUDED_SRC_SharedFolders_shflhandle_h */

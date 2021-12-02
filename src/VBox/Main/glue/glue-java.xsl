@@ -10,7 +10,7 @@
         XSLT stylesheet that generates Java glue code for XPCOM, MSCOM and JAX-WS from
         VirtualBox.xidl.
 
-    Copyright (C) 2010-2016 Oracle Corporation
+    Copyright (C) 2010-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -58,7 +58,7 @@
 <xsl:template name="fileheader">
   <xsl:param name="name" />
   <xsl:text>/*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of the VirtualBox SDK, as available from
  * http://www.virtualbox.org.  This library is free software; you can
@@ -1923,7 +1923,7 @@
         <xsl:with-param name="safearray" select="@safearray" />
       </xsl:call-template>
       </xsl:variable>
-      <xsl:value-of select="concat('        ', $attrname, ' = ', $wrapped, ';&#10;')" /> 
+      <xsl:value-of select="concat('        ', $attrname, ' = ', $wrapped, ';&#10;')" />
     </xsl:if>
   </xsl:for-each>
   <xsl:text>    }&#10;&#10;</xsl:text>
@@ -4890,7 +4890,7 @@ class VBoxTLSSocketFactory extends SSLSocketFactory
         return sf.getSupportedCipherSuites();
     }
 }
-        
+
 
 public class VirtualBoxManager
 {
@@ -5177,6 +5177,16 @@ public class VirtualBoxManager
     <xsl:choose>
       <xsl:when test="$G_vboxGlueStyle='jaxws'">
         <xsl:if test="not($module) and not(@wsmap='suppress')">
+          <xsl:call-template name="genIface">
+            <xsl:with-param name="ifname" select="@name" />
+            <xsl:with-param name="filename" select="concat(@name, '.java')" />
+          </xsl:call-template>
+        </xsl:if>
+      </xsl:when>
+
+      <xsl:when test="$G_vboxGlueStyle='xpcom'">
+        <!-- We don't need WSDL-specific nor MIDL-specific interfaces here -->
+        <xsl:if test="not(@internal='yes') and not($self_target='wsdl') and not($module) and not($self_target='midl')">
           <xsl:call-template name="genIface">
             <xsl:with-param name="ifname" select="@name" />
             <xsl:with-param name="filename" select="concat(@name, '.java')" />

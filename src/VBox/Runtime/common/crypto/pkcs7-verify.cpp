@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pkcs7-verify.cpp 86610 2020-10-16 14:34:15Z vboxsync $ */
 /** @file
  * IPRT - Crypto - PKCS \#7, Verification
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,17 +32,21 @@
 #include <iprt/crypto/pkcs7.h>
 
 #include <iprt/err.h>
+#include <iprt/mem.h>
 #include <iprt/string.h>
 #include <iprt/crypto/digest.h>
+#include <iprt/crypto/key.h>
 #include <iprt/crypto/pkix.h>
 #include <iprt/crypto/store.h>
 #include <iprt/crypto/x509.h>
 
 #ifdef IPRT_WITH_OPENSSL
 # include "internal/iprt-openssl.h"
+# include "internal/openssl-pre.h"
 # include <openssl/pkcs7.h>
 # include <openssl/x509.h>
 # include <openssl/err.h>
+# include "internal/openssl-post.h"
 #endif
 
 
@@ -50,21 +54,30 @@
 #ifdef IPRT_WITH_OPENSSL
 static int rtCrPkcs7VerifySignedDataUsingOpenSsl(PCRTCRPKCS7CONTENTINFO pContentInfo, uint32_t fFlags,
                                                  RTCRSTORE hAdditionalCerts, RTCRSTORE hTrustedCerts,
-                                                 void const *pvContent, uint32_t cbContent, PRTERRINFO pErrInfo)
+                                                 void const *pvContent, size_t cbContent, PRTERRINFO pErrInfo)
 {
     RT_NOREF_PV(fFlags);
 
     /*
-     * Verify using OpenSSL.
+     * Verify using OpenSSL.          ERR_PUT_error
      */
-    int rcOssl;
-    unsigned char const *pbRawContent = RTASN1CORE_GET_RAW_ASN1_PTR(&pContentInfo->SeqCore.Asn1Core);
-    PKCS7 *pOsslPkcs7 = NULL;
-    if (d2i_PKCS7(&pOsslPkcs7, &pbRawContent, RTASN1CORE_GET_RAW_ASN1_SIZE(&pContentInfo->SeqCore.Asn1Core)) == pOsslPkcs7)
+    unsigned char const *pbRawContent;
+    uint32_t             cbRawContent;
+    void                *pvFree;
+    int rcOssl = RTAsn1EncodeQueryRawBits(RTCrPkcs7ContentInfo_GetAsn1Core(pContentInfo),
+                                          (const uint8_t **)&pbRawContent, &cbRawContent, &pvFree, pErrInfo);
+    AssertRCReturn(rcOssl, rcOssl);
+
+    PKCS7 *pOsslPkcs7   = NULL;
+    PKCS7 *pOsslPkcs7Ret = d2i_PKCS7(&pOsslPkcs7, &pbRawContent, cbRawContent);
+
+    RTMemTmpFree(pvFree);
+
+    if (pOsslPkcs7Ret != NULL)
     {
         STACK_OF(X509) *pAddCerts = NULL;
         if (hAdditionalCerts != NIL_RTCRSTORE)
-            rcOssl = RTCrStoreConvertToOpenSslCertStack(hAdditionalCerts, 0, (void **)&pAddCerts);
+            rcOssl = RTCrStoreConvertToOpenSslCertStack(hAdditionalCerts, 0, (void **)&pAddCerts, pErrInfo);
         else
         {
             pAddCerts = sk_X509_new_null();
@@ -75,17 +88,16 @@ static int rtCrPkcs7VerifySignedDataUsingOpenSsl(PCRTCRPKCS7CONTENTINFO pContent
             PCRTCRPKCS7SETOFCERTS pCerts = &pContentInfo->u.pSignedData->Certificates;
             for (uint32_t i = 0; i < pCerts->cItems; i++)
                 if (pCerts->papItems[i]->enmChoice == RTCRPKCS7CERTCHOICE_X509)
-                    rtCrOpenSslAddX509CertToStack(pAddCerts, pCerts->papItems[i]->u.pX509Cert);
-
+                    rtCrOpenSslAddX509CertToStack(pAddCerts, pCerts->papItems[i]->u.pX509Cert, NULL);
 
             X509_STORE *pTrustedCerts = NULL;
             if (hTrustedCerts != NIL_RTCRSTORE)
-                rcOssl = RTCrStoreConvertToOpenSslCertStore(hTrustedCerts, 0, (void **)&pTrustedCerts);
+                rcOssl = RTCrStoreConvertToOpenSslCertStore(hTrustedCerts, 0, (void **)&pTrustedCerts, pErrInfo);
             if (RT_SUCCESS(rcOssl))
             {
                 rtCrOpenSslInit();
 
-                BIO *pBioContent = BIO_new_mem_buf((void *)pvContent, cbContent);
+                BIO *pBioContent = BIO_new_mem_buf((void *)pvContent, (int)cbContent);
                 if (pBioContent)
                 {
                     uint32_t fOsslFlags = PKCS7_NOCHAIN;
@@ -113,7 +125,11 @@ static int rtCrPkcs7VerifySignedDataUsingOpenSsl(PCRTCRPKCS7CONTENTINFO pContent
         PKCS7_free(pOsslPkcs7);
     }
     else
+    {
         rcOssl = RTErrInfoSet(pErrInfo, VERR_CR_PKCS7_OSSL_D2I_FAILED, "d2i_PKCS7 failed");
+        if (pErrInfo)
+            ERR_print_errors_cb(rtCrOpenSslErrInfoCallback, pErrInfo);
+    }
 
     return rcOssl;
 }
@@ -187,7 +203,7 @@ RTDECL(int) RTCrPkcs7VerifyCertCallbackCodeSigning(PCRTCRX509CERTIFICATE pCert, 
             if (!(pCert->TbsCertificate.T3.fFlags & RTCRX509TBSCERTIFICATE_F_PRESENT_EXT_KEY_USAGE))
                 return RTErrInfoSetF(pErrInfo, VERR_CR_PKCS7_KEY_USAGE_MISMATCH, "No extended key usage certificate attribute.");
             if (!(pCert->TbsCertificate.T3.fExtKeyUsage & RTCRX509CERT_EKU_F_CODE_SIGNING))
-                return RTErrInfoSetF(pErrInfo, VERR_CR_PKCS7_KEY_USAGE_MISMATCH, "fExtKeyUsage=%#x, missing %#x",
+                return RTErrInfoSetF(pErrInfo, VERR_CR_PKCS7_KEY_USAGE_MISMATCH, "fExtKeyUsage=%#RX64, missing CODE_SIGNING (%#RX64)",
                                      pCert->TbsCertificate.T3.fExtKeyUsage, RTCRX509CERT_EKU_F_CODE_SIGNING);
         }
     }
@@ -310,14 +326,21 @@ static int rtCrPkcs7VerifySignerInfoAuthAttribs(PCRTCRPKCS7SIGNERINFO pSignerInf
         *phDigest = hDigest;
 
         /* ASSUMES that the attributes are encoded according to DER. */
-        uint8_t const  *pbData = (uint8_t const *)RTASN1CORE_GET_RAW_ASN1_PTR(&pSignerInfo->AuthenticatedAttributes.SetCore.Asn1Core);
-        uint32_t        cbData = RTASN1CORE_GET_RAW_ASN1_SIZE(&pSignerInfo->AuthenticatedAttributes.SetCore.Asn1Core);
-        uint8_t         bSetOfTag = ASN1_TAG_SET | ASN1_TAGCLASS_UNIVERSAL | ASN1_TAGFLAG_CONSTRUCTED;
-        rc = RTCrDigestUpdate(hDigest, &bSetOfTag, sizeof(bSetOfTag)); /* Replace the implict tag with a SET-OF tag. */
+        uint8_t const  *pbData;
+        uint32_t        cbData;
+        void           *pvFree = NULL;
+        rc = RTAsn1EncodeQueryRawBits(RTCrPkcs7Attributes_GetAsn1Core(&pSignerInfo->AuthenticatedAttributes),
+                                      &pbData, &cbData, &pvFree, pErrInfo);
         if (RT_SUCCESS(rc))
-            rc = RTCrDigestUpdate(hDigest, pbData + sizeof(bSetOfTag), cbData - sizeof(bSetOfTag)); /* Skip the implicit tag. */
-        if (RT_SUCCESS(rc))
-            rc = RTCrDigestFinal(hDigest, NULL, 0);
+        {
+            uint8_t bSetOfTag = ASN1_TAG_SET | ASN1_TAGCLASS_UNIVERSAL | ASN1_TAGFLAG_CONSTRUCTED;
+            rc = RTCrDigestUpdate(hDigest, &bSetOfTag, sizeof(bSetOfTag)); /* Replace the implict tag with a SET-OF tag. */
+            if (RT_SUCCESS(rc))
+                rc = RTCrDigestUpdate(hDigest, pbData + sizeof(bSetOfTag), cbData - sizeof(bSetOfTag)); /* Skip the implicit tag. */
+            if (RT_SUCCESS(rc))
+                rc = RTCrDigestFinal(hDigest, NULL, 0);
+            RTMemTmpFree(pvFree);
+        }
     }
     return rc;
 }
@@ -365,7 +388,7 @@ static int rtCrPkcs7VerifyFindDigest(PRTCRDIGEST phDigest, PCRTCRPKCS7SIGNEDDATA
  * @param   pSignedData         The SignedData.
  * @param   hDigests            The digest corresponding to
  *                              pSignerInfo->DigestAlgorithm.
- * @param   fFlags              Verficiation flags.
+ * @param   fFlags              Verification flags.
  * @param   hAdditionalCerts    Store containing optional certificates,
  *                              optional.
  * @param   hTrustedCerts       Store containing trusted certificates, required.
@@ -387,22 +410,16 @@ static int rtCrPkcs7VerifySignerInfo(PCRTCRPKCS7SIGNERINFO pSignerInfo, PCRTCRPK
      */
     PCRTCRCERTCTX           pSignerCertCtx = NULL;
     PCRTCRX509CERTIFICATE   pSignerCert = NULL;
-    RTCRSTORE               hSignerCertSrc = hTrustedCerts;
-    if (hSignerCertSrc != NIL_RTCRSTORE)
-        pSignerCertCtx = RTCrStoreCertByIssuerAndSerialNo(hSignerCertSrc, &pSignerInfo->IssuerAndSerialNumber.Name,
+    if (hTrustedCerts != NIL_RTCRSTORE)
+        pSignerCertCtx = RTCrStoreCertByIssuerAndSerialNo(hTrustedCerts, &pSignerInfo->IssuerAndSerialNumber.Name,
                                                           &pSignerInfo->IssuerAndSerialNumber.SerialNumber);
-    if (!pSignerCertCtx)
-    {
-        hSignerCertSrc = hAdditionalCerts;
-        if (hSignerCertSrc != NIL_RTCRSTORE)
-            pSignerCertCtx = RTCrStoreCertByIssuerAndSerialNo(hSignerCertSrc, &pSignerInfo->IssuerAndSerialNumber.Name,
-                                                              &pSignerInfo->IssuerAndSerialNumber.SerialNumber);
-    }
+    if (!pSignerCertCtx && hAdditionalCerts != NIL_RTCRSTORE)
+        pSignerCertCtx = RTCrStoreCertByIssuerAndSerialNo(hAdditionalCerts, &pSignerInfo->IssuerAndSerialNumber.Name,
+                                                          &pSignerInfo->IssuerAndSerialNumber.SerialNumber);
     if (pSignerCertCtx)
         pSignerCert = pSignerCertCtx->pCert;
     else
     {
-        hSignerCertSrc = NULL;
         pSignerCert = RTCrPkcs7SetOfCerts_FindX509ByIssuerAndSerialNumber(&pSignedData->Certificates,
                                                                           &pSignerInfo->IssuerAndSerialNumber.Name,
                                                                           &pSignerInfo->IssuerAndSerialNumber.SerialNumber);
@@ -414,12 +431,17 @@ static int rtCrPkcs7VerifySignerInfo(PCRTCRPKCS7SIGNERINFO pSignerInfo, PCRTCRPK
     }
 
     /*
-     * If not a trusted certificate, we'll have to build certificate paths
-     * and verify them.  If no valid paths are found, this step will fail.
+     * Unless caller requesed all certificates to be trusted fully, we always
+     * pass it on to the certificate path builder so it can do the requested
+     * checks on trust anchors.   (We didn't used to do this as the path
+     * builder could handle trusted targets.  A benefit here is that
+     * pfnVerifyCert can assume a hCertPaths now, and get the validation time
+     * from it if it wants it.)
+     *
+     * If no valid paths are found, this step will fail.
      */
-    int rc = VINF_SUCCESS;
-    if (   hSignerCertSrc == NIL_RTCRSTORE
-        || hSignerCertSrc != hTrustedCerts)
+    int rc;
+    if (!(fFlags & RTCRPKCS7VERIFY_SD_F_TRUST_ALL_CERTS))
     {
         RTCRX509CERTPATHS hCertPaths;
         rc = RTCrX509CertPathsCreate(&hCertPaths, pSignerCert);
@@ -432,6 +454,8 @@ static int rtCrPkcs7VerifySignerInfo(PCRTCRPKCS7SIGNERINFO pSignerInfo, PCRTCRPK
                 rc = RTCrX509CertPathsSetUntrustedStore(hCertPaths, hAdditionalCerts);
             if (pSignedData->Certificates.cItems > 0 && RT_SUCCESS(rc))
                 rc = RTCrX509CertPathsSetUntrustedSet(hCertPaths, &pSignedData->Certificates);
+            if ((fFlags & RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS) && RT_SUCCESS(rc))
+                rc = RTCrX509CertPathsSetTrustAnchorChecks(hCertPaths, true /*fEnable*/);
             if (RT_SUCCESS(rc))
             {
                 rc = RTCrX509CertPathsBuild(hCertPaths, pErrInfo);
@@ -476,26 +500,30 @@ static int rtCrPkcs7VerifySignerInfo(PCRTCRPKCS7SIGNERINFO pSignerInfo, PCRTCRPK
          */
         if (RT_SUCCESS(rc))
         {
-            RTCRPKIXSIGNATURE hSignature;
-            rc = RTCrPkixSignatureCreateByObjId(&hSignature,
-                                                &pSignerCert->TbsCertificate.SubjectPublicKeyInfo.Algorithm.Algorithm,
-                                                false /*fSigning*/,
-                                                &pSignerCert->TbsCertificate.SubjectPublicKeyInfo.SubjectPublicKey,
-                                                &pSignerInfo->DigestEncryptionAlgorithm.Parameters);
+            RTCRKEY hKey;
+            rc = RTCrKeyCreateFromSubjectPublicKeyInfo(&hKey, &pSignerCert->TbsCertificate.SubjectPublicKeyInfo,
+                                                       pErrInfo, "pkcs7");
             if (RT_SUCCESS(rc))
             {
-                /** @todo Check that DigestEncryptionAlgorithm is compatible with hSignature
-                 *        (this is not vital). */
-                rc = RTCrPkixSignatureVerifyOctetString(hSignature, hDigest, &pSignerInfo->EncryptedDigest);
-                if (RT_FAILURE(rc))
-                    rc = RTErrInfoSetF(pErrInfo, VERR_CR_PKCS7_SIGNATURE_VERIFICATION_FAILED,
-                                       "Signature verficiation failed: %Rrc", rc);
-                RTCrPkixSignatureRelease(hSignature);
+                RTCRPKIXSIGNATURE hSignature;
+                rc = RTCrPkixSignatureCreateByObjId(&hSignature, &pSignerInfo->DigestEncryptionAlgorithm.Algorithm,
+                                                    hKey, &pSignerInfo->DigestEncryptionAlgorithm.Parameters, false /*fSigning*/);
+                RTCrKeyRelease(hKey);
+                if (RT_SUCCESS(rc))
+                {
+                    /** @todo Check that DigestEncryptionAlgorithm is compatible with hSignature
+                     *        (this is not vital). */
+                    rc = RTCrPkixSignatureVerifyOctetString(hSignature, hDigest, &pSignerInfo->EncryptedDigest);
+                    if (RT_FAILURE(rc))
+                        rc = RTErrInfoSetF(pErrInfo, VERR_CR_PKCS7_SIGNATURE_VERIFICATION_FAILED,
+                                           "Signature verification failed: %Rrc", rc);
+                    RTCrPkixSignatureRelease(hSignature);
+                }
+                else
+                    rc = RTErrInfoSetF(pErrInfo, rc, "Failure to instantiate public key algorithm [IPRT]: %s (%s)",
+                                       pSignerCert->TbsCertificate.SubjectPublicKeyInfo.Algorithm.Algorithm.szObjId,
+                                       pSignerInfo->DigestEncryptionAlgorithm.Algorithm.szObjId);
             }
-            else
-                rc = RTErrInfoSetF(pErrInfo, rc, "Failure to instantiate public key algorithm [IPRT]: %s (%s)",
-                                   pSignerCert->TbsCertificate.SubjectPublicKeyInfo.Algorithm.Algorithm.szObjId,
-                                   pSignerInfo->DigestEncryptionAlgorithm.Algorithm.szObjId);
         }
 
         RTCrDigestRelease(hDigest);
@@ -515,7 +543,7 @@ static int rtCrPkcs7VerifySignerInfo(PCRTCRPKCS7SIGNERINFO pSignerInfo, PCRTCRPK
  * @param   pPrimarySignerInfo  The primary signature (can be a counter
  *                              signature too if nested).
  * @param   pSignedData         The SignedData.
- * @param   fFlags              Verficiation flags.
+ * @param   fFlags              Verification flags.
  * @param   hAdditionalCerts    Store containing optional certificates,
  *                              optional.
  * @param   hTrustedCerts       Store containing trusted certificates, required.
@@ -569,13 +597,17 @@ static int rtCrPkcs7VerifyCounterSignerInfo(PCRTCRPKCS7SIGNERINFO pCounterSigner
 }
 
 
-RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint32_t fFlags,
-                                      RTCRSTORE hAdditionalCerts, RTCRSTORE hTrustedCerts,
-                                      PCRTTIMESPEC pValidationTime, PFNRTCRPKCS7VERIFYCERTCALLBACK pfnVerifyCert, void *pvUser,
-                                      PRTERRINFO pErrInfo)
+/**
+ * Worker.
+ */
+static int rtCrPkcs7VerifySignedDataEx(PCRTCRPKCS7CONTENTINFO pContentInfo, uint32_t fFlags,
+                                       RTCRSTORE hAdditionalCerts, RTCRSTORE hTrustedCerts,
+                                       PCRTTIMESPEC pValidationTime,
+                                       PFNRTCRPKCS7VERIFYCERTCALLBACK pfnVerifyCert, void *pvUser,
+                                       void const *pvContent, size_t cbContent, PRTERRINFO pErrInfo)
 {
     /*
-     * Check the input.
+     * Check and adjust the input.
      */
     if (pfnVerifyCert)
         AssertPtrReturn(pfnVerifyCert, VERR_INVALID_POINTER);
@@ -592,17 +624,6 @@ RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint3
     /*
      * Hash the content info.
      */
-    /* Exactly what the content is, for some stupid reason unnecessarily
-       complicated.  Figure it out here as we'll need it for the OpenSSL code
-       path as well. */
-    void const *pvContent = pSignedData->ContentInfo.Content.Asn1Core.uData.pv;
-    uint32_t    cbContent = pSignedData->ContentInfo.Content.Asn1Core.cb;
-    if (pSignedData->ContentInfo.Content.pEncapsulated)
-    {
-        pvContent = pSignedData->ContentInfo.Content.pEncapsulated->uData.pv;
-        cbContent = pSignedData->ContentInfo.Content.pEncapsulated->cb;
-    }
-
     /* Check that there aren't too many or too few hash algorithms for our
        implementation and purposes. */
     RTCRDIGEST     ahDigests[2];
@@ -639,12 +660,20 @@ RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint3
         if (RT_SUCCESS(rc))
         {
             /*
-             * Validate the signed infos.
+             * Validate the signed infos.  The flags may select one particular entry.
              */
+            RTTIMESPEC const GivenValidationTime = *pValidationTime;
             uint32_t fPrimaryVccFlags = !(fFlags & RTCRPKCS7VERIFY_SD_F_USAGE_TIMESTAMPING)
                                       ? RTCRPKCS7VCC_F_SIGNED_DATA : RTCRPKCS7VCC_F_TIMESTAMP;
+            uint32_t cItems           = pSignedData->SignerInfos.cItems;
+            i                         = 0;
+            if (fFlags & RTCRPKCS7VERIFY_SD_F_HAS_SIGNER_INDEX)
+            {
+                i      = (fFlags & RTCRPKCS7VERIFY_SD_F_SIGNER_INDEX_MASK) >> RTCRPKCS7VERIFY_SD_F_SIGNER_INDEX_SHIFT;
+                cItems = RT_MIN(cItems, i + 1);
+            }
             rc = VERR_CR_PKCS7_NO_SIGNER_INFOS;
-            for (i = 0; i < pSignedData->SignerInfos.cItems; i++)
+            for (; i < cItems; i++)
             {
                 PCRTCRPKCS7SIGNERINFO   pSignerInfo = pSignedData->SignerInfos.papItems[i];
                 RTCRDIGEST              hThisDigest = NIL_RTCRDIGEST; /* (gcc maybe incredible stupid.) */
@@ -679,7 +708,8 @@ RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint3
                         {
                             rc = VINF_SUCCESS;
                             if (!(fFlags & RTCRPKCS7VERIFY_SD_F_USE_SIGNING_TIME_UNVERIFIED))
-                                rc = rtCrPkcs7VerifyCounterSignerInfo(pSigningTimeSigner, pSignerInfo, pSignedData, fFlags,
+                                rc = rtCrPkcs7VerifyCounterSignerInfo(pSigningTimeSigner, pSignerInfo, pSignedData,
+                                                                      fFlags & ~RTCRPKCS7VERIFY_SD_F_UPDATE_VALIDATION_TIME,
                                                                       hAdditionalCerts, hTrustedCerts, &ThisValidationTime,
                                                                       pfnVerifyCert, RTCRPKCS7VCC_F_TIMESTAMP, pvUser, pErrInfo);
                             if (RT_SUCCESS(rc))
@@ -689,6 +719,8 @@ RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint3
                         }
                         fDone = RT_SUCCESS(rc)
                              || (fFlags & RTCRPKCS7VERIFY_SD_F_ALWAYS_USE_SIGNING_TIME_IF_PRESENT);
+                        if ((fFlags & RTCRPKCS7VERIFY_SD_F_UPDATE_VALIDATION_TIME) && fDone)
+                            *(PRTTIMESPEC)pValidationTime = ThisValidationTime;
                     }
                     else
                     {
@@ -723,6 +755,8 @@ RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint3
                                                                pfnVerifyCert, fPrimaryVccFlags, pvUser, pErrInfo);
                             fDone = RT_SUCCESS(rc)
                                  || (fFlags & RTCRPKCS7VERIFY_SD_F_ALWAYS_USE_MS_TIMESTAMP_IF_PRESENT);
+                            if ((fFlags & RTCRPKCS7VERIFY_SD_F_UPDATE_VALIDATION_TIME) && fDone)
+                                *(PRTTIMESPEC)pValidationTime = ThisValidationTime;
                         }
                         else
                         {
@@ -738,7 +772,7 @@ RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint3
                  */
                 if (!fDone)
                     rc = rtCrPkcs7VerifySignerInfo(pSignerInfo, pSignedData, hThisDigest, fFlags, hAdditionalCerts, hTrustedCerts,
-                                                   pValidationTime, pfnVerifyCert, fPrimaryVccFlags, pvUser, pErrInfo);
+                                                   &GivenValidationTime, pfnVerifyCert, fPrimaryVccFlags, pvUser, pErrInfo);
                 RTCrDigestRelease(hThisDigest);
                 if (RT_FAILURE(rc))
                     break;
@@ -765,6 +799,10 @@ RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint3
     /** @todo figure out how to verify MS timstamp signatures using OpenSSL. */
     if (fFlags & RTCRPKCS7VERIFY_SD_F_USAGE_TIMESTAMPING)
         return rc;
+    /** @todo figure out if we can verify just one signer info item using OpenSSL. */
+    if (!(fFlags & RTCRPKCS7VERIFY_SD_F_HAS_SIGNER_INDEX) && pSignedData->SignerInfos.cItems > 1)
+        return rc;
+
     int rcOssl = rtCrPkcs7VerifySignedDataUsingOpenSsl(pContentInfo, fFlags, hAdditionalCerts, hTrustedCerts,
                                                        pvContent, cbContent, RT_SUCCESS(rc) ? pErrInfo : NULL);
     if (RT_SUCCESS(rcOssl) && RT_SUCCESS(rc))
@@ -776,5 +814,54 @@ RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint3
 #else
     return rc;
 #endif
+}
+
+
+RTDECL(int) RTCrPkcs7VerifySignedData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint32_t fFlags,
+                                      RTCRSTORE hAdditionalCerts, RTCRSTORE hTrustedCerts,
+                                      PCRTTIMESPEC pValidationTime, PFNRTCRPKCS7VERIFYCERTCALLBACK pfnVerifyCert, void *pvUser,
+                                      PRTERRINFO pErrInfo)
+{
+    /*
+     * Find the content and pass it on to common worker.
+     */
+    if (!RTCrPkcs7ContentInfo_IsSignedData(pContentInfo))
+        return RTErrInfoSet(pErrInfo, VERR_CR_PKCS7_NOT_SIGNED_DATA, "Not PKCS #7 SignedData.");
+
+    /* Exactly what the content is, is for some stupid reason unnecessarily complicated. */
+    PCRTCRPKCS7SIGNEDDATA pSignedData = pContentInfo->u.pSignedData;
+    void const *pvContent = pSignedData->ContentInfo.Content.Asn1Core.uData.pv;
+    uint32_t    cbContent = pSignedData->ContentInfo.Content.Asn1Core.cb;
+    if (pSignedData->ContentInfo.Content.pEncapsulated)
+    {
+        pvContent = pSignedData->ContentInfo.Content.pEncapsulated->uData.pv;
+        cbContent = pSignedData->ContentInfo.Content.pEncapsulated->cb;
+    }
+
+    return rtCrPkcs7VerifySignedDataEx(pContentInfo, fFlags, hAdditionalCerts, hTrustedCerts, pValidationTime,
+                                       pfnVerifyCert, pvUser, pvContent, cbContent, pErrInfo);
+}
+
+
+RTDECL(int) RTCrPkcs7VerifySignedDataWithExternalData(PCRTCRPKCS7CONTENTINFO pContentInfo, uint32_t fFlags,
+                                                      RTCRSTORE hAdditionalCerts, RTCRSTORE hTrustedCerts,
+                                                      PCRTTIMESPEC pValidationTime,
+                                                      PFNRTCRPKCS7VERIFYCERTCALLBACK pfnVerifyCert, void *pvUser,
+                                                      void const *pvData, size_t cbData, PRTERRINFO pErrInfo)
+{
+    /*
+     * Require 'data' as inner content type.
+     */
+    if (!RTCrPkcs7ContentInfo_IsSignedData(pContentInfo))
+        return RTErrInfoSet(pErrInfo, VERR_CR_PKCS7_NOT_SIGNED_DATA, "Not PKCS #7 SignedData.");
+    PCRTCRPKCS7SIGNEDDATA pSignedData = pContentInfo->u.pSignedData;
+
+    if (RTAsn1ObjId_CompareWithString(&pSignedData->ContentInfo.ContentType, RTCR_PKCS7_DATA_OID) != 0)
+        return RTErrInfoSetF(pErrInfo, VERR_CR_PKCS7_NOT_DATA,
+                             "The signedData content type is %s, expected 'data' (%s)",
+                             pSignedData->ContentInfo.ContentType.szObjId, RTCR_PKCS7_DATA_OID);
+
+    return rtCrPkcs7VerifySignedDataEx(pContentInfo, fFlags, hAdditionalCerts, hTrustedCerts, pValidationTime,
+                                       pfnVerifyCert, pvUser, pvData, cbData, pErrInfo);
 }
 

@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: MediumFormatImpl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * MediumFormat COM class implementation
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,9 +15,10 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_MEDIUMFORMAT
 #include "MediumFormatImpl.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/vd.h>
 
@@ -82,7 +82,7 @@ HRESULT MediumFormat::init(const VDBACKENDINFO *aVDInfo)
                 case VDTYPE_HDD:
                     devType = DeviceType_HardDisk;
                     break;
-                case VDTYPE_DVD:
+                case VDTYPE_OPTICAL_DISC:
                     devType = DeviceType_DVD;
                     break;
                 case VDTYPE_FLOPPY:

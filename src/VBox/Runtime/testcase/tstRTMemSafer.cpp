@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTMemSafer.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - RTMemSafer* functions.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,7 +35,7 @@
 #include <iprt/rand.h>
 #include <iprt/string.h>
 #include <iprt/test.h>
-#ifdef VBOX
+#if defined(VBOX) && (defined(RT_ARCH_X86) || defined(RT_ARCH_AMD64))
 # include <VBox/sup.h>
 #endif
 
@@ -148,7 +148,7 @@ int main()
     if (rcExit != RTEXITCODE_SUCCESS)
         return rcExit;
     RTTestBanner(hTest);
-#ifdef VBOX
+#if defined(VBOX) && (defined(RT_ARCH_X86) || defined(RT_ARCH_AMD64))
     SUPR3Init(NULL);
 #endif
 

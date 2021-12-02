@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_com_defs_h
-#define ___VBox_com_defs_h
+#ifndef VBOX_INCLUDED_com_defs_h
+#define VBOX_INCLUDED_com_defs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Make sure all the stdint.h macros are included - must come first! */
 #ifndef __STDC_LIMIT_MACROS
@@ -369,6 +372,7 @@ typedef nsIID   IID;
 
 /* OLE error codes */
 #define S_OK                ((nsresult)NS_OK)
+#define S_FALSE             ((nsresult)1)
 #define E_UNEXPECTED        NS_ERROR_UNEXPECTED
 #define E_NOTIMPL           NS_ERROR_NOT_IMPLEMENTED
 #define E_OUTOFMEMORY       NS_ERROR_OUT_OF_MEMORY
@@ -393,7 +397,7 @@ typedef nsIID   IID;
 extern "C"
 {
 BSTR SysAllocString(const OLECHAR *sz);
-BSTR SysAllocStringByteLen(char *psz, unsigned int len);
+BSTR SysAllocStringByteLen(char const *psz, unsigned int len);
 BSTR SysAllocStringLen(const OLECHAR *pch, unsigned int cch);
 void SysFreeString(BSTR bstr);
 int SysReAllocString(BSTR *pbstr, const OLECHAR *psz);
@@ -588,5 +592,5 @@ namespace com
 
 /** @} */
 
-#endif /* !___VBox_com_defs_h */
+#endif /* !VBOX_INCLUDED_com_defs_h */
 

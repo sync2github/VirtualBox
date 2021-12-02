@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Config.kmk 92287 2021-11-09 12:38:52Z vboxsync $
 ## @file
 # kBuild Configuration file for the Devices.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -22,7 +22,14 @@ ifndef VBOX_ROOT_CONFIG_KMK_INCLUDED
  include $(PATH_ROOT)/Config.kmk
 endif
 
+# We need the VMM/Config.kmk one for the VMM_COMMON_DEFS variable.
+ifndef VBOX_VMM_CONFIG_KMK_INCLUDED
+ include $(PATH_ROOT)/src/VBox/VMM/Config.kmk
+endif
+
 VBOX_PATH_DEVICES_SRC := $(PATH_ROOT)/src/VBox/Devices
+
+VBOX_PATH_VMSVGA_DEVICE_INC := $(VBOX_PATH_DEVICES_SRC)/Graphics/vmsvga_include
 
 #
 # VBoxBios - Template for building 16-bit BIOS code.
@@ -40,6 +47,8 @@ TEMPLATE_VBoxBios_ASTOOL       = OPENWATCOM-16
 TEMPLATE_VBoxBios_BLD_TRG      = os-agnostic
 TEMPLATE_VBoxBios_BLD_TRG_ARCH = x86
 TEMPLATE_VBoxBios_BINSUFF      = .rom
+TEMPLATE_VBoxBios_CDEFS        = IN_RING0
+TEMPLATE_VBoxBios_CXXDEFS      = IN_RING0
 TEMPLATE_VBoxBios_INCS         = . $(VBOX_PATH_DEVICES_SRC)/BiosCommonCode
 TEMPLATE_VBoxBios_ASFLAGS      = -q -wx -d1 -0
 TEMPLATE_VBoxBios_CFLAGS       = -q -0 -wx -zl -zu -s -oafs -ms -hc -d1+
@@ -73,4 +82,46 @@ endif
 TEMPLATE_VBoxBios32Lib_CXXFLAGS   = $(TEMPLATE_VBoxBios32_CFLAGS)
 TEMPLATE_VBoxBios32Lib_LNK_DEPS   = $(NO_SUCH_VARIABLE)
 TEMPLATE_VBoxBios32Lib_POST_CMDS  = $(NO_SUCH_VARIABLE)
+
+
+#
+# Audio configuration.
+# This must live here because of testcase/
+#
+VBOX_AUDIO_DEFS :=
+if 0 # Not stable yet.
+ # Enable microphone-in support for HDA. Otherwise only line-in is supported.
+ VBOX_AUDIO_DEFS += VBOX_WITH_AUDIO_HDA_MIC_IN
+
+ # Enable interleavig streams support for HDA. Needed for 5.1 surround support.
+ VBOX_AUDIO_DEFS  += VBOX_WITH_AUDIO_HDA_INTERLEAVING_STREAMS_SUPPORT
+
+ # Enable 5.1 surround support (Front, Center/LFE, Rear) for HDA.
+ # Without this, only stereo output (Front) is supported.
+ VBOX_AUDIO_DEFS += VBOX_WITH_AUDIO_HDA_51_SURROUND
+endif
+
+# Enable backend-independent device enumeration support.
+VBOX_AUDIO_DEFS  += VBOX_WITH_AUDIO_ENUM
+
+# Enable backend callback support.
+VBOX_AUDIO_DEFS += VBOX_WITH_AUDIO_CALLBACKS
+
+ifdef VBOX_WITH_HP_HDA
+ VBOX_AUDIO_DEFS += VBOX_WITH_HP_HDA
+endif
+ifdef VBOX_WITH_INTEL_HDA
+ VBOX_AUDIO_DEFS += VBOX_WITH_INTEL_HDA
+endif
+ifdef VBOX_WITH_NVIDIA_HDA
+ VBOX_AUDIO_DEFS += VBOX_WITH_NVIDIA_HDA
+endif
+
+# Not yet enabled: Callbacks for the device emulation to let the backends
+#                  tell the emulation when and how to process data.
+if 0
+ VBOX_AUDIO_DEFS  += VBOX_WITH_AUDIO_SB16_CALLBACKS
+ VBOX_AUDIO_DEFS  += VBOX_WITH_AUDIO_AC97_CALLBACKS
+ VBOX_AUDIO_DEFS  += VBOX_WITH_AUDIO_HDA_CALLBACKS
+endif
 

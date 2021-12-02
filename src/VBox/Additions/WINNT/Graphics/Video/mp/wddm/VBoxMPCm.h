@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPCm.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox WDDM Miniport driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxMPCm_h___
-#define ___VBoxMPCm_h___
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPCm_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPCm_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 typedef struct VBOXVIDEOCM_MGR
 {
@@ -51,10 +54,10 @@ void vboxVideoCmCmdSubmit(void *pvCmd, uint32_t cbSize);
 
 #define VBOXVIDEOCMCMDVISITOR_RETURN_BREAK    0x00000001
 #define VBOXVIDEOCMCMDVISITOR_RETURN_RMCMD    0x00000002
-typedef DECLCALLBACK(UINT) FNVBOXVIDEOCMCMDVISITOR(PVBOXVIDEOCM_CTX pContext, PVOID pvCmd, uint32_t cbCmd, PVOID pvVisitor);
+typedef DECLCALLBACKTYPE(UINT, FNVBOXVIDEOCMCMDVISITOR,(PVBOXVIDEOCM_CTX pContext, PVOID pvCmd, uint32_t cbCmd, PVOID pvVisitor));
 typedef FNVBOXVIDEOCMCMDVISITOR *PFNVBOXVIDEOCMCMDVISITOR;
 NTSTATUS vboxVideoCmCmdVisit(PVBOXVIDEOCM_CTX pContext, BOOLEAN bEntireSession, PFNVBOXVIDEOCMCMDVISITOR pfnVisitor, PVOID pvVisitor);
 
 NTSTATUS vboxVideoCmEscape(PVBOXVIDEOCM_CTX pContext, PVBOXDISPIFESCAPE_GETVBOXVIDEOCMCMD pCmd, uint32_t cbCmd);
 
-#endif /* #ifndef ___VBoxMPCm_h___ */
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPCm_h */

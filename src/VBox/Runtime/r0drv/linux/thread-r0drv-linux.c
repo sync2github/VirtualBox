@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: thread-r0drv-linux.c 90416 2021-07-29 21:10:03Z vboxsync $ */
 /** @file
  * IPRT - Threads, Ring-0 Driver, Linux.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,11 +33,11 @@
 #include <iprt/thread.h>
 
 #include <iprt/asm.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 5, 28) || defined(CONFIG_X86_SMAP)
+#if RTLNX_VER_MAX(2,5,28) || defined(CONFIG_X86_SMAP)
 # include <iprt/asm-amd64-x86.h>
 #endif
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/mp.h>
 
 
@@ -87,7 +87,7 @@ RT_EXPORT_SYMBOL(RTThreadSleepNoLog);
 RTDECL(bool) RTThreadYield(void)
 {
     IPRT_LINUX_SAVE_EFL_AC();
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 4, 20)
+#if RTLNX_VER_MIN(2,4,20)
     yield();
 #else
     /** @todo r=ramshankar: Can we use cond_resched() instead?  */
@@ -118,11 +118,11 @@ RTDECL(bool) RTThreadPreemptIsEnabled(RTTHREAD hThread)
     AssertMsg(c >= 0 && c < 32, ("%d\n", c));
     if (c != 0)
         return false;
-# if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 32)
+# if RTLNX_VER_MIN(2,5,32)
     if (in_atomic())
         return false;
 # endif
-# if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 28)
+# if RTLNX_VER_MIN(2,5,28)
     if (irqs_disabled())
         return false;
 # else
@@ -138,13 +138,13 @@ RT_EXPORT_SYMBOL(RTThreadPreemptIsEnabled);
 RTDECL(bool) RTThreadPreemptIsPending(RTTHREAD hThread)
 {
     Assert(hThread == NIL_RTTHREAD); RT_NOREF_PV(hThread);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 4)
+#if RTLNX_VER_MIN(2,5,4)
     return !!test_tsk_thread_flag(current, TIF_NEED_RESCHED);
 
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 4, 20)
+#elif RTLNX_VER_MIN(2,4,20)
     return !!need_resched();
 
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 1, 110)
+#elif RTLNX_VER_MIN(2,1,110)
     return current->need_resched != 0;
 
 #else
@@ -164,12 +164,10 @@ RT_EXPORT_SYMBOL(RTThreadPreemptIsPendingTrusty);
 
 RTDECL(bool) RTThreadPreemptIsPossible(void)
 {
-    /** @todo r=ramshankar: What about CONFIG_PREEMPT_VOLUNTARY? That can preempt
-     *        too but does so in voluntarily in explicit preemption points. */
 #ifdef CONFIG_PREEMPT
-    return true;    /* yes, kernel preemption is possible. */
+    return true;    /* Yes, kernel preemption is possible. */
 #else
-    return false;   /* no kernel preemption */
+    return false;   /* No kernel preemption (or CONFIG_PREEMPT_VOLUNTARY). */
 #endif
 }
 RT_EXPORT_SYMBOL(RTThreadPreemptIsPossible);
@@ -233,4 +231,36 @@ RTDECL(bool) RTThreadIsInInterrupt(RTTHREAD hThread)
     return in_interrupt() != 0;
 }
 RT_EXPORT_SYMBOL(RTThreadIsInInterrupt);
+
+
+RTDECL(int) RTThreadQueryTerminationStatus(RTTHREAD hThread)
+{
+    struct task_struct *pTask = current;
+    AssertReturn(hThread == NIL_RTTHREAD, VERR_NOT_SUPPORTED);
+
+    /* Check out pending signals.  ASSUMES we can get away w/o locking
+       anything because we're only reading the data.  */
+    if (sigismember(&pTask->pending.signal, SIGKILL))
+        return VINF_THREAD_IS_TERMINATING;
+
+#if RTLNX_VER_MIN(2,5,34)
+    /* Check the pending signals shared with other threads in
+       the same process/group.  ASSUME since we're alive that
+       the signal_struct won't be freed while we're looking
+       at it here... */
+    {
+# if RTLNX_VER_MIN(2,5,60)
+        struct signal_struct *pSignal = current->signal;
+# else
+        struct signal_struct *pSignal = current->sig;
+# endif
+        if (   pSignal
+            && sigismember(&pSignal->shared_pending.signal, SIGKILL))
+            return VINF_THREAD_IS_TERMINATING;
+    }
+#endif
+
+    return VINF_SUCCESS;
+}
+RT_EXPORT_SYMBOL(RTThreadQueryTerminationStatus);
 

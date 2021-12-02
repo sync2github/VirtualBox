@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDbgConsole.h 86329 2020-09-28 16:40:45Z vboxsync $ */
 /** @file
  * VBox Debugger GUI - Console.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___Debugger_VBoxDbgConsole_h
-#define ___Debugger_VBoxDbgConsole_h
+#ifndef DEBUGGER_INCLUDED_SRC_VBoxDbgConsole_h
+#define DEBUGGER_INCLUDED_SRC_VBoxDbgConsole_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VBoxDbgBase.h"
 
@@ -24,10 +27,18 @@
 #include <QComboBox>
 #include <QTimer>
 #include <QEvent>
+#include <QActionGroup>
 
 #include <iprt/critsect.h>
 #include <iprt/semaphore.h>
 #include <iprt/thread.h>
+
+// VirtualBox COM interfaces declarations (generated header)
+#ifdef VBOX_WITH_XPCOM
+# include <VirtualBox_XPCOM.h>
+#else
+# include <VirtualBox.h>
+#endif
 
 
 class VBoxDbgConsoleOutput : public QTextEdit
@@ -39,9 +50,10 @@ public:
      * Constructor.
      *
      * @param   pParent     Parent Widget.
+     * @param   pVirtualBox VirtualBox object for storing extra data.
      * @param   pszName     Widget name.
      */
-    VBoxDbgConsoleOutput(QWidget *pParent = NULL, const char *pszName = NULL);
+    VBoxDbgConsoleOutput(QWidget *pParent = NULL, IVirtualBox *pVirtualBox = NULL, const char *pszName = NULL);
 
     /**
      * Destructor
@@ -72,6 +84,7 @@ public:
 
 protected:
     typedef enum  { kGreenOnBlack, kBlackOnWhite } VBoxDbgConsoleColor;
+    typedef enum  { kFontType_Monospace, kFontType_Courier } VBoxDbgConsoleFontType;
 
     /**
      * Context menu event.
@@ -81,6 +94,31 @@ protected:
      */
     virtual void contextMenuEvent(QContextMenuEvent *pEvent);
 
+    /**
+     * Sets the color scheme.
+     *
+     * @param   enmScheme       The new color scheme.
+     * @param   fSaveIt         Whether to save it.
+     */
+    void        setColorScheme(VBoxDbgConsoleColor enmScheme, bool fSaveIt);
+
+    /**
+     * Sets the font type / family.
+     *
+     * @param   enmFontType     The font type.
+     * @param   fSaveIt         Whether to save it.
+     */
+    void        setFontType(VBoxDbgConsoleFontType enmFontType, bool fSaveIt);
+
+    /**
+     * Sets the font size.
+     *
+     * @param   uFontSize       The new font size in points.
+     * @param   fSaveIt         Whether to save it.
+     */
+    void        setFontSize(uint32_t uFontSize, bool fSaveIt);
+
+
     /** The current line (paragraph) number. */
     unsigned m_uCurLine;
     /** The position in the current line. */
@@ -89,34 +127,39 @@ protected:
     RTNATIVETHREAD m_hGUIThread;
     /** The current color scheme (foreground on background). */
     VBoxDbgConsoleColor m_enmColorScheme;
+    /** The IVirtualBox object */
+    IVirtualBox *m_pVirtualBox;
+
+    /** Array of font size actions 6..22pt. */
+    QAction *m_apFontSizeActions[22 - 6 + 1];
+    /** Action group for m_apFontSizeActions. */
+    QActionGroup *m_pActionFontSizeGroup;
+
+    /** The minimum font size.   */
+    static const uint32_t s_uMinFontSize;
 
 private slots:
     /**
-     * The green-on-black color scheme context-menu item was triggered.
+     * Selects color scheme
      */
-    void        setColorGreenOnBlack();
+    void        sltSelectColorScheme();
 
     /**
-     * The black-on-white color scheme context-menu item was triggered.
+     * Selects font type.
      */
-    void        setColorBlackOnWhite();
+    void        sltSelectFontType();
 
     /**
-     * The courier font family context-menu item was triggered.
+     * Selects font size.
      */
-    void        setFontCourier();
-
-    /**
-     * The monospace font family context-menu item was triggered.
-     */
-    void        setFontMonospace();
+    void        sltSelectFontSize();
 };
 
 
 /**
  * The Debugger Console Input widget.
  *
- * This is a combobox which only responds to <return>.
+ * This is a combobox which only responds to \<return\>.
  */
 class VBoxDbgConsoleInput : public QComboBox
 {
@@ -178,8 +221,9 @@ public:
      *
      * @param   a_pDbgGui       Pointer to the debugger gui object.
      * @param   a_pParent       Parent Widget.
+     * @param   a_pVirtualBox   VirtualBox object for storing extra data.
      */
-    VBoxDbgConsole(VBoxDbgGui *a_pDbgGui, QWidget *a_pParent = NULL);
+    VBoxDbgConsole(VBoxDbgGui *a_pDbgGui, QWidget *a_pParent = NULL, IVirtualBox *a_pVirtualBox = NULL);
 
     /**
      * Destructor
@@ -244,7 +288,7 @@ protected:
      * @param   pBack       Pointer to VBoxDbgConsole::m_Back.
      * @param   cMillies    Number of milliseconds to wait on input data.
      */
-    static DECLCALLBACK(bool) backInput(PDBGCBACK pBack, uint32_t cMillies);
+    static DECLCALLBACK(bool) backInput(PCDBGCIO pIo, uint32_t cMillies);
 
     /**
      * Read input.
@@ -257,7 +301,7 @@ protected:
      *                      If NULL the entire buffer must be filled for a
      *                      successful return.
      */
-    static DECLCALLBACK(int) backRead(PDBGCBACK pBack, void *pvBuf, size_t cbBuf, size_t *pcbRead);
+    static DECLCALLBACK(int) backRead(PCDBGCIO pIo, void *pvBuf, size_t cbBuf, size_t *pcbRead);
 
     /**
      * Write (output).
@@ -269,12 +313,12 @@ protected:
      * @param   pcbWritten  Where to store the number of bytes actually written.
      *                      If NULL the entire buffer must be successfully written.
      */
-    static DECLCALLBACK(int) backWrite(PDBGCBACK pBack, const void *pvBuf, size_t cbBuf, size_t *pcbWritten);
+    static DECLCALLBACK(int) backWrite(PCDBGCIO pIo, const void *pvBuf, size_t cbBuf, size_t *pcbWritten);
 
     /**
-     * @copydoc FNDBGCBACKSETREADY
+     * @copydoc DBGCIO::pfnSetReady
      */
-    static DECLCALLBACK(void) backSetReady(PDBGCBACK pBack, bool fReady);
+    static DECLCALLBACK(void) backSetReady(PCDBGCIO pIo, bool fReady);
 
     /**
      * The Debugger Console Thread
@@ -343,10 +387,10 @@ protected:
     bool volatile m_fThreadTerminated;
 
     /** The debug console backend structure.
-     * Use VBOXDBGCONSOLE_FROM_DBGCBACK to convert the DBGCBACK pointer to a object pointer. */
+     * Use VBOXDBGCONSOLE_FROM_DBGCIO to convert the DBGCIO pointer to a object pointer. */
     struct VBoxDbgConsoleBack
     {
-        DBGCBACK Core;
+        DBGCIO Core;
         VBoxDbgConsole *pSelf;
     } m_Back;
 
@@ -354,7 +398,7 @@ protected:
      * Converts a pointer to VBoxDbgConsole::m_Back to VBoxDbgConsole pointer.
      * @todo find a better way because offsetof is undefined on objects and g++ gets very noisy because of that.
      */
-#   define VBOXDBGCONSOLE_FROM_DBGCBACK(pBack) ( ((struct VBoxDbgConsoleBack *)(pBack))->pSelf )
+#   define VBOXDBGCONSOLE_FROM_DBGCIO(pIo) ( ((struct VBoxDbgConsoleBack *)(pBack))->pSelf )
 
     /** Change focus to the input field. */
     QAction *m_pFocusToInput;
@@ -388,5 +432,5 @@ private:
 };
 
 
-#endif
+#endif /* !DEBUGGER_INCLUDED_SRC_VBoxDbgConsole_h */
 

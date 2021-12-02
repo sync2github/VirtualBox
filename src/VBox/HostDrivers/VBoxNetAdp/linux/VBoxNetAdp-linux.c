@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetAdp-linux.c 87823 2021-02-20 13:35:47Z vboxsync $ */
 /** @file
  * VBoxNetAdp - Virtual Network Adapter Driver (Host), Linux Specific Code.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -30,7 +39,7 @@
 
 #define LOG_GROUP LOG_GROUP_NET_ADP_DRV
 #include <VBox/log.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/process.h>
 #include <iprt/initterm.h>
 #include <iprt/mem.h>
@@ -61,21 +70,25 @@
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
 *********************************************************************************************************************************/
-static int  VBoxNetAdpLinuxInit(void);
-static void VBoxNetAdpLinuxUnload(void);
+static int  __init VBoxNetAdpLinuxInit(void);
+static void __exit VBoxNetAdpLinuxUnload(void);
 
 static int VBoxNetAdpLinuxOpen(struct inode *pInode, struct file *pFilp);
 static int VBoxNetAdpLinuxClose(struct inode *pInode, struct file *pFilp);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36)
+#if RTLNX_VER_MAX(2,6,36)
 static int VBoxNetAdpLinuxIOCtl(struct inode *pInode, struct file *pFilp,
                                 unsigned int uCmd, unsigned long ulArg);
-#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36) */
+#else  /* >= 2,6,36 */
 static long VBoxNetAdpLinuxIOCtlUnlocked(struct file *pFilp,
                                          unsigned int uCmd, unsigned long ulArg);
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36) */
+#endif /* >= 2,6,36 */
 
 static void vboxNetAdpEthGetDrvinfo(struct net_device *dev, struct ethtool_drvinfo *info);
+#if RTLNX_VER_MIN(4,20,0)
+static int vboxNetAdpEthGetLinkSettings(struct net_device *pNetDev, struct ethtool_link_ksettings *pLinkSettings);
+#else  /* < 4,20,0 */
 static int vboxNetAdpEthGetSettings(struct net_device *dev, struct ethtool_cmd *cmd);
+#endif /* < 4,20,0 */
 
 
 /*********************************************************************************************************************************
@@ -99,11 +112,11 @@ static struct file_operations gFileOpsVBoxNetAdp =
     owner:      THIS_MODULE,
     open:       VBoxNetAdpLinuxOpen,
     release:    VBoxNetAdpLinuxClose,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36)
+#if RTLNX_VER_MAX(2,6,36)
     ioctl:      VBoxNetAdpLinuxIOCtl,
-#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36) */
+#else /* RTLNX_VER_MIN(2,6,36) */
     unlocked_ioctl: VBoxNetAdpLinuxIOCtlUnlocked,
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36) */
+#endif /* RTLNX_VER_MIN(2,6,36) */
 };
 
 /** The miscdevice structure. */
@@ -112,15 +125,23 @@ static struct miscdevice g_CtlDev =
     minor:      MISC_DYNAMIC_MINOR,
     name:       VBOXNETADP_CTL_DEV_NAME,
     fops:       &gFileOpsVBoxNetAdp,
-# if LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 17)
+# if RTLNX_VER_MAX(2,6,18)
     devfs_name: VBOXNETADP_CTL_DEV_NAME
 # endif
 };
 
+# if RTLNX_VER_MIN(2,6,19)
 static const struct ethtool_ops gEthToolOpsVBoxNetAdp =
+# else
+static struct ethtool_ops gEthToolOpsVBoxNetAdp =
+# endif
 {
     .get_drvinfo        = vboxNetAdpEthGetDrvinfo,
+# if RTLNX_VER_MIN(4,20,0)
+    .get_link_ksettings = vboxNetAdpEthGetLinkSettings,
+# else
     .get_settings       = vboxNetAdpEthGetSettings,
+# endif
     .get_link           = ethtool_op_get_link,
 };
 
@@ -152,7 +173,7 @@ static int vboxNetAdpLinuxXmit(struct sk_buff *pSkb, struct net_device *pNetDev)
     /* Update the stats. */
     pPriv->Stats.tx_packets++;
     pPriv->Stats.tx_bytes += pSkb->len;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 31)
+#if RTLNX_VER_MAX(2,6,31)
     /* Update transmission time stamp. */
     pNetDev->trans_start = jiffies;
 #endif
@@ -161,7 +182,7 @@ static int vboxNetAdpLinuxXmit(struct sk_buff *pSkb, struct net_device *pNetDev)
     return 0;
 }
 
-struct net_device_stats *vboxNetAdpLinuxGetStats(struct net_device *pNetDev)
+static struct net_device_stats *vboxNetAdpLinuxGetStats(struct net_device *pNetDev)
 {
     PVBOXNETADPPRIV pPriv = netdev_priv(pNetDev);
     return &pPriv->Stats;
@@ -192,12 +213,29 @@ static void vboxNetAdpEthGetDrvinfo(struct net_device *pNetDev, struct ethtool_d
 }
 
 
+# if RTLNX_VER_MIN(4,20,0)
+/* ethtool_ops::get_link_ksettings */
+static int vboxNetAdpEthGetLinkSettings(struct net_device *pNetDev, struct ethtool_link_ksettings *pLinkSettings)
+{
+    /* We just need to set field we care for, the rest is done by ethtool_get_link_ksettings() helper in ethtool. */
+    ethtool_link_ksettings_zero_link_mode(pLinkSettings, supported);
+    ethtool_link_ksettings_zero_link_mode(pLinkSettings, advertising);
+    ethtool_link_ksettings_zero_link_mode(pLinkSettings, lp_advertising);
+    pLinkSettings->base.speed       = SPEED_10;
+    pLinkSettings->base.duplex      = DUPLEX_FULL;
+    pLinkSettings->base.port        = PORT_TP;
+    pLinkSettings->base.phy_address = 0;
+    pLinkSettings->base.transceiver = XCVR_INTERNAL;
+    pLinkSettings->base.autoneg     = AUTONEG_DISABLE;
+    return 0;
+}
+#else /* RTLNX_VER_MAX(4,20,0) */
 /* ethtool_ops::get_settings */
 static int vboxNetAdpEthGetSettings(struct net_device *pNetDev, struct ethtool_cmd *cmd)
 {
     cmd->supported      = 0;
     cmd->advertising    = 0;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
+#if RTLNX_VER_MIN(2,6,27)
     ethtool_cmd_speed_set(cmd, SPEED_10);
 #else
     cmd->speed          = SPEED_10;
@@ -211,9 +249,10 @@ static int vboxNetAdpEthGetSettings(struct net_device *pNetDev, struct ethtool_c
     cmd->maxrxpkt       = 0;
     return 0;
 }
+#endif /* RTLNX_VER_MAX(4,20,0) */
 
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
+#if RTLNX_VER_MIN(2,6,29)
 static const struct net_device_ops vboxNetAdpNetdevOps = {
     .ndo_open               = vboxNetAdpLinuxOpen,
     .ndo_stop               = vboxNetAdpLinuxStop,
@@ -227,14 +266,17 @@ static void vboxNetAdpNetDevInit(struct net_device *pNetDev)
     PVBOXNETADPPRIV pPriv;
 
     ether_setup(pNetDev);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
+#if RTLNX_VER_MIN(2,6,29)
     pNetDev->netdev_ops = &vboxNetAdpNetdevOps;
-#else /* LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29) */
+#else /* RTLNX_VER_MAX(2,6,29) */
     pNetDev->open = vboxNetAdpLinuxOpen;
     pNetDev->stop = vboxNetAdpLinuxStop;
     pNetDev->hard_start_xmit = vboxNetAdpLinuxXmit;
     pNetDev->get_stats = vboxNetAdpLinuxGetStats;
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 29) */
+#endif /* RTLNX_VER_MAX(2,6,29) */
+#if RTLNX_VER_MIN(4,10,0)
+    pNetDev->max_mtu = 16110;
+#endif /* RTLNX_VER_MIN(4,10,0) */
 
     pNetDev->ethtool_ops = &gEthToolOpsVBoxNetAdp;
 
@@ -251,7 +293,7 @@ int vboxNetAdpOsCreate(PVBOXNETADP pThis, PCRTMAC pMACAddress)
     /* No need for private data. */
     pNetDev = alloc_netdev(sizeof(VBOXNETADPPRIV),
                            pThis->szName[0] ? pThis->szName : VBOXNETADP_LINUX_NAME,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 17, 0)
+#if RTLNX_VER_MIN(3,17,0)
                            NET_NAME_UNKNOWN,
 #endif
                            vboxNetAdpNetDevInit);
@@ -351,13 +393,13 @@ static int VBoxNetAdpLinuxClose(struct inode *pInode, struct file *pFilp)
  * @param   uCmd        The function specified to ioctl().
  * @param   ulArg       The argument specified to ioctl().
  */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36)
+#if RTLNX_VER_MAX(2,6,36)
 static int VBoxNetAdpLinuxIOCtl(struct inode *pInode, struct file *pFilp,
                                 unsigned int uCmd, unsigned long ulArg)
-#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36) */
+#else /* RTLNX_VER_MIN(2,6,36) */
 static long VBoxNetAdpLinuxIOCtlUnlocked(struct file *pFilp,
                                          unsigned int uCmd, unsigned long ulArg)
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36) */
+#endif /* RTLNX_VER_MIN(2,6,36) */
 {
     VBOXNETADPREQ Req;
     PVBOXNETADP pAdp;

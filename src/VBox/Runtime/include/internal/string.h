@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: string.h 90821 2021-08-23 22:04:06Z vboxsync $ */
 /** @file
  * IPRT - Internal RTStr header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_string_h
-#define ___internal_string_h
+#ifndef IPRT_INCLUDED_INTERNAL_string_h
+#define IPRT_INCLUDED_INTERNAL_string_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/string.h>
 
@@ -47,10 +50,26 @@ RT_C_DECLS_BEGIN
 # define RTStrAssertMsgReturn(expr, msg, rc)    do { if (!(expr)) return rc; } while (0)
 #endif
 
+DECLHIDDEN(size_t) rtStrFormatBadPointer(size_t cch, PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, int cchWidth,
+                                         unsigned fFlags, void const *pvStr, char szTmp[64], const char *pszTag, int cchTag);
 DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, const char **ppszFormat, va_list *pArgs,
                                  int cchWidth, int cchPrecision, unsigned fFlags, char chArgSize);
 DECLHIDDEN(size_t) rtstrFormatType(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, const char **ppszFormat, va_list *pArgs,
                                    int cchWidth, int cchPrecision, unsigned fFlags, char chArgSize);
+
+/**
+ * Format kernel address into @a pszBuf.
+ *
+ * @returns Number of bytes returned.
+ * @param   pszBuf          The return buffer.
+ * @param   cbBuf           The buffer size.
+ * @param   uPtr            The ring-0 pointer value.
+ * @param   cchWidth        The specified width, -1 if not given.
+ * @param   cchPrecision    The specified precision.
+ * @param   fFlags          Format flags, RTSTR_F_XXX.
+ */
+DECLHIDDEN(size_t) rtStrFormatKernelAddress(char *pszBuf, size_t cbBuf, RTR0INTPTR uPtr, signed int cchWidth,
+                                            signed int cchPrecision, unsigned int fFlags);
 
 #ifdef RT_WITH_ICONV_CACHE
 DECLHIDDEN(void) rtStrIconvCacheInit(struct RTTHREADINT *pThread);
@@ -84,5 +103,5 @@ DECLHIDDEN(int) rtStrToIpAddr6Str(const char *psz, char *pszAddrOut, size_t addr
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_string_h */
 

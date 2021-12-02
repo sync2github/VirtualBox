@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ldrNative-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Binary Image Loader, Win32 native.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -40,11 +40,11 @@
 #include <iprt/err.h>
 #include <iprt/file.h>
 #include <iprt/log.h>
+#include <iprt/once.h>
 #include <iprt/path.h>
 #include <iprt/string.h>
+#include <iprt/utf16.h>
 
-#include <iprt/once.h>
-#include <iprt/string.h>
 #include "internal/ldr.h"
 #include "internal-r3-win.h"
 
@@ -55,7 +55,7 @@
 #endif
 
 
-int rtldrNativeLoad(const char *pszFilename, uintptr_t *phHandle, uint32_t fFlags, PRTERRINFO pErrInfo)
+DECLHIDDEN(int) rtldrNativeLoad(const char *pszFilename, uintptr_t *phHandle, uint32_t fFlags, PRTERRINFO pErrInfo)
 {
     Assert(sizeof(*phHandle) >= sizeof(HMODULE));
     AssertReturn(!(fFlags & RTLDRLOAD_FLAGS_GLOBAL), VERR_INVALID_FLAGS);
@@ -68,9 +68,10 @@ int rtldrNativeLoad(const char *pszFilename, uintptr_t *phHandle, uint32_t fFlag
     /*
      * Convert to UTF-16 and make sure it got a .DLL suffix.
      */
+    /** @todo Implement long path support for native DLL loading on windows. @bugref{9248} */
     int rc;
     RTUTF16 *pwszNative = NULL;
-    if (RTPathHasSuffix(pszFilename))
+    if (RTPathHasSuffix(pszFilename) || (fFlags & RTLDRLOAD_FLAGS_NO_SUFFIX))
         rc = RTStrToUtf16(pszFilename, &pwszNative);
     else
     {
@@ -174,7 +175,7 @@ DECLCALLBACK(int) rtldrNativeClose(PRTLDRMODINTERNAL pMod)
 }
 
 
-int rtldrNativeLoadSystem(const char *pszFilename, const char *pszExt, uint32_t fFlags, PRTLDRMOD phLdrMod)
+DECLHIDDEN(int) rtldrNativeLoadSystem(const char *pszFilename, const char *pszExt, uint32_t fFlags, PRTLDRMOD phLdrMod)
 {
     AssertReleaseMsg(g_hModKernel32,
                      ("rtldrNativeLoadSystem(%s,,) is called before IPRT has configured the windows loader!\n", pszFilename));

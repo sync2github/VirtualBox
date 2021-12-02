@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ldr.cpp 90789 2021-08-23 10:27:29Z vboxsync $ */
 /** @file
  * IPRT - Binary Image Loader.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,7 +35,7 @@
 #include <iprt/alloc.h>
 #include <iprt/string.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
 #include "internal/ldr.h"
 
@@ -49,7 +49,7 @@ RTDECL(int) RTLdrGetSymbol(RTLDRMOD hLdrMod, const char *pszSymbol, void **ppvVa
      */
     AssertMsgReturn(rtldrIsValid(hLdrMod), ("hLdrMod=%p\n", hLdrMod), VERR_INVALID_HANDLE);
     AssertMsgReturn(pszSymbol, ("pszSymbol=%p\n", pszSymbol), VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(ppvValue), ("ppvValue=%p\n", ppvValue), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(ppvValue, VERR_INVALID_POINTER);
     PRTLDRMODINTERNAL pMod = (PRTLDRMODINTERNAL)hLdrMod;
     //AssertMsgReturn(pMod->eState == LDR_STATE_OPENED, ("eState=%d\n", pMod->eState), VERR_WRONG_ORDER);
 
@@ -155,4 +155,22 @@ RTDECL(int) RTLdrClose(RTLDRMOD hLdrMod)
     return VINF_SUCCESS;
 }
 RT_EXPORT_SYMBOL(RTLdrClose);
+
+
+RTDECL(RTLDRARCH) RTLdrGetHostArch(void)
+{
+#if   defined(RT_ARCH_AMD64)
+    RTLDRARCH enmArch = RTLDRARCH_AMD64;
+#elif defined(RT_ARCH_X86)
+    RTLDRARCH enmArch = RTLDRARCH_X86_32;
+#elif defined(RT_ARCH_ARM) || defined(RT_ARCH_ARM32)
+    RTLDRARCH enmArch = RTLDRARCH_ARM32;
+#elif defined(RT_ARCH_ARM64)
+    RTLDRARCH enmArch = RTLDRARCH_ARM64;
+#else
+    RTLDRARCH enmArch = RTLDRARCH_WHATEVER;
+#endif
+    return enmArch;
+}
+RT_EXPORT_SYMBOL(RTLdrGetHostArch);
 

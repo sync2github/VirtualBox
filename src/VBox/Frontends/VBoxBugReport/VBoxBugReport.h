@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxBugReport.h 85086 2020-07-07 17:01:10Z vboxsync $ */
 /** @file
  * VBoxBugReport - VirtualBox command-line diagnostics tool, internal header file.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___H_VBOXBUGREPORT
-#define ___H_VBOXBUGREPORT
+#ifndef VBOX_INCLUDED_SRC_VBoxBugReport_VBoxBugReport_h
+#define VBOX_INCLUDED_SRC_VBoxBugReport_VBoxBugReport_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /*
  * Introduction.
@@ -28,7 +31,7 @@
  * collected via OS APIs.
  */
 
-/* @todo not sure if using a separate namespace would be beneficial */
+/** @todo not sure if using a separate namespace would be beneficial */
 
 #include <iprt/path.h>
 #include <iprt/stream.h>
@@ -44,29 +47,29 @@
 
 /* Base */
 
-inline void handleRtError(int rc, const char *pszMsgFmt, ...)
+DECL_INLINE_THROW(void) handleRtError(int rc, const char *pszMsgFmt, ...)
 {
     if (RT_FAILURE(rc))
     {
         va_list va;
         va_start(va, pszMsgFmt);
-        RTCString msgArgs(pszMsgFmt, va);
+        RTCString strMsg(pszMsgFmt, va);
         va_end(va);
-        RTCStringFmt msg("%s. %s (%d)\n", msgArgs.c_str(), RTErrGetFull(rc), rc);
-        throw RTCError(msg.c_str());
+        strMsg.appendPrintfNoThrow(". %Rrf\n", rc);
+        throw RTCError(strMsg);
     }
 }
 
-inline void handleComError(HRESULT hr, const char *pszMsgFmt, ...)
+DECL_INLINE_THROW(void) handleComError(HRESULT hr, const char *pszMsgFmt, ...)
 {
     if (FAILED(hr))
     {
         va_list va;
         va_start(va, pszMsgFmt);
-        RTCString msgArgs(pszMsgFmt, va);
+        RTCString strMsg(pszMsgFmt, va);
         va_end(va);
-        RTCStringFmt msg("%s (hr=0x%x)\n", msgArgs.c_str(), hr);
-        throw RTCError(msg.c_str());
+        strMsg.appendPrintfNoThrow(". (hr=0x%x %Rhrc)\n", hr, hr);
+        throw RTCError(strMsg);
     }
 }
 
@@ -85,6 +88,29 @@ private:
 
 
 /*
+ * An abstract class serving as the root of the bug report filter tree.
+ * A child provides an implementation of the 'apply' method. A child
+ * should modify the input buffer (provided via pvSource) in place, or
+ * allocate a new buffer via 'allocateBuffer'. Allocated buffers are
+ * released automatically when another buffer is allocated, which means
+ * that NEXT CALL TO 'APPLY' INVALIDATES BUFFERS RETURNED IN PREVIOUS
+ * CALLS!
+ */
+class BugReportFilter
+{
+public:
+    BugReportFilter();
+    virtual ~BugReportFilter();
+    virtual void *apply(void *pvSource, size_t *pcbInOut) = 0;
+protected:
+    void *allocateBuffer(size_t cbNeeded);
+private:
+    void *m_pvBuffer;
+    size_t m_cbBuffer;
+};
+
+
+/*
  * An abstract class serving as the root of the bug report item tree.
  */
 class BugReportItem
@@ -94,8 +120,11 @@ public:
     virtual ~BugReportItem();
     virtual const char *getTitle(void);
     virtual PRTSTREAM getStream(void) = 0;
+    void addFilter(BugReportFilter *filter);
+    void *applyFilter(void *pvSource, size_t *pcbInOut);
 private:
     char *m_pszTitle;
+    BugReportFilter *m_filter;
 };
 
 /*
@@ -107,9 +136,10 @@ public:
     BugReport(const char *pszFileName);
     virtual ~BugReport();
 
-    void addItem(BugReportItem* item);
+    void addItem(BugReportItem* item, BugReportFilter *filter = 0);
     int  getItemCount(void);
     void process();
+    void *applyFilters(BugReportItem* item, void *pvSource, size_t *pcbInOut);
 
     virtual void processItem(BugReportItem* item) = 0;
     virtual void complete(void) = 0;
@@ -223,9 +253,24 @@ private:
     char *m_papszArgs[32];
 };
 
+/*
+ * A base class for item classes that provide temp output file to a command.
+ */
+class BugReportCommandTemp : public BugReportItem
+{
+public:
+    BugReportCommandTemp(const char *pszTitle, const char *pszExec, ...);
+    virtual ~BugReportCommandTemp();
+    virtual PRTSTREAM getStream(void);
+private:
+    PRTSTREAM m_Strm;
+    char m_szFileName[RTPATH_MAX];
+    char m_szErrFileName[RTPATH_MAX];
+    char *m_papszArgs[32];
+};
 
 /* Platform-specific */
 
 void createBugReportOsSpecific(BugReport* report, const char *pszHome);
 
-#endif /* !___H_VBOXBUGREPORT */
+#endif /* !VBOX_INCLUDED_SRC_VBoxBugReport_VBoxBugReport_h */

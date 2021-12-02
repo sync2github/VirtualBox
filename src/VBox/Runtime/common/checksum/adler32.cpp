@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: adler32.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Adler-32
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -82,7 +82,7 @@ RTDECL(uint32_t) RTCrcAdler32Process(uint32_t u32Crc, void const *pv, size_t cb)
                 b += a;
                 b %= RTCRC_ADLER_32_NUMBER;
                 cb--;
-                /* fall thru */
+                RT_FALL_THRU();
 
             case 2:
                 a += *pbSrc++;
@@ -90,7 +90,7 @@ RTDECL(uint32_t) RTCrcAdler32Process(uint32_t u32Crc, void const *pv, size_t cb)
                 b += a;
                 b %= RTCRC_ADLER_32_NUMBER;
                 cb--;
-                /* fall thru */
+                RT_FALL_THRU();
 
             case 3:
                 a += *pbSrc++;
@@ -140,7 +140,7 @@ RTDECL(uint32_t) RTCrcAdler32Process(uint32_t u32Crc, void const *pv, size_t cb)
                 b += a;
                 b %= RTCRC_ADLER_32_NUMBER;
                 cb--;
-                /* fall thru */
+                RT_FALL_THRU();
 
             case 2:
                 a += *pbSrc++;
@@ -148,7 +148,7 @@ RTDECL(uint32_t) RTCrcAdler32Process(uint32_t u32Crc, void const *pv, size_t cb)
                 b += a;
                 b %= RTCRC_ADLER_32_NUMBER;
                 cb--;
-                /* fall thru */
+                RT_FALL_THRU();
 
             case 1:
                 a += *pbSrc++;

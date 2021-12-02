@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxSDL.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  *
  * VBox frontends: VBoxSDL (simple frontend based on SDL):
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __H_VBOXSDL
-#define __H_VBOXSDL
+#ifndef VBOX_INCLUDED_SRC_VBoxSDL_VBoxSDL_h
+#define VBOX_INCLUDED_SRC_VBoxSDL_VBoxSDL_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #ifdef RT_OS_WINDOWS /** @todo check why we need to do this on windows. */
@@ -30,6 +33,7 @@
 #ifdef _MSC_VER
 # pragma warning(push)
 # pragma warning(disable: 4121) /* warning C4121: 'SDL_SysWMmsg' : alignment of a member was sensitive to packing*/
+# pragma warning(disable: 4668) /* warning C4668: '__GNUC__' is not defined as a preprocessor macro, replacing with '0' for '#if/#elif' */
 #endif
 #include <SDL.h>
 #ifdef _MSC_VER
@@ -88,4 +92,4 @@ void *VBoxSDLGetDarwinWindowId(void);
 RT_C_DECLS_END
 #endif
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_VBoxSDL_VBoxSDL_h */

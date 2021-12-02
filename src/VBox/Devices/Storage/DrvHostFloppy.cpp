@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: DrvHostFloppy.cpp 92224 2021-11-04 21:22:28Z vboxsync $ */
 /** @file
  *
  * VBox storage devices:
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -50,7 +50,7 @@ static DECLCALLBACK(int) drvHostFloppyConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pC
     /*
      * Init instance data.
      */
-    int rc = DRVHostBaseInit(pDrvIns, pCfg, "Path\0ReadOnly\0Interval\0Locked\0BIOSVisible\0",
+    int rc = DRVHostBaseInit(pDrvIns, pCfg, "Path\0ReadOnly\0Interval\0BIOSVisible\0",
                              PDMMEDIATYPE_FLOPPY_1_44);
     LogFlow(("drvHostFloppyConstruct: returns %Rrc\n", rc));
     return rc;

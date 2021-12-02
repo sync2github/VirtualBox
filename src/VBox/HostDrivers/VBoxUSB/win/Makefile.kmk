@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 84540 2020-05-26 15:06:13Z vboxsync $
 ## @file
 # Sub-Makefile for the Windows USB drivers.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
 # Foundation, in version 2 as it comes in the "COPYING" file of the
 # VirtualBox OSE distribution. VirtualBox OSE is distributed in the
 # hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+# The contents of this file may alternatively be used under the terms
+# of the Common Development and Distribution License Version 1.0
+# (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+# VirtualBox OSE distribution, in which case the provisions of the
+# CDDL are applicable instead of those of the GPL.
+#
+# You may elect to license modified versions of this file under the
+# terms and conditions of either the GPL or the CDDL or both.
 #
 
 SUB_DEPTH = ../../../../..
@@ -38,7 +47,11 @@ ifdef VBOX_SIGNING_MODE
  VBoxUSB_DEBUG_INSTTYPE = both
 endif
 VBoxUSB_SDKS        = ReorderCompilerIncs $(VBOX_WINDDK) $(VBOX_WINPSDK)INCS
-VBoxUSB_DEFS        = IN_RT_R0 IN_SUP_R0 VBOX_DBG_LOG_NAME=\"USBDev\"
+ifdef VBOX_WITH_AUTOMATIC_DEFS_QUOTING
+ VBoxUSB_DEFS      := IN_RT_R0 IN_SUP_R0 VBOX_DBG_LOG_NAME="USBDev"
+else
+ VBoxUSB_DEFS      := IN_RT_R0 IN_SUP_R0 VBOX_DBG_LOG_NAME=\"USBDev\"
+endif
 VBoxUSB_LDFLAGS.x86 = -Entry:DriverEntry@8
 VBoxUSB_LDFLAGS.amd64 = -Entry:DriverEntry
 VBoxUSB_SOURCES     = \
@@ -65,9 +78,12 @@ ifdef VBOX_SIGNING_MODE
 endif
 VBoxUSBMon_INCS       := $(PATH_SUB_CURRENT)/..
 VBoxUSBMon_SDKS        = ReorderCompilerIncs $(VBOX_WINDDK) $(VBOX_WINPSDK)INCS
-VBoxUSBMon_DEFS        = IN_RT_R0 IN_SUP_R0 i386=1 STD_CALL CONDITION_HANDLING=1 NT_INST=0 \
-	WIN32=100 _NT1X_=100 WINNT=1 _WIN32_WINNT=0x0501 WINVER=0x0501 _WIN32_IE=0x0600 WIN32_LEAN_AND_MEAN=1 \
-	VBOXUSBFILTERMGR_USB_SPINLOCK VBOX_DBG_LOG_NAME=\"USBMon\"
+VBoxUSBMon_DEFS        = IN_RT_R0 IN_SUP_R0 NTDDI_WINNT=_NTDDI_VISTA VBOXUSBFILTERMGR_USB_SPINLOCK
+ifdef VBOX_WITH_AUTOMATIC_DEFS_QUOTING
+ VBoxUSBMon_DEFS      += VBOX_DBG_LOG_NAME="USBMon"
+else
+ VBoxUSBMon_DEFS      += VBOX_DBG_LOG_NAME=\"USBMon\"
+endif
 VBoxUSBMon_LDFLAGS.x86 = -Entry:DriverEntry@8
 VBoxUSBMon_LDFLAGS.amd64 = -Entry:DriverEntry
 ifdef VBOX_USBMON_WITH_FILTER_AUTOAPPLY
@@ -128,12 +144,13 @@ USBUninstall_LIBS = \
 # USBTest
 #
 USBTest_TEMPLATE = VBOXR3EXE
-USBTest_DEFS     = IN_RT_R3
+USBTest_DEFS     = IN_RT_R3 IN_USBLIB
 USBTest_SDKS     = ReorderCompilerIncs $(VBOX_WINPSDK) $(VBOX_WINDDK) VBOX_NTDLL
 USBTest_CXXFLAGS = -Gz
 USBTest_CFLAGS   = -Gz
 USBTest_SOURCES  = \
-	testcase/USBTest.cpp
+	testcase/USBTest.cpp \
+	../USBFilter.cpp
 USBTest_LIBS = \
 	$(PATH_SDK_$(VBOX_WINDDK)_LIB)/newdev.lib \
 	$(LIB_RUNTIME) \
@@ -143,8 +160,7 @@ USBTest_LIBS = \
 #
 # Install the INF files.
 #
-install-infs_INST = bin/
-install-infs_MODE = a+r,u+w
+install-infs_TEMPLATE = VBoxR0DrvInfCat
 install-infs_SOURCES = \
 	$(PATH_TARGET)/VBoxUSBCat.dir/VBoxUSB.inf \
 	$(PATH_TARGET)/VBoxUSBMonCat.dir/VBoxUSBMon.inf
@@ -164,8 +180,10 @@ $(PATH_TARGET)/VBoxUSBMonCat.dir/VBoxUSBMon.inf: $(PATH_SUB_CURRENT)/mon/VBoxUSB
 ifdef VBOX_SIGNING_MODE
 install-infs_SOURCES += \
 	$(PATH_TARGET)/VBoxUSBCat.dir/VBoxUSB.cat \
+	$(PATH_TARGET)/VBoxUSBCat.dir/VBoxUSB.cat=>VBoxUSB-PreW10.cat \
 	$(PATH_TARGET)/VBoxUSBCat.dir/VBoxUSB.sys \
 	$(PATH_TARGET)/VBoxUSBMonCat.dir/VBoxUSBMon.cat \
+	$(PATH_TARGET)/VBoxUSBMonCat.dir/VBoxUSBMon.cat=>VBoxUSBMon-PreW10.cat \
 	$(PATH_TARGET)/VBoxUSBMonCat.dir/VBoxUSBMon.sys
 
 $(PATH_TARGET)/VBoxUSBCat.dir/VBoxUSB.sys: $$(VBoxUSB_1_TARGET) | $$(dir $$@)

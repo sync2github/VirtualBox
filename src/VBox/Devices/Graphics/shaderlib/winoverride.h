@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: winoverride.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DevVMWare/Shaderlib - Wine Function Portability Overrides
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __WINOVERRIDE_H__
-#define __WINOVERRIDE_H__
+#ifndef VBOX_INCLUDED_SRC_Graphics_shaderlib_winoverride_h
+#define VBOX_INCLUDED_SRC_Graphics_shaderlib_winoverride_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #define GetProcessHeap()    ((HANDLE)0)
 #define HeapAlloc           VBoxHeapAlloc
@@ -29,5 +32,5 @@ BOOL        WINAPI VBoxHeapFree(HANDLE hHeap, DWORD heaptype, LPVOID ptr);
 LPVOID      WINAPI VBoxHeapReAlloc(HANDLE hHeap,DWORD heaptype, LPVOID ptr, SIZE_T size);
 void VBoxDebugBreak(void);
 
-#endif /* !__WINOVERRIDE_H__ */
+#endif /* !VBOX_INCLUDED_SRC_Graphics_shaderlib_winoverride_h */
 

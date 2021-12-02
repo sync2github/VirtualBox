@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: process-creation-posix.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Process Creation, POSIX.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,8 +30,24 @@
 *********************************************************************************************************************************/
 #define LOG_GROUP RTLOGGROUP_PROCESS
 #include <iprt/cdefs.h>
+#ifdef RT_OS_LINUX
+# define IPRT_WITH_DYNAMIC_CRYPT_R
+#endif
+#if (defined(RT_OS_LINUX) || defined(RT_OS_OS2)) && !defined(_GNU_SOURCE)
+# define _GNU_SOURCE
+#endif
 
-#include <unistd.h>
+#ifdef RT_OS_OS2
+# define crypt   unistd_crypt
+# define setkey  unistd_setkey
+# define encrypt unistd_encrypt
+# include <unistd.h>
+# undef  crypt
+# undef  setkey
+# undef  encrypt
+#else
+# include <unistd.h>
+#endif
 #include <stdlib.h>
 #include <errno.h>
 #include <sys/types.h>
@@ -41,8 +57,10 @@
 #include <signal.h>
 #include <grp.h>
 #include <pwd.h>
-#if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
+#if defined(RT_OS_LINUX) || defined(RT_OS_OS2) || defined(RT_OS_SOLARIS)
 # include <crypt.h>
+#endif
+#if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
 # include <shadow.h>
 #endif
 
@@ -61,9 +79,24 @@
 # include <spawn.h>
 #endif
 
-#ifdef RT_OS_DARWIN
-# include <mach-o/dyld.h>
+#if !defined(IPRT_USE_PAM) && ( defined(RT_OS_DARWIN) || defined(RT_OS_FREEBSD) || defined(RT_OS_NETBSD) || defined(RT_OS_OPENBSD) )
+# define IPRT_USE_PAM
 #endif
+#ifdef IPRT_USE_PAM
+# ifdef RT_OS_DARWIN
+#  include <mach-o/dyld.h>
+#  define IPRT_LIBPAM_FILE      "libpam.dylib"
+#  define IPRT_PAM_SERVICE_NAME "login"     /** @todo we've been abusing 'login' here, probably not needed? */
+# else
+#  define IPRT_LIBPAM_FILE      "libpam.so"
+#  define IPRT_PAM_SERVICE_NAME "iprt-as-user"
+# endif
+# include <security/pam_appl.h>
+# include <stdlib.h>
+# include <dlfcn.h>
+# include <iprt/asm.h>
+#endif
+
 #ifdef RT_OS_SOLARIS
 # include <limits.h>
 # include <sys/ctfs.h>
@@ -87,12 +120,112 @@
 #include <iprt/env.h>
 #include <iprt/err.h>
 #include <iprt/file.h>
+#ifdef IPRT_WITH_DYNAMIC_CRYPT_R
+# include <iprt/ldr.h>
+#endif
+#include <iprt/log.h>
 #include <iprt/path.h>
 #include <iprt/pipe.h>
 #include <iprt/socket.h>
 #include <iprt/string.h>
 #include <iprt/mem.h>
 #include "internal/process.h"
+
+
+/*********************************************************************************************************************************
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
+#ifdef IPRT_USE_PAM
+/** For passing info between rtCheckCredentials and rtPamConv. */
+typedef struct RTPROCPAMARGS
+{
+    const char *pszUser;
+    const char *pszPassword;
+} RTPROCPAMARGS;
+/** Pointer to rtPamConv argument package. */
+typedef RTPROCPAMARGS *PRTPROCPAMARGS;
+#endif
+
+
+#ifdef IPRT_USE_PAM
+/**
+ * Worker for rtCheckCredentials that feeds password and maybe username to PAM.
+ *
+ * @returns PAM status.
+ * @param   cMessages       Number of messages.
+ * @param   papMessages     Message vector.
+ * @param   ppaResponses    Where to put our responses.
+ * @param   pvAppData       Pointer to RTPROCPAMARGS.
+ */
+static int rtPamConv(int cMessages, const struct pam_message **papMessages, struct pam_response **ppaResponses, void *pvAppData)
+{
+    LogFlow(("rtPamConv: cMessages=%d\n", cMessages));
+    PRTPROCPAMARGS pArgs = (PRTPROCPAMARGS)pvAppData;
+    AssertPtrReturn(pArgs, PAM_CONV_ERR);
+
+    struct pam_response *paResponses = (struct pam_response *)calloc(cMessages, sizeof(paResponses[0]));
+    AssertReturn(paResponses,  PAM_CONV_ERR);
+    for (int i = 0; i < cMessages; i++)
+    {
+        LogFlow(("rtPamConv: #%d: msg_style=%d msg=%s\n", i, papMessages[i]->msg_style, papMessages[i]->msg));
+
+        paResponses[i].resp_retcode = 0;
+        if (papMessages[i]->msg_style == PAM_PROMPT_ECHO_OFF)
+            paResponses[i].resp = strdup(pArgs->pszPassword);
+        else if (papMessages[i]->msg_style == PAM_PROMPT_ECHO_ON)
+            paResponses[i].resp = strdup(pArgs->pszUser);
+        else
+        {
+            paResponses[i].resp = NULL;
+            continue;
+        }
+        if (paResponses[i].resp == NULL)
+        {
+            while (i-- > 0)
+                free(paResponses[i].resp);
+            free(paResponses);
+            LogFlow(("rtPamConv: out of memory\n"));
+            return PAM_CONV_ERR;
+        }
+    }
+
+    *ppaResponses = paResponses;
+    return PAM_SUCCESS;
+}
+#endif /* IPRT_USE_PAM */
+
+
+#if defined(IPRT_WITH_DYNAMIC_CRYPT_R) && !defined(IPRT_USE_PAM)
+/** Pointer to crypt_r(). */
+typedef char *(*PFNCRYPTR)(const char *, const char *, struct crypt_data *);
+
+/**
+ * Wrapper for resolving and calling crypt_r dynamcially.
+ *
+ * The reason for this is that fedora 30+ wants to use libxcrypt rather than the
+ * glibc libcrypt.  The two libraries has different crypt_data sizes and layout,
+ * so we allocate a 256KB data block to be on the safe size (caller does this).
+ */
+static char *rtProcDynamicCryptR(const char *pszKey, const char *pszSalt, struct crypt_data *pData)
+{
+    static PFNCRYPTR volatile s_pfnCryptR = NULL;
+    PFNCRYPTR pfnCryptR = s_pfnCryptR;
+    if (pfnCryptR)
+        return pfnCryptR(pszKey, pszSalt, pData);
+
+    pfnCryptR = (PFNCRYPTR)(uintptr_t)RTLdrGetSystemSymbolEx("libcrypt.so", "crypt_r", RTLDRLOAD_FLAGS_SO_VER_RANGE(1, 6));
+    if (!pfnCryptR)
+        pfnCryptR = (PFNCRYPTR)(uintptr_t)RTLdrGetSystemSymbolEx("libxcrypt.so", "crypt_r", RTLDRLOAD_FLAGS_SO_VER_RANGE(1, 32));
+    if (pfnCryptR)
+    {
+        s_pfnCryptR = pfnCryptR;
+        return pfnCryptR(pszKey, pszSalt, pData);
+    }
+
+    LogRel(("IPRT/RTProc: Unable to locate crypt_r!\n"));
+    return NULL;
+}
+#endif /* IPRT_WITH_DYNAMIC_CRYPT_R */
 
 
 /**
@@ -106,73 +239,183 @@
  */
 static int rtCheckCredentials(const char *pszUser, const char *pszPasswd, gid_t *pGid, uid_t *pUid)
 {
-#if defined(RT_OS_LINUX)
-    struct passwd *pw;
+#ifdef IPRT_USE_PAM
+    RTLogPrintf("rtCheckCredentials\n");
 
-    pw = getpwnam(pszUser);
-    if (!pw)
+    /*
+     * Resolve user to UID and GID.
+     */
+    char            szBuf[_4K];
+    struct passwd   Pw;
+    struct passwd  *pPw;
+    if (getpwnam_r(pszUser, &Pw, szBuf, sizeof(szBuf), &pPw) != 0)
+        return VERR_AUTHENTICATION_FAILURE;
+    if (!pPw)
         return VERR_AUTHENTICATION_FAILURE;
 
-    if (!pszPasswd)
-        pszPasswd = "";
+    *pUid = pPw->pw_uid;
+    *pGid = pPw->pw_gid;
 
-    struct spwd *spwd;
-    /* works only if /etc/shadow is accessible */
-    spwd = getspnam(pszUser);
-    if (spwd)
-        pw->pw_passwd = spwd->sp_pwdp;
-
-    /* Default fCorrect=true if no password specified. In that case, pw->pw_passwd
-     * must be NULL (no password set for this user). Fail if a password is specified
-     * but the user does not have one assigned. */
-    int fCorrect = !pszPasswd || !*pszPasswd;
-    if (pw->pw_passwd && *pw->pw_passwd)
+    /*
+     * Use PAM for the authentication.
+     * Note! libpam.2.dylib was introduced with 10.6.x (OpenPAM).
+     */
+    void *hModPam = dlopen(IPRT_LIBPAM_FILE, RTLD_LAZY | RTLD_GLOBAL);
+    if (hModPam)
     {
-        struct crypt_data *data = (struct crypt_data*)RTMemTmpAllocZ(sizeof(*data));
-        /* be reentrant */
-        char *pszEncPasswd = crypt_r(pszPasswd, pw->pw_passwd, data);
-        fCorrect = pszEncPasswd && !strcmp(pszEncPasswd, pw->pw_passwd);
-        RTMemTmpFree(data);
+        int (*pfnPamStart)(const char *, const char *, struct pam_conv *, pam_handle_t **);
+        int (*pfnPamAuthenticate)(pam_handle_t *, int);
+        int (*pfnPamAcctMgmt)(pam_handle_t *, int);
+        int (*pfnPamSetItem)(pam_handle_t *, int, const void *);
+        int (*pfnPamEnd)(pam_handle_t *, int);
+        *(void **)&pfnPamStart        = dlsym(hModPam, "pam_start");
+        *(void **)&pfnPamAuthenticate = dlsym(hModPam, "pam_authenticate");
+        *(void **)&pfnPamAcctMgmt     = dlsym(hModPam, "pam_acct_mgmt");
+        *(void **)&pfnPamSetItem      = dlsym(hModPam, "pam_set_item");
+        *(void **)&pfnPamEnd          = dlsym(hModPam, "pam_end");
+        ASMCompilerBarrier();
+        if (   pfnPamStart
+            && pfnPamAuthenticate
+            && pfnPamAcctMgmt
+            && pfnPamSetItem
+            && pfnPamEnd)
+        {
+# define pam_start           pfnPamStart
+# define pam_authenticate    pfnPamAuthenticate
+# define pam_acct_mgmt       pfnPamAcctMgmt
+# define pam_set_item        pfnPamSetItem
+# define pam_end             pfnPamEnd
+
+            /* Do the PAM stuff. */
+            pam_handle_t   *hPam        = NULL;
+            RTPROCPAMARGS   PamConvArgs = { pszUser, pszPasswd };
+            struct pam_conv PamConversation;
+            RT_ZERO(PamConversation);
+            PamConversation.appdata_ptr = &PamConvArgs;
+            PamConversation.conv        = rtPamConv;
+            int rc = pam_start(IPRT_PAM_SERVICE_NAME, pszUser, &PamConversation, &hPam);
+            if (rc == PAM_SUCCESS)
+            {
+                rc = pam_set_item(hPam, PAM_RUSER, pszUser);
+                if (rc == PAM_SUCCESS)
+                    rc = pam_authenticate(hPam, 0);
+                if (rc == PAM_SUCCESS)
+                {
+                    rc = pam_acct_mgmt(hPam, 0);
+                    if (   rc == PAM_SUCCESS
+                        || rc == PAM_AUTHINFO_UNAVAIL /*??*/)
+                    {
+                        pam_end(hPam, PAM_SUCCESS);
+                        dlclose(hModPam);
+                        return VINF_SUCCESS;
+                    }
+                    Log(("rtCheckCredentials: pam_acct_mgmt -> %d\n", rc));
+                }
+                else
+                    Log(("rtCheckCredentials: pam_authenticate -> %d\n", rc));
+                pam_end(hPam, rc);
+            }
+            else
+                Log(("rtCheckCredentials: pam_start -> %d\n", rc));
+        }
+        else
+            Log(("rtCheckCredentials: failed to resolve symbols: %p %p %p %p %p\n",
+                 pfnPamStart, pfnPamAuthenticate, pfnPamAcctMgmt, pfnPamSetItem, pfnPamEnd));
+        dlclose(hModPam);
     }
-    if (!fCorrect)
-        return VERR_AUTHENTICATION_FAILURE;
-
-    *pGid = pw->pw_gid;
-    *pUid = pw->pw_uid;
-    return VINF_SUCCESS;
-
-#elif defined(RT_OS_SOLARIS)
-    struct passwd *ppw, pw;
-    char szBuf[1024];
-
-    if (getpwnam_r(pszUser, &pw, szBuf, sizeof(szBuf), &ppw) != 0 || ppw == NULL)
-        return VERR_AUTHENTICATION_FAILURE;
-
-    if (!pszPasswd)
-        pszPasswd = "";
-
-    struct spwd spwd;
-    char szPwdBuf[1024];
-    /* works only if /etc/shadow is accessible */
-    if (getspnam_r(pszUser, &spwd, szPwdBuf, sizeof(szPwdBuf)) != NULL)
-        ppw->pw_passwd = spwd.sp_pwdp;
-
-    char *pszEncPasswd = crypt(pszPasswd, ppw->pw_passwd);
-    if (strcmp(pszEncPasswd, ppw->pw_passwd))
-        return VERR_AUTHENTICATION_FAILURE;
-
-    *pGid = ppw->pw_gid;
-    *pUid = ppw->pw_uid;
-    return VINF_SUCCESS;
+    else
+        Log(("rtCheckCredentials: Loading " IPRT_LIBPAM_FILE " failed\n"));
+    return VERR_AUTHENTICATION_FAILURE;
 
 #else
-    NOREF(pszUser); NOREF(pszPasswd); NOREF(pGid); NOREF(pUid);
-    return VERR_AUTHENTICATION_FAILURE;
+    /*
+     * Lookup the user in /etc/passwd first.
+     *
+     * Note! On FreeBSD and OS/2 the root user will open /etc/shadow here, so
+     *       the getspnam_r step is not necessary.
+     */
+    struct passwd  Pwd;
+    char           szBuf[_4K];
+    struct passwd *pPwd = NULL;
+    if (getpwnam_r(pszUser, &Pwd, szBuf, sizeof(szBuf), &pPwd) != 0)
+        return VERR_AUTHENTICATION_FAILURE;
+    if (pPwd == NULL)
+        return VERR_AUTHENTICATION_FAILURE;
+
+# if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
+    /*
+     * Ditto for /etc/shadow and replace pw_passwd from above if we can access it:
+     */
+    struct spwd  ShwPwd;
+    char         szBuf2[_4K];
+#  if defined(RT_OS_LINUX)
+    struct spwd *pShwPwd = NULL;
+    if (getspnam_r(pszUser, &ShwPwd, szBuf2, sizeof(szBuf2), &pShwPwd) != 0)
+        pShwPwd = NULL;
+#  else
+    struct spwd *pShwPwd = getspnam_r(pszUser, &ShwPwd, szBuf2, sizeof(szBuf2));
+#  endif
+    if (pShwPwd != NULL)
+        pPwd->pw_passwd = pShwPwd->sp_pwdp;
+# endif
+
+    /*
+     * Encrypt the passed in password and see if it matches.
+     */
+# if !defined(RT_OS_LINUX)
+    int rc;
+# else
+    /* Default fCorrect=true if no password specified. In that case, pPwd->pw_passwd
+       must be NULL (no password set for this user). Fail if a password is specified
+       but the user does not have one assigned. */
+    int rc = !pszPasswd || !*pszPasswd ? VINF_SUCCESS : VERR_AUTHENTICATION_FAILURE;
+    if (pPwd->pw_passwd && *pPwd->pw_passwd)
+# endif
+    {
+# if defined(RT_OS_LINUX) || defined(RT_OS_OS2)
+#  ifdef IPRT_WITH_DYNAMIC_CRYPT_R
+        size_t const       cbCryptData = RT_MAX(sizeof(struct crypt_data) * 2, _256K);
+#  else
+        size_t const       cbCryptData = sizeof(struct crypt_data);
+#  endif
+        struct crypt_data *pCryptData  = (struct crypt_data *)RTMemTmpAllocZ(cbCryptData);
+        if (pCryptData)
+        {
+#  ifdef IPRT_WITH_DYNAMIC_CRYPT_R
+            char *pszEncPasswd = rtProcDynamicCryptR(pszPasswd, pPwd->pw_passwd, pCryptData);
+#  else
+            char *pszEncPasswd = crypt_r(pszPasswd, pPwd->pw_passwd, pCryptData);
+#  endif
+            rc = pszEncPasswd && !strcmp(pszEncPasswd, pPwd->pw_passwd) ? VINF_SUCCESS : VERR_AUTHENTICATION_FAILURE;
+            RTMemWipeThoroughly(pCryptData, cbCryptData, 3);
+            RTMemTmpFree(pCryptData);
+        }
+        else
+            rc = VERR_NO_TMP_MEMORY;
+# else
+        char *pszEncPasswd = crypt(pszPasswd, pPwd->pw_passwd);
+        rc = strcmp(pszEncPasswd, pPwd->pw_passwd) == 0 ? VINF_SUCCESS : VERR_AUTHENTICATION_FAILURE;
+# endif
+    }
+
+    /*
+     * Return GID and UID on success.  Always wipe stack buffers.
+     */
+    if (RT_SUCCESS(rc))
+    {
+        *pGid = pPwd->pw_gid;
+        *pUid = pPwd->pw_uid;
+    }
+    RTMemWipeThoroughly(szBuf, sizeof(szBuf), 3);
+# if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
+    RTMemWipeThoroughly(szBuf2, sizeof(szBuf2), 3);
+# endif
+    return rc;
 #endif
 }
 
-
 #ifdef RT_OS_SOLARIS
+
 /** @todo the error reporting of the Solaris process contract code could be
  * a lot better, but essentially it is not meant to run into errors after
  * the debugging phase. */
@@ -277,7 +520,7 @@ RTR3DECL(int)   RTProcCreate(const char *pszExec, const char * const *papszArgs,
 {
     return RTProcCreateEx(pszExec, papszArgs, Env, fFlags,
                           NULL, NULL, NULL,  /* standard handles */
-                          NULL /*pszAsUser*/, NULL /* pszPassword*/,
+                          NULL /*pszAsUser*/, NULL /* pszPassword*/, NULL /*pvExtraData*/,
                           pProcess);
 }
 
@@ -447,9 +690,10 @@ static int rtProcPosixCreateReturn(int rc, RTENV hEnvToUse, RTENV hEnv)
 
 RTR3DECL(int)   RTProcCreateEx(const char *pszExec, const char * const *papszArgs, RTENV hEnv, uint32_t fFlags,
                                PCRTHANDLE phStdIn, PCRTHANDLE phStdOut, PCRTHANDLE phStdErr, const char *pszAsUser,
-                               const char *pszPassword, PRTPROCESS phProcess)
+                               const char *pszPassword, void *pvExtraData, PRTPROCESS phProcess)
 {
     int rc;
+    LogFlow(("RTProcCreateEx: pszExec=%s pszAsUser=%s\n", pszExec, pszAsUser));
 
     /*
      * Input validation
@@ -468,6 +712,7 @@ RTR3DECL(int)   RTProcCreateEx(const char *pszExec, const char * const *papszArg
     if (fFlags & RTPROC_FLAGS_DETACHED)
         return VERR_PROC_DETACH_NOT_SUPPORTED;
 #endif
+    AssertReturn(pvExtraData == NULL || (fFlags & RTPROC_FLAGS_DESIRED_SESSION_ID), VERR_INVALID_PARAMETER);
 
     /*
      * Get the file descriptors for the handles we've been passed.

@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-wc16-I8DR.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - 16-bit Watcom C/C++, 64-bit unsigned integer modulo.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;

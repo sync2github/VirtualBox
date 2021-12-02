@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SecretKeyStore.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Main - Secret key interface.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_SECRETKEYSTORE
-#define ____H_SECRETKEYSTORE
+#ifndef MAIN_INCLUDED_SecretKeyStore_h
+#define MAIN_INCLUDED_SecretKeyStore_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VirtualBoxBase.h"
 #include "VBox/com/array.h"
@@ -187,4 +190,4 @@ class SecretKeyStore
         bool         m_fKeyBufNonPageable;
 };
 
-#endif  /* !____H_SECRETKEYSTORE */
+#endif /* !MAIN_INCLUDED_SecretKeyStore_h */

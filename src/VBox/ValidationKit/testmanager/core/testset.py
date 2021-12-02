@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: testset.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 Test Manager - TestSet.
@@ -7,7 +7,7 @@ Test Manager - TestSet.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard python imports.
@@ -376,7 +376,7 @@ class TestSetLogic(ModelLogicBase):
                           'ORDER BY idTestResult DESC\n'
                           , (idTestSet, TestSetData.ksTestStatus_Running, oData.idTestResult));
         aaoRows = self._oDb.fetchAll();
-        if len(aaoRows):
+        if aaoRows:
             idStr = self.strTabString('Unclosed test result', fCommit = fCommit);
             for aoRow in aaoRows:
                 self._oDb.execute('UPDATE   TestResults\n'
@@ -536,7 +536,7 @@ class TestSetLogic(ModelLogicBase):
         self._oDb.maybeCommit(fCommit);
         return True;
 
-    def createFile(self, oTestSet, sName, sMime, sKind, sDesc, cbFile, fCommit = False): # pylint: disable=R0914
+    def createFile(self, oTestSet, sName, sMime, sKind, sDesc, cbFile, fCommit = False): # pylint: disable=too-many-locals
         """
         Creates a file and associating with the current test result record in
         the test set.
@@ -710,7 +710,7 @@ class TestSetLogic(ModelLogicBase):
             aoRet.append(TestSetData().initFromDbRow(aoRow));
         return aoRet;
 
-    def isTestBoxExecutingToRapidly(self, idTestBox):
+    def isTestBoxExecutingToRapidly(self, idTestBox): ## s/To/Too/
         """
         Checks whether the specified test box is executing tests too rapidly.
 
@@ -741,19 +741,34 @@ class TestSetLogic(ModelLogicBase):
     # The virtual test sheriff interface.
     #
 
-    def fetchBadTestBoxIds(self, cHoursBack = 2, tsNow = None):
+    def fetchBadTestBoxIds(self, cHoursBack = 2, tsNow = None, aidFailureReasons = None):
         """
         Fetches a list of test box IDs which returned bad-testbox statuses in the
         given period (tsDone).
         """
         if tsNow is None:
             tsNow = self._oDb.getCurrentTimestamp();
-        self._oDb.execute('SELECT DISTINCT idTestBox\n'
-                          'FROM   TestSets\n'
-                          'WHERE  TestSets.enmStatus = \'bad-testbox\'\n'
-                          '   AND tsDone           <= %s\n'
-                          '   AND tsDone            > (%s - interval \'%s hours\')\n'
-                          , ( tsNow, tsNow, cHoursBack,));
+        if aidFailureReasons is None:
+            aidFailureReasons = [ -1, ];
+        self._oDb.execute('(SELECT idTestBox\n'
+                          ' FROM   TestSets\n'
+                          ' WHERE  TestSets.enmStatus = \'bad-testbox\'\n'
+                          '    AND tsDone           <= %s\n'
+                          '    AND tsDone            > (%s - interval \'%s hours\')\n'
+                          ') UNION (\n'
+                          ' SELECT TestSets.idTestBox\n'
+                          '   FROM TestSets,\n'
+                          '        TestResultFailures\n'
+                          '  WHERE TestSets.tsDone                   <= %s\n'
+                          '    AND TestSets.tsDone                   >  (%s - interval \'%s hours\')\n'
+                          '    AND TestSets.enmStatus                >= \'failure\'::TestStatus_T\n'
+                          '    AND TestSets.idTestSet                 = TestResultFailures.idTestSet\n'
+                          '    AND TestResultFailures.tsExpire        = \'infinity\'::TIMESTAMP\n'
+                          '    AND TestResultFailures.idFailureReason IN ('
+                          + ', '.join([str(i) for i in aidFailureReasons]) + ')\n'
+                          ')\n'
+                          , ( tsNow, tsNow, cHoursBack,
+                              tsNow, tsNow, cHoursBack, ));
         return [aoRow[0] for aoRow in self._oDb.fetchAll()];
 
     def fetchSetsForTestBox(self, idTestBox, cHoursBack = 2, tsNow = None):
@@ -809,7 +824,7 @@ class TestSetLogic(ModelLogicBase):
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class TestSetDataTestCase(ModelDataBaseTestCase):
     def setUp(self):
         self.aoSamples = [TestSetData(),];

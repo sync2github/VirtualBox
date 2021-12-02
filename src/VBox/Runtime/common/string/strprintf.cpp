@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: strprintf.cpp 91789 2021-10-17 18:16:11Z vboxsync $ */
 /** @file
  * IPRT - String Formatters.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -79,14 +79,14 @@ static DECLCALLBACK(size_t) strbufoutput(void *pvArg, const char *pachChars, siz
             default:
                 memcpy(pszCur, pachChars, cbChars);
                 break;
-            case 8: pszCur[7] = pachChars[7];
-            case 7: pszCur[6] = pachChars[6];
-            case 6: pszCur[5] = pachChars[5];
-            case 5: pszCur[4] = pachChars[4];
-            case 4: pszCur[3] = pachChars[3];
-            case 3: pszCur[2] = pachChars[2];
-            case 2: pszCur[1] = pachChars[1];
-            case 1: pszCur[0] = pachChars[0];
+            case 8: pszCur[7] = pachChars[7]; RT_FALL_THRU();
+            case 7: pszCur[6] = pachChars[6]; RT_FALL_THRU();
+            case 6: pszCur[5] = pachChars[5]; RT_FALL_THRU();
+            case 5: pszCur[4] = pachChars[4]; RT_FALL_THRU();
+            case 4: pszCur[3] = pachChars[3]; RT_FALL_THRU();
+            case 3: pszCur[2] = pachChars[2]; RT_FALL_THRU();
+            case 2: pszCur[1] = pachChars[1]; RT_FALL_THRU();
+            case 1: pszCur[0] = pachChars[0]; RT_FALL_THRU();
             case 0:
                 break;
         }
@@ -98,24 +98,15 @@ static DECLCALLBACK(size_t) strbufoutput(void *pvArg, const char *pachChars, siz
 }
 
 
-RTDECL(size_t) RTStrPrintf(char *pszBuffer, size_t cchBuffer, const char *pszFormat, ...)
+RTDECL(size_t) RTStrPrintfV(char *pszBuffer, size_t cchBuffer, const char *pszFormat, va_list args)
 {
-    /* Explicitly inline RTStrPrintfV + RTStrPrintfExV here because this is a frequently use API. */
     STRBUFARG Arg;
-    va_list args;
-    size_t cbRet;
-
     AssertMsgReturn(cchBuffer, ("Excellent idea! Format a string with no space for the output!\n"), 0);
     Arg.psz = pszBuffer;
     Arg.cch = cchBuffer - 1;
-
-    va_start(args, pszFormat);
-    cbRet = RTStrFormatV(strbufoutput, &Arg, NULL, NULL, pszFormat, args);
-    va_end(args);
-
-    return cbRet;
+    return RTStrFormatV(strbufoutput, &Arg, NULL, NULL, pszFormat, args);
 }
-RT_EXPORT_SYMBOL(RTStrPrintf);
+RT_EXPORT_SYMBOL(RTStrPrintfV);
 
 
 RTDECL(size_t) RTStrPrintfExV(PFNSTRFORMAT pfnFormat, void *pvArg, char *pszBuffer, size_t cchBuffer, const char *pszFormat, va_list args)
@@ -127,23 +118,4 @@ RTDECL(size_t) RTStrPrintfExV(PFNSTRFORMAT pfnFormat, void *pvArg, char *pszBuff
     return RTStrFormatV(strbufoutput, &Arg, pfnFormat, pvArg, pszFormat, args);
 }
 RT_EXPORT_SYMBOL(RTStrPrintfExV);
-
-
-RTDECL(size_t) RTStrPrintfV(char *pszBuffer, size_t cchBuffer, const char *pszFormat, va_list args)
-{
-    return RTStrPrintfExV(NULL, NULL, pszBuffer, cchBuffer, pszFormat, args);
-}
-RT_EXPORT_SYMBOL(RTStrPrintfV);
-
-
-RTDECL(size_t) RTStrPrintfEx(PFNSTRFORMAT pfnFormat, void *pvArg, char *pszBuffer, size_t cchBuffer, const char *pszFormat, ...)
-{
-    va_list args;
-    size_t cbRet;
-    va_start(args, pszFormat);
-    cbRet = RTStrPrintfExV(pfnFormat, pvArg, pszBuffer, cchBuffer, pszFormat, args);
-    va_end(args);
-    return cbRet;
-}
-RT_EXPORT_SYMBOL(RTStrPrintfEx);
 

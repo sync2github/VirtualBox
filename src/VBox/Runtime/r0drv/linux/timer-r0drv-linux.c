@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: timer-r0drv-linux.c 85698 2020-08-11 17:05:29Z vboxsync $ */
 /** @file
  * IPRT - Timers, Ring-0 Driver, Linux.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -50,7 +50,7 @@
 # define RTTIMER_LINUX_WITH_HRTIMER
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 31)
+#if RTLNX_VER_MAX(2,6,31)
 # define mod_timer_pinned               mod_timer
 # define HRTIMER_MODE_ABS_PINNED        HRTIMER_MODE_ABS
 #endif
@@ -116,6 +116,8 @@ typedef struct RTTIMERLNXSUBTIMER
             /** The start of the current run (ns).
              * This is used to calculate when the timer ought to fire the next time. */
             uint64_t                u64NextTS;
+            /** When the timer was started. */
+            uint64_t                nsStartTS;
             /** The u64NextTS in jiffies. */
             unsigned long           ulNextJiffies;
             /** Set when starting or changing the timer so that u64StartTs
@@ -344,7 +346,10 @@ static void rtTimerLnxStartSubTimer(PRTTIMERLNXSUBTIMER pSubTimer, uint64_t u64N
      */
     uint64_t u64NextTS = u64Now + u64First;
     if (!fHighRes)
+    {
         pSubTimer->u.Std.u64NextTS = u64NextTS;
+        pSubTimer->u.Std.nsStartTS = u64NextTS;
+    }
     RTTIMERLNX_LOG(("startsubtimer %p\n", pSubTimer->pParent));
 
     pSubTimer->iTick = 0;
@@ -362,7 +367,7 @@ static void rtTimerLnxStartSubTimer(PRTTIMERLNXSUBTIMER pSubTimer, uint64_t u64N
 #ifdef CONFIG_SMP
         if (fPinned)
         {
-# if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+# if RTLNX_VER_MIN(4,8,0)
             mod_timer(&pSubTimer->u.Std.LnxTimer, pSubTimer->u.Std.ulNextJiffies);
 # else
             mod_timer_pinned(&pSubTimer->u.Std.LnxTimer, pSubTimer->u.Std.ulNextJiffies);
@@ -461,7 +466,7 @@ static void rtTimerLnxDestroyIt(PRTTIMER pTimer)
     /*
      * Finally, free the resources.
      */
-    RTMemFreeEx(pTimer, RT_OFFSETOF(RTTIMER, aSubTimers[pTimer->cCpus]));
+    RTMemFreeEx(pTimer, RT_UOFFSETOF_DYN(RTTIMER, aSubTimers[pTimer->cCpus]));
     if (hSpinlock != NIL_RTSPINLOCK)
         RTSpinlockDestroy(hSpinlock);
 }
@@ -544,7 +549,7 @@ static void rtTimerLnxCallbackHandleMigration(PRTTIMER pTimer, PRTTIMERLNXSUBTIM
                 break;
 
             default:
-                AssertMsgFailed(("%d\n", enmState));
+                AssertMsgFailed(("%d\n", enmState)); RT_FALL_THRU();
             case RTTIMERLNXSTATE_STARTING:
             case RTTIMERLNXSTATE_MP_STARTING:
             case RTTIMERLNXSTATE_ACTIVE:
@@ -596,7 +601,7 @@ static bool rtTimerLnxChangeToCallbackStateSlow(PRTTIMERLNXSUBTIMER pSubTimer)
             case RTTIMERLNXSTATE_CB_STOPPING:
             case RTTIMERLNXSTATE_CB_RESTARTING:
             case RTTIMERLNXSTATE_CB_DESTROYING:
-                AssertMsgFailed(("%d\n", enmState));
+                AssertMsgFailed(("%d\n", enmState)); RT_FALL_THRU();
             default:
                 return false;
         }
@@ -715,6 +720,16 @@ static enum hrtimer_restart rtTimerLinuxHrCallback(struct hrtimer *pHrTimer)
 #endif /* RTTIMER_LINUX_WITH_HRTIMER */
 
 
+#if RTLNX_VER_MIN(4,15,0)
+/**
+ * Timer callback function for standard timers.
+ *
+ * @param   pLnxTimer   Pointer to the Linux timer structure.
+ */
+static void rtTimerLinuxStdCallback(struct timer_list *pLnxTimer)
+{
+    PRTTIMERLNXSUBTIMER pSubTimer = from_timer(pSubTimer, pLnxTimer, u.Std.LnxTimer);
+#else
 /**
  * Timer callback function for standard timers.
  *
@@ -723,6 +738,7 @@ static enum hrtimer_restart rtTimerLinuxHrCallback(struct hrtimer *pHrTimer)
 static void rtTimerLinuxStdCallback(unsigned long ulUser)
 {
     PRTTIMERLNXSUBTIMER pSubTimer = (PRTTIMERLNXSUBTIMER)ulUser;
+#endif
     PRTTIMER            pTimer    = pSubTimer->pParent;
 
     RTTIMERLNX_LOG(("stdcallback %p\n", pTimer));
@@ -754,7 +770,9 @@ static void rtTimerLinuxStdCallback(unsigned long ulUser)
          * The first time around, we'll re-adjust the u.Std.u64NextTS to
          * try prevent some jittering if we were started at a bad time.
          */
-        const uint64_t  iTick = ++pSubTimer->iTick;
+        const uint64_t  iTick       = ++pSubTimer->iTick;
+        unsigned long   uCurJiffies = jiffies;
+        unsigned long   ulNextJiffies;
         uint64_t        u64NanoInterval;
         unsigned long   cJiffies;
         unsigned long   flFlags;
@@ -766,28 +784,46 @@ static void rtTimerLinuxStdCallback(unsigned long ulUser)
         {
             pSubTimer->u.Std.fFirstAfterChg = false;
             pSubTimer->u.Std.u64NextTS      = RTTimeSystemNanoTS();
-            pSubTimer->u.Std.ulNextJiffies  = jiffies;
+            pSubTimer->u.Std.nsStartTS      = pSubTimer->u.Std.u64NextTS - u64NanoInterval * (iTick - 1);
+            pSubTimer->u.Std.ulNextJiffies  = uCurJiffies = jiffies;
         }
         spin_unlock_irqrestore(&pTimer->ChgIntLock, flFlags);
 
         pSubTimer->u.Std.u64NextTS += u64NanoInterval;
         if (cJiffies)
         {
-            pSubTimer->u.Std.ulNextJiffies += cJiffies;
-            /* Prevent overflows when the jiffies counter wraps around.
-             * Special thanks to Ken Preslan for helping debugging! */
-            while (time_before(pSubTimer->u.Std.ulNextJiffies, jiffies))
+            ulNextJiffies = pSubTimer->u.Std.ulNextJiffies + cJiffies;
+            pSubTimer->u.Std.ulNextJiffies = ulNextJiffies;
+            if (time_after_eq(ulNextJiffies, uCurJiffies))
+            { /* likely */ }
+            else
             {
-                pSubTimer->u.Std.ulNextJiffies += cJiffies;
-                pSubTimer->u.Std.u64NextTS     += u64NanoInterval;
+                unsigned long cJiffiesBehind = uCurJiffies - ulNextJiffies;
+                ulNextJiffies = uCurJiffies + cJiffies / 2;
+                if (cJiffiesBehind >= HZ / 4) /* Conside if we're lagging too far behind.  Screw the u64NextTS member. */
+                    pSubTimer->u.Std.ulNextJiffies = ulNextJiffies;
+                /*else: Don't update u.Std.ulNextJiffies so we can continue catching up in the next tick. */
             }
         }
         else
         {
             const uint64_t u64NanoTS = RTTimeSystemNanoTS();
-            while (pSubTimer->u.Std.u64NextTS < u64NanoTS)
-                pSubTimer->u.Std.u64NextTS += u64NanoInterval;
-            pSubTimer->u.Std.ulNextJiffies = jiffies + rtTimerLnxNanoToJiffies(pSubTimer->u.Std.u64NextTS - u64NanoTS);
+            const int64_t  cNsBehind = u64NanoTS - pSubTimer->u.Std.u64NextTS;
+            if (cNsBehind <= 0)
+                ulNextJiffies = uCurJiffies + rtTimerLnxNanoToJiffies(pSubTimer->u.Std.u64NextTS - u64NanoTS);
+            else if (u64NanoInterval >= RT_NS_1SEC_64 * 2 / HZ)
+            {
+                ulNextJiffies = uCurJiffies + rtTimerLnxNanoToJiffies(u64NanoInterval / 2);
+                if (cNsBehind >= RT_NS_1SEC_64 / HZ / 4) /* Conside if we're lagging too far behind. */
+                    pSubTimer->u.Std.u64NextTS = u64NanoTS + u64NanoInterval / 2;
+            }
+            else
+            {
+                ulNextJiffies = uCurJiffies + 1;
+                if (cNsBehind >= RT_NS_1SEC_64 / HZ / 4) /* Conside if we're lagging too far behind. */
+                    pSubTimer->u.Std.u64NextTS = u64NanoTS + RT_NS_1SEC_64 / HZ;
+            }
+            pSubTimer->u.Std.ulNextJiffies = ulNextJiffies;
         }
 
         /*
@@ -803,15 +839,15 @@ static void rtTimerLinuxStdCallback(unsigned long ulUser)
 #ifdef CONFIG_SMP
             if (pTimer->fSpecificCpu || pTimer->fAllCpus)
             {
-# if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
-                mod_timer(&pSubTimer->u.Std.LnxTimer, pSubTimer->u.Std.ulNextJiffies);
+# if RTLNX_VER_MIN(4,8,0)
+                mod_timer(&pSubTimer->u.Std.LnxTimer, ulNextJiffies);
 # else
-                mod_timer_pinned(&pSubTimer->u.Std.LnxTimer, pSubTimer->u.Std.ulNextJiffies);
+                mod_timer_pinned(&pSubTimer->u.Std.LnxTimer, ulNextJiffies);
 # endif
             }
             else
 #endif
-                mod_timer(&pSubTimer->u.Std.LnxTimer, pSubTimer->u.Std.ulNextJiffies);
+                mod_timer(&pSubTimer->u.Std.LnxTimer, ulNextJiffies);
             return;
         }
     }
@@ -866,7 +902,7 @@ static void rtTimerLinuxStdCallback(unsigned long ulUser)
 #ifdef CONFIG_SMP
                     if (pTimer->fSpecificCpu || pTimer->fAllCpus)
                     {
-# if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+# if RTLNX_VER_MIN(4,8,0)
                         mod_timer(&pSubTimer->u.Std.LnxTimer, pSubTimer->u.Std.ulNextJiffies);
 # else
                         mod_timer_pinned(&pSubTimer->u.Std.LnxTimer, pSubTimer->u.Std.ulNextJiffies);
@@ -1407,8 +1443,8 @@ RTDECL(int) RTTimerChangeInterval(PRTTIMER pTimer, uint64_t u64NanoInterval)
     if (pTimer->cCpus > 1)
         return VERR_NOT_SUPPORTED;
 
-    cJiffies = u64NanoInterval / RTTimerGetSystemGranularity();
-    if (cJiffies * RTTimerGetSystemGranularity() != u64NanoInterval)
+    cJiffies = u64NanoInterval / (RT_NS_1SEC / HZ);
+    if (cJiffies * (RT_NS_1SEC / HZ) != u64NanoInterval)
         cJiffies = 0;
 
     spin_lock_irqsave(&pTimer->ChgIntLock, flFlags);
@@ -1483,7 +1519,7 @@ RTDECL(int) RTTimerDestroy(PRTTIMER pTimer)
     {
         /* For paranoid reasons, defer actually destroying the semaphore when
            in atomic or interrupt context. */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 32)
+#if RTLNX_VER_MIN(2,5,32)
         if (in_atomic() || in_interrupt())
 #else
         if (in_interrupt())
@@ -1539,7 +1575,7 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
     }
 #endif
 
-    rc = RTMemAllocEx(RT_OFFSETOF(RTTIMER, aSubTimers[cCpus]), 0,
+    rc = RTMemAllocEx(RT_UOFFSETOF_DYN(RTTIMER, aSubTimers[cCpus]), 0,
                       RTMEMALLOCEX_FLAGS_ZEROED | RTMEMALLOCEX_FLAGS_ANY_CTX_FREE, (void **)&pTimer);
     if (RT_FAILURE(rc))
     {
@@ -1568,8 +1604,8 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
     pTimer->pfnTimer        = pfnTimer;
     pTimer->pvUser          = pvUser;
     pTimer->u64NanoInterval = u64NanoInterval;
-    pTimer->cJiffies        = u64NanoInterval / RTTimerGetSystemGranularity();
-    if (pTimer->cJiffies * RTTimerGetSystemGranularity() != u64NanoInterval)
+    pTimer->cJiffies        = u64NanoInterval / (RT_NS_1SEC / HZ);
+    if (pTimer->cJiffies * (RT_NS_1SEC / HZ) != u64NanoInterval)
         pTimer->cJiffies    = 0;
     spin_lock_init(&pTimer->ChgIntLock);
 
@@ -1584,13 +1620,17 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
         else
 #endif
         {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+#if RTLNX_VER_MIN(4,15,0)
+            timer_setup(&pTimer->aSubTimers[iCpu].u.Std.LnxTimer, rtTimerLinuxStdCallback, TIMER_PINNED);
+#elif RTLNX_VER_MIN(4,8,0)
             init_timer_pinned(&pTimer->aSubTimers[iCpu].u.Std.LnxTimer);
 #else
             init_timer(&pTimer->aSubTimers[iCpu].u.Std.LnxTimer);
 #endif
+#if RTLNX_VER_MAX(4,15,0)
             pTimer->aSubTimers[iCpu].u.Std.LnxTimer.data        = (unsigned long)&pTimer->aSubTimers[iCpu];
             pTimer->aSubTimers[iCpu].u.Std.LnxTimer.function    = rtTimerLinuxStdCallback;
+#endif
             pTimer->aSubTimers[iCpu].u.Std.LnxTimer.expires     = jiffies;
             pTimer->aSubTimers[iCpu].u.Std.u64NextTS            = 0;
         }
@@ -1645,7 +1685,16 @@ RTDECL(uint32_t) RTTimerGetSystemGranularity(void)
         return Ts.tv_nsec;
     }
 #endif
+    /* */
+#if RTLNX_VER_MAX(4,9,0) || RTLNX_VER_MIN(4,13,0)
+    /* On 4.9, 4.10 and 4.12 we've observed tstRTR0Timer failures of the omni timer tests
+       where we get about half of the ticks we want.  The failing test is using this value
+       as interval.  So, this is a very very crude hack to try make omni timers work
+       correctly without actually knowing what's going wrong... */
+    return RT_NS_1SEC * 2 / HZ; /* ns */
+#else
     return RT_NS_1SEC / HZ; /* ns */
+#endif
 }
 RT_EXPORT_SYMBOL(RTTimerGetSystemGranularity);
 

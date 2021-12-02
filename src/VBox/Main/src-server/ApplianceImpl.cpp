@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ApplianceImpl.cpp 91503 2021-10-01 08:57:59Z vboxsync $ */
 /** @file
  * IAppliance and IVirtualSystem COM class implementations.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,7 +15,13 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_MAIN_APPLIANCE
 #include <iprt/path.h>
+#include <iprt/cpp/path.h>
 #include <iprt/cpp/utils.h>
 #include <VBox/com/array.h>
 #include <map>
@@ -29,12 +35,333 @@
 #include "MachineImpl.h"
 #include "SystemPropertiesImpl.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 #include "CertificateImpl.h"
 
 #include "ApplianceImplPrivate.h"
 
 using namespace std;
+
+
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
+*********************************************************************************************************************************/
+static const char * const   g_pszISOURI             = "http://www.ecma-international.org/publications/standards/Ecma-119.htm";
+static const char * const   g_pszVMDKStreamURI      = "http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized";
+static const char * const   g_pszVMDKSparseURI      = "http://www.vmware.com/specifications/vmdk.html#sparse";
+static const char * const   g_pszVMDKCompressedURI  = "http://www.vmware.com/specifications/vmdk.html#compressed";
+static const char * const   g_pszVMDKCompressedURI2 = "http://www.vmware.com/interfaces/specifications/vmdk.html#compressed";
+static const char * const   g_pszrVHDURI            = "http://go.microsoft.com/fwlink/?LinkId=137171";
+static char                 g_szIsoBackend[128];
+static char                 g_szVmdkBackend[128];
+static char                 g_szVhdBackend[128];
+/** Set after the g_szXxxxBackend variables has been initialized. */
+static bool volatile        g_fInitializedBackendNames = false;
+
+static struct
+{
+    const char *pszUri, *pszBackend;
+} const g_aUriToBackend[] =
+{
+    { g_pszISOURI,              g_szIsoBackend },
+    { g_pszVMDKStreamURI,       g_szVmdkBackend },
+    { g_pszVMDKSparseURI,       g_szVmdkBackend },
+    { g_pszVMDKCompressedURI,   g_szVmdkBackend },
+    { g_pszVMDKCompressedURI2,  g_szVmdkBackend },
+    { g_pszrVHDURI,             g_szVhdBackend },
+};
+
+static std::map<Utf8Str, Utf8Str> supportedStandardsURI;
+
+static struct
+{
+    ovf::CIMOSType_T    cim;
+    VBOXOSTYPE          osType;
+} const g_aOsTypes[] =
+{
+    { ovf::CIMOSType_CIMOS_Unknown,                              VBOXOSTYPE_Unknown },
+    { ovf::CIMOSType_CIMOS_OS2,                                  VBOXOSTYPE_OS2 },
+    { ovf::CIMOSType_CIMOS_OS2,                                  VBOXOSTYPE_OS2Warp3 },
+    { ovf::CIMOSType_CIMOS_OS2,                                  VBOXOSTYPE_OS2Warp4 },
+    { ovf::CIMOSType_CIMOS_OS2,                                  VBOXOSTYPE_OS2Warp45 },
+    { ovf::CIMOSType_CIMOS_MSDOS,                                VBOXOSTYPE_DOS },
+    { ovf::CIMOSType_CIMOS_WIN3x,                                VBOXOSTYPE_Win31 },
+    { ovf::CIMOSType_CIMOS_WIN95,                                VBOXOSTYPE_Win95 },
+    { ovf::CIMOSType_CIMOS_WIN98,                                VBOXOSTYPE_Win98 },
+    { ovf::CIMOSType_CIMOS_WINNT,                                VBOXOSTYPE_WinNT },
+    { ovf::CIMOSType_CIMOS_WINNT,                                VBOXOSTYPE_WinNT4 },
+    { ovf::CIMOSType_CIMOS_WINNT,                                VBOXOSTYPE_WinNT3x },
+    { ovf::CIMOSType_CIMOS_NetWare,                              VBOXOSTYPE_Netware },
+    { ovf::CIMOSType_CIMOS_NovellOES,                            VBOXOSTYPE_Netware },
+    { ovf::CIMOSType_CIMOS_Solaris,                              VBOXOSTYPE_Solaris },
+    { ovf::CIMOSType_CIMOS_SunOS,                                VBOXOSTYPE_Solaris },
+    { ovf::CIMOSType_CIMOS_FreeBSD,                              VBOXOSTYPE_FreeBSD },
+    { ovf::CIMOSType_CIMOS_NetBSD,                               VBOXOSTYPE_NetBSD },
+    { ovf::CIMOSType_CIMOS_QNX,                                  VBOXOSTYPE_QNX },
+    { ovf::CIMOSType_CIMOS_Windows2000,                          VBOXOSTYPE_Win2k },
+    { ovf::CIMOSType_CIMOS_WindowsMe,                            VBOXOSTYPE_WinMe },
+    { ovf::CIMOSType_CIMOS_OpenBSD,                              VBOXOSTYPE_OpenBSD },
+    { ovf::CIMOSType_CIMOS_WindowsXP,                            VBOXOSTYPE_WinXP },
+    { ovf::CIMOSType_CIMOS_WindowsXPEmbedded,                    VBOXOSTYPE_WinXP },
+    { ovf::CIMOSType_CIMOS_WindowsEmbeddedforPointofService,     VBOXOSTYPE_WinXP },
+    { ovf::CIMOSType_CIMOS_MicrosoftWindowsServer2003,           VBOXOSTYPE_Win2k3 },
+    { ovf::CIMOSType_CIMOS_MicrosoftWindowsServer2003_64,        VBOXOSTYPE_Win2k3_x64 },
+    { ovf::CIMOSType_CIMOS_WindowsXP_64,                         VBOXOSTYPE_WinXP_x64 },
+    { ovf::CIMOSType_CIMOS_WindowsVista,                         VBOXOSTYPE_WinVista },
+    { ovf::CIMOSType_CIMOS_WindowsVista_64,                      VBOXOSTYPE_WinVista_x64 },
+    { ovf::CIMOSType_CIMOS_MicrosoftWindowsServer2008,           VBOXOSTYPE_Win2k8 },
+    { ovf::CIMOSType_CIMOS_MicrosoftWindowsServer2008_64,        VBOXOSTYPE_Win2k8_x64 },
+    { ovf::CIMOSType_CIMOS_FreeBSD_64,                           VBOXOSTYPE_FreeBSD_x64 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS_x64 }, // there is no CIM 64-bit type for this
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS106 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS106_x64 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS107_x64 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS108_x64 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS109_x64 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS1010_x64 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS1011_x64 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS1012_x64 },
+    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS1013_x64 },
+
+    // Linuxes
+    { ovf::CIMOSType_CIMOS_RedHatEnterpriseLinux,                VBOXOSTYPE_RedHat },
+    { ovf::CIMOSType_CIMOS_RedHatEnterpriseLinux_64,             VBOXOSTYPE_RedHat_x64 },
+    { ovf::CIMOSType_CIMOS_Solaris_64,                           VBOXOSTYPE_Solaris_x64 },
+    { ovf::CIMOSType_CIMOS_SUSE,                                 VBOXOSTYPE_OpenSUSE },
+    { ovf::CIMOSType_CIMOS_SLES,                                 VBOXOSTYPE_OpenSUSE },
+    { ovf::CIMOSType_CIMOS_NovellLinuxDesktop,                   VBOXOSTYPE_OpenSUSE },
+    { ovf::CIMOSType_CIMOS_SUSE_64,                              VBOXOSTYPE_OpenSUSE_x64 },
+    { ovf::CIMOSType_CIMOS_SLES_64,                              VBOXOSTYPE_OpenSUSE_x64 },
+    { ovf::CIMOSType_CIMOS_LINUX,                                VBOXOSTYPE_Linux },
+    { ovf::CIMOSType_CIMOS_LINUX,                                VBOXOSTYPE_Linux22 },
+    { ovf::CIMOSType_CIMOS_SunJavaDesktopSystem,                 VBOXOSTYPE_Linux },
+    { ovf::CIMOSType_CIMOS_TurboLinux,                           VBOXOSTYPE_Turbolinux },
+    { ovf::CIMOSType_CIMOS_TurboLinux_64,                        VBOXOSTYPE_Turbolinux_x64 },
+    { ovf::CIMOSType_CIMOS_Mandriva,                             VBOXOSTYPE_Mandriva },
+    { ovf::CIMOSType_CIMOS_Mandriva_64,                          VBOXOSTYPE_Mandriva_x64 },
+    { ovf::CIMOSType_CIMOS_Ubuntu,                               VBOXOSTYPE_Ubuntu },
+    { ovf::CIMOSType_CIMOS_Ubuntu_64,                            VBOXOSTYPE_Ubuntu_x64 },
+    { ovf::CIMOSType_CIMOS_Debian,                               VBOXOSTYPE_Debian },
+    { ovf::CIMOSType_CIMOS_Debian_64,                            VBOXOSTYPE_Debian_x64 },
+    { ovf::CIMOSType_CIMOS_Linux_2_4_x,                          VBOXOSTYPE_Linux24 },
+    { ovf::CIMOSType_CIMOS_Linux_2_4_x_64,                       VBOXOSTYPE_Linux24_x64 },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_Linux26 },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_Linux26_x64 },
+    { ovf::CIMOSType_CIMOS_Linux_64,                             VBOXOSTYPE_Linux26_x64 },
+
+    // types that we have support for but CIM doesn't
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_ArchLinux },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_ArchLinux_x64 },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_FedoraCore },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_FedoraCore_x64 },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_Gentoo },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_Gentoo_x64 },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_Xandros },
+    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_Xandros_x64 },
+    { ovf::CIMOSType_CIMOS_Solaris,                              VBOXOSTYPE_OpenSolaris },
+    { ovf::CIMOSType_CIMOS_Solaris_64,                           VBOXOSTYPE_OpenSolaris_x64 },
+
+    // types added with CIM 2.25.0 follow:
+    { ovf::CIMOSType_CIMOS_WindowsServer2008R2,                  VBOXOSTYPE_Win2k8 },           // duplicate, see above
+//     { ovf::CIMOSType_CIMOS_VMwareESXi = 104,                                                 // we can't run ESX in a VM
+    { ovf::CIMOSType_CIMOS_Windows7,                             VBOXOSTYPE_Win7 },
+    { ovf::CIMOSType_CIMOS_Windows7,                             VBOXOSTYPE_Win7_x64 },         // there is no
+                                                                                                // CIM 64-bit type for this
+    { ovf::CIMOSType_CIMOS_CentOS,                               VBOXOSTYPE_RedHat },
+    { ovf::CIMOSType_CIMOS_CentOS_64,                            VBOXOSTYPE_RedHat_x64 },
+    { ovf::CIMOSType_CIMOS_OracleLinux,                          VBOXOSTYPE_Oracle },
+    { ovf::CIMOSType_CIMOS_OracleLinux_64,                       VBOXOSTYPE_Oracle_x64 },
+    { ovf::CIMOSType_CIMOS_eComStation,                          VBOXOSTYPE_ECS },
+
+    { ovf::CIMOSType_CIMOS_WindowsServer2011,                    VBOXOSTYPE_Win2k8_x64 },       // no 1:1 match on the VBox side
+    { ovf::CIMOSType_CIMOS_WindowsServer2012,                    VBOXOSTYPE_Win2k12_x64 },
+    { ovf::CIMOSType_CIMOS_Windows8,                             VBOXOSTYPE_Win8 },
+    { ovf::CIMOSType_CIMOS_Windows8_64,                          VBOXOSTYPE_Win8_x64 },
+    { ovf::CIMOSType_CIMOS_WindowsServer2012R2,                  VBOXOSTYPE_Win2k12_x64 },
+    { ovf::CIMOSType_CIMOS_Windows8_1,                           VBOXOSTYPE_Win81 },
+    { ovf::CIMOSType_CIMOS_Windows8_1_64,                        VBOXOSTYPE_Win81_x64 },
+    { ovf::CIMOSType_CIMOS_WindowsServer2016,                    VBOXOSTYPE_Win2k16_x64 },
+    { ovf::CIMOSType_CIMOS_Windows10,                            VBOXOSTYPE_Win10 },
+    { ovf::CIMOSType_CIMOS_Windows10_64,                         VBOXOSTYPE_Win10_x64 },
+    { ovf::CIMOSType_CIMOS_Windows10_64,                         VBOXOSTYPE_Win10_x64 },
+    { ovf::CIMOSType_CIMOS_WindowsServer2016,                    VBOXOSTYPE_Win2k19_x64 },      // no CIM type for this yet
+
+    // there are no CIM types for these, so these turn to "other" on export:
+    //      VBOXOSTYPE_OpenBSD
+    //      VBOXOSTYPE_OpenBSD_x64
+    //      VBOXOSTYPE_NetBSD
+    //      VBOXOSTYPE_NetBSD_x64
+
+};
+
+/* Pattern structure for matching the OS type description field */
+struct osTypePattern
+{
+    const char *pcszPattern;
+    VBOXOSTYPE osType;
+};
+
+/* These are the 32-Bit ones. They are sorted by priority. */
+static const osTypePattern g_aOsTypesPattern[] =
+{
+    {"Windows NT",    VBOXOSTYPE_WinNT4},
+    {"Windows XP",    VBOXOSTYPE_WinXP},
+    {"Windows 2000",  VBOXOSTYPE_Win2k},
+    {"Windows 2003",  VBOXOSTYPE_Win2k3},
+    {"Windows Vista", VBOXOSTYPE_WinVista},
+    {"Windows 2008",  VBOXOSTYPE_Win2k8},
+    {"Windows 7",     VBOXOSTYPE_Win7},
+    {"Windows 8.1",   VBOXOSTYPE_Win81},
+    {"Windows 8",     VBOXOSTYPE_Win8},
+    {"Windows 10",    VBOXOSTYPE_Win10},
+    {"SUSE",          VBOXOSTYPE_OpenSUSE},
+    {"Novell",        VBOXOSTYPE_OpenSUSE},
+    {"Red Hat",       VBOXOSTYPE_RedHat},
+    {"Mandriva",      VBOXOSTYPE_Mandriva},
+    {"Ubuntu",        VBOXOSTYPE_Ubuntu},
+    {"Debian",        VBOXOSTYPE_Debian},
+    {"QNX",           VBOXOSTYPE_QNX},
+    {"Linux 2.4",     VBOXOSTYPE_Linux24},
+    {"Linux 2.6",     VBOXOSTYPE_Linux26},
+    {"Linux",         VBOXOSTYPE_Linux},
+    {"OpenSolaris",   VBOXOSTYPE_OpenSolaris},
+    {"Solaris",       VBOXOSTYPE_OpenSolaris},
+    {"FreeBSD",       VBOXOSTYPE_FreeBSD},
+    {"NetBSD",        VBOXOSTYPE_NetBSD},
+    {"Windows 95",    VBOXOSTYPE_Win95},
+    {"Windows 98",    VBOXOSTYPE_Win98},
+    {"Windows Me",    VBOXOSTYPE_WinMe},
+    {"Windows 3.",    VBOXOSTYPE_Win31},
+    {"DOS",           VBOXOSTYPE_DOS},
+    {"OS2",           VBOXOSTYPE_OS2}
+};
+
+/* These are the 64-Bit ones. They are sorted by priority. */
+static const osTypePattern g_aOsTypesPattern64[] =
+{
+    {"Windows XP",    VBOXOSTYPE_WinXP_x64},
+    {"Windows 2003",  VBOXOSTYPE_Win2k3_x64},
+    {"Windows Vista", VBOXOSTYPE_WinVista_x64},
+    {"Windows 2008",  VBOXOSTYPE_Win2k8_x64},
+    {"Windows 7",     VBOXOSTYPE_Win7_x64},
+    {"Windows 8.1",   VBOXOSTYPE_Win81_x64},
+    {"Windows 8",     VBOXOSTYPE_Win8_x64},
+    {"Windows 2012",  VBOXOSTYPE_Win2k12_x64},
+    {"Windows 10",    VBOXOSTYPE_Win10_x64},
+    {"Windows 2016",  VBOXOSTYPE_Win2k16_x64},
+    {"Windows 2019",  VBOXOSTYPE_Win2k19_x64},
+    {"SUSE",          VBOXOSTYPE_OpenSUSE_x64},
+    {"Novell",        VBOXOSTYPE_OpenSUSE_x64},
+    {"Red Hat",       VBOXOSTYPE_RedHat_x64},
+    {"Mandriva",      VBOXOSTYPE_Mandriva_x64},
+    {"Ubuntu",        VBOXOSTYPE_Ubuntu_x64},
+    {"Debian",        VBOXOSTYPE_Debian_x64},
+    {"Linux 2.4",     VBOXOSTYPE_Linux24_x64},
+    {"Linux 2.6",     VBOXOSTYPE_Linux26_x64},
+    {"Linux",         VBOXOSTYPE_Linux26_x64},
+    {"OpenSolaris",   VBOXOSTYPE_OpenSolaris_x64},
+    {"Solaris",       VBOXOSTYPE_OpenSolaris_x64},
+    {"FreeBSD",       VBOXOSTYPE_FreeBSD_x64},
+};
+
+/**
+ * Private helper func that suggests a VirtualBox guest OS type
+ * for the given OVF operating system type.
+ */
+void convertCIMOSType2VBoxOSType(Utf8Str &strType, ovf::CIMOSType_T c, const Utf8Str &cStr)
+{
+    /* First check if the type is other/other_64 */
+    if (c == ovf::CIMOSType_CIMOS_Other)
+    {
+        for (size_t i = 0; i < RT_ELEMENTS(g_aOsTypesPattern); ++i)
+            if (cStr.contains(g_aOsTypesPattern[i].pcszPattern, Utf8Str::CaseInsensitive))
+            {
+                strType = Global::OSTypeId(g_aOsTypesPattern[i].osType);
+                return;
+            }
+    }
+    else if (c == ovf::CIMOSType_CIMOS_Other_64)
+    {
+        for (size_t i = 0; i < RT_ELEMENTS(g_aOsTypesPattern64); ++i)
+            if (cStr.contains(g_aOsTypesPattern64[i].pcszPattern, Utf8Str::CaseInsensitive))
+            {
+                strType = Global::OSTypeId(g_aOsTypesPattern64[i].osType);
+                return;
+            }
+    }
+
+    for (size_t i = 0; i < RT_ELEMENTS(g_aOsTypes); ++i)
+    {
+        if (c == g_aOsTypes[i].cim)
+        {
+            strType = Global::OSTypeId(g_aOsTypes[i].osType);
+            return;
+        }
+    }
+
+    if (c == ovf::CIMOSType_CIMOS_Other_64)
+        strType = Global::OSTypeId(VBOXOSTYPE_Unknown_x64);
+    else
+        strType = Global::OSTypeId(VBOXOSTYPE_Unknown);
+}
+
+/**
+ * Private helper func that suggests a VirtualBox guest OS type
+ * for the given OVF operating system type.
+ * @returns CIM OS type.
+ * @param pcszVBox  Our guest OS type identifier string.
+ * @param fLongMode Whether long mode is enabled and a 64-bit CIM type is
+ *                  preferred even if the VBox guest type isn't 64-bit.
+ */
+ovf::CIMOSType_T convertVBoxOSType2CIMOSType(const char *pcszVBox, BOOL fLongMode)
+{
+    for (size_t i = 0; i < RT_ELEMENTS(g_aOsTypes); ++i)
+    {
+        if (!RTStrICmp(pcszVBox, Global::OSTypeId(g_aOsTypes[i].osType)))
+        {
+            if (fLongMode && !(g_aOsTypes[i].osType & VBOXOSTYPE_x64))
+            {
+                VBOXOSTYPE enmDesiredOsType = (VBOXOSTYPE)((int)g_aOsTypes[i].osType | (int)VBOXOSTYPE_x64);
+                for (size_t j = i+1; j < RT_ELEMENTS(g_aOsTypes); j++)
+                    if (g_aOsTypes[j].osType == enmDesiredOsType)
+                        return g_aOsTypes[j].cim;
+                if (i > 0)
+                {
+                    for (size_t j = i-1; j > 0; j++)
+                        if (g_aOsTypes[j].osType == enmDesiredOsType)
+                            return g_aOsTypes[j].cim;
+                }
+                /* Not all OSes have 64-bit versions, so just return the 32-bit variant. */
+            }
+            return g_aOsTypes[i].cim;
+        }
+    }
+
+    return fLongMode ? ovf::CIMOSType_CIMOS_Other_64 : ovf::CIMOSType_CIMOS_Other;
+}
+
+Utf8Str convertNetworkAttachmentTypeToString(NetworkAttachmentType_T type)
+{
+    Utf8Str strType;
+    switch (type)
+    {
+        case NetworkAttachmentType_NAT: strType = "NAT"; break;
+        case NetworkAttachmentType_Bridged: strType = "Bridged"; break;
+        case NetworkAttachmentType_Internal: strType = "Internal"; break;
+        case NetworkAttachmentType_HostOnly: strType = "HostOnly"; break;
+        case NetworkAttachmentType_HostOnlyNetwork: strType = "HostOnlyNetwork"; break;
+        case NetworkAttachmentType_Generic: strType = "Generic"; break;
+        case NetworkAttachmentType_NATNetwork: strType = "NATNetwork"; break;
+        case NetworkAttachmentType_Null: strType = "Null"; break;
+        case NetworkAttachmentType_Cloud: strType = "Cloud"; break;
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+        case NetworkAttachmentType_32BitHack: AssertFailedBreak(); /* (compiler warnings) */
+#endif
+    }
+    return strType;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -85,280 +412,6 @@ void Appliance::FinalRelease()
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-static const char* const strISOURI = "http://www.ecma-international.org/publications/standards/Ecma-119.htm";
-static const char* const strVMDKStreamURI = "http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized";
-static const char* const strVMDKSparseURI = "http://www.vmware.com/specifications/vmdk.html#sparse";
-static const char* const strVMDKCompressedURI = "http://www.vmware.com/specifications/vmdk.html#compressed";
-static const char* const strVMDKCompressedURI2 = "http://www.vmware.com/interfaces/specifications/vmdk.html#compressed";
-static const char* const strVHDURI = "http://go.microsoft.com/fwlink/?LinkId=137171";
-
-static std::map<Utf8Str, Utf8Str> supportedStandardsURI;
-
-static const char* const applianceIOTarName = "Appliance::IOTar";
-static const char* const applianceIOShaName = "Appliance::IOSha";
-static const char* const applianceIOFileName = "Appliance::IOFile";
-
-static std::map<APPLIANCEIONAME, Utf8Str> applianceIONameMap;
-
-static const struct
-{
-    ovf::CIMOSType_T    cim;
-    VBOXOSTYPE          osType;
-}
-g_osTypes[] =
-{
-    { ovf::CIMOSType_CIMOS_Unknown,                              VBOXOSTYPE_Unknown },
-    { ovf::CIMOSType_CIMOS_OS2,                                  VBOXOSTYPE_OS2 },
-    { ovf::CIMOSType_CIMOS_OS2,                                  VBOXOSTYPE_OS2Warp3 },
-    { ovf::CIMOSType_CIMOS_OS2,                                  VBOXOSTYPE_OS2Warp4 },
-    { ovf::CIMOSType_CIMOS_OS2,                                  VBOXOSTYPE_OS2Warp45 },
-    { ovf::CIMOSType_CIMOS_MSDOS,                                VBOXOSTYPE_DOS },
-    { ovf::CIMOSType_CIMOS_WIN3x,                                VBOXOSTYPE_Win31 },
-    { ovf::CIMOSType_CIMOS_WIN95,                                VBOXOSTYPE_Win95 },
-    { ovf::CIMOSType_CIMOS_WIN98,                                VBOXOSTYPE_Win98 },
-    { ovf::CIMOSType_CIMOS_WINNT,                                VBOXOSTYPE_WinNT },
-    { ovf::CIMOSType_CIMOS_WINNT,                                VBOXOSTYPE_WinNT4 },
-    { ovf::CIMOSType_CIMOS_NetWare,                              VBOXOSTYPE_Netware },
-    { ovf::CIMOSType_CIMOS_NovellOES,                            VBOXOSTYPE_Netware },
-    { ovf::CIMOSType_CIMOS_Solaris,                              VBOXOSTYPE_Solaris },
-    { ovf::CIMOSType_CIMOS_SunOS,                                VBOXOSTYPE_Solaris },
-    { ovf::CIMOSType_CIMOS_FreeBSD,                              VBOXOSTYPE_FreeBSD },
-    { ovf::CIMOSType_CIMOS_NetBSD,                               VBOXOSTYPE_NetBSD },
-    { ovf::CIMOSType_CIMOS_QNX,                                  VBOXOSTYPE_QNX },
-    { ovf::CIMOSType_CIMOS_Windows2000,                          VBOXOSTYPE_Win2k },
-    { ovf::CIMOSType_CIMOS_WindowsMe,                            VBOXOSTYPE_WinMe },
-    { ovf::CIMOSType_CIMOS_OpenBSD,                              VBOXOSTYPE_OpenBSD },
-    { ovf::CIMOSType_CIMOS_WindowsXP,                            VBOXOSTYPE_WinXP },
-    { ovf::CIMOSType_CIMOS_WindowsXPEmbedded,                    VBOXOSTYPE_WinXP },
-    { ovf::CIMOSType_CIMOS_WindowsEmbeddedforPointofService,     VBOXOSTYPE_WinXP },
-    { ovf::CIMOSType_CIMOS_MicrosoftWindowsServer2003,           VBOXOSTYPE_Win2k3 },
-    { ovf::CIMOSType_CIMOS_MicrosoftWindowsServer2003_64,        VBOXOSTYPE_Win2k3_x64 },
-    { ovf::CIMOSType_CIMOS_WindowsXP_64,                         VBOXOSTYPE_WinXP_x64 },
-    { ovf::CIMOSType_CIMOS_WindowsVista,                         VBOXOSTYPE_WinVista },
-    { ovf::CIMOSType_CIMOS_WindowsVista_64,                      VBOXOSTYPE_WinVista_x64 },
-    { ovf::CIMOSType_CIMOS_MicrosoftWindowsServer2008,           VBOXOSTYPE_Win2k8 },
-    { ovf::CIMOSType_CIMOS_MicrosoftWindowsServer2008_64,        VBOXOSTYPE_Win2k8_x64 },
-    { ovf::CIMOSType_CIMOS_FreeBSD_64,                           VBOXOSTYPE_FreeBSD_x64 },
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS },
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS_x64 }, // there is no CIM 64-bit type for this
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS106 },
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS106_x64 },
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS107_x64 },
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS108_x64 },
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS109_x64 },
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS1010_x64 },
-    { ovf::CIMOSType_CIMOS_MACOS,                                VBOXOSTYPE_MacOS1011_x64 },
-
-    // Linuxes
-    { ovf::CIMOSType_CIMOS_RedHatEnterpriseLinux,                VBOXOSTYPE_RedHat },
-    { ovf::CIMOSType_CIMOS_RedHatEnterpriseLinux_64,             VBOXOSTYPE_RedHat_x64 },
-    { ovf::CIMOSType_CIMOS_Solaris_64,                           VBOXOSTYPE_Solaris_x64 },
-    { ovf::CIMOSType_CIMOS_SUSE,                                 VBOXOSTYPE_OpenSUSE },
-    { ovf::CIMOSType_CIMOS_SLES,                                 VBOXOSTYPE_OpenSUSE },
-    { ovf::CIMOSType_CIMOS_NovellLinuxDesktop,                   VBOXOSTYPE_OpenSUSE },
-    { ovf::CIMOSType_CIMOS_SUSE_64,                              VBOXOSTYPE_OpenSUSE_x64 },
-    { ovf::CIMOSType_CIMOS_SLES_64,                              VBOXOSTYPE_OpenSUSE_x64 },
-    { ovf::CIMOSType_CIMOS_LINUX,                                VBOXOSTYPE_Linux },
-    { ovf::CIMOSType_CIMOS_LINUX,                                VBOXOSTYPE_Linux22 },
-    { ovf::CIMOSType_CIMOS_SunJavaDesktopSystem,                 VBOXOSTYPE_Linux },
-    { ovf::CIMOSType_CIMOS_TurboLinux,                           VBOXOSTYPE_Turbolinux },
-    { ovf::CIMOSType_CIMOS_TurboLinux_64,                        VBOXOSTYPE_Turbolinux_x64 },
-    { ovf::CIMOSType_CIMOS_Mandriva,                             VBOXOSTYPE_Mandriva },
-    { ovf::CIMOSType_CIMOS_Mandriva_64,                          VBOXOSTYPE_Mandriva_x64 },
-    { ovf::CIMOSType_CIMOS_Ubuntu,                               VBOXOSTYPE_Ubuntu },
-    { ovf::CIMOSType_CIMOS_Ubuntu_64,                            VBOXOSTYPE_Ubuntu_x64 },
-    { ovf::CIMOSType_CIMOS_Debian,                               VBOXOSTYPE_Debian },
-    { ovf::CIMOSType_CIMOS_Debian_64,                            VBOXOSTYPE_Debian_x64 },
-    { ovf::CIMOSType_CIMOS_Linux_2_4_x,                          VBOXOSTYPE_Linux24 },
-    { ovf::CIMOSType_CIMOS_Linux_2_4_x_64,                       VBOXOSTYPE_Linux24_x64 },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_Linux26 },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_Linux26_x64 },
-    { ovf::CIMOSType_CIMOS_Linux_64,                             VBOXOSTYPE_Linux26_x64 },
-
-    // types that we have support for but CIM doesn't
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_ArchLinux },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_ArchLinux_x64 },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_FedoraCore },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_FedoraCore_x64 },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_Gentoo },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_Gentoo_x64 },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x,                          VBOXOSTYPE_Xandros },
-    { ovf::CIMOSType_CIMOS_Linux_2_6_x_64,                       VBOXOSTYPE_Xandros_x64 },
-    { ovf::CIMOSType_CIMOS_Solaris,                              VBOXOSTYPE_OpenSolaris },
-    { ovf::CIMOSType_CIMOS_Solaris_64,                           VBOXOSTYPE_OpenSolaris_x64 },
-
-    // types added with CIM 2.25.0 follow:
-    { ovf::CIMOSType_CIMOS_WindowsServer2008R2,                  VBOXOSTYPE_Win2k8 },           // duplicate, see above
-//     { ovf::CIMOSType_CIMOS_VMwareESXi = 104,                                                 // we can't run ESX in a VM
-    { ovf::CIMOSType_CIMOS_Windows7,                             VBOXOSTYPE_Win7 },
-    { ovf::CIMOSType_CIMOS_Windows7,                             VBOXOSTYPE_Win7_x64 },         // there is no
-                                                                                                // CIM 64-bit type for this
-    { ovf::CIMOSType_CIMOS_CentOS,                               VBOXOSTYPE_RedHat },
-    { ovf::CIMOSType_CIMOS_CentOS_64,                            VBOXOSTYPE_RedHat_x64 },
-    { ovf::CIMOSType_CIMOS_OracleEnterpriseLinux,                VBOXOSTYPE_Oracle },
-    { ovf::CIMOSType_CIMOS_OracleEnterpriseLinux_64,             VBOXOSTYPE_Oracle_x64 },
-    { ovf::CIMOSType_CIMOS_eComStation,                          VBOXOSTYPE_ECS }
-
-    // there are no CIM types for these, so these turn to "other" on export:
-    //      VBOXOSTYPE_OpenBSD
-    //      VBOXOSTYPE_OpenBSD_x64
-    //      VBOXOSTYPE_NetBSD
-    //      VBOXOSTYPE_NetBSD_x64
-
-};
-
-/* Pattern structure for matching the OS type description field */
-struct osTypePattern
-{
-    const char *pcszPattern;
-    VBOXOSTYPE osType;
-};
-
-/* These are the 32-Bit ones. They are sorted by priority. */
-static const osTypePattern g_osTypesPattern[] =
-{
-    {"Windows NT",    VBOXOSTYPE_WinNT4},
-    {"Windows XP",    VBOXOSTYPE_WinXP},
-    {"Windows 2000",  VBOXOSTYPE_Win2k},
-    {"Windows 2003",  VBOXOSTYPE_Win2k3},
-    {"Windows Vista", VBOXOSTYPE_WinVista},
-    {"Windows 2008",  VBOXOSTYPE_Win2k8},
-    {"SUSE",          VBOXOSTYPE_OpenSUSE},
-    {"Novell",        VBOXOSTYPE_OpenSUSE},
-    {"Red Hat",       VBOXOSTYPE_RedHat},
-    {"Mandriva",      VBOXOSTYPE_Mandriva},
-    {"Ubuntu",        VBOXOSTYPE_Ubuntu},
-    {"Debian",        VBOXOSTYPE_Debian},
-    {"QNX",           VBOXOSTYPE_QNX},
-    {"Linux 2.4",     VBOXOSTYPE_Linux24},
-    {"Linux 2.6",     VBOXOSTYPE_Linux26},
-    {"Linux",         VBOXOSTYPE_Linux},
-    {"OpenSolaris",   VBOXOSTYPE_OpenSolaris},
-    {"Solaris",       VBOXOSTYPE_OpenSolaris},
-    {"FreeBSD",       VBOXOSTYPE_FreeBSD},
-    {"NetBSD",        VBOXOSTYPE_NetBSD},
-    {"Windows 95",    VBOXOSTYPE_Win95},
-    {"Windows 98",    VBOXOSTYPE_Win98},
-    {"Windows Me",    VBOXOSTYPE_WinMe},
-    {"Windows 3.",    VBOXOSTYPE_Win31},
-    {"DOS",           VBOXOSTYPE_DOS},
-    {"OS2",           VBOXOSTYPE_OS2}
-};
-
-/* These are the 64-Bit ones. They are sorted by priority. */
-static const osTypePattern g_osTypesPattern64[] =
-{
-    {"Windows XP",    VBOXOSTYPE_WinXP_x64},
-    {"Windows 2003",  VBOXOSTYPE_Win2k3_x64},
-    {"Windows Vista", VBOXOSTYPE_WinVista_x64},
-    {"Windows 2008",  VBOXOSTYPE_Win2k8_x64},
-    {"SUSE",          VBOXOSTYPE_OpenSUSE_x64},
-    {"Novell",        VBOXOSTYPE_OpenSUSE_x64},
-    {"Red Hat",       VBOXOSTYPE_RedHat_x64},
-    {"Mandriva",      VBOXOSTYPE_Mandriva_x64},
-    {"Ubuntu",        VBOXOSTYPE_Ubuntu_x64},
-    {"Debian",        VBOXOSTYPE_Debian_x64},
-    {"Linux 2.4",     VBOXOSTYPE_Linux24_x64},
-    {"Linux 2.6",     VBOXOSTYPE_Linux26_x64},
-    {"Linux",         VBOXOSTYPE_Linux26_x64},
-    {"OpenSolaris",   VBOXOSTYPE_OpenSolaris_x64},
-    {"Solaris",       VBOXOSTYPE_OpenSolaris_x64},
-    {"FreeBSD",       VBOXOSTYPE_FreeBSD_x64},
-};
-
-/**
- * Private helper func that suggests a VirtualBox guest OS type
- * for the given OVF operating system type.
- * @param osTypeVBox
- * @param c
- * @param cStr
- */
-void convertCIMOSType2VBoxOSType(Utf8Str &strType, ovf::CIMOSType_T c, const Utf8Str &cStr)
-{
-    /* First check if the type is other/other_64 */
-    if (c == ovf::CIMOSType_CIMOS_Other)
-    {
-        for (size_t i=0; i < RT_ELEMENTS(g_osTypesPattern); ++i)
-            if (cStr.contains (g_osTypesPattern[i].pcszPattern, Utf8Str::CaseInsensitive))
-            {
-                strType = Global::OSTypeId(g_osTypesPattern[i].osType);
-                return;
-            }
-    }
-    else if (c == ovf::CIMOSType_CIMOS_Other_64)
-    {
-        for (size_t i=0; i < RT_ELEMENTS(g_osTypesPattern64); ++i)
-            if (cStr.contains (g_osTypesPattern64[i].pcszPattern, Utf8Str::CaseInsensitive))
-            {
-                strType = Global::OSTypeId(g_osTypesPattern64[i].osType);
-                return;
-            }
-    }
-
-    for (size_t i = 0; i < RT_ELEMENTS(g_osTypes); ++i)
-    {
-        if (c == g_osTypes[i].cim)
-        {
-            strType = Global::OSTypeId(g_osTypes[i].osType);
-            return;
-        }
-    }
-
-    if (c == ovf::CIMOSType_CIMOS_Other_64)
-        strType = Global::OSTypeId(VBOXOSTYPE_Unknown_x64);
-    else
-        strType = Global::OSTypeId(VBOXOSTYPE_Unknown);
-}
-
-/**
- * Private helper func that suggests a VirtualBox guest OS type
- * for the given OVF operating system type.
- * @returns CIM OS type.
- * @param pcszVBox  Our guest OS type identifier string.
- * @param fLongMode Whether long mode is enabled and a 64-bit CIM type is
- *                  preferred even if the VBox guest type isn't 64-bit.
- */
-ovf::CIMOSType_T convertVBoxOSType2CIMOSType(const char *pcszVBox, BOOL fLongMode)
-{
-    for (size_t i = 0; i < RT_ELEMENTS(g_osTypes); ++i)
-    {
-        if (!RTStrICmp(pcszVBox, Global::OSTypeId(g_osTypes[i].osType)))
-        {
-            if (fLongMode && !(g_osTypes[i].osType & VBOXOSTYPE_x64))
-            {
-                VBOXOSTYPE enmDesiredOsType = (VBOXOSTYPE)((int)g_osTypes[i].osType | (int)VBOXOSTYPE_x64);
-                size_t     j = i;
-                while (++j < RT_ELEMENTS(g_osTypes))
-                    if (g_osTypes[j].osType == enmDesiredOsType)
-                        return g_osTypes[j].cim;
-                j = i;
-                while (--j > 0)
-                    if (g_osTypes[j].osType == enmDesiredOsType)
-                        return g_osTypes[j].cim;
-                /* Not all OSes have 64-bit versions, so just return the 32-bit variant. */
-            }
-            return g_osTypes[i].cim;
-        }
-    }
-
-    return fLongMode ? ovf::CIMOSType_CIMOS_Other_64 : ovf::CIMOSType_CIMOS_Other;
-}
-
-Utf8Str convertNetworkAttachmentTypeToString(NetworkAttachmentType_T type)
-{
-    Utf8Str strType;
-    switch (type)
-    {
-        case NetworkAttachmentType_NAT: strType = "NAT"; break;
-        case NetworkAttachmentType_Bridged: strType = "Bridged"; break;
-        case NetworkAttachmentType_Internal: strType = "Internal"; break;
-        case NetworkAttachmentType_HostOnly: strType = "HostOnly"; break;
-        case NetworkAttachmentType_Generic: strType = "Generic"; break;
-        case NetworkAttachmentType_NATNetwork: strType = "NATNetwork"; break;
-        case NetworkAttachmentType_Null: strType = "Null"; break;
-    }
-    return strType;
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -372,27 +425,25 @@ Utf8Str convertNetworkAttachmentTypeToString(NetworkAttachmentType_T type)
 /**
  * Implementation for IVirtualBox::createAppliance.
  *
- * @param anAppliance IAppliance object created if S_OK is returned.
+ * @param aAppliance IAppliance object created if S_OK is returned.
  * @return S_OK or error.
  */
 HRESULT VirtualBox::createAppliance(ComPtr<IAppliance> &aAppliance)
 {
-    HRESULT rc;
-
     ComObjPtr<Appliance> appliance;
-    appliance.createObject();
-    rc = appliance->init(this);
-
-    if (SUCCEEDED(rc))
-        appliance.queryInterfaceTo(aAppliance.asOutParam());
-
-    return rc;
+    HRESULT hrc = appliance.createObject();
+    if (SUCCEEDED(hrc))
+    {
+        hrc = appliance->init(this);
+        if (SUCCEEDED(hrc))
+            hrc = appliance.queryInterfaceTo(aAppliance.asOutParam());
+    }
+    return hrc;
 }
 
 /**
  * Appliance COM initializer.
- * @param
- * @return
+ * @param   aVirtualBox     The VirtualBox object.
  */
 HRESULT Appliance::init(VirtualBox *aVirtualBox)
 {
@@ -409,9 +460,7 @@ HRESULT Appliance::init(VirtualBox *aVirtualBox)
     m->m_pSecretKeyStore = new SecretKeyStore(false /* fRequireNonPageable*/);
     AssertReturn(m->m_pSecretKeyStore, E_FAIL);
 
-    i_initApplianceIONameMap();
-
-    rc = i_initSetOfSupportedStandardsURI();
+    rc = i_initBackendNames();
 
     /* Confirm a successful initialization */
     autoInitSpan.setSucceeded();
@@ -421,7 +470,6 @@ HRESULT Appliance::init(VirtualBox *aVirtualBox)
 
 /**
  * Appliance COM uninitializer.
- * @return
  */
 void Appliance::uninit()
 {
@@ -445,15 +493,10 @@ void Appliance::uninit()
 
 /**
  * Public method implementation.
- * @param
- * @return
  */
 HRESULT Appliance::getPath(com::Utf8Str &aPath)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-    if (!i_isApplianceIdle())
-        return E_ACCESSDENIED;
 
     aPath = m->locInfo.strPath;
 
@@ -462,16 +505,12 @@ HRESULT Appliance::getPath(com::Utf8Str &aPath)
 
 /**
  * Public method implementation.
- * @param
- * @return
  */
 HRESULT Appliance::getDisks(std::vector<com::Utf8Str> &aDisks)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
     aDisks.resize(0);
-    if (!i_isApplianceIdle())
-        return E_ACCESSDENIED;
 
     if (m->pReader) // OVFReader instantiated?
     {
@@ -513,15 +552,11 @@ HRESULT Appliance::getDisks(std::vector<com::Utf8Str> &aDisks)
 }
 
 /**
-* Public method implementation.
- * @return
+ * Public method implementation.
  */
 HRESULT Appliance::getCertificate(ComPtr<ICertificate> &aCertificateInfo)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-    if (!i_isApplianceIdle())
-        return E_ACCESSDENIED;
 
     /* Can be NULL at this point, queryInterfaceto handles that. */
     m->ptrCertificateInfo.queryInterfaceTo(aCertificateInfo.asOutParam());
@@ -530,37 +565,27 @@ HRESULT Appliance::getCertificate(ComPtr<ICertificate> &aCertificateInfo)
 
 /**
  * Public method implementation.
- * @param
- * @return
  */
 HRESULT Appliance::getVirtualSystemDescriptions(std::vector<ComPtr<IVirtualSystemDescription> > &aVirtualSystemDescriptions)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-    if (!i_isApplianceIdle())
-        return E_ACCESSDENIED;
 
     aVirtualSystemDescriptions.resize(m->virtualSystemDescriptions.size());
     std::list< ComObjPtr<VirtualSystemDescription> > vsds(m->virtualSystemDescriptions);
     size_t i = 0;
     for (std::list< ComObjPtr<VirtualSystemDescription> >::iterator it = vsds.begin(); it != vsds.end(); ++it, ++i)
     {
-         (*it).queryInterfaceTo(aVirtualSystemDescriptions[i].asOutParam());
+        (*it).queryInterfaceTo(aVirtualSystemDescriptions[i].asOutParam());
     }
     return S_OK;
 }
 
 /**
  * Public method implementation.
- * @param aDisks
- * @return
  */
 HRESULT Appliance::getMachines(std::vector<com::Utf8Str> &aMachines)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-    if (!i_isApplianceIdle())
-        return E_ACCESSDENIED;
 
     aMachines.resize(m->llGuidsMachinesCreated.size());
     size_t i = 0;
@@ -602,9 +627,65 @@ HRESULT Appliance::createVFSExplorer(const com::Utf8Str &aURI, ComPtr<IVFSExplor
     return rc;
 }
 
+
 /**
-* Public method implementation.
- * @return
+ * Public method implementation.
+ * Add the "aRequested" numbers of new empty objects of VSD into the list
+ * "virtualSystemDescriptions".
+ * The parameter "aCreated" keeps the actual number of the added objects.
+ * In case of exception all added objects are removed from the list.
+ */
+HRESULT Appliance::createVirtualSystemDescriptions(ULONG aRequested, ULONG *aCreated)
+{
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    HRESULT rc = S_OK;
+    uint32_t lQuantity = aRequested;
+    uint32_t i=0;
+
+    if (lQuantity < 1)
+        return setError(E_FAIL, tr("The number of VirtualSystemDescription objects must be at least 1 or more."));
+    try
+    {
+        for (; i<lQuantity; ++i)
+        {
+            ComObjPtr<VirtualSystemDescription> opVSD;
+            rc = opVSD.createObject();
+            if (SUCCEEDED(rc))
+            {
+                rc = opVSD->init();
+                if (SUCCEEDED(rc))
+                    m->virtualSystemDescriptions.push_back(opVSD);
+                else
+                    break;
+            }
+            else
+                break;
+        }
+
+        if (i<lQuantity)
+            LogRel(("Number of created VirtualSystemDescription objects is less than requested"
+                    "(Requested %d, Created %d)",lQuantity, i));
+
+        *aCreated = i;
+    }
+    catch (HRESULT aRC)
+    {
+        for (; i>0; --i)
+        {
+            if (!m->virtualSystemDescriptions.empty())
+                m->virtualSystemDescriptions.pop_back();
+            else
+                break;
+        }
+        rc = aRC;
+    }
+
+    return rc;
+}
+
+/**
+ * Public method implementation.
  */
 HRESULT Appliance::getWarnings(std::vector<com::Utf8Str> &aWarnings)
 {
@@ -689,114 +770,72 @@ HRESULT Appliance::addPasswords(const std::vector<com::Utf8Str> &aIdentifiers,
 // Appliance private methods
 //
 ////////////////////////////////////////////////////////////////////////////////
-//
-HRESULT Appliance::i_initSetOfSupportedStandardsURI()
+
+HRESULT Appliance::i_initBackendNames()
 {
-    HRESULT rc = S_OK;
-    if (!supportedStandardsURI.empty())
-        return rc;
-
-    /* Get the system properties. */
-    SystemProperties *pSysProps = mVirtualBox->i_getSystemProperties();
+    HRESULT hrc = S_OK;
+    if (!g_fInitializedBackendNames)
     {
-        ComObjPtr<MediumFormat> trgFormat = pSysProps->i_mediumFormatFromExtension("iso");
-        if (trgFormat.isNull())
-            return setError(E_FAIL, tr("Can't find appropriate medium format for ISO type of a virtual disk."));
+        /*
+         * Use the system properties to translate file extensions into
+         * storage backend names.
+         */
+        static struct
+        {
+            const char *pszExt;         /**< extension */
+            char       *pszBackendName;
+            size_t      cbBackendName;
+        } const s_aFormats[] =
+        {
+            { "iso",   g_szIsoBackend,  sizeof(g_szIsoBackend)  },
+            { "vmdk",  g_szVmdkBackend, sizeof(g_szVmdkBackend) },
+            { "vhd",   g_szVhdBackend,  sizeof(g_szVhdBackend)  },
+        };
+        SystemProperties *pSysProps = mVirtualBox->i_getSystemProperties();
+        for (unsigned i = 0; i < RT_ELEMENTS(s_aFormats); i++)
+        {
+            ComObjPtr<MediumFormat> trgFormat = pSysProps->i_mediumFormatFromExtension(s_aFormats[i].pszExt);
+            if (trgFormat.isNotNull())
+            {
+                const char *pszName = trgFormat->i_getName().c_str();
+                int vrc = RTStrCopy(s_aFormats[i].pszBackendName, s_aFormats[i].cbBackendName, pszName);
+                AssertRCStmt(vrc, hrc = setError(E_FAIL, "Unexpected storage backend name copy error %Rrc for %s.", vrc, pszName));
+            }
+            else
+                hrc = setError(E_FAIL, tr("Can't find appropriate medium format for ISO type of a virtual disk."));
+        }
 
-        Bstr bstrFormatName;
-        rc = trgFormat->COMGETTER(Name)(bstrFormatName.asOutParam());
-        if (FAILED(rc)) return rc;
-
-        Utf8Str strTrgFormat = Utf8Str(bstrFormatName);
-
-        supportedStandardsURI.insert(std::make_pair(Utf8Str(strISOURI), strTrgFormat));
+        if (SUCCEEDED(hrc))
+            g_fInitializedBackendNames = true;
     }
 
-    {
-        ComObjPtr<MediumFormat> trgFormat = pSysProps->i_mediumFormatFromExtension("vmdk");
-        if (trgFormat.isNull())
-            return setError(E_FAIL, tr("Can't find appropriate medium format for VMDK type of a virtual disk."));
-
-        Bstr bstrFormatName;
-        rc = trgFormat->COMGETTER(Name)(bstrFormatName.asOutParam());
-        if (FAILED(rc)) return rc;
-
-        Utf8Str strTrgFormat = Utf8Str(bstrFormatName);
-
-        supportedStandardsURI.insert(std::make_pair(Utf8Str(strVMDKStreamURI), strTrgFormat));
-        supportedStandardsURI.insert(std::make_pair(Utf8Str(strVMDKSparseURI), strTrgFormat));
-        supportedStandardsURI.insert(std::make_pair(Utf8Str(strVMDKCompressedURI), strTrgFormat));
-        supportedStandardsURI.insert(std::make_pair(Utf8Str(strVMDKCompressedURI2), strTrgFormat));
-    }
-
-    {
-        ComObjPtr<MediumFormat> trgFormat = pSysProps->i_mediumFormatFromExtension("vhd");
-        if (trgFormat.isNull())
-            return setError(E_FAIL, tr("Can't find appropriate medium format for VHD type of a virtual disk."));
-
-        Bstr bstrFormatName;
-        rc = trgFormat->COMGETTER(Name)(bstrFormatName.asOutParam());
-        if (FAILED(rc)) return rc;
-
-        Utf8Str strTrgFormat = Utf8Str(bstrFormatName);
-
-        supportedStandardsURI.insert(std::make_pair(Utf8Str(strVHDURI), strTrgFormat));
-    }
-
-    return rc;
+    return hrc;
 }
 
 Utf8Str Appliance::i_typeOfVirtualDiskFormatFromURI(Utf8Str uri) const
 {
-    Utf8Str type;
-    std::map<Utf8Str, Utf8Str>::const_iterator cit = supportedStandardsURI.find(uri);
-    if (cit != supportedStandardsURI.end())
-    {
-        type = cit->second;
-    }
+    Assert(g_fInitializedBackendNames);
 
-    return type;
+    unsigned i = RT_ELEMENTS(g_aUriToBackend);
+    while (i-- > 0)
+        if (RTStrICmp(g_aUriToBackend[i].pszUri, uri.c_str()) == 0)
+            return Utf8Str(g_aUriToBackend[i].pszBackend);
+    return Utf8Str();
 }
 
+#if 0 /* unused */
 std::set<Utf8Str> Appliance::i_URIFromTypeOfVirtualDiskFormat(Utf8Str type)
 {
-    std::set<Utf8Str> uri;
-    std::map<Utf8Str, Utf8Str>::const_iterator cit = supportedStandardsURI.begin();
-    while(cit != supportedStandardsURI.end())
-    {
-        if (cit->second.compare(type,Utf8Str::CaseInsensitive) == 0)
-            uri.insert(cit->first);
-        ++cit;
-    }
+    Assert(g_fInitializedBackendNames);
 
-    return uri;
+    std::set<Utf8Str> UriSet;
+    unsigned i = RT_ELEMENTS(g_aUriToBackend);
+    while (i-- > 0)
+        if (RTStrICmp(g_aUriToBackend[i].pszBackend, type.c_str()) == 0)
+            UriSet.insert(g_aUriToBackend[i].pszUri);
+    return UriSet;
 }
-
-HRESULT Appliance::i_initApplianceIONameMap()
-{
-    HRESULT rc = S_OK;
-    if (!applianceIONameMap.empty())
-        return rc;
-
-    applianceIONameMap.insert(std::make_pair(applianceIOTar, applianceIOTarName));
-    applianceIONameMap.insert(std::make_pair(applianceIOFile, applianceIOFileName));
-    applianceIONameMap.insert(std::make_pair(applianceIOSha, applianceIOShaName));
-
-    return rc;
-}
-
-Utf8Str Appliance::i_applianceIOName(APPLIANCEIONAME type) const
-{
-    Utf8Str name;
-    std::map<APPLIANCEIONAME, Utf8Str>::const_iterator cit = applianceIONameMap.find(type);
-    if (cit != applianceIONameMap.end())
-    {
-        name = cit->second;
-    }
-
-    return name;
-}
-
+#endif
 
 /**
  * Returns a medium format object corresponding to the given
@@ -807,7 +846,6 @@ Utf8Str Appliance::i_applianceIOName(APPLIANCEIONAME type) const
  *
  * @return ComObjPtr<MediumFormat>
  */
-
 HRESULT Appliance::i_findMediumFormatFromDiskImage(const ovf::DiskImage &di, ComObjPtr<MediumFormat>& mf)
 {
     HRESULT rc = S_OK;
@@ -861,13 +899,47 @@ HRESULT Appliance::i_findMediumFormatFromDiskImage(const ovf::DiskImage &di, Com
         mf = pSysProps->i_mediumFormat(strSrcFormat);
 
     if (mf.isNull())
-    {
-        rc = setError(E_FAIL,
-               tr("Internal inconsistency looking up medium format for the disk image '%s'"),
-               di.strHref.c_str());
-    }
+        rc = setError(E_FAIL, tr("Internal inconsistency looking up medium format for the disk image '%s'"),
+                      di.strHref.c_str());
 
     return rc;
+}
+
+/**
+ * Setup automatic I/O stream digest calculation, adding it to hOurManifest.
+ *
+ * @returns Passthru I/O stream, of @a hVfsIos if no digest calc needed.
+ * @param   hVfsIos             The stream to wrap. Always consumed.
+ * @param   pszManifestEntry    The manifest entry.
+ * @param   fRead               Set if read stream, clear if write.
+ * @throws  Nothing.
+ */
+RTVFSIOSTREAM Appliance::i_manifestSetupDigestCalculationForGivenIoStream(RTVFSIOSTREAM hVfsIos, const char *pszManifestEntry,
+                                                                          bool fRead /*= true */)
+{
+    int vrc;
+    Assert(!RTManifestPtIosIsInstanceOf(hVfsIos));
+
+    if (m->fDigestTypes == 0)
+        return hVfsIos;
+
+    /* Create the manifest if necessary. */
+    if (m->hOurManifest == NIL_RTMANIFEST)
+    {
+        vrc = RTManifestCreate(0 /*fFlags*/, &m->hOurManifest);
+        AssertRCReturnStmt(vrc, RTVfsIoStrmRelease(hVfsIos), NIL_RTVFSIOSTREAM);
+    }
+
+    /* Setup the stream. */
+    RTVFSIOSTREAM hVfsIosPt;
+    vrc = RTManifestEntryAddPassthruIoStream(m->hOurManifest, hVfsIos, pszManifestEntry, m->fDigestTypes, fRead, &hVfsIosPt);
+
+    RTVfsIoStrmRelease(hVfsIos);        /* always consumed! */
+    if (RT_SUCCESS(vrc))
+        return hVfsIosPt;
+
+    setErrorVrc(vrc, tr("RTManifestEntryAddPassthruIoStream failed with rc=%Rrc"), vrc);
+    return NIL_RTVFSIOSTREAM;
 }
 
 /**
@@ -881,14 +953,12 @@ HRESULT Appliance::i_findMediumFormatFromDiskImage(const ovf::DiskImage &di, Com
  * is busy. The caller should then return E_ACCESSDENIED.
  *
  * Must be called from under the object lock!
- *
- * @return
  */
 bool Appliance::i_isApplianceIdle()
 {
-    if (m->state == Data::ApplianceImporting)
+    if (m->state == ApplianceImporting)
         setError(VBOX_E_INVALID_OBJECT_STATE, tr("The appliance is busy importing files"));
-    else if (m->state == Data::ApplianceExporting)
+    else if (m->state == ApplianceExporting)
         setError(VBOX_E_INVALID_OBJECT_STATE, tr("The appliance is busy exporting files"));
     else
         return true;
@@ -896,16 +966,15 @@ bool Appliance::i_isApplianceIdle()
     return false;
 }
 
-HRESULT Appliance::i_searchUniqueVMName(Utf8Str& aName) const
+HRESULT Appliance::i_searchUniqueVMName(Utf8Str &aName) const
 {
-    IMachine *machine = NULL;
+    ComPtr<IMachine> ptrMachine;
     char *tmpName = RTStrDup(aName.c_str());
     int i = 1;
-    /** @todo Maybe too cost-intensive; try to find a lighter way */
-    while (mVirtualBox->FindMachine(Bstr(tmpName).raw(), &machine) != VBOX_E_OBJECT_NOT_FOUND)
+    while (mVirtualBox->FindMachine(Bstr(tmpName).raw(), ptrMachine.asOutParam()) != VBOX_E_OBJECT_NOT_FOUND)
     {
         RTStrFree(tmpName);
-        RTStrAPrintf(&tmpName, "%s_%d", aName.c_str(), i);
+        RTStrAPrintf(&tmpName, "%s %d", aName.c_str(), i);
         ++i;
     }
     aName = tmpName;
@@ -914,43 +983,46 @@ HRESULT Appliance::i_searchUniqueVMName(Utf8Str& aName) const
     return S_OK;
 }
 
-HRESULT Appliance::i_searchUniqueDiskImageFilePath(Utf8Str& aName) const
+HRESULT Appliance::i_ensureUniqueImageFilePath(const Utf8Str &aMachineFolder, DeviceType_T aDeviceType, Utf8Str &aName) const
 {
-    IMedium *harddisk = NULL;
-    char *tmpName = RTStrDup(aName.c_str());
-    int i = 1;
-    /* Check if the file exists or if a file with this path is registered
-     * already */
-    /** @todo Maybe too cost-intensive; try to find a lighter way */
-    while (    RTPathExists(tmpName)
-            || mVirtualBox->OpenMedium(Bstr(tmpName).raw(), DeviceType_HardDisk, AccessMode_ReadWrite,
-                                       FALSE /* fForceNewUuid */,  &harddisk) != VBOX_E_OBJECT_NOT_FOUND)
+    /*
+     * Check if the file exists or if a medium with this path is registered already
+     */
+    Utf8Str strAbsName;
+    size_t  offDashNum = ~(size_t)0;
+    size_t  cchDashNum = 0;
+    for (unsigned i = 1;; i++)
     {
-        RTStrFree(tmpName);
-        char *tmpDir = RTStrDup(aName.c_str());
-        RTPathStripFilename(tmpDir);;
-        char *tmpFile = RTStrDup(RTPathFilename(aName.c_str()));
-        RTPathStripSuffix(tmpFile);
-        const char *pszTmpSuff = RTPathSuffix(aName.c_str());
-        RTStrAPrintf(&tmpName, "%s%c%s_%d%s", tmpDir, RTPATH_DELIMITER, tmpFile, i, pszTmpSuff);
-        RTStrFree(tmpFile);
-        RTStrFree(tmpDir);
-        ++i;
-    }
-    aName = tmpName;
-    RTStrFree(tmpName);
+        /* Complete the path (could be relative to machine folder). */
+        int rc = RTPathAbsExCxx(strAbsName, aMachineFolder, aName);
+        AssertRCReturn(rc, Global::vboxStatusCodeToCOM(rc));  /** @todo stupid caller ignores this */
 
-    return S_OK;
+        /* Check that the file does not exist and that there is no media somehow matching the name. */
+        if (!RTPathExists(strAbsName.c_str()))
+        {
+            ComPtr<IMedium> ptrMedium;
+            HRESULT hrc = mVirtualBox->OpenMedium(Bstr(strAbsName).raw(), aDeviceType, AccessMode_ReadWrite,
+                                                  FALSE /* fForceNewUuid */, ptrMedium.asOutParam());
+            if (hrc == VBOX_E_OBJECT_NOT_FOUND)
+                return S_OK;
+        }
+
+        /* Insert '_%i' before the suffix and try again. */
+        if (offDashNum == ~(size_t)0)
+        {
+            const char *pszSuffix = RTPathSuffix(aName.c_str());
+            offDashNum = pszSuffix ? (size_t)(pszSuffix - aName.c_str()) : aName.length();
+        }
+        char   szTmp[32];
+        size_t cchTmp = RTStrPrintf(szTmp, sizeof(szTmp),  "_%u", i);
+        aName.replace(offDashNum, cchDashNum, szTmp, cchTmp);
+        cchDashNum = cchTmp;
+    }
 }
 
 /**
  * Called from Appliance::importImpl() and Appliance::writeImpl() to set up a
  * progress object with the proper weights and maximum progress values.
- *
- * @param pProgress
- * @param strDescription
- * @param mode
- * @return
  */
 HRESULT Appliance::i_setUpProgress(ComObjPtr<Progress> &pProgress,
                                    const Utf8Str &strDescription,
@@ -959,18 +1031,25 @@ HRESULT Appliance::i_setUpProgress(ComObjPtr<Progress> &pProgress,
     HRESULT rc;
 
     /* Create the progress object */
-    pProgress.createObject();
+    try
+    {
+        rc = pProgress.createObject();
+        if (FAILED(rc))
+            return rc;
+    }
+    catch (std::bad_alloc &)
+    {
+        return E_OUTOFMEMORY;
+    }
 
     // compute the disks weight (this sets ulTotalDisksMB and cDisks in the instance data)
     i_disksWeight();
 
     m->ulWeightForManifestOperation = 0;
 
-    ULONG cOperations;
+    ULONG cOperations = 1               // one for XML setup
+                      + m->cDisks;      // plus one per disk
     ULONG ulTotalOperationsWeight;
-
-    cOperations =   1               // one for XML setup
-                  + m->cDisks;      // plus one per disk
     if (m->ulTotalDisksMB)
     {
         m->ulWeightForXmlOperation = (ULONG)((double)m->ulTotalDisksMB * 1 / 100);    // use 1% of the progress for the XML
@@ -1004,7 +1083,7 @@ HRESULT Appliance::i_setUpProgress(ComObjPtr<Progress> &pProgress,
         }
         case ImportS3:
         {
-            cOperations += 1 + 1;     // another one for the manifest file & another one for the import
+            cOperations += 1 + 1;       // another one for the manifest file & another one for the import
             ulTotalOperationsWeight = m->ulTotalDisksMB;
             if (!m->ulTotalDisksMB)
                 // no disks to export:
@@ -1021,7 +1100,7 @@ HRESULT Appliance::i_setUpProgress(ComObjPtr<Progress> &pProgress,
         }
         case WriteS3:
         {
-            cOperations += 1 + 1;     // another one for the mf & another one for temporary creation
+            cOperations += 1 + 1;       // another one for the mf & another one for temporary creation
 
             if (m->ulTotalDisksMB)
             {
@@ -1043,94 +1122,20 @@ HRESULT Appliance::i_setUpProgress(ComObjPtr<Progress> &pProgress,
             ulTotalOperationsWeight += ulOVFCreationWeight;
             break;
         }
+        case ExportCloud:
+        case ImportCloud:
+            break;
     }
     Log(("Setting up progress object: ulTotalMB = %d, cDisks = %d, => cOperations = %d, ulTotalOperationsWeight = %d, m->ulWeightForXmlOperation = %d\n",
          m->ulTotalDisksMB, m->cDisks, cOperations, ulTotalOperationsWeight, m->ulWeightForXmlOperation));
 
-    rc = pProgress->init(mVirtualBox, static_cast<IAppliance*>(this),
-                         Bstr(strDescription).raw(),
-                         TRUE /* aCancelable */,
-                         cOperations, // ULONG cOperations,
-                         ulTotalOperationsWeight, // ULONG ulTotalOperationsWeight,
-                         Bstr(strDescription).raw(), // CBSTR bstrFirstOperationDescription,
-                         m->ulWeightForXmlOperation); // ULONG ulFirstOperationWeight,
-    return rc;
-}
-
-/**
- * Called from the import and export background threads to synchronize the second
- * background disk thread's progress object with the current progress object so
- * that the user interface sees progress correctly and that cancel signals are
- * passed on to the second thread.
- * @param pProgressThis Progress object of the current thread.
- * @param pProgressAsync Progress object of asynchronous task running in background.
- */
-void Appliance::i_waitForAsyncProgress(ComObjPtr<Progress> &pProgressThis,
-                                       ComPtr<IProgress> &pProgressAsync)
-{
-    HRESULT rc;
-
-    // now loop until the asynchronous operation completes and then report its result
-    BOOL fCompleted;
-    BOOL fCanceled;
-    ULONG currentPercent;
-    ULONG cOp = 0;
-    while (SUCCEEDED(pProgressAsync->COMGETTER(Completed(&fCompleted))))
-    {
-        rc = pProgressThis->COMGETTER(Canceled)(&fCanceled);
-        if (FAILED(rc)) throw rc;
-        if (fCanceled)
-            pProgressAsync->Cancel();
-        /* Check if the current operation has changed. It is also possible
-           that in the meantime more than one async operation was finished. So
-           we have to loop as long as we reached the same operation count. */
-        ULONG curOp;
-        for (;;)
-        {
-            rc = pProgressAsync->COMGETTER(Operation(&curOp));
-            if (FAILED(rc)) throw rc;
-            if (cOp != curOp)
-            {
-                Bstr bstr;
-                ULONG currentWeight;
-                rc = pProgressAsync->COMGETTER(OperationDescription(bstr.asOutParam()));
-                if (FAILED(rc)) throw rc;
-                rc = pProgressAsync->COMGETTER(OperationWeight(&currentWeight));
-                if (FAILED(rc)) throw rc;
-                rc = pProgressThis->SetNextOperation(bstr.raw(), currentWeight);
-                if (FAILED(rc)) throw rc;
-                ++cOp;
-            }
-            else
-                break;
-        }
-
-        rc = pProgressAsync->COMGETTER(OperationPercent(&currentPercent));
-        if (FAILED(rc)) throw rc;
-        pProgressThis->SetCurrentOperationProgress(currentPercent);
-        if (fCompleted)
-            break;
-
-        /* Make sure the loop is not too tight */
-        rc = pProgressAsync->WaitForCompletion(100);
-        if (FAILED(rc)) throw rc;
-    }
-    // report result of asynchronous operation
-    LONG iRc;
-    rc = pProgressAsync->COMGETTER(ResultCode)(&iRc);
-    if (FAILED(rc)) throw rc;
-
-
-    // if the thread of the progress object has an error, then
-    // retrieve the error info from there, or it'll be lost
-    if (FAILED(iRc))
-    {
-        ProgressErrorInfo info(pProgressAsync);
-        Utf8Str str(info.getText());
-        const char *pcsz = str.c_str();
-        HRESULT rc2 = setError(iRc, pcsz);
-        throw rc2;
-    }
+    return pProgress->init(mVirtualBox, static_cast<IAppliance*>(this),
+                           strDescription,
+                           TRUE /* aCancelable */,
+                           cOperations, // ULONG cOperations,
+                           ulTotalOperationsWeight, // ULONG ulTotalOperationsWeight,
+                           strDescription, // CBSTR bstrFirstOperationDescription,
+                           m->ulWeightForXmlOperation); // ULONG ulFirstOperationWeight,
 }
 
 void Appliance::i_addWarning(const char* aWarning, ...)
@@ -1164,7 +1169,7 @@ void Appliance::i_disksWeight()
          ++it)
     {
         ComObjPtr<VirtualSystemDescription> vsdescThis = (*it);
-        /* One for every hard disk of the Virtual System */
+        /* One for every medium of the Virtual System */
         std::list<VirtualSystemDescriptionEntry*> avsdeHDs = vsdescThis->i_findByType(VirtualSystemDescriptionType_HardDiskImage);
         std::list<VirtualSystemDescriptionEntry*>::const_iterator itH;
         for (itH = avsdeHDs.begin();
@@ -1218,8 +1223,7 @@ void Appliance::i_parseBucket(Utf8Str &aPath, Utf8Str &aBucket)
  *
  * @thread  pTask       The task.
  */
-/* static */
-void Appliance::i_importOrExportThreadTask(TaskOVF *pTask)
+/* static */ void Appliance::i_importOrExportThreadTask(TaskOVF *pTask)
 {
     LogFlowFuncEnter();
     AssertReturnVoid(pTask);
@@ -1283,10 +1287,115 @@ void Appliance::i_importOrExportThreadTask(TaskOVF *pTask)
     LogFlowFuncLeave();
 }
 
-/* static */
-DECLCALLBACK(int) Appliance::TaskOVF::updateProgress(unsigned uPercent, void *pvUser)
+/* static */ DECLCALLBACK(int) Appliance::TaskOVF::updateProgress(unsigned uPercent, void *pvUser)
 {
     Appliance::TaskOVF* pTask = *(Appliance::TaskOVF**)pvUser;
+
+    if (    pTask
+         && !pTask->pProgress.isNull())
+    {
+        BOOL fCanceled;
+        pTask->pProgress->COMGETTER(Canceled)(&fCanceled);
+        if (fCanceled)
+            return -1;
+        pTask->pProgress->SetCurrentOperationProgress(uPercent);
+    }
+    return VINF_SUCCESS;
+}
+
+/**
+ * Worker for TaskOPC::handler.
+ * @thread  pTask       The task.
+ */
+/* static */
+void Appliance::i_exportOPCThreadTask(TaskOPC *pTask)
+{
+    LogFlowFuncEnter();
+    AssertReturnVoid(pTask);
+
+    Appliance *pAppliance = pTask->pAppliance;
+    LogFlowFunc(("Appliance %p taskType=%d\n", pAppliance, pTask->taskType));
+
+    switch (pTask->taskType)
+    {
+        case TaskOPC::Export:
+            pTask->rc = pAppliance->i_writeFSOPC(pTask);
+            break;
+
+        default:
+            AssertFailed();
+            pTask->rc = E_FAIL;
+            break;
+    }
+
+    if (!pTask->pProgress.isNull())
+        pTask->pProgress->i_notifyComplete(pTask->rc);
+
+    LogFlowFuncLeave();
+}
+
+/* static */
+DECLCALLBACK(int) Appliance::TaskOPC::updateProgress(unsigned uPercent, void *pvUser)
+{
+    Appliance::TaskOPC* pTask = *(Appliance::TaskOPC**)pvUser;
+
+    if (    pTask
+         && !pTask->pProgress.isNull())
+    {
+        BOOL fCanceled;
+        pTask->pProgress->COMGETTER(Canceled)(&fCanceled);
+        if (fCanceled)
+            return -1;
+        pTask->pProgress->SetCurrentOperationProgress(uPercent);
+    }
+    return VINF_SUCCESS;
+}
+
+/**
+ * Worker for TaskCloud::handler.
+ * @thread  pTask       The task.
+ */
+/* static */
+void Appliance::i_importOrExportCloudThreadTask(TaskCloud *pTask)
+{
+    LogFlowFuncEnter();
+    AssertReturnVoid(pTask);
+
+    Appliance *pAppliance = pTask->pAppliance;
+    LogFlowFunc(("Appliance %p taskType=%d\n", pAppliance, pTask->taskType));
+
+    switch (pTask->taskType)
+    {
+        case TaskCloud::Export:
+            pAppliance->i_setApplianceState(ApplianceExporting);
+            pTask->rc = pAppliance->i_exportCloudImpl(pTask);
+            break;
+        case TaskCloud::Import:
+            pAppliance->i_setApplianceState(ApplianceImporting);
+            pTask->rc = pAppliance->i_importCloudImpl(pTask);
+            break;
+        case TaskCloud::ReadData:
+            pAppliance->i_setApplianceState(ApplianceImporting);
+            pTask->rc = pAppliance->i_gettingCloudData(pTask);
+            break;
+        default:
+            AssertFailed();
+            pTask->rc = E_FAIL;
+            break;
+    }
+
+    pAppliance->i_setApplianceState(ApplianceIdle);
+
+    if (!pTask->pProgress.isNull())
+        pTask->pProgress->i_notifyComplete(pTask->rc);
+
+    LogFlowFuncLeave();
+}
+
+/* static */
+DECLCALLBACK(int) Appliance::TaskCloud::updateProgress(unsigned uPercent, void *pvUser)
+{
+    Appliance::TaskCloud* pTask = *(Appliance::TaskCloud**)pvUser;
 
     if (    pTask
          && !pTask->pProgress.isNull())
@@ -1318,41 +1427,47 @@ void i_parseURI(Utf8Str strUri, LocationInfo &locInfo)
         locInfo.storageType = VFSType_S3;
         strUri = strUri.substr(sizeof("S3://") - 1);
     }
+    else if (strUri.startsWith("OCI://", Utf8Str::CaseInsensitive)) /* OCI service (storage or compute) */
+    {
+        locInfo.storageType = VFSType_Cloud;
+        locInfo.strProvider = "OCI";
+        strUri = strUri.substr(sizeof("OCI://") - 1);
+    }
     else if (strUri.startsWith("webdav://", Utf8Str::CaseInsensitive)) /* webdav service */
         throw E_NOTIMPL;
 
     /* Not necessary on a file based URI */
-    if (locInfo.storageType != VFSType_File)
-    {
-        size_t uppos = strUri.find("@"); /* username:password combo */
-        if (uppos != Utf8Str::npos)
-        {
-            locInfo.strUsername = strUri.substr(0, uppos);
-            strUri = strUri.substr(uppos + 1);
-            size_t upos = locInfo.strUsername.find(":");
-            if (upos != Utf8Str::npos)
-            {
-                locInfo.strPassword = locInfo.strUsername.substr(upos + 1);
-                locInfo.strUsername = locInfo.strUsername.substr(0, upos);
-            }
-        }
-        size_t hpos = strUri.find("/"); /* hostname part */
-        if (hpos != Utf8Str::npos)
-        {
-            locInfo.strHostname = strUri.substr(0, hpos);
-            strUri = strUri.substr(hpos);
-        }
-    }
+//  if (locInfo.storageType != VFSType_File)
+//  {
+//      size_t uppos = strUri.find("@"); /* username:password combo */
+//      if (uppos != Utf8Str::npos)
+//      {
+//          locInfo.strUsername = strUri.substr(0, uppos);
+//          strUri = strUri.substr(uppos + 1);
+//          size_t upos = locInfo.strUsername.find(":");
+//          if (upos != Utf8Str::npos)
+//          {
+//              locInfo.strPassword = locInfo.strUsername.substr(upos + 1);
+//              locInfo.strUsername = locInfo.strUsername.substr(0, upos);
+//          }
+//      }
+//      size_t hpos = strUri.find("/"); /* hostname part */
+//      if (hpos != Utf8Str::npos)
+//      {
+//          locInfo.strHostname = strUri.substr(0, hpos);
+//          strUri = strUri.substr(hpos);
+//      }
+//  }
 
     locInfo.strPath = strUri;
 }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //
 // IVirtualSystemDescription constructor / destructor
 //
 ////////////////////////////////////////////////////////////////////////////////
-
 
 /**
  * COM initializer.
@@ -1385,6 +1500,7 @@ void VirtualSystemDescription::uninit()
     m = NULL;
 }
 
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // IVirtualSystemDescription public methods
@@ -1393,8 +1509,6 @@ void VirtualSystemDescription::uninit()
 
 /**
  * Public method implementation.
- * @param
- * @return
  */
 HRESULT VirtualSystemDescription::getCount(ULONG *aCount)
 {
@@ -1409,7 +1523,6 @@ HRESULT VirtualSystemDescription::getCount(ULONG *aCount)
 
 /**
  * Public method implementation.
- * @return
  */
 HRESULT VirtualSystemDescription::getDescription(std::vector<VirtualSystemDescriptionType_T> &aTypes,
                                                  std::vector<com::Utf8Str> &aRefs,
@@ -1440,7 +1553,6 @@ HRESULT VirtualSystemDescription::getDescription(std::vector<VirtualSystemDescri
 
 /**
  * Public method implementation.
- * @return
  */
 HRESULT VirtualSystemDescription::getDescriptionByType(VirtualSystemDescriptionType_T aType,
                                                        std::vector<VirtualSystemDescriptionType_T> &aTypes,
@@ -1475,7 +1587,6 @@ HRESULT VirtualSystemDescription::getDescriptionByType(VirtualSystemDescriptionT
 
 /**
  * Public method implementation.
- * @return
  */
 HRESULT VirtualSystemDescription::getValuesByType(VirtualSystemDescriptionType_T aType,
                                                   VirtualSystemDescriptionValueType_T aWhich,
@@ -1501,6 +1612,9 @@ HRESULT VirtualSystemDescription::getValuesByType(VirtualSystemDescriptionType_T
             case VirtualSystemDescriptionValueType_Original: aValues[i]  = vsde->strOvf; break;
             case VirtualSystemDescriptionValueType_Auto: aValues[i]  = vsde->strVBoxCurrent; break;
             case VirtualSystemDescriptionValueType_ExtraConfig: aValues[i] = vsde->strExtraConfigCurrent; break;
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+            case VirtualSystemDescriptionValueType_32BitHack: AssertFailedBreak(); /* (compiler warnings) */
+#endif
         }
     }
 
@@ -1509,7 +1623,6 @@ HRESULT VirtualSystemDescription::getValuesByType(VirtualSystemDescriptionType_T
 
 /**
  * Public method implementation.
- * @return
  */
 HRESULT VirtualSystemDescription::setFinalValues(const std::vector<BOOL> &aEnabled,
                                                  const std::vector<com::Utf8Str> &aVBoxValues,
@@ -1547,7 +1660,6 @@ HRESULT VirtualSystemDescription::setFinalValues(const std::vector<BOOL> &aEnabl
 
 /**
  * Public method implementation.
- * @return
  */
 HRESULT VirtualSystemDescription::addDescription(VirtualSystemDescriptionType_T aType,
                                                  const com::Utf8Str &aVBoxValue,
@@ -1562,9 +1674,9 @@ HRESULT VirtualSystemDescription::addDescription(VirtualSystemDescriptionType_T 
 /**
  * Internal method; adds a new description item to the member list.
  * @param aType Type of description for the new item.
- * @param strRef Reference item; only used with hard disk controllers.
- * @param aOrigValue Corresponding original value from OVF.
- * @param aAutoValue Initial configuration value (can be overridden by caller with setFinalValues).
+ * @param strRef Reference item; only used with storage controllers.
+ * @param aOvfValue Corresponding original value from OVF.
+ * @param aVBoxValue Initial configuration value (can be overridden by caller with setFinalValues).
  * @param ulSizeMB Weight for IProgress
  * @param strExtraConfig Extra configuration; meaning dependent on type.
  */
@@ -1580,8 +1692,8 @@ void VirtualSystemDescription::i_addEntry(VirtualSystemDescriptionType_T aType,
     vsde.type = aType;
     vsde.strRef = strRef;
     vsde.strOvf = aOvfValue;
-    vsde.strVBoxSuggested           // remember original value
-        = vsde.strVBoxCurrent       // and set current value which can be overridden by setFinalValues()
+    vsde.strVBoxSuggested           /* remember original value */
+        = vsde.strVBoxCurrent       /* and set current value which can be overridden by setFinalValues() */
         = aVBoxValue;
     vsde.strExtraConfigSuggested
         = vsde.strExtraConfigCurrent
@@ -1596,8 +1708,6 @@ void VirtualSystemDescription::i_addEntry(VirtualSystemDescriptionType_T aType,
 /**
  * Private method; returns a list of description items containing all the items from the member
  * description items of this virtual system that match the given type.
- * @param aType
- * @return
  */
 std::list<VirtualSystemDescriptionEntry*> VirtualSystemDescription::i_findByType(VirtualSystemDescriptionType_T aType)
 {
@@ -1613,10 +1723,22 @@ std::list<VirtualSystemDescriptionEntry*> VirtualSystemDescription::i_findByType
     return vsd;
 }
 
+HRESULT VirtualSystemDescription::removeDescriptionByType(VirtualSystemDescriptionType_T aType)
+{
+    std::vector<VirtualSystemDescriptionEntry>::iterator it = m->maDescriptions.begin();
+    while (it != m->maDescriptions.end())
+    {
+        if (it->type == aType)
+            it = m->maDescriptions.erase(it);
+        else
+            ++it;
+    }
+
+    return S_OK;
+}
+
 /* Private method; delete all records from the list
  * m->llDescriptions that match the given type.
- * @param aType
- * @return
  */
 void VirtualSystemDescription::i_removeByType(VirtualSystemDescriptionType_T aType)
 {
@@ -1634,12 +1756,9 @@ void VirtualSystemDescription::i_removeByType(VirtualSystemDescriptionType_T aTy
  * Private method; looks thru the member hardware items for the IDE, SATA, or SCSI controller with
  * the given reference ID. Useful when needing the controller for a particular
  * virtual disk.
- * @param id
- * @return
  */
-const VirtualSystemDescriptionEntry* VirtualSystemDescription::i_findControllerFromID(uint32_t id)
+const VirtualSystemDescriptionEntry* VirtualSystemDescription::i_findControllerFromID(const Utf8Str &id)
 {
-    Utf8Str strRef = Utf8StrFmt("%RI32", id);
     vector<VirtualSystemDescriptionEntry>::const_iterator it;
     for (it = m->maDescriptions.begin();
          it != m->maDescriptions.end();
@@ -1651,8 +1770,9 @@ const VirtualSystemDescriptionEntry* VirtualSystemDescription::i_findControllerF
             case VirtualSystemDescriptionType_HardDiskControllerIDE:
             case VirtualSystemDescriptionType_HardDiskControllerSATA:
             case VirtualSystemDescriptionType_HardDiskControllerSCSI:
+            case VirtualSystemDescriptionType_HardDiskControllerVirtioSCSI:
             case VirtualSystemDescriptionType_HardDiskControllerSAS:
-                if (d.strRef == strRef)
+                if (d.strRef == id)
                     return &d;
                 break;
             default: break; /* Shut up MSC. */
@@ -1698,7 +1818,6 @@ void VirtualSystemDescription::i_importVBoxMachineXML(const xml::ElementNode &el
 
 /**
  * Returns the machine config created by importVBoxMachineXML() or NULL if there's none.
- * @return
  */
 const settings::MachineConfigFile* VirtualSystemDescription::i_getMachineConfig() const
 {

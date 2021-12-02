@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPDrvTracer.cpp 87700 2021-02-10 20:21:04Z vboxsync $ */
 /** @file
  * VBoxDrv - The VirtualBox Support Driver - Tracer Interface.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -953,7 +953,7 @@ static int supdrvTracerRegisterVtgObj(PSUPDRVDEVEXT pDevExt, PVTGOBJHDR pVtgHdr,
         const char      *pszName = supdrvVtgGetString(pVtgHdr, pDesc->offName);
         size_t const     cchName = strlen(pszName) + (pUmod ? 16 : 0);
 
-        pProv = (PSUPDRVTPPROVIDER)RTMemAllocZ(RT_OFFSETOF(SUPDRVTPPROVIDER, szName[cchName + 1 + cchModName + 1]));
+        pProv = (PSUPDRVTPPROVIDER)RTMemAllocZ(RT_UOFFSETOF_DYN(SUPDRVTPPROVIDER, szName[cchName + 1 + cchModName + 1]));
         if (pProv)
         {
             pProv->Core.pszName         = &pProv->szName[0];
@@ -1097,6 +1097,7 @@ SUPR0DECL(int) SUPR0TracerRegisterDrv(PSUPDRVSESSION pSession, PVTGOBJHDR pVtgHd
 
     return rc;
 }
+SUPR0_EXPORT_SYMBOL(SUPR0TracerRegisterDrv);
 
 
 /**
@@ -1129,6 +1130,7 @@ SUPR0DECL(void) SUPR0TracerDeregisterDrv(PSUPDRVSESSION pSession)
      */
     supdrvTracerProcessZombies(pDevExt);
 }
+SUPR0_EXPORT_SYMBOL(SUPR0TracerDeregisterDrv);
 
 
 /**
@@ -1175,6 +1177,7 @@ SUPR0DECL(int) SUPR0TracerRegisterModule(void *hMod, PVTGOBJHDR pVtgHdr)
 
     return rc;
 }
+SUPR0_EXPORT_SYMBOL(SUPR0TracerRegisterModule);
 
 
 /**
@@ -1274,6 +1277,7 @@ SUPR0DECL(int) SUPR0TracerRegisterImpl(void *hMod, PSUPDRVSESSION pSession, PCSU
     return rc;
 
 }
+SUPR0_EXPORT_SYMBOL(SUPR0TracerRegisterImpl);
 
 
 /**
@@ -1459,6 +1463,7 @@ SUPR0DECL(int) SUPR0TracerDeregisterImpl(void *hMod, PSUPDRVSESSION pSession)
 
     return rc;
 }
+SUPR0_EXPORT_SYMBOL(SUPR0TracerDeregisterImpl);
 
 
 /*
@@ -1472,29 +1477,32 @@ SUPR0DECL(int) SUPR0TracerDeregisterImpl(void *hMod, PSUPDRVSESSION pSession)
 __asm__("\
         .section .text                                                  \n\
                                                                         \n\
-        .p2align 2,,3                                                   \n\
+        .p2align 4                                                      \n\
         .global SUPR0TracerFireProbe                                    \n\
+        .type   SUPR0TracerFireProbe, @function                         \n\
 SUPR0TracerFireProbe:                                                   \n\
 ");
 # if   defined(RT_ARCH_AMD64)
-__asm__(" \
-            movq    g_pfnSupdrvProbeFireKernel(%rip), %rax                  \n\
+__asm__("\
+            movq    g_pfnSupdrvProbeFireKernel(%rip), %rax              \n\
             jmp     *%rax \n\
 ");
 # elif defined(RT_ARCH_X86)
 __asm__("\
-            movl    g_pfnSupdrvProbeFireKernel, %eax                        \n\
+            movl    g_pfnSupdrvProbeFireKernel, %eax                    \n\
             jmp     *%eax \n\
 ");
 # else
 #  error "Which arch is this?"
 # endif
 __asm__("\
+        .size SUPR0TracerFireProbe, . - SUPR0TracerFireProbe            \n\
                                                                         \n\
         .type supdrvTracerProbeFireStub,@function                       \n\
         .global supdrvTracerProbeFireStub                               \n\
 supdrvTracerProbeFireStub:                                              \n\
         ret                                                             \n\
+        .size supdrvTracerProbeFireStub, . - supdrvTracerProbeFireStub  \n\
                                                                         \n\
         .previous                                                       \n\
 ");
@@ -1502,6 +1510,7 @@ supdrvTracerProbeFireStub:                                              \n\
  )
 # endif
 #endif
+SUPR0_EXPORT_SYMBOL(SUPR0TracerFireProbe);
 
 
 /**
@@ -1726,7 +1735,7 @@ static int supdrvVtgCreateObjectCopy(PSUPDRVDEVEXT pDevExt, PCVTGOBJHDR pVtgHdr,
     uint32_t const  cbProbeLocs  = cProbeLocs * sizeof(VTGPROBELOC);
     uint32_t const  offProbeLocs = RT_ALIGN(pVtgHdr->cbObj, 8);
     size_t const    cb           = offProbeLocs + cbProbeLocs + cbStrTab + 1;
-    PSUPDRVVTGCOPY  pThis = (PSUPDRVVTGCOPY)RTMemAlloc(RT_OFFSETOF(SUPDRVVTGCOPY, Hdr) + cb);
+    PSUPDRVVTGCOPY  pThis = (PSUPDRVVTGCOPY)RTMemAlloc(RT_UOFFSETOF(SUPDRVVTGCOPY, Hdr) + cb);
     if (!pThis)
         return VERR_NO_MEMORY;
 
@@ -2018,7 +2027,7 @@ int  VBOXCALL   supdrvIOCtl_TracerUmodRegister(PSUPDRVDEVEXT pDevExt, PSUPDRVSES
     /*
      * Allocate the tracker data we keep in the session.
      */
-    pUmod = (PSUPDRVTRACERUMOD)RTMemAllocZ(  RT_OFFSETOF(SUPDRVTRACERUMOD, aProbeLocs[cProbeLocs])
+    pUmod = (PSUPDRVTRACERUMOD)RTMemAllocZ(  RT_UOFFSETOF_DYN(SUPDRVTRACERUMOD, aProbeLocs[cProbeLocs])
                                            + (Hdr.cbProbeEnabled / sizeof(uint32_t) * sizeof(SUPDRVPROBEINFO)) );
     if (!pUmod)
         return VERR_NO_MEMORY;
@@ -2226,6 +2235,7 @@ SUPR0DECL(void) SUPR0TracerUmodProbeFire(PSUPDRVSESSION pSession, PSUPDRVTRACERU
 
     supdrvTracerUmodProbeFire(pSession->pDevExt, pSession, pCtx);
 }
+SUPR0_EXPORT_SYMBOL(SUPR0TracerUmodProbeFire);
 
 
 void  VBOXCALL  supdrvIOCtl_TracerUmodProbeFire(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, PSUPDRVTRACERUSRCTX pCtx)
@@ -2465,7 +2475,9 @@ void VBOXCALL supdrvTracerTerm(PSUPDRVDEVEXT pDevExt)
     LOG_TRACER(("supdrvTracerTerm\n"));
 
     supdrvTracerRemoveAllProviders(pDevExt);
-
+#ifdef VBOX_WITH_NATIVE_DTRACE
+    supdrvDTraceFini();
+#endif
     RTSemFastMutexDestroy(pDevExt->mtxTracer);
     pDevExt->mtxTracer = NIL_RTSEMFASTMUTEX;
     LOG_TRACER(("supdrvTracerTerm: Done\n"));

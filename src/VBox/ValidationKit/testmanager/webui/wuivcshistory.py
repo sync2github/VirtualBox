@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: wuivcshistory.py 83432 2020-03-25 20:19:30Z vboxsync $
 
 """
 Test Manager WUI - VCS history
@@ -7,7 +7,7 @@ Test Manager WUI - VCS history
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 83432 $"
 
 # Python imports.
 #import datetime;
@@ -70,7 +70,7 @@ class WuiVcsHistoryTooltip(WuiContentBase):
                        % (oTsZulu.strftime('%Y-%m-%d'),);
 
             sEntry  = '  <dt id="r%s">' % (oEntry.iRevision, );
-            sEntry += '<a href="%s">' \
+            sEntry += '<a href="%s" target="_blank">' \
                     % ( webutils.escapeAttr(config.g_ksTracChangsetUrlFmt
                                             % { 'iRevision': oEntry.iRevision, 'sRepository': oEntry.sRepository,}), );
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VUSBUrbPool.cpp 85124 2020-07-08 21:13:30Z vboxsync $ */
 /** @file
  * Virtual USB - URB pool.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -21,7 +21,7 @@
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DRV_VUSB
 #include <VBox/log.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/critsect.h>
 
@@ -69,14 +69,6 @@ typedef VUSBURBHDR *PVUSBURBHDR;
 AssertCompileSizeAlignment(VUSBURBHDR, 8);
 
 
-/*********************************************************************************************************************************
-*   Static Variables                                                                                                             *
-*********************************************************************************************************************************/
-
-
-/*********************************************************************************************************************************
-*   Internal Functions                                                                                                           *
-*********************************************************************************************************************************/
 
 DECLHIDDEN(int) vusbUrbPoolInit(PVUSBURBPOOL pUrbPool)
 {
@@ -129,7 +121,7 @@ DECLHIDDEN(PVUSBURB) vusbUrbPoolAlloc(PVUSBURBPOOL pUrbPool, VUSBXFERTYPE enmTyp
     /* Get the required amount of additional memory to allocate the whole state. */
     size_t cbMem = cbData + sizeof(VUSBURBVUSBINT) + cbHci + cTds * cbHciTd;
 
-    AssertReturn(enmType < RT_ELEMENTS(pUrbPool->aLstFreeUrbs), NULL);
+    AssertReturn((size_t)enmType < RT_ELEMENTS(pUrbPool->aLstFreeUrbs), NULL);
 
     RTCritSectEnter(&pUrbPool->CritSectPool);
     PVUSBURBHDR pHdr = NULL;
@@ -172,7 +164,7 @@ DECLHIDDEN(PVUSBURB) vusbUrbPoolAlloc(PVUSBURBPOOL pUrbPool, VUSBXFERTYPE enmTyp
                                : cbMem <= _32K ? RT_ALIGN_32(cbMem, _4K)
                                                : RT_ALIGN_32(cbMem, 16*_1K);
 
-        pHdr = (PVUSBURBHDR)RTMemAllocZ(RT_OFFSETOF(VUSBURBHDR, Urb.abData[cbDataAllocated]));
+        pHdr = (PVUSBURBHDR)RTMemAllocZ(RT_UOFFSETOF_DYN(VUSBURBHDR, Urb.abData[cbDataAllocated]));
         if (RT_UNLIKELY(!pHdr))
         {
             RTCritSectLeave(&pUrbPool->CritSectPool);
@@ -203,7 +195,6 @@ DECLHIDDEN(PVUSBURB) vusbUrbPoolAlloc(PVUSBURBPOOL pUrbPool, VUSBXFERTYPE enmTyp
     pUrb->pVUsb->pfnFree         = NULL;
     pUrb->pVUsb->pCtrlUrb        = NULL;
     pUrb->pVUsb->u64SubmitTS     = 0;
-    pUrb->pVUsb->pvBuffered      = NULL;
     pUrb->Dev.pvPrivate          = NULL;
     pUrb->Dev.pNext              = NULL;
     pUrb->EndPt                  = UINT8_MAX;
@@ -234,7 +225,7 @@ DECLHIDDEN(void) vusbUrbPoolFree(PVUSBURBPOOL pUrbPool, PVUSBURB pUrb)
     {
         /* Put it into the list of free URBs. */
         VUSBXFERTYPE enmType = pUrb->enmType;
-        AssertReturnVoid(enmType < RT_ELEMENTS(pUrbPool->aLstFreeUrbs));
+        AssertReturnVoid((size_t)enmType < RT_ELEMENTS(pUrbPool->aLstFreeUrbs));
         RTCritSectEnter(&pUrbPool->CritSectPool);
         pUrb->enmState = VUSBURBSTATE_FREE;
         RTListAppend(&pUrbPool->aLstFreeUrbs[enmType], &pHdr->NdFree);

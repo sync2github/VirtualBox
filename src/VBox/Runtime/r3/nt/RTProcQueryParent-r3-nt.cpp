@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTProcQueryParent-r3-nt.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Process, Windows.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,7 +35,7 @@
 #include "internal/iprt.h"
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 
 
@@ -53,7 +53,7 @@ RTR3DECL(int) RTProcQueryParent(RTPROCESS hProcess, PRTPROCESS phParent)
     else
     {
         CLIENT_ID ClientId;
-        ClientId.UniqueProcess = (HANDLE)hProcess;
+        ClientId.UniqueProcess = (HANDLE)(uintptr_t)hProcess;
         ClientId.UniqueThread  = NULL;
 
         OBJECT_ATTRIBUTES ObjAttrs;

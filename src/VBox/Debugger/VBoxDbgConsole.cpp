@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDbgConsole.cpp 87677 2021-02-10 11:57:49Z vboxsync $ */
 /** @file
  * VBox Debugger GUI - Console.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -21,6 +21,7 @@
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DBGG
 #include "VBoxDbgConsole.h"
+#include "VBoxDbgGui.h"
 
 #include <QLabel>
 #include <QApplication>
@@ -33,7 +34,7 @@
 
 #include <VBox/dbg.h>
 #include <VBox/vmm/cfgm.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 #include <iprt/thread.h>
 #include <iprt/tcp.h>
@@ -43,6 +44,7 @@
 #include <iprt/alloc.h>
 #include <iprt/string.h>
 
+#include <VBox/com/string.h>
 
 
 
@@ -55,9 +57,12 @@
  *
  */
 
+/*static*/ const uint32_t VBoxDbgConsoleOutput::s_uMinFontSize = 6;
 
-VBoxDbgConsoleOutput::VBoxDbgConsoleOutput(QWidget *pParent/* = NULL*/, const char *pszName/* = NULL*/)
-    : QTextEdit(pParent), m_uCurLine(0), m_uCurPos(0), m_hGUIThread(RTThreadNativeSelf())
+
+VBoxDbgConsoleOutput::VBoxDbgConsoleOutput(QWidget *pParent/* = NULL*/, IVirtualBox *a_pVirtualBox /* = NULL */,
+                                           const char *pszName/* = NULL*/)
+    : QTextEdit(pParent), m_uCurLine(0), m_uCurPos(0), m_hGUIThread(RTThreadNativeSelf()), m_pVirtualBox(a_pVirtualBox)
 {
     setReadOnly(true);
     setUndoRedoEnabled(false);
@@ -69,38 +74,19 @@ VBoxDbgConsoleOutput::VBoxDbgConsoleOutput(QWidget *pParent/* = NULL*/, const ch
     setAcceptRichText(false);
 
     /*
-     * Font.
-     * Create actions for font menu items.
-     */
-    m_pCourierFontAction = new QAction(tr("Courier"), this);
-    m_pCourierFontAction->setCheckable(true);
-    m_pCourierFontAction->setShortcut(Qt::ControlModifier + Qt::Key_D);
-    connect(m_pCourierFontAction, SIGNAL(triggered()), this, SLOT(setFontCourier()));
-
-    m_pMonospaceFontAction = new QAction(tr("Monospace"), this);
-    m_pMonospaceFontAction->setCheckable(true);
-    m_pMonospaceFontAction->setShortcut(Qt::ControlModifier + Qt::Key_M);
-    connect(m_pMonospaceFontAction, SIGNAL(triggered()), this, SLOT(setFontMonospace()));
-
-    /* Create action group for grouping of exclusive font menu items. */
-    QActionGroup *pActionFontGroup = new QActionGroup(this);
-    pActionFontGroup->addAction(m_pCourierFontAction);
-    pActionFontGroup->addAction(m_pMonospaceFontAction);
-    pActionFontGroup->setExclusive(true);
-
-    /*
-     * Color scheme.
      * Create actions for color-scheme menu items.
      */
     m_pGreenOnBlackAction = new QAction(tr("Green On Black"), this);
     m_pGreenOnBlackAction->setCheckable(true);
     m_pGreenOnBlackAction->setShortcut(Qt::ControlModifier + Qt::Key_1);
-    connect(m_pGreenOnBlackAction, SIGNAL(triggered()), this, SLOT(setColorGreenOnBlack()));
+    m_pGreenOnBlackAction->setData((int)kGreenOnBlack);
+    connect(m_pGreenOnBlackAction, SIGNAL(triggered()), this, SLOT(sltSelectColorScheme()));
 
     m_pBlackOnWhiteAction = new QAction(tr("Black On White"), this);
     m_pBlackOnWhiteAction->setCheckable(true);
     m_pBlackOnWhiteAction->setShortcut(Qt::ControlModifier + Qt::Key_2);
-    connect(m_pBlackOnWhiteAction, SIGNAL(triggered()), this, SLOT(setColorBlackOnWhite()));
+    m_pBlackOnWhiteAction->setData((int)kBlackOnWhite);
+    connect(m_pBlackOnWhiteAction, SIGNAL(triggered()), this, SLOT(sltSelectColorScheme()));
 
     /* Create action group for grouping of exclusive color-scheme menu items. */
     QActionGroup *pActionColorGroup = new QActionGroup(this);
@@ -109,10 +95,75 @@ VBoxDbgConsoleOutput::VBoxDbgConsoleOutput(QWidget *pParent/* = NULL*/, const ch
     pActionColorGroup->setExclusive(true);
 
     /*
+     * Create actions for font menu items.
+     */
+    m_pCourierFontAction = new QAction(tr("Courier"), this);
+    m_pCourierFontAction->setCheckable(true);
+    m_pCourierFontAction->setShortcut(Qt::ControlModifier + Qt::Key_D);
+    m_pCourierFontAction->setData((int)kFontType_Courier);
+    connect(m_pCourierFontAction, SIGNAL(triggered()), this, SLOT(sltSelectFontType()));
+
+    m_pMonospaceFontAction = new QAction(tr("Monospace"), this);
+    m_pMonospaceFontAction->setCheckable(true);
+    m_pMonospaceFontAction->setShortcut(Qt::ControlModifier + Qt::Key_M);
+    m_pMonospaceFontAction->setData((int)kFontType_Monospace);
+    connect(m_pMonospaceFontAction, SIGNAL(triggered()), this, SLOT(sltSelectFontType()));
+
+    /* Create action group for grouping of exclusive font menu items. */
+    QActionGroup *pActionFontGroup = new QActionGroup(this);
+    pActionFontGroup->addAction(m_pCourierFontAction);
+    pActionFontGroup->addAction(m_pMonospaceFontAction);
+    pActionFontGroup->setExclusive(true);
+
+    /*
+     * Create actions for font size menu.
+     */
+    uint32_t const uDefaultFontSize = font().pointSize();
+    m_pActionFontSizeGroup = new QActionGroup(this);
+    for (uint32_t i = 0; i < RT_ELEMENTS(m_apFontSizeActions); i++)
+    {
+        char szTitle[32];
+        RTStrPrintf(szTitle, sizeof(szTitle), s_uMinFontSize + i != uDefaultFontSize ? "%upt" : "%upt (default)",
+                    s_uMinFontSize + i);
+        m_apFontSizeActions[i] = new QAction(tr(szTitle), this);
+        m_apFontSizeActions[i]->setCheckable(true);
+        m_apFontSizeActions[i]->setData(i + s_uMinFontSize);
+        connect(m_apFontSizeActions[i], SIGNAL(triggered()), this, SLOT(sltSelectFontSize()));
+        m_pActionFontSizeGroup->addAction(m_apFontSizeActions[i]);
+    }
+
+    /*
      * Set the defaults (which syncs with the menu item checked state).
      */
-    setFontCourier();
-    setColorGreenOnBlack();
+    /* color scheme: */
+    com::Bstr bstrColor;
+    HRESULT hrc = m_pVirtualBox ? m_pVirtualBox->GetExtraData(com::Bstr("DbgConsole/ColorScheme").raw(), bstrColor.asOutParam()) : E_FAIL;
+    if (  SUCCEEDED(hrc)
+        && bstrColor.compareUtf8("blackonwhite", com::Bstr::CaseInsensitive) == 0)
+        setColorScheme(kBlackOnWhite, false /*fSaveIt*/);
+    else
+        setColorScheme(kGreenOnBlack, false /*fSaveIt*/);
+
+    /* font: */
+    com::Bstr bstrFont;
+    hrc = m_pVirtualBox ? m_pVirtualBox->GetExtraData(com::Bstr("DbgConsole/Font").raw(), bstrFont.asOutParam()) : E_FAIL;
+    if (  SUCCEEDED(hrc)
+        && bstrFont.compareUtf8("monospace", com::Bstr::CaseInsensitive) == 0)
+        setFontType(kFontType_Monospace, false /*fSaveIt*/);
+    else
+        setFontType(kFontType_Courier, false /*fSaveIt*/);
+
+    /* font size: */
+    com::Bstr bstrFontSize;
+    hrc = m_pVirtualBox ? m_pVirtualBox->GetExtraData(com::Bstr("DbgConsole/FontSize").raw(), bstrFontSize.asOutParam()) : E_FAIL;
+    if (SUCCEEDED(hrc))
+    {
+        com::Utf8Str strFontSize(bstrFontSize);
+        uint32_t uFontSizePrf = strFontSize.strip().toUInt32();
+        if (   uFontSizePrf - s_uMinFontSize < (uint32_t)RT_ELEMENTS(m_apFontSizeActions)
+            && uFontSizePrf != uDefaultFontSize)
+            setFontSize(uFontSizePrf, false /*fSaveIt*/);
+    }
 
     NOREF(pszName);
 }
@@ -121,6 +172,11 @@ VBoxDbgConsoleOutput::VBoxDbgConsoleOutput(QWidget *pParent/* = NULL*/, const ch
 VBoxDbgConsoleOutput::~VBoxDbgConsoleOutput()
 {
     Assert(m_hGUIThread == RTThreadNativeSelf());
+    if (m_pVirtualBox)
+    {
+        m_pVirtualBox->Release();
+        m_pVirtualBox = NULL;
+    }
 }
 
 
@@ -131,6 +187,8 @@ VBoxDbgConsoleOutput::contextMenuEvent(QContextMenuEvent *pEvent)
      * Create the context menu and add the menu items.
      */
     QMenu *pMenu = createStandardContextMenu();
+    pMenu->addSeparator();
+
     QMenu *pColorMenu = pMenu->addMenu(tr("Co&lor Scheme"));
     pColorMenu->addAction(m_pGreenOnBlackAction);
     pColorMenu->addAction(m_pBlackOnWhiteAction);
@@ -139,64 +197,136 @@ VBoxDbgConsoleOutput::contextMenuEvent(QContextMenuEvent *pEvent)
     pFontMenu->addAction(m_pCourierFontAction);
     pFontMenu->addAction(m_pMonospaceFontAction);
 
+    QMenu *pFontSize = pMenu->addMenu(tr("Font &Size"));
+    for (unsigned i = 0; i < RT_ELEMENTS(m_apFontSizeActions); i++)
+        pFontSize->addAction(m_apFontSizeActions[i]);
+
     pMenu->exec(pEvent->globalPos());
     delete pMenu;
 }
 
 
 void
-VBoxDbgConsoleOutput::setColorGreenOnBlack()
+VBoxDbgConsoleOutput::setColorScheme(VBoxDbgConsoleColor enmScheme, bool fSaveIt)
 {
-    setStyleSheet("QTextEdit { background-color: black; color: rgb(0, 224, 0) }");
+    const char *pszSetting;
+    QAction *pAction;
+    switch (enmScheme)
+    {
+        case kGreenOnBlack:
+            setStyleSheet("QTextEdit { background-color: black; color: rgb(0, 224, 0) }");
+            pszSetting = "GreenOnBlack";
+            pAction = m_pGreenOnBlackAction;
+            break;
+        case kBlackOnWhite:
+            setStyleSheet("QTextEdit { background-color: white; color: black }");
+            pszSetting = "BlackOnWhite";
+            pAction = m_pBlackOnWhiteAction;
+            break;
+        default:
+            AssertFailedReturnVoid();
+    }
+
     m_enmColorScheme = kGreenOnBlack;
 
-    /* This is used both as a trigger as well as called independently from code.
-       When used as a trigger, the checked is done automatically by Qt. */
-    if (!m_pGreenOnBlackAction->isChecked())
-        m_pGreenOnBlackAction->setChecked(true);
+    /* When going through a slot, the action is typically checked already by Qt. */
+    if (!pAction->isChecked())
+        pAction->setChecked(true);
+
+    /* Make this setting persistent. */
+    if (m_pVirtualBox && fSaveIt)
+        m_pVirtualBox->SetExtraData(com::Bstr("DbgConsole/ColorScheme").raw(), com::Bstr(pszSetting).raw());
 }
 
 
 void
-VBoxDbgConsoleOutput::setColorBlackOnWhite()
+VBoxDbgConsoleOutput::setFontType(VBoxDbgConsoleFontType enmFontType, bool fSaveIt)
 {
-    setStyleSheet("QTextEdit { background-color: white; color: black }");
-    m_enmColorScheme = kBlackOnWhite;
-
-    if (!m_pBlackOnWhiteAction->isChecked())
-        m_pBlackOnWhiteAction->setChecked(true);
-}
-
-
-void
-VBoxDbgConsoleOutput::setFontCourier()
-{
+    QFont Font = font();
+    QAction *pAction;
+    const char *pszSetting;
+    switch (enmFontType)
+    {
+        case kFontType_Courier:
 #ifdef Q_WS_MAC
-    QFont Font("Monaco", 10, QFont::Normal, FALSE);
-    Font.setStyleStrategy(QFont::NoAntialias);
+            Font = QFont("Monaco", Font.pointSize(), QFont::Normal, FALSE);
+            Font.setStyleStrategy(QFont::NoAntialias);
 #else
-    QFont Font = font();
-    Font.setStyleHint(QFont::TypeWriter);
-    Font.setFamily("Courier [Monotype]");
+            Font.setStyleHint(QFont::TypeWriter);
+            Font.setFamily("Courier [Monotype]");
 #endif
+            pszSetting = "Courier";
+            pAction = m_pCourierFontAction;
+            break;
+
+        case kFontType_Monospace:
+            Font.setStyleHint(QFont::TypeWriter);
+            Font.setStyleStrategy(QFont::PreferAntialias);
+            Font.setFamily("Monospace [Monotype]");
+            pszSetting = "Monospace";
+            pAction = m_pMonospaceFontAction;
+            break;
+
+        default:
+            AssertFailedReturnVoid();
+    }
+
     setFont(Font);
 
-    if (!m_pCourierFontAction->isChecked())
-        m_pCourierFontAction->setChecked(true);
+    /* When going through a slot, the action is typically checked already by Qt. */
+    if (!pAction->isChecked())
+        pAction->setChecked(true);
+
+    /* Make this setting persistent. */
+    if (m_pVirtualBox && fSaveIt)
+        m_pVirtualBox->SetExtraData(com::Bstr("DbgConsole/Font").raw(), com::Bstr(pszSetting).raw());
 }
 
 
 void
-VBoxDbgConsoleOutput::setFontMonospace()
+VBoxDbgConsoleOutput::setFontSize(uint32_t uFontSize, bool fSaveIt)
 {
-    QFont Font = font();
-    Font.setStyleHint(QFont::TypeWriter);
-    Font.setStyleStrategy(QFont::PreferAntialias);
-    Font.setFamily("Monospace [Monotype]");
-    setFont(Font);
+    uint32_t idxAction = uFontSize - s_uMinFontSize;
+    if (idxAction < (uint32_t)RT_ELEMENTS(m_apFontSizeActions))
+    {
+        if (!m_apFontSizeActions[idxAction]->isChecked())
+            m_apFontSizeActions[idxAction]->setChecked(true);
 
-    if (!m_pMonospaceFontAction->isChecked())
-        m_pMonospaceFontAction->setChecked(true);
+        QFont Font = font();
+        Font.setPointSize(uFontSize);
+        setFont(Font);
+
+        /* Make this setting persistent if requested. */
+        if (fSaveIt && m_pVirtualBox)
+            m_pVirtualBox->SetExtraData(com::Bstr("DbgConsole/FontSize").raw(), com::BstrFmt("%u", uFontSize).raw());
+    }
+}
+
+
+void
+VBoxDbgConsoleOutput::sltSelectColorScheme()
+{
+    QAction *pAction = qobject_cast<QAction *>(sender());
+    if (pAction)
+        setColorScheme((VBoxDbgConsoleColor)pAction->data().toInt(), true /*fSaveIt*/);
+}
+
+
+void
+VBoxDbgConsoleOutput::sltSelectFontType()
+{
+    QAction *pAction = qobject_cast<QAction *>(sender());
+    if (pAction)
+        setFontType((VBoxDbgConsoleFontType)pAction->data().toInt(), true /*fSaveIt*/);
+}
+
+
+void
+VBoxDbgConsoleOutput::sltSelectFontSize()
+{
+    QAction *pAction = qobject_cast<QAction *>(sender());
+    if (pAction)
+        setFontSize(pAction->data().toUInt(), true /*fSaveIt*/);
 }
 
 
@@ -259,7 +389,7 @@ VBoxDbgConsoleInput::VBoxDbgConsoleInput(QWidget *pParent/* = NULL*/, const char
 
     setEditable(true);
     setInsertPolicy(NoInsert);
-    setAutoCompletion(false);
+    setCompleter(0);
     setMaxCount(50);
     const QLineEdit *pEdit = lineEdit();
     if (pEdit)
@@ -352,19 +482,20 @@ VBoxDbgConsoleInput::returnPressed()
  */
 
 
-VBoxDbgConsole::VBoxDbgConsole(VBoxDbgGui *a_pDbgGui, QWidget *a_pParent/* = NULL*/)
-    : VBoxDbgBaseWindow(a_pDbgGui, a_pParent), m_pOutput(NULL), m_pInput(NULL), m_fInputRestoreFocus(false),
+VBoxDbgConsole::VBoxDbgConsole(VBoxDbgGui *a_pDbgGui, QWidget *a_pParent/* = NULL*/, IVirtualBox *a_pVirtualBox/* = NULL */)
+    : VBoxDbgBaseWindow(a_pDbgGui, a_pParent, "Console"), m_pOutput(NULL), m_pInput(NULL), m_fInputRestoreFocus(false),
     m_pszInputBuf(NULL), m_cbInputBuf(0), m_cbInputBufAlloc(0),
     m_pszOutputBuf(NULL), m_cbOutputBuf(0), m_cbOutputBufAlloc(0),
     m_pTimer(NULL), m_fUpdatePending(false), m_Thread(NIL_RTTHREAD), m_EventSem(NIL_RTSEMEVENT),
     m_fTerminate(false), m_fThreadTerminated(false)
 {
-    setWindowTitle("VBoxDbg - Console");
+    /* Delete dialog on close: */
+    setAttribute(Qt::WA_DeleteOnClose);
 
     /*
      * Create the output text box.
      */
-    m_pOutput = new VBoxDbgConsoleOutput(this);
+    m_pOutput = new VBoxDbgConsoleOutput(this, a_pVirtualBox);
 
     /* try figure a suitable size */
     QLabel *pLabel = new QLabel(      "11111111111111111111111111111111111111111111111111111111111111111111111111111112222222222", this);
@@ -507,6 +638,12 @@ VBoxDbgConsole::~VBoxDbgConsole()
     m_pFocusToInput = NULL;
     delete m_pFocusToOutput;
     m_pFocusToOutput = NULL;
+
+    if (m_pszOutputBuf)
+    {
+        RTMemFree(m_pszOutputBuf);
+        m_pszOutputBuf = NULL;
+    }
 }
 
 
@@ -602,9 +739,9 @@ VBoxDbgConsole::unlock()
  * @param   cMillies    Number of milliseconds to wait on input data.
  */
 /*static*/ DECLCALLBACK(bool)
-VBoxDbgConsole::backInput(PDBGCBACK pBack, uint32_t cMillies)
+VBoxDbgConsole::backInput(PCDBGCIO pBack, uint32_t cMillies)
 {
-    VBoxDbgConsole *pThis = VBOXDBGCONSOLE_FROM_DBGCBACK(pBack);
+    VBoxDbgConsole *pThis = VBOXDBGCONSOLE_FROM_DBGCIO(pBack);
     pThis->lock();
 
     bool fRc = true;
@@ -637,9 +774,9 @@ VBoxDbgConsole::backInput(PDBGCBACK pBack, uint32_t cMillies)
  *                      successful return.
  */
 /*static*/ DECLCALLBACK(int)
-VBoxDbgConsole::backRead(PDBGCBACK pBack, void *pvBuf, size_t cbBuf, size_t *pcbRead)
+VBoxDbgConsole::backRead(PCDBGCIO pBack, void *pvBuf, size_t cbBuf, size_t *pcbRead)
 {
-    VBoxDbgConsole *pThis = VBOXDBGCONSOLE_FROM_DBGCBACK(pBack);
+    VBoxDbgConsole *pThis = VBOXDBGCONSOLE_FROM_DBGCIO(pBack);
     Assert(pcbRead); /** @todo implement this bit */
     if (pcbRead)
         *pcbRead = 0;
@@ -679,9 +816,9 @@ VBoxDbgConsole::backRead(PDBGCBACK pBack, void *pvBuf, size_t cbBuf, size_t *pcb
  *                      If NULL the entire buffer must be successfully written.
  */
 /*static*/ DECLCALLBACK(int)
-VBoxDbgConsole::backWrite(PDBGCBACK pBack, const void *pvBuf, size_t cbBuf, size_t *pcbWritten)
+VBoxDbgConsole::backWrite(PCDBGCIO pBack, const void *pvBuf, size_t cbBuf, size_t *pcbWritten)
 {
-    VBoxDbgConsole *pThis = VBOXDBGCONSOLE_FROM_DBGCBACK(pBack);
+    VBoxDbgConsole *pThis = VBOXDBGCONSOLE_FROM_DBGCIO(pBack);
     int rc = VINF_SUCCESS;
 
     pThis->lock();
@@ -726,9 +863,9 @@ VBoxDbgConsole::backWrite(PDBGCBACK pBack, const void *pvBuf, size_t cbBuf, size
 
 
 /*static*/ DECLCALLBACK(void)
-VBoxDbgConsole::backSetReady(PDBGCBACK pBack, bool fReady)
+VBoxDbgConsole::backSetReady(PCDBGCIO pBack, bool fReady)
 {
-    VBoxDbgConsole *pThis = VBOXDBGCONSOLE_FROM_DBGCBACK(pBack);
+    VBoxDbgConsole *pThis = VBOXDBGCONSOLE_FROM_DBGCIO(pBack);
     if (fReady)
         QApplication::postEvent(pThis, new VBoxDbgConsoleEvent(VBoxDbgConsoleEvent::kInputEnable));
 }
@@ -865,10 +1002,7 @@ void
 VBoxDbgConsole::closeEvent(QCloseEvent *a_pCloseEvt)
 {
     if (m_fThreadTerminated)
-    {
         a_pCloseEvt->accept();
-        delete this;
-    }
 }
 
 

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,9 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___VBox_vmm_dbgfsel_h
-#define ___VBox_vmm_dbgfsel_h
+#ifndef VBOX_INCLUDED_vmm_dbgfsel_h
+#define VBOX_INCLUDED_vmm_dbgfsel_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <iprt/x86.h>
@@ -72,7 +74,8 @@ typedef const DBGFSELINFO *PCDBGFSELINFO;
 #define DBGFSELINFO_FLAGS_PROT_MODE     RT_BIT_32(1)
 /** The CPU is in long mode. */
 #define DBGFSELINFO_FLAGS_LONG_MODE     RT_BIT_32(2)
-/** The selector is a hyper selector. */
+/** The selector is a hyper selector.
+ * @todo remove me!  */
 #define DBGFSELINFO_FLAGS_HYPER         RT_BIT_32(3)
 /** The selector is a gate selector. */
 #define DBGFSELINFO_FLAGS_GATE          RT_BIT_32(4)
@@ -100,5 +103,5 @@ VMMR3DECL(int) DBGFR3SelInfoValidateCS(PCDBGFSELINFO pSelInfo, RTSEL SelCPL);
 
 /** @}  */
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_dbgfsel_h */
 

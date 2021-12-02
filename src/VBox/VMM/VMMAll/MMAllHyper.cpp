@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MMAllHyper.cpp 91266 2021-09-15 22:26:50Z vboxsync $ */
 /** @file
  * MM - Memory Manager - Hypervisor Memory Area, All Contexts.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,7 +23,7 @@
 #include <VBox/vmm/mm.h>
 #include <VBox/vmm/stam.h>
 #include "MMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 
 #include <VBox/err.h>
 #include <VBox/param.h>
@@ -155,7 +155,7 @@ static void mmHyperHeapCheck(PMMHYPERHEAP pHeap);
  *
  * @param   pVM     The cross context VM structure.
  */
-static int mmHyperLock(PVM pVM)
+static int mmHyperLock(PVMCC pVM)
 {
     PMMHYPERHEAP pHeap = pVM->mm.s.CTX_SUFF(pHyperHeap);
 
@@ -165,12 +165,8 @@ static int mmHyperLock(PVM pVM)
 #else
     Assert(PDMCritSectIsInitialized(&pHeap->Lock));
 #endif
-    int rc = PDMCritSectEnter(&pHeap->Lock, VERR_SEM_BUSY);
-#if defined(IN_RC) || defined(IN_RING0)
-    if (rc == VERR_SEM_BUSY)
-        rc = VMMRZCallRing3NoCpu(pVM, VMMCALLRING3_MMHYPER_LOCK, 0);
-#endif
-    AssertRC(rc);
+    int rc = PDMCritSectEnter(pVM, &pHeap->Lock, VINF_SUCCESS);
+    PDM_CRITSECT_RELEASE_ASSERT_RC(pVM, &pHeap->Lock, rc);
     return rc;
 }
 
@@ -180,7 +176,7 @@ static int mmHyperLock(PVM pVM)
  *
  * @param   pVM     The cross context VM structure.
  */
-static void mmHyperUnlock(PVM pVM)
+static void mmHyperUnlock(PVMCC pVM)
 {
     PMMHYPERHEAP pHeap = pVM->mm.s.CTX_SUFF(pHyperHeap);
 
@@ -189,7 +185,7 @@ static void mmHyperUnlock(PVM pVM)
         return;     /* early init */
 #endif
     Assert(PDMCritSectIsInitialized(&pHeap->Lock));
-    PDMCritSectLeave(&pHeap->Lock);
+    PDMCritSectLeave(pVM, &pHeap->Lock);
 }
 
 /**
@@ -327,7 +323,7 @@ static int mmHyperAllocInternal(PVM pVM, size_t cb, unsigned uAlignment, MMTAG e
 /**
  * Wrapper for mmHyperAllocInternal
  */
-VMMDECL(int) MMHyperAlloc(PVM pVM, size_t cb, unsigned uAlignment, MMTAG enmTag, void **ppv)
+VMMDECL(int) MMHyperAlloc(PVMCC pVM, size_t cb, unsigned uAlignment, MMTAG enmTag, void **ppv)
 {
     int rc = mmHyperLock(pVM);
     AssertRCReturn(rc, rc);
@@ -341,6 +337,7 @@ VMMDECL(int) MMHyperAlloc(PVM pVM, size_t cb, unsigned uAlignment, MMTAG enmTag,
 }
 
 
+#if 0
 /**
  * Duplicates a block of memory.
  *
@@ -355,13 +352,14 @@ VMMDECL(int) MMHyperAlloc(PVM pVM, size_t cb, unsigned uAlignment, MMTAG enmTag,
  * @param   ppv         Where to store the address to the allocated
  *                      memory.
  */
-VMMDECL(int) MMHyperDupMem(PVM pVM, const void *pvSrc, size_t cb, unsigned uAlignment, MMTAG enmTag, void **ppv)
+VMMDECL(int) MMHyperDupMem(PVMCC pVM, const void *pvSrc, size_t cb, unsigned uAlignment, MMTAG enmTag, void **ppv)
 {
     int rc = MMHyperAlloc(pVM, cb, uAlignment, enmTag, ppv);
     if (RT_SUCCESS(rc))
         memcpy(*ppv, pvSrc, cb);
     return rc;
 }
+#endif
 
 
 /**
@@ -931,11 +929,9 @@ static int mmHyperFreeInternal(PVM pVM, void *pv)
 /**
  * Wrapper for mmHyperFreeInternal
  */
-VMMDECL(int) MMHyperFree(PVM pVM, void *pv)
+VMMDECL(int) MMHyperFree(PVMCC pVM, void *pv)
 {
-    int rc;
-
-    rc = mmHyperLock(pVM);
+    int rc = mmHyperLock(pVM);
     AssertRCReturn(rc, rc);
 
     LogFlow(("MMHyperFree %p\n", pv));
@@ -1214,12 +1210,10 @@ static void mmHyperHeapCheck(PMMHYPERHEAP pHeap)
  *
  * @param   pVM         The cross context VM structure.
  */
-VMMDECL(void) MMHyperHeapCheck(PVM pVM)
+VMMDECL(void) MMHyperHeapCheck(PVMCC pVM)
 {
 #ifdef MMHYPER_HEAP_STRICT
-    int rc;
-
-    rc = mmHyperLock(pVM);
+    int rc = mmHyperLock(pVM);
     AssertRC(rc);
     mmHyperHeapCheck(pVM->mm.s.CTX_SUFF(pHyperHeap));
     mmHyperUnlock(pVM);
@@ -1326,9 +1320,12 @@ VMMDECL(RTGCPTR) MMHyperGetArea(PVM pVM, size_t *pcb)
  * @returns false if outside.
  * @param   pVM         The cross context VM structure.
  * @param   GCPtr       The pointer to check.
+ *
+ * @note    Caller must check that we're in raw-mode before calling!
  */
 VMMDECL(bool) MMHyperIsInsideArea(PVM pVM, RTGCPTR GCPtr)
 {
+    Assert(VM_IS_RAW_MODE_ENABLED(pVM));
     return (RTGCUINTPTR)GCPtr - (RTGCUINTPTR)pVM->mm.s.pvHyperAreaGC < pVM->mm.s.cbHyperArea;
 }
 

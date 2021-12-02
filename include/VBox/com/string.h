@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: string.h 91519 2021-10-01 14:36:27Z vboxsync $ */
 /** @file
  * MS COM / XPCOM Abstraction Layer - Smart string classes declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_com_string_h
-#define ___VBox_com_string_h
+#ifndef VBOX_INCLUDED_com_string_h
+#define VBOX_INCLUDED_com_string_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Make sure all the stdint.h macros are included - must come first! */
 #ifndef __STDC_LIMIT_MACROS
@@ -43,6 +46,7 @@
 #include "VBox/com/assert.h"
 
 #include <iprt/mem.h>
+#include <iprt/utf16.h>
 #include <iprt/cpp/ministring.h>
 
 
@@ -142,33 +146,107 @@ public:
         setNull();
     }
 
-    Bstr& operator=(const Bstr &that)
+    Bstr &operator=(const Bstr &that)
     {
-        cleanup();
-        copyFrom((const OLECHAR *)that.m_bstr);
+        cleanupAndCopyFrom((const OLECHAR *)that.m_bstr);
         return *this;
     }
 
-    Bstr& operator=(CBSTR that)
+    Bstr &operator=(CBSTR that)
     {
-        cleanup();
-        copyFrom((const OLECHAR *)that);
+        cleanupAndCopyFrom((const OLECHAR *)that);
         return *this;
     }
 
 #if defined(VBOX_WITH_XPCOM)
-    Bstr& operator=(const wchar_t *that)
+    Bstr &operator=(const wchar_t *that)
     {
-        cleanup();
-        copyFrom((const OLECHAR *)that);
+        cleanupAndCopyFrom((const OLECHAR *)that);
         return *this;
     }
 #endif
 
-    Bstr& setNull()
+    Bstr &setNull()
     {
         cleanup();
         return *this;
+    }
+
+    /**
+     * Extended assignment method that returns a COM status code instead of an
+     * exception on failure.
+     *
+     * @returns S_OK or E_OUTOFMEMORY.
+     * @param   a_rSrcStr   The source string
+     */
+    HRESULT assignEx(const Bstr &a_rSrcStr) RT_NOEXCEPT
+    {
+        return cleanupAndCopyFromEx((const OLECHAR *)a_rSrcStr.m_bstr);
+    }
+
+    /**
+     * Extended assignment method that returns a COM status code instead of an
+     * exception on failure.
+     *
+     * @returns S_OK or E_OUTOFMEMORY.
+     * @param   a_pSrcStr   The source string
+     */
+    HRESULT assignEx(CBSTR a_pSrcStr) RT_NOEXCEPT
+    {
+        return cleanupAndCopyFromEx((const OLECHAR *)a_pSrcStr);
+    }
+
+    /**
+     * Assign the value of a RTCString/Utf8Str string, no exceptions.
+     *
+     * @returns S_OK or E_OUTOFMEMORY.
+     * @param   a_rSrcStr   The source string
+     */
+    HRESULT assignEx(RTCString const &a_rSrcStr) RT_NOEXCEPT
+    {
+        return cleanupAndCopyFromNoThrow(a_rSrcStr.c_str(), a_rSrcStr.length());
+    }
+
+    /**
+     * Assign the value of a RTCString/Utf8Str substring, no exceptions.
+     *
+     * @returns S_OK, E_OUTOFMEMORY or E_INVALIDARG.
+     * @param   a_rSrcStr   The source string
+     * @param   a_offSrc    The character (byte) offset of the substring.
+     * @param   a_cchSrc    The number of characters (bytes) to copy from the source
+     *                      string.
+     */
+    HRESULT assignEx(RTCString const &a_rSrcStr, size_t a_offSrc, size_t a_cchSrc) RT_NOEXCEPT
+    {
+        size_t const cchTmp = a_rSrcStr.length();
+        if (   a_offSrc + a_cchSrc < cchTmp
+            && a_offSrc < cchTmp)
+            return cleanupAndCopyFromNoThrow(a_rSrcStr.c_str() + a_offSrc, a_cchSrc);
+        return E_INVALIDARG;
+    }
+
+    /**
+     * Assign the value of a zero terminated UTF-8 string, no exceptions.
+     *
+     * @returns S_OK or E_OUTOFMEMORY.
+     * @param   a_pszSrcStr The source string.
+     */
+    HRESULT assignEx(const char *a_pszSrcStr) RT_NOEXCEPT
+    {
+        return cleanupAndCopyFromNoThrow(a_pszSrcStr, RTSTR_MAX);
+    }
+
+    /**
+     * Assign the value of a UTF-8 substring, no exceptions.
+     *
+     * @returns S_OK or E_OUTOFMEMORY.
+     * @param   a_pszSrcStr The source string.
+     * @param   a_cchSrc    The number of characters (bytes) to copy from the source
+     *                      string.
+     */
+    HRESULT assignEx(const char *a_pszSrcStr, size_t a_cchSrc) RT_NOEXCEPT
+    {
+        return cleanupAndCopyFromNoThrow(a_pszSrcStr, a_cchSrc);
     }
 
 #ifdef _MSC_VER
@@ -296,6 +374,415 @@ public:
 
     size_t length() const { return isEmpty() ? 0 : ::RTUtf16Len((PRTUTF16)m_bstr); }
 
+    /**
+     * Assigns the output of the string format operation (RTStrPrintf).
+     *
+     * @param   pszFormat       Pointer to the format string,
+     *                          @see pg_rt_str_format.
+     * @param   ...             Ellipsis containing the arguments specified by
+     *                          the format string.
+     *
+     * @throws  std::bad_alloc  On allocation error.  Object state is undefined.
+     *
+     * @returns Reference to the object.
+     */
+    Bstr &printf(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
+
+    /**
+     * Assigns the output of the string format operation (RTStrPrintf).
+     *
+     * @param   pszFormat       Pointer to the format string,
+     *                          @see pg_rt_str_format.
+     * @param   ...             Ellipsis containing the arguments specified by
+     *                          the format string.
+     *
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT printfNoThrow(const char *pszFormat, ...) RT_NOEXCEPT RT_IPRT_FORMAT_ATTR(1, 2);
+
+    /**
+     * Assigns the output of the string format operation (RTStrPrintfV).
+     *
+     * @param   pszFormat       Pointer to the format string,
+     *                          @see pg_rt_str_format.
+     * @param   va              Argument vector containing the arguments
+     *                          specified by the format string.
+     *
+     * @throws  std::bad_alloc  On allocation error.  Object state is undefined.
+     *
+     * @returns Reference to the object.
+     */
+    Bstr &printfV(const char *pszFormat, va_list va) RT_IPRT_FORMAT_ATTR(1, 0);
+
+    /**
+     * Assigns the output of the string format operation (RTStrPrintfV).
+     *
+     * @param   pszFormat       Pointer to the format string,
+     *                          @see pg_rt_str_format.
+     * @param   va              Argument vector containing the arguments
+     *                          specified by the format string.
+     *
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT printfVNoThrow(const char *pszFormat, va_list va) RT_NOEXCEPT RT_IPRT_FORMAT_ATTR(1, 0);
+
+    /** @name Append methods and operators
+     *  @{ */
+
+    /**
+     * Appends the string @a that to @a rThat.
+     *
+     * @param   rThat            The string to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(const Bstr &rThat);
+
+    /**
+     * Appends the string @a that to @a rThat.
+     *
+     * @param   rThat            The string to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(const Bstr &rThat) RT_NOEXCEPT;
+
+    /**
+     * Appends the UTF-8 string @a that to @a rThat.
+     *
+     * @param   rThat            The string to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(const RTCString &rThat);
+
+    /**
+     * Appends the UTF-8 string @a that to @a rThat.
+     *
+     * @param   rThat            The string to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(const RTCString &rThat) RT_NOEXCEPT;
+
+    /**
+     * Appends the UTF-16 string @a pszSrc to @a this.
+     *
+     * @param   pwszSrc         The C-style UTF-16 string to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(CBSTR pwszSrc);
+
+    /**
+     * Appends the UTF-16 string @a pszSrc to @a this.
+     *
+     * @param   pwszSrc         The C-style UTF-16 string to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(CBSTR pwszSrc) RT_NOEXCEPT;
+
+    /**
+     * Appends the UTF-8 string @a pszSrc to @a this.
+     *
+     * @param   pszSrc          The C-style string to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(const char *pszSrc);
+
+    /**
+     * Appends the UTF-8 string @a pszSrc to @a this.
+     *
+     * @param   pszSrc          The C-style string to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(const char *pszSrc) RT_NOEXCEPT;
+
+    /**
+     * Appends the a substring from @a rThat to @a this.
+     *
+     * @param   rThat           The string to append a substring from.
+     * @param   offStart        The start of the substring to append (UTF-16
+     *                          offset, not codepoint).
+     * @param   cwcMax          The maximum number of UTF-16 units to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(const Bstr &rThat, size_t offStart, size_t cwcMax = RTSTR_MAX);
+
+    /**
+     * Appends the a substring from @a rThat to @a this.
+     *
+     * @param   rThat           The string to append a substring from.
+     * @param   offStart        The start of the substring to append (UTF-16
+     *                          offset, not codepoint).
+     * @param   cwcMax          The maximum number of UTF-16 units to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(const Bstr &rThat, size_t offStart, size_t cwcMax = RTSTR_MAX) RT_NOEXCEPT;
+
+    /**
+     * Appends the a substring from UTF-8 @a rThat to @a this.
+     *
+     * @param   rThat           The string to append a substring from.
+     * @param   offStart        The start of the substring to append (byte offset,
+     *                          not codepoint).
+     * @param   cchMax          The maximum number of bytes to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(const RTCString &rThat, size_t offStart, size_t cchMax = RTSTR_MAX);
+
+    /**
+     * Appends the a substring from UTF-8 @a rThat to @a this.
+     *
+     * @param   rThat           The string to append a substring from.
+     * @param   offStart        The start of the substring to append (byte offset,
+     *                          not codepoint).
+     * @param   cchMax          The maximum number of bytes to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(const RTCString &rThat, size_t offStart, size_t cchMax = RTSTR_MAX) RT_NOEXCEPT;
+
+    /**
+     * Appends the first @a cchMax chars from UTF-16 string @a pszThat to @a this.
+     *
+     * @param   pwszThat        The C-style UTF-16 string to append.
+     * @param   cchMax          The maximum number of bytes to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(CBSTR pwszThat, size_t cchMax);
+
+    /**
+     * Appends the first @a cchMax chars from UTF-16 string @a pszThat to @a this.
+     *
+     * @param   pwszThat        The C-style UTF-16 string to append.
+     * @param   cchMax          The maximum number of bytes to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(CBSTR pwszThat, size_t cchMax) RT_NOEXCEPT;
+
+    /**
+     * Appends the first @a cchMax chars from string @a pszThat to @a this.
+     *
+     * @param   pszThat         The C-style string to append.
+     * @param   cchMax          The maximum number of bytes to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(const char *pszThat, size_t cchMax);
+
+    /**
+     * Appends the first @a cchMax chars from string @a pszThat to @a this.
+     *
+     * @param   pszThat         The C-style string to append.
+     * @param   cchMax          The maximum number of bytes to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(const char *pszThat, size_t cchMax) RT_NOEXCEPT;
+
+    /**
+     * Appends the given character to @a this.
+     *
+     * @param   ch              The character to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &append(char ch);
+
+    /**
+     * Appends the given character to @a this.
+     *
+     * @param   ch              The character to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendNoThrow(char ch) RT_NOEXCEPT;
+
+    /**
+     * Appends the given unicode code point to @a this.
+     *
+     * @param   uc              The unicode code point to append.
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     * @returns Reference to the object.
+     */
+    Bstr &appendCodePoint(RTUNICP uc);
+
+    /**
+     * Appends the given unicode code point to @a this.
+     *
+     * @param   uc              The unicode code point to append.
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendCodePointNoThrow(RTUNICP uc) RT_NOEXCEPT;
+
+    /**
+     * Appends the output of the string format operation (RTStrPrintf).
+     *
+     * @param   pszFormat       Pointer to the format string,
+     *                          @see pg_rt_str_format.
+     * @param   ...             Ellipsis containing the arguments specified by
+     *                          the format string.
+     *
+     * @throws  std::bad_alloc  On allocation error.  Object state is undefined.
+     *
+     * @returns Reference to the object.
+     */
+    Bstr &appendPrintf(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
+
+    /**
+     * Appends the output of the string format operation (RTStrPrintf).
+     *
+     * @param   pszFormat       Pointer to the format string,
+     *                          @see pg_rt_str_format.
+     * @param   ...             Ellipsis containing the arguments specified by
+     *                          the format string.
+     *
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendPrintfNoThrow(const char *pszFormat, ...) RT_NOEXCEPT RT_IPRT_FORMAT_ATTR(1, 2);
+
+    /**
+     * Appends the output of the string format operation (RTStrPrintfV).
+     *
+     * @param   pszFormat       Pointer to the format string,
+     *                          @see pg_rt_str_format.
+     * @param   va              Argument vector containing the arguments
+     *                          specified by the format string.
+     *
+     * @throws  std::bad_alloc  On allocation error.  Object state is undefined.
+     *
+     * @returns Reference to the object.
+     */
+    Bstr &appendPrintfV(const char *pszFormat, va_list va) RT_IPRT_FORMAT_ATTR(1, 0);
+
+    /**
+     * Appends the output of the string format operation (RTStrPrintfV).
+     *
+     * @param   pszFormat       Pointer to the format string,
+     *                          @see pg_rt_str_format.
+     * @param   va              Argument vector containing the arguments
+     *                          specified by the format string.
+     *
+     * @returns S_OK, E_OUTOFMEMORY or E_INVAL (bad encoding).
+     */
+    HRESULT appendPrintfVNoThrow(const char *pszFormat, va_list va) RT_NOEXCEPT RT_IPRT_FORMAT_ATTR(1, 0);
+
+    /**
+     * Shortcut to append(), Bstr variant.
+     *
+     * @param   rThat           The string to append.
+     * @returns Reference to the object.
+     */
+    Bstr &operator+=(const Bstr &rThat)
+    {
+        return append(rThat);
+    }
+
+    /**
+     * Shortcut to append(), RTCString variant.
+     *
+     * @param   rThat           The string to append.
+     * @returns Reference to the object.
+     */
+    Bstr &operator+=(const RTCString &rThat)
+    {
+        return append(rThat);
+    }
+
+    /**
+     * Shortcut to append(), CBSTR variant.
+     *
+     * @param   pwszThat        The C-style string to append.
+     * @returns                 Reference to the object.
+     */
+    Bstr &operator+=(CBSTR pwszThat)
+    {
+        return append(pwszThat);
+    }
+
+    /**
+     * Shortcut to append(), const char * variant.
+     *
+     * @param   pszThat         The C-style string to append.
+     * @returns                 Reference to the object.
+     */
+    Bstr &operator+=(const char *pszThat)
+    {
+        return append(pszThat);
+    }
+
+    /**
+     * Shortcut to append(), char variant.
+     *
+     * @param ch                The character to append.
+     *
+     * @returns                 Reference to the object.
+     */
+    Bstr &operator+=(char ch)
+    {
+        return append(ch);
+    }
+
+    /** @} */
+
+    /**
+     * Erases a sequence from the string.
+     *
+     * @returns Reference to the object.
+     * @param   offStart        Where in @a this string to start erasing (UTF-16
+     *                          units, not codepoints).
+     * @param   cwcLength       How much following @a offStart to erase (UTF-16
+     *                          units, not codepoints).
+     */
+    Bstr &erase(size_t offStart = 0, size_t cwcLength = RTSTR_MAX) RT_NOEXCEPT;
+
+
+    /** @name BASE64 related methods
+     * @{ */
+    /**
+     * Encodes the given data as BASE64.
+     *
+     * @returns S_OK or E_OUTOFMEMORY.
+     * @param   pvData          Pointer to the data to encode.
+     * @param   cbData          Number of bytes to encode.
+     * @param   fLineBreaks     Whether to add line breaks (true) or just encode it
+     *                          as a continuous string.
+     * @sa RTBase64EncodeUtf16
+     */
+    HRESULT base64Encode(const void *pvData, size_t cbData, bool fLineBreaks = false);
+
+    /**
+     * Decodes the string as BASE64.
+     *
+     * @returns IPRT status code, see RTBase64DecodeUtf16Ex.
+     * @param   pvData          Where to return the decoded bytes.
+     * @param   cbData          Size of the @a pvData return buffer.
+     * @param   pcbActual       Where to return number of bytes actually decoded.
+     *                          This is optional and if not specified, the request
+     *                          will fail unless @a cbData matches the data size
+     *                          exactly.
+     * @param   ppwszEnd        Where to return pointer to the first non-base64
+     *                          character following the encoded data.  This is
+     *                          optional and if NULL, the request will fail if there
+     *                          are anything trailing the encoded bytes in the
+     *                          string.
+     * @sa base64DecodedSize, RTBase64DecodeUtf16
+     */
+    int base64Decode(void *pvData, size_t cbData, size_t *pcbActual = NULL, PRTUTF16 *ppwszEnd = NULL);
+
+    /**
+     * Determins the size of the BASE64 encoded data in the string.
+     *
+     * @returns The length in bytes. -1 if the encoding is bad.
+     *
+     * @param   ppwszEnd        If not NULL, this will point to the first char
+     *                          following the Base64 encoded text block. If
+     *                          NULL the entire string is assumed to be Base64.
+     * @sa      base64Decode, RTBase64DecodedUtf16Size
+     */
+    ssize_t base64DecodedSize(PRTUTF16 *ppwszEnd = NULL);
+    /** @} */
+
 #if defined(VBOX_WITH_XPCOM)
     /**
      *  Returns a pointer to the raw member UTF-16 string. If the member string is empty,
@@ -329,17 +816,86 @@ public:
 #endif
 
     /**
-     *  Returns a non-const raw pointer that allows to modify the string directly.
-     *  As opposed to raw(), this DOES return NULL if the member string is empty
-     *  because we cannot return a mutable pointer to the global variable with the
-     *  empty string.
+     * Returns a non-const raw pointer that allows modifying the string directly.
      *
-     *  @warning
-     *      Be sure not to modify data beyond the allocated memory! The
-     *      guaranteed size of the allocated memory is at least #length()
-     *      bytes after creation and after every assignment operation.
+     * @note As opposed to raw(), this DOES return NULL if the member string is
+     *       empty because we cannot return a mutable pointer to the global variable
+     *       with the empty string.
+     *
+     * @note If modifying the string size (only shrinking it is allows), #jolt() or
+     *       #joltNoThrow() must be called!
+     *
+     * @note Do not modify memory beyond the #length() of the string!
+     *
+     * @sa   joltNoThrow(), mutalbleRaw(), reserve(), reserveNoThrow()
      */
     BSTR mutableRaw() { return m_bstr; }
+
+    /**
+     * Correct the embedded length after using mutableRaw().
+     *
+     * This is needed on COM (Windows) to update the embedded string length.  It is
+     * a stub on hosts using XPCOM.
+     *
+     * @param   cwcNew      The new string length, if handy, otherwise a negative
+     *                      number.
+     * @sa      joltNoThrow(), mutalbleRaw(), reserve(), reserveNoThrow()
+     */
+#ifndef VBOX_WITH_XPCOM
+    void jolt(ssize_t cwcNew = -1);
+#else
+    void jolt(ssize_t cwcNew = -1)
+    {
+        Assert(cwcNew < 0 || (cwcNew == 0 && !m_bstr) || m_bstr[cwcNew] == '\0'); RT_NOREF(cwcNew);
+    }
+#endif
+
+    /**
+     * Correct the embedded length after using mutableRaw().
+     *
+     * This is needed on COM (Windows) to update the embedded string length.  It is
+     * a stub on hosts using XPCOM.
+     *
+     * @returns S_OK on success, E_OUTOFMEMORY if shrinking the string failed.
+     * @param   cwcNew      The new string length, if handy, otherwise a negative
+     *                      number.
+     * @sa      jolt(), mutalbleRaw(), reserve(), reserveNoThrow()
+     */
+#ifndef VBOX_WITH_XPCOM
+    HRESULT joltNoThrow(ssize_t cwcNew = -1) RT_NOEXCEPT;
+#else
+    HRESULT joltNoThrow(ssize_t cwcNew = -1) RT_NOEXCEPT
+    {
+        Assert(cwcNew < 0 || (cwcNew == 0 && !m_bstr) || m_bstr[cwcNew] == '\0'); RT_NOREF(cwcNew);
+        return S_OK;
+    }
+#endif
+
+    /**
+     * Make sure at that least @a cwc of buffer space is reserved.
+     *
+     * Requests that the contained memory buffer have at least cb bytes allocated.
+     * This may expand or shrink the string's storage, but will never truncate the
+     * contained string.  In other words, cb will be ignored if it's smaller than
+     * length() + 1.
+     *
+     * @param   cwcMin  The new minimum string length that the can be stored. This
+     *                  does not include the terminator.
+     * @param   fForce  Force this size.
+     *
+     * @throws  std::bad_alloc  On allocation error.  The object is left unchanged.
+     */
+    void reserve(size_t cwcMin, bool fForce = false);
+
+    /**
+     * A C like version of the #reserve() method, i.e. return code instead of throw.
+     *
+     * @returns S_OK or E_OUTOFMEMORY.
+     * @param   cwcMin  The new minimum string length that the can be stored.  This
+     *                  does not include the terminator.
+    * @param   fForce  Force this size.
+     */
+    HRESULT reserveNoThrow(size_t cwcMin, bool fForce = false) RT_NOEXCEPT;
 
     /**
      *  Intended to assign copies of instances to |BSTR| out parameters from
@@ -450,14 +1006,7 @@ public:
 
 protected:
 
-    void cleanup()
-    {
-        if (m_bstr)
-        {
-            ::SysFreeString(m_bstr);
-            m_bstr = NULL;
-        }
-    }
+    void cleanup();
 
     /**
      * Protected internal helper to copy a string. This ignores the previous object
@@ -473,19 +1022,24 @@ protected:
      *
      * @throws  std::bad_alloc - the object is representing an empty string.
      */
-    void copyFrom(const OLECHAR *a_bstrSrc)
-    {
-        if (a_bstrSrc && *a_bstrSrc)
-        {
-            m_bstr = ::SysAllocString(a_bstrSrc);
-#ifdef RT_EXCEPTIONS_ENABLED
-            if (!m_bstr)
-                throw std::bad_alloc();
-#endif
-        }
-        else
-            m_bstr = NULL;
-    }
+    void copyFrom(const OLECHAR *a_bstrSrc);
+
+    /** cleanup() + copyFrom() - for assignment operators.  */
+    void cleanupAndCopyFrom(const OLECHAR *a_bstrSrc);
+
+    /**
+     * Protected internal helper to copy a string, implying cleanup().
+     *
+     * This variant copies from a zero-terminated UTF-16 string (which need not be a
+     * BSTR, i.e. need not have a length prefix).
+     *
+     * If the source is empty, this sets the member string to NULL.
+     *
+     * @param   a_bstrSrc           The source string.  The caller guarantees
+     *                              that this is valid UTF-16.
+     * @returns S_OK or E_OUTOFMEMORY
+     */
+    HRESULT cleanupAndCopyFromEx(const OLECHAR *a_bstrSrc) RT_NOEXCEPT;
 
     /**
      * Protected internal helper to copy a string. This ignores the previous object
@@ -517,6 +1071,16 @@ protected:
      * @throws  std::bad_alloc - the object is representing an empty string.
      */
     void copyFromN(const char *a_pszSrc, size_t a_cchSrc);
+
+    /** cleanup() + non-throwing copyFromN(). */
+    HRESULT cleanupAndCopyFromNoThrow(const char *a_pszSrc, size_t a_cchMax) RT_NOEXCEPT;
+
+    Bstr   &appendWorkerUtf16(PCRTUTF16 pwszSrc, size_t cwcSrc);
+    Bstr   &appendWorkerUtf8(const char *pszSrc, size_t cchSrc);
+    HRESULT appendWorkerUtf16NoThrow(PCRTUTF16 pwszSrc, size_t cwcSrc) RT_NOEXCEPT;
+    HRESULT appendWorkerUtf8NoThrow(const char *pszSrc, size_t cchSrc) RT_NOEXCEPT;
+
+    static DECLCALLBACK(size_t) printfOutputCallbackNoThrow(void *pvArg, const char *pachChars, size_t cbChars) RT_NOEXCEPT;
 
     BSTR m_bstr;
 
@@ -719,13 +1283,7 @@ public:
      * @param   pbstr Where to store a clone of the string.
      * @returns S_OK or E_OUTOFMEMORY (COM status codes).
      */
-    HRESULT cloneToEx(BSTR *pbstr) const
-    {
-        if (!pbstr)
-            return S_OK;
-        Bstr bstr(*this);
-        return bstr.detachToEx(pbstr);
-    }
+    HRESULT cloneToEx(BSTR *pbstr) const RT_NOEXCEPT;
 
     /**
      * Safe assignment from BSTR.
@@ -763,8 +1321,31 @@ public:
      */
     Utf8Str& stripSuffix();
 
-    // Parse key=value pairs from string
-    size_t parseKeyValue(Utf8Str &key, Utf8Str &value, size_t pos = 0, const Utf8Str &pairSeparator = ",", const Utf8Str &keyValueSeparator = "=") const;
+    /**
+     * Parses key=value pairs.
+     *
+     * @returns offset of the @a a_rPairSeparator following the returned value.
+     * @retval  npos is returned if there are no more key/value pairs.
+     *
+     * @param   a_rKey                  Reference to variable that should receive
+     *                                  the key substring.  This is set to null if
+     *                                  no key/value found.  (It's also possible the
+     *                                  key is an empty string, so be careful.)
+     * @param   a_rValue                Reference to variable that should receive
+     *                                  the value substring.  This is set to null if
+     *                                  no key/value found.  (It's also possible the
+     *                                  value is an empty string, so be careful.)
+     * @param   a_offStart              The offset to start searching from.  This is
+     *                                  typically 0 for the first call, and the
+     *                                  return value of the previous call for the
+     *                                  subsequent ones.
+     * @param   a_rPairSeparator        The pair separator string.  If this is an
+     *                                  empty string, the whole string will be
+     *                                  considered as a single key/value pair.
+     * @param   a_rKeyValueSeparator    The key/value separator string.
+     */
+    size_t parseKeyValue(Utf8Str &a_rKey, Utf8Str &a_rValue, size_t a_offStart = 0,
+                         const Utf8Str &a_rPairSeparator = ",", const Utf8Str &a_rKeyValueSeparator = "=") const;
 
     /**
      *  Static immutable empty-string object. May be used for comparison purposes.
@@ -790,6 +1371,10 @@ protected:
  * @code
     Utf8StrFmt strName("program name = %s", argv[0]);
    @endcode
+ *
+ * @note    Do not use in assignments to Utf8Str variables.  Instead use
+ *          RTCString::printf directly on the variable!  This avoid an extra
+ *          temporary Utf8Str instance and assignment operation.
  */
 class Utf8StrFmt : public Utf8Str
 {
@@ -822,7 +1407,7 @@ private:
 };
 
 /**
- * The BstrFmt class is a shortcut to <tt>Bstr(Utf8StrFmt(...))</tt>.
+ * Class with Bstr::printf as constructor for your convenience.
  */
 class BstrFmt : public Bstr
 {
@@ -832,22 +1417,27 @@ public:
      * Constructs a new string given the format string and the list of the
      * arguments for the format string.
      *
-     * @param aFormat   printf-like format string (in UTF-8 encoding).
-     * @param ...       List of the arguments for the format string.
+     * @param a_pszFormat   printf-like format string (in UTF-8 encoding), see
+     *                      iprt/string.h for details.
+     * @param ...           List of the arguments for the format string.
      */
-    explicit BstrFmt(const char *aFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2)
+    explicit BstrFmt(const char *a_pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2)
     {
-        va_list args;
-        va_start(args, aFormat);
-        copyFrom(Utf8Str(aFormat, args).c_str());
-        va_end(args);
+        va_list va;
+        va_start(va, a_pszFormat);
+        printfV(a_pszFormat, va);
+        va_end(va);
     }
 
     RTMEMEF_NEW_AND_DELETE_OPERATORS();
+
+protected:
+    BstrFmt()
+    { }
 };
 
 /**
- * The BstrFmtVA class is a shortcut to <tt>Bstr(Utf8Str(format,va))</tt>.
+ * Class with Bstr::printfV as constructor for your convenience.
  */
 class BstrFmtVA : public Bstr
 {
@@ -857,20 +1447,25 @@ public:
      * Constructs a new string given the format string and the list of the
      * arguments for the format string.
      *
-     * @param aFormat   printf-like format string (in UTF-8 encoding).
-     * @param aArgs     List of arguments for the format string
+     * @param a_pszFormat   printf-like format string (in UTF-8 encoding), see
+     *                      iprt/string.h for details.
+     * @param a_va          List of arguments for the format string
      */
-    BstrFmtVA(const char *aFormat, va_list aArgs) RT_IPRT_FORMAT_ATTR(1, 0)
+    BstrFmtVA(const char *a_pszFormat, va_list a_va) RT_IPRT_FORMAT_ATTR(1, 0)
     {
-        copyFrom(Utf8Str(aFormat, aArgs).c_str());
+        printfV(a_pszFormat, a_va);
     }
 
     RTMEMEF_NEW_AND_DELETE_OPERATORS();
+
+protected:
+    BstrFmtVA()
+    { }
 };
 
 } /* namespace com */
 
 /** @} */
 
-#endif /* !___VBox_com_string_h */
+#endif /* !VBOX_INCLUDED_com_string_h */
 

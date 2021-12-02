@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGCInternal.h 87788 2021-02-18 15:12:31Z vboxsync $ */
 /** @file
  * DBGC - Debugger Console, Internal Header File.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,9 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-
-#ifndef ___Debugger_DBGCInternal_h
-#define ___Debugger_DBGCInternal_h
+#ifndef DEBUGGER_INCLUDED_SRC_DBGCInternal_h
+#define DEBUGGER_INCLUDED_SRC_DBGCInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 /*******************************************************************************
@@ -25,7 +27,10 @@
 *******************************************************************************/
 #include <VBox/dbg.h>
 #include <VBox/err.h>
+#include <VBox/vmm/dbgf.h>
+#include <VBox/vmm/dbgfflowtrace.h>
 
+#include <iprt/list.h>
 
 /*******************************************************************************
 *   Structures and Typedefs                                                    *
@@ -92,6 +97,24 @@ typedef DBGCNAMEDVAR *PDBGCNAMEDVAR;
 
 
 /**
+ * Debugger console per trace flow data.
+ */
+typedef struct DBGCTFLOW
+{
+    /** Node for the trace flow module list. */
+    RTLISTNODE       NdTraceFlow;
+    /** Handle of the DGF trace flow module. */
+    DBGFFLOWTRACEMOD hTraceFlowMod;
+    /** The control flow graph for the module. */
+    DBGFFLOW         hFlow;
+    /** The trace flow module identifier. */
+    uint32_t         iTraceFlowMod;
+} DBGCTFLOW;
+/** Pointer to the per trace flow data. */
+typedef DBGCTFLOW *PDBGCTFLOW;
+
+
+/**
  * Debugger console status
  */
 typedef enum DBGCSTATUS
@@ -111,8 +134,20 @@ typedef struct DBGC
     DBGCCMDHLP          CmdHlp;
     /** Wrappers for DBGF output. */
     DBGFINFOHLP         DbgfOutputHlp;
-    /** Pointer to backend callback structure. */
-    PDBGCBACK           pBack;
+    /** Pointer to I/O callback structure. */
+    PCDBGCIO            pIo;
+
+    /**
+     * Output a bunch of characters.
+     *
+     * @returns VBox status code.
+     * @param   pvUser      Opaque user data from DBGC::pvOutputUser.
+     * @param   pachChars   Pointer to an array of utf-8 characters.
+     * @param   cbChars     Number of bytes in the character array pointed to by pachChars.
+     */
+    DECLR3CALLBACKMEMBER(int, pfnOutput, (void *pvUser, const char *pachChars, size_t cbChars));
+    /** Opqaue user data passed to DBGC::pfnOutput. */
+    void                *pvOutputUser;
 
     /** Pointer to the current VM. */
     PVM                 pVM;
@@ -135,14 +170,22 @@ typedef struct DBGC
     /** Log indicator. (If set we're writing the log to the console.) */
     bool                fLog;
 
-    /** Indicates whether we're in guest (true) or hypervisor (false) register context. */
-    bool                fRegCtxGuest;
-    /** Indicates whether the register are terse or sparse. */
-    bool                fRegTerse;
-    /** Whether to display registers when tracing. */
-    bool                fStepTraceRegs;
     /** Counter use to suppress the printing of the headers. */
     uint8_t             cPagingHierarchyDumps;
+    /** Indicates whether the register are terse or sparse. */
+    bool                fRegTerse;
+
+    /** @name Stepping
+     * @{ */
+    /** Whether to display registers when tracing. */
+    bool                fStepTraceRegs;
+    /** Number of multi-steps left, zero if not multi-stepping.   */
+    uint32_t            cMultiStepsLeft;
+    /** The multi-step stride length. */
+    uint32_t            uMultiStepStrideLength;
+    /** The active multi-step command. */
+    PCDBGCCMD           pMultiStepCmd;
+    /** @} */
 
     /** Current disassembler position. */
     DBGCVAR             DisasmPos;
@@ -167,6 +210,8 @@ typedef struct DBGC
 
     /** The list of breakpoints. (singly linked) */
     PDBGCBP             pFirstBp;
+    /** The list of known trace flow modules. */
+    RTLISTANCHOR        LstTraceFlowMods;
 
     /** Software interrupt events. */
     PDBGCEVTCFG         apSoftInts[256];
@@ -235,7 +280,7 @@ typedef struct DBGC
 typedef DBGC *PDBGC;
 
 /** Converts a Command Helper pointer to a pointer to DBGC instance data. */
-#define DBGC_CMDHLP2DBGC(pCmdHlp)   ( (PDBGC)((uintptr_t)(pCmdHlp) - RT_OFFSETOF(DBGC, CmdHlp)) )
+#define DBGC_CMDHLP2DBGC(pCmdHlp)   ( (PDBGC)((uintptr_t)(pCmdHlp) - RT_UOFFSETOF(DBGC, CmdHlp)) )
 
 
 /**
@@ -282,7 +327,7 @@ typedef DBGCEXTFUNCS *PDBGCEXTFUNCS;
  * @param   enmCat      The desired result category. Can be ignored.
  * @param   pResult     Where to store the result.
  */
-typedef DECLCALLBACK(int) FNDBGCOPUNARY(PDBGC pDbgc, PCDBGCVAR pArg, DBGCVARCAT enmCat, PDBGCVAR pResult);
+typedef DECLCALLBACKTYPE(int, FNDBGCOPUNARY,(PDBGC pDbgc, PCDBGCVAR pArg, DBGCVARCAT enmCat, PDBGCVAR pResult));
 /** Pointer to a unary operator handler function. */
 typedef FNDBGCOPUNARY *PFNDBGCOPUNARY;
 
@@ -298,7 +343,7 @@ typedef FNDBGCOPUNARY *PFNDBGCOPUNARY;
  * @param   pArg2       The 2nd argument.
  * @param   pResult     Where to store the result.
  */
-typedef DECLCALLBACK(int) FNDBGCOPBINARY(PDBGC pDbgc, PCDBGCVAR pArg1, PCDBGCVAR pArg2, PDBGCVAR pResult);
+typedef DECLCALLBACKTYPE(int, FNDBGCOPBINARY,(PDBGC pDbgc, PCDBGCVAR pArg1, PCDBGCVAR pArg2, PDBGCVAR pResult));
 /** Pointer to a binary operator handler function. */
 typedef FNDBGCOPBINARY *PFNDBGCOPBINARY;
 
@@ -353,7 +398,7 @@ typedef const struct DBGCSYM *PCDBGCSYM;
  * @param   enmType     The result type.
  * @param   pResult     Where to store the result.
  */
-typedef DECLCALLBACK(int) FNDBGCSYMGET(PCDBGCSYM pSymDesc, PDBGCCMDHLP pCmdHlp, DBGCVARTYPE enmType, PDBGCVAR pResult);
+typedef DECLCALLBACKTYPE(int, FNDBGCSYMGET,(PCDBGCSYM pSymDesc, PDBGCCMDHLP pCmdHlp, DBGCVARTYPE enmType, PDBGCVAR pResult));
 /** Pointer to get function for a builtin symbol. */
 typedef FNDBGCSYMGET *PFNDBGCSYMGET;
 
@@ -367,7 +412,7 @@ typedef FNDBGCSYMGET *PFNDBGCSYMGET;
  * @param   pCmdHlp     Pointer to the command callback structure.
  * @param   pValue      The value to assign the symbol.
  */
-typedef DECLCALLBACK(int) FNDBGCSYMSET(PCDBGCSYM pSymDesc, PDBGCCMDHLP pCmdHlp, PCDBGCVAR pValue);
+typedef DECLCALLBACKTYPE(int, FNDBGCSYMSET,(PCDBGCSYM pSymDesc, PDBGCCMDHLP pCmdHlp, PCDBGCVAR pValue));
 /** Pointer to set function for a builtin symbol. */
 typedef FNDBGCSYMSET *PFNDBGCSYMSET;
 
@@ -423,6 +468,8 @@ typedef DBGCSXEVT const *PCDBGCSXEVT;
 /** @name DBGCSXEVT_F_XXX
  * @{ */
 #define DBGCSXEVT_F_TAKE_ARG        RT_BIT_32(0)
+/** Windows bugcheck, should take 5 arguments. */
+#define DBGCSXEVT_F_BUGCHECK        RT_BIT_32(1)
 /** @} */
 
 
@@ -480,6 +527,10 @@ int     dbgcBpDelete(PDBGC pDbgc, RTUINT iBp);
 PDBGCBP dbgcBpGet(PDBGC pDbgc, RTUINT iBp);
 int     dbgcBpExec(PDBGC pDbgc, RTUINT iBp);
 
+DECLHIDDEN(PDBGCTFLOW) dbgcFlowTraceModGet(PDBGC pDbgc, uint32_t iTraceFlowMod);
+DECLHIDDEN(int) dbgcFlowTraceModAdd(PDBGC pDbgc, DBGFFLOWTRACEMOD hFlowTraceMod, DBGFFLOW hFlow, uint32_t *piId);
+DECLHIDDEN(int) dbgcFlowTraceModDelete(PDBGC pDbgc, uint32_t iFlowTraceMod);
+
 void    dbgcEvalInit(void);
 int     dbgcEvalSub(PDBGC pDbgc, char *pszExpr, size_t cchExpr, DBGCVARCAT enmCategory, PDBGCVAR pResult);
 int     dbgcEvalCommand(PDBGC pDbgc, char *pszCmd, size_t cchCmd, bool fNoExecute);
@@ -515,7 +566,7 @@ typedef DBGCSCREEN *PDBGCSCREEN;
  * @param   psz             The string to dump
  * @param   pvUser          Opaque user data.
  */
-typedef DECLCALLBACK(int) FNDGCSCREENBLIT(const char *psz, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNDGCSCREENBLIT,(const char *psz, void *pvUser));
 /** Pointer to a FNDGCSCREENBLIT. */
 typedef FNDGCSCREENBLIT *PFNDGCSCREENBLIT;
 
@@ -569,10 +620,16 @@ DECLHIDDEN(int)  dbgcScreenAsciiDrawString(DBGCSCREEN hScreen, uint32_t uX, uint
                                            DBGCSCREENCOLOR enmColor);
 
 /* For tstDBGCParser: */
-int     dbgcCreate(PDBGC *ppDbgc, PDBGCBACK pBack, unsigned fFlags);
+int     dbgcCreate(PDBGC *ppDbgc, PCDBGCIO pIo, unsigned fFlags);
 int     dbgcRun(PDBGC pDbgc);
 int     dbgcProcessInput(PDBGC pDbgc, bool fNoExecute);
 void    dbgcDestroy(PDBGC pDbgc);
+
+DECLHIDDEN(const char *) dbgcGetEventCtx(DBGFEVENTCTX enmCtx);
+DECLHIDDEN(PCDBGCSXEVT) dbgcEventLookup(DBGFEVENTTYPE enmType);
+
+DECL_HIDDEN_CALLBACK(int) dbgcGdbStubRunloop(PUVM pUVM, PCDBGCIO pIo, unsigned fFlags);
+DECL_HIDDEN_CALLBACK(int) dbgcKdStubRunloop(PUVM pUVM, PCDBGCIO pIo, unsigned fFlags);
 
 
 /*******************************************************************************
@@ -606,5 +663,5 @@ extern const uint32_t   g_cDbgcSxEvents;
 
 
 
-#endif
+#endif /* !DEBUGGER_INCLUDED_SRC_DBGCInternal_h */
 

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vrdpusb_h
-#define ___VBox_vrdpusb_h
+#ifndef VBOX_INCLUDED_vrdpusb_h
+#define VBOX_INCLUDED_vrdpusb_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -65,21 +68,21 @@ typedef struct REMOTEUSBCALLBACK
 {
     PREMOTEUSBBACKEND pInstance;
 
-    DECLCALLBACKMEMBER(int, pfnOpen)             (PREMOTEUSBBACKEND pInstance, const char *pszAddress, size_t cbAddress, PREMOTEUSBDEVICE *ppDevice);
-    DECLCALLBACKMEMBER(void, pfnClose)           (PREMOTEUSBDEVICE pDevice);
-    DECLCALLBACKMEMBER(int, pfnReset)            (PREMOTEUSBDEVICE pDevice);
-    DECLCALLBACKMEMBER(int, pfnSetConfig)        (PREMOTEUSBDEVICE pDevice, uint8_t u8Cfg);
-    DECLCALLBACKMEMBER(int, pfnClaimInterface)   (PREMOTEUSBDEVICE pDevice, uint8_t u8Ifnum);
-    DECLCALLBACKMEMBER(int, pfnReleaseInterface) (PREMOTEUSBDEVICE pDevice, uint8_t u8Ifnum);
-    DECLCALLBACKMEMBER(int, pfnInterfaceSetting) (PREMOTEUSBDEVICE pDevice, uint8_t u8Ifnum, uint8_t u8Setting);
-    DECLCALLBACKMEMBER(int, pfnQueueURB)         (PREMOTEUSBDEVICE pDevice, uint8_t u8Type, uint8_t u8Ep, uint8_t u8Direction, uint32_t u32Len, void *pvData, void *pvURB, PREMOTEUSBQURB *ppRemoteURB);
-    DECLCALLBACKMEMBER(int, pfnReapURB)          (PREMOTEUSBDEVICE pDevice, uint32_t u32Millies, void **ppvURB, uint32_t *pu32Len, uint32_t *pu32Err);
-    DECLCALLBACKMEMBER(int, pfnClearHaltedEP)    (PREMOTEUSBDEVICE pDevice, uint8_t u8Ep);
-    DECLCALLBACKMEMBER(void, pfnCancelURB)       (PREMOTEUSBDEVICE pDevice, PREMOTEUSBQURB pRemoteURB);
-    DECLCALLBACKMEMBER(int, pfnWakeup)           (PREMOTEUSBDEVICE pDevice);
+    DECLCALLBACKMEMBER(int, pfnOpen,(PREMOTEUSBBACKEND pInstance, const char *pszAddress, size_t cbAddress, PREMOTEUSBDEVICE *ppDevice));
+    DECLCALLBACKMEMBER(void, pfnClose,(PREMOTEUSBDEVICE pDevice));
+    DECLCALLBACKMEMBER(int, pfnReset,(PREMOTEUSBDEVICE pDevice));
+    DECLCALLBACKMEMBER(int, pfnSetConfig,(PREMOTEUSBDEVICE pDevice, uint8_t u8Cfg));
+    DECLCALLBACKMEMBER(int, pfnClaimInterface,(PREMOTEUSBDEVICE pDevice, uint8_t u8Ifnum));
+    DECLCALLBACKMEMBER(int, pfnReleaseInterface,(PREMOTEUSBDEVICE pDevice, uint8_t u8Ifnum));
+    DECLCALLBACKMEMBER(int, pfnInterfaceSetting,(PREMOTEUSBDEVICE pDevice, uint8_t u8Ifnum, uint8_t u8Setting));
+    DECLCALLBACKMEMBER(int, pfnQueueURB,(PREMOTEUSBDEVICE pDevice, uint8_t u8Type, uint8_t u8Ep, uint8_t u8Direction, uint32_t u32Len, void *pvData, void *pvURB, PREMOTEUSBQURB *ppRemoteURB));
+    DECLCALLBACKMEMBER(int, pfnReapURB,(PREMOTEUSBDEVICE pDevice, uint32_t u32Millies, void **ppvURB, uint32_t *pu32Len, uint32_t *pu32Err));
+    DECLCALLBACKMEMBER(int, pfnClearHaltedEP,(PREMOTEUSBDEVICE pDevice, uint8_t u8Ep));
+    DECLCALLBACKMEMBER(void, pfnCancelURB,(PREMOTEUSBDEVICE pDevice, PREMOTEUSBQURB pRemoteURB));
+    DECLCALLBACKMEMBER(int, pfnWakeup,(PREMOTEUSBDEVICE pDevice));
 } REMOTEUSBCALLBACK;
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_vrdpusb_h */
 

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_test_h
-#define ___iprt_test_h
+#ifndef IPRT_INCLUDED_test_h
+#define IPRT_INCLUDED_test_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -140,7 +143,6 @@ RTR3DECL(int) RTTestCreateChild(const char *pszTest, PRTTEST phTest);
  *
  * @returns IPRT status code.
  * @param   pszTest         The test name.
- * @param   pszXmlFile      The XML output file/pipe/whatever.
  * @param   fFlags          Flags, see RTTEST_C_XXX.
  * @param   enmMaxLevel     The max message level.  Use RTTESTLVL_INVALID for
  *                          the default output level or one from the
@@ -467,12 +469,16 @@ RTR3DECL(int) RTTestSkippedV(RTTEST hTest, const char *pszFormat, va_list va) RT
  *          older versions of this header and other components using the same
  *          contant values.
  * @remarks When adding a new item:
- *              - Always add at the end of the list - do NOT group it.
+ *              - Always add at the end of the list.
  *              - Add it to rtTestUnitName in r3/test.cpp.
- *              - include/VBox/VMMDevTesting.h (VMMDEV_TESTING_UNIT_XXX).
+ *              - Add it as VMMDEV_TESTING_UNIT_ in include/VBox/VMMDevTesting.h.
  *              - Add it to g_aszBs2TestUnitNames in
- *                TestSuite/bootsectors/bootsector2-common-routines.mac.
- *
+ *                ValidationKit/bootsectors/bootsector2-common-routines.mac.
+ *              - Add it to g_aszBs3TestUnitNames in bs3kit/bs3-cmn-TestData.c.
+ *              - Add it to ValidationKit/common/constants/valueunit.py both as
+ *                a constant (strip RTTESTUNIT_) and as a name (same as what
+ *                rtTestUnitName returns) for mapping.  Testmanager must be
+ *                updated.
  */
 typedef enum RTTESTUNIT
 {
@@ -510,12 +516,20 @@ typedef enum RTTESTUNIT
     RTTESTUNIT_PP10K,                           /**< Parts per ten thousand (10^-4). */
     RTTESTUNIT_PPM,                             /**< Parts per million (10^-6). */
     RTTESTUNIT_PPB,                             /**< Parts per billion (10^-9). */
+    RTTESTUNIT_TICKS,                           /**< CPU ticks. */
+    RTTESTUNIT_TICKS_PER_CALL,                  /**< CPU ticks per call. */
+    RTTESTUNIT_TICKS_PER_OCCURENCE,             /**< CPU ticks per occurence. */
+    RTTESTUNIT_PAGES,                           /**< Page count. */
+    RTTESTUNIT_PAGES_PER_SEC,                   /**< Pages per second. */
+    RTTESTUNIT_TICKS_PER_PAGE,                  /**< CPU ticks per page. */
+    RTTESTUNIT_NS_PER_PAGE,                     /**< Nanoseconds per page. */
 
     /** The end of valid units. */
     RTTESTUNIT_END
 } RTTESTUNIT;
-AssertCompile(RTTESTUNIT_INSTRS == 0x19);
-AssertCompile(RTTESTUNIT_NONE   == 0x1b);
+AssertCompile(RTTESTUNIT_INSTRS      == 0x19);
+AssertCompile(RTTESTUNIT_NONE        == 0x1b);
+AssertCompile(RTTESTUNIT_NS_PER_PAGE == 0x26);
 
 /**
  * Report a named test result value.
@@ -636,6 +650,30 @@ RTR3DECL(int) RTTestFailureDetailsV(RTTEST hTest, const char *pszFormat, va_list
 RTR3DECL(int) RTTestFailureDetails(RTTEST hTest, const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(2, 3);
 
 /**
+ * Sets error context info to be printed with the first failure.
+ *
+ * @returns IPRT status code.
+ * @param   hTest       The test handle. If NIL_RTTEST we'll use the one
+ *                      associated with the calling thread.
+ * @param   pszFormat   The message, no trailing newline.  NULL to clear the
+ *                      context message.
+ * @param   va          The arguments.
+ */
+RTR3DECL(int) RTTestErrContextV(RTTEST hTest, const char *pszFormat, va_list va) RT_IPRT_FORMAT_ATTR(2, 0);
+
+/**
+ * Sets error context info to be printed with the first failure.
+ *
+ * @returns IPRT status code.
+ * @param   hTest       The test handle. If NIL_RTTEST we'll use the one
+ *                      associated with the calling thread.
+ * @param   pszFormat   The message, no trailing newline.  NULL to clear the
+ *                      context message.
+ * @param   ...         The arguments.
+ */
+RTR3DECL(int) RTTestErrContext(RTTEST hTest, const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(2, 3);
+
+/**
  * Disables and shuts up assertions.
  *
  * Max 8 nestings.
@@ -751,7 +789,7 @@ RTR3DECL(int) RTTestRestoreAssertions(RTTEST hTest);
             return (rcRet); \
          } \
     } while (0)
-/** @def RTTEST_CHECK_MSG_RET
+/** @def RTTEST_CHECK_MSG_RETV
  * Check whether a boolean expression holds true, returns void on false.
  *
  * If the expression is false, call RTTestFailed giving the line number and expression.
@@ -1114,6 +1152,26 @@ RTR3DECL(int) RTTestIFailureDetailsV(const char *pszFormat, va_list va) RT_IPRT_
 RTR3DECL(int) RTTestIFailureDetails(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
 
 /**
+ * Sets error context info to be printed with the first failure.
+ *
+ * @returns IPRT status code.
+ * @param   pszFormat   The message, no trailing newline.  NULL to clear the
+ *                      context message.
+ * @param   va          The arguments.
+ */
+RTR3DECL(int) RTTestIErrContextV(const char *pszFormat, va_list va) RT_IPRT_FORMAT_ATTR(1, 0);
+
+/**
+ * Sets error context info to be printed with the first failure.
+ *
+ * @returns IPRT status code.
+ * @param   pszFormat   The message, no trailing newline.  NULL to clear the
+ *                      context message.
+ * @param   ...         The arguments.
+ */
+RTR3DECL(int) RTTestIErrContext(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
+
+/**
  * Disables and shuts up assertions.
  *
  * Max 8 nestings.
@@ -1173,7 +1231,7 @@ RTR3DECL(int) RTTestIRestoreAssertions(void);
             return; \
          } \
     } while (0)
-/** @def RTTESTI_CHECK_RETV
+/** @def RTTESTI_CHECK_BREAK
  * Check whether a boolean expression holds true, returns void on false.
  *
  * If the expression is false, call RTTestIFailed giving the line number and
@@ -1238,7 +1296,7 @@ RTR3DECL(int) RTTestIRestoreAssertions(void);
             return (rcRet); \
          } \
     } while (0)
-/** @def RTTESTI_CHECK_MSG_RET
+/** @def RTTESTI_CHECK_MSG_RETV
  * Check whether a boolean expression holds true, returns void on false.
  *
  * If the expression is false, call RTTestIFailed giving the line number and
@@ -1404,5 +1462,5 @@ RTR3DECL(int) RTTestIRestoreAssertions(void);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_test_h */
 

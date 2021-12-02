@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardNewVM.cpp 92111 2021-10-27 16:47:58Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardNewVM class implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,69 +15,92 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
+/* Qt includes: */
+#include <QAbstractButton>
+#include <QLayout>
 
 /* GUI includes: */
-# include "VBoxGlobal.h"
-# include "UIWizardNewVM.h"
-# include "UIWizardNewVMPageBasic1.h"
-# include "UIWizardNewVMPageBasic2.h"
-# include "UIWizardNewVMPageBasic3.h"
-# include "UIWizardNewVMPageExpert.h"
-# include "UIMessageCenter.h"
-# include "UIMedium.h"
+#include "UICommon.h"
+#include "UIMedium.h"
+#include "UINotificationCenter.h"
+#include "UIWizardNewVM.h"
+#include "UIWizardNewVMNameOSTypePage.h"
+#include "UIWizardNewVMUnattendedPage.h"
+#include "UIWizardNewVMHardwarePage.h"
+#include "UIWizardNewVMDiskPage.h"
+#include "UIWizardNewVMExpertPage.h"
+#include "UIWizardNewVMSummaryPage.h"
 
 /* COM includes: */
-# include "CAudioAdapter.h"
-# include "CUSBController.h"
-# include "CUSBDeviceFilters.h"
-# include "CExtPackManager.h"
-# include "CStorageController.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "CAudioAdapter.h"
+#include "CBIOSSettings.h"
+#include "CGraphicsAdapter.h"
+#include "CMediumFormat.h"
+#include "CUSBController.h"
+#include "CUSBDeviceFilters.h"
+#include "CExtPackManager.h"
+#include "CStorageController.h"
 
 /* Namespaces: */
 using namespace UIExtraDataDefs;
 
 
-UIWizardNewVM::UIWizardNewVM(QWidget *pParent, const QString &strGroup /* = QString() */)
-    : UIWizard(pParent, WizardType_NewVM)
-    , m_strGroup(strGroup)
+UIUnattendedInstallData::UIUnattendedInstallData()
+    : m_fUnattendedEnabled(false)
+    , m_fStartHeadless(false)
+{
+}
+
+UIWizardNewVM::UIWizardNewVM(QWidget *pParent, const QString &strMachineGroup /* = QString() */,
+                             const QString &strHelpHashtag /* = QString() */)
+    : UINativeWizard(pParent, WizardType_NewVM, WizardMode_Auto, strHelpHashtag)
+    , m_strMachineGroup(strMachineGroup)
     , m_iIDECount(0)
     , m_iSATACount(0)
     , m_iSCSICount(0)
     , m_iFloppyCount(0)
     , m_iSASCount(0)
     , m_iUSBCount(0)
+    , m_fSkipUnattendedInstall(false)
+    , m_fEFIEnabled(false)
+    , m_iCPUCount(1)
+    , m_iMemorySize(0)
+    , m_iUnattendedInstallPageIndex(-1)
+    , m_uMediumVariant(0)
+    , m_uMediumSize(0)
+    , m_enmDiskSource(SelectedDiskSource_New)
+    , m_fEmptyDiskRecommended(false)
 {
 #ifndef VBOX_WS_MAC
     /* Assign watermark: */
-    assignWatermark(":/vmw_new_welcome.png");
+    setPixmapName(":/wizard_new_welcome.png");
 #else /* VBOX_WS_MAC */
     /* Assign background image: */
-    assignBackground(":/vmw_new_welcome_bg.png");
+    setPixmapName(":/wizard_new_welcome_bg.png");
 #endif /* VBOX_WS_MAC */
     /* Register classes: */
     qRegisterMetaType<CGuestOSType>();
+
+    connect(this, &UIWizardNewVM::rejected, this, &UIWizardNewVM::sltHandleWizardCancel);
 }
 
-void UIWizardNewVM::prepare()
+void UIWizardNewVM::populatePages()
 {
-    /* Create corresponding pages: */
     switch (mode())
     {
         case WizardMode_Basic:
         {
-            setPage(Page1, new UIWizardNewVMPageBasic1(m_strGroup));
-            setPage(Page2, new UIWizardNewVMPageBasic2);
-            setPage(Page3, new UIWizardNewVMPageBasic3);
+            addPage(new UIWizardNewVMNameOSTypePage);
+            m_iUnattendedInstallPageIndex = addPage(new UIWizardNewVMUnattendedPage);
+            setUnattendedPageVisible(false);
+            addPage(new UIWizardNewVMHardwarePage);
+            addPage(new UIWizardNewVMDiskPage);
+            addPage(new UIWizardNewVMSummaryPage);
             break;
         }
         case WizardMode_Expert:
         {
-            setPage(PageExpert, new UIWizardNewVMPageExpert(m_strGroup));
+            addPage(new UIWizardNewVMExpertPage);
             break;
         }
         default:
@@ -86,75 +109,174 @@ void UIWizardNewVM::prepare()
             break;
         }
     }
-    /* Call to base-class: */
-    UIWizard::prepare();
+}
+
+void UIWizardNewVM::cleanWizard()
+{
+    /* Try to delete the hard disk in case we have created one: */
+    deleteVirtualDisk();
+    /* Cleanup the machine folder: */
+    UIWizardNewVMNameOSTypeCommon::cleanupMachineFolder(this, true);
 }
 
 bool UIWizardNewVM::createVM()
 {
-    /* Get VBox object: */
-    CVirtualBox vbox = vboxGlobal().virtualBox();
-
-    /* OS type: */
-    CGuestOSType type = field("type").value<CGuestOSType>();
-    QString strTypeId = type.GetId();
+    CVirtualBox vbox = uiCommon().virtualBox();
+    QString strTypeId = m_comGuestOSType.GetId();
 
     /* Create virtual machine: */
     if (m_machine.isNull())
     {
         QVector<QString> groups;
-        if (!m_strGroup.isEmpty())
-            groups << m_strGroup;
-        m_machine = vbox.CreateMachine(QString() /* no file-path for now */,
-                                       field("name").toString(),
+        if (!m_strMachineGroup.isEmpty())
+            groups << m_strMachineGroup;
+        m_machine = vbox.CreateMachine(m_strMachineFilePath,
+                                       m_strMachineBaseName,
                                        groups, strTypeId, QString());
         if (!vbox.isOk())
         {
-            msgCenter().cannotCreateMachine(vbox, this);
+            UINotificationMessage::cannotCreateMachine(vbox, notificationCenter());
+            cleanWizard();
             return false;
         }
-
-        /* The First RUN Wizard is to be shown:
-         * 1. if we don't attach any virtual hard-drive
-         * 2. or attach a new (empty) one.
-         * Usually we are assigning extra-data values through UIExtraDataManager,
-         * but in that special case VM was not registered yet, so UIExtraDataManager is unaware of it. */
-        if (field("virtualDiskId").toString().isNull() || !field("virtualDisk").value<CMedium>().isNull())
-            m_machine.SetExtraData(GUI_FirstRun, "yes");
     }
 
+#if 0
+    /* Configure the newly created vm here in GUI by several calls to API: */
+    configureVM(strTypeId, m_comGuestOSType);
+#else
+    /* The newer and less tested way of configuring vms: */
+    m_machine.ApplyDefaults(QString());
+    /* Apply user preferences again. IMachine::applyDefaults may have overwritten the user setting: */
+    m_machine.SetMemorySize(m_iMemorySize);
+    int iVPUCount = qMax(1, m_iCPUCount);
+    m_machine.SetCPUCount(iVPUCount);
+    /* Correct the VRAM size since API does not take fullscreen memory requirements into account: */
+    CGraphicsAdapter comGraphics = m_machine.GetGraphicsAdapter();
+    comGraphics.SetVRAMSize(qMax(comGraphics.GetVRAMSize(), (ULONG)(UICommon::requiredVideoMemory(strTypeId) / _1M)));
+    /* Enabled I/O APIC explicitly in we have more than 1 VCPU: */
+    if (iVPUCount > 1)
+        m_machine.GetBIOSSettings().SetIOAPICEnabled(true);
+
+    /* Set recommended firmware type: */
+    m_machine.SetFirmwareType(m_fEFIEnabled ? KFirmwareType_EFI : KFirmwareType_BIOS);
+#endif
+
+    /* Register the VM prior to attaching hard disks: */
+    vbox.RegisterMachine(m_machine);
+    if (!vbox.isOk())
+    {
+        UINotificationMessage::cannotRegisterMachine(vbox, m_machine.GetName(), notificationCenter());
+        cleanWizard();
+        return false;
+    }
+    return attachDefaultDevices();
+}
+
+bool UIWizardNewVM::createVirtualDisk()
+{
+    /* Prepare result: */
+    bool fResult = false;
+
+    /* Check attributes: */
+    AssertReturn(!m_strMediumPath.isNull(), false);
+    AssertReturn(m_uMediumSize > 0, false);
+
+    /* Acquire VBox: */
+    CVirtualBox comVBox = uiCommon().virtualBox();
+
+    /* Create new virtual hard-disk: */
+    CMedium newVirtualDisk = comVBox.CreateMedium(m_comMediumFormat.GetName(), m_strMediumPath, KAccessMode_ReadWrite, KDeviceType_HardDisk);
+    if (!comVBox.isOk())
+    {
+        UINotificationMessage::cannotCreateMediumStorage(comVBox, m_strMediumPath, notificationCenter());
+        return fResult;
+    }
+
+    /* Create base storage for the new virtual-disk: */
+    UINotificationProgressMediumCreate *pNotification = new UINotificationProgressMediumCreate(newVirtualDisk,
+                                                                                               m_uMediumSize,
+                                                                                               mediumVariants());
+    if (!handleNotificationProgressNow(pNotification))
+        return fResult;
+
+    /* Inform UICommon about it: */
+    uiCommon().createMedium(UIMedium(newVirtualDisk, UIMediumDeviceType_HardDisk, KMediumState_Created));
+
+    /* Remember created virtual-disk: */
+    m_virtualDisk = newVirtualDisk;
+
+    /* True finally: */
+    fResult = true;
+
+    /* Return result: */
+    return fResult;
+}
+
+void UIWizardNewVM::deleteVirtualDisk()
+{
+    /* Make sure virtual-disk valid: */
+    if (m_virtualDisk.isNull())
+        return;
+
+    /* Delete storage of existing disk: */
+    UINotificationProgressMediumDeletingStorage *pNotification = new UINotificationProgressMediumDeletingStorage(m_virtualDisk);
+    if (!handleNotificationProgressNow(pNotification))
+        return;
+
+    /* Detach virtual-disk finally: */
+    m_virtualDisk.detach();
+}
+
+void UIWizardNewVM::configureVM(const QString &strGuestTypeId, const CGuestOSType &comGuestType)
+{
+    /* Get graphics adapter: */
+    CGraphicsAdapter comGraphics = m_machine.GetGraphicsAdapter();
+
     /* RAM size: */
-    m_machine.SetMemorySize(field("ram").toInt());
+    m_machine.SetMemorySize(m_iMemorySize);
+
+    /* VCPU count: */
+    int iVPUCount = qMax(1, m_iCPUCount);
+    m_machine.SetCPUCount(iVPUCount);
+
+    /* Enabled I/O APIC explicitly in we have more than 1 VCPU: */
+    if (iVPUCount > 1)
+        m_machine.GetBIOSSettings().SetIOAPICEnabled(true);
+
+    /* Graphics Controller type: */
+    comGraphics.SetGraphicsControllerType(comGuestType.GetRecommendedGraphicsController());
 
     /* VRAM size - select maximum between recommended and minimum for fullscreen: */
-    m_machine.SetVRAMSize(qMax(type.GetRecommendedVRAM(), (ULONG)(VBoxGlobal::requiredVideoMemory(strTypeId) / _1M)));
+    comGraphics.SetVRAMSize(qMax(comGuestType.GetRecommendedVRAM(), (ULONG)(UICommon::requiredVideoMemory(strGuestTypeId) / _1M)));
 
     /* Selecting recommended chipset type: */
-    m_machine.SetChipsetType(type.GetRecommendedChipset());
+    m_machine.SetChipsetType(comGuestType.GetRecommendedChipset());
 
     /* Selecting recommended Audio Controller: */
-    m_machine.GetAudioAdapter().SetAudioController(type.GetRecommendedAudioController());
+    m_machine.GetAudioAdapter().SetAudioController(comGuestType.GetRecommendedAudioController());
     /* And the Audio Codec: */
-    m_machine.GetAudioAdapter().SetAudioCodec(type.GetRecommendedAudioCodec());
+    m_machine.GetAudioAdapter().SetAudioCodec(comGuestType.GetRecommendedAudioCodec());
     /* Enabling audio by default: */
     m_machine.GetAudioAdapter().SetEnabled(true);
+    m_machine.GetAudioAdapter().SetEnabledOut(true);
 
     /* Enable the OHCI and EHCI controller by default for new VMs. (new in 2.2): */
     CUSBDeviceFilters usbDeviceFilters = m_machine.GetUSBDeviceFilters();
     bool fOhciEnabled = false;
-    if (!usbDeviceFilters.isNull() && type.GetRecommendedUSB3() && m_machine.GetUSBProxyAvailable())
+    if (!usbDeviceFilters.isNull() && comGuestType.GetRecommendedUSB3() && m_machine.GetUSBProxyAvailable())
     {
-        /* USB 3.0 is only available if the proper ExtPack is installed. */
-        CExtPackManager manager = vboxGlobal().virtualBox().GetExtensionPackManager();
-        if (manager.IsExtPackUsable(GUI_ExtPackName))
+        /* USB 3.0 is only available if the proper ExtPack is installed: */
+        CExtPackManager extPackManager = uiCommon().virtualBox().GetExtensionPackManager();
+        if (extPackManager.isNull() || extPackManager.IsExtPackUsable(GUI_ExtPackName))
         {
             m_machine.AddUSBController("XHCI", KUSBControllerType_XHCI);
-            /* xHci includes OHCI */
+            /* xHCI includes OHCI */
             fOhciEnabled = true;
         }
     }
     if (   !fOhciEnabled
-        && !usbDeviceFilters.isNull() && type.GetRecommendedUSB() && m_machine.GetUSBProxyAvailable())
+        && !usbDeviceFilters.isNull() && comGuestType.GetRecommendedUSB() && m_machine.GetUSBProxyAvailable())
     {
         m_machine.AddUSBController("OHCI", KUSBControllerType_OHCI);
         fOhciEnabled = true;
@@ -163,14 +285,14 @@ bool UIWizardNewVM::createVM()
          * the missing extpack isn't exactly clean, but it is a
          * necessary evil to patch over legacy compatability issues
          * introduced by the new distribution model. */
-        CExtPackManager manager = vboxGlobal().virtualBox().GetExtensionPackManager();
-        if (manager.IsExtPackUsable(GUI_ExtPackName))
+        CExtPackManager extPackManager = uiCommon().virtualBox().GetExtensionPackManager();
+        if (extPackManager.isNull() || extPackManager.IsExtPackUsable(GUI_ExtPackName))
             m_machine.AddUSBController("EHCI", KUSBControllerType_EHCI);
     }
 
     /* Create a floppy controller if recommended: */
     QString strFloppyName = getNextControllerName(KStorageBus_Floppy);
-    if (type.GetRecommendedFloppy())
+    if (comGuestType.GetRecommendedFloppy())
     {
         m_machine.AddStorageController(strFloppyName, KStorageBus_Floppy);
         CStorageController flpCtr = m_machine.GetStorageControllerByName(strFloppyName);
@@ -178,18 +300,18 @@ bool UIWizardNewVM::createVM()
     }
 
     /* Create recommended DVD storage controller: */
-    KStorageBus strDVDBus = type.GetRecommendedDVDStorageBus();
+    KStorageBus strDVDBus = comGuestType.GetRecommendedDVDStorageBus();
     QString strDVDName = getNextControllerName(strDVDBus);
     m_machine.AddStorageController(strDVDName, strDVDBus);
 
     /* Set recommended DVD storage controller type: */
     CStorageController dvdCtr = m_machine.GetStorageControllerByName(strDVDName);
-    KStorageControllerType dvdStorageControllerType = type.GetRecommendedDVDStorageController();
+    KStorageControllerType dvdStorageControllerType = comGuestType.GetRecommendedDVDStorageController();
     dvdCtr.SetControllerType(dvdStorageControllerType);
 
     /* Create recommended HD storage controller if it's not the same as the DVD controller: */
-    KStorageBus ctrHDBus = type.GetRecommendedHDStorageBus();
-    KStorageControllerType hdStorageControllerType = type.GetRecommendedHDStorageController();
+    KStorageBus ctrHDBus = comGuestType.GetRecommendedHDStorageBus();
+    KStorageControllerType hdStorageControllerType = comGuestType.GetRecommendedHDStorageController();
     CStorageController hdCtr;
     QString strHDName;
     if (ctrHDBus != strDVDBus || hdStorageControllerType != dvdStorageControllerType)
@@ -206,7 +328,7 @@ bool UIWizardNewVM::createVM()
         strHDName = strDVDName;
     }
 
-    /* Liomit the AHCI port count if it's used because windows has trouble with
+    /* Limit the AHCI port count if it's used because windows has trouble with
        too many ports and other guest (OS X in particular) may take extra long
        to boot: */
     if (hdStorageControllerType == KStorageControllerType_IntelAhci)
@@ -215,17 +337,16 @@ bool UIWizardNewVM::createVM()
         dvdCtr.SetPortCount(1);
 
     /* Turn on PAE, if recommended: */
-    m_machine.SetCPUProperty(KCPUPropertyType_PAE, type.GetRecommendedPAE());
+    m_machine.SetCPUProperty(KCPUPropertyType_PAE, comGuestType.GetRecommendedPAE());
 
     /* Set the recommended triple fault behavior: */
-    m_machine.SetCPUProperty(KCPUPropertyType_TripleFaultReset, type.GetRecommendedTFReset());
+    m_machine.SetCPUProperty(KCPUPropertyType_TripleFaultReset, comGuestType.GetRecommendedTFReset());
 
     /* Set recommended firmware type: */
-    KFirmwareType fwType = type.GetRecommendedFirmware();
-    m_machine.SetFirmwareType(fwType);
+    m_machine.SetFirmwareType(m_fEFIEnabled ? KFirmwareType_EFI : KFirmwareType_BIOS);
 
     /* Set recommended human interface device types: */
-    if (type.GetRecommendedUSBHID())
+    if (comGuestType.GetRecommendedUSBHID())
     {
         m_machine.SetKeyboardHIDType(KKeyboardHIDType_USBKeyboard);
         m_machine.SetPointingHIDType(KPointingHIDType_USBMouse);
@@ -233,7 +354,7 @@ bool UIWizardNewVM::createVM()
             m_machine.AddUSBController("OHCI", KUSBControllerType_OHCI);
     }
 
-    if (type.GetRecommendedUSBTablet())
+    if (comGuestType.GetRecommendedUSBTablet())
     {
         m_machine.SetPointingHIDType(KPointingHIDType_USBTablet);
         if (!fOhciEnabled && !usbDeviceFilters.isNull())
@@ -241,100 +362,116 @@ bool UIWizardNewVM::createVM()
     }
 
     /* Set HPET flag: */
-    m_machine.SetHPETEnabled(type.GetRecommendedHPET());
+    m_machine.SetHPETEnabled(comGuestType.GetRecommendedHPET());
 
     /* Set UTC flags: */
-    m_machine.SetRTCUseUTC(type.GetRecommendedRTCUseUTC());
+    m_machine.SetRTCUseUTC(comGuestType.GetRecommendedRTCUseUTC());
 
     /* Set graphic bits: */
-    if (type.GetRecommended2DVideoAcceleration())
-        m_machine.SetAccelerate2DVideoEnabled(type.GetRecommended2DVideoAcceleration());
+    if (comGuestType.GetRecommended2DVideoAcceleration())
+        comGraphics.SetAccelerate2DVideoEnabled(comGuestType.GetRecommended2DVideoAcceleration());
 
-    if (type.GetRecommended3DAcceleration())
-        m_machine.SetAccelerate3DEnabled(type.GetRecommended3DAcceleration());
+    if (comGuestType.GetRecommended3DAcceleration())
+        comGraphics.SetAccelerate3DEnabled(comGuestType.GetRecommended3DAcceleration());
+}
 
-    /* Register the VM prior to attaching hard disks: */
-    vbox.RegisterMachine(m_machine);
-    if (!vbox.isOk())
+bool UIWizardNewVM::attachDefaultDevices()
+{
+    bool success = false;
+    QUuid uMachineId = m_machine.GetId();
+    CSession session = uiCommon().openSession(uMachineId);
+    if (!session.isNull())
     {
-        msgCenter().cannotRegisterMachine(vbox, m_machine.GetName(), this);
-        return false;
-    }
-
-    /* Attach default devices: */
-    {
-        bool success = false;
-        QString strMachineId = m_machine.GetId();
-        CSession session = vboxGlobal().openSession(strMachineId);
-        if (!session.isNull())
+        CMachine machine = session.GetMachine();
+        if (!m_virtualDisk.isNull())
         {
-            CMachine machine = session.GetMachine();
-
-            QString strId = field("virtualDiskId").toString();
-            /* Boot virtual hard drive: */
-            if (!strId.isNull())
+            KStorageBus enmHDDBus = m_comGuestOSType.GetRecommendedHDStorageBus();
+            CStorageController comHDDController = m_machine.GetStorageControllerByInstance(enmHDDBus, 0);
+            if (!comHDDController.isNull())
             {
-                UIMedium vmedium = vboxGlobal().medium(strId);
-                CMedium medium = vmedium.medium();              /// @todo r=dj can this be cached somewhere?
-                machine.AttachDevice(strHDName, 0, 0, KDeviceType_HardDisk, medium);
+                machine.AttachDevice(comHDDController.GetName(), 0, 0, KDeviceType_HardDisk, m_virtualDisk);
                 if (!machine.isOk())
-                    msgCenter().cannotAttachDevice(machine, UIMediumType_HardDisk, field("virtualDiskLocation").toString(),
-                                                   StorageSlot(ctrHDBus, 0, 0), this);
+                    UINotificationMessage::cannotAttachDevice(machine, UIMediumDeviceType_HardDisk, m_strMediumPath,
+                                                              StorageSlot(enmHDDBus, 0, 0), notificationCenter());
             }
+        }
 
-            /* Attach empty optical drive: */
-            machine.AttachDevice(strDVDName, 1, 0, KDeviceType_DVD, CMedium());
+        /* Attach optical drive: */
+        KStorageBus enmDVDBus = m_comGuestOSType.GetRecommendedDVDStorageBus();
+        CStorageController comDVDController = m_machine.GetStorageControllerByInstance(enmDVDBus, 0);
+        if (!comDVDController.isNull())
+        {
+            CMedium opticalDisk;
+            QString strISOFilePath = ISOFilePath();
+            if (!strISOFilePath.isEmpty() && !isUnattendedEnabled())
+            {
+                CVirtualBox vbox = uiCommon().virtualBox();
+                opticalDisk =
+                    vbox.OpenMedium(strISOFilePath, KDeviceType_DVD, KAccessMode_ReadWrite, false);
+                if (!vbox.isOk())
+                    UINotificationMessage::cannotOpenMedium(vbox, strISOFilePath, notificationCenter());
+            }
+            machine.AttachDevice(comDVDController.GetName(), 1, 0, KDeviceType_DVD, opticalDisk);
             if (!machine.isOk())
-                msgCenter().cannotAttachDevice(machine, UIMediumType_DVD, QString(), StorageSlot(strDVDBus, 1, 0), this);
-
-
-            /* Attach an empty floppy drive if recommended */
-            if (type.GetRecommendedFloppy()) {
-                machine.AttachDevice(strFloppyName, 0, 0, KDeviceType_Floppy, CMedium());
-                if (!machine.isOk())
-                    msgCenter().cannotAttachDevice(machine, UIMediumType_Floppy, QString(),
-                                                   StorageSlot(KStorageBus_Floppy, 0, 0), this);
-            }
-
-            if (machine.isOk())
-            {
-                machine.SaveSettings();
-                if (machine.isOk())
-                    success = true;
-                else
-                    msgCenter().cannotSaveMachineSettings(machine, this);
-            }
-
-            session.UnlockMachine();
+                UINotificationMessage::cannotAttachDevice(machine, UIMediumDeviceType_DVD, QString(),
+                                                          StorageSlot(enmDVDBus, 1, 0), notificationCenter());
         }
-        if (!success)
-        {
-            /* Unregister on failure */
-            QVector<CMedium> aMedia = m_machine.Unregister(KCleanupMode_UnregisterOnly);   /// @todo replace with DetachAllReturnHardDisksOnly once a progress dialog is in place below
-            if (vbox.isOk())
+
+        /* Attach an empty floppy drive if recommended */
+        if (m_comGuestOSType.GetRecommendedFloppy()) {
+            CStorageController comFloppyController = m_machine.GetStorageControllerByInstance(KStorageBus_Floppy, 0);
+            if (!comFloppyController.isNull())
             {
-                CProgress progress = m_machine.DeleteConfig(aMedia);
-                progress.WaitForCompletion(-1);         /// @todo do this nicely with a progress dialog, this can delete lots of files
+                machine.AttachDevice(comFloppyController.GetName(), 0, 0, KDeviceType_Floppy, CMedium());
+                if (!machine.isOk())
+                    UINotificationMessage::cannotAttachDevice(machine, UIMediumDeviceType_Floppy, QString(),
+                                                              StorageSlot(KStorageBus_Floppy, 0, 0), notificationCenter());
             }
-            return false;
+        }
+
+        if (machine.isOk())
+        {
+            machine.SaveSettings();
+            if (machine.isOk())
+                success = true;
+            else
+                UINotificationMessage::cannotSaveMachineSettings(machine, notificationCenter());
+        }
+
+        session.UnlockMachine();
+    }
+    if (!success)
+    {
+        /* Unregister VM on failure: */
+        const QVector<CMedium> media = m_machine.Unregister(KCleanupMode_DetachAllReturnHardDisksOnly);
+        if (!m_machine.isOk())
+            UINotificationMessage::cannotRemoveMachine(m_machine, notificationCenter());
+        else
+        {
+            UINotificationProgressMachineMediaRemove *pNotification =
+                new UINotificationProgressMachineMediaRemove(m_machine, media);
+            handleNotificationProgressNow(pNotification);
         }
     }
 
-    /* Ensure we don't try to delete a newly created virtual hard drive on success: */
-    if (!field("virtualDisk").value<CMedium>().isNull())
-        field("virtualDisk").value<CMedium>().detach();
+    /* Make sure we detach CMedium wrapper from IMedium pointer to avoid deletion of IMedium as m_virtualDisk
+     * is deallocated.  Or in case of UINotificationProgressMachineMediaRemove handling, IMedium has been
+     * already deleted so detach in this case as well. */
+    if (!m_virtualDisk.isNull())
+        m_virtualDisk.detach();
 
-    return true;
+    return success;
+}
+
+void UIWizardNewVM::sltHandleWizardCancel()
+{
+    cleanWizard();
 }
 
 void UIWizardNewVM::retranslateUi()
 {
-    /* Call to base-class: */
-    UIWizard::retranslateUi();
-
-    /* Translate wizard: */
+    UINativeWizard::retranslateUi();
     setWindowTitle(tr("Create Virtual Machine"));
-    setButtonText(QWizard::FinishButton, tr("Create"));
 }
 
 QString UIWizardNewVM::getNextControllerName(KStorageBus type)
@@ -396,3 +533,340 @@ QString UIWizardNewVM::getNextControllerName(KStorageBus type)
     return strControllerName;
 }
 
+QUuid UIWizardNewVM::createdMachineId() const
+{
+    if (m_machine.isOk())
+        return m_machine.GetId();
+    return QUuid();
+}
+
+void UIWizardNewVM::setDefaultUnattendedInstallData(const UIUnattendedInstallData &unattendedInstallData)
+{
+    m_unattendedInstallData = unattendedInstallData;
+}
+
+CMedium &UIWizardNewVM::virtualDisk()
+{
+    return m_virtualDisk;
+}
+
+void UIWizardNewVM::setVirtualDisk(const CMedium &medium)
+{
+    m_virtualDisk = medium;
+}
+
+void UIWizardNewVM::setVirtualDisk(const QUuid &mediumId)
+{
+    if (m_virtualDisk.isOk() && m_virtualDisk.GetId() == mediumId)
+        return;
+    CMedium medium = uiCommon().medium(mediumId).medium();
+    if (!medium.isNull())
+        setVirtualDisk(medium);
+}
+
+const QString &UIWizardNewVM::machineGroup() const
+{
+    return m_strMachineGroup;
+}
+
+const QString &UIWizardNewVM::machineFilePath() const
+{
+    return m_strMachineFilePath;
+}
+
+void UIWizardNewVM::setMachineFilePath(const QString &strMachineFilePath)
+{
+    m_strMachineFilePath = strMachineFilePath;
+}
+
+QString UIWizardNewVM::machineFileName() const
+{
+    return QFileInfo(machineFilePath()).completeBaseName();
+}
+
+const QString &UIWizardNewVM::machineFolder() const
+{
+    return m_strMachineFolder;
+}
+
+void UIWizardNewVM::setMachineFolder(const QString &strMachineFolder)
+{
+    m_strMachineFolder = strMachineFolder;
+}
+
+const QString &UIWizardNewVM::machineBaseName() const
+{
+    return m_strMachineBaseName;
+}
+
+void UIWizardNewVM::setMachineBaseName(const QString &strMachineBaseName)
+{
+    m_strMachineBaseName = strMachineBaseName;
+}
+
+const QString &UIWizardNewVM::createdMachineFolder() const
+{
+    return m_strCreatedFolder;
+}
+
+void UIWizardNewVM::setCreatedMachineFolder(const QString &strCreatedMachineFolder)
+{
+    m_strCreatedFolder = strCreatedMachineFolder;
+}
+
+const QString &UIWizardNewVM::detectedOSTypeId() const
+{
+    return m_strDetectedOSTypeId;
+}
+
+void UIWizardNewVM::setDetectedOSTypeId(const QString &strDetectedOSTypeId)
+{
+    m_strDetectedOSTypeId = strDetectedOSTypeId;
+}
+
+const QString &UIWizardNewVM::guestOSFamilyId() const
+{
+    return m_strGuestOSFamilyId;
+}
+
+void UIWizardNewVM::setGuestOSFamilyId(const QString &strGuestOSFamilyId)
+{
+    m_strGuestOSFamilyId = strGuestOSFamilyId;
+}
+
+const CGuestOSType &UIWizardNewVM::guestOSType() const
+{
+    return m_comGuestOSType;;
+}
+
+void UIWizardNewVM::setGuestOSType(const CGuestOSType &guestOSType)
+{
+    m_comGuestOSType= guestOSType;
+}
+
+bool UIWizardNewVM::installGuestAdditions() const
+{
+    return m_unattendedInstallData.m_fInstallGuestAdditions;
+}
+
+void UIWizardNewVM::setInstallGuestAdditions(bool fInstallGA)
+{
+    m_unattendedInstallData.m_fInstallGuestAdditions = fInstallGA;
+}
+
+bool UIWizardNewVM::startHeadless() const
+{
+    return m_unattendedInstallData.m_fStartHeadless;
+}
+
+void UIWizardNewVM::setStartHeadless(bool fStartHeadless)
+{
+    m_unattendedInstallData.m_fStartHeadless = fStartHeadless;
+}
+
+bool UIWizardNewVM::skipUnattendedInstall() const
+{
+    return m_fSkipUnattendedInstall;
+}
+
+void UIWizardNewVM::setSkipUnattendedInstall(bool fSkipUnattendedInstall)
+{
+    m_fSkipUnattendedInstall = fSkipUnattendedInstall;
+    /* We hide/show unattended install page depending on the value of isUnattendedEnabled: */
+    setUnattendedPageVisible(isUnattendedEnabled());
+}
+
+bool UIWizardNewVM::EFIEnabled() const
+{
+    return m_fEFIEnabled;
+}
+
+void UIWizardNewVM::setEFIEnabled(bool fEnabled)
+{
+    m_fEFIEnabled = fEnabled;
+}
+
+const QString &UIWizardNewVM::ISOFilePath() const
+{
+    return m_strISOFilePath;
+}
+
+void UIWizardNewVM::setISOFilePath(const QString &strISOFilePath)
+{
+    m_strISOFilePath = strISOFilePath;
+    /* We hide/show unattended install page depending on the value of isUnattendedEnabled: */
+    setUnattendedPageVisible(isUnattendedEnabled());
+}
+
+const QString &UIWizardNewVM::userName() const
+{
+    return m_unattendedInstallData.m_strUserName;
+}
+
+void UIWizardNewVM::setUserName(const QString &strUserName)
+{
+    m_unattendedInstallData.m_strUserName = strUserName;
+}
+
+const QString &UIWizardNewVM::password() const
+{
+    return m_unattendedInstallData.m_strPassword;
+}
+
+void UIWizardNewVM::setPassword(const QString &strPassword)
+{
+    m_unattendedInstallData.m_strPassword = strPassword;
+}
+
+const QString &UIWizardNewVM::guestAdditionsISOPath() const
+{
+    return m_unattendedInstallData.m_strGuestAdditionsISOPath;
+}
+
+void UIWizardNewVM::setGuestAdditionsISOPath(const QString &strGAISOPath)
+{
+    m_unattendedInstallData.m_strGuestAdditionsISOPath = strGAISOPath;
+}
+
+const QString &UIWizardNewVM::hostnameDomainName() const
+{
+    return m_unattendedInstallData.m_strHostnameDomainName;
+}
+
+void UIWizardNewVM::setHostnameDomainName(const QString &strHostnameDomain)
+{
+    m_unattendedInstallData.m_strHostnameDomainName = strHostnameDomain;
+}
+
+const QString &UIWizardNewVM::productKey() const
+{
+    return m_unattendedInstallData.m_strProductKey;
+}
+
+void UIWizardNewVM::setProductKey(const QString &productKey)
+{
+    m_unattendedInstallData.m_strProductKey = productKey;
+}
+
+int UIWizardNewVM::CPUCount() const
+{
+    return m_iCPUCount;
+}
+
+void UIWizardNewVM::setCPUCount(int iCPUCount)
+{
+    m_iCPUCount = iCPUCount;
+}
+
+int UIWizardNewVM::memorySize() const
+{
+    return m_iMemorySize;
+}
+
+void UIWizardNewVM::setMemorySize(int iMemory)
+{
+    m_iMemorySize = iMemory;
+}
+
+
+qulonglong UIWizardNewVM::mediumVariant() const
+{
+    return m_uMediumVariant;
+}
+
+void UIWizardNewVM::setMediumVariant(qulonglong uMediumVariant)
+{
+    m_uMediumVariant = uMediumVariant;
+}
+
+const CMediumFormat &UIWizardNewVM::mediumFormat()
+{
+    return m_comMediumFormat;
+}
+
+void UIWizardNewVM::setMediumFormat(const CMediumFormat &mediumFormat)
+{
+    m_comMediumFormat = mediumFormat;
+}
+
+const QString &UIWizardNewVM::mediumPath() const
+{
+    return m_strMediumPath;
+}
+
+void UIWizardNewVM::setMediumPath(const QString &strMediumPath)
+{
+    m_strMediumPath = strMediumPath;
+}
+
+qulonglong UIWizardNewVM::mediumSize() const
+{
+    return m_uMediumSize;
+}
+
+void UIWizardNewVM::setMediumSize(qulonglong uMediumSize)
+{
+    m_uMediumSize = uMediumSize;
+}
+
+SelectedDiskSource UIWizardNewVM::diskSource() const
+{
+    return m_enmDiskSource;
+}
+
+void UIWizardNewVM::setDiskSource(SelectedDiskSource enmDiskSource)
+{
+    m_enmDiskSource = enmDiskSource;
+}
+
+bool UIWizardNewVM::emptyDiskRecommended() const
+{
+    return m_fEmptyDiskRecommended;
+}
+
+void UIWizardNewVM::setEmptyDiskRecommended(bool fEmptyDiskRecommended)
+{
+    m_fEmptyDiskRecommended = fEmptyDiskRecommended;
+}
+
+QVector<KMediumVariant> UIWizardNewVM::mediumVariants() const
+{
+    /* Compose medium-variant: */
+    QVector<KMediumVariant> variants(sizeof(qulonglong)*8);
+    for (int i = 0; i < variants.size(); ++i)
+    {
+        qulonglong temp = m_uMediumVariant;
+        temp &= UINT64_C(1)<<i;
+        variants[i] = (KMediumVariant)temp;
+    }
+    return variants;
+}
+
+const UIUnattendedInstallData &UIWizardNewVM::unattendedInstallData() const
+{
+    m_unattendedInstallData.m_strISOPath = m_strISOFilePath;
+    m_unattendedInstallData.m_fUnattendedEnabled = isUnattendedEnabled();
+    m_unattendedInstallData.m_uMachineUid = createdMachineId();
+
+    return m_unattendedInstallData;
+}
+
+bool UIWizardNewVM::isUnattendedEnabled() const
+{
+    if (m_strISOFilePath.isEmpty() || m_strISOFilePath.isNull())
+        return false;
+    if (m_fSkipUnattendedInstall)
+        return false;
+    return true;
+}
+
+bool UIWizardNewVM::isGuestOSTypeWindows() const
+{
+    return m_strGuestOSFamilyId.contains("windows", Qt::CaseInsensitive);
+}
+
+void UIWizardNewVM::setUnattendedPageVisible(bool fVisible)
+{
+    if (m_iUnattendedInstallPageIndex != -1)
+        setPageVisible(m_iUnattendedInstallPageIndex, fVisible);
+}

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManageStorageController.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxManage - The storage controller related commands.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -69,6 +69,7 @@ static const RTGETOPTDEF g_aStorageAttachOptions[] =
     { "--encodedlun",       'E', RTGETOPT_REQ_STRING },
     { "--username",         'U', RTGETOPT_REQ_STRING },
     { "--password",         'W', RTGETOPT_REQ_STRING },
+    { "--passwordfile",     'w', RTGETOPT_REQ_STRING },
     { "--initiator",        'N', RTGETOPT_REQ_STRING },
     { "--intnet",           'I', RTGETOPT_REQ_NOTHING },
 };
@@ -285,6 +286,15 @@ RTEXITCODE handleStorageAttach(HandlerArg *a)
                 bstrPassword = ValueUnion.psz;
                 break;
 
+            case 'w':   // --passwordFile
+            {
+                Utf8Str utf8Password;
+                RTEXITCODE rcExit = readPasswordFile(ValueUnion.psz, &utf8Password);
+                if (rcExit != RTEXITCODE_SUCCESS)
+                    rc = E_FAIL;
+                bstrPassword = utf8Password;
+                break;
+            }
             case 'N':   // --initiator
                 bstrInitiator = ValueUnion.psz;
                 break;
@@ -1099,6 +1109,12 @@ RTEXITCODE handleStorageController(HandlerArg *a)
                                                           StorageBus_PCIe,
                                                           ctl.asOutParam()));
             }
+            else if (!RTStrICmp(pszBusType, "virtio-scsi") || !RTStrICmp(pszBusType, "virtio"))
+            {
+                CHECK_ERROR(machine, AddStorageController(Bstr(pszCtl).raw(),
+                                                          StorageBus_VirtioSCSI,
+                                                          ctl.asOutParam()));
+            }
             else
             {
                 errorArgument("Invalid --add argument '%s'", pszBusType);
@@ -1155,6 +1171,10 @@ RTEXITCODE handleStorageController(HandlerArg *a)
                 else if (!RTStrICmp(pszCtlType, "nvme"))
                 {
                     CHECK_ERROR(ctl, COMSETTER(ControllerType)(StorageControllerType_NVMe));
+                }
+                else if (!RTStrICmp(pszCtlType, "virtio-scsi") || !RTStrICmp(pszCtlType, "virtio"))
+                {
+                    CHECK_ERROR(ctl, COMSETTER(ControllerType)(StorageControllerType_VirtioSCSI));
                 }
                 else
                 {

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTMpGetDescription-generic.cpp 87205 2021-01-08 16:55:19Z vboxsync $ */
 /** @file
  * IPRT - Multiprocessor, Generic RTMpGetDescription.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,6 +33,7 @@
 #if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
 # include <iprt/asm-amd64-x86.h>
 #endif
+#include <iprt/err.h>
 #include <iprt/string.h>
 
 
@@ -91,6 +92,9 @@ RTDECL(int) RTMpGetDescription(RTCPUID idCpu, char *pszBuf, size_t cbBuf)
         ((uint32_t *)&szString[0])[1] = uEDX;
         ((uint32_t *)&szString[0])[2] = uECX;
     }
+
+#elif defined(RT_ARCH_ARM64)
+    RTCCINTREG uFreq;
 
 #else
 # error "PORTME or use RTMpGetDescription-generic-stub.cpp."

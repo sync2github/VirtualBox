@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VMMDevTesting.h 92258 2021-11-08 09:18:20Z vboxsync $ */
 /** @file
  * VMMDev - Testing Extensions.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___VBox_VMMDevTesting_h
-#define ___VBox_VMMDevTesting_h
+#ifndef VBOX_INCLUDED_VMMDevTesting_h
+#define VBOX_INCLUDED_VMMDevTesting_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 
@@ -87,6 +89,25 @@
 #define VMMDEV_TESTING_IOPORT_DATA      (VMMDEV_TESTING_IOPORT_BASE + 4)
 /** The go-to-ring-3-NOP I/O port - 1,2,4 RW. */
 #define VMMDEV_TESTING_IOPORT_NOP_R3    (VMMDEV_TESTING_IOPORT_BASE + 5)
+/** Take the VMMDev lock in arrival context and return - 1,2,4 RW.
+ * Writing configures counter action by a thread taking the lock to trigger
+ * contention:
+ *  - bits 15:0: Number of microseconds thread should hold lock.
+ *  - bits 31:16: Number of microseconds thread should wait before locking
+ *    again. */
+#define VMMDEV_TESTING_IOPORT_LOCKED_LO (VMMDEV_TESTING_IOPORT_BASE + 6)
+/** Take the VMMDev lock in arrival context and return - 1,2,4 RW.
+ * Writing configures counter action by a thread taking the lock to trigger
+ * contention:
+ *  - bits 19:0: Number of kilo (1024) ticks the EMT should hold lock.
+ *  - bits 25:20: Reserved, must be zero.
+ *  - bit 26: Thread takes lock in shared mode when set, exclusive when clear.
+ *  - bit 27: EMT takes lock in shared mode when set, exclusive when clear.
+ *  - bit 28: Use read/write critical section when set, device section if clear.
+ *  - bit 29: EMT passes VINF_SUCCESS as rcBusy when set.
+ *  - bit 30: Makes thread poke all EMTs before release lock.
+ *  - bit 31: Enables the thread. */
+#define VMMDEV_TESTING_IOPORT_LOCKED_HI (VMMDEV_TESTING_IOPORT_BASE + 7)
 
 /** @name Commands.
  * @{ */
@@ -120,6 +141,7 @@
 /** @} */
 
 /** @name Value units
+ * @note Same as RTTESTUNIT, see rules here for adding new units.
  * @{ */
 #define VMMDEV_TESTING_UNIT_PCT                 UINT8_C(0x01)   /**< Percentage. */
 #define VMMDEV_TESTING_UNIT_BYTES               UINT8_C(0x02)   /**< Bytes. */
@@ -148,13 +170,52 @@
 #define VMMDEV_TESTING_UNIT_INSTRS              UINT8_C(0x19)   /**< Instructions. */
 #define VMMDEV_TESTING_UNIT_INSTRS_PER_SEC      UINT8_C(0x1a)   /**< Instructions per second. */
 #define VMMDEV_TESTING_UNIT_NONE                UINT8_C(0x1b)   /**< No unit. */
+#define VMMDEV_TESTING_UNIT_PP1K                UINT8_C(0x1c)   /**< Parts per thousand (10^-3). */
+#define VMMDEV_TESTING_UNIT_PP10K               UINT8_C(0x1d)   /**< Parts per ten thousand (10^-4). */
+#define VMMDEV_TESTING_UNIT_PPM                 UINT8_C(0x1e)   /**< Parts per million (10^-6). */
+#define VMMDEV_TESTING_UNIT_PPB                 UINT8_C(0x1f)   /**< Parts per billion (10^-9). */
+#define VMMDEV_TESTING_UNIT_TICKS               UINT8_C(0x20)   /**< CPU ticks. */
+#define VMMDEV_TESTING_UNIT_TICKS_PER_CALL      UINT8_C(0x21)   /**< CPU ticks per call. */
+#define VMMDEV_TESTING_UNIT_TICKS_PER_OCCURENCE UINT8_C(0x22)   /**< CPU ticks per occurence. */
+#define VMMDEV_TESTING_UNIT_PAGES               UINT8_C(0x23)   /**< Page count. */
+#define VMMDEV_TESTING_UNIT_PAGES_PER_SEC       UINT8_C(0x24)   /**< Pages per second. */
+#define VMMDEV_TESTING_UNIT_TICKS_PER_PAGE      UINT8_C(0x25)   /**< CPU ticks per page. */
+#define VMMDEV_TESTING_UNIT_NS_PER_PAGE         UINT8_C(0x26)   /**< Nanoseconds per page. */
 /** @}  */
 
-
 /** What the NOP accesses returns. */
-#define VMMDEV_TESTING_NOP_RET          UINT32_C(0x64726962) /* bird */
+#define VMMDEV_TESTING_NOP_RET                  UINT32_C(0x64726962) /* bird */
+
+/** @name Low and High Locking Control Dwords
+ * @{ */
+/** Low Locking Control: Thread lock hold interval in microseconds. */
+#define VMMDEV_TESTING_LOCKED_LO_HOLD_MASK      UINT32_C(0x0000ffff)
+/** Low Locking Control: Thread wait time in microseconds between locking
+ *  attempts. */
+#define VMMDEV_TESTING_LOCKED_LO_WAIT_MASK      UINT32_C(0xffff0000)
+/** Low Locking Control: Thread wait time shift count. */
+#define VMMDEV_TESTING_LOCKED_LO_WAIT_SHIFT     16
+/** High Locking Control: Kilo (1024) ticks the EMT should hold the lock.  */
+#define VMMDEV_TESTING_LOCKED_HI_TICKS_MASK     UINT32_C(0x000fffff)
+/** High Locking Control: Must be zero. */
+#define VMMDEV_TESTING_LOCKED_HI_MBZ_MASK       UINT32_C(0x03f00000)
+/** High Locking Control: Thread takes lock in shared mode when set, exclusive
+ *  when clear.  */
+#define VMMDEV_TESTING_LOCKED_HI_THREAD_SHARED  UINT32_C(0x04000000)
+/** High Locking Control: EMT takes lock in shared mode when set, exclusive
+ *  when clear.  */
+#define VMMDEV_TESTING_LOCKED_HI_EMT_SHARED     UINT32_C(0x08000000)
+/** High Locking Control: Use read/write critical section instead of regular. */
+#define VMMDEV_TESTING_LOCKED_HI_TYPE_RW        UINT32_C(0x10000000)
+/** High Locking Control: EMT takes lock with rcBusy set to VINF_SUCCESS. */
+#define VMMDEV_TESTING_LOCKED_HI_BUSY_SUCCESS   UINT32_C(0x20000000)
+/** High Locking Control: Thread pokes EMTs before releasing lock. */
+#define VMMDEV_TESTING_LOCKED_HI_POKE           UINT32_C(0x40000000)
+/** High Locking Control: Thread enabled. */
+#define VMMDEV_TESTING_LOCKED_HI_ENABLED        UINT32_C(0x80000000)
+/** @} */
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_VMMDevTesting_h */
 

@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VUSBInternal.h 90791 2021-08-23 10:28:24Z vboxsync $ */
 /** @file
  * Virtual USB - Internal header.
  *
@@ -9,7 +9,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,8 +20,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VUSBInternal_h
-#define ___VUSBInternal_h
+#ifndef VBOX_INCLUDED_SRC_USB_VUSBInternal_h
+#define VBOX_INCLUDED_SRC_USB_VUSBInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -41,7 +44,13 @@
 RT_C_DECLS_BEGIN
 
 
-/** @name Internal Device Operations, Structures and Constants.
+/** @defgroup grp_vusb_int  VUSB Internals.
+ * @ingroup grp_vusb
+ * @internal
+ * @{
+ */
+
+/** @defgroup grp_vusb_int_dev  Internal Device Operations, Structures and Constants.
  * @{
  */
 
@@ -92,11 +101,9 @@ typedef struct VUSBURBVUSBINT
      * Callback which will free the URB once it's reaped and completed.
      * @param   pUrb    The URB.
      */
-    DECLCALLBACKMEMBER(void, pfnFree)(PVUSBURB pUrb);
+    DECLCALLBACKMEMBER(void, pfnFree,(PVUSBURB pUrb));
     /** Submit timestamp. (logging only) */
     uint64_t        u64SubmitTS;
-    /** Opaque data holder when this is an URB from a buffered pipe. */
-    void            *pvBuffered;
 } VUSBURBVUSBINT;
 
 /**
@@ -139,17 +146,14 @@ typedef struct vusb_ctrl_extra
      * This starts at the default 8KB, and this structure will be reallocated to
      * accommodate any larger request (unlikely). */
     uint32_t            cbMax;
+    /** VUSB internal data for the extra URB. */
+    VUSBURBVUSBINT      VUsbExtra;
     /** The message URB. */
     VUSBURB             Urb;
 } VUSBCTRLEXTRA, *PVUSBCTRLEXTRA;
 
 void vusbMsgFreeExtraData(PVUSBCTRLEXTRA pExtra);
 void vusbMsgResetExtraData(PVUSBCTRLEXTRA pExtra);
-
-/** Opaque VUSB buffered pipe management handle. */
-typedef struct VUSBBUFFEREDPIPEINT *VUSBBUFFEREDPIPE;
-/** Pointer to a VUSB buffered pipe handle. */
-typedef VUSBBUFFEREDPIPE *PVUSBBUFFEREDPIPE;
 
 /**
  * A VUSB pipe
@@ -164,8 +168,10 @@ typedef struct vusb_pipe
     RTCRITSECT          CritSectCtrl;
     /** Count of active async transfers. */
     volatile uint32_t   async;
-    /** Pipe buffer - only valid for isochronous endpoints. */
-    VUSBBUFFEREDPIPE    hBuffer;
+    /** Last scheduled frame - only valid for isochronous IN endpoints. */
+    uint32_t            uLastFrameIn;
+    /** Last scheduled frame - only valid for isochronous OUT endpoints. */
+    uint32_t            uLastFrameOut;
 } VUSBPIPE;
 /** Pointer to a VUSB pipe structure. */
 typedef VUSBPIPE *PVUSBPIPE;
@@ -264,7 +270,7 @@ typedef struct VUSBDEV
     } Urb;
 
     /** The reset timer handle. */
-    PTMTIMER            pResetTimer;
+    TMTIMERHANDLE       hResetTimer;
     /** Reset handler arguments. */
     void               *pvArgs;
     /** URB submit and reap thread. */
@@ -299,6 +305,7 @@ DECLINLINE(bool) vusbDevIsRh(PVUSBDEV pDev)
 bool vusbDevDoSelectConfig(PVUSBDEV dev, PCVUSBDESCCONFIGEX pCfg);
 void vusbDevMapEndpoint(PVUSBDEV dev, PCVUSBDESCENDPOINTEX ep);
 int vusbDevDetach(PVUSBDEV pDev);
+int vusbDevAttach(PVUSBDEV pDev, PVUSBHUB pHub);
 DECLINLINE(PVUSBROOTHUB) vusbDevGetRh(PVUSBDEV pDev);
 size_t vusbDevMaxInterfaces(PVUSBDEV dev);
 
@@ -309,7 +316,7 @@ bool vusbDevStandardRequest(PVUSBDEV pDev, int EndPt, PVUSBSETUP pSetup, void *p
 /** @} */
 
 
-/** @name Internal Hub Operations, Structures and Constants.
+/** @defgroup grp_vusb_int_hub Internal Hub Operations, Structures and Constants.
  * @{
  */
 
@@ -345,7 +352,7 @@ AssertCompileSizeAlignment(VUSBHUB, 8);
 /** @} */
 
 
-/** @name Internal Root Hub Operations, Structures and Constants.
+/** @defgroup grp_vusb_int_roothub Internal Root Hub Operations, Structures and Constants.
  * @{
  */
 
@@ -484,7 +491,7 @@ AssertCompileMemberAlignment(VUSBROOTHUB, Total, 8);
 #endif
 
 /** Converts a pointer to VUSBROOTHUB::IRhConnector to a PVUSBROOTHUB. */
-#define VUSBIROOTHUBCONNECTOR_2_VUSBROOTHUB(pInterface) (PVUSBROOTHUB)( (uintptr_t)(pInterface) - RT_OFFSETOF(VUSBROOTHUB, IRhConnector) )
+#define VUSBIROOTHUBCONNECTOR_2_VUSBROOTHUB(pInterface) (PVUSBROOTHUB)( (uintptr_t)(pInterface) - RT_UOFFSETOF(VUSBROOTHUB, IRhConnector) )
 
 /**
  * URB cancellation modes
@@ -497,11 +504,11 @@ typedef enum CANCELMODE
     CANCELMODE_UNDO
 } CANCELMODE;
 
-/* @} */
+/** @} */
 
 
 
-/** @name Internal URB Operations, Structures and Constants.
+/** @defgroup grp_vusb_int_urb Internal URB Operations, Structures and Constants.
  * @{ */
 int  vusbUrbSubmit(PVUSBURB pUrb);
 void vusbUrbDoReapAsync(PRTLISTANCHOR pUrbLst, RTMSINTERVAL cMillies);
@@ -525,47 +532,7 @@ DECLHIDDEN(uint64_t) vusbRhR3ProcessFrame(PVUSBROOTHUB pThis, bool fCallback);
 
 int  vusbUrbQueueAsyncRh(PVUSBURB pUrb);
 
-/**
- * Completes an URB from a buffered pipe.
- *
- * @returns nothing.
- * @param   pUrb        The URB to complete.
- */
-DECLHIDDEN(void) vusbBufferedPipeCompleteUrb(PVUSBURB pUrb);
-
-/**
- * Creates a new buffered pipe.
- *
- * @returns VBox status code.
- * @retval  VERR_NOT_SUPPORTED if buffering is not supported for the given pipe.
- * @param   pDev         The device instance the pipe is associated with.
- * @param   pPipe        The pipe to buffer.
- * @param   enmDirection The direction for the buffering.
- * @param   enmSpeed     USB device speed.
- * @param   cLatencyMs   The maximum latency the buffering should introduce, this influences
- *                       the amount of data to buffer.
- * @param   phBuffer     Where to store the handle to the buffer on success.
- */
-DECLHIDDEN(int)  vusbBufferedPipeCreate(PVUSBDEV pDev, PVUSBPIPE pPipe, VUSBDIRECTION enmDirection,
-                                        VUSBSPEED enmSpeed, uint32_t cLatencyMs,
-                                        PVUSBBUFFEREDPIPE phBuffer);
-
-/**
- * Destroys a buffered pipe, freeing all acquired resources.
- *
- * @returns nothing.
- * @param   hBuffer     The buffered pipe handle.
- */
-DECLHIDDEN(void) vusbBufferedPipeDestroy(VUSBBUFFEREDPIPE hBuffer);
-
-/**
- * Submits a URB from the HCD which is subject to buffering.
- *
- * @returns VBox status code.
- * @param   hBuffer     The buffered pipe handle.
- * @param   pUrb        The URB from the HCD which is subject to buffering.
- */
-DECLHIDDEN(int)  vusbBufferedPipeSubmitUrb(VUSBBUFFEREDPIPE hBuffer, PVUSBURB pUrb);
+bool vusbDevIsDescriptorInCache(PVUSBDEV pDev, PCVUSBSETUP pSetup);
 
 /**
  * Initializes the given URB pool.
@@ -649,7 +616,7 @@ DECLINLINE(void) vusbUrbUnlink(PVUSBURB pUrb)
  */
 #ifdef VBOX_STRICT
 # define vusbUrbAssert(pUrb) do { \
-    AssertMsg(VALID_PTR((pUrb)),  ("%p\n", (pUrb))); \
+    AssertPtr((pUrb)); \
     AssertMsg((pUrb)->u32Magic == VUSBURB_MAGIC, ("%#x", (pUrb)->u32Magic)); \
     AssertMsg((pUrb)->enmState > VUSBURBSTATE_INVALID && (pUrb)->enmState < VUSBURBSTATE_END, \
               ("%d\n", (pUrb)->enmState)); \
@@ -781,11 +748,8 @@ DECLINLINE(uint32_t) vusbDevRelease(PVUSBDEV pThis)
 
 /** Strings for the CTLSTAGE enum values. */
 extern const char * const g_apszCtlStates[4];
-/** Default message pipe. */
-extern const VUSBDESCENDPOINTEX g_Endpoint0;
-/** Default configuration. */
-extern const VUSBDESCCONFIGEX g_Config0;
 
+/** @} */
 RT_C_DECLS_END
-#endif
+#endif /* !VBOX_INCLUDED_SRC_USB_VUSBInternal_h */
 

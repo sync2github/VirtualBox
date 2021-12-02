@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardExportApp.cpp 92089 2021-10-26 17:02:00Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardExportApp class implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,298 +15,221 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QVariant>
-# include <QFileInfo>
+#include <QFileInfo>
+#include <QPushButton>
+#include <QVariant>
 
 /* GUI includes: */
-# include "UIWizardExportApp.h"
-# include "UIWizardExportAppDefs.h"
-# include "UIWizardExportAppPageBasic1.h"
-# include "UIWizardExportAppPageBasic2.h"
-# include "UIWizardExportAppPageBasic3.h"
-# include "UIWizardExportAppPageBasic4.h"
-# include "UIWizardExportAppPageExpert.h"
-# include "UIAddDiskEncryptionPasswordDialog.h"
-# include "UIMessageCenter.h"
+#include "UIAddDiskEncryptionPasswordDialog.h"
+#include "UIMessageCenter.h"
+#include "UIModalWindowManager.h"
+#include "UINotificationCenter.h"
+#include "UIWizardExportApp.h"
+#include "UIWizardExportAppPageExpert.h"
+#include "UIWizardExportAppPageFormat.h"
+#include "UIWizardExportAppPageSettings.h"
+#include "UIWizardExportAppPageVMs.h"
 
 /* COM includes: */
-# include "CAppliance.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
+#include "CAppliance.h"
 #include "CVFSExplorer.h"
 
 
-UIWizardExportApp::UIWizardExportApp(QWidget *pParent, const QStringList &selectedVMNames)
-    : UIWizard(pParent, WizardType_ExportAppliance)
-    , m_selectedVMNames(selectedVMNames)
+UIWizardExportApp::UIWizardExportApp(QWidget *pParent,
+                                     const QStringList &predefinedMachineNames /* = QStringList() */,
+                                     bool fFastTraverToExportOCI /* = false */)
+    : UINativeWizard(pParent, WizardType_ExportAppliance, WizardMode_Auto,
+                     fFastTraverToExportOCI ? "cloud-export-oci" : "ovf")
+    , m_predefinedMachineNames(predefinedMachineNames)
+    , m_fFastTraverToExportOCI(fFastTraverToExportOCI)
+    , m_fFormatCloudOne(false)
+    , m_enmMACAddressExportPolicy(MACAddressExportPolicy_KeepAllMACs)
+    , m_fManifestSelected(false)
+    , m_fIncludeISOsSelected(false)
+    , m_enmCloudExportMode(CloudExportMode_DoNotAsk)
 {
 #ifndef VBOX_WS_MAC
     /* Assign watermark: */
-    assignWatermark(":/vmw_ovf_export.png");
-#else /* VBOX_WS_MAC */
+    setPixmapName(":/wizard_ovf_export.png");
+#else
     /* Assign background image: */
-    assignBackground(":/vmw_ovf_export_bg.png");
-#endif /* VBOX_WS_MAC */
+    setPixmapName(":/wizard_ovf_export_bg.png");
+#endif
 }
 
-bool UIWizardExportApp::exportAppliance()
+void UIWizardExportApp::goForward()
 {
-    /* Get export appliance widget: */
-    UIApplianceExportEditorWidget *pExportApplianceWidget = field("applianceWidget").value<ExportAppliancePointer>();
-    /* Fetch all settings from the appliance editor. */
-    pExportApplianceWidget->prepareExport();
-    /* Get the appliance. */
-    CAppliance *pAppliance = pExportApplianceWidget->appliance();
-    /* We need to know every filename which will be created, so that we can
-     * ask the user for confirmation of overwriting. For that we iterating
-     * over all virtual systems & fetch all descriptions of the type
-     * HardDiskImage. Also add the manifest file to the check. In the ova
-     * case only the target file itself get checked. */
-    QFileInfo fi(field("path").toString());
-    QVector<QString> files;
-    files << fi.fileName();
-    if (fi.suffix().toLower() == "ovf")
-    {
-        if (field("manifestSelected").toBool())
-            files << fi.baseName() + ".mf";
-        CVirtualSystemDescriptionVector vsds = pAppliance->GetVirtualSystemDescriptions();
-        for (int i = 0; i < vsds.size(); ++ i)
-        {
-            QVector<KVirtualSystemDescriptionType> types;
-            QVector<QString> refs, origValues, configValues, extraConfigValues;
-            vsds[i].GetDescriptionByType(KVirtualSystemDescriptionType_HardDiskImage, types,
-                                         refs, origValues, configValues, extraConfigValues);
-            foreach (const QString &s, origValues)
-                files << QString("%2").arg(s);
-        }
-    }
-    CVFSExplorer explorer = pAppliance->CreateVFSExplorer(uri(false /* fWithFile */));
-    CProgress progress = explorer.Update();
-    bool fResult = explorer.isOk();
-    if (fResult)
-    {
-        /* Show some progress, so the user know whats going on: */
-        msgCenter().showModalProgressDialog(progress, QApplication::translate("UIWizardExportApp", "Checking files ..."),
-                                            ":/progress_refresh_90px.png", this);
-        if (progress.GetCanceled())
-            return false;
-        if (!progress.isOk() || progress.GetResultCode() != 0)
-        {
-            msgCenter().cannotCheckFiles(progress, this);
-            return false;
-        }
-    }
-    QVector<QString> exists = explorer.Exists(files);
-    /* Check if the file exists already, if yes get confirmation for overwriting from the user. */
-    if (!msgCenter().confirmOverridingFiles(exists, this))
-        return false;
-    /* Ok all is confirmed so delete all the files which exists: */
-    if (!exists.isEmpty())
-    {
-        CProgress progress1 = explorer.Remove(exists);
-        fResult = explorer.isOk();
-        if (fResult)
-        {
-            /* Show some progress, so the user know whats going on: */
-            msgCenter().showModalProgressDialog(progress1, QApplication::translate("UIWizardExportApp", "Removing files ..."),
-                                                ":/progress_delete_90px.png", this);
-            if (progress1.GetCanceled())
-                return false;
-            if (!progress1.isOk() || progress1.GetResultCode() != 0)
-            {
-                msgCenter().cannotRemoveFiles(progress1, this);
-                return false;
-            }
-        }
-    }
-
-    /* Export the VMs, on success we are finished: */
-    return exportVMs(*pAppliance);
+    wizardButton(WizardButtonType_Next)->click();
 }
 
-bool UIWizardExportApp::exportVMs(CAppliance &appliance)
+void UIWizardExportApp::disableButtons()
 {
-    /* Get the map of the password IDs: */
-    EncryptedMediumMap encryptedMediums;
-    foreach (const QString &strPasswordId, appliance.GetPasswordIds())
-        foreach (const QString &strMediumId, appliance.GetMediumIdsForPasswordId(strPasswordId))
-            encryptedMediums.insert(strPasswordId, strMediumId);
-
-    /* Ask for the disk encryption passwords if necessary: */
-    if (!encryptedMediums.isEmpty())
-    {
-        /* Create corresponding dialog: */
-        QPointer<UIAddDiskEncryptionPasswordDialog> pDlg =
-             new UIAddDiskEncryptionPasswordDialog(this,
-                                                   window()->windowTitle(),
-                                                   encryptedMediums);
-
-        /* Execute the dialog: */
-        if (pDlg->exec() == QDialog::Accepted)
-        {
-            /* Acquire the passwords provided: */
-            const EncryptionPasswordMap encryptionPasswords = pDlg->encryptionPasswords();
-
-            /* Delete the dialog: */
-            delete pDlg;
-
-            /* Make sure the passwords were really provided: */
-            AssertReturn(!encryptionPasswords.isEmpty(), false);
-
-            /* Provide appliance with passwords if possible: */
-            appliance.AddPasswords(encryptionPasswords.keys().toVector(),
-                                   encryptionPasswords.values().toVector());
-            if (!appliance.isOk())
-            {
-                /* Warn the user about failure: */
-                msgCenter().cannotAddDiskEncryptionPassword(appliance);
-
-                return false;
-            }
-        }
-        else
-        {
-            /* Any modal dialog can be destroyed in own event-loop
-             * as a part of application termination procedure..
-             * We have to check if the dialog still valid. */
-            if (pDlg)
-            {
-                /* Delete the dialog: */
-                delete pDlg;
-            }
-
-            return false;
-        }
-    }
-
-    /* Write the appliance: */
-    QVector<KExportOptions> options;
-    if (field("manifestSelected").toBool())
-        options.append(KExportOptions_CreateManifest);
-    CProgress progress = appliance.Write(field("format").toString(), options, uri());
-    bool fResult = appliance.isOk();
-    if (fResult)
-    {
-        /* Show some progress, so the user know whats going on: */
-        msgCenter().showModalProgressDialog(progress, QApplication::translate("UIWizardExportApp", "Exporting Appliance ..."),
-                                            ":/progress_export_90px.png", this);
-        if (progress.GetCanceled())
-            return false;
-        if (!progress.isOk() || progress.GetResultCode() != 0)
-        {
-            msgCenter().cannotExportAppliance(progress, appliance.GetPath(), this);
-            return false;
-        }
-        else
-            return true;
-    }
-    if (!fResult)
-        msgCenter().cannotExportAppliance(appliance, this);
-    return false;
+    wizardButton(WizardButtonType_Expert)->setEnabled(false);
+    wizardButton(WizardButtonType_Back)->setEnabled(false);
+    wizardButton(WizardButtonType_Next)->setEnabled(false);
 }
 
 QString UIWizardExportApp::uri(bool fWithFile) const
 {
-    StorageType type = field("storageType").value<StorageType>();
-
-    QString path = field("path").toString();
-    if (!fWithFile)
+    /* For Cloud formats: */
+    if (isFormatCloudOne())
+        return QString("%1://").arg(format());
+    else
     {
-        QFileInfo fi(path);
-        path = fi.path();
-    }
-    switch (type)
-    {
-        case Filesystem:
+        /* Prepare storage path: */
+        QString strPath = path();
+        /* Append file name if requested: */
+        if (!fWithFile)
         {
-            return path;
+            QFileInfo fi(strPath);
+            strPath = fi.path();
         }
-        case SunCloud:
-        {
-            QString uri("SunCloud://");
-            if (!field("username").toString().isEmpty())
-                uri = QString("%1%2").arg(uri).arg(field("username").toString());
-            if (!field("password").toString().isEmpty())
-                uri = QString("%1:%2").arg(uri).arg(field("password").toString());
-            if (!field("username").toString().isEmpty() || !field("password").toString().isEmpty())
-                uri = QString("%1@").arg(uri);
-            uri = QString("%1%2/%3/%4").arg(uri).arg("object.storage.network.com").arg(field("bucket").toString()).arg(path);
-            return uri;
-        }
-        case S3:
-        {
-            QString uri("S3://");
-            if (!field("username").toString().isEmpty())
-                uri = QString("%1%2").arg(uri).arg(field("username").toString());
-            if (!field("password").toString().isEmpty())
-                uri = QString("%1:%2").arg(uri).arg(field("password").toString());
-            if (!field("username").toString().isEmpty() || !field("password").toString().isEmpty())
-                uri = QString("%1@").arg(uri);
-            uri = QString("%1%2/%3/%4").arg(uri).arg(field("hostname").toString()).arg(field("bucket").toString()).arg(path);
-            return uri;
-        }
-    }
-    return QString();
-}
 
-void UIWizardExportApp::sltCurrentIdChanged(int iId)
-{
-    /* Call to base-class: */
-    UIWizard::sltCurrentIdChanged(iId);
-    /* Enable 2nd button (Reset to Defaults) for 4th and Expert pages only! */
-    setOption(QWizard::HaveCustomButton2, (mode() == WizardMode_Basic && iId == Page4) ||
-                                          (mode() == WizardMode_Expert && iId == PageExpert));
-}
-
-void UIWizardExportApp::sltCustomButtonClicked(int iId)
-{
-    /* Call to base-class: */
-    UIWizard::sltCustomButtonClicked(iId);
-
-    /* Handle 2nd button: */
-    if (iId == CustomButton2)
-    {
-        /* Get appliance widget: */
-        ExportAppliancePointer pApplianceWidget = field("applianceWidget").value<ExportAppliancePointer>();
-        AssertMsg(!pApplianceWidget.isNull(), ("Appliance Widget is not set!\n"));
-        /* Reset it to default: */
-        pApplianceWidget->restoreDefaults();
+        /* Just path by default: */
+        return strPath;
     }
 }
 
-void UIWizardExportApp::retranslateUi()
+bool UIWizardExportApp::exportAppliance()
 {
-    /* Call to base-class: */
-    UIWizard::retranslateUi();
+    /* Check whether there was cloud target selected: */
+    if (isFormatCloudOne())
+    {
+        /* Get appliance: */
+        CAppliance comAppliance = cloudAppliance();
+        AssertReturn(comAppliance.isNotNull(), false);
 
-    /* Translate wizard: */
-    setWindowTitle(tr("Export Virtual Appliance"));
-    setButtonText(QWizard::CustomButton2, tr("Restore Defaults"));
-    setButtonText(QWizard::FinishButton, tr("Export"));
+        /* Export the VMs, on success we are finished: */
+        return exportVMs(comAppliance);
+    }
+    else
+    {
+        /* Get appliance: */
+        CAppliance comAppliance = localAppliance();
+        AssertReturn(comAppliance.isNotNull(), false);
+
+        /* We need to know every filename which will be created, so that we can ask the user for confirmation of overwriting.
+         * For that we iterating over all virtual systems & fetch all descriptions of the type HardDiskImage. Also add the
+         * manifest file to the check. In the .ova case only the target file itself get checked. */
+
+        /* Compose a list of all required files: */
+        QFileInfo fi(path());
+        QVector<QString> files;
+
+        /* Add arhive itself: */
+        files << fi.fileName();
+
+        /* If archive is of .ovf type: */
+        if (fi.suffix().toLower() == "ovf")
+        {
+            /* Add manifest file if requested: */
+            if (isManifestSelected())
+                files << fi.baseName() + ".mf";
+
+            /* Add all hard disk images: */
+            CVirtualSystemDescriptionVector vsds = comAppliance.GetVirtualSystemDescriptions();
+            for (int i = 0; i < vsds.size(); ++i)
+            {
+                QVector<KVirtualSystemDescriptionType> types;
+                QVector<QString> refs, origValues, configValues, extraConfigValues;
+                vsds[i].GetDescriptionByType(KVirtualSystemDescriptionType_HardDiskImage, types,
+                                             refs, origValues, configValues, extraConfigValues);
+                foreach (const QString &strValue, origValues)
+                    files << QString("%2").arg(strValue);
+            }
+        }
+
+        /* Initialize VFS explorer: */
+        CVFSExplorer comExplorer = comAppliance.CreateVFSExplorer(uri(false /* fWithFile */));
+        if (!comAppliance.isOk())
+        {
+            UINotificationMessage::cannotCreateVfsExplorer(comAppliance, notificationCenter());
+            return false;
+        }
+
+        /* Update VFS explorer: */
+        UINotificationProgressVFSExplorerUpdate *pNotification =
+            new UINotificationProgressVFSExplorerUpdate(comExplorer);
+        if (!handleNotificationProgressNow(pNotification))
+            return false;
+
+        /* Confirm overwriting for existing files: */
+        QVector<QString> exists = comExplorer.Exists(files);
+        if (!msgCenter().confirmOverridingFiles(exists, this))
+            return false;
+
+        /* DELETE all the files which exists after everything is confirmed: */
+        if (!exists.isEmpty())
+        {
+            /* Remove files with VFS explorer: */
+            UINotificationProgressVFSExplorerFilesRemove *pNotification =
+                new UINotificationProgressVFSExplorerFilesRemove(comExplorer, exists);
+            if (!handleNotificationProgressNow(pNotification))
+                return false;
+        }
+
+        /* Export the VMs, on success we are finished: */
+        return exportVMs(comAppliance);
+    }
 }
 
-void UIWizardExportApp::prepare()
+void UIWizardExportApp::createVsdLaunchForm()
+{
+    /* Acquire prepared client and description: */
+    CCloudClient comClient = cloudClient();
+    CVirtualSystemDescription comVSD = vsd();
+    AssertReturnVoid(comClient.isNotNull() && comVSD.isNotNull());
+
+    /* Create launch VSD form: */
+    UINotificationProgressLaunchVSDFormCreate *pNotification = new UINotificationProgressLaunchVSDFormCreate(comClient,
+                                                                                                             comVSD,
+                                                                                                             format(),
+                                                                                                             profileName());
+    connect(pNotification, &UINotificationProgressLaunchVSDFormCreate::sigVSDFormCreated,
+            this, &UIWizardExportApp::setVsdLaunchForm);
+    handleNotificationProgressNow(pNotification);
+}
+
+bool UIWizardExportApp::createCloudVM()
+{
+    /* Acquire prepared client and description: */
+    CCloudClient comClient = cloudClient();
+    CVirtualSystemDescription comVSD = vsd();
+    AssertReturn(comClient.isNotNull() && comVSD.isNotNull(), false);
+
+    /* Initiate cloud VM creation procedure: */
+    CCloudMachine comMachine;
+
+    /* Create cloud VM: */
+    UINotificationProgressCloudMachineCreate *pNotification = new UINotificationProgressCloudMachineCreate(comClient,
+                                                                                                           comMachine,
+                                                                                                           comVSD,
+                                                                                                           format(),
+                                                                                                           profileName());
+    connect(pNotification, &UINotificationProgressCloudMachineCreate::sigCloudMachineCreated,
+            &uiCommon(), &UICommon::sltHandleCloudMachineAdded);
+    gpNotificationCenter->append(pNotification);
+
+    /* Return result: */
+    return true;
+}
+
+void UIWizardExportApp::populatePages()
 {
     /* Create corresponding pages: */
     switch (mode())
     {
         case WizardMode_Basic:
         {
-            setPage(Page1, new UIWizardExportAppPageBasic1(m_selectedVMNames));
-            setPage(Page2, new UIWizardExportAppPageBasic2);
-            setPage(Page3, new UIWizardExportAppPageBasic3);
-            setPage(Page4, new UIWizardExportAppPageBasic4);
+            addPage(new UIWizardExportAppPageVMs(m_predefinedMachineNames, m_fFastTraverToExportOCI));
+            addPage(new UIWizardExportAppPageFormat(m_fFastTraverToExportOCI));
+            addPage(new UIWizardExportAppPageSettings);
             break;
         }
         case WizardMode_Expert:
         {
-            setPage(PageExpert, new UIWizardExportAppPageExpert(m_selectedVMNames));
+            addPage(new UIWizardExportAppPageExpert(m_predefinedMachineNames, m_fFastTraverToExportOCI));
             break;
         }
         default:
@@ -315,7 +238,99 @@ void UIWizardExportApp::prepare()
             break;
         }
     }
-    /* Call to base-class: */
-    UIWizard::prepare();
 }
 
+void UIWizardExportApp::retranslateUi()
+{
+    /* Call to base-class: */
+    UINativeWizard::retranslateUi();
+
+    /* Translate wizard: */
+    setWindowTitle(tr("Export Virtual Appliance"));
+    /// @todo implement this?
+    //setButtonText(QWizard::FinishButton, tr("Export"));
+}
+
+bool UIWizardExportApp::exportVMs(CAppliance &comAppliance)
+{
+    /* Get the map of the password IDs: */
+    EncryptedMediumMap encryptedMedia;
+    foreach (const QString &strPasswordId, comAppliance.GetPasswordIds())
+        foreach (const QUuid &uMediumId, comAppliance.GetMediumIdsForPasswordId(strPasswordId))
+            encryptedMedia.insert(strPasswordId, uMediumId);
+
+    /* Ask for the disk encryption passwords if necessary: */
+    if (!encryptedMedia.isEmpty())
+    {
+        /* Modal dialog can be destroyed in own event-loop as a part of application
+         * termination procedure. We have to make sure that the dialog pointer is
+         * always up to date. So we are wrapping created dialog with QPointer. */
+        QPointer<UIAddDiskEncryptionPasswordDialog> pDlg =
+            new UIAddDiskEncryptionPasswordDialog(this,
+                                                  window()->windowTitle(),
+                                                  encryptedMedia);
+
+        /* Execute the dialog: */
+        if (pDlg->exec() != QDialog::Accepted)
+        {
+            /* Delete the dialog: */
+            delete pDlg;
+            return false;
+        }
+
+        /* Acquire the passwords provided: */
+        const EncryptionPasswordMap encryptionPasswords = pDlg->encryptionPasswords();
+
+        /* Delete the dialog: */
+        delete pDlg;
+
+        /* Provide appliance with passwords if possible: */
+        comAppliance.AddPasswords(encryptionPasswords.keys().toVector(),
+                                  encryptionPasswords.values().toVector());
+        if (!comAppliance.isOk())
+        {
+            UINotificationMessage::cannotAddDiskEncryptionPassword(comAppliance, notificationCenter());
+            return false;
+        }
+    }
+
+    /* Prepare export options: */
+    QVector<KExportOptions> options;
+    switch (macAddressExportPolicy())
+    {
+        case MACAddressExportPolicy_StripAllNonNATMACs: options.append(KExportOptions_StripAllNonNATMACs); break;
+        case MACAddressExportPolicy_StripAllMACs: options.append(KExportOptions_StripAllMACs); break;
+        default: break;
+    }
+    if (isManifestSelected())
+        options.append(KExportOptions_CreateManifest);
+    if (isIncludeISOsSelected())
+        options.append(KExportOptions_ExportDVDImages);
+
+    /* Is this VM being exported to cloud? */
+    if (isFormatCloudOne())
+    {
+        /* Export appliance: */
+        UINotificationProgressApplianceWrite *pNotification = new UINotificationProgressApplianceWrite(comAppliance,
+                                                                                                       format(),
+                                                                                                       options,
+                                                                                                       uri());
+        if (cloudExportMode() == CloudExportMode_DoNotAsk)
+            gpNotificationCenter->append(pNotification);
+        else
+            handleNotificationProgressNow(pNotification);
+    }
+    /* Is this VM being exported locally? */
+    else
+    {
+        /* Export appliance: */
+        UINotificationProgressApplianceWrite *pNotification = new UINotificationProgressApplianceWrite(comAppliance,
+                                                                                                       format(),
+                                                                                                       options,
+                                                                                                       uri());
+        gpNotificationCenter->append(pNotification);
+    }
+
+    /* Success finally: */
+    return true;
+}

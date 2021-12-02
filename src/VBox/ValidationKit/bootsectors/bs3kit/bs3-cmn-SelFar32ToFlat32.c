@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-SelFar32ToFlat32.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - Bs3SelFar32ToFlat32
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 #undef Bs3SelFar32ToFlat32
 BS3_CMN_DEF(uint32_t, Bs3SelFar32ToFlat32,(uint32_t off, uint16_t uSel))
 {
-    if (g_bBs3CurrentMode == BS3_MODE_RM)
+    if (BS3_MODE_IS_RM_OR_V86(g_bBs3CurrentMode))
         return ((uint32_t)uSel << 4) + off;
     return Bs3SelProtFar32ToFlat32(off, uSel);
 }

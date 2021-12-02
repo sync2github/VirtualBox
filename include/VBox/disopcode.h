@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_disopcode_h
-#define ___VBox_disopcode_h
+#ifndef VBOX_INCLUDED_disopcode_h
+#define VBOX_INCLUDED_disopcode_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/assert.h>
 
@@ -179,8 +182,10 @@ enum OPCODES
     OP_3DNOW,
     OP_MOVUPS,
     OP_MOVLPS,
+    OP_MOVHLPS = OP_MOVLPS, /**< @todo OP_MOVHLPS */
     OP_UNPCKLPS,
     OP_MOVHPS,
+    OP_MOVLHPS = OP_MOVHPS, /**< @todo OP_MOVLHPS */
     OP_UNPCKHPS,
     OP_PREFETCH_GRP16,
     OP_MOV_CR,
@@ -688,6 +693,7 @@ enum OPCODES
     OP_PFSWAPD,
     OP_PAVGUSB,
     OP_PFNACC,
+/** @}  */
     OP_ROL,
     OP_ROR,
     OP_RCL,
@@ -721,6 +727,13 @@ enum OPCODES
     OP_FXRSTOR,
     OP_LDMXCSR,
     OP_STMXCSR,
+    OP_XSAVE,
+    OP_XSAVEOPT,
+    OP_XRSTOR,
+    OP_RDFSBASE,
+    OP_RDGSBASE,
+    OP_WRFSBASE,
+    OP_WRGSBASE,
     OP_LFENCE,
     OP_MFENCE,
     OP_SFENCE,
@@ -728,12 +741,14 @@ enum OPCODES
     OP_MONITOR,
     OP_MWAIT,
     OP_CLFLUSH,
+    OP_CLFLUSHOPT,
     OP_MOV_DR,
     OP_MOV_TR,
     OP_SWAPGS,
-/** @}  */
+    OP_UD1,
+    OP_UD2,
 /** @name VT-x instructions
-* @{ */
+ * @{ */
     OP_VMREAD,
     OP_VMWRITE,
     OP_VMCALL,
@@ -762,8 +777,33 @@ enum OPCODES
 /** @}  */
 /** @name 64 bits instruction
  * @{ */
-    OP_MOVSXD
+    OP_MOVSXD,
 /** @} */
+/** @name AVX instructions
+ * @{ */
+    OP_VLDMXCSR,
+    OP_VSTMXCSR,
+    OP_VMOVUPS,
+    OP_VMOVUPD,
+    OP_VMOVSS,
+    OP_VMOVSD,
+    OP_VMOVHLPS,
+    OP_VMOVLPS,
+    OP_VMOVLPD,
+    OP_VMOVSLDUP,
+    OP_VMOVDDUP,
+    OP_VMOVAPS,
+    OP_VMOVAPD,
+    OP_VMOVNTPS,
+    OP_VMOVNTPD,
+    OP_VMOVD,
+    OP_VMOVQ,
+    OP_VMOVDQA,
+    OP_VMOVDQU,
+    OP_VMOVNTDQ,
+    OP_VMOVNTDQA,
+/** @} */
+    OP_END_OF_OPCODES
 };
 AssertCompile(OP_LOCK == 7);
 /** @} */
@@ -878,6 +918,28 @@ enum OP_PARM
     OP_PARM_REG_R15,
     OP_PARM_REG_GEN64_END = OP_PARM_REG_R15
 };
+
+
+/* 8-bit GRP aliases (for IEM). */
+#define OP_PARM_AL OP_PARM_REG_AL
+
+/* GPR aliases for op-size specified register sizes (for IEM). */
+#define OP_PARM_rAX OP_PARM_REG_EAX
+#define OP_PARM_rCX OP_PARM_REG_ECX
+#define OP_PARM_rDX OP_PARM_REG_EDX
+#define OP_PARM_rBX OP_PARM_REG_EBX
+#define OP_PARM_rSP OP_PARM_REG_ESP
+#define OP_PARM_rBP OP_PARM_REG_EBP
+#define OP_PARM_rSI OP_PARM_REG_ESI
+#define OP_PARM_rDI OP_PARM_REG_EDI
+
+/* SREG aliases (for IEM). */
+#define OP_PARM_ES  OP_PARM_REG_ES
+#define OP_PARM_CS  OP_PARM_REG_CS
+#define OP_PARM_SS  OP_PARM_REG_SS
+#define OP_PARM_DS  OP_PARM_REG_DS
+#define OP_PARM_FS  OP_PARM_REG_FS
+#define OP_PARM_GS  OP_PARM_REG_GS
 
 /*
  * Note! We don't document anything here if we can help it, because it we love
@@ -997,7 +1059,7 @@ enum OP_PARM
 #define OP_PARM_Vx              (OP_PARM_V+OP_PARM_x)
 #define OP_PARM_Vy              (OP_PARM_V+OP_PARM_y)
 #define OP_PARM_Wq              (OP_PARM_W+OP_PARM_q)
-//#define OP_PARM_Ws              (OP_PARM_W+OP_PARM_s) - wtf? Same as lgdt (OP_PARM_Ms)?
+/*#define OP_PARM_Ws              (OP_PARM_W+OP_PARM_s) - wtf? Same as lgdt (OP_PARM_Ms)?*/
 #define OP_PARM_Wx              (OP_PARM_W+OP_PARM_x)
 #define OP_PARM_Xb              (OP_PARM_X+OP_PARM_b)
 #define OP_PARM_Xv              (OP_PARM_X+OP_PARM_v)
@@ -1028,7 +1090,58 @@ enum OP_PARM
 #define OP_PARM_Udq             (OP_PARM_U+OP_PARM_dq)
 #define OP_PARM_Lx              (OP_PARM_L+OP_PARM_x)
 
+/* For making IEM / bs3-cpu-generated-1 happy: */
+#define OP_PARM_Ed_WO           OP_PARM_Ed              /**< Annotates write only operand. */
+#define OP_PARM_Eq              (OP_PARM_E+OP_PARM_q)
+#define OP_PARM_Eq_WO           OP_PARM_Eq              /**< Annotates write only operand. */
+#define OP_PARM_Gv_RO           OP_PARM_Gv              /**< Annotates read only first operand (default is readwrite). */
+#define OP_PARM_HssHi           OP_PARM_Hx              /**< Register referenced by VEX.vvvv, bits [127:32]. */
+#define OP_PARM_HsdHi           OP_PARM_Hx              /**< Register referenced by VEX.vvvv, bits [127:64]. */
+#define OP_PARM_HqHi            OP_PARM_Hx              /**< Register referenced by VEX.vvvv, bits [127:64]. */
+#define OP_PARM_M_RO            OP_PARM_M               /**< Annotates read only memory of variable operand size (xrstor). */
+#define OP_PARM_M_RW            OP_PARM_M               /**< Annotates read-write memory of variable operand size (xsave). */
+#define OP_PARM_Mb_RO           OP_PARM_Mb              /**< Annotates read only memory byte operand. */
+#define OP_PARM_Md_RO           OP_PARM_Md              /**< Annotates read only memory operand. */
+#define OP_PARM_Md_WO           OP_PARM_Md              /**< Annotates write only memory operand. */
+#define OP_PARM_Mdq_WO          OP_PARM_Mdq             /**< Annotates write only memory operand. */
+#define OP_PARM_Mq_WO           OP_PARM_Mq              /**< Annotates write only memory quad word operand. */
+#define OP_PARM_Mps_WO          OP_PARM_Mps             /**< Annotates write only memory operand. */
+#define OP_PARM_Mpd_WO          OP_PARM_Mpd             /**< Annotates write only memory operand. */
+#define OP_PARM_Mx_WO           OP_PARM_Mx             /**< Annotates write only memory operand. */
+#define OP_PARM_PdZx_WO         OP_PARM_Pd              /**< Annotates write only operand and zero extends to 64-bit. */
+#define OP_PARM_Pq_WO           OP_PARM_Pq              /**< Annotates write only operand. */
+#define OP_PARM_Qq_WO           OP_PARM_Qq              /**< Annotates write only operand. */
+#define OP_PARM_Nq              OP_PARM_Qq              /**< Missing 'N' class (MMX reg selected by modrm.mem) in disasm. */
+#define OP_PARM_Uq              (OP_PARM_U+OP_PARM_q)
+#define OP_PARM_UqHi            (OP_PARM_U+OP_PARM_dq)
+#define OP_PARM_Uss             (OP_PARM_U+OP_PARM_ss)
+#define OP_PARM_Uss_WO          OP_PARM_Uss             /**< Annotates write only operand. */
+#define OP_PARM_Usd             (OP_PARM_U+OP_PARM_sd)
+#define OP_PARM_Usd_WO          OP_PARM_Usd             /**< Annotates write only operand. */
+#define OP_PARM_Vd              (OP_PARM_V+OP_PARM_d)
+#define OP_PARM_Vd_WO           OP_PARM_Vd              /**< Annotates write only operand. */
+#define OP_PARM_VdZx_WO         OP_PARM_Vd              /**< Annotates that the registers get their upper bits cleared */
+#define OP_PARM_Vdq_WO          OP_PARM_Vdq             /**< Annotates that only YMM/XMM[127:64] are accessed. */
+#define OP_PARM_Vpd_WO          OP_PARM_Vpd             /**< Annotates write only operand. */
+#define OP_PARM_Vps_WO          OP_PARM_Vps             /**< Annotates write only operand. */
+#define OP_PARM_Vq_WO           OP_PARM_Vq              /**< Annotates write only operand. */
+#define OP_PARM_VqHi            OP_PARM_Vdq             /**< Annotates that only YMM/XMM[127:64] are accessed. */
+#define OP_PARM_VqHi_WO         OP_PARM_Vdq             /**< Annotates that only YMM/XMM[127:64] are written. */
+#define OP_PARM_VqZx_WO         OP_PARM_Vq              /**< Annotates that the registers get their upper bits cleared */
+#define OP_PARM_VsdZx_WO        OP_PARM_Vsd             /**< Annotates that the registers get their upper bits cleared. */
+#define OP_PARM_VssZx_WO        OP_PARM_Vss             /**< Annotates that the registers get their upper bits cleared. */
+#define OP_PARM_Vss_WO          OP_PARM_Vss             /**< Annotates write only operand. */
+#define OP_PARM_Vsd_WO          OP_PARM_Vsd             /**< Annotates write only operand. */
+#define OP_PARM_Vx_WO           OP_PARM_Vx              /**< Annotates write only operand. */
+#define OP_PARM_Wpd_WO          OP_PARM_Wpd             /**< Annotates write only operand. */
+#define OP_PARM_Wps_WO          OP_PARM_Wps             /**< Annotates write only operand. */
+#define OP_PARM_Wq_WO           OP_PARM_Wq              /**< Annotates write only operand. */
+#define OP_PARM_WqZxReg_WO      OP_PARM_Wq              /**< Annotates that register targets get their upper bits cleared. */
+#define OP_PARM_Wss_WO          OP_PARM_Wss             /**< Annotates write only operand. */
+#define OP_PARM_Wsd_WO          OP_PARM_Wsd             /**< Annotates write only operand. */
+#define OP_PARM_Wx_WO           OP_PARM_Wx              /**< Annotates write only operand. */
+
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_disopcode_h */
 

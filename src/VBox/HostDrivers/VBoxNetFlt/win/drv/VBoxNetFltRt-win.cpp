@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetFltRt-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxNetFltRt-win.cpp - Bridged Networking Driver, Windows Specific Runtime Code.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -128,7 +137,7 @@ VBOXNETFLTGLOBALS_WIN g_VBoxNetFltGlobalsWin = {0};
 *   Defined Constants And Macros                                                                                                 *
 *********************************************************************************************************************************/
 #define LIST_ENTRY_2_JOB(pListEntry) \
-    ( (PVBOXNETFLT_JOB)((uint8_t *)(pListEntry) - RT_OFFSETOF(VBOXNETFLT_JOB, ListEntry)) )
+    ( (PVBOXNETFLT_JOB)((uint8_t *)(pListEntry) - RT_UOFFSETOF(VBOXNETFLT_JOB, ListEntry)) )
 
 
 /*********************************************************************************************************************************
@@ -378,7 +387,7 @@ static void vboxNetFltWinDeleteSG(PINTNETSG pSG)
 static PINTNETSG vboxNetFltWinCreateSG(uint32_t cSegs)
 {
     PINTNETSG pSG;
-    NTSTATUS Status = vboxNetFltWinMemAlloc((PVOID*)&pSG, RT_OFFSETOF(INTNETSG, aSegs[cSegs]));
+    NTSTATUS Status = vboxNetFltWinMemAlloc((PVOID*)&pSG, RT_UOFFSETOF_DYN(INTNETSG, aSegs[cSegs]));
     if (Status == STATUS_SUCCESS)
     {
         IntNetSgInitTempSegs(pSG, 0 /*cbTotal*/, cSegs, 0 /*cSegsUsed*/);

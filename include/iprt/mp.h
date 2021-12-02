@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_mp_h
-#define ___iprt_mp_h
+#ifndef IPRT_INCLUDED_mp_h
+#define IPRT_INCLUDED_mp_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -291,7 +294,7 @@ RTDECL(bool) RTMpIsCpuWorkPending(void);
  * @param   pvUser1     The 1st user argument.
  * @param   pvUser2     The 2nd user argument.
  */
-typedef DECLCALLBACK(void) FNRTMPWORKER(RTCPUID idCpu, void *pvUser1, void *pvUser2);
+typedef DECLCALLBACKTYPE(void, FNRTMPWORKER,(RTCPUID idCpu, void *pvUser1, void *pvUser2));
 /** Pointer to a FNRTMPWORKER. */
 typedef FNRTMPWORKER *PFNRTMPWORKER;
 
@@ -336,7 +339,7 @@ RTDECL(bool) RTMpOnAllIsConcurrentSafe(void);
 RTDECL(int) RTMpOnAll(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUser2);
 
 /**
- * Executes a function on a all other (online) CPUs in the system.
+ * Executes a function on all other (online) CPUs in the system.
  *
  * The caller must disable preemption prior to calling this API if the outcome
  * is to make any sense. But do *not* disable interrupts.
@@ -458,7 +461,7 @@ typedef enum RTMPEVENT
  * @param   enmEvent    The event.
  * @param   pvUser      The user argument.
  */
-typedef DECLCALLBACK(void) FNRTMPNOTIFICATION(RTMPEVENT enmEvent, RTCPUID idCpu, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNRTMPNOTIFICATION,(RTMPEVENT enmEvent, RTCPUID idCpu, void *pvUser));
 /** Pointer to a FNRTMPNOTIFICATION(). */
 typedef FNRTMPNOTIFICATION *PFNRTMPNOTIFICATION;
 
@@ -504,5 +507,5 @@ RTDECL(int) RTMpNotificationDeregister(PFNRTMPNOTIFICATION pfnCallback, void *pv
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_mp_h */
 

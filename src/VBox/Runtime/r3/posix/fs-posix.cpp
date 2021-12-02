@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fs-posix.cpp 90789 2021-08-23 10:27:29Z vboxsync $ */
 /** @file
  * IPRT - File System, Linux.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -43,7 +43,7 @@
 #include "internal/iprt.h"
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
 #include <iprt/string.h>
 #include "internal/fs.h"
@@ -57,7 +57,8 @@ RTR3DECL(int) RTFsQuerySizes(const char *pszFsPath, RTFOFF *pcbTotal, RTFOFF *pc
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszFsPath) && *pszFsPath, ("%p", pszFsPath), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFsPath, VERR_INVALID_POINTER);
+    AssertReturn(*pszFsPath != '\0', VERR_INVALID_PARAMETER);
 
     /*
      * Convert the path and query the information.
@@ -102,8 +103,9 @@ RTR3DECL(int) RTFsQuerySerial(const char *pszFsPath, uint32_t *pu32Serial)
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszFsPath) && *pszFsPath, ("%p", pszFsPath), VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pu32Serial), ("%p", pu32Serial), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFsPath, VERR_INVALID_POINTER);
+    AssertReturn(*pszFsPath != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pu32Serial, VERR_INVALID_POINTER);
 
     /*
      * Convert the path and query the stats.
@@ -134,8 +136,9 @@ RTR3DECL(int) RTFsQueryProperties(const char *pszFsPath, PRTFSPROPERTIES pProper
     /*
      * Validate.
      */
-    AssertMsgReturn(VALID_PTR(pszFsPath) && *pszFsPath, ("%p", pszFsPath), VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pProperties), ("%p", pProperties), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFsPath, VERR_INVALID_POINTER);
+    AssertReturn(*pszFsPath != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pProperties, VERR_INVALID_POINTER);
 
     /*
      * Convert the path and query the information.
@@ -294,6 +297,8 @@ RTR3DECL(int) RTFsQueryType(const char *pszFsPath, PRTFSTYPE penmType)
             {
                 if (!strcmp("hfs", statfsBuf.f_fstypename))
                     *penmType = RTFSTYPE_HFS;
+                else if (!strcmp("apfs", statfsBuf.f_fstypename)) /** @todo verify apfs signature. */
+                    *penmType = RTFSTYPE_APFS;
                 else if (   !strcmp("fat", statfsBuf.f_fstypename)
                          || !strcmp("msdos", statfsBuf.f_fstypename))
                     *penmType = RTFSTYPE_FAT;

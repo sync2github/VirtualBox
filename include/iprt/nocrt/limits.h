@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_nocrt_limits_h
-#define ___iprt_nocrt_limits_h
+#ifndef IPRT_INCLUDED_nocrt_limits_h
+#define IPRT_INCLUDED_nocrt_limits_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -50,12 +53,12 @@
 #define INT_MAX         0x7fffffff
 #define INT_MIN         (-0x7fffffff - 1)
 
-#if defined(RT_ARCH_X86) || defined(RT_OS_WINDOWS) || defined(RT_ARCH_SPARC)
+#if defined(RT_ARCH_X86) || defined(RT_OS_WINDOWS) || defined(RT_ARCH_SPARC) || defined(RT_ARCH_ARM32)
 # define LONG_BIT       32
 # define ULONG_MAX      0xffffffffU
 # define LONG_MAX       0x7fffffff
 # define LONG_MIN       (-0x7fffffff - 1)
-#elif defined(RT_ARCH_AMD64) || defined(RT_ARCH_SPARC64)
+#elif defined(RT_ARCH_AMD64) || defined(RT_ARCH_SPARC64) || defined(RT_ARCH_ARM64)
 # define LONG_BIT       64
 # define ULONG_MAX      UINT64_C(0xffffffffffffffff)
 # define LONG_MAX       INT64_C(0x7fffffffffffffff)
@@ -82,5 +85,5 @@
 /*#define OFF_MAX         __OFF_MAX
 #define OFF_MIN         __OFF_MIN*/
 
-#endif
+#endif /* !IPRT_INCLUDED_nocrt_limits_h */
 

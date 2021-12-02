@@ -27,14 +27,8 @@
   APs to help test system memory in parallel with other device initialization.
   Diagnostics applications may also use this protocol for multi-processor.
 
-Copyright (c) 2006 - 2010, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials are licensed and made available under
-the terms and conditions of the BSD License that accompanies this distribution.
-The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php.
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
   @par Revision Reference:
   This Protocol is defined in the UEFI Platform Initialization Specification 1.2,
@@ -52,6 +46,11 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
   { \
     0x3fdda605, 0xa76e, 0x4f46, {0xad, 0x29, 0x12, 0xf4, 0x53, 0x1b, 0x3d, 0x08} \
   }
+
+///
+/// Value used in the NumberProcessors parameter of the GetProcessorInfo function
+///
+#define CPU_V2_EXTENDED_TOPOLOGY BIT24
 
 ///
 /// Forward declaration for the EFI_MP_SERVICES_PROTOCOL.
@@ -103,6 +102,47 @@ typedef struct {
 } EFI_CPU_PHYSICAL_LOCATION;
 
 ///
+///  Structure that defines the 6-level physical location of the processor
+///
+typedef struct {
+///
+///    Package     Zero-based physical package number that identifies the cartridge of the processor.
+///
+UINT32  Package;
+///
+///    Module      Zero-based physical module number within package of the processor.
+///
+UINT32  Module;
+///
+///    Tile        Zero-based physical tile number within module of the processor.
+///
+UINT32  Tile;
+///
+///    Die         Zero-based physical die number within tile of the processor.
+///
+UINT32  Die;
+///
+///     Core        Zero-based physical core number within die of the processor.
+///
+UINT32  Core;
+///
+///     Thread      Zero-based logical thread number within core of the processor.
+///
+UINT32  Thread;
+} EFI_CPU_PHYSICAL_LOCATION2;
+
+
+typedef union {
+  /// The 6-level physical location of the processor, including the
+  /// physical package number that identifies the cartridge, the physical
+  /// module number within package, the physical tile number within the module,
+  /// the physical die number within the tile, the physical core number within
+  /// package, and logical thread number within core.
+  EFI_CPU_PHYSICAL_LOCATION2  Location2;
+} EXTENDED_PROCESSOR_INFORMATION;
+
+
+///
 /// Structure that describes information about a logical CPU.
 ///
 typedef struct {
@@ -138,6 +178,10 @@ typedef struct {
   /// logical thread number within core.
   ///
   EFI_CPU_PHYSICAL_LOCATION  Location;
+  ///
+  /// The extended information of the processor. This field is filled only when
+  /// CPU_V2_EXTENDED_TOPOLOGY is set in parameter ProcessorNumber.
+  EXTENDED_PROCESSOR_INFORMATION ExtendedInformation;
 } EFI_PROCESSOR_INFORMATION;
 
 /**
@@ -388,8 +432,8 @@ EFI_STATUS
 
   @param[in]  This                    A pointer to the EFI_MP_SERVICES_PROTOCOL
                                       instance.
-  @param[in]  Procedure               A pointer to the function to be run on
-                                      enabled APs of the system. See type
+  @param[in]  Procedure               A pointer to the function to be run on the
+                                      designated AP of the system. See type
                                       EFI_AP_PROCEDURE.
   @param[in]  ProcessorNumber         The handle number of the AP. The range is
                                       from 0 to the total number of logical
@@ -398,13 +442,13 @@ EFI_STATUS
                                       EFI_MP_SERVICES_PROTOCOL.GetNumberOfProcessors().
   @param[in]  WaitEvent               The event created by the caller with CreateEvent()
                                       service.  If it is NULL, then execute in
-                                      blocking mode. BSP waits until all APs finish
+                                      blocking mode. BSP waits until this AP finish
                                       or TimeoutInMicroSeconds expires.  If it's
                                       not NULL, then execute in non-blocking mode.
                                       BSP requests the function specified by
-                                      Procedure to be started on all the enabled
-                                      APs, and go on executing immediately. If
-                                      all return from Procedure or TimeoutInMicroSeconds
+                                      Procedure to be started on this AP,
+                                      and go on executing immediately. If this AP
+                                      return from Procedure or TimeoutInMicroSeconds
                                       expires, this event is signaled. The BSP
                                       can use the CheckEvent() or WaitForEvent()
                                       services to check the state of event.  Type
@@ -412,20 +456,20 @@ EFI_STATUS
                                       the Unified Extensible Firmware Interface
                                       Specification.
   @param[in]  TimeoutInMicrosecsond   Indicates the time limit in microseconds for
-                                      APs to return from Procedure, either for
+                                      this AP to finish this Procedure, either for
                                       blocking or non-blocking mode. Zero means
                                       infinity.  If the timeout expires before
-                                      all APs return from Procedure, then Procedure
-                                      on the failed APs is terminated. All enabled
-                                      APs are available for next function assigned
+                                      this AP returns from Procedure, then Procedure
+                                      on the AP is terminated. The
+                                      AP is available for next function assigned
                                       by EFI_MP_SERVICES_PROTOCOL.StartupAllAPs()
                                       or EFI_MP_SERVICES_PROTOCOL.StartupThisAP().
                                       If the timeout expires in blocking mode,
                                       BSP returns EFI_TIMEOUT.  If the timeout
                                       expires in non-blocking mode, WaitEvent
                                       is signaled with SignalEvent().
-  @param[in]  ProcedureArgument       The parameter passed into Procedure for
-                                      all APs.
+  @param[in]  ProcedureArgument       The parameter passed into Procedure on the
+                                      specified AP.
   @param[out] Finished                If NULL, this parameter is ignored.  In
                                       blocking mode, this parameter is ignored.
                                       In non-blocking mode, if AP returns from
@@ -491,7 +535,7 @@ EFI_STATUS
   @retval EFI_UNSUPPORTED         Switching the BSP cannot be completed prior to
                                   this service returning.
   @retval EFI_UNSUPPORTED         Switching the BSP is not supported.
-  @retval EFI_SUCCESS             The calling processor is an AP.
+  @retval EFI_DEVICE_ERROR        The calling processor is an AP.
   @retval EFI_NOT_FOUND           The processor with the handle specified by
                                   ProcessorNumber does not exist.
   @retval EFI_INVALID_PARAMETER   ProcessorNumber specifies the current BSP or
@@ -523,8 +567,8 @@ EFI_STATUS
   from this service, then EFI_UNSUPPORTED must be returned.
 
   @param[in] This              A pointer to the EFI_MP_SERVICES_PROTOCOL instance.
-  @param[in] ProcessorNumber   The handle number of AP that is to become the new
-                               BSP. The range is from 0 to the total number of
+  @param[in] ProcessorNumber   The handle number of AP.
+                               The range is from 0 to the total number of
                                logical processors minus 1. The total number of
                                logical processors can be retrieved by
                                EFI_MP_SERVICES_PROTOCOL.GetNumberOfProcessors().
@@ -570,8 +614,8 @@ EFI_STATUS
   ProcessorNumber, and EFI_SUCCESS is returned.
 
   @param[in] This              A pointer to the EFI_MP_SERVICES_PROTOCOL instance.
-  @param[in] ProcessorNumber   The handle number of AP that is to become the new
-                               BSP. The range is from 0 to the total number of
+  @param[in] ProcessorNumber   Pointer to the handle number of AP.
+                               The range is from 0 to the total number of
                                logical processors minus 1. The total number of
                                logical processors can be retrieved by
                                EFI_MP_SERVICES_PROTOCOL.GetNumberOfProcessors().

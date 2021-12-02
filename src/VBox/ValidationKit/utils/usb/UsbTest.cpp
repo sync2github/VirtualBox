@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: UsbTest.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * UsbTest - User frontend for the Linux usbtest USB test and benchmarking module.
  *           Integrates with our test framework for nice outputs.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -121,7 +121,7 @@ typedef struct USBDEVDESC
  * @param   pszTest         Test name.
  * @param   pParams         The USB test parameters to set up.
  */
-typedef DECLCALLBACK(int) FNUSBTESTPARAMSSETUP(unsigned idxTest, const char *pszTest, PUSBTESTPARAMS pParams);
+typedef DECLCALLBACKTYPE(int, FNUSBTESTPARAMSSETUP,(unsigned idxTest, const char *pszTest, PUSBTESTPARAMS pParams));
 /** Pointer to a USB test parameters setup callback. */
 typedef FNUSBTESTPARAMSSETUP *PFNUSBTESTPARAMSSETUP;
 
@@ -302,14 +302,14 @@ static int usbTestDeviceQueryBusAndDevId(uint16_t *pu16BusId, uint16_t *pu16DevI
 
 #define USBTEST_USB_DEV_SYSFS "/sys/bus/usb/devices/"
 
-    PRTDIR pDirUsb = NULL;
-    int rc = RTDirOpen(&pDirUsb, USBTEST_USB_DEV_SYSFS);
+    RTDIR hDirUsb = NULL;
+    int rc = RTDirOpen(&hDirUsb, USBTEST_USB_DEV_SYSFS);
     if (RT_SUCCESS(rc))
     {
         do
         {
             RTDIRENTRY DirUsbBus;
-            rc = RTDirRead(pDirUsb, &DirUsbBus, NULL);
+            rc = RTDirRead(hDirUsb, &DirUsbBus, NULL);
             if (   RT_SUCCESS(rc)
                 && RTStrNCmp(DirUsbBus.szName, "usb", 3)
                 && RTLinuxSysFsExists(USBTEST_USB_DEV_SYSFS "%s/idVendor", DirUsbBus.szName))
@@ -367,7 +367,7 @@ static int usbTestDeviceQueryBusAndDevId(uint16_t *pu16BusId, uint16_t *pu16DevI
         if (rc == VERR_NO_MORE_FILES)
             rc = VINF_SUCCESS;
 
-        RTDirClose(pDirUsb);
+        RTDirClose(hDirUsb);
     }
 
     if (RT_SUCCESS(rc) && !fFound)
@@ -389,27 +389,27 @@ static char *usbTestFindDevice(void)
      */
     char *pszDevPath = NULL;
 
-    PRTDIR pDirUsb = NULL;
-    int rc = RTDirOpen(&pDirUsb, "/dev/bus/usb");
+    RTDIR hDirUsb = NULL;
+    int rc = RTDirOpen(&hDirUsb, "/dev/bus/usb");
     if (RT_SUCCESS(rc))
     {
         do
         {
             RTDIRENTRY DirUsbBus;
-            rc = RTDirRead(pDirUsb, &DirUsbBus, NULL);
+            rc = RTDirRead(hDirUsb, &DirUsbBus, NULL);
             if (RT_SUCCESS(rc))
             {
                 char aszPath[RTPATH_MAX + 1];
                 RTStrPrintf(&aszPath[0], RT_ELEMENTS(aszPath), "/dev/bus/usb/%s", DirUsbBus.szName);
 
-                PRTDIR pDirUsbBus = NULL;
-                rc = RTDirOpen(&pDirUsbBus, &aszPath[0]);
+                RTDIR hDirUsbBus = NULL;
+                rc = RTDirOpen(&hDirUsbBus, &aszPath[0]);
                 if (RT_SUCCESS(rc))
                 {
                     do
                     {
                         RTDIRENTRY DirUsbDev;
-                        rc = RTDirRead(pDirUsbBus, &DirUsbDev, NULL);
+                        rc = RTDirRead(hDirUsbBus, &DirUsbDev, NULL);
                         if (RT_SUCCESS(rc))
                         {
                             char aszPathDev[RTPATH_MAX + 1];
@@ -440,7 +440,7 @@ static char *usbTestFindDevice(void)
                              && !pszDevPath);
 
                     rc = VINF_SUCCESS;
-                    RTDirClose(pDirUsbBus);
+                    RTDirClose(hDirUsbBus);
                 }
             }
             else if (rc != VERR_NO_MORE_FILES)
@@ -448,7 +448,7 @@ static char *usbTestFindDevice(void)
         } while (   RT_SUCCESS(rc)
                  && !pszDevPath);
 
-        RTDirClose(pDirUsb);
+        RTDirClose(hDirUsb);
     }
 
     return pszDevPath;
@@ -506,7 +506,21 @@ static void usbTestExec(const char *pszDevice)
                 }
 
                 if (rcPosix < 0)
-                    RTTestFailed(g_hTest, "Test failed with %Rrc\n", RTErrConvertFromErrno(errno));
+                {
+                    /*
+                     * The error status code of the unlink testcase is
+                     * offset by 2000 for the sync and 1000 for the sync code path
+                     * (see drivers/usb/misc/usbtest.c in the Linux kernel sources).
+                     *
+                     * Adjust to the actual status code so converting doesn't assert.
+                     */
+                    int iTmpErrno = errno;
+                    if (iTmpErrno >= 2000)
+                        iTmpErrno -= 2000;
+                    else if (iTmpErrno >= 1000)
+                        iTmpErrno -= 1000;
+                    RTTestFailed(g_hTest, "Test failed with %Rrc\n", RTErrConvertFromErrno(iTmpErrno));
+                }
                 else
                 {
                     uint64_t u64Ns = Params.TimeTest.tv_sec * RT_NS_1SEC + Params.TimeTest.tv_usec * RT_NS_1US;

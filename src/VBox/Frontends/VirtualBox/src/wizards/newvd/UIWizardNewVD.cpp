@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardNewVD.cpp 92103 2021-10-27 13:08:01Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardNewVD class implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,130 +15,96 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
-/* Qt includes: */
-# include <QVariant>
-
 /* GUI includes: */
-# include "VBoxGlobal.h"
-# include "UIWizardNewVD.h"
-# include "UIWizardNewVDPageBasic1.h"
-# include "UIWizardNewVDPageBasic2.h"
-# include "UIWizardNewVDPageBasic3.h"
-# include "UIWizardNewVDPageExpert.h"
-# include "UIMessageCenter.h"
-# include "UIMedium.h"
-
-/* COM includes: */
-# include "CMediumFormat.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
+#include "UICommon.h"
+#include "UINotificationCenter.h"
+#include "UIWizardNewVD.h"
+#include "UIWizardNewVDFileTypePage.h"
+#include "UIWizardNewVDVariantPage.h"
+#include "UIWizardNewVDSizeLocationPage.h"
+#include "UIWizardNewVDExpertPage.h"
 
 UIWizardNewVD::UIWizardNewVD(QWidget *pParent,
-                             const QString &strDefaultName, const QString &strDefaultPath,
+                             const QString &strDefaultName,
+                             const QString &strDefaultPath,
                              qulonglong uDefaultSize,
                              WizardMode mode)
-    : UIWizard(pParent, WizardType_NewVD, mode)
+    : UINativeWizard(pParent, WizardType_NewVD, mode)
     , m_strDefaultName(strDefaultName)
     , m_strDefaultPath(strDefaultPath)
     , m_uDefaultSize(uDefaultSize)
+    , m_iMediumVariantPageIndex(-1)
 {
 #ifndef VBOX_WS_MAC
     /* Assign watermark: */
-    assignWatermark(":/vmw_new_harddisk.png");
+    setPixmapName(":/wizard_new_harddisk.png");
 #else /* VBOX_WS_MAC */
     /* Assign background image: */
-    assignBackground(":/vmw_new_harddisk_bg.png");
+    setPixmapName(":/wizard_new_harddisk_bg.png");
 #endif /* VBOX_WS_MAC */
 }
 
-bool UIWizardNewVD::createVirtualDisk()
+qulonglong UIWizardNewVD::mediumVariant() const
 {
-    /* Gather attributes: */
-    CMediumFormat mediumFormat = field("mediumFormat").value<CMediumFormat>();
-    qulonglong uVariant = field("mediumVariant").toULongLong();
-    QString strMediumPath = field("mediumPath").toString();
-    qulonglong uSize = field("mediumSize").toULongLong();
-    /* Check attributes: */
-    AssertReturn(!strMediumPath.isNull(), false);
-    AssertReturn(uSize > 0, false);
-
-    /* Get VBox object: */
-    CVirtualBox vbox = vboxGlobal().virtualBox();
-
-    /* Create new virtual hard-disk: */
-    CMedium virtualDisk = vbox.CreateMedium(mediumFormat.GetName(), strMediumPath, KAccessMode_ReadWrite, KDeviceType_HardDisk);
-    if (!vbox.isOk())
-    {
-        msgCenter().cannotCreateHardDiskStorage(vbox, strMediumPath, this);
-        return false;
-    }
-
-    /* Compose medium-variant: */
-    QVector<KMediumVariant> variants(sizeof(qulonglong)*8);
-    for (int i = 0; i < variants.size(); ++i)
-    {
-        qulonglong temp = uVariant;
-        temp &= UINT64_C(1)<<i;
-        variants[i] = (KMediumVariant)temp;
-    }
-
-    /* Create base storage for the new virtual-disk: */
-    CProgress progress = virtualDisk.CreateBaseStorage(uSize, variants);
-    if (!virtualDisk.isOk())
-    {
-        msgCenter().cannotCreateHardDiskStorage(virtualDisk, strMediumPath, this);
-        return false;
-    }
-
-    /* Show creation progress: */
-    msgCenter().showModalProgressDialog(progress, windowTitle(), ":/progress_media_create_90px.png", this);
-    if (progress.GetCanceled())
-        return false;
-    if (!progress.isOk() || progress.GetResultCode() != 0)
-    {
-        msgCenter().cannotCreateHardDiskStorage(progress, strMediumPath, this);
-        return false;
-    }
-
-    /* Remember created virtual-disk: */
-    m_virtualDisk = virtualDisk;
-
-    /* Inform VBoxGlobal about it: */
-    vboxGlobal().createMedium(UIMedium(m_virtualDisk, UIMediumType_HardDisk, KMediumState_Created));
-
-    return true;
+    return m_uMediumVariant;
 }
 
-void UIWizardNewVD::retranslateUi()
+void UIWizardNewVD::setMediumVariant(qulonglong uMediumVariant)
 {
-    /* Call to base-class: */
-    UIWizard::retranslateUi();
-
-    /* Translate wizard: */
-    setWindowTitle(tr("Create Virtual Hard Disk"));
-    setButtonText(QWizard::FinishButton, tr("Create"));
+    m_uMediumVariant = uMediumVariant;
 }
 
-void UIWizardNewVD::prepare()
+const CMediumFormat &UIWizardNewVD::mediumFormat()
 {
-    /* Create corresponding pages: */
+    return m_comMediumFormat;
+}
+
+void UIWizardNewVD::setMediumFormat(const CMediumFormat &mediumFormat)
+{
+    m_comMediumFormat = mediumFormat;
+    if (mode() == WizardMode_Basic)
+        setMediumVariantPageVisibility();
+}
+
+const QString &UIWizardNewVD::mediumPath() const
+{
+    return m_strMediumPath;
+}
+
+void UIWizardNewVD::setMediumPath(const QString &strMediumPath)
+{
+    m_strMediumPath = strMediumPath;
+}
+
+qulonglong UIWizardNewVD::mediumSize() const
+{
+    return m_uMediumSize;
+}
+
+void UIWizardNewVD::setMediumSize(qulonglong uMediumSize)
+{
+    m_uMediumSize = uMediumSize;
+}
+
+QUuid UIWizardNewVD::mediumId() const
+{
+    return m_uMediumId;
+}
+
+void UIWizardNewVD::populatePages()
+{
     switch (mode())
     {
         case WizardMode_Basic:
         {
-            setPage(Page1, new UIWizardNewVDPageBasic1);
-            setPage(Page2, new UIWizardNewVDPageBasic2);
-            setPage(Page3, new UIWizardNewVDPageBasic3(m_strDefaultName, m_strDefaultPath, m_uDefaultSize));
+            addPage(new UIWizardNewVDFileTypePage);
+            m_iMediumVariantPageIndex = addPage(new UIWizardNewVDVariantPage);
+            addPage(new UIWizardNewVDSizeLocationPage(m_strDefaultName, m_strDefaultPath, m_uDefaultSize));
             break;
         }
         case WizardMode_Expert:
         {
-            setPage(PageExpert, new UIWizardNewVDPageExpert(m_strDefaultName, m_strDefaultPath, m_uDefaultSize));
+            addPage(new UIWizardNewVDExpertPage(m_strDefaultName, m_strDefaultPath, m_uDefaultSize));
             break;
         }
         default:
@@ -147,7 +113,69 @@ void UIWizardNewVD::prepare()
             break;
         }
     }
-    /* Call to base-class: */
-    UIWizard::prepare();
 }
 
+bool UIWizardNewVD::createVirtualDisk()
+{
+    AssertReturn(!m_strMediumPath.isNull(), false);
+    AssertReturn(m_uMediumSize > 0, false);
+
+    /* Get VBox object: */
+    CVirtualBox comVBox = uiCommon().virtualBox();
+
+    /* Create new virtual disk image: */
+    CMedium comVirtualDisk = comVBox.CreateMedium(m_comMediumFormat.GetName(),
+                                                  m_strMediumPath, KAccessMode_ReadWrite, KDeviceType_HardDisk);
+    if (!comVBox.isOk())
+    {
+        UINotificationMessage::cannotCreateMediumStorage(comVBox, m_strMediumPath, notificationCenter());
+        return false;
+    }
+
+    /* Compose medium-variant: */
+    QVector<KMediumVariant> variants(sizeof(qulonglong) * 8);
+    for (int i = 0; i < variants.size(); ++i)
+    {
+        qulonglong temp = m_uMediumVariant;
+        temp &= Q_UINT64_C(1) << i;
+        variants[i] = (KMediumVariant)temp;
+    }
+
+    UINotificationProgressMediumCreate *pNotification = new UINotificationProgressMediumCreate(comVirtualDisk,
+                                                                                               m_uMediumSize,
+                                                                                               variants);
+    connect(pNotification, &UINotificationProgressMediumCreate::sigMediumCreated,
+            &uiCommon(), &UICommon::sltHandleMediumCreated);
+
+    m_uMediumId = comVirtualDisk.GetId();
+
+    gpNotificationCenter->append(pNotification);
+
+    /* Positive: */
+    return true;
+}
+
+void UIWizardNewVD::retranslateUi()
+{
+    UINativeWizard::retranslateUi();
+    setWindowTitle(tr("Create Virtual Hard Disk"));
+}
+
+void UIWizardNewVD::setMediumVariantPageVisibility()
+{
+    AssertReturnVoid(!m_comMediumFormat.isNull());
+    ULONG uCapabilities = 0;
+    QVector<KMediumFormatCapabilities> capabilities;
+    capabilities = m_comMediumFormat.GetCapabilities();
+    for (int i = 0; i < capabilities.size(); i++)
+        uCapabilities |= capabilities[i];
+
+    int cTest = 0;
+    if (uCapabilities & KMediumFormatCapabilities_CreateDynamic)
+        ++cTest;
+    if (uCapabilities & KMediumFormatCapabilities_CreateFixed)
+        ++cTest;
+    if (uCapabilities & KMediumFormatCapabilities_CreateSplit2G)
+        ++cTest;
+    setPageVisible(m_iMediumVariantPageIndex, cTest > 1);
+}

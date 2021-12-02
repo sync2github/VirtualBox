@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: utf-16-latin-1.cpp 90794 2021-08-23 13:16:11Z vboxsync $ */
 /** @file
  * IPRT - Latin-1 and UTF-16.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,13 +28,15 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#include <iprt/string.h>
+#include <iprt/latin1.h>
 #include "internal/iprt.h"
 
-#include <iprt/uni.h>
-#include <iprt/alloc.h>
 #include <iprt/assert.h>
 #include <iprt/err.h>
+#include <iprt/mem.h>
+#include <iprt/string.h>
+#include <iprt/utf16.h>
+#include <iprt/uni.h>
 #include "internal/string.h"
 
 
@@ -182,8 +184,8 @@ RTDECL(int)  RTUtf16ToLatin1Tag(PCRTUTF16 pwszString, char **ppszString, const c
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(ppszString));
-    Assert(VALID_PTR(pwszString));
+    AssertPtr(ppszString);
+    AssertPtr(pwszString);
     *ppszString = NULL;
 
     /*
@@ -361,8 +363,8 @@ RTDECL(int) RTLatin1ToUtf16Tag(const char *pszString, PRTUTF16 *ppwszString, con
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(ppwszString));
-    Assert(VALID_PTR(pszString));
+    AssertPtr(ppwszString);
+    AssertPtr(pszString);
     *ppwszString = NULL;
 
     /*
@@ -403,9 +405,9 @@ RTDECL(int)  RTLatin1ToUtf16ExTag(const char *pszString, size_t cchString,
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(pszString));
-    Assert(VALID_PTR(ppwsz));
-    Assert(!pcwc || VALID_PTR(pcwc));
+    AssertPtr(pszString);
+    AssertPtr(ppwsz);
+    AssertPtrNull(pcwc);
 
     /*
      * Validate the input and calculate the length of the UTF-16 string.

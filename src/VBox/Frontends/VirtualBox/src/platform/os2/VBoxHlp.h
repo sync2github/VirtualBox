@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxHlp.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Declaration of OS/2-specific helpers that require to reside in a DLL.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxHlp_h
-#define ___VBoxHlp_h
+#ifndef FEQT_INCLUDED_SRC_platform_os2_VBoxHlp_h
+#define FEQT_INCLUDED_SRC_platform_os2_VBoxHlp_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 
@@ -32,5 +35,5 @@ VBOXHLPDECL(bool) VBoxHlpInstallKbdHook (HAB aHab, HWND aHwnd,
 VBOXHLPDECL(bool) VBoxHlpUninstallKbdHook (HAB aHab, HWND aHwnd,
                                            unsigned long aMsg);
 
-#endif /* !___VBoxHlp_h */
+#endif /* !FEQT_INCLUDED_SRC_platform_os2_VBoxHlp_h */
 

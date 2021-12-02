@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: NATEngineImpl.h 92133 2021-10-28 10:43:36Z vboxsync $ */
 
 /** @file
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_NATENGINE
-#define ____H_NATENGINE
+#ifndef MAIN_INCLUDED_NATEngineImpl_h
+#define MAIN_INCLUDED_NATEngineImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "NATEngineWrap.h"
 
@@ -33,7 +36,7 @@ class ATL_NO_VTABLE NATEngine :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(NATEngine)
+    DECLARE_COMMON_CLASS_METHODS(NATEngine)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -47,6 +50,8 @@ public:
     void i_rollback();
     void i_commit();
     void i_copyFrom(NATEngine *aThat);
+    void i_applyDefaults();
+    bool i_hasDefaults();
     HRESULT i_loadSettings(const settings::NAT &data);
     HRESULT i_saveSettings(settings::NAT &data);
 
@@ -57,6 +62,8 @@ private:
     HRESULT getNetwork(com::Utf8Str &aNetwork);
     HRESULT setHostIP(const com::Utf8Str &aHostIP);
     HRESULT getHostIP(com::Utf8Str &aBindIP);
+    HRESULT setLocalhostReachable(BOOL fLocalhostReachable);
+    HRESULT getLocalhostReachable(BOOL *pfLocalhostReachable);
     /* TFTP properties */
     HRESULT setTFTPPrefix(const com::Utf8Str &aTFTPPrefix);
     HRESULT getTFTPPrefix(com::Utf8Str &aTFTPPrefix);
@@ -104,4 +111,4 @@ private:
     Machine * const mParent;
     INetworkAdapter * const mAdapter;
 };
-#endif
+#endif /* !MAIN_INCLUDED_NATEngineImpl_h */

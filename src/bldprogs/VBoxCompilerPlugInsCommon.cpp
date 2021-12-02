@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCompilerPlugInsCommon.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxCompilerPlugInsCommon - Code common to the compiler plug-ins.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -332,6 +332,7 @@ void MyCheckFormatCString(PVFMTCHKSTATE pState, const char *pszFmt)
             case 'j':
                 fFmtSize = RTSTR_Z_INTMAX;
                 ch = *pszFmt++;
+                break;
             case 't':
                 fFmtSize = RTSTR_Z_PTRDIFF;
                 ch = *pszFmt++;
@@ -417,6 +418,15 @@ void MyCheckFormatCString(PVFMTCHKSTATE pState, const char *pszFmt)
                 iArg += 2;
                 break;
             }
+
+            case 'R':
+                if (   pszFmt[0] == 'h'
+                    && pszFmt[1] == 'X')
+                {
+                    VFmtChkRequirePresentArg(pState, pszPct, iArg, "Expected argument");
+                    iArg++;
+                }
+                RT_FALL_THROUGH();
 
             default:
                 VFmtChkRequirePresentArg(pState, pszPct, iArg, "Expected argument");

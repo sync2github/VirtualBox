@@ -1,4 +1,4 @@
-; $Id$
+; $Id: VBoxRT-openssl-1.1plus.def 91594 2021-10-06 15:57:22Z vboxsync $
 ;; @file
 ; IPRT - Windows OpenSSL exports we use outside VBoxRT (keep them few!).
 ;
@@ -6,7 +6,7 @@
 ;
 
 ;
-; Copyright (C) 2009-2016 Oracle Corporation
+; Copyright (C) 2009-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -119,6 +119,7 @@
 
     ; vboxwebsrv needs SSL support.
     ASN1_STRING_data
+    ASN1_STRING_get0_data
     ASN1_STRING_to_UTF8
     ;exported above: BIO_free
     ;exported above: BIO_new_file
@@ -129,6 +130,8 @@
     DH_check
     DH_free
     DH_generate_parameters
+    DH_generate_parameters_ex
+    DH_new
     ERR_clear_error
     ERR_error_string
     ERR_error_string_n
@@ -136,6 +139,7 @@
     ERR_peek_error
     GENERAL_NAME_free
     i2v_GENERAL_NAMES
+    OpenSSL_version_num
     OPENSSL_init_crypto
     ;exported above: OPENSSL_init_ssl
     OPENSSL_sk_num
@@ -200,6 +204,7 @@
     X509_STORE_CTX_get_error_depth
     X509_STORE_CTX_set_error
     X509_STORE_set1_param
+    X509_STORE_set_flags
     X509_verify_cert_error_string
     X509_VERIFY_PARAM_free
     X509_VERIFY_PARAM_new
@@ -212,3 +217,70 @@
     BN_mod_exp_simple
     BN_ucmp
 
+    ; VBox-libtpms
+    BN_set_flags
+    BN_clear_free
+    BN_cmp
+    BN_dup
+    BN_sub
+    BN_add
+    BN_copy
+    RAND_add
+    BN_is_zero
+    BN_is_one
+    BN_value_one
+    BN_CTX_start
+    BN_CTX_get
+    BN_CTX_end
+    BN_mod_add
+    BN_mod_mul
+    BN_lshift
+    BN_mask_bits
+    BN_rshift
+    BN_mod_inverse
+    RSA_size
+    RSA_set0_key
+    RSA_get0_factors
+    RSA_public_encrypt
+    RSA_private_encrypt
+    RSA_private_decrypt
+    RSA_sign
+    RSA_verify
+    RSA_padding_add_PKCS1_type_1
+    RSA_padding_add_PKCS1_type_2
+    RSA_padding_check_PKCS1_type_1
+    RSA_padding_check_PKCS1_type_2
+    RSA_padding_add_PKCS1_OAEP
+    RSA_padding_check_PKCS1_OAEP
+    ERR_get_error_line_data
+    AES_set_encrypt_key
+    AES_set_decrypt_key
+    AES_decrypt
+    AES_encrypt
+    AES_cbc_encrypt
+    AES_ofb128_encrypt
+    SHA256_Init
+    SHA256_Update
+    SHA256_Final
+    SHA384_Init
+    SHA384_Update
+    SHA384_Final
+    SHA512_Init
+    SHA512_Update
+    SHA512_Final
+    EC_GROUP_free
+    EC_GROUP_set_generator
+    EC_GROUP_new_curve_GFp
+    EC_POINT_new
+    EC_POINT_free
+    EC_POINT_clear_free
+    EC_POINT_set_affine_coordinates
+    EC_POINT_get_affine_coordinates
+    EC_POINT_add
+    EC_POINTs_mul
+    EC_POINT_mul
+    Camellia_set_key
+    Camellia_encrypt
+    Camellia_decrypt
+    DES_ecb3_encrypt
+    DES_set_key_unchecked

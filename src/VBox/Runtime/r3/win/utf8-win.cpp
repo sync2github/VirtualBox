@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: utf8-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - UTF8 helpers.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,9 +35,17 @@
 #include <iprt/alloc.h>
 #include <iprt/assert.h>
 #include <iprt/err.h>
+#include <iprt/utf16.h>
+
 
 
 RTR3DECL(int)  RTStrUtf8ToCurrentCPTag(char **ppszString, const char *pszString, const char *pszTag)
+{
+    return RTStrUtf8ToCurrentCPExTag(ppszString, pszString, RTSTR_MAX, pszTag);
+}
+
+
+RTR3DECL(int)  RTStrUtf8ToCurrentCPExTag(char **ppszString, const char *pszString, size_t cchString, const char *pszTag)
 {
     Assert(ppszString);
     Assert(pszString);
@@ -45,7 +53,7 @@ RTR3DECL(int)  RTStrUtf8ToCurrentCPTag(char **ppszString, const char *pszString,
     /*
      * Check for zero length input string.
      */
-    if (!*pszString)
+    if (cchString < 1 || !*pszString)
     {
         *ppszString = (char *)RTMemTmpAllocZTag(sizeof(char), pszTag);
         if (*ppszString)
@@ -59,7 +67,7 @@ RTR3DECL(int)  RTStrUtf8ToCurrentCPTag(char **ppszString, const char *pszString,
      * Convert to wide char first.
      */
     PRTUTF16 pwszString = NULL;
-    int rc = RTStrToUtf16(pszString, &pwszString);
+    int rc = RTStrToUtf16Ex(pszString, cchString, &pwszString, 0, NULL);
     if (RT_FAILURE(rc))
         return rc;
 

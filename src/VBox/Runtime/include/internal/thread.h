@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: thread.h 85126 2020-07-08 23:04:57Z vboxsync $ */
 /** @file
  * IPRT - Internal RTThread header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___thread_h
-#define ___thread_h
+#ifndef IPRT_INCLUDED_INTERNAL_thread_h
+#define IPRT_INCLUDED_INTERNAL_thread_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 #include <iprt/thread.h>
@@ -133,6 +136,9 @@ typedef RTTHREADINT *PRTTHREADINT;
 #define RTTHREADINT_FLAGS_MAIN       RT_BIT(3)
 /** @} */
 
+/** Counters for each thread type. */
+extern DECL_HIDDEN_DATA(uint32_t volatile) g_acRTThreadTypeStats[RTTHREADTYPE_END];
+
 
 /**
  * Initialize the native part of the thread management.
@@ -179,6 +185,21 @@ DECLHIDDEN(int) rtThreadNativeAdopt(PRTTHREADINT pThread);
  */
 DECLHIDDEN(void) rtThreadNativeDestroy(PRTTHREADINT pThread);
 
+#ifdef IN_RING3
+/**
+ * Called to check whether the thread is still alive or not before we start
+ * waiting.
+ *
+ * This is a kludge to deal with windows threads being killed wholesale in
+ * certain process termination scenarios and we don't want to hang the last
+ * thread because it's waiting on the semaphore of a dead thread.
+ *
+ * @returns true if alive, false if not.
+ * @param   pThread         The thread structure.
+ */
+DECLHIDDEN(bool) rtThreadNativeIsAliveKludge(PRTTHREADINT pThread);
+#endif
+
 #ifdef IN_RING0
 /**
  * Called from rtThreadWait when the last thread has completed in order to make
@@ -224,7 +245,7 @@ DECLHIDDEN(void) rtThreadNativeInformDebugger(PRTTHREADINT pThread);
 
 
 /* thread.cpp */
-DECLCALLBACK(DECLHIDDEN(int)) rtThreadMain(PRTTHREADINT pThread, RTNATIVETHREAD NativeThread, const char *pszThreadName);
+DECL_HIDDEN_CALLBACK(int) rtThreadMain(PRTTHREADINT pThread, RTNATIVETHREAD NativeThread, const char *pszThreadName);
 DECLHIDDEN(uint32_t)     rtThreadRelease(PRTTHREADINT pThread);
 DECLHIDDEN(void)         rtThreadTerminate(PRTTHREADINT pThread, int rc);
 DECLHIDDEN(PRTTHREADINT) rtThreadGetByNative(RTNATIVETHREAD NativeThread);
@@ -242,8 +263,22 @@ DECLHIDDEN(int)          rtThreadDoSetProcPriority(RTPROCPRIORITY enmPriority);
 DECLHIDDEN(void)         rtThreadClearTlsEntry(RTTLS iTls);
 DECLHIDDEN(void)         rtThreadTlsDestruction(PRTTHREADINT pThread); /* in tls-generic.cpp */
 #endif
+#ifdef RT_OS_WINDOWS
+DECLHIDDEN(void)         rtThreadWinTlsDestruction(void); /* in tls-win.cpp */
+#endif
 
-#ifdef ___iprt_asm_h
+/* thread-posix.cpp */
+#ifdef IN_RING3
+# if !defined(RT_OS_WINDOWS) && !defined(RT_OS_OS2) && !defined(RT_OS_DARWIN)
+#  define RTTHREAD_POSIX_WITH_CREATE_PRIORITY_PROXY
+# endif
+# ifdef RTTHREAD_POSIX_WITH_CREATE_PRIORITY_PROXY
+DECLHIDDEN(bool) rtThreadPosixPriorityProxyStart(void);
+DECLHIDDEN(int)  rtThreadPosixPriorityProxyCall(PRTTHREADINT pTargetThread, PFNRT pfnFunction, int cArgs, ...);
+# endif
+#endif
+
+#ifdef IPRT_INCLUDED_asm_h
 
 /**
  * Gets the thread state.
@@ -272,4 +307,4 @@ DECLINLINE(void) rtThreadSetState(PRTTHREADINT pThread, RTTHREADSTATE enmNewStat
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_thread_h */

@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,8 +27,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmapi_h
-#define ___VBox_vmm_pdmapi_h
+#ifndef VBOX_INCLUDED_vmm_pdmapi_h
+#define VBOX_INCLUDED_vmm_pdmapi_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vmm/pdmcommon.h>
 #ifdef IN_RING3
@@ -36,6 +39,7 @@
 #endif
 #include <VBox/sup.h>
 
+struct PDMDEVMODREGR0;
 
 RT_C_DECLS_BEGIN
 
@@ -44,13 +48,13 @@ RT_C_DECLS_BEGIN
  * @{
  */
 
-VMMDECL(int)            PDMGetInterrupt(PVMCPU pVCpu, uint8_t *pu8Interrupt);
-VMMDECL(int)            PDMIsaSetIrq(PVM pVM, uint8_t u8Irq, uint8_t u8Level, uint32_t uTagSrc);
+VMMDECL(int)            PDMGetInterrupt(PVMCPUCC pVCpu, uint8_t *pu8Interrupt);
+VMMDECL(int)            PDMIsaSetIrq(PVMCC pVM, uint8_t u8Irq, uint8_t u8Level, uint32_t uTagSrc);
 VMM_INT_DECL(bool)      PDMHasIoApic(PVM pVM);
 VMM_INT_DECL(bool)      PDMHasApic(PVM pVM);
-VMM_INT_DECL(int)       PDMIoApicSetIrq(PVM pVM, uint8_t u8Irq, uint8_t u8Level, uint32_t uTagSrc);
-VMM_INT_DECL(int)       PDMIoApicBroadcastEoi(PVM pVM, uint8_t uVector);
-VMM_INT_DECL(int)       PDMIoApicSendMsi(PVM pVM, RTGCPHYS GCAddr, uint32_t uValue, uint32_t uTagSrc);
+VMM_INT_DECL(int)       PDMIoApicSetIrq(PVM pVM, PCIBDF uBusDevFn, uint8_t u8Irq, uint8_t u8Level, uint32_t uTagSrc);
+VMM_INT_DECL(void)      PDMIoApicBroadcastEoi(PVMCC pVM, uint8_t uVector);
+VMM_INT_DECL(void)      PDMIoApicSendMsi(PVMCC pVM, PCIBDF uBusDevFn, PCMSIMSG pMsi, uint32_t uTagSrc);
 VMM_INT_DECL(int)       PDMVmmDevHeapR3ToGCPhys(PVM pVM, RTR3PTR pv, RTGCPHYS *pGCPhys);
 VMM_INT_DECL(bool)      PDMVmmDevHeapIsEnabled(PVM pVM);
 
@@ -63,7 +67,7 @@ VMM_INT_DECL(bool)      PDMVmmDevHeapIsEnabled(PVM pVM);
  *                              it's being mapped, NIL_RTGCPHYS if it's being
  *                              unmapped.
  */
-typedef DECLCALLBACK(void) FNPDMVMMDEVHEAPNOTIFY(PVM pVM, void *pvAllocation, RTGCPHYS GCPhysAllocation);
+typedef DECLCALLBACKTYPE(void, FNPDMVMMDEVHEAPNOTIFY,(PVM pVM, void *pvAllocation, RTGCPHYS GCPhysAllocation));
 /** Pointer (ring-3) to a FNPDMVMMDEVHEAPNOTIFY function. */
 typedef R3PTRTYPE(FNPDMVMMDEVHEAPNOTIFY *) PFNPDMVMMDEVHEAPNOTIFY;
 
@@ -88,6 +92,7 @@ VMMR3DECL(void)         PDMR3PowerOff(PVM pVM);
 VMMR3_INT_DECL(void)    PDMR3Relocate(PVM pVM, RTGCINTPTR offDelta);
 VMMR3_INT_DECL(int)     PDMR3Term(PVM pVM);
 VMMR3_INT_DECL(void)    PDMR3TermUVM(PUVM pUVM);
+VMMR3_INT_DECL(bool)    PDMR3HasLoadedState(PVM pVM);
 
 /** PDM loader context indicator.  */
 typedef enum  PDMLDRCTX
@@ -120,12 +125,13 @@ typedef enum  PDMLDRCTX
  * @param   enmCtx          The context the module is loaded into.
  * @param   pvArg           User argument.
  */
-typedef DECLCALLBACK(int) FNPDMR3ENUM(PVM pVM, const char *pszFilename, const char *pszName,
-                                      RTUINTPTR ImageBase, size_t cbImage, PDMLDRCTX enmCtx, void *pvArg);
+typedef DECLCALLBACKTYPE(int, FNPDMR3ENUM,(PVM pVM, const char *pszFilename, const char *pszName,
+                                           RTUINTPTR ImageBase, size_t cbImage, PDMLDRCTX enmCtx, void *pvArg));
 /** Pointer to a FNPDMR3ENUM() function. */
 typedef FNPDMR3ENUM *PFNPDMR3ENUM;
 VMMR3DECL(int)          PDMR3LdrEnumModules(PVM pVM, PFNPDMR3ENUM pfnCallback, void *pvArg);
 VMMR3_INT_DECL(void)    PDMR3LdrRelocateU(PUVM pUVM, RTGCINTPTR offDelta);
+VMMR3_INT_DECL(int)     PDMR3LdrLoadR0(PUVM pUVM, const char *pszModule, const char *pszSearchPath);
 VMMR3_INT_DECL(int)     PDMR3LdrGetSymbolR3(PVM pVM, const char *pszModule, const char *pszSymbol, void **ppvValue);
 VMMR3DECL(int)          PDMR3LdrGetSymbolR0(PVM pVM, const char *pszModule, const char *pszSymbol, PRTR0PTR ppvValue);
 VMMR3DECL(int)          PDMR3LdrGetSymbolR0Lazy(PVM pVM, const char *pszModule, const char *pszSearchPath, const char *pszSymbol, PRTR0PTR ppvValue);
@@ -158,12 +164,11 @@ VMMR3_INT_DECL(PPDMCRITSECT) PDMR3DevGetCritSect(PVM pVM, PPDMDEVINS pDevIns);
 VMMR3DECL(int)          PDMR3DriverAttach(PUVM pUVM, const char *pszDevice, unsigned iDevIns, unsigned iLun, uint32_t fFlags,
                                           PPPDMIBASE ppBase);
 VMMR3DECL(int)          PDMR3DriverDetach(PUVM pUVM, const char *pszDevice, unsigned iDevIns, unsigned iLun,
-                                          const char *pszDriver, unsigned iOccurance, uint32_t fFlags);
+                                          const char *pszDriver, unsigned iOccurrence, uint32_t fFlags);
 VMMR3DECL(int)          PDMR3DriverReattach(PUVM pVM, const char *pszDevice, unsigned iDevIns, unsigned iLun,
-                                            const char *pszDriver, unsigned iOccurance, uint32_t fFlags, PCFGMNODE pCfg,
+                                            const char *pszDriver, unsigned iOccurrence, uint32_t fFlags, PCFGMNODE pCfg,
                                             PPPDMIBASE ppBase);
 VMMR3DECL(void)         PDMR3DmaRun(PVM pVM);
-VMMR3_INT_DECL(int)     PDMR3LockCall(PVM pVM);
 
 VMMR3_INT_DECL(int)     PDMR3VmmDevHeapAlloc(PVM pVM, size_t cbSize, PFNPDMVMMDEVHEAPNOTIFY pfnNotify, RTR3PTR *ppv);
 VMMR3_INT_DECL(int)     PDMR3VmmDevHeapFree(PVM pVM, RTR3PTR pv);
@@ -185,6 +190,12 @@ VMMR3_INT_DECL(int)     PDMR3TracingQueryConfig(PVM pVM, char *pszConfig, size_t
 /** @defgroup grp_pdm_r0    The PDM Ring-0 Context API
  * @{
  */
+VMMR0_INT_DECL(void)    PDMR0Init(void *hMod);
+VMMR0DECL(int)          PDMR0DeviceRegisterModule(void *hMod, struct PDMDEVMODREGR0 *pModReg);
+VMMR0DECL(int)          PDMR0DeviceDeregisterModule(void *hMod, struct PDMDEVMODREGR0 *pModReg);
+
+VMMR0_INT_DECL(void)    PDMR0InitPerVMData(PGVM pGVM);
+VMMR0_INT_DECL(void)    PDMR0CleanupVM(PGVM pGVM);
 
 /**
  * Request buffer for PDMR0DriverCallReqHandler / VMMR0_DO_PDM_DRIVER_CALL_REQ_HANDLER.
@@ -207,32 +218,129 @@ typedef struct PDMDRIVERCALLREQHANDLERREQ
  * request buffer. */
 typedef PDMDRIVERCALLREQHANDLERREQ *PPDMDRIVERCALLREQHANDLERREQ;
 
-VMMR0_INT_DECL(int) PDMR0DriverCallReqHandler(PVM pVM, PPDMDRIVERCALLREQHANDLERREQ pReq);
+VMMR0_INT_DECL(int) PDMR0DriverCallReqHandler(PGVM pGVM, PPDMDRIVERCALLREQHANDLERREQ pReq);
+
 
 /**
- * Request buffer for PDMR0DeviceCallReqHandler / VMMR0_DO_PDM_DEVICE_CALL_REQ_HANDLER.
- * @see PDMR0DeviceCallReqHandler.
+ * Request buffer for PDMR0DeviceCreateReqHandler / VMMR0_DO_PDM_DEVICE_CREATE.
+ * @see PDMR0DeviceCreateReqHandler.
  */
-typedef struct PDMDEVICECALLREQHANDLERREQ
+typedef struct PDMDEVICECREATEREQ
 {
     /** The header. */
     SUPVMMR0REQHDR          Hdr;
-    /** The device instance. */
-    PPDMDEVINSR0            pDevInsR0;
-    /** The request handler for the device. */
-    PFNPDMDEVREQHANDLERR0   pfnReqHandlerR0;
-    /** The operation. */
-    uint32_t                uOperation;
-    /** Explicit alignment padding. */
-    uint32_t                u32Alignment;
-    /** Optional 64-bit integer argument. */
-    uint64_t                u64Arg;
-} PDMDEVICECALLREQHANDLERREQ;
-/** Pointer to a PDMR0DeviceCallReqHandler /
- * VMMR0_DO_PDM_DEVICE_CALL_REQ_HANDLER request buffer. */
-typedef PDMDEVICECALLREQHANDLERREQ *PPDMDEVICECALLREQHANDLERREQ;
+    /** Out: Where to return the address of the ring-3 device instance. */
+    PPDMDEVINSR3            pDevInsR3;
 
-VMMR0_INT_DECL(int) PDMR0DeviceCallReqHandler(PVM pVM, PPDMDEVICECALLREQHANDLERREQ pReq);
+    /** Copy of PDMDEVREGR3::fFlags for matching with PDMDEVREGR0::fFlags. */
+    uint32_t                fFlags;
+    /** Copy of PDMDEVREGR3::fClass for matching with PDMDEVREGR0::fFlags. */
+    uint32_t                fClass;
+    /** Copy of PDMDEVREGR3::cMaxInstances for matching with
+     *  PDMDEVREGR0::cMaxInstances. */
+    uint32_t                cMaxInstances;
+    /** Copy of PDMDEVREGR3::uSharedVersion for matching with
+     *  PDMDEVREGR0::uSharedVersion. */
+    uint32_t                uSharedVersion;
+    /** Copy of PDMDEVREGR3::cbInstanceShared for matching with
+     *  PDMDEVREGR0::cbInstanceShared. */
+    uint32_t                cbInstanceShared;
+    /** Copy of PDMDEVREGR3::cbInstanceCC. */
+    uint32_t                cbInstanceR3;
+    /** Copy of PDMDEVREGR3::cbInstanceRC for matching with
+     *  PDMDEVREGR0::cbInstanceRC. */
+    uint32_t                cbInstanceRC;
+    /** Copy of PDMDEVREGR3::cMaxPciDevices for matching with
+     *  PDMDEVREGR0::cMaxPciDevices. */
+    uint16_t                cMaxPciDevices;
+    /** Copy of PDMDEVREGR3::cMaxMsixVectors for matching with
+     *  PDMDEVREGR0::cMaxMsixVectors. */
+    uint16_t                cMaxMsixVectors;
+
+    /** The device instance ordinal. */
+    uint32_t                iInstance;
+    /** Set if the raw-mode component is desired. */
+    bool                    fRCEnabled;
+    /** Explicit padding. */
+    bool                    afReserved[3];
+    /** DBGF tracer event source handle if configured. */
+    DBGFTRACEREVTSRC        hDbgfTracerEvtSrc;
+
+    /** In: Device name. */
+    char                    szDevName[32];
+    /** In: The module name (no path). */
+    char                    szModName[32];
+} PDMDEVICECREATEREQ;
+/** Pointer to a PDMR0DeviceCreate / VMMR0_DO_PDM_DEVICE_CREATE request buffer. */
+typedef PDMDEVICECREATEREQ *PPDMDEVICECREATEREQ;
+
+VMMR0_INT_DECL(int) PDMR0DeviceCreateReqHandler(PGVM pGVM, PPDMDEVICECREATEREQ pReq);
+
+/**
+ * The ring-0 device call to make.
+ */
+typedef enum PDMDEVICEGENCALL
+{
+    PDMDEVICEGENCALL_INVALID = 0,
+    PDMDEVICEGENCALL_CONSTRUCT,
+    PDMDEVICEGENCALL_DESTRUCT,
+    PDMDEVICEGENCALL_REQUEST,
+    PDMDEVICEGENCALL_END,
+    PDMDEVICEGENCALL_32BIT_HACK = 0x7fffffff
+} PDMDEVICEGENCALL;
+
+/**
+ * Request buffer for PDMR0DeviceGenCallReqHandler / VMMR0_DO_PDM_DEVICE_GEN_CALL.
+ * @see PDMR0DeviceGenCallReqHandler.
+ */
+typedef struct PDMDEVICEGENCALLREQ
+{
+    /** The header. */
+    SUPVMMR0REQHDR          Hdr;
+    /** The ring-3 device instance. */
+    PPDMDEVINSR3            pDevInsR3;
+    /** The ring-0 device handle. */
+    uint32_t                idxR0Device;
+    /** The call to make. */
+    PDMDEVICEGENCALL        enmCall;
+    union
+    {
+        /** PDMDEVICEGENCALL_REQUEST: */
+        struct
+        {
+            /** The request argument. */
+            uint64_t        uArg;
+            /** The request number.    */
+            uint32_t        uReq;
+        } Req;
+        /** Size padding. */
+        uint64_t            au64[3];
+    } Params;
+} PDMDEVICEGENCALLREQ;
+/** Pointer to a PDMR0DeviceGenCallReqHandler / VMMR0_DO_PDM_DEVICE_GEN_CALL request buffer. */
+typedef PDMDEVICEGENCALLREQ *PPDMDEVICEGENCALLREQ;
+
+VMMR0_INT_DECL(int) PDMR0DeviceGenCallReqHandler(PGVM pGVM, PPDMDEVICEGENCALLREQ pReq, VMCPUID idCpu);
+
+/**
+ * Request buffer for PDMR0DeviceCompatSetCritSectReqHandler / VMMR0_DO_PDM_DEVICE_COMPAT_SET_CRITSECT
+ * @see PDMR0DeviceCompatSetCritSectReqHandler.
+ */
+typedef struct PDMDEVICECOMPATSETCRITSECTREQ
+{
+    /** The header. */
+    SUPVMMR0REQHDR          Hdr;
+    /** The ring-3 device instance. */
+    PPDMDEVINSR3            pDevInsR3;
+    /** The ring-0 device handle. */
+    uint32_t                idxR0Device;
+    /** The critical section address (ring-3). */
+    R3PTRTYPE(PPDMCRITSECT) pCritSectR3;
+} PDMDEVICECOMPATSETCRITSECTREQ;
+/** Pointer to a PDMR0DeviceGenCallReqHandler / VMMR0_DO_PDM_DEVICE_GEN_CALL request buffer. */
+typedef PDMDEVICECOMPATSETCRITSECTREQ *PPDMDEVICECOMPATSETCRITSECTREQ;
+
+VMMR0_INT_DECL(int) PDMR0DeviceCompatSetCritSectReqHandler(PGVM pGVM, PPDMDEVICECOMPATSETCRITSECTREQ pReq);
 
 /** @} */
 
@@ -240,4 +348,4 @@ RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_pdmapi_h */

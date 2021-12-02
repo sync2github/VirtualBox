@@ -5,7 +5,7 @@
  *  definition expressed in XML. The generated file is intended solely to
  *  generate the documentation using Doxygen.
 
-    Copyright (C) 2006-2016 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -16,12 +16,21 @@
     hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 -->
 
-<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:stylesheet
+  version="1.0"
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:str="http://xsltsl.org/string"
+  exclude-result-prefixes="str"
+>
+<!-- The exclude-result-prefixes attribute is needed since otherwise the <tt>
+  tag added for the ID in interface and enum descriptions would get the
+  namespace, confusing doxygen completely. -->
+
+<xsl:import href="string.xsl"/>
+
 <xsl:output method="html" indent="yes"/>
 
 <xsl:strip-space elements="*"/>
-
-<xsl:include href="typemap-shared.inc.xsl" />
 
 
 <!--
@@ -45,6 +54,21 @@
   <xsl:copy>
     <xsl:apply-templates/>
   </xsl:copy>
+</xsl:template>
+
+<!--
+ * special treatment of <tt>, making sure that Doxygen will not interpret its
+ * contents (assuming it is a leaf tag)
+-->
+<xsl:template match="desc//tt/text()">
+  <xsl:variable name="subst1">
+    <xsl:call-template name="str:subst">
+      <xsl:with-param name="text" select="." />
+      <xsl:with-param name="replace" select="'::'" />
+      <xsl:with-param name="with" select="'\::'" />
+    </xsl:call-template>
+  </xsl:variable>
+  <xsl:value-of select="$subst1"/>
 </xsl:template>
 
 <!--
@@ -234,8 +258,8 @@
   <xsl:apply-templates select="." mode="begin"/>
   <xsl:apply-templates select="." mode="middle"/>
 @par Interface ID:
-<tt>{<xsl:call-template name="string-to-upper">
-    <xsl:with-param name="str" select="../@uuid"/>
+<tt>{<xsl:call-template name="str:to-upper">
+    <xsl:with-param name="text" select="../@uuid"/>
   </xsl:call-template>}</tt>
   <xsl:text>&#x0A;*/&#x0A;</xsl:text>
 </xsl:template>
@@ -302,8 +326,8 @@ owns the object will most likely fail or crash your application.
   <xsl:apply-templates select="." mode="begin"/>
   <xsl:apply-templates select="." mode="middle"/>
 @par Interface ID:
-<tt>{<xsl:call-template name="string-to-upper">
-    <xsl:with-param name="str" select="../@uuid"/>
+<tt>{<xsl:call-template name="str:to-upper">
+    <xsl:with-param name="text" select="../@uuid"/>
   </xsl:call-template>}</tt>
   <xsl:text>&#x0A;*/&#x0A;</xsl:text>
 </xsl:template>
@@ -408,7 +432,7 @@ owns the object will most likely fail or crash your application.
 <!--
  *  libraries
 -->
-<xsl:template match="library">
+<xsl:template match="application">
   <!-- result codes -->
   <xsl:for-each select="result">
     <xsl:apply-templates select="."/>
@@ -424,7 +448,7 @@ owns the object will most likely fail or crash your application.
 <!--
  *  result codes
 -->
-<xsl:template match="result">
+<xsl:template match="application//result">
   <xsl:apply-templates select="@if" mode="begin"/>
   <xsl:apply-templates select="desc"/>
   <xsl:value-of select="concat('const HRESULT ',@name,' = ',@value,';')"/>
@@ -630,15 +654,19 @@ owns the object will most likely fail or crash your application.
           <xsl:choose>
             <!-- enum types -->
             <xsl:when test="
-              (ancestor::library/enum[@name=current()]) or
-              (ancestor::library/if[@target=$self_target]/enum[@name=current()])
+                 (ancestor::library/application/enum[@name=current()])
+              or (ancestor::library/if/application/enum[@name=current()])
+              or (ancestor::library/application/if[@target=$self_target]/enum[@name=current()])
+              or (ancestor::library/if/application/if[@target=$self_target]/enum[@name=current()])
             ">
               <xsl:value-of select="."/>
             </xsl:when>
             <!-- custom interface types -->
             <xsl:when test="
-              ((ancestor::library/interface[@name=current()]) or
-               (ancestor::library/if[@target=$self_target]/interface[@name=current()])
+              (   (ancestor::library/application/interface[@name=current()])
+               or (ancestor::library/if/application/interface[@name=current()])
+               or (ancestor::library/application/if[@target=$self_target]/interface[@name=current()])
+               or (ancestor::library/if/application/if[@target=$self_target]/interface[@name=current()])
               )
             ">
               <xsl:value-of select="."/>

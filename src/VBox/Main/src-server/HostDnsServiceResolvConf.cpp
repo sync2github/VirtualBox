@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HostDnsServiceResolvConf.cpp 83794 2020-04-18 13:25:05Z vboxsync $ */
 /** @file
  * Base class for Host DNS & Co services.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,13 +32,13 @@ typedef int socklen_t;
 
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/file.h>
 #include <iprt/critsect.h>
 
 #include <VBox/log.h>
 
-#include <string>
+#include <iprt/sanitized/string>
 
 #include "HostDnsService.h"
 #include "../../Devices/Network/slirp/resolv_conf_parser.h"
@@ -54,12 +54,6 @@ struct HostDnsServiceResolvConf::Data
     std::string resolvConfFilename;
 };
 
-const std::string& HostDnsServiceResolvConf::resolvConf() const
-{
-    return m->resolvConfFilename;
-}
-
-
 HostDnsServiceResolvConf::~HostDnsServiceResolvConf()
 {
     if (m)
@@ -69,19 +63,34 @@ HostDnsServiceResolvConf::~HostDnsServiceResolvConf()
     }
 }
 
-HRESULT HostDnsServiceResolvConf::init(VirtualBox *virtualbox, const char *aResolvConfFileName)
+HRESULT HostDnsServiceResolvConf::init(HostDnsMonitorProxy *pProxy, const char *aResolvConfFileName)
 {
+    HRESULT hr = HostDnsServiceBase::init(pProxy);
+    AssertComRCReturn(hr, hr);
+
     m = new Data(aResolvConfFileName);
+    AssertPtrReturn(m, E_OUTOFMEMORY);
 
-    HostDnsMonitor::init(virtualbox);
-
-    readResolvConf();
-
-    return S_OK;
+    return readResolvConf();
 }
 
+void HostDnsServiceResolvConf::uninit(void)
+{
+    if (m)
+    {
+        delete m;
+        m = NULL;
+    }
 
-HRESULT HostDnsServiceResolvConf::readResolvConf()
+    HostDnsServiceBase::uninit();
+}
+
+const std::string& HostDnsServiceResolvConf::getResolvConf(void) const
+{
+    return m->resolvConfFilename;
+}
+
+HRESULT HostDnsServiceResolvConf::readResolvConf(void)
 {
     struct rcp_state st;
 

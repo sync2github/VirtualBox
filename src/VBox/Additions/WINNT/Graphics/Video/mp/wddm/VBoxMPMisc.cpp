@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPMisc.cpp 84697 2020-06-05 15:03:45Z vboxsync $ */
 /** @file
  * VBox WDDM Miniport driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,9 @@
  */
 
 #include "VBoxMPWddm.h"
-#include <VBox/Hardware/VBoxVideoVBE.h>
-#include <stdio.h>
+#include <VBoxVideoVBE.h>
+#include <iprt/param.h>
+#include <iprt/utf16.h>
 
 /* simple handle -> value table API */
 NTSTATUS vboxWddmHTableCreate(PVBOXWDDM_HTABLE pTbl, uint32_t cSize)
@@ -68,7 +69,7 @@ NTSTATUS vboxWddmHTableRealloc(PVBOXWDDM_HTABLE pTbl, uint32_t cNewSize)
         pTbl->paData = pvNewData;
         return STATUS_SUCCESS;
     }
-    else if (cNewSize >= pTbl->cData)
+    if (cNewSize >= pTbl->cData)
     {
         AssertFailed();
         return STATUS_NOT_IMPLEMENTED;
@@ -177,404 +178,7 @@ PVOID vboxWddmHTableIterRemoveCur(PVBOXWDDM_HTABLE_ITERATOR pIter)
     }
     return NULL;
 }
-#ifdef VBOX_WITH_CROGL
-PVBOXWDDM_SWAPCHAIN vboxWddmSwapchainCreate(UINT w, UINT h)
-{
-    PVBOXWDDM_SWAPCHAIN pSwapchain = (PVBOXWDDM_SWAPCHAIN)vboxWddmMemAllocZero(sizeof (VBOXWDDM_SWAPCHAIN));
-    Assert(pSwapchain);
-    if (pSwapchain)
-    {
-        InitializeListHead(&pSwapchain->AllocList);
-        pSwapchain->enmState = VBOXWDDM_OBJSTATE_TYPE_INITIALIZED;
-        pSwapchain->cRefs = 1;
-        /* init to some invalid value so that the pos get submitted */
-        pSwapchain->Pos.x = pSwapchain->Pos.y = VBOXWDDM_INVALID_COORD;
-        pSwapchain->width = w;
-        pSwapchain->height = h;
-        VBoxVrListInit(&pSwapchain->VisibleRegions);
-    }
-    return pSwapchain;
-}
 
-DECLINLINE(BOOLEAN) vboxWddmSwapchainRetainLocked(PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    if (pSwapchain->enmState == VBOXWDDM_OBJSTATE_TYPE_INITIALIZED)
-    {
-        ASMAtomicIncU32(&pSwapchain->cRefs);
-        return TRUE;
-    }
-    return FALSE;
-}
-
-BOOLEAN vboxWddmSwapchainRetain(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    KIRQL OldIrql;
-    BOOLEAN bRc;
-    KeAcquireSpinLock(&pDevExt->SynchLock, &OldIrql);
-    bRc = vboxWddmSwapchainRetainLocked(pSwapchain);
-    KeReleaseSpinLock(&pDevExt->SynchLock, OldIrql);
-    return bRc;
-}
-
-VOID vboxWddmSwapchainRelease(PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    const uint32_t cRefs = ASMAtomicDecU32(&pSwapchain->cRefs);
-    Assert(cRefs < UINT32_MAX/2);
-    if (!cRefs)
-    {
-        VBoxVrListClear(&pSwapchain->VisibleRegions);
-        vboxWddmMemFree(pSwapchain);
-    }
-}
-
-PVBOXWDDM_SWAPCHAIN vboxWddmSwapchainRetainByAllocData(PVBOXMP_DEVEXT pDevExt, const struct VBOXWDDM_ALLOC_DATA *pAllocData)
-{
-    KIRQL OldIrql;
-    PVBOXWDDM_SWAPCHAIN pSwapchain;
-    KeAcquireSpinLock(&pDevExt->SynchLock, &OldIrql);
-    pSwapchain = pAllocData->pSwapchain;
-    if (pSwapchain && !vboxWddmSwapchainRetainLocked(pSwapchain))
-        pSwapchain = NULL;
-    KeReleaseSpinLock(&pDevExt->SynchLock, OldIrql);
-    return pSwapchain;
-}
-
-PVBOXWDDM_SWAPCHAIN vboxWddmSwapchainRetainByAlloc(PVBOXMP_DEVEXT pDevExt, const VBOXWDDM_ALLOCATION *pAlloc)
-{
-    return vboxWddmSwapchainRetainByAllocData(pDevExt, &pAlloc->AllocData);
-}
-
-VOID vboxWddmSwapchainAllocRemove(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_SWAPCHAIN pSwapchain, PVBOXWDDM_ALLOCATION pAlloc)
-{
-    KIRQL OldIrql;
-    KeAcquireSpinLock(&pDevExt->SynchLock, &OldIrql);
-    Assert(pAlloc->AllocData.pSwapchain == pSwapchain);
-    pAlloc->AllocData.pSwapchain = NULL;
-    RemoveEntryList(&pAlloc->SwapchainEntry);
-    KeReleaseSpinLock(&pDevExt->SynchLock, OldIrql);
-    vboxWddmSwapchainRelease(pSwapchain);
-}
-
-BOOLEAN vboxWddmSwapchainAllocAdd(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_SWAPCHAIN pSwapchain, PVBOXWDDM_ALLOCATION pAlloc)
-{
-    KIRQL OldIrql;
-    BOOLEAN bRc;
-    Assert(!pAlloc->AllocData.pSwapchain);
-    KeAcquireSpinLock(&pDevExt->SynchLock, &OldIrql);
-    bRc = vboxWddmSwapchainRetainLocked(pSwapchain);
-    if (bRc)
-    {
-        if (pAlloc->AllocData.pSwapchain)
-        {
-            RemoveEntryList(&pAlloc->SwapchainEntry);
-        }
-        InsertTailList(&pSwapchain->AllocList, &pAlloc->SwapchainEntry);
-        pAlloc->AllocData.pSwapchain = pSwapchain;
-    }
-    KeReleaseSpinLock(&pDevExt->SynchLock, OldIrql);
-    return bRc;
-}
-
-#define VBOXSCENTRY_2_ALLOC(_pE) ((PVBOXWDDM_ALLOCATION)((uint8_t*)(_pE) - RT_OFFSETOF(VBOXWDDM_ALLOCATION, SwapchainEntry)))
-
-static VOID vboxWddmSwapchainAllocRemoveAllInternal(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_SWAPCHAIN pSwapchain, BOOLEAN bOnDestroy)
-{
-    KIRQL OldIrql;
-    UINT cRemoved = 0;
-    KeAcquireSpinLock(&pDevExt->SynchLock, &OldIrql);
-    PLIST_ENTRY pEntry = pSwapchain->AllocList.Flink;
-    do
-    {
-        if (pEntry != &pSwapchain->AllocList)
-        {
-            PVBOXWDDM_ALLOCATION pAlloc = VBOXSCENTRY_2_ALLOC(pEntry);
-            pEntry = pEntry->Flink;
-            Assert(pAlloc->AllocData.pSwapchain == pSwapchain);
-            pAlloc->AllocData.pSwapchain = NULL;
-            RemoveEntryList(&pAlloc->SwapchainEntry);
-            ++cRemoved;
-        }
-        else
-            break;
-    } while (1);
-
-    if (bOnDestroy)
-        pSwapchain->enmState = VBOXWDDM_OBJSTATE_TYPE_TERMINATED;
-    KeReleaseSpinLock(&pDevExt->SynchLock, OldIrql);
-
-    for (UINT i = 0; i < cRemoved; ++i)
-        vboxWddmSwapchainRelease(pSwapchain);
-}
-
-VOID vboxWddmSwapchainAllocRemoveAll(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    vboxWddmSwapchainAllocRemoveAllInternal(pDevExt, pSwapchain, FALSE);
-}
-
-VOID vboxWddmSwapchainDestroy(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    vboxWddmSwapchainAllocRemoveAllInternal(pDevExt, pSwapchain, TRUE);
-
-    vboxWddmSwapchainRelease(pSwapchain);
-}
-
-static BOOLEAN vboxWddmSwapchainCtxAddLocked(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_CONTEXT pContext, PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    if (vboxWddmSwapchainRetain(pDevExt, pSwapchain))
-    {
-        Assert(!pSwapchain->hSwapchainKm);
-        Assert(!pSwapchain->pContext);
-        pSwapchain->pContext = pContext;
-        pSwapchain->hSwapchainKm = vboxWddmHTablePut(&pContext->Swapchains, pSwapchain);
-        InsertHeadList(&pDevExt->SwapchainList3D, &pSwapchain->DevExtListEntry);
-        return TRUE;
-    }
-    return FALSE;
-}
-
-static VOID vboxWddmSwapchainCtxRemoveLocked(PVBOXWDDM_CONTEXT pContext, PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    Assert(pSwapchain->hSwapchainKm);
-    Assert(pSwapchain->pContext);
-    void *pvTst = vboxWddmHTableRemove(&pContext->Swapchains, pSwapchain->hSwapchainKm);
-    Assert((PVBOXWDDM_SWAPCHAIN)pvTst == pSwapchain); NOREF(pvTst);
-    RemoveEntryList(&pSwapchain->DevExtListEntry);
-    pSwapchain->hSwapchainKm = NULL;
-    VBoxVrListClear(&pSwapchain->VisibleRegions);
-    vboxWddmSwapchainRelease(pSwapchain);
-}
-
-/* adds the given swapchain to the context's swapchain list
- * @return true on success */
-BOOLEAN vboxWddmSwapchainCtxAdd(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_CONTEXT pContext, PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    BOOLEAN bRc;
-    VBOXWDDM_CTXLOCK_DATA
-    VBOXWDDM_CTXLOCK_LOCK(pDevExt);
-    bRc = vboxWddmSwapchainCtxAddLocked(pDevExt, pContext, pSwapchain);
-    VBOXWDDM_CTXLOCK_UNLOCK(pDevExt);
-    return bRc;
-}
-
-/* removes the given swapchain from the context's swapchain list
- * */
-VOID vboxWddmSwapchainCtxRemove(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_CONTEXT pContext, PVBOXWDDM_SWAPCHAIN pSwapchain)
-{
-    VBOXWDDM_CTXLOCK_DATA
-    VBOXWDDM_CTXLOCK_LOCK(pDevExt);
-    vboxWddmSwapchainCtxRemoveLocked(pContext, pSwapchain);
-    VBOXWDDM_CTXLOCK_UNLOCK(pDevExt);
-}
-
-/* destroys all swapchains for the given context
- * */
-VOID vboxWddmSwapchainCtxDestroyAll(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_CONTEXT pContext)
-{
-    VBOXWDDM_HTABLE_ITERATOR Iter;
-    VBOXWDDM_CTXLOCK_DATA
-    do
-    {
-        VBOXWDDM_CTXLOCK_LOCK(pDevExt);
-        vboxWddmHTableIterInit(&pContext->Swapchains, &Iter);
-        PVBOXWDDM_SWAPCHAIN pSwapchain = (PVBOXWDDM_SWAPCHAIN)vboxWddmHTableIterNext(&Iter, NULL);
-        if (!pSwapchain)
-            break;
-
-        /* yes, we can call remove locked even when using iterator */
-        vboxWddmSwapchainCtxRemoveLocked(pContext, pSwapchain);
-
-        VBOXWDDM_CTXLOCK_UNLOCK(pDevExt);
-        /* we must not do vboxWddmSwapchainDestroy inside a context mutex */
-        vboxWddmSwapchainDestroy(pDevExt, pSwapchain);
-        /* start from the very beginning, we will quit the loop when no swapchains left */
-    } while (1);
-
-    /* no swapchains left, we exiteed the while loop via the "break", and we still owning the mutex */
-    VBOXWDDM_CTXLOCK_UNLOCK(pDevExt);
-}
-
-/* process the swapchain info passed from user-mode display driver & synchronizes the driver state with it */
-NTSTATUS vboxWddmSwapchainCtxEscape(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_CONTEXT pContext,
-                                    PVBOXDISPIFESCAPE_SWAPCHAININFO pSwapchainInfo, UINT cbSize)
-{
-    if (cbSize < RT_OFFSETOF(VBOXDISPIFESCAPE_SWAPCHAININFO, SwapchainInfo.ahAllocs[0]))
-    {
-        WARN(("invalid cbSize1 %d", cbSize));
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (cbSize < RT_OFFSETOF(VBOXDISPIFESCAPE_SWAPCHAININFO, SwapchainInfo.ahAllocs[pSwapchainInfo->SwapchainInfo.cAllocs]))
-    {
-        WARN(("invalid cbSize2 %d", cbSize));
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (!pSwapchainInfo->SwapchainInfo.winHostID)
-    {
-        WARN(("Zero winHostID specified!"));
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (!pContext)
-    {
-        WARN(("vboxWddmSwapchainCtxEscape: no context specified"));
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    PVBOXWDDM_SWAPCHAIN pSwapchain = NULL;
-    PVBOXWDDM_ALLOCATION *apAlloc = NULL;
-    Assert(KeGetCurrentIrql() == PASSIVE_LEVEL);
-    NTSTATUS Status = STATUS_SUCCESS;
-    VBOXWDDM_CTXLOCK_DATA
-
-    do {
-        if (pSwapchainInfo->SwapchainInfo.cAllocs)
-        {
-            /* ensure we do not overflow the 32bit buffer size value */
-            if (VBOXWDDM_ARRAY_MAXELEMENTSU32(VBOXWDDM_ALLOCATION) < pSwapchainInfo->SwapchainInfo.cAllocs)
-            {
-                WARN(("number of allocations passed in too big (%d), max is (%d)",
-                      pSwapchainInfo->SwapchainInfo.cAllocs, VBOXWDDM_ARRAY_MAXELEMENTSU32(VBOXWDDM_ALLOCATION)));
-                Status = STATUS_INVALID_PARAMETER;
-                break;
-            }
-
-            apAlloc = (PVBOXWDDM_ALLOCATION *)vboxWddmMemAlloc(  sizeof(PVBOXWDDM_ALLOCATION)
-                                                               * pSwapchainInfo->SwapchainInfo.cAllocs);
-            Assert(apAlloc);
-            if (!apAlloc)
-            {
-                Status = STATUS_NO_MEMORY;
-                break;
-            }
-            for (UINT i = 0; i < pSwapchainInfo->SwapchainInfo.cAllocs; ++i)
-            {
-                DXGKARGCB_GETHANDLEDATA GhData;
-                GhData.hObject = pSwapchainInfo->SwapchainInfo.ahAllocs[i];
-                GhData.Type = DXGK_HANDLE_ALLOCATION;
-                GhData.Flags.Value = 0;
-                PVBOXWDDM_ALLOCATION pAlloc = (PVBOXWDDM_ALLOCATION)pDevExt->u.primary.DxgkInterface.DxgkCbGetHandleData(&GhData);
-                Assert(pAlloc);
-                if (!pAlloc)
-                {
-                    Status = STATUS_INVALID_PARAMETER;
-                    break;
-                }
-                apAlloc[i] = pAlloc;
-            }
-
-            if (!NT_SUCCESS(Status))
-                break;
-        }
-
-        if (pSwapchainInfo->SwapchainInfo.hSwapchainKm)
-        {
-            VBOXWDDM_CTXLOCK_LOCK(pDevExt);
-            pSwapchain = (PVBOXWDDM_SWAPCHAIN)vboxWddmHTableGet(&pContext->Swapchains,
-                                                                (VBOXWDDM_HANDLE)pSwapchainInfo->SwapchainInfo.hSwapchainKm);
-            Assert(pSwapchain);
-            if (!pSwapchain)
-            {
-                VBOXWDDM_CTXLOCK_UNLOCK(pDevExt);
-                Status = STATUS_INVALID_PARAMETER;
-                break;
-            }
-            Assert(pSwapchain->hSwapchainKm == pSwapchainInfo->SwapchainInfo.hSwapchainKm);
-            Assert(pSwapchain->pContext == pContext);
-            if (pSwapchain->pContext != pContext)
-            {
-                VBOXWDDM_CTXLOCK_UNLOCK(pDevExt);
-                Status = STATUS_INVALID_PARAMETER;
-                break;
-            }
-        }
-        else if (pSwapchainInfo->SwapchainInfo.cAllocs)
-        {
-            pSwapchain = vboxWddmSwapchainCreate(apAlloc[0]->AllocData.SurfDesc.width, apAlloc[0]->AllocData.SurfDesc.height);
-            if (!pSwapchain)
-            {
-                Status = STATUS_NO_MEMORY;
-                break;
-            }
-
-            VBOXWDDM_CTXLOCK_LOCK(pDevExt);
-            BOOLEAN fRc = vboxWddmSwapchainCtxAddLocked(pDevExt, pContext, pSwapchain);
-            Assert(fRc); NOREF(fRc);
-        }
-        else
-        {
-            Status = STATUS_INVALID_PARAMETER;
-            break;
-        }
-
-        /* do not zero up the view rect since it may still be valid */
-//        memset(&pSwapchain->ViewRect, 0, sizeof (pSwapchain->ViewRect));
-        /** @todo do we really need to zero this up here ? */
-        VBoxVrListClear(&pSwapchain->VisibleRegions);
-
-        vboxWddmSwapchainAllocRemoveAll(pDevExt, pSwapchain);
-
-        if (pSwapchainInfo->SwapchainInfo.cAllocs)
-        {
-            for (UINT i = 0; i < pSwapchainInfo->SwapchainInfo.cAllocs; ++i)
-            {
-                vboxWddmSwapchainAllocAdd(pDevExt, pSwapchain, apAlloc[i]);
-            }
-            pSwapchain->hSwapchainUm = pSwapchainInfo->SwapchainInfo.hSwapchainUm;
-            if (pSwapchain->winHostID != pSwapchainInfo->SwapchainInfo.winHostID)
-            {
-                pSwapchain->fExposed = FALSE;
-                pSwapchain->winHostID = pSwapchainInfo->SwapchainInfo.winHostID;
-            }
-        }
-        else
-        {
-            vboxWddmSwapchainCtxRemoveLocked(pContext, pSwapchain);
-        }
-
-        VBOXWDDM_CTXLOCK_UNLOCK(pDevExt);
-
-        if (pSwapchainInfo->SwapchainInfo.cAllocs)
-        {
-            Assert(pSwapchain->pContext);
-            Assert(pSwapchain->hSwapchainKm);
-            pSwapchainInfo->SwapchainInfo.hSwapchainKm = pSwapchain->hSwapchainKm;
-        }
-        else
-        {
-            vboxWddmSwapchainDestroy(pDevExt, pSwapchain);
-            pSwapchainInfo->SwapchainInfo.hSwapchainKm = 0;
-        }
-
-        AssertNtStatusSuccess(Status);
-    } while (0);
-
-    /* cleanup */
-    if (apAlloc)
-        vboxWddmMemFree(apAlloc);
-
-    return Status;
-}
-
-NTSTATUS vboxWddmSwapchainCtxInit(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_CONTEXT pContext)
-{
-    RT_NOREF(pDevExt);
-    NTSTATUS Status = vboxWddmHTableCreate(&pContext->Swapchains, 4);
-    if (!NT_SUCCESS(Status))
-    {
-        WARN(("vboxWddmHTableCreate failes, Status (x%x)", Status));
-        return Status;
-    }
-
-    return STATUS_SUCCESS;
-}
-
-VOID vboxWddmSwapchainCtxTerm(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_CONTEXT pContext)
-{
-    vboxWddmSwapchainCtxDestroyAll(pDevExt, pContext);
-    vboxWddmHTableDestroy(&pContext->Swapchains);
-}
-#endif
 NTSTATUS vboxWddmRegQueryDrvKeyName(PVBOXMP_DEVEXT pDevExt, ULONG cbBuf, PWCHAR pBuf, PULONG pcbResult)
 {
     WCHAR fallBackBuf[2];
@@ -611,7 +215,6 @@ NTSTATUS vboxWddmRegQueryDisplaySettingsKeyName(PVBOXMP_DEVEXT pDevExt, D3DDDI_V
         ULONG cbBuf, PWCHAR pBuf, PULONG pcbResult)
 {
     NTSTATUS Status = STATUS_SUCCESS;
-    PWCHAR pSuffix;
     const WCHAR* pKeyPrefix;
     UINT cbKeyPrefix;
     UNICODE_STRING* pVGuid = vboxWddmVGuidGet(pDevExt);
@@ -619,11 +222,17 @@ NTSTATUS vboxWddmRegQueryDisplaySettingsKeyName(PVBOXMP_DEVEXT pDevExt, D3DDDI_V
     if (!pVGuid)
         return STATUS_UNSUCCESSFUL;
 
-    vboxWinVersion_t ver = VBoxQueryWinVersion();
+    uint32_t build;
+    vboxWinVersion_t ver = VBoxQueryWinVersion(&build);
     if (ver == WINVERSION_VISTA)
     {
         pKeyPrefix = VBOXWDDM_REG_DISPLAYSETTINGSKEY_PREFIX_VISTA;
         cbKeyPrefix = sizeof (VBOXWDDM_REG_DISPLAYSETTINGSKEY_PREFIX_VISTA);
+    }
+    else if (ver >= WINVERSION_10 && build >= 17763)
+    {
+        pKeyPrefix = VBOXWDDM_REG_DISPLAYSETTINGSKEY_PREFIX_WIN10_17763;
+        cbKeyPrefix = sizeof (VBOXWDDM_REG_DISPLAYSETTINGSKEY_PREFIX_WIN10_17763);
     }
     else
     {
@@ -635,13 +244,9 @@ NTSTATUS vboxWddmRegQueryDisplaySettingsKeyName(PVBOXMP_DEVEXT pDevExt, D3DDDI_V
     ULONG cbResult = cbKeyPrefix + pVGuid->Length + 2 + 8; // L"\\" + "XXXX"
     if (cbBuf >= cbResult)
     {
-        wcscpy(pBuf, pKeyPrefix);
-        pSuffix = pBuf + (cbKeyPrefix-2)/2;
-        memcpy(pSuffix, pVGuid->Buffer, pVGuid->Length);
-        pSuffix += pVGuid->Length/2;
-        pSuffix[0] = L'\\';
-        pSuffix += 1;
-        swprintf(pSuffix, L"%04d", VidPnSourceId);
+        ssize_t cwcFmt = RTUtf16Printf(pBuf, cbBuf / sizeof(WCHAR), "%ls%.*ls\\%04d",
+                                       pKeyPrefix, pVGuid->Length / sizeof(WCHAR), pVGuid->Buffer, VidPnSourceId);
+        Assert((size_t)cwcFmt + 1 == cbResult / sizeof(WCHAR)); RT_NOREF(cwcFmt);
     }
     else
     {
@@ -1347,130 +952,6 @@ NTSTATUS vboxVideoAMgrCtxAllocDestroy(PVBOXVIDEOCM_ALLOC_CONTEXT pContext, VBOXD
     return Status;
 }
 
-#ifdef VBOX_WITH_CRHGSMI
-static DECLCALLBACK(VOID) vboxVideoAMgrAllocSubmitCompletion(PVBOXMP_DEVEXT pDevExt, PVBOXVDMADDI_CMD pCmd, PVOID pvContext)
-{
-    RT_NOREF(pCmd);
-    /* we should be called from our DPC routine */
-    Assert(KeGetCurrentIrql() == DISPATCH_LEVEL);
-
-    PVBOXVDMACBUF_DR pDr = (PVBOXVDMACBUF_DR)pvContext;
-    PVBOXVDMACMD pHdr = VBOXVDMACBUF_DR_TAIL(pDr, VBOXVDMACMD);
-    VBOXVDMACMD_CHROMIUM_CMD *pBody = VBOXVDMACMD_BODY(pHdr, VBOXVDMACMD_CHROMIUM_CMD);
-    UINT cBufs = pBody->cBuffers;
-    for (UINT i = 0; i < cBufs; ++i)
-    {
-        VBOXVDMACMD_CHROMIUM_BUFFER *pBufCmd = &pBody->aBuffers[i];
-        PVBOXVIDEOCM_ALLOC_REF pRef = (PVBOXVIDEOCM_ALLOC_REF)pBufCmd->u64GuestData;
-        if (!pBufCmd->u32GuestData)
-        {
-            /* signal completion */
-            if (pRef->pSynchEvent)
-                KeSetEvent(pRef->pSynchEvent, 3, FALSE);
-        }
-
-        vboxVideoAMgrCtxAllocRefRelease(pRef);
-    }
-
-    vboxVdmaCBufDrFree(&pDevExt->u.primary.Vdma, pDr);
-}
-
-/* submits a set of chromium uhgsmi buffers to host for processing */
-NTSTATUS vboxVideoAMgrCtxAllocSubmit(PVBOXMP_DEVEXT pDevExt, PVBOXVIDEOCM_ALLOC_CONTEXT pContext, UINT cBuffers,
-                                     VBOXWDDM_UHGSMI_BUFFER_UI_INFO_ESCAPE *paBuffers)
-{
-    /* ensure we do not overflow the 32bit buffer size value */
-    if (VBOXWDDM_TRAILARRAY_MAXELEMENTSU32(VBOXVDMACMD_CHROMIUM_CMD, aBuffers) < cBuffers)
-    {
-        WARN(("number of buffers passed too big (%d), max is (%d)",
-              cBuffers, VBOXWDDM_TRAILARRAY_MAXELEMENTSU32(VBOXVDMACMD_CHROMIUM_CMD, aBuffers)));
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    NTSTATUS Status = STATUS_SUCCESS;
-    UINT cbCmd = VBOXVDMACMD_SIZE_FROMBODYSIZE(RT_OFFSETOF(VBOXVDMACMD_CHROMIUM_CMD, aBuffers[cBuffers]));
-
-    PVBOXVDMACBUF_DR pDr = vboxVdmaCBufDrCreate(&pDevExt->u.primary.Vdma, cbCmd);
-    if (pDr)
-    {
-        // vboxVdmaCBufDrCreate zero initializes the pDr
-        pDr->fFlags = VBOXVDMACBUF_FLAG_BUF_FOLLOWS_DR;
-        pDr->cbBuf = cbCmd;
-        pDr->rc = VERR_NOT_IMPLEMENTED;
-
-        PVBOXVDMACMD pHdr = VBOXVDMACBUF_DR_TAIL(pDr, VBOXVDMACMD);
-        pHdr->enmType = VBOXVDMACMD_TYPE_CHROMIUM_CMD;
-        pHdr->u32CmdSpecific = 0;
-        VBOXVDMACMD_CHROMIUM_CMD *pBody = VBOXVDMACMD_BODY(pHdr, VBOXVDMACMD_CHROMIUM_CMD);
-        pBody->cBuffers = cBuffers;
-        for (UINT i = 0; i < cBuffers; ++i)
-        {
-            VBOXVDMACMD_CHROMIUM_BUFFER *pBufCmd = &pBody->aBuffers[i];
-            VBOXWDDM_UHGSMI_BUFFER_UI_INFO_ESCAPE *pBufInfo = &paBuffers[i];
-            PVBOXVIDEOCM_ALLOC_REF pRef = vboxVideoAMgrCtxAllocRefAcquire(pContext, pBufInfo->hAlloc);
-            if (pRef)
-            {
-#ifdef DEBUG_misha
-                Assert(pRef->cRefs == 2);
-#endif
-                pBufCmd->offBuffer = pRef->pAlloc->offData + pBufInfo->Info.offData;
-                pBufCmd->cbBuffer = pBufInfo->Info.cbData;
-                pBufCmd->u32GuestData = 0;
-                pBufCmd->u64GuestData = (uintptr_t)pRef;
-            }
-            else
-            {
-                WARN(("vboxVideoAMgrCtxAllocRefAcquire failed for hAlloc(0x%x)\n", pBufInfo->hAlloc));
-                /* release all previously acquired aloc references */
-                for (UINT j = 0; j < i; ++j)
-                {
-                    VBOXVDMACMD_CHROMIUM_BUFFER *pBufCmdJ = &pBody->aBuffers[j];
-                    PVBOXVIDEOCM_ALLOC_REF pRefJ = (PVBOXVIDEOCM_ALLOC_REF)pBufCmdJ;
-                    vboxVideoAMgrCtxAllocRefRelease(pRefJ);
-                }
-                Status = STATUS_INVALID_PARAMETER;
-                break;
-            }
-        }
-
-        if (Status == STATUS_SUCCESS)
-        {
-            PVBOXVDMADDI_CMD pDdiCmd = VBOXVDMADDI_CMD_FROM_BUF_DR(pDr);
-            vboxVdmaDdiCmdInit(pDdiCmd, 0, 0, vboxVideoAMgrAllocSubmitCompletion, pDr);
-            /* mark command as submitted & invisible for the dx runtime since dx did not originate it */
-            vboxVdmaDdiCmdSubmittedNotDx(pDdiCmd);
-            int rc = vboxVdmaCBufDrSubmit(pDevExt, &pDevExt->u.primary.Vdma, pDr);
-            if (RT_SUCCESS(rc))
-            {
-                return STATUS_SUCCESS;
-            }
-
-            WARN(("vboxVdmaCBufDrSubmit failed with rc (%d)\n", rc));
-
-            /* failure branch */
-            /* release all previously acquired aloc references */
-            for (UINT i = 0; i < cBuffers; ++i)
-            {
-                VBOXVDMACMD_CHROMIUM_BUFFER *pBufCmd = &pBody->aBuffers[i];
-                PVBOXVIDEOCM_ALLOC_REF pRef = (PVBOXVIDEOCM_ALLOC_REF)pBufCmd;
-                vboxVideoAMgrCtxAllocRefRelease(pRef);
-            }
-        }
-
-        vboxVdmaCBufDrFree(&pDevExt->u.primary.Vdma, pDr);
-    }
-    else
-    {
-        Assert(0);
-        /** @todo try flushing.. */
-        LOGREL(("vboxVdmaCBufDrCreate returned NULL"));
-        Status = STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    return Status;
-}
-#endif
-
 NTSTATUS vboxVideoAMgrCreate(PVBOXMP_DEVEXT pDevExt, PVBOXVIDEOCM_ALLOC_MGR pMgr, uint32_t offData, uint32_t cbData)
 {
     Assert(!(offData & (PAGE_SIZE -1)));
@@ -1604,7 +1085,6 @@ static BOOLEAN g_bVBoxUmdD3DCAPS9IsInited = FALSE;
 
 static void vboxUmdDumpDword(DWORD *pvData, DWORD cData)
 {
-    char aBuf[16*4];
     DWORD dw1, dw2, dw3, dw4;
     for (UINT i = 0; i < (cData & (~3)); i+=4)
     {
@@ -1612,8 +1092,7 @@ static void vboxUmdDumpDword(DWORD *pvData, DWORD cData)
         dw2 = *pvData++;
         dw3 = *pvData++;
         dw4 = *pvData++;
-        sprintf(aBuf, "0x%08x, 0x%08x, 0x%08x, 0x%08x,\n", dw1, dw2, dw3, dw4);
-        LOGREL(("%s", aBuf));
+        LOGREL(("0x%08x, 0x%08x, 0x%08x, 0x%08x,\n", dw1, dw2, dw3, dw4));
     }
 
     cData = cData % 4;
@@ -1623,19 +1102,16 @@ static void vboxUmdDumpDword(DWORD *pvData, DWORD cData)
             dw1 = *pvData++;
             dw2 = *pvData++;
             dw3 = *pvData++;
-            sprintf(aBuf, "0x%08x, 0x%08x, 0x%08x\n", dw1, dw2, dw3);
-            LOGREL(("%s", aBuf));
+            LOGREL(("0x%08x, 0x%08x, 0x%08x\n", dw1, dw2, dw3));
             break;
         case 2:
             dw1 = *pvData++;
             dw2 = *pvData++;
-            sprintf(aBuf, "0x%08x, 0x%08x\n", dw1, dw2);
-            LOGREL(("%s", aBuf));
+            LOGREL(("0x%08x, 0x%08x\n", dw1, dw2));
             break;
         case 1:
             dw1 = *pvData++;
-            sprintf(aBuf, "0x%8x\n", dw1);
-            LOGREL(("%s", aBuf));
+            LOGREL(("0x%8x\n", dw1));
             break;
         default:
             break;
@@ -1653,14 +1129,14 @@ static void vboxUmdDumpD3DCAPS9(void *pvData, PVBOXDISPIFESCAPE_DBGDUMPBUF_FLAGS
 
 NTSTATUS vboxUmdDumpBuf(PVBOXDISPIFESCAPE_DBGDUMPBUF pBuf, uint32_t cbBuffer)
 {
-    if (cbBuffer < RT_OFFSETOF(VBOXDISPIFESCAPE_DBGDUMPBUF, aBuf[0]))
+    if (cbBuffer < RT_UOFFSETOF(VBOXDISPIFESCAPE_DBGDUMPBUF, aBuf[0]))
     {
         WARN(("Buffer too small"));
         return STATUS_BUFFER_TOO_SMALL;
     }
 
     NTSTATUS Status = STATUS_SUCCESS;
-    uint32_t cbString = cbBuffer - RT_OFFSETOF(VBOXDISPIFESCAPE_DBGDUMPBUF, aBuf[0]);
+    uint32_t cbString = cbBuffer - RT_UOFFSETOF(VBOXDISPIFESCAPE_DBGDUMPBUF, aBuf[0]);
     switch (pBuf->enmType)
     {
         case VBOXDISPIFESCAPE_DBGDUMPBUF_TYPE_D3DCAPS9:
@@ -1774,6 +1250,17 @@ NTSTATUS vboxWddmDrvCfgInit(PUNICODE_STRING pRegStr)
     if (NT_SUCCESS(Status))
         g_VBoxLogUm = dwValue;
 
+    g_RefreshRate = 0;
+    Status = vboxWddmRegQueryValueDword(hKey, VBOXWDDM_CFG_STR_RATE, &dwValue);
+    if (NT_SUCCESS(Status))
+    {
+        LOGREL(("WDDM: Guest refresh rate %u", dwValue));
+        g_RefreshRate = dwValue;
+    }
+
+    if (g_RefreshRate == 0 || g_RefreshRate > 240)
+        g_RefreshRate = VBOXWDDM_DEFAULT_REFRESH_RATE;
+
     ZwClose(hKey);
 
     return Status;
@@ -1801,115 +1288,6 @@ NTSTATUS vboxWddmThreadCreate(PKTHREAD * ppThread, PKSTART_ROUTINE pStartRoutine
     ZwClose(hThread);
     return STATUS_SUCCESS;
 }
-
-#ifdef VBOX_VDMA_WITH_WATCHDOG
-static int vboxWddmWdProgram(PVBOXMP_DEVEXT pDevExt, uint32_t cMillis)
-{
-    int rc = VINF_SUCCESS;
-    PVBOXVDMA_CTL pCmd = (PVBOXVDMA_CTL)VBoxSHGSMICommandAlloc(&VBoxCommonFromDeviceExt(pDevExt)->guestCtx.heapCtx,
-                                                               sizeof(VBOXVDMA_CTL), HGSMI_CH_VBVA, VBVA_VDMA_CTL);
-    if (pCmd)
-    {
-        pCmd->enmCtl = VBOXVDMA_CTL_TYPE_WATCHDOG;
-        pCmd->u32Offset = cMillis;
-        pCmd->i32Result = VERR_NOT_SUPPORTED;
-
-        const VBOXSHGSMIHEADER* pHdr = VBoxSHGSMICommandPrepSynch(&VBoxCommonFromDeviceExt(pDevExt)->guestCtx.heapCtx, pCmd);
-        Assert(pHdr);
-        if (pHdr)
-        {
-            do
-            {
-                HGSMIOFFSET offCmd = VBoxSHGSMICommandOffset(&VBoxCommonFromDeviceExt(pDevExt)->guestCtx.heapCtx, pHdr);
-                Assert(offCmd != HGSMIOFFSET_VOID);
-                if (offCmd != HGSMIOFFSET_VOID)
-                {
-                    VBoxVideoCmnPortWriteUlong(VBoxCommonFromDeviceExt(pDevExt)->guestCtx.port, offCmd);
-                    /* Make the compiler aware that the host has changed memory. */
-                    ASMCompilerBarrier();
-                    rc = VBoxSHGSMICommandDoneSynch(&VBoxCommonFromDeviceExt(pDevExt)->guestCtx.heapCtx, pHdr);
-                    AssertRC(rc);
-                    if (RT_SUCCESS(rc))
-                    {
-                        rc = pCmd->i32Result;
-                        AssertRC(rc);
-                    }
-                    break;
-                }
-                else
-                    rc = VERR_INVALID_PARAMETER;
-                /* fail to submit, cancel it */
-                VBoxSHGSMICommandCancelSynch(&VBoxCommonFromDeviceExt(pDevExt)->guestCtx.heapCtx, pHdr);
-            } while (0);
-        }
-
-        VBoxSHGSMICommandFree (&VBoxCommonFromDeviceExt(pDevExt)->guestCtx.heapCtx, pCmd);
-    }
-    else
-    {
-        LOGREL(("HGSMIHeapAlloc failed"));
-        rc = VERR_OUT_OF_RESOURCES;
-    }
-    return rc;
-}
-
-static uint32_t g_VBoxWdTimeout = 4000;
-/* if null g_VBoxWdTimeout / 2 is used */
-static uint32_t g_VBoxWdTimerPeriod = 0;
-
-static VOID vboxWddmWdThread(PVOID pvUser)
-{
-    PVBOXMP_DEVEXT pDevExt = (PVBOXMP_DEVEXT)pvUser;
-    BOOLEAN bExit = FALSE;
-    int rc;
-    while (1)
-    {
-        if (!bExit)
-        {
-            rc = vboxWddmWdProgram(pDevExt, g_VBoxWdTimeout /* ms */);
-            AssertRC(rc);
-        }
-        else
-        {
-            rc = vboxWddmWdProgram(pDevExt, 0 /* to disable WatchDog */);
-            AssertRC(rc);
-            break;
-        }
-        LARGE_INTEGER Timeout;
-        uint32_t timerTimeOut = g_VBoxWdTimerPeriod ? g_VBoxWdTimerPeriod : g_VBoxWdTimeout / 2;
-        Timeout.QuadPart = 10000ULL * timerTimeOut /* ms */;
-        NTSTATUS Status = KeWaitForSingleObject(&pDevExt->WdEvent, Executive, KernelMode, FALSE, &Timeout);
-        if (Status != STATUS_TIMEOUT)
-            bExit = TRUE;
-    }
-}
-
-NTSTATUS vboxWddmWdInit(PVBOXMP_DEVEXT pDevExt)
-{
-    KeInitializeEvent(&pDevExt->WdEvent, NotificationEvent, FALSE);
-
-    NTSTATUS Status = vboxWddmThreadCreate(&pDevExt->pWdThread, vboxWddmWdThread, pDevExt);
-    if (!NT_SUCCESS(Status))
-    {
-        WARN(("vboxWddmThreadCreate failed, Status 0x%x", Status));
-        pDevExt->pWdThread = NULL;
-    }
-    return Status;
-}
-
-NTSTATUS vboxWddmWdTerm(PVBOXMP_DEVEXT pDevExt)
-{
-    if (!pDevExt->pWdThread)
-        return STATUS_SUCCESS;
-
-    KeSetEvent(&pDevExt->WdEvent, 0, FALSE);
-
-    KeWaitForSingleObject(pDevExt->pWdThread, Executive, KernelMode, FALSE, NULL);
-    ObDereferenceObject(pDevExt->pWdThread);
-    pDevExt->pWdThread = NULL;
-    return STATUS_SUCCESS;
-}
-#endif
 
 static int vboxWddmSlConfigure(PVBOXMP_DEVEXT pDevExt, uint32_t fFlags)
 {
@@ -1955,8 +1333,8 @@ NTSTATUS VBoxWddmSlEnableVSyncNotification(PVBOXMP_DEVEXT pDevExt, BOOLEAN fEnab
         KeQuerySystemTime((PLARGE_INTEGER)&pDevExt->VSyncTime);
 
         LARGE_INTEGER DueTime;
-        DueTime.QuadPart = -166666LL; /* 60 Hz */
-        KeSetTimerEx(&pDevExt->VSyncTimer, DueTime, 16, &pDevExt->VSyncDpc);
+        DueTime.QuadPart = -10000000LL / g_RefreshRate; /* 100ns units per second / Freq Hz */
+        KeSetTimerEx(&pDevExt->VSyncTimer, DueTime, 1000 / g_RefreshRate, &pDevExt->VSyncDpc);
     }
 
     pDevExt->bVSyncTimerEnabled = !!fEnable;
@@ -1988,17 +1366,19 @@ NTSTATUS VBoxWddmSlGetScanLine(PVBOXMP_DEVEXT pDevExt, DXGKARG_GETSCANLINE *pGet
         {
             VSyncTime.QuadPart = VSyncTime.QuadPart - DevVSyncTime.QuadPart;
             /*
-             * Check whether we are in VBlank state or actively drawing a scan line
-             * 10% of the 60Hz are dedicated to VBlank.
+             * Check whether we are in VBlank state or actively drawing a scan line.
+             * 10% of the VSync interval are dedicated to VBlank.
              *
              * Time intervals are in 100ns steps.
              */
             LARGE_INTEGER VSyncPeriod;
-            VSyncPeriod.QuadPart = VSyncTime.QuadPart % 166666LL; /* ASSUMES 60Hz*/
-            if (VSyncPeriod.QuadPart >= 150000LL)
+            VSyncPeriod.QuadPart = VSyncTime.QuadPart % (10000000LL / g_RefreshRate);
+            LARGE_INTEGER VBlankStart;
+            VBlankStart.QuadPart = ((10000000LL / g_RefreshRate) * 9) / 10;
+            if (VSyncPeriod.QuadPart >= VBlankStart.QuadPart)
                 bVBlank = TRUE;
             else
-                curScanLine = (uint32_t)((pTarget->Size.cy * VSyncPeriod.QuadPart) / 150000LL);
+                curScanLine = (uint32_t)((pTarget->Size.cy * VSyncPeriod.QuadPart) / VBlankStart.QuadPart);
         }
 
         pGetScanLine->ScanLine = curScanLine;
@@ -2023,13 +1403,9 @@ static BOOLEAN vboxWddmSlVSyncIrqCb(PVOID pvContext)
         if (pTarget->fConnected)
         {
             memset(&notify, 0, sizeof(DXGKARGCB_NOTIFY_INTERRUPT_DATA));
-#ifdef VBOX_WDDM_WIN8
             notify.InterruptType = g_VBoxDisplayOnly?
                                        DXGK_INTERRUPT_DISPLAYONLY_VSYNC:
                                        DXGK_INTERRUPT_CRTC_VSYNC;
-#else
-            notify.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
-#endif
             notify.CrtcVsync.VidPnTargetId = i;
             pDevExt->u.primary.DxgkInterface.DxgkCbNotifyInterrupt(pDevExt->u.primary.DxgkInterface.DeviceHandle, &notify);
             bNeedDpc = TRUE;
@@ -2089,8 +1465,6 @@ NTSTATUS VBoxWddmSlTerm(PVBOXMP_DEVEXT pDevExt)
     return STATUS_SUCCESS;
 }
 
-#ifdef VBOX_WDDM_WIN8
-
 void vboxWddmDiInitDefault(DXGK_DISPLAY_INFORMATION *pInfo, PHYSICAL_ADDRESS PhAddr, D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
 {
     pInfo->Width = 1024;
@@ -2113,7 +1487,7 @@ void vboxWddmDiToAllocData(PVBOXMP_DEVEXT pDevExt, const DXGK_DISPLAY_INFORMATIO
     pAllocData->SurfDesc.slicePitch = pInfo->Pitch;
     pAllocData->SurfDesc.cbSize = pInfo->Pitch * pInfo->Height;
     pAllocData->SurfDesc.VidPnSourceId = pInfo->TargetId;
-    pAllocData->SurfDesc.RefreshRate.Numerator = 60000;
+    pAllocData->SurfDesc.RefreshRate.Numerator = g_RefreshRate * 1000;
     pAllocData->SurfDesc.RefreshRate.Denominator = 1000;
 
     /* the address here is not a VRAM offset! so convert it to offset */
@@ -2135,5 +1509,19 @@ void vboxWddmDmSetupDefaultVramLocation(PVBOXMP_DEVEXT pDevExt, D3DDDI_VIDEO_PRE
         pSource->u8SyncState &= ~VBOXWDDM_HGSYNC_F_SYNCED_LOCATION;
 }
 
-#endif /* VBOX_WDDM_WIN8 */
-
+char const *vboxWddmAllocTypeString(PVBOXWDDM_ALLOCATION pAlloc)
+{
+    switch (pAlloc->enmType)
+    {
+        case VBOXWDDM_ALLOC_TYPE_UNEFINED:                 return "UNEFINED";
+        case VBOXWDDM_ALLOC_TYPE_STD_SHAREDPRIMARYSURFACE: return "SHAREDPRIMARYSURFACE";
+        case VBOXWDDM_ALLOC_TYPE_STD_SHADOWSURFACE:        return "SHADOWSURFACE";
+        case VBOXWDDM_ALLOC_TYPE_STD_STAGINGSURFACE:       return "STAGINGSURFACE";
+        case VBOXWDDM_ALLOC_TYPE_STD_GDISURFACE:           return "GDISURFACE";
+        case VBOXWDDM_ALLOC_TYPE_UMD_RC_GENERIC:           return "UMD_RC_GENERIC";
+        case VBOXWDDM_ALLOC_TYPE_UMD_HGSMI_BUFFER:         return "UMD_HGSMI_BUFFER";
+        default: break;
+    }
+    AssertFailed();
+    return "UNKNOWN";
+}

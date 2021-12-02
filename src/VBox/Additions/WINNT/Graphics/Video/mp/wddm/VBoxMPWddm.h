@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPWddm.h 84658 2020-06-03 11:30:37Z vboxsync $ */
 /** @file
  * VBox WDDM Miniport driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,21 +15,14 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxMPWddm_h___
-#define ___VBoxMPWddm_h___
-
-#ifdef VBOX_WDDM_WIN8
-# define VBOX_WDDM_DRIVERNAME L"VBoxVideoW8"
-#else
-# define VBOX_WDDM_DRIVERNAME L"VBoxVideoWddm"
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPWddm_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPWddm_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
 #endif
 
-#ifndef DEBUG_misha
-# ifdef Assert
-#  error "VBoxMPWddm.h must be included first."
-# endif
-# define RT_NO_STRICT
-#endif
+#define VBOX_WDDM_DRIVERNAME L"VBoxWddm"
+
 #include "common/VBoxMPUtils.h"
 #include "common/VBoxMPDevExt.h"
 #include "../../common/VBoxVideoTools.h"
@@ -44,6 +37,7 @@
 #define VBOXWDDM_CFG_LOG_UM_BACKDOOR 0x00000001
 #define VBOXWDDM_CFG_LOG_UM_DBGPRINT 0x00000002
 #define VBOXWDDM_CFG_STR_LOG_UM L"VBoxLogUm"
+#define VBOXWDDM_CFG_STR_RATE L"RefreshRate"
 
 #define VBOXWDDM_REG_DRV_FLAGS_NAME L"VBoxFlags"
 #define VBOXWDDM_REG_DRV_DISPFLAGS_PREFIX L"VBoxDispFlags"
@@ -56,12 +50,14 @@
 
 #define VBOXWDDM_REG_DISPLAYSETTINGSKEY_PREFIX_VISTA L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current\\System\\CurrentControlSet\\Control\\VIDEO\\"
 #define VBOXWDDM_REG_DISPLAYSETTINGSKEY_PREFIX_WIN7 L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\UnitedVideo\\CONTROL\\VIDEO\\"
+#define VBOXWDDM_REG_DISPLAYSETTINGSKEY_PREFIX_WIN10_17763 L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\UnitedVideo\\CONTROL\\VIDEO\\"
 
 #define VBOXWDDM_REG_DISPLAYSETTINGS_ATTACH_RELX L"Attach.RelativeX"
 #define VBOXWDDM_REG_DISPLAYSETTINGS_ATTACH_RELY L"Attach.RelativeY"
 #define VBOXWDDM_REG_DISPLAYSETTINGS_ATTACH_DESKTOP L"Attach.ToDesktop"
 
 extern DWORD g_VBoxLogUm;
+extern DWORD g_RefreshRate;
 
 RT_C_DECLS_BEGIN
 NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING RegistryPath);
@@ -167,7 +163,8 @@ DECLINLINE(VBOXVIDEOOFFSET) vboxWddmAddrFramOffset(const VBOXWDDM_ADDR *pAddr)
             : VBOXVIDEOOFFSET_VOID;
 }
 
-DECLINLINE(int) vboxWddmScreenInfoInit(VBVAINFOSCREEN *pScreen, const VBOXWDDM_ALLOC_DATA *pAllocData, const POINT * pVScreenPos, uint16_t fFlags)
+DECLINLINE(int) vboxWddmScreenInfoInit(VBVAINFOSCREEN RT_UNTRUSTED_VOLATILE_HOST *pScreen,
+                                       const VBOXWDDM_ALLOC_DATA *pAllocData, const POINT * pVScreenPos, uint16_t fFlags)
 {
     VBOXVIDEOOFFSET offVram = vboxWddmAddrFramOffset(&pAllocData->Addr);
     if (offVram == VBOXVIDEOOFFSET_VOID && !(fFlags & (VBVA_SCREEN_F_DISABLED | VBVA_SCREEN_F_BLANK2)))
@@ -191,20 +188,7 @@ DECLINLINE(int) vboxWddmScreenInfoInit(VBVAINFOSCREEN *pScreen, const VBOXWDDM_A
 
 bool vboxWddmGhDisplayCheckSetInfoFromSource(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_SOURCE pSource);
 
-#ifdef VBOX_WITH_CROGL
-#define VBOXWDDMENTRY_2_SWAPCHAIN(_pE) ((PVBOXWDDM_SWAPCHAIN)((uint8_t*)(_pE) - RT_OFFSETOF(VBOXWDDM_SWAPCHAIN, DevExtListEntry)))
-
-BOOLEAN DxgkDdiInterruptRoutineNew(
-    IN CONST PVOID MiniportDeviceContext,
-    IN ULONG MessageNumber
-    );
-#endif
-
-#ifdef VBOX_WDDM_WIN8
-# define VBOXWDDM_IS_DISPLAYONLY() (g_VBoxDisplayOnly)
-#else
-# define VBOXWDDM_IS_DISPLAYONLY() (FALSE)
-#endif
+#define VBOXWDDM_IS_DISPLAYONLY() (g_VBoxDisplayOnly)
 
 # define VBOXWDDM_IS_FB_ALLOCATION(_pDevExt, _pAlloc) ((_pAlloc)->bAssigned)
 
@@ -221,5 +205,11 @@ BOOLEAN DxgkDdiInterruptRoutineNew(
         KeReleaseSpinLock(&(_p)->ContextLock, _ctxLockOldIrql); \
     } while (0)
 
-#endif /* #ifndef ___VBoxMPWddm_h___ */
+DECLINLINE(PVBOXWDDM_ALLOCATION) vboxWddmGetAllocationFromAllocList(DXGK_ALLOCATIONLIST *pAllocList)
+{
+    PVBOXWDDM_OPENALLOCATION pOa = (PVBOXWDDM_OPENALLOCATION)pAllocList->hDeviceSpecificAllocation;
+    return pOa->pAllocation;
+}
+
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPWddm_h */
 

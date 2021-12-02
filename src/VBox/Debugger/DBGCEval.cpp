@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGCEval.cpp 84054 2020-04-28 16:05:00Z vboxsync $ */
 /** @file
  * DBGC - Debugger Console, command evaluator.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -572,6 +572,7 @@ static int dbgcEvalSubUnary(PDBGC pDbgc, char *pszExpr, size_t cchExpr, DBGCVARC
  *
  * @param   pDbgc       Debugger console instance data.
  * @param   pszExpr     The expression string.
+ * @param   cchExpr     The size of the expression string.
  * @param   enmCategory The target category for the result.
  * @param   pResult     Where to store the result of the expression evaluation.
  */
@@ -832,7 +833,7 @@ static int dbgcCheckAndTypePromoteArgument(PDBGC pDbgc, DBGCVARCAT enmCategory, 
         case DBGCVAR_CAT_POINTER_NUMBER_NO_RANGE:
             if (pArg->enmRangeType != DBGCVAR_RANGE_NONE)
                 return VERR_DBGC_PARSE_NO_RANGE_ALLOWED;
-            /* fallthru */
+            RT_FALL_THRU();
         case DBGCVAR_CAT_POINTER:
         case DBGCVAR_CAT_POINTER_NUMBER:
             switch (pArg->enmType)
@@ -887,7 +888,7 @@ static int dbgcCheckAndTypePromoteArgument(PDBGC pDbgc, DBGCVARCAT enmCategory, 
         case DBGCVAR_CAT_GC_POINTER_NO_RANGE:
             if (pArg->enmRangeType != DBGCVAR_RANGE_NONE)
                 return VERR_DBGC_PARSE_NO_RANGE_ALLOWED;
-            /* fallthru */
+            RT_FALL_THRU();
         case DBGCVAR_CAT_GC_POINTER:
             switch (pArg->enmType)
             {
@@ -941,7 +942,7 @@ static int dbgcCheckAndTypePromoteArgument(PDBGC pDbgc, DBGCVARCAT enmCategory, 
         case DBGCVAR_CAT_NUMBER_NO_RANGE:
             if (pArg->enmRangeType != DBGCVAR_RANGE_NONE)
                 return VERR_DBGC_PARSE_NO_RANGE_ALLOWED;
-            /* fallthru */
+            RT_FALL_THRU();
         case DBGCVAR_CAT_NUMBER:
             switch (pArg->enmType)
             {
@@ -1042,7 +1043,7 @@ static int dbgcCheckAndTypePromoteArgument(PDBGC pDbgc, DBGCVARCAT enmCategory, 
  * @param   cArgsMax        See DBGCCMD::cArgsMax and DBGCFUNC::cArgsMax.
  * @param   paVarDescs      See DBGCCMD::paVarDescs and DBGCFUNC::paVarDescs.
  * @param   cVarDescs       See DBGCCMD::cVarDescs and DBGCFUNC::cVarDescs.
- * @param   pszArg          Pointer to the arguments to parse.
+ * @param   pszArgs         Pointer to the arguments to parse.
  * @param   piArg           Where to return the index of the first argument in
  *                          DBGC::aArgs. Always set. Caller must restore DBGC::iArg
  *                          to this value when done, even on failure.
@@ -1471,14 +1472,11 @@ int dbgcEvalCommand(PDBGC pDbgc, char *pszCmd, size_t cchCmd, bool fNoExecute)
                 break;
 
             default:
-            {
-                PCRTSTATUSMSG pErr = RTErrGet(rc);
-                if (strncmp(pErr->pszDefine, RT_STR_TUPLE("Unknown Status")))
-                    rc = DBGCCmdHlpPrintf(&pDbgc->CmdHlp, "Error: %s (%d) - %s\n", pErr->pszDefine, rc, pErr->pszMsgFull);
+                if (RTErrIsKnown(rc))
+                    rc = DBGCCmdHlpPrintf(&pDbgc->CmdHlp, "Error: %Rra\n", rc);
                 else
                     rc = DBGCCmdHlpPrintf(&pDbgc->CmdHlp, "Error: Unknown error %d (%#x)!\n", rc, rc);
                 break;
-            }
         }
     }
 

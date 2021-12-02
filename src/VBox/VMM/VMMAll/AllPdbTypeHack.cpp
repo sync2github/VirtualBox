@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: AllPdbTypeHack.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Debug info hack for the VM and VMCPU structures.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,7 +37,6 @@
 #include "../include/TRPMInternal.h"
 #include "../include/TMInternal.h"
 #include "../include/IOMInternal.h"
-#include "../include/REMInternal.h"
 #ifdef IN_RING3
 # include "../include/SSMInternal.h"
 #endif
@@ -50,16 +49,10 @@
 #include "../include/VMInternal.h"
 #include "../include/EMInternal.h"
 #include "../include/IEMInternal.h"
-#include "../include/REMInternal.h"
+#include "../include/NEMInternal.h"
 #include "../VMMR0/GMMR0Internal.h"
-#ifndef IN_RC
-# include "../VMMR0/GVMMR0Internal.h"
-#endif
-#ifdef VBOX_WITH_RAW_MODE
-# include "../include/CSAMInternal.h"
-# include "../include/PATMInternal.h"
-#endif
-#include <VBox/vmm/vm.h>
+#include "../VMMR0/GVMMR0Internal.h"
+#include <VBox/vmm/vmcc.h>
 #ifdef IN_RING3
 # include <VBox/vmm/uvm.h>
 #endif
@@ -98,7 +91,7 @@ DECLEXPORT(uint32_t) PdbTypeHack(PVM pVM, PVMCPU pVCpu, PPDMCRITSECT pCs1, PPDMC
          | (pCs1 == g_PdbTypeHack3)
          | pCs2->s.Core.fFlags
          | (pCs2 == g_PdbTypeHack4)
-         | g_PdbTypeHack5->Internal.s.fIntFlags
+         | g_PdbTypeHack5->Internal.s.idxR0Device
          | (g_PdbTypeHack5 != NULL)
          | (uint32_t)g_PdbTypeHack6->Internal.s.fDetaching
          | (g_PdbTypeHack6 != NULL)

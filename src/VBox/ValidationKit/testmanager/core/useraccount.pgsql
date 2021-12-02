@@ -1,10 +1,10 @@
--- $Id$
+-- $Id: useraccount.pgsql 82968 2020-02-04 10:35:17Z vboxsync $
 --- @file
 -- VBox Test Manager Database Stored Procedures - UserAccounts.
 --
 
 --
--- Copyright (C) 2012-2015 Oracle Corporation
+-- Copyright (C) 2012-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;
@@ -59,7 +59,7 @@ CREATE OR REPLACE FUNCTION UserAccountLogic_checkUniqueUser(a_sUsername TEXT, a_
         END IF;
     END;
 $$ LANGUAGE plpgsql;
-              
+
 ---
 -- Check that the user account exists.
 -- Raises exception if it doesn't.
@@ -83,7 +83,7 @@ $$ LANGUAGE plpgsql;
 -- Historize a row.
 -- @internal
 --
-CREATE OR REPLACE FUNCTION UserAccountLogic_historizeEntry(a_uid INTEGER, a_tsExpire TIMESTAMP WITH TIME ZONE) 
+CREATE OR REPLACE FUNCTION UserAccountLogic_historizeEntry(a_uid INTEGER, a_tsExpire TIMESTAMP WITH TIME ZONE)
     RETURNS VOID AS $$
     DECLARE
         v_cUpdatedRows INTEGER;
@@ -106,8 +106,8 @@ $$ LANGUAGE plpgsql;
 ---
 -- Adds a new user.
 --
-CREATE OR REPLACE FUNCTION UserAccountLogic_addEntry(a_uidAuthor INTEGER, a_sUsername TEXT, a_sEmail TEXT, a_sFullName TEXT, 
-                                                     a_sLoginName TEXT) 
+CREATE OR REPLACE FUNCTION UserAccountLogic_addEntry(a_uidAuthor INTEGER, a_sUsername TEXT, a_sEmail TEXT, a_sFullName TEXT,
+                                                     a_sLoginName TEXT, a_fReadOnly BOOLEAN)
     RETURNS VOID AS $$
     DECLARE
         v_cRows INTEGER;
@@ -118,16 +118,16 @@ CREATE OR REPLACE FUNCTION UserAccountLogic_addEntry(a_uidAuthor INTEGER, a_sUse
     END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION UserAccountLogic_editEntry(a_uidAuthor INTEGER, a_uid INTEGER, a_sUsername TEXT, a_sEmail TEXT, 
-                                                      a_sFullName TEXT, a_sLoginName TEXT)  
+CREATE OR REPLACE FUNCTION UserAccountLogic_editEntry(a_uidAuthor INTEGER, a_uid INTEGER, a_sUsername TEXT, a_sEmail TEXT,
+                                                      a_sFullName TEXT, a_sLoginName TEXT, a_fReadOnly BOOLEAN)
     RETURNS VOID AS $$
     BEGIN
         PERFORM UserAccountLogic_checkExists(a_uid);
         PERFORM UserAccountLogic_checkUniqueUser(a_sUsername, a_sLoginName, a_uid);
 
         PERFORM UserAccountLogic_historizeEntry(a_uid, CURRENT_TIMESTAMP);
-        INSERT INTO Users (uid, uidAuthor, sUsername, sEmail, sFullName, sLoginName)
-            VALUES (a_uid, a_uidAuthor, a_sUsername, a_sEmail, a_sFullName, a_sLoginName);
+        INSERT INTO Users (uid, uidAuthor, sUsername, sEmail, sFullName, sLoginName, fReadOnly)
+            VALUES (a_uid, a_uidAuthor, a_sUsername, a_sEmail, a_sFullName, a_sLoginName, a_fReadOnly);
     END;
 $$ LANGUAGE plpgsql;
 
@@ -139,7 +139,7 @@ CREATE OR REPLACE FUNCTION UserAccountLogic_delEntry(a_uidAuthor INTEGER, a_uid 
     BEGIN
         --
         -- To preserve the information about who deleted the record, we try to
-        -- add a dummy record which expires immediately.  I say try because of 
+        -- add a dummy record which expires immediately.  I say try because of
         -- the primary key, we must let the new record be valid for 1 us. :-(
         --
 

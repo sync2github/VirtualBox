@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: strcpy.cpp 85075 2020-07-06 17:17:30Z vboxsync $ */
 /** @file
  * IPRT - CRT Strings, strcpy().
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -38,9 +38,9 @@
  * @param   pszDst      Will contain a copy of pszSrc.
  * @param   pszSrc      Zero terminated string.
  */
-char* strcpy(char *pszDst, register const char *pszSrc)
+char* strcpy(char *pszDst, const char *pszSrc)
 {
-    register char *psz = pszDst;
+    char *psz = pszDst;
     while ((*psz++ = *pszSrc++))
         ;
 

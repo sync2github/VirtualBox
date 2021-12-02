@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MediumImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,9 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-
-#ifndef ____H_MEDIUMIMPL
-#define ____H_MEDIUMIMPL
+#ifndef MAIN_INCLUDED_MediumImpl_h
+#define MAIN_INCLUDED_MediumImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vd.h>
 #include "MediumWrap.h"
@@ -27,6 +29,7 @@
 class Progress;
 class MediumFormat;
 class MediumLockList;
+struct MediumCryptoFilterSettings;
 
 namespace settings
 {
@@ -42,7 +45,7 @@ class ATL_NO_VTABLE Medium :
     public MediumWrap
 {
 public:
-    DECLARE_EMPTY_CTOR_DTOR(Medium)
+    DECLARE_COMMON_CLASS_METHODS(Medium)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -75,13 +78,14 @@ public:
                     const Guid &uuidMachineRegistry,
                     const settings::Medium &data,
                     const Utf8Str &strMachineFolder);
-    HRESULT init(VirtualBox *aVirtualBox,
-                 Medium *aParent,
-                 DeviceType_T aDeviceType,
-                 const Guid &uuidMachineRegistry,
-                 const settings::Medium &data,
-                 const Utf8Str &strMachineFolder,
-                 AutoWriteLock &mediaTreeLock);
+    HRESULT initFromSettings(VirtualBox *aVirtualBox,
+                             Medium *aParent,
+                             DeviceType_T aDeviceType,
+                             const Guid &uuidMachineRegistry,
+                             const settings::Medium &data,
+                             const Utf8Str &strMachineFolder,
+                             AutoWriteLock &mediaTreeLock,
+                             ComObjPtr<Medium> *ppRegistered);
 
     // initializer for host floppy/DVD
     HRESULT init(VirtualBox *aVirtualBox,
@@ -108,12 +112,14 @@ public:
     const ComObjPtr<MediumFormat> & i_getMediumFormat() const;
     bool i_isMediumFormatFile() const;
     uint64_t i_getSize() const;
+    uint64_t i_getLogicalSize() const;
     DeviceType_T i_getDeviceType() const;
     MediumType_T i_getType() const;
     Utf8Str i_getName();
 
     /* handles caller/locking itself */
     bool i_addRegistry(const Guid &id);
+    bool i_addRegistryNoCallerCheck(const Guid &id);
     /* handles caller/locking itself, caller is responsible for tree lock */
     bool i_addRegistryRecursive(const Guid &id);
     /* handles caller/locking itself */
@@ -166,14 +172,15 @@ public:
                                 MediumVariant_T aVariant,
                                 MediumLockList *pMediumLockList,
                                 ComObjPtr<Progress> *aProgress,
-                                bool aWait);
+                                bool aWait,
+                                bool aNotify);
     Utf8Str i_getPreferredDiffFormat();
     MediumVariant_T i_getPreferredDiffVariant();
 
     HRESULT i_close(AutoCaller &autoCaller);
     HRESULT i_unlockRead(MediumState_T *aState);
     HRESULT i_unlockWrite(MediumState_T *aState);
-    HRESULT i_deleteStorage(ComObjPtr<Progress> *aProgress, bool aWait);
+    HRESULT i_deleteStorage(ComObjPtr<Progress> *aProgress, bool aWait, bool aNotify);
     HRESULT i_markForDeletion();
     HRESULT i_unmarkForDeletion();
     HRESULT i_markLockedForDeletion();
@@ -196,40 +203,55 @@ public:
                       MediumLockList *aChildrenToReparent,
                       MediumLockList *aMediumLockList,
                       ComObjPtr<Progress> *aProgress,
-                      bool aWait);
+                      bool aWait,
+                      bool aNotify);
     void i_cancelMergeTo(MediumLockList *aChildrenToReparent,
                        MediumLockList *aMediumLockList);
 
+    HRESULT i_resize(uint64_t aLogicalSize,
+                     MediumLockList *aMediumLockList,
+                     ComObjPtr<Progress> *aProgress,
+                     bool aWait,
+                     bool aNotify);
+
     HRESULT i_fixParentUuidOfChildren(MediumLockList *pChildrenToReparent);
+
+    HRESULT i_addRawToFss(const char *aFilename, SecretKeyStore *pKeyStore, RTVFSFSSTREAM hVfsFssDst,
+                          const ComObjPtr<Progress> &aProgress, bool fSparse);
 
     HRESULT i_exportFile(const char *aFilename,
                          const ComObjPtr<MediumFormat> &aFormat,
                          MediumVariant_T aVariant,
                          SecretKeyStore *pKeyStore,
-                         PVDINTERFACEIO aVDImageIOIf, void *aVDImageIOUser,
+                         RTVFSIOSTREAM hVfsIosDst,
                          const ComObjPtr<Progress> &aProgress);
     HRESULT i_importFile(const char *aFilename,
-                        const ComObjPtr<MediumFormat> &aFormat,
-                        MediumVariant_T aVariant,
-                        RTVFSIOSTREAM hVfsIosSrc,
-                        const ComObjPtr<Medium> &aParent,
-                        const ComObjPtr<Progress> &aProgress);
+                         const ComObjPtr<MediumFormat> &aFormat,
+                         MediumVariant_T aVariant,
+                         RTVFSIOSTREAM hVfsIosSrc,
+                         const ComObjPtr<Medium> &aParent,
+                         const ComObjPtr<Progress> &aProgress,
+                         bool aNotify);
 
-    HRESULT i_cloneToEx(const ComObjPtr<Medium> &aTarget, ULONG aVariant,
+    HRESULT i_cloneToEx(const ComObjPtr<Medium> &aTarget, MediumVariant_T aVariant,
                         const ComObjPtr<Medium> &aParent, IProgress **aProgress,
-                        uint32_t idxSrcImageSame, uint32_t idxDstImageSame);
+                        uint32_t idxSrcImageSame, uint32_t idxDstImageSame, bool aNotify);
 
     const Utf8Str& i_getKeyId();
+
+    HRESULT i_openForIO(bool fWritable, SecretKeyStore *pKeyStore, PVDISK *ppHdd, MediumLockList *pMediumLockList,
+                        struct MediumCryptoFilterSettings *pCryptoSettings);
 
 private:
 
     // wrapped IMedium properties
     HRESULT getId(com::Guid &aId);
-    HRESULT getDescription(com::Utf8Str &aDescription);
-    HRESULT setDescription(const com::Utf8Str &aDescription);
+    HRESULT getDescription(AutoCaller &autoCaller, com::Utf8Str &aDescription);
+    HRESULT setDescription(AutoCaller &autoCaller, const com::Utf8Str &aDescription);
     HRESULT getState(MediumState_T *aState);
     HRESULT getVariant(std::vector<MediumVariant_T> &aVariant);
     HRESULT getLocation(com::Utf8Str &aLocation);
+    HRESULT setLocation(const com::Utf8Str &aLocation);
     HRESULT getName(com::Utf8Str &aName);
     HRESULT getDeviceType(DeviceType_T *aDeviceType);
     HRESULT getHostDrive(BOOL *aHostDrive);
@@ -288,8 +310,9 @@ private:
     HRESULT cloneToBase(const ComPtr<IMedium> &aTarget,
                         const std::vector<MediumVariant_T> &aVariant,
                         ComPtr<IProgress> &aProgress);
-    HRESULT setLocation(const com::Utf8Str &aLocation,
-                        ComPtr<IProgress> &aProgress);
+    HRESULT moveTo(AutoCaller &autoCaller,
+                   const com::Utf8Str &aLocation,
+                   ComPtr<IProgress> &aProgress);
     HRESULT compact(ComPtr<IProgress> &aProgress);
     HRESULT resize(LONG64 aLogicalSize,
                    ComPtr<IProgress> &aProgress);
@@ -297,8 +320,9 @@ private:
     HRESULT changeEncryption(const com::Utf8Str &aCurrentPassword, const com::Utf8Str &aCipher,
                              const com::Utf8Str &aNewPassword, const com::Utf8Str &aNewPasswordId,
                              ComPtr<IProgress> &aProgress);
-    HRESULT getEncryptionSettings(com::Utf8Str &aCipher, com::Utf8Str &aPasswordId);
+    HRESULT getEncryptionSettings(AutoCaller &autoCaller, com::Utf8Str &aCipher, com::Utf8Str &aPasswordId);
     HRESULT checkEncryptionPassword(const com::Utf8Str &aPassword);
+    HRESULT openForIO(BOOL aWritable, com::Utf8Str const &aPassword, ComPtr<IMediumIO> &aMediumIO);
 
     // Private internal nmethods
     HRESULT i_queryInfo(bool fSetImageId, bool fSetParentId, AutoCaller &autoCaller);
@@ -327,22 +351,11 @@ private:
                                                      const char *pszzValid);
     static DECLCALLBACK(int) i_vdConfigQuerySize(void *pvUser, const char *pszName,
                                                  size_t *pcbValue);
+    static DECLCALLBACK(int) i_vdConfigUpdate(void *pvUser, bool fCreate,
+                                            const char *pszName, const char *pszValue);
+
     static DECLCALLBACK(int) i_vdConfigQuery(void *pvUser, const char *pszName,
                                              char *pszValue, size_t cchValue);
-    static DECLCALLBACK(int) i_vdTcpSocketCreate(uint32_t fFlags, PVDSOCKET pSock);
-    static DECLCALLBACK(int) i_vdTcpSocketDestroy(VDSOCKET Sock);
-    static DECLCALLBACK(int) i_vdTcpClientConnect(VDSOCKET Sock, const char *pszAddress, uint32_t uPort,
-                                                  RTMSINTERVAL cMillies);
-    static DECLCALLBACK(int) i_vdTcpClientClose(VDSOCKET Sock);
-    static DECLCALLBACK(bool) i_vdTcpIsClientConnected(VDSOCKET Sock);
-    static DECLCALLBACK(int) i_vdTcpSelectOne(VDSOCKET Sock, RTMSINTERVAL cMillies);
-    static DECLCALLBACK(int) i_vdTcpRead(VDSOCKET Sock, void *pvBuffer, size_t cbBuffer, size_t *pcbRead);
-    static DECLCALLBACK(int) i_vdTcpWrite(VDSOCKET Sock, const void *pvBuffer, size_t cbBuffer);
-    static DECLCALLBACK(int) i_vdTcpSgWrite(VDSOCKET Sock, PCRTSGBUF pSgBuf);
-    static DECLCALLBACK(int) i_vdTcpFlush(VDSOCKET Sock);
-    static DECLCALLBACK(int) i_vdTcpSetSendCoalescing(VDSOCKET Sock, bool fEnable);
-    static DECLCALLBACK(int) i_vdTcpGetLocalAddress(VDSOCKET Sock, PRTNETADDR pAddr);
-    static DECLCALLBACK(int) i_vdTcpGetPeerAddress(VDSOCKET Sock, PRTNETADDR pAddr);
 
     static DECLCALLBACK(bool) i_vdCryptoConfigAreKeysValid(void *pvUser,
                                                            const char *pszzValid);
@@ -370,7 +383,6 @@ private:
     class ResetTask;
     class DeleteTask;
     class MergeTask;
-    class ExportTask;
     class ImportTask;
     class EncryptTask;
     friend class Task;
@@ -383,7 +395,6 @@ private:
     friend class ResetTask;
     friend class DeleteTask;
     friend class MergeTask;
-    friend class ExportTask;
     friend class ImportTask;
     friend class EncryptTask;
 
@@ -396,12 +407,10 @@ private:
     HRESULT i_taskResetHandler(Medium::ResetTask &task);
     HRESULT i_taskCompactHandler(Medium::CompactTask &task);
     HRESULT i_taskResizeHandler(Medium::ResizeTask &task);
-    HRESULT i_taskExportHandler(Medium::ExportTask &task);
     HRESULT i_taskImportHandler(Medium::ImportTask &task);
     HRESULT i_taskEncryptHandler(Medium::EncryptTask &task);
 
-    struct CryptoFilterSettings;
-    void i_taskEncryptSettingsSetup(CryptoFilterSettings *pSettings, const char *pszCipher,
+    void i_taskEncryptSettingsSetup(struct MediumCryptoFilterSettings *pSettings, const char *pszCipher,
                                     const char *pszKeyStore,  const char *pszPassword,
                                     bool fCreateKeyStore);
 
@@ -409,5 +418,42 @@ private:
     Data *m;
 };
 
-#endif /* ____H_MEDIUMIMPL */
+
+/**
+ * Settings for a crypto filter instance.
+ */
+struct MediumCryptoFilterSettings
+{
+    MediumCryptoFilterSettings()
+        : fCreateKeyStore(false),
+          pszPassword(NULL),
+          pszKeyStore(NULL),
+          pszKeyStoreLoad(NULL),
+          pbDek(NULL),
+          cbDek(0),
+          pszCipher(NULL),
+          pszCipherReturned(NULL)
+    { }
+
+    bool              fCreateKeyStore;
+    const char        *pszPassword;
+    char              *pszKeyStore;
+    const char        *pszKeyStoreLoad;
+
+    const uint8_t     *pbDek;
+    size_t            cbDek;
+    const char        *pszCipher;
+
+    /** The cipher returned by the crypto filter. */
+    char              *pszCipherReturned;
+
+    PVDINTERFACE      vdFilterIfaces;
+
+    VDINTERFACECONFIG vdIfCfg;
+    VDINTERFACECRYPTO vdIfCrypto;
+};
+
+
+
+#endif /* !MAIN_INCLUDED_MediumImpl_h */
 

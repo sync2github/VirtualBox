@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: intnetinline.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * INTNET - Internal Networking, Inlined Code. (DEV,++)
  *
@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,8 +28,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_intnetinline_h
-#define ___VBox_intnetinline_h
+#ifndef VBOX_INCLUDED_intnetinline_h
+#define VBOX_INCLUDED_intnetinline_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/intnet.h>
 #include <iprt/string.h>
@@ -801,7 +804,7 @@ DECLINLINE(void) IntNetBufInit(PINTNETBUF pIntBuf, uint32_t cbBuf, uint32_t cbRe
     pIntBuf->cbSend    = cbSend;
 
     /* receive ring buffer. */
-    uint32_t offBuf = RT_ALIGN_32(sizeof(INTNETBUF), INTNETRINGBUF_ALIGNMENT) - RT_OFFSETOF(INTNETBUF, Recv);
+    uint32_t offBuf = RT_ALIGN_32(sizeof(INTNETBUF), INTNETRINGBUF_ALIGNMENT) - RT_UOFFSETOF(INTNETBUF, Recv);
     pIntBuf->Recv.offStart      = offBuf;
     pIntBuf->Recv.offReadX      = offBuf;
     pIntBuf->Recv.offWriteInt   = offBuf;
@@ -809,7 +812,7 @@ DECLINLINE(void) IntNetBufInit(PINTNETBUF pIntBuf, uint32_t cbBuf, uint32_t cbRe
     pIntBuf->Recv.offEnd        = offBuf + cbRecv;
 
     /* send ring buffer. */
-    offBuf += cbRecv + RT_OFFSETOF(INTNETBUF, Recv) - RT_OFFSETOF(INTNETBUF, Send);
+    offBuf += cbRecv + RT_UOFFSETOF(INTNETBUF, Recv) - RT_UOFFSETOF(INTNETBUF, Send);
     pIntBuf->Send.offStart      = offBuf;
     pIntBuf->Send.offReadX      = offBuf;
     pIntBuf->Send.offWriteCom   = offBuf;
@@ -820,5 +823,5 @@ DECLINLINE(void) IntNetBufInit(PINTNETBUF pIntBuf, uint32_t cbBuf, uint32_t cbRe
 
 #endif /* __cplusplus */
 
-#endif
+#endif /* !VBOX_INCLUDED_intnetinline_h */
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: wuihlpgraph.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 Test Manager Web-UI - Graph Helpers.
@@ -7,7 +7,7 @@ Test Manager Web-UI - Graph Helpers.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,15 +26,15 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
-class WuiHlpGraphDataTable(object): # pylint: disable=R0903
+class WuiHlpGraphDataTable(object): # pylint: disable=too-few-public-methods
     """
     Data table container.
     """
 
-    class Row(object): # pylint: disable=R0903
+    class Row(object): # pylint: disable=too-few-public-methods
         """A row."""
         def __init__(self, sGroup, aoValues, asValues = None):
             self.sName    = sGroup;
@@ -47,9 +47,12 @@ class WuiHlpGraphDataTable(object): # pylint: disable=R0903
 
     def __init__(self, sGroupLable, asMemberLabels):
         self.aoTable = [ WuiHlpGraphDataTable.Row(sGroupLable, asMemberLabels), ];
+        self.fHasStringValues = False;
 
     def addRow(self, sGroup, aoValues, asValues = None):
         """Adds a row to the data table."""
+        if asValues:
+            self.fHasStringValues = True;
         self.aoTable.append(WuiHlpGraphDataTable.Row(sGroup, aoValues, asValues));
         return True;
 
@@ -58,12 +61,12 @@ class WuiHlpGraphDataTable(object): # pylint: disable=R0903
         return len(self.aoTable) - 1;
 
 
-class WuiHlpGraphDataTableEx(object): # pylint: disable=R0903
+class WuiHlpGraphDataTableEx(object): # pylint: disable=too-few-public-methods
     """
     Data container for an table/graph with optional error bars on the Y values.
     """
 
-    class DataSeries(object): # pylint: disable=R0903
+    class DataSeries(object): # pylint: disable=too-few-public-methods
         """
         A data series.
 
@@ -99,16 +102,16 @@ class WuiHlpGraphDataTableEx(object): # pylint: disable=R0903
 #
 # Dynamically choose implementation.
 #
-if True: # pylint: disable=W0125
+if True: # pylint: disable=using-constant-test
     from testmanager.webui import wuihlpgraphgooglechart        as GraphImplementation;
 else:
     try:
-        import matplotlib; # pylint: disable=W0611,F0401,import-error,wrong-import-order
-        from testmanager.webui import wuihlpgraphmatplotlib     as GraphImplementation;
+        import matplotlib; # pylint: disable=unused-import,import-error,import-error,wrong-import-order
+        from testmanager.webui import wuihlpgraphmatplotlib     as GraphImplementation; # pylint: disable=ungrouped-imports
     except:
         from testmanager.webui import wuihlpgraphsimple         as GraphImplementation;
 
-# pylint: disable=C0103
+# pylint: disable=invalid-name
 WuiHlpBarGraph              = GraphImplementation.WuiHlpBarGraph;
 WuiHlpLineGraph             = GraphImplementation.WuiHlpLineGraph;
 WuiHlpLineGraphErrorbarY    = GraphImplementation.WuiHlpLineGraphErrorbarY;

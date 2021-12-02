@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPLib-darwin.cpp 85129 2020-07-09 00:05:45Z vboxsync $ */
 /** @file
  * VirtualBox Support Library - Darwin specific parts.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,9 @@
 #define LOG_GROUP LOG_GROUP_SUP
 #ifdef IN_SUP_HARDENED_R3
 # undef DEBUG /* Warning: disables RT_STRICT */
-# define LOG_DISABLED
+# ifndef LOG_DISABLED
+#  define LOG_DISABLED
+# endif
 # define RTLOG_REL_DISABLED
 # include <iprt/log.h>
 #endif
@@ -184,7 +186,7 @@ static int suplibDarwinOpenService(PSUPLIBDATA pThis)
 }
 
 
-int suplibOsInit(PSUPLIBDATA pThis, bool fPreInited, bool fUnrestricted, SUPINITOP *penmWhat, PRTERRINFO pErrInfo)
+DECLHIDDEN(int) suplibOsInit(PSUPLIBDATA pThis, bool fPreInited, bool fUnrestricted, SUPINITOP *penmWhat, PRTERRINFO pErrInfo)
 {
     RT_NOREF(penmWhat, pErrInfo);
 
@@ -218,9 +220,7 @@ int suplibOsInit(PSUPLIBDATA pThis, bool fPreInited, bool fUnrestricted, SUPINIT
 }
 
 
-#ifndef IN_SUP_HARDENED_R3
-
-int suplibOsTerm(PSUPLIBDATA pThis)
+DECLHIDDEN(int) suplibOsTerm(PSUPLIBDATA pThis)
 {
     /*
      * Close the connection to the IOService.
@@ -251,19 +251,21 @@ int suplibOsTerm(PSUPLIBDATA pThis)
 }
 
 
-int suplibOsInstall(void)
+#ifndef IN_SUP_HARDENED_R3
+
+DECLHIDDEN(int) suplibOsInstall(void)
 {
     return VERR_NOT_IMPLEMENTED;
 }
 
 
-int suplibOsUninstall(void)
+DECLHIDDEN(int) suplibOsUninstall(void)
 {
     return VERR_NOT_IMPLEMENTED;
 }
 
 
-int suplibOsIOCtl(PSUPLIBDATA pThis, uintptr_t uFunction, void *pvReq, size_t cbReq)
+DECLHIDDEN(int) suplibOsIOCtl(PSUPLIBDATA pThis, uintptr_t uFunction, void *pvReq, size_t cbReq)
 {
     RT_NOREF(cbReq);
     if (RT_LIKELY(ioctl(pThis->hDevice, uFunction, pvReq) >= 0))
@@ -272,7 +274,7 @@ int suplibOsIOCtl(PSUPLIBDATA pThis, uintptr_t uFunction, void *pvReq, size_t cb
 }
 
 
-int suplibOsIOCtlFast(PSUPLIBDATA pThis, uintptr_t uFunction, uintptr_t idCpu)
+DECLHIDDEN(int) suplibOsIOCtlFast(PSUPLIBDATA pThis, uintptr_t uFunction, uintptr_t idCpu)
 {
     int rc = ioctl(pThis->hDevice, uFunction, idCpu);
     if (rc == -1)
@@ -281,7 +283,7 @@ int suplibOsIOCtlFast(PSUPLIBDATA pThis, uintptr_t uFunction, uintptr_t idCpu)
 }
 
 
-int suplibOsPageAlloc(PSUPLIBDATA pThis, size_t cPages, void **ppvPages)
+DECLHIDDEN(int) suplibOsPageAlloc(PSUPLIBDATA pThis, size_t cPages, void **ppvPages)
 {
     NOREF(pThis);
     *ppvPages = valloc(cPages << PAGE_SHIFT);
@@ -294,7 +296,7 @@ int suplibOsPageAlloc(PSUPLIBDATA pThis, size_t cPages, void **ppvPages)
 }
 
 
-int suplibOsPageFree(PSUPLIBDATA pThis, void *pvPages, size_t /* cPages */)
+DECLHIDDEN(int) suplibOsPageFree(PSUPLIBDATA pThis, void *pvPages, size_t /* cPages */)
 {
     NOREF(pThis);
     free(pvPages);

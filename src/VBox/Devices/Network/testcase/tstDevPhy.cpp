@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstDevPhy.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * PHY MDIO unit tests.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -106,7 +106,7 @@ void PhyTest::shiftOutBits(uint32_t data, uint16_t count) {
     uint32_t mask = 0x01 << (count - 1);
 
     do {
-        Phy::writeMDIO(phy, data & mask);
+        Phy::writeMDIO(phy, data & mask, NULL /*pDevIns*/);
         mask >>= 1;
     } while (mask);
 }

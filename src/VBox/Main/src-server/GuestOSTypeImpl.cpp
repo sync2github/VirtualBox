@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: GuestOSTypeImpl.cpp 92154 2021-10-29 17:11:00Z vboxsync $ */
 /** @file
- *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,9 +15,10 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_GUESTOSTYPE
 #include "GuestOSTypeImpl.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 #include <iprt/cpp/utils.h>
 
 // constructor / destructor
@@ -27,8 +27,11 @@
 GuestOSType::GuestOSType()
     : mOSType(VBOXOSTYPE_Unknown)
     , mOSHint(VBOXOSHINT_NONE)
-    , mRAMSize(0), mVRAMSize(0)
-    , mHDDSize(0), mMonitorCount(0)
+    , mRAMSize(0)
+    , mCPUCount(1)
+    , mGraphicsControllerType(GraphicsControllerType_Null)
+    , mVRAMSize(0)
+    , mHDDSize(0)
     , mNetworkAdapterType(NetworkAdapterType_Am79C973)
     , mNumSerialEnabled(0)
     , mDVDStorageControllerType(StorageControllerType_PIIX3)
@@ -36,6 +39,7 @@ GuestOSType::GuestOSType()
     , mHDStorageControllerType(StorageControllerType_PIIX3)
     , mHDStorageBusType(StorageBus_IDE)
     , mChipsetType(ChipsetType_PIIX3)
+    , mIommuType(IommuType_None)
     , mAudioControllerType(AudioControllerType_AC97)
     , mAudioCodecType(AudioCodecType_STAC9700)
 {
@@ -64,45 +68,19 @@ void GuestOSType::FinalRelease()
  * Initializes the guest OS type object.
  *
  * @returns COM result indicator
- * @param aFamilyId          os family short name string
- * @param aFamilyDescription os family name string
- * @param aId                os short name string
- * @param aDescription       os name string
- * @param aOSType            global OS type ID
- * @param aOSHint            os configuration hint
- * @param aRAMSize           recommended RAM size in megabytes
- * @param aVRAMSize          recommended video memory size in megabytes
- * @param aHDDSize           recommended HDD size in bytes
+ * @param ostype containing the following parts:
+ * @a aFamilyId          os family short name string
+ * @a aFamilyDescription os family name string
+ * @a aId                os short name string
+ * @a aDescription       os name string
+ * @a aOSType            global OS type ID
+ * @a aOSHint            os configuration hint
+ * @a aRAMSize           recommended RAM size in megabytes
+ * @a aVRAMSize          recommended video memory size in megabytes
+ * @a aHDDSize           recommended HDD size in bytes
  */
-HRESULT GuestOSType::init(const Global::OSType &ostype)/*const char *aFamilyId, const char *aFamilyDescription,
-                          const char *aId, const char *aDescription,
-                          VBOXOSTYPE aOSType, uint32_t aOSHint,
-                          uint32_t aRAMSize, uint32_t aVRAMSize, uint64_t aHDDSize,
-                          NetworkAdapterType_T aNetworkAdapterType,
-                          uint32_t aNumSerialEnabled,
-                          StorageControllerType_T aDVDStorageControllerType,
-                          StorageBus_T aDVDStorageBusType,
-                          StorageControllerType_T aHDStorageControllerType,
-                          StorageBus_T aHDStorageBusType,
-                          ChipsetType_T aChipsetType
-                          AudioControllerType_T aAudioControllerType*/
+HRESULT GuestOSType::init(const Global::OSType &ostype)
 {
-#if 0
-    LogFlowThisFunc(("aFamilyId='%s', aFamilyDescription='%s', "
-                      "aId='%s', aDescription='%s', "
-                      "aType=%d, aOSHint=%x, "
-                      "aRAMSize=%d, aVRAMSize=%d, aHDDSize=%lld, "
-                      "aNetworkAdapterType=%d, aNumSerialEnabled=%d, "
-                      "aStorageControllerType=%d\n",
-                      aFamilyId, aFamilyDescription,
-                      aId, aDescription,
-                      aOSType, aOSHint,
-                      aRAMSize, aVRAMSize, aHDDSize,
-                      aNetworkAdapterType,
-                      aNumSerialEnabled,
-                      aStorageControllerType));
-#endif
-
     ComAssertRet(ostype.familyId && ostype.familyDescription && ostype.id && ostype.description, E_INVALIDARG);
 
     /* Enclose the state transition NotReady->InInit->Ready */
@@ -116,6 +94,8 @@ HRESULT GuestOSType::init(const Global::OSType &ostype)/*const char *aFamilyId, 
     unconst(mOSType)                    = ostype.osType;
     unconst(mOSHint)                    = ostype.osHint;
     unconst(mRAMSize)                   = ostype.recommendedRAM;
+    unconst(mCPUCount)                  = ostype.recommendedCPUCount;
+    unconst(mGraphicsControllerType)    = ostype.graphicsControllerType;
     unconst(mVRAMSize)                  = ostype.recommendedVRAM;
     unconst(mHDDSize)                   = ostype.recommendedHDD;
     unconst(mNetworkAdapterType)        = ostype.networkAdapterType;
@@ -125,6 +105,7 @@ HRESULT GuestOSType::init(const Global::OSType &ostype)/*const char *aFamilyId, 
     unconst(mHDStorageControllerType)   = ostype.hdStorageControllerType;
     unconst(mHDStorageBusType)          = ostype.hdStorageBusType;
     unconst(mChipsetType)               = ostype.chipsetType;
+    unconst(mIommuType)                 = ostype.iommuType;
     unconst(mAudioControllerType)       = ostype.audioControllerType;
     unconst(mAudioCodecType)            = ostype.audioCodecType;
 
@@ -218,6 +199,15 @@ HRESULT GuestOSType::getRecommendedRAM(ULONG *aRAMSize)
 }
 
 
+HRESULT GuestOSType::getRecommendedGraphicsController(GraphicsControllerType_T *aRecommendedGraphicsController)
+{
+    /* mGraphicsController is constant during life time, no need to lock */
+    *aRecommendedGraphicsController = mGraphicsControllerType;
+
+    return S_OK;
+}
+
+
 HRESULT GuestOSType::getRecommendedVRAM(ULONG *aVRAMSize)
 {
     /* mVRAMSize is constant during life time, no need to lock */
@@ -248,7 +238,7 @@ HRESULT GuestOSType::getRecommended3DAcceleration(BOOL *aRecommended3DAccelerati
 HRESULT GuestOSType::getRecommendedHDD(LONG64 *aHDDSize)
 {
     /* mHDDSize is constant during life time, no need to lock */
-    *aHDDSize = mHDDSize;
+    *aHDDSize = (LONG64)mHDDSize;
 
     return S_OK;
 }
@@ -364,6 +354,15 @@ HRESULT GuestOSType::getRecommendedChipset(ChipsetType_T *aChipsetType)
 }
 
 
+HRESULT GuestOSType::getRecommendedIommuType(IommuType_T *aIommuType)
+{
+    /* IOMMU type is constant during life time, no need to lock */
+    *aIommuType = mIommuType;
+
+    return S_OK;
+}
+
+
 HRESULT GuestOSType::getRecommendedAudioController(AudioControllerType_T *aAudioController)
 {
     *aAudioController = mAudioControllerType;
@@ -421,5 +420,41 @@ HRESULT GuestOSType::getRecommendedX2APIC(BOOL *aRecommendedX2APIC)
     return S_OK;
 }
 
+HRESULT GuestOSType::getRecommendedCPUCount(ULONG *aRecommendedCPUCount)
+{
+    /* mCPUCount is constant during life time, no need to lock */
+    *aRecommendedCPUCount = mCPUCount;
+
+    return S_OK;
+}
+
+HRESULT GuestOSType::getRecommendedTpmType(TpmType_T *aRecommendedTpmType)
+{
+    /* Value is constant during life time, no need to lock */
+    if (mOSHint & VBOXOSHINT_TPM2)
+        *aRecommendedTpmType = TpmType_v2_0;
+    else if (mOSHint & VBOXOSHINT_TPM)
+        *aRecommendedTpmType = TpmType_v1_2;
+    else
+        *aRecommendedTpmType = TpmType_None;
+
+    return S_OK;
+}
+
+HRESULT GuestOSType::getRecommendedSecureBoot(BOOL *aRecommendedSecureBoot)
+{
+    /* Value is constant during life time, no need to lock */
+    *aRecommendedSecureBoot = !!(mOSHint & VBOXOSHINT_EFI_SECUREBOOT);
+
+    return S_OK;
+}
+
+HRESULT GuestOSType::getRecommendedWDDMGraphics(BOOL *aRecommendedWDDMGraphics)
+{
+    /* Value is constant during life time, no need to lock */
+    *aRecommendedWDDMGraphics = !!(mOSHint & VBOXOSHINT_WDDM_GRAPHICS);
+
+    return S_OK;
+}
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

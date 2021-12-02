@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,28 +20,34 @@
  * to make the service use a file operations structure with function pointers
  * but I'm not sure that would be universally appreciated. */
 
-#ifndef __VBSF_TEST_STUBS__H
-#define __VBSF_TEST_STUBS__H
+#ifndef VBOX_INCLUDED_SRC_SharedFolders_teststubs_h
+#define VBOX_INCLUDED_SRC_SharedFolders_teststubs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/dir.h>
+#include <iprt/file.h>
 #include <iprt/time.h>
 
 #define RTDirClose           testRTDirClose
-extern int testRTDirClose(PRTDIR pDir);
+extern int testRTDirClose(RTDIR hDir);
 #define RTDirCreate          testRTDirCreate
 extern int testRTDirCreate(const char *pszPath, RTFMODE fMode, uint32_t fCreate);
 #define RTDirOpen            testRTDirOpen
-extern int testRTDirOpen(PRTDIR *ppDir, const char *pszPath);
+extern int testRTDirOpen(RTDIR *phDir, const char *pszPath);
 #define RTDirOpenFiltered    testRTDirOpenFiltered
-extern int testRTDirOpenFiltered(PRTDIR *ppDir, const char *pszPath, RTDIRFILTER enmFilter, uint32_t fOpen);
+extern int testRTDirOpenFiltered(RTDIR *phDir, const char *pszPath, RTDIRFILTER enmFilter, uint32_t fFlags);
 #define RTDirQueryInfo       testRTDirQueryInfo
-extern int testRTDirQueryInfo(PRTDIR pDir, PRTFSOBJINFO pObjInfo, RTFSOBJATTRADD enmAdditionalAttribs);
+extern int testRTDirQueryInfo(RTDIR hDir, PRTFSOBJINFO pObjInfo, RTFSOBJATTRADD enmAdditionalAttribs);
 #define RTDirRemove          testRTDirRemove
 extern int testRTDirRemove(const char *pszPath);
 #define RTDirReadEx          testRTDirReadEx
-extern int testRTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntry, RTFSOBJATTRADD enmAdditionalAttribs, uint32_t fFlags);
+extern int testRTDirReadEx(RTDIR hDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntry, RTFSOBJATTRADD enmAdditionalAttribs, uint32_t fFlags);
+#define RTDirSetMode         testRTDirSetMode
+extern int testRTDirSetMode(RTDIR hDir, RTFMODE fMode);
 #define RTDirSetTimes        testRTDirSetTimes
-extern int testRTDirSetTimes(PRTDIR pDir, PCRTTIMESPEC pAccessTime, PCRTTIMESPEC pModificationTime, PCRTTIMESPEC pChangeTime, PCRTTIMESPEC pBirthTime);
+extern int testRTDirSetTimes(RTDIR hDir, PCRTTIMESPEC pAccessTime, PCRTTIMESPEC pModificationTime, PCRTTIMESPEC pChangeTime, PCRTTIMESPEC pBirthTime);
 #define RTFileClose          testRTFileClose
 extern int testRTFileClose(RTFILE hFile);
 #define RTFileDelete         testRTFileDelete
@@ -50,12 +56,14 @@ extern int testRTFileDelete(const char *pszFilename);
 extern int testRTFileFlush(RTFILE hFile);
 #define RTFileLock           testRTFileLock
 extern int testRTFileLock(RTFILE hFile, unsigned fLock, int64_t offLock, uint64_t cbLock);
-#define RTFileOpen           testRTFileOpen
-extern int testRTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen);
+#define RTFileOpenEx         testRTFileOpenEx
+extern int testRTFileOpenEx(const char *pszFilename, uint64_t fOpen, PRTFILE phFile, PRTFILEACTION penmActionTaken);
 #define RTFileQueryInfo      testRTFileQueryInfo
 extern int testRTFileQueryInfo(RTFILE hFile, PRTFSOBJINFO pObjInfo, RTFSOBJATTRADD enmAdditionalAttribs);
 #define RTFileRead           testRTFileRead
 extern int testRTFileRead(RTFILE hFile, void *pvBuf, size_t cbToRead, size_t *pcbRead);
+#define RTFileReadAt         testRTFileReadAt
+extern int testRTFileReadAt(RTFILE hFile, uint64_t offFile, void *pvBuf, size_t cbToRead, size_t *pcbRead);
 #define RTFileSetMode        testRTFileSetMode
 extern int testRTFileSetMode(RTFILE hFile, RTFMODE fMode);
 #define RTFileSetSize        testRTFileSetSize
@@ -68,6 +76,8 @@ extern int testRTFileSeek(RTFILE hFile, int64_t offSeek, unsigned uMethod, uint6
 extern int testRTFileUnlock(RTFILE hFile, int64_t offLock, uint64_t cbLock);
 #define RTFileWrite          testRTFileWrite
 extern int testRTFileWrite(RTFILE hFile, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten);
+#define RTFileWriteAt        testRTFileWriteAt
+extern int testRTFileWriteAt(RTFILE hFile, uint64_t offFile, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten);
 #define RTFsQueryProperties  testRTFsQueryProperties
 extern int testRTFsQueryProperties(const char *pszFsPath, PRTFSPROPERTIES pProperties);
 #define RTFsQuerySerial      testRTFsQuerySerial
@@ -81,4 +91,4 @@ extern int testRTSymlinkDelete(const char *pszSymlink, uint32_t fDelete);
 #define RTSymlinkRead        testRTSymlinkRead
 extern int testRTSymlinkRead(const char *pszSymlink, char *pszTarget, size_t cbTarget, uint32_t fRead);
 
-#endif /* __VBSF_TEST_STUBS__H */
+#endif /* !VBOX_INCLUDED_SRC_SharedFolders_teststubs_h */

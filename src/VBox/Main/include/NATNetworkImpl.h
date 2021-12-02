@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: NATNetworkImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * INATNetwork implementation header, lives in VBoxSVC.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,12 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_H_NATNETWORKIMPL
-#define ____H_H_NATNETWORKIMPL
+#ifndef MAIN_INCLUDED_NATNetworkImpl_h
+#define MAIN_INCLUDED_NATNetworkImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
 #include "VBoxEvents.h"
 #include "NATNetworkWrap.h"
 
@@ -59,7 +63,7 @@ class ATL_NO_VTABLE NATNetwork :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(NATNetwork)
+    DECLARE_COMMON_CLASS_METHODS(NATNetwork)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -106,18 +110,24 @@ private:
                                USHORT aGuestPort);
     HRESULT removePortForwardRule(BOOL aISipv6,
                                   const com::Utf8Str &aRuleName);
-    HRESULT start(const com::Utf8Str &aTrunkType);
+    HRESULT start();
     HRESULT stop();
 
     // Internal methods
+    HRESULT setErrorBusy();
+
     int i_recalculateIpv4AddressAssignments();
     int i_findFirstAvailableOffset(ADDRESSLOOKUPTYPE, uint32_t *);
     int i_recalculateIPv6Prefix();
 
     void i_getPortForwardRulesFromMap(std::vector<Utf8Str> &aPortForwardRules, settings::NATRulesMap &aRules);
 
+    void i_updateDnsOptions();
+    void i_updateDomainNameOption(ComPtr<IHost> &host);
+    void i_updateDomainNameServerOption(ComPtr<IHost> &host);
+
     struct Data;
     Data *m;
 };
 
-#endif // !____H_H_NATNETWORKIMPL
+#endif /* !MAIN_INCLUDED_NATNetworkImpl_h */

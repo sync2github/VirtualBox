@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VSCSIInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual SCSI driver: Internal defines
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,16 +14,21 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-#ifndef ___VSCSIInternal_h
-#define ___VSCSIInternal_h
+
+#ifndef VBOX_INCLUDED_SRC_Storage_VSCSI_VSCSIInternal_h
+#define VBOX_INCLUDED_SRC_Storage_VSCSI_VSCSIInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vscsi.h>
 #include <VBox/scsi.h>
+#include <VBox/scsiinline.h>
+#include <iprt/err.h>
 #include <iprt/memcache.h>
 #include <iprt/sg.h>
 #include <iprt/list.h>
 
-#include "VSCSIInline.h"
 #include "VSCSIVpdPages.h"
 
 /** Pointer to an internal virtual SCSI device. */
@@ -120,6 +125,13 @@ typedef struct VSCSIREQINT
     void                *pvVScsiReqUser;
     /** Transfer size determined from the CDB. */
     size_t               cbXfer;
+    /** Number of bytes of sense data written. */
+    size_t               cbSenseWritten;
+    /** Transfer direction as indicated by the CDB. */
+    VSCSIXFERDIR         enmXferDir;
+    /** Pointer to the opaque data which may be allocated by the LUN
+     * the request is for. */
+    void                *pvLun;
 } VSCSIREQINT;
 
 /**
@@ -262,6 +274,17 @@ typedef struct VSCSILUNDESC
      * @param   pVScsiReq    The SCSi request to process.
      */
     DECLR3CALLBACKMEMBER(int, pfnVScsiLunReqProcess, (PVSCSILUNINT pVScsiLun, PVSCSIREQINT pVScsiReq));
+
+    /**
+     * Frees additional allocated resources for the given request if it was allocated before.
+     *
+     * @returns void.
+     * @param   pVScsiLun    The SCSI LUN instance.
+     * @param   pVScsiReq    The SCSI request.
+     * @param   pvScsiReqLun The opaque data allocated previously.
+     */
+    DECLR3CALLBACKMEMBER(void, pfnVScsiLunReqFree, (PVSCSILUNINT pVScsiLun, PVSCSIREQINT pVScsiReq,
+                                                    void *pvScsiReqLun));
 
     /**
      * Informs about a medium being inserted - optional.
@@ -423,6 +446,22 @@ int vscsiIoReqTransferEnqueue(PVSCSILUNINT pVScsiLun, PVSCSIREQINT pVScsiReq,
                               size_t cbTransfer);
 
 /**
+ * Enqueue a new data transfer request - extended variant.
+ *
+ * @returns VBox status code.
+ * @param   pVScsiLun   The LUN instance which issued the request.
+ * @param   pVScsiReq   The virtual SCSI request associated with the transfer.
+ * @param   enmTxDir    Transfer direction.
+ * @param   uOffset     Start offset of the transfer.
+ * @param   paSegs      Pointer to the array holding the memory buffer segments.
+ * @param   cSegs       Number of segments in the array.
+ * @param   cbTransfer  Number of bytes to transfer.
+ */
+int vscsiIoReqTransferEnqueueEx(PVSCSILUNINT pVScsiLun, PVSCSIREQINT pVScsiReq,
+                                VSCSIIOREQTXDIR enmTxDir, uint64_t uOffset,
+                                PCRTSGSEG paSegs, unsigned cSegs, size_t cbTransfer);
+
+/**
  * Enqueue a new unmap request.
  *
  * @returns VBox status code.
@@ -452,6 +491,18 @@ uint32_t vscsiIoReqOutstandingCountGet(PVSCSILUNINT pVScsiLun);
 DECLINLINE(void) vscsiReqSetXferSize(PVSCSIREQINT pVScsiReq, size_t cbXfer)
 {
     pVScsiReq->cbXfer = cbXfer;
+}
+
+/**
+ * Sets the transfer direction for the given request.
+ *
+ * @returns nothing.
+ * @param   pVScsiReq     The SCSI request.
+ * @param   cbXfer        The transfer size for the request.
+ */
+DECLINLINE(void) vscsiReqSetXferDir(PVSCSIREQINT pVScsiReq, VSCSIXFERDIR enmXferDir)
+{
+    pVScsiReq->enmXferDir = enmXferDir;
 }
 
 /**
@@ -498,31 +549,59 @@ DECLINLINE(int) vscsiLunReqFree(PVSCSILUNINT pVScsiLun, PVSCSIIOREQINT pVScsiIoR
 }
 
 /**
- * Wrapper for the get medium size I/O callback.
+ * Wrapper for the get medium region count I/O callback.
  *
- * @returns VBox status code.
+ * @returns Number of regions for the underlying medium.
  * @param   pVScsiLun   The LUN.
- * @param   pcbSize     Where to store the size on success.
  */
-DECLINLINE(int) vscsiLunMediumGetSize(PVSCSILUNINT pVScsiLun, uint64_t *pcbSize)
+DECLINLINE(uint32_t) vscsiLunMediumGetRegionCount(PVSCSILUNINT pVScsiLun)
 {
-    return pVScsiLun->pVScsiLunIoCallbacks->pfnVScsiLunMediumGetSize(pVScsiLun,
-                                                                     pVScsiLun->pvVScsiLunUser,
-                                                                     pcbSize);
+    return pVScsiLun->pVScsiLunIoCallbacks->pfnVScsiLunMediumGetRegionCount(pVScsiLun,
+                                                                            pVScsiLun->pvVScsiLunUser);
 }
 
 /**
- * Wrapper for the get medium sector size I/O callback.
+ * Wrapper for the query medium region properties I/O callback.
  *
  * @returns VBox status code.
  * @param   pVScsiLun     The LUN.
- * @param   pcbSectorSize Where to store the sector size on success.
+ * @param   uRegion       The region index to query the properties of.
+ * @param   pu64LbaStart  Where to store the starting LBA for the region on success.
+ * @param   pcBlocks      Where to store the number of blocks for the region on success.
+ * @param   pcbBlock      Where to store the size of one block in bytes on success.
+ * @param   penmDataForm  WHere to store the data form for the region on success.
  */
-DECLINLINE(int) vscsiLunMediumGetSectorSize(PVSCSILUNINT pVScsiLun, uint32_t *pcbSectorSize)
+DECLINLINE(int) vscsiLunMediumQueryRegionProperties(PVSCSILUNINT pVScsiLun, uint32_t uRegion,
+                                                    uint64_t *pu64LbaStart, uint64_t *pcBlocks,
+                                                    uint64_t *pcbBlock, PVDREGIONDATAFORM penmDataForm)
 {
-    return pVScsiLun->pVScsiLunIoCallbacks->pfnVScsiLunMediumGetSectorSize(pVScsiLun,
-                                                                           pVScsiLun->pvVScsiLunUser,
-                                                                           pcbSectorSize);
+    return pVScsiLun->pVScsiLunIoCallbacks->pfnVScsiLunMediumQueryRegionProperties(pVScsiLun,
+                                                                                   pVScsiLun->pvVScsiLunUser,
+                                                                                   uRegion, pu64LbaStart,
+                                                                                   pcBlocks, pcbBlock,
+                                                                                   penmDataForm);
+}
+
+/**
+ * Wrapper for the query medium region properties for LBA I/O callback.
+ *
+ * @returns VBox status code.
+ * @param   pVScsiLun     The LUN.
+ * @param   uRegion       The region index to query the properties of.
+ * @param   pu64LbaStart  Where to store the starting LBA for the region on success.
+ * @param   pcBlocks      Where to store the number of blocks for the region on success.
+ * @param   pcbBlock      Where to store the size of one block in bytes on success.
+ * @param   penmDataForm  WHere to store the data form for the region on success.
+ */
+DECLINLINE(int) vscsiLunMediumQueryRegionPropertiesForLba(PVSCSILUNINT pVScsiLun, uint64_t u64LbaStart, uint32_t *puRegion,
+                                                          uint64_t *pcBlocks, uint64_t *pcbBlock,
+                                                          PVDREGIONDATAFORM penmDataForm)
+{
+    return pVScsiLun->pVScsiLunIoCallbacks->pfnVScsiLunMediumQueryRegionPropertiesForLba(pVScsiLun,
+                                                                                         pVScsiLun->pvVScsiLunUser,
+                                                                                         u64LbaStart, puRegion,
+                                                                                         pcBlocks, pcbBlock,
+                                                                                         penmDataForm);
 }
 
 /**
@@ -570,13 +649,36 @@ DECLINLINE(int) vscsiLunReqTransferEnqueue(PVSCSILUNINT pVScsiLun, PVSCSIIOREQIN
  *
  * @returns VBox status code.
  * @param   pVScsiLun   The LUN.
- * @param   pVScsiIoReq The I/O request to enqueue.
+ * @param   pfFeatures  Where to sthre supported flags on success.
  */
 DECLINLINE(int) vscsiLunGetFeatureFlags(PVSCSILUNINT pVScsiLun, uint64_t *pfFeatures)
 {
     return pVScsiLun->pVScsiLunIoCallbacks->pfnVScsiLunGetFeatureFlags(pVScsiLun,
                                                                        pVScsiLun->pvVScsiLunUser,
                                                                        pfFeatures);
+}
+
+/**
+ * Wrapper for the query INQUIRY strings I/O callback.
+ *
+ * @returns VBox status code.
+ * @param   pVScsiLun   The LUN.
+ * @param   ppszVendorId     Where to store the pointer to the vendor ID string to report.
+ * @param   ppszProductId    Where to store the pointer to the product ID string to report.
+ * @param   ppszProductLevel Where to store the pointer to the revision string to report.
+ */
+DECLINLINE(int) vscsiLunQueryInqStrings(PVSCSILUNINT pVScsiLun, const char **ppszVendorId,
+                                        const char **ppszProductId, const char **ppszProductLevel)
+{
+    if (pVScsiLun->pVScsiLunIoCallbacks->pfnVScsiLunQueryInqStrings)
+    {
+        return pVScsiLun->pVScsiLunIoCallbacks->pfnVScsiLunQueryInqStrings(pVScsiLun,
+                                                                           pVScsiLun->pvVScsiLunUser,
+                                                                           ppszVendorId, ppszProductId,
+                                                                           ppszProductLevel);
+    }
+
+    return VERR_NOT_FOUND;
 }
 
 /**
@@ -603,5 +705,5 @@ DECLINLINE(int) vscsiLunReqSenseErrorInfoSet(PVSCSILUNINT pVScsiLun, PVSCSIREQIN
     return vscsiReqSenseErrorInfoSet(&pVScsiLun->pVScsiDevice->VScsiSense, pVScsiReq, uSCSISenseKey, uSCSIASC, uSCSIASCQ, uInfo);
 }
 
-#endif /* ___VSCSIInternal_h */
+#endif /* !VBOX_INCLUDED_SRC_Storage_VSCSI_VSCSIInternal_h */
 

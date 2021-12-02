@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fsw_efi.c 85801 2020-08-17 16:09:43Z vboxsync $ */
 /** @file
  * fsw_efi.c - EFI host environment code.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,9 +22,7 @@
  *
  * You may elect to license modified versions of this file under the
  * terms and conditions of either the GPL or the CDDL or both.
- */
-
-/*-
+ * ---------------------------------------------------------------------------
  * This code is based on:
  *
  * Copyright (c) 2006 Christoph Pfisterer
@@ -59,6 +57,11 @@
  */
 
 #include "fsw_efi.h"
+
+#ifdef VBOX
+# include <IndustryStandard/ElTorito.h>
+# include <IndustryStandard/Udf.h>
+#endif
 
 #define DEBUG_LEVEL 0
 
@@ -137,6 +140,10 @@ EFI_STATUS fsw_efi_dnode_fill_FileInfo(IN FSW_VOLUME_DATA *Volume,
                                        IN struct fsw_dnode *dno,
                                        IN OUT UINTN *BufferSize,
                                        OUT VOID *Buffer);
+
+#if defined(VBOX) && defined(FSTYPE_HFS)
+extern fsw_status_t fsw_hfs_get_blessed_file(void *vol, struct fsw_string *path);
+#endif
 
 /**
  * Interface structure for the EFI Driver Binding protocol.
@@ -231,9 +238,6 @@ EFI_STATUS EFIAPI fsw_efi_DriverBinding_Supported(IN EFI_DRIVER_BINDING_PROTOCOL
     // we check for both DiskIO and BlockIO protocols
 
     // first, open DiskIO
-    VBoxLogFlowFuncEnter();
-    VBoxLogFlowFuncMarkDP(RemainingDevicePath);
-
     Status = BS->OpenProtocol(ControllerHandle,
                               &PROTO_NAME(DiskIoProtocol),
                               (VOID **) &DiskIo,
@@ -242,7 +246,6 @@ EFI_STATUS EFIAPI fsw_efi_DriverBinding_Supported(IN EFI_DRIVER_BINDING_PROTOCOL
                               EFI_OPEN_PROTOCOL_GET_PROTOCOL);
     if (EFI_ERROR(Status))
     {
-        VBoxLogFlowFuncLeaveRC(Status);
         return Status;
     }
 
@@ -259,9 +262,130 @@ EFI_STATUS EFIAPI fsw_efi_DriverBinding_Supported(IN EFI_DRIVER_BINDING_PROTOCOL
                               This->DriverBindingHandle,
                               ControllerHandle,
                               EFI_OPEN_PROTOCOL_TEST_PROTOCOL);
-    VBoxLogFlowFuncLeaveRC(Status);
     return Status;
 }
+
+#if defined(VBOX) && !defined(FSTYPE_HFS)
+/**
+  Find UDF volume identifiers in a Volume Recognition Sequence.
+
+  @param[in]  BlockIo             BlockIo interface.
+  @param[in]  DiskIo              DiskIo interface.
+
+  @retval EFI_SUCCESS             UDF volume identifiers were found.
+  @retval EFI_NOT_FOUND           UDF volume identifiers were not found.
+  @retval other                   Failed to perform disk I/O.
+
+**/
+EFI_STATUS
+FindUdfVolumeIdentifiers (
+  IN EFI_BLOCK_IO_PROTOCOL  *BlockIo,
+  IN EFI_DISK_IO_PROTOCOL   *DiskIo
+  )
+{
+  EFI_STATUS                            Status;
+  UINT64                                Offset;
+  UINT64                                EndDiskOffset;
+  CDROM_VOLUME_DESCRIPTOR               VolDescriptor;
+  CDROM_VOLUME_DESCRIPTOR               TerminatingVolDescriptor;
+
+  ZeroMem ((VOID *)&TerminatingVolDescriptor, sizeof (CDROM_VOLUME_DESCRIPTOR));
+
+  //
+  // Start Volume Recognition Sequence
+  //
+  EndDiskOffset = MultU64x32 (BlockIo->Media->LastBlock,
+                              BlockIo->Media->BlockSize);
+
+  for (Offset = UDF_VRS_START_OFFSET; Offset < EndDiskOffset;
+       Offset += UDF_LOGICAL_SECTOR_SIZE) {
+    //
+    // Check if block device has a Volume Structure Descriptor and an Extended
+    // Area.
+    //
+    Status = DiskIo->ReadDisk (
+      DiskIo,
+      BlockIo->Media->MediaId,
+      Offset,
+      sizeof (CDROM_VOLUME_DESCRIPTOR),
+      (VOID *)&VolDescriptor
+      );
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+
+    if (CompareMem ((VOID *)VolDescriptor.Unknown.Id,
+                    (VOID *)UDF_BEA_IDENTIFIER,
+                    sizeof (VolDescriptor.Unknown.Id)) == 0) {
+      break;
+    }
+
+    if ((CompareMem ((VOID *)VolDescriptor.Unknown.Id,
+                     (VOID *)CDVOL_ID,
+                     sizeof (VolDescriptor.Unknown.Id)) != 0) ||
+        (CompareMem ((VOID *)&VolDescriptor,
+                     (VOID *)&TerminatingVolDescriptor,
+                     sizeof (CDROM_VOLUME_DESCRIPTOR)) == 0)) {
+      return EFI_NOT_FOUND;
+    }
+  }
+
+  //
+  // Look for "NSR0{2,3}" identifiers in the Extended Area.
+  //
+  Offset += UDF_LOGICAL_SECTOR_SIZE;
+  if (Offset >= EndDiskOffset) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = DiskIo->ReadDisk (
+    DiskIo,
+    BlockIo->Media->MediaId,
+    Offset,
+    sizeof (CDROM_VOLUME_DESCRIPTOR),
+    (VOID *)&VolDescriptor
+    );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  if ((CompareMem ((VOID *)VolDescriptor.Unknown.Id,
+                   (VOID *)UDF_NSR2_IDENTIFIER,
+                   sizeof (VolDescriptor.Unknown.Id)) != 0) &&
+      (CompareMem ((VOID *)VolDescriptor.Unknown.Id,
+                   (VOID *)UDF_NSR3_IDENTIFIER,
+                   sizeof (VolDescriptor.Unknown.Id)) != 0)) {
+    return EFI_NOT_FOUND;
+  }
+
+  //
+  // Look for "TEA01" identifier in the Extended Area
+  //
+  Offset += UDF_LOGICAL_SECTOR_SIZE;
+  if (Offset >= EndDiskOffset) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = DiskIo->ReadDisk (
+    DiskIo,
+    BlockIo->Media->MediaId,
+    Offset,
+    sizeof (CDROM_VOLUME_DESCRIPTOR),
+    (VOID *)&VolDescriptor
+    );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  if (CompareMem ((VOID *)VolDescriptor.Unknown.Id,
+                  (VOID *)UDF_TEA_IDENTIFIER,
+                  sizeof (VolDescriptor.Unknown.Id)) != 0) {
+    return EFI_NOT_FOUND;
+  }
+
+  return EFI_SUCCESS;
+}
+#endif
 
 static EFI_STATUS fsw_efi_ReMount(IN FSW_VOLUME_DATA *pVolume,
                                        IN EFI_HANDLE      ControllerHandle,
@@ -269,7 +393,6 @@ static EFI_STATUS fsw_efi_ReMount(IN FSW_VOLUME_DATA *pVolume,
                                        EFI_BLOCK_IO       *pBlockIo)
 {
     EFI_STATUS Status;
-    VBoxLogFlowFuncEnter();
     pVolume->Signature       = FSW_VOLUME_DATA_SIGNATURE;
     pVolume->Handle          = ControllerHandle;
     pVolume->DiskIo          = pDiskIo;
@@ -280,8 +403,21 @@ static EFI_STATUS fsw_efi_ReMount(IN FSW_VOLUME_DATA *pVolume,
     Status = fsw_efi_map_status(fsw_mount(pVolume, &fsw_efi_host_table,
                                           &FSW_FSTYPE_TABLE_NAME(FSTYPE), &pVolume->vol),
                                 pVolume);
+#if defined(VBOX) && !defined(FSTYPE_HFS)
+    /*
+     * Don't give the iso9660 filesystem driver a chance to claim a volume which supports UDF
+     * or we loose booting capability from UDF volumes.
+     */
+    if (!EFI_ERROR(Status))
+    {
+        Status = FindUdfVolumeIdentifiers(pBlockIo, pDiskIo);
+        if (!EFI_ERROR(Status))
+            Status = EFI_UNSUPPORTED;
+        else
+            Status = EFI_SUCCESS;
+    }
+#endif
 
-    VBoxLogFlowFuncMarkRC(Status);
     if (!EFI_ERROR(Status)) {
         // register the SimpleFileSystem protocol
         pVolume->FileSystem.Revision     = EFI_FILE_IO_INTERFACE_REVISION;
@@ -294,7 +430,6 @@ static EFI_STATUS fsw_efi_ReMount(IN FSW_VOLUME_DATA *pVolume,
             Print(L"Fsw ERROR: InstallMultipleProtocolInterfaces returned %x\n", Status);
 #endif
     }
-    VBoxLogFlowFuncLeaveRC(Status);
     return Status;
 }
 
@@ -320,7 +455,6 @@ EFI_STATUS EFIAPI fsw_efi_DriverBinding_Start(IN EFI_DRIVER_BINDING_PROTOCOL  *T
     EFI_DISK_IO         *DiskIo;
     FSW_VOLUME_DATA     *Volume;
 
-    VBoxLogFlowFuncEnter();
     // open consumed protocols
     Status = BS->OpenProtocol(ControllerHandle,
                               &PROTO_NAME(BlockIoProtocol),
@@ -329,7 +463,6 @@ EFI_STATUS EFIAPI fsw_efi_DriverBinding_Start(IN EFI_DRIVER_BINDING_PROTOCOL  *T
                               ControllerHandle,
                               EFI_OPEN_PROTOCOL_GET_PROTOCOL);   // NOTE: we only want to look at the MediaId
     if (EFI_ERROR(Status)) {
-        VBoxLogFlowFuncLeaveRC(Status);
         return Status;
     }
 
@@ -340,7 +473,6 @@ EFI_STATUS EFIAPI fsw_efi_DriverBinding_Start(IN EFI_DRIVER_BINDING_PROTOCOL  *T
                               ControllerHandle,
                               EFI_OPEN_PROTOCOL_BY_DRIVER);
     if (EFI_ERROR(Status)) {
-        VBoxLogFlowFuncLeaveRC(Status);
         return Status;
     }
 
@@ -365,7 +497,6 @@ EFI_STATUS EFIAPI fsw_efi_DriverBinding_Start(IN EFI_DRIVER_BINDING_PROTOCOL  *T
                               ControllerHandle);
     }
 
-    VBoxLogFlowFuncLeaveRC(Status);
     return Status;
 }
 
@@ -946,7 +1077,7 @@ EFI_STATUS fsw_efi_dnode_getinfo(IN FSW_FILE_DATA *File,
 
         Status = fsw_efi_dnode_fill_FileInfo(Volume, File->shand.dnode, BufferSize, Buffer);
 
-    } else if (CompareGuid(InformationType, &GUID_NAME(FileSystemInfo)) == 0) {
+    } else if (CompareGuid(InformationType, &GUID_NAME(FileSystemInfo))) {
 #if DEBUG_LEVEL
         Print(L"fsw_efi_dnode_getinfo: FILE_SYSTEM_INFO\n");
 #endif
@@ -995,6 +1126,32 @@ EFI_STATUS fsw_efi_dnode_getinfo(IN FSW_FILE_DATA *File,
         // prepare for return
         *BufferSize = RequiredSize;
         Status = EFI_SUCCESS;
+
+#if defined(VBOX) && defined(FSTYPE_HFS)
+    } else if (CompareGuid(InformationType, &gVBoxFsBlessedFileInfoGuid)) {
+
+        struct fsw_string StrBlessedFile;
+
+        fsw_status_t rc = fsw_hfs_get_blessed_file(Volume->vol, &StrBlessedFile);
+        if (!rc)
+        {
+            // check buffer size
+            RequiredSize = SIZE_OF_VBOX_FS_BLESSED_FILE + fsw_efi_strsize(&StrBlessedFile);
+            if (*BufferSize < RequiredSize) {
+                *BufferSize = RequiredSize;
+                return EFI_BUFFER_TOO_SMALL;
+            }
+
+            // copy volume label
+            fsw_efi_strcpy(((VBOX_FS_BLESSED_FILE *)Buffer)->BlessedFile, &StrBlessedFile);
+
+            // prepare for return
+            *BufferSize = RequiredSize;
+            Status = EFI_SUCCESS;
+        }
+        else
+            Status = EFI_UNSUPPORTED;
+#endif
 
     } else {
         Status = EFI_UNSUPPORTED;
@@ -1055,12 +1212,12 @@ EFI_STATUS fsw_efi_dnode_fill_FileInfo(IN FSW_VOLUME_DATA *Volume,
     if (EFI_ERROR(Status))
         return Status;
 
-    // TODO: check/assert that the dno's name is in UTF16
+    /// @todo check/assert that the dno's name is in UTF16
 
     // check buffer size
     RequiredSize = SIZE_OF_EFI_FILE_INFO + fsw_efi_strsize(&dno->name);
     if (*BufferSize < RequiredSize) {
-        // TODO: wind back the directory in this case
+        /// @todo wind back the directory in this case
 
 #if DEBUG_LEVEL
         Print(L"...BUFFER TOO SMALL\n");

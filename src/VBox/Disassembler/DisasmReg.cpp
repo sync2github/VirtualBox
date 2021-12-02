@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DisasmReg.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox disassembler- Register Info Helpers.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,9 +22,11 @@
 #define LOG_GROUP LOG_GROUP_DIS
 #include <VBox/dis.h>
 #include <VBox/disopcode.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
-#include <VBox/vmm/cpum.h>
+#ifdef RT_ARCH_AMD64
+# include <VBox/vmm/cpum.h>
+#endif
 #include <iprt/assert.h>
 #include <iprt/string.h>
 #include <iprt/stdarg.h>
@@ -34,6 +36,7 @@
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
+#ifdef RT_ARCH_AMD64
 
 /**
  * Array for accessing 64-bit general registers in VMMREGFRAME structure
@@ -62,9 +65,9 @@ static const unsigned g_aReg64Index[] =
 /**
  * Macro for accessing 64-bit general purpose registers in CPUMCTXCORE structure.
  */
-#define DIS_READ_REG64(p, idx)       (*(uint64_t *)((char *)(p) + g_aReg64Index[idx]))
-#define DIS_WRITE_REG64(p, idx, val) (*(uint64_t *)((char *)(p) + g_aReg64Index[idx]) = val)
-#define DIS_PTR_REG64(p, idx)        ( (uint64_t *)((char *)(p) + g_aReg64Index[idx]))
+# define DIS_READ_REG64(p, idx)       (*(uint64_t *)((char *)(p) + g_aReg64Index[idx]))
+# define DIS_WRITE_REG64(p, idx, val) (*(uint64_t *)((char *)(p) + g_aReg64Index[idx]) = val)
+# define DIS_PTR_REG64(p, idx)        ( (uint64_t *)((char *)(p) + g_aReg64Index[idx]))
 
 /**
  * Array for accessing 32-bit general registers in VMMREGFRAME structure
@@ -93,14 +96,14 @@ static const unsigned g_aReg32Index[] =
 /**
  * Macro for accessing 32-bit general purpose registers in CPUMCTXCORE structure.
  */
-#define DIS_READ_REG32(p, idx)       (*(uint32_t *)((char *)(p) + g_aReg32Index[idx]))
+# define DIS_READ_REG32(p, idx)       (*(uint32_t *)((char *)(p) + g_aReg32Index[idx]))
 /* From http://www.cs.cmu.edu/~fp/courses/15213-s06/misc/asm64-handout.pdf:
  * ``Perhaps unexpectedly, instructions that move or generate 32-bit register
  *   values also set the upper 32 bits of the register to zero. Consequently
  *   there is no need for an instruction movzlq.''
  */
-#define DIS_WRITE_REG32(p, idx, val) (*(uint64_t *)((char *)(p) + g_aReg32Index[idx]) = (uint32_t)val)
-#define DIS_PTR_REG32(p, idx)        ( (uint32_t *)((char *)(p) + g_aReg32Index[idx]))
+# define DIS_WRITE_REG32(p, idx, val) (*(uint64_t *)((char *)(p) + g_aReg32Index[idx]) = (uint32_t)val)
+# define DIS_PTR_REG32(p, idx)        ( (uint32_t *)((char *)(p) + g_aReg32Index[idx]))
 
 /**
  * Array for accessing 16-bit general registers in CPUMCTXCORE structure
@@ -129,9 +132,9 @@ static const unsigned g_aReg16Index[] =
 /**
  * Macro for accessing 16-bit general purpose registers in CPUMCTXCORE structure.
  */
-#define DIS_READ_REG16(p, idx)          (*(uint16_t *)((char *)(p) + g_aReg16Index[idx]))
-#define DIS_WRITE_REG16(p, idx, val)    (*(uint16_t *)((char *)(p) + g_aReg16Index[idx]) = val)
-#define DIS_PTR_REG16(p, idx)           ( (uint16_t *)((char *)(p) + g_aReg16Index[idx]))
+# define DIS_READ_REG16(p, idx)          (*(uint16_t *)((char *)(p) + g_aReg16Index[idx]))
+# define DIS_WRITE_REG16(p, idx, val)    (*(uint16_t *)((char *)(p) + g_aReg16Index[idx]) = val)
+# define DIS_PTR_REG16(p, idx)           ( (uint16_t *)((char *)(p) + g_aReg16Index[idx]))
 
 /**
  * Array for accessing 8-bit general registers in CPUMCTXCORE structure
@@ -164,9 +167,9 @@ static const unsigned g_aReg8Index[] =
 /**
  * Macro for accessing 8-bit general purpose registers in CPUMCTXCORE structure.
  */
-#define DIS_READ_REG8(p, idx)           (*(uint8_t *)((char *)(p) + g_aReg8Index[idx]))
-#define DIS_WRITE_REG8(p, idx, val)     (*(uint8_t *)((char *)(p) + g_aReg8Index[idx]) = val)
-#define DIS_PTR_REG8(p, idx)            ( (uint8_t *)((char *)(p) + g_aReg8Index[idx]))
+# define DIS_READ_REG8(p, idx)           (*(uint8_t *)((char *)(p) + g_aReg8Index[idx]))
+# define DIS_WRITE_REG8(p, idx, val)     (*(uint8_t *)((char *)(p) + g_aReg8Index[idx]) = val)
+# define DIS_PTR_REG8(p, idx)            ( (uint8_t *)((char *)(p) + g_aReg8Index[idx]))
 
 /**
  * Array for accessing segment registers in CPUMCTXCORE structure
@@ -195,8 +198,11 @@ static const unsigned g_aRegHidSegIndex[] =
 /**
  * Macro for accessing segment registers in CPUMCTXCORE structure.
  */
-#define DIS_READ_REGSEG(p, idx)         (*((uint16_t *)((char *)(p) + g_aRegSegIndex[idx])))
-#define DIS_WRITE_REGSEG(p, idx, val)   (*((uint16_t *)((char *)(p) + g_aRegSegIndex[idx])) = val)
+# define DIS_READ_REGSEG(p, idx)         (*((uint16_t *)((char *)(p) + g_aRegSegIndex[idx])))
+# define DIS_WRITE_REGSEG(p, idx, val)   (*((uint16_t *)((char *)(p) + g_aRegSegIndex[idx])) = val)
+
+#endif /* RT_ARCH_AMD64 */
+
 
 //*****************************************************************************
 //*****************************************************************************
@@ -333,13 +339,15 @@ DISDECL(uint8_t) DISQuerySegPrefixByte(PCDISSTATE pDis)
 }
 
 
+#ifdef RT_ARCH_AMD64
+
 /**
  * Returns the value of the specified 8 bits general purpose register
  *
  */
 DISDECL(int) DISFetchReg8(PCCPUMCTXCORE pCtx, unsigned reg8, uint8_t *pVal)
 {
-    AssertReturn(reg8 < RT_ELEMENTS(g_aReg8Index), VERR_INVALID_PARAMETER);
+    AssertReturnStmt(reg8 < RT_ELEMENTS(g_aReg8Index), *pVal = 0, VERR_INVALID_PARAMETER);
 
     *pVal = DIS_READ_REG8(pCtx, reg8);
     return VINF_SUCCESS;
@@ -351,7 +359,7 @@ DISDECL(int) DISFetchReg8(PCCPUMCTXCORE pCtx, unsigned reg8, uint8_t *pVal)
  */
 DISDECL(int) DISFetchReg16(PCCPUMCTXCORE pCtx, unsigned reg16, uint16_t *pVal)
 {
-    AssertReturn(reg16 < RT_ELEMENTS(g_aReg16Index), VERR_INVALID_PARAMETER);
+    AssertReturnStmt(reg16 < RT_ELEMENTS(g_aReg16Index), *pVal = 0, VERR_INVALID_PARAMETER);
 
     *pVal = DIS_READ_REG16(pCtx, reg16);
     return VINF_SUCCESS;
@@ -363,7 +371,7 @@ DISDECL(int) DISFetchReg16(PCCPUMCTXCORE pCtx, unsigned reg16, uint16_t *pVal)
  */
 DISDECL(int) DISFetchReg32(PCCPUMCTXCORE pCtx, unsigned reg32, uint32_t *pVal)
 {
-    AssertReturn(reg32 < RT_ELEMENTS(g_aReg32Index), VERR_INVALID_PARAMETER);
+    AssertReturnStmt(reg32 < RT_ELEMENTS(g_aReg32Index), *pVal = 0, VERR_INVALID_PARAMETER);
 
     *pVal = DIS_READ_REG32(pCtx, reg32);
     return VINF_SUCCESS;
@@ -375,7 +383,7 @@ DISDECL(int) DISFetchReg32(PCCPUMCTXCORE pCtx, unsigned reg32, uint32_t *pVal)
  */
 DISDECL(int) DISFetchReg64(PCCPUMCTXCORE pCtx, unsigned reg64, uint64_t *pVal)
 {
-    AssertReturn(reg64 < RT_ELEMENTS(g_aReg64Index), VERR_INVALID_PARAMETER);
+    AssertReturnStmt(reg64 < RT_ELEMENTS(g_aReg64Index), *pVal = 0, VERR_INVALID_PARAMETER);
 
     *pVal = DIS_READ_REG64(pCtx, reg64);
     return VINF_SUCCESS;
@@ -387,7 +395,7 @@ DISDECL(int) DISFetchReg64(PCCPUMCTXCORE pCtx, unsigned reg64, uint64_t *pVal)
  */
 DISDECL(int) DISPtrReg8(PCPUMCTXCORE pCtx, unsigned reg8, uint8_t **ppReg)
 {
-    AssertReturn(reg8 < RT_ELEMENTS(g_aReg8Index), VERR_INVALID_PARAMETER);
+    AssertReturnStmt(reg8 < RT_ELEMENTS(g_aReg8Index), *ppReg = NULL, VERR_INVALID_PARAMETER);
 
     *ppReg = DIS_PTR_REG8(pCtx, reg8);
     return VINF_SUCCESS;
@@ -399,7 +407,7 @@ DISDECL(int) DISPtrReg8(PCPUMCTXCORE pCtx, unsigned reg8, uint8_t **ppReg)
  */
 DISDECL(int) DISPtrReg16(PCPUMCTXCORE pCtx, unsigned reg16, uint16_t **ppReg)
 {
-    AssertReturn(reg16 < RT_ELEMENTS(g_aReg16Index), VERR_INVALID_PARAMETER);
+    AssertReturnStmt(reg16 < RT_ELEMENTS(g_aReg16Index), *ppReg = NULL, VERR_INVALID_PARAMETER);
 
     *ppReg = DIS_PTR_REG16(pCtx, reg16);
     return VINF_SUCCESS;
@@ -407,11 +415,10 @@ DISDECL(int) DISPtrReg16(PCPUMCTXCORE pCtx, unsigned reg16, uint16_t **ppReg)
 
 /**
  * Returns the pointer to the specified 32 bits general purpose register
- *
  */
 DISDECL(int) DISPtrReg32(PCPUMCTXCORE pCtx, unsigned reg32, uint32_t **ppReg)
 {
-    AssertReturn(reg32 < RT_ELEMENTS(g_aReg32Index), VERR_INVALID_PARAMETER);
+    AssertReturnStmt(reg32 < RT_ELEMENTS(g_aReg32Index), *ppReg = NULL, VERR_INVALID_PARAMETER);
 
     *ppReg = DIS_PTR_REG32(pCtx, reg32);
     return VINF_SUCCESS;
@@ -419,11 +426,10 @@ DISDECL(int) DISPtrReg32(PCPUMCTXCORE pCtx, unsigned reg32, uint32_t **ppReg)
 
 /**
  * Returns the pointer to the specified 64 bits general purpose register
- *
  */
 DISDECL(int) DISPtrReg64(PCPUMCTXCORE pCtx, unsigned reg64, uint64_t **ppReg)
 {
-    AssertReturn(reg64 < RT_ELEMENTS(g_aReg64Index), VERR_INVALID_PARAMETER);
+    AssertReturnStmt(reg64 < RT_ELEMENTS(g_aReg64Index), *ppReg = NULL, VERR_INVALID_PARAMETER);
 
     *ppReg = DIS_PTR_REG64(pCtx, reg64);
     return VINF_SUCCESS;
@@ -431,7 +437,6 @@ DISDECL(int) DISPtrReg64(PCPUMCTXCORE pCtx, unsigned reg64, uint64_t **ppReg)
 
 /**
  * Returns the value of the specified segment register
- *
  */
 DISDECL(int) DISFetchRegSeg(PCCPUMCTXCORE pCtx, DISSELREG sel, RTSEL *pVal)
 {
@@ -836,4 +841,6 @@ DISDECL(int) DISQueryParamRegPtr(PCPUMCTXCORE pCtx, PCDISSTATE pDis, PCDISOPPARA
     }
     return VERR_INVALID_PARAMETER;
 }
+
+#endif /* RT_ARCH_AMD64 */
 

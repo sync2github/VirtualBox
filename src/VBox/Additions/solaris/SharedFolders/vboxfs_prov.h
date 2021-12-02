@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: vboxfs_prov.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox File System for Solaris Guests, provider header.
  * Portions contributed by: Ronald.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,8 +25,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef	___VBoxFS_prov_Solaris_h
-#define	___VBoxFS_prov_Solaris_h
+#ifndef GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_prov_h
+#define GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_prov_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/VBoxGuestLibSharedFolders.h>
 
@@ -183,5 +186,5 @@ extern int sfprov_readdir(sfp_mount_t *mnt, char *path,
 }
 #endif
 
-#endif	/* !___VBoxFS_prov_Solaris_h */
+#endif /* !GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_prov_h */
 

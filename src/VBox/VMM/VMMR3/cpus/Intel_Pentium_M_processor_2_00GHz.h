@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: Intel_Pentium_M_processor_2_00GHz.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * CPU database entry "Intel Pentium M processor 2.00GHz".
  * Generated at 2013-12-09T14:18:00Z by VBoxCpuReport v4.3.51r91027 on win.x86.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOX_CPUDB_Intel_Pentium_M_processor_2_00GHz
-#define VBOX_CPUDB_Intel_Pentium_M_processor_2_00GHz
+#ifndef VBOX_CPUDB_Intel_Pentium_M_processor_2_00GHz_h
+#define VBOX_CPUDB_Intel_Pentium_M_processor_2_00GHz_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #ifndef CPUM_DB_STANDALONE
@@ -199,6 +202,7 @@ static CPUMDBENTRY const g_Entry_Intel_Pentium_M_processor_2_00GHz =
     /*.uScalableBusFreq = */ CPUM_SBUSFREQ_UNKNOWN,
     /*.fFlags           = */ 0,
     /*.cMaxPhysAddrWidth= */ 32,
+    /*.fMxCsrMask       = */ 0xffbf, ///< @todo check this
     /*.paCpuIdLeaves    = */ NULL_ALONE(g_aCpuIdLeaves_Intel_Pentium_M_processor_2_00GHz),
     /*.cCpuIdLeaves     = */ ZERO_ALONE(RT_ELEMENTS(g_aCpuIdLeaves_Intel_Pentium_M_processor_2_00GHz)),
     /*.enmUnknownCpuId  = */ CPUMUNKNOWNCPUID_LAST_STD_LEAF,
@@ -208,5 +212,5 @@ static CPUMDBENTRY const g_Entry_Intel_Pentium_M_processor_2_00GHz =
     /*.paMsrRanges      = */ NULL_ALONE(g_aMsrRanges_Intel_Pentium_M_processor_2_00GHz),
 };
 
-#endif /* !VBOX_DB_Intel_Pentium_M_processor_2_00GHz */
+#endif /* !VBOX_CPUDB_Intel_Pentium_M_processor_2_00GHz_h */
 

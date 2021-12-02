@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: process.cpp 83661 2020-04-09 18:53:23Z vboxsync $ */
 /** @file
  * IPRT - Process, Common.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 *********************************************************************************************************************************/
 #include <iprt/process.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/string.h>
 #include "internal/process.h"
 #include "internal/thread.h"
@@ -109,6 +109,12 @@ RTR3DECL(char *) RTProcGetExecutablePath(char *pszExecPath, size_t cbExecPath)
 
     AssertMsgFailed(("Buffer too small (%zu <= %zu)\n", cbExecPath, cch));
     return NULL;
+}
+
+
+RTR3DECL(const char *) RTProcExecutablePath(void)
+{
+    return g_szrtProcExePath;
 }
 
 

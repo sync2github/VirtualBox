@@ -1,11 +1,11 @@
-; $Id$
+; $Id: bootsector2-vbinstst-64-1.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; Bootsector tests instructions in 64-bit mode.
 ;   VBoxManage setextradata bs-vbinstst-64-1 VBoxInternal/Devices/VMMDev/0/Config/TestingEnabled  1
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;

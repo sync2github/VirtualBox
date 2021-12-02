@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PCIRawDevImpl.cpp 85300 2020-07-13 10:04:45Z vboxsync $ */
 /** @file
  * VirtualBox Driver Interface to raw PCI device.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,13 +15,18 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#include "Logging.h"
+#define LOG_GROUP LOG_GROUP_DEV_PCI_RAW
+#include "LoggingNew.h"
+
 #include "PCIRawDevImpl.h"
 #include "PCIDeviceAttachmentImpl.h"
 #include "ConsoleImpl.h"
 
 // generated header for events
 #include "VBoxEvents.h"
+
+#include <VBox/err.h>
+
 
 /**
  * PCI raw driver instance data.
@@ -41,8 +46,8 @@ typedef struct DRVMAINPCIRAWDEV
 // constructor / destructor
 //
 PCIRawDev::PCIRawDev(Console *console)
-  : mpDrv(NULL),
-    mParent(console)
+  : mParent(console),
+    mpDrv(NULL)
 {
 }
 
@@ -66,7 +71,7 @@ DECLCALLBACK(void *) PCIRawDev::drvQueryInterface(PPDMIBASE pInterface, const ch
 
 
 /**
- * @interface_method_impl{PDMIPCIRAWUP,pfnPciDeviceConstructComplete}
+ * @interface_method_impl{PDMIPCIRAWCONNECTOR,pfnDeviceConstructComplete}
  */
 DECLCALLBACK(int) PCIRawDev::drvDeviceConstructComplete(PPDMIPCIRAWCONNECTOR pInterface, const char *pcszName,
                                                         uint32_t uHostPCIAddress, uint32_t uGuestPCIAddress,
@@ -97,7 +102,7 @@ DECLCALLBACK(int) PCIRawDev::drvDeviceConstructComplete(PPDMIPCIRAWCONNECTOR pIn
     if (RT_FAILURE(rc))
         msg = BstrFmt("runtime error %Rrc", rc);
 
-    fireHostPCIDevicePlugEvent(es, bstrId.raw(), true /* plugged */, RT_SUCCESS_NP(rc) /* success */, pda, msg.raw());
+    ::FireHostPCIDevicePlugEvent(es, bstrId.raw(), true /* plugged */, RT_SUCCESS_NP(rc) /* success */, pda, msg.raw());
 
     return VINF_SUCCESS;
 }

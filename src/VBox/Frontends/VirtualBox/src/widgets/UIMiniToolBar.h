@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMiniToolBar.h 88635 2021-04-21 14:05:26Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMiniToolBar class declaration.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,18 +15,19 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMiniToolBar_h___
-#define ___UIMiniToolBar_h___
+#ifndef FEQT_INCLUDED_SRC_widgets_UIMiniToolBar_h
+#define FEQT_INCLUDED_SRC_widgets_UIMiniToolBar_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
-#include "UIToolBar.h"
+#include "QIToolBar.h"
 
 /* Forward declarations: */
 class QMenu;
 class QTimer;
 class QLabel;
-class QMdiArea;
-class QMdiSubWindow;
 class UIAnimation;
 class UIMiniToolBarPrivate;
 
@@ -36,6 +37,7 @@ enum GeometryType
     GeometryType_Available,
     GeometryType_Full
 };
+
 
 /** QWidget reimplementation
   * providing GUI with slideable mini-toolbar used in full-screen/seamless modes. */
@@ -63,6 +65,10 @@ signals:
     /** Notifies listeners about we stole window activation. */
     void sigNotifyAboutWindowActivationStolen();
 
+    /** Notifies listeners about auto-hide toggled.
+      * @param  fEnabled  Brings whether auto-hide is enabled. */
+    void sigAutoHideToggled(bool fEnabled);
+
 public:
 
     /** Proposes default set of window flags for particular platform. */
@@ -71,11 +77,13 @@ public:
     /** Constructor, passes @a pParent to the QWidget constructor.
       * @param geometryType determines the geometry type,
       * @param alignment    determines the alignment type,
-      * @param fAutoHide    determines whether we should auto-hide. */
+      * @param fAutoHide    determines whether we should auto-hide.
+      * @param iWindowIndex determines the parent window index. */
     UIMiniToolBar(QWidget *pParent,
                   GeometryType geometryType,
                   Qt::Alignment alignment,
-                  bool fAutoHide = true);
+                  bool fAutoHide = true,
+                  int iWindowIndex = -1);
     /** Destructor. */
     ~UIMiniToolBar();
 
@@ -120,6 +128,8 @@ private slots:
     void sltShow();
     /** Adjusts window according to parent. */
     void sltAdjust();
+    /** Adjusts window transience according to parent. */
+    void sltAdjustTransience();
 
 private:
 
@@ -155,20 +165,22 @@ private:
     /** Returns whether the parent is currently minimized. */
     bool isParentMinimized() const;
 
+    /** Holds the parent reference. */
+    QWidget *m_pParent;
+
     /** Holds the geometry type. */
     const GeometryType m_geometryType;
     /** Holds the alignment type. */
     Qt::Alignment m_alignment;
     /** Holds whether we should auto-hide. */
     bool m_fAutoHide;
+    /** Holds the parent window index. */
+    int m_iWindowIndex;
 
-    /** Holds the MDI-area. */
-    QMdiArea *m_pMdiArea;
+    /** Holds the area. */
+    QWidget *m_pArea;
     /** Holds the internal widget. */
     UIMiniToolBarPrivate *m_pToolbar;
-    /** Holds the pointer to the wrapped
-      * internal widget inside the MDI-area. */
-    QMdiSubWindow *m_pEmbeddedToolbar;
 
     /** Holds whether we are hovered. */
     bool m_fHovered;
@@ -183,12 +195,13 @@ private:
     /** Holds the animation framework object. */
     UIAnimation *m_pAnimation;
 
-#if defined(VBOX_WS_X11) && QT_VERSION >= 0x050000
-    /** Holds whether the parent is currently minimized.
-      * Used to restore full-screen state when the parent restored again. */
+#ifdef VBOX_WS_X11
+    /** X11: Holds whether the parent is currently minimized.
+      * Used to restore the full-screen/maximized state
+      * when the parent restored again. */
     bool m_fIsParentMinimized;
-#endif /* VBOX_WS_X11 && QT_VERSION >= 0x050000 */
+#endif
 };
 
-#endif /* !___UIMiniToolBar_h___ */
+#endif /* !FEQT_INCLUDED_SRC_widgets_UIMiniToolBar_h */
 

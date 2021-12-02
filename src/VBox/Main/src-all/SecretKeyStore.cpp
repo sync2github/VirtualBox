@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SecretKeyStore.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Main - Secret key interface.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -135,15 +135,22 @@ int SecretKeyStore::addSecretKey(const com::Utf8Str &strKeyId, const uint8_t *pb
     if (it != m_mapSecretKeys.end())
         return VERR_ALREADY_EXISTS;
 
+    SecretKey *pKey = NULL;
     try
     {
-        SecretKey *pKey = new SecretKey(pbKey, cbKey, m_fKeyBufNonPageable);
+        pKey = new SecretKey(pbKey, cbKey, m_fKeyBufNonPageable);
 
         m_mapSecretKeys.insert(std::make_pair(strKeyId, pKey));
     }
     catch (int rc)
     {
         return rc;
+    }
+    catch (std::bad_alloc &)
+    {
+        if (pKey)
+            delete pKey;
+        return VERR_NO_MEMORY;
     }
 
     return VINF_SUCCESS;
@@ -217,7 +224,10 @@ int SecretKeyStore::deleteAllSecretKeys(bool fSuspend, bool fForce)
         {
             AssertMsg(!pKey->refCount(), ("No one should access the stored key at this point anymore!\n"));
             delete pKey;
-            m_mapSecretKeys.erase(it++);
+            SecretKeyMap::iterator itNext = it;
+            ++itNext;
+            m_mapSecretKeys.erase(it);
+            it = itNext;
         }
         else
             ++it;

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: NetPerf.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NetPerf - Network Performance Benchmark.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -85,6 +85,11 @@
 /** The minimum cool down time (ms). */
 #define NETPERF_MIN_COOL_DOWN                   1000  /*  1s */
 
+/** Maximum socket buffer size possible (bytes). */
+#define NETPERF_MAX_BUF_SIZE                    _128M
+/** Minimum socket buffer size possible (bytes). */
+#define NETPERF_MIN_BUF_SIZE                    256
+
 /** The length of the length prefix used when submitting parameters and
  * results. */
 #define NETPERF_LEN_PREFIX                      4
@@ -141,6 +146,8 @@ typedef struct NETPERFPARAMS
     bool            fServerStats;
     /** Server: Quit after the first client. */
     bool            fSingleClient;
+    /** Send and receive buffer sizes for TCP sockets, zero if to use defaults. */
+    uint32_t        cbBufferSize;
     /** @} */
 
     /** @name Dynamic settings
@@ -226,18 +233,22 @@ static const RTGETOPTDEF g_aCmdOptions[] =
     { "--len",              'l', RTGETOPT_REQ_UINT32  },
     { "--nodelay",          'N', RTGETOPT_REQ_NOTHING },
     { "--mode",             'm', RTGETOPT_REQ_STRING  },
-    { "--warmpup",          'w', RTGETOPT_REQ_UINT32  },
+    { "--warmup",           'w', RTGETOPT_REQ_UINT32  },
     { "--cool-down",        'W', RTGETOPT_REQ_UINT32  },
     { "--server-stats",     'S', RTGETOPT_REQ_NOTHING },
     { "--single-client",    '1', RTGETOPT_REQ_NOTHING },
     { "--daemonize",        'd', RTGETOPT_REQ_NOTHING },
     { "--daemonized",       'D', RTGETOPT_REQ_NOTHING },
     { "--check-data",       'C', RTGETOPT_REQ_NOTHING },
+    { "--verbose",          'v', RTGETOPT_REQ_NOTHING },
+    { "--buffer-size",      'b', RTGETOPT_REQ_UINT32  },
     { "--help",             'h', RTGETOPT_REQ_NOTHING } /* for Usage() */
 };
 
 /** The test handle. */
 static RTTEST g_hTest;
+/** Verbosity level. */
+static uint32_t g_uVerbosity = 0;
 
 
 
@@ -292,13 +303,19 @@ static void Usage(PRTSTREAM pStrm)
             case 'D':
                 continue; /* internal */
             case 'w':
-                pszHelp = "Warmup time, in milliseconds (default " RT_XSTR(NETPERF_DEFAULT_WARMPUP) " ms)";
+                pszHelp = "Warmup time, in milliseconds (default " RT_XSTR(NETPERF_DEFAULT_WARMUP) " ms)";
                 break;
             case 'W':
                 pszHelp = "Cool down time, in milliseconds (default " RT_XSTR(NETPERF_DEFAULT_COOL_DOWN) " ms)";
                 break;
             case 'C':
                 pszHelp = "Check payload data at the receiving end";
+                break;
+            case 'b':
+                pszHelp = "Send and receive buffer sizes for TCP";
+                break;
+            case 'v':
+                pszHelp = "Verbose execution.";
                 break;
             default:
                 pszHelp = "Option undocumented";
@@ -322,7 +339,8 @@ static void Usage(PRTSTREAM pStrm)
 static DECLCALLBACK(void) netperfStopTimerCallback(RTTIMERLR hTimer, void *pvUser, uint64_t iTick)
 {
     bool volatile *pfStop = (bool volatile *)pvUser;
-/*    RTPrintf("Time's Up!\n");*/
+    if (g_uVerbosity > 0)
+        RTPrintf("Time's Up!\n");
     ASMAtomicWriteBool(pfStop, true);
     NOREF(hTimer); NOREF(iTick);
 }
@@ -517,6 +535,8 @@ static int netperfTCPThroughputSend(NETPERFPARAMS const *pParams, NETPERFHDR *pB
         /*
          * Warm up.
          */
+        if (g_uVerbosity > 0)
+            RTPrintf("Warmup...\n");
         pBuf->u32State = RT_H2LE_U32_C(NETPERFHDR_WARMUP);
         rc = RTTimerLRStart(hTimer, pParams->cMsWarmup * UINT64_C(1000000) /* nsec */);
         if (RT_SUCCESS(rc))
@@ -541,6 +561,8 @@ static int netperfTCPThroughputSend(NETPERFPARAMS const *pParams, NETPERFHDR *pB
          */
         if (RT_SUCCESS(rc))
         {
+            if (g_uVerbosity > 0)
+                RTPrintf("The real thing...\n");
             pBuf->u32State = RT_H2LE_U32_C(NETPERFHDR_TESTING);
             fStop          = false;
             rc = RTTimerLRStart(hTimer, pParams->cSecTimeout * UINT64_C(1000000000) /* nsec */);
@@ -570,6 +592,8 @@ static int netperfTCPThroughputSend(NETPERFPARAMS const *pParams, NETPERFHDR *pB
          */
         if (RT_SUCCESS(rc))
         {
+            if (g_uVerbosity > 0)
+                RTPrintf("Cool down...\n");
             pBuf->u32State = RT_H2LE_U32_C(NETPERFHDR_COOL_DOWN);
             fStop          = false;
             rc = RTTimerLRStart(hTimer, pParams->cMsCoolDown * UINT64_C(1000000) /* nsec */);
@@ -594,6 +618,8 @@ static int netperfTCPThroughputSend(NETPERFPARAMS const *pParams, NETPERFHDR *pB
         /*
          * Send DONE packet.
          */
+        if (g_uVerbosity > 0)
+            RTPrintf("Done\n");
         if (RT_SUCCESS(rc))
         {
             u32Seq++;
@@ -1123,6 +1149,16 @@ static DECLCALLBACK(int) netperfTCPServerWorker(RTSOCKET hSocket, void *pvUser)
     }
 
     /*
+     * Adjust send and receive buffer sizes if necessary.
+     */
+    if (pParams->cbBufferSize)
+    {
+        rc = RTTcpSetBufferSize(hSocket, pParams->cbBufferSize);
+        if (RT_FAILURE(rc))
+            return RTTestIFailedRc(rc, "Failed to set socket buffer sizes to %#x: %Rrc\n", pParams->cbBufferSize, rc);
+    }
+
+    /*
      * Greet the other dude.
      */
     rc = RTTcpWrite(hSocket, g_ConnectStart, sizeof(g_ConnectStart) - 1);
@@ -1442,6 +1478,8 @@ static int netperfTCPClientDoLatency(NETPERFPARAMS *pParams)
         /*
          * Warm up.
          */
+        if (g_uVerbosity > 0)
+            RTPrintf("Warmup...\n");
         rc = RTTimerLRStart(hTimer, pParams->cMsWarmup * UINT64_C(1000000) /* nsec */);
         if (RT_SUCCESS(rc))
         {
@@ -1473,6 +1511,8 @@ static int netperfTCPClientDoLatency(NETPERFPARAMS *pParams)
          */
         if (RT_SUCCESS(rc))
         {
+            if (g_uVerbosity > 0)
+                RTPrintf("The real thing...\n");
             fStop = false;
             rc = RTTimerLRStart(hTimer, pParams->cSecTimeout * UINT64_C(1000000000) /* nsec */);
             if (RT_SUCCESS(rc))
@@ -1516,6 +1556,8 @@ static int netperfTCPClientDoLatency(NETPERFPARAMS *pParams)
          */
         if (RT_SUCCESS(rc))
         {
+            if (g_uVerbosity > 0)
+                RTPrintf("Cool down...\n");
             fStop = false;
             rc = RTTimerLRStart(hTimer, pParams->cMsCoolDown * UINT64_C(1000000) /* nsec */);
             if (RT_SUCCESS(rc))
@@ -1547,6 +1589,8 @@ static int netperfTCPClientDoLatency(NETPERFPARAMS *pParams)
         /*
          * Send DONE packet.
          */
+        if (g_uVerbosity > 0)
+            RTPrintf("Done\n");
         if (RT_SUCCESS(rc))
         {
             u32Seq++;
@@ -1612,6 +1656,16 @@ static int netperfTCPClient(const char *pszServer, NETPERFPARAMS *pParams)
         rc = RTTcpSetSendCoalescing(hSocket, false /*fEnable*/);
         if (RT_FAILURE(rc))
             return RTTestIFailedRc(rc, "Failed to set no-delay option: %Rrc\n", rc);
+    }
+
+    /*
+     * Adjust send and receive buffer sizes if necessary.
+     */
+    if (pParams->cbBufferSize)
+    {
+        rc = RTTcpSetBufferSize(hSocket, pParams->cbBufferSize);
+        if (RT_FAILURE(rc))
+            return RTTestIFailedRc(rc, "Failed to set socket buffer sizes to %#x: %Rrc\n", pParams->cbBufferSize, rc);
     }
 
     /*
@@ -1757,8 +1811,8 @@ int main(int argc, char *argv[])
     bool                fDaemonized     = false;
     bool                fPacketSizeSet  = false;
     const char         *pszServerAddress= NULL;
-    NETPERFPARAMS       Params;
 
+    NETPERFPARAMS       Params;
     Params.uPort            = NETPERF_DEFAULT_PORT;
     Params.fServerStats     = false;
     Params.fSingleClient    = false;
@@ -1770,6 +1824,7 @@ int main(int argc, char *argv[])
     Params.cMsWarmup        = NETPERF_DEFAULT_WARMUP;
     Params.cMsCoolDown      = NETPERF_DEFAULT_COOL_DOWN;
     Params.cbPacket         = NETPERF_DEFAULT_PKT_SIZE_LATENCY;
+    Params.cbBufferSize     = 0;
 
     Params.hSocket          = NIL_RTSOCKET;
 
@@ -1860,12 +1915,16 @@ int main(int argc, char *argv[])
                 Params.fSingleClient = true;
                 break;
 
+            case 'v':
+                g_uVerbosity++;
+                break;
+
             case 'h':
                 Usage(g_pStdOut);
                 return RTEXITCODE_SUCCESS;
 
             case 'V':
-                RTPrintf("$Revision$\n");
+                RTPrintf("$Revision: 82968 $\n");
                 return RTEXITCODE_SUCCESS;
 
             case 'w':
@@ -1892,6 +1951,18 @@ int main(int argc, char *argv[])
 
             case 'C':
                 Params.fCheckData = true;
+                break;
+
+            case 'b':
+                Params.cbBufferSize = ValueUnion.u32;
+                if (   (    Params.cbBufferSize < NETPERF_MIN_BUF_SIZE
+                         || Params.cbBufferSize > NETPERF_MAX_BUF_SIZE)
+                    && Params.cbBufferSize  != 0)
+                {
+                    RTTestFailed(g_hTest, "Invalid packet size %u bytes, valid range: %u-%u or 0\n",
+                                 Params.cbBufferSize, NETPERF_MIN_BUF_SIZE, NETPERF_MAX_BUF_SIZE);
+                    return RTTestSummaryAndDestroy(g_hTest);
+                }
                 break;
 
             default:

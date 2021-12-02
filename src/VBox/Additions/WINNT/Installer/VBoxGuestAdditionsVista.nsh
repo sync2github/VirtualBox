@@ -1,10 +1,10 @@
-; $Id$
-; @file
+; $Id: VBoxGuestAdditionsVista.nsh 84945 2020-06-25 10:22:05Z vboxsync $
+;; @file
 ; VBoxGuestAdditionsVista.nsh - Guest Additions installation for Windows Vista/7.
 ;
 
 ;
-; Copyright (C) 2006-2012 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -21,50 +21,19 @@ Function Vista_CheckForRequirements
 
   ${LogVerbose} "Checking for installation requirements for Vista / Windows 7 / Windows 8 ..."
 
-  ${If} $g_bForceInstall == "true"
-    ${LogVerbose} "Forcing installation, checking requirements skipped"
-    goto success
-  ${EndIf}
-
-  ; Validate D3D files, regardless whether D3D support is selected or not
-  Call ValidateD3DFiles
-  Pop $0
-  ${If} $0 == "1" ; D3D files are invalid, notify user
-    MessageBox MB_ICONSTOP|MB_OKCANCEL $(VBOX_COMPONENT_D3D_INVALID) /SD IDOK IDCANCEL failure
-    ; Offer to open up the VBox online manual on how to fix missing/corrupted D3D files
-    MessageBox MB_ICONQUESTION|MB_YESNO $(VBOX_COMPONENT_D3D_INVALID_MANUAL) /SD IDNO IDYES open_handbook_d3d_invalid    
-  ${EndIf}
-  Goto success
-
-open_handbook_d3d_invalid:
-
-  ; @todo Add a language GET parameter (e.g. ?lang=enUS) here as soon as we got the
-  ;       handbook online in different languages
-  ; Don't use https here (even if we offer it) -- we only want to display the handbook
-  Call SetAppMode64 ; For shell execution we need to switch to 64-bit mode first
-  ExecShell open "http://www.virtualbox.org/manual/ch12.html#ts_d3d8-d3d9-restore"
-  IfErrors 0 +2
-    MessageBox MB_ICONSTOP|MB_OK $(VBOX_ERROR_OPEN_LINK) /SD IDOK
-  Call SetAppMode32
-  Goto failure
-
-failure:
-
-  Abort "ERROR: Requirements not met! Installation aborted."
-  goto exit
-
-success:
-
-  ; Nothing to do here right now
-  Goto exit
-
-exit:
+  ; Nothing to do here right now.
 
   Pop $0
 
 FunctionEnd
 
 Function Vista_Prepare
+
+  ; Try to restore the original Direct3D files in case we're coming from an old(er) Guest Additions
+  ; installation, which formerly replaced those system files with our own stubs.
+  ; This no longer is needed and thus needs to be reverted in any case.
+  Call RestoreFilesDirect3D
+  ; Ignore the result in case we had trouble restoring. The system would be in an inconsistent state anyway.
 
   Call VBoxMMR_Uninstall
 
@@ -111,7 +80,7 @@ FunctionEnd
 !macro Vista_UninstallInstDir un
 Function ${un}Vista_UninstallInstDir
 
-!if $%BUILD_TARGET_ARCH% == "x86"       ; 32-bit
+!if $%KBUILD_TARGET_ARCH% == "x86"       ; 32-bit
   Delete /REBOOTOK "$INSTDIR\netamd.inf"
   Delete /REBOOTOK "$INSTDIR\pcntpci5.cat"
   Delete /REBOOTOK "$INSTDIR\PCNTPCI5.sys"
@@ -150,7 +119,7 @@ Function ${un}VBoxMMR_Uninstall
 
   Delete /REBOOTOK "$g_strSystemDir\VBoxMMR.exe"
 
-  !if $%BUILD_TARGET_ARCH% == "amd64"
+  !if $%KBUILD_TARGET_ARCH% == "amd64"
     Delete /REBOOTOK "$g_strSysWow64\VBoxMMRHook.dll"
     Delete /REBOOTOK "$INSTDIR\VBoxMMR-x86.exe"
     Delete /REBOOTOK "$INSTDIR\VBoxMMRHook-x86.dll"

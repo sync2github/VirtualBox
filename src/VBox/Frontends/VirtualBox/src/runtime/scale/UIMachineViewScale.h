@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineViewScale.h 84790 2020-06-11 10:30:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineViewScale class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineViewScale_h___
-#define ___UIMachineViewScale_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_scale_UIMachineViewScale_h
+#define FEQT_INCLUDED_SRC_runtime_scale_UIMachineViewScale_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Local includes */
 #include "UIMachineView.h"
@@ -28,12 +31,7 @@ class UIMachineViewScale : public UIMachineView
 protected:
 
     /* Scale machine-view constructor: */
-    UIMachineViewScale(  UIMachineWindow *pMachineWindow
-                       , ulong uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                       , bool bAccelerate2DVideo
-#endif
-    );
+    UIMachineViewScale(UIMachineWindow *pMachineWindow, ulong uScreenId);
     /* Scale machine-view destructor: */
     virtual ~UIMachineViewScale() {}
 
@@ -63,5 +61,5 @@ private:
     friend class UIMachineView;
 };
 
-#endif // !___UIMachineViewScale_h___
+#endif /* !FEQT_INCLUDED_SRC_runtime_scale_UIMachineViewScale_h */
 

@@ -1,9 +1,9 @@
-; $Id$
+; $Id: VMMR3.def 90549 2021-08-06 13:57:29Z vboxsync $
 ;; @file
 ; VMM Ring-3 Context DLL - Definition file.
 
 ;
-; Copyright (C) 2010-2016 Oracle Corporation
+; Copyright (C) 2010-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -95,31 +95,54 @@ EXPORTS
     CFGMR3GetParent
     CFGMR3GetRootU
 
-    CSAMR3IsEnabled
-    CSAMR3SetScanningEnabled
+    CPUMGetHostMicroarch
+    CPUMGetGuestMicroarch
 
     DBGCCreate
 
+    DBGFR3BpClear
+    DBGFR3BpDisable
+    DBGFR3BpEnable
+    DBGFR3BpOwnerCreate
+    DBGFR3BpOwnerDestroy
+    DBGFR3BpSetInt3
+    DBGFR3BpSetInt3Ex
+    DBGFR3BpSetMmio
+    DBGFR3BpSetMmioEx
+    DBGFR3BpSetPortIo
+    DBGFR3BpSetPortIoEx
+    DBGFR3BpSetReg
+    DBGFR3BpSetRegEx
+    DBGFR3BpSetREM
     DBGFR3CoreWrite
     DBGFR3Info
     DBGFR3InfoRegisterExternal
+    DBGFR3InfoDeregisterExternal
+    DBGFR3InfoGenericGetOptError
     DBGFR3InjectNMI
     DBGFR3LogModifyDestinations
     DBGFR3LogModifyFlags
     DBGFR3LogModifyGroups
     DBGFR3OSDetect
     DBGFR3OSQueryNameAndVersion
+    DBGFR3RegCpuQueryU8
+    DBGFR3RegCpuQueryU16
     DBGFR3RegCpuQueryU32
+    DBGFR3RegCpuQueryU64
+    DBGFR3RegCpuQueryXdtr
+    DBGFR3RegCpuQueryLrd
     DBGFR3RegFormatValue
     DBGFR3RegNmQuery
     DBGFR3RegNmQueryAll
     DBGFR3RegNmQueryAllCount
+    DBGFR3RegNmSetBatch
     DBGFR3OSDeregister
     DBGFR3OSRegister
     DBGFR3OSQueryInterface
     DBGFR3MemReadString
     DBGFR3MemRead
     DBGFR3MemScan
+    DBGFR3ModInMem
     DBGFR3AddrFromFlat
     DBGFR3AsSymbolByName
     DBGFR3AsResolveAndRetain
@@ -127,7 +150,9 @@ EXPORTS
     DBGFR3AddrAdd
     DBGFR3AddrSub
     DBGFR3AsGetConfig
+    DBGFR3CpuGetCount
     DBGFR3CpuGetMode
+    DBGFR3CpuGetState
     DBGFR3AddrFromSelOff
     DBGFR3FlowCreate
     DBGFR3FlowRetain
@@ -137,6 +162,7 @@ EXPORTS
     DBGFR3FlowQueryBranchTblByAddress
     DBGFR3FlowGetBbCount
     DBGFR3FlowGetBranchTblCount
+    DBGFR3FlowGetCallInsnCount
     DBGFR3FlowBbRetain
     DBGFR3FlowBbRelease
     DBGFR3FlowBbGetStartAddress
@@ -166,10 +192,46 @@ EXPORTS
     DBGFR3FlowBranchTblItDestroy
     DBGFR3FlowBranchTblItNext
     DBGFR3FlowBranchTblItReset
+    DBGFR3FlowTraceModCreate
+    DBGFR3FlowTraceModCreateFromFlowGraph
+    DBGFR3FlowTraceModRetain
+    DBGFR3FlowTraceModRelease
+    DBGFR3FlowTraceModEnable
+    DBGFR3FlowTraceModDisable
+    DBGFR3FlowTraceModQueryReport
+    DBGFR3FlowTraceModClear
+    DBGFR3FlowTraceModAddProbe
+    DBGFR3FlowTraceProbeCreate
+    DBGFR3FlowTraceProbeRetain
+    DBGFR3FlowTraceProbeRelease
+    DBGFR3FlowTraceProbeEntriesAdd
+    DBGFR3FlowTraceReportRetain
+    DBGFR3FlowTraceReportRelease
+    DBGFR3FlowTraceReportGetRecordCount
+    DBGFR3FlowTraceReportQueryRecord
+    DBGFR3FlowTraceReportQueryFiltered
+    DBGFR3FlowTraceReportEnumRecords
+    DBGFR3FlowTraceRecordRetain
+    DBGFR3FlowTraceRecordRelease
+    DBGFR3FlowTraceRecordGetSeqNo
+    DBGFR3FlowTraceRecordGetTimestamp
+    DBGFR3FlowTraceRecordGetAddr
+    DBGFR3FlowTraceRecordGetProbe
+    DBGFR3FlowTraceRecordGetValCount
+    DBGFR3FlowTraceRecordGetVals
+    DBGFR3FlowTraceRecordGetValsCommon
+    DBGFR3FlowTraceRecordGetCpuId
     DBGFR3PlugInLoad
     DBGFR3PlugInUnload
     DBGFR3PlugInLoadAll
     DBGFR3PlugInUnloadAll
+    DBGFR3SampleReportCreate
+    DBGFR3SampleReportRetain
+    DBGFR3SampleReportRelease
+    DBGFR3SampleReportStart
+    DBGFR3SampleReportStop
+    DBGFR3SampleReportDumpToFile
+    DBGFR3SelQueryInfo
     DBGFR3StackWalkBegin
     DBGFR3StackWalkNext
     DBGFR3StackWalkEnd
@@ -184,10 +246,8 @@ EXPORTS
     DBGFR3TypeValDumpEx
 
     EMR3QueryExecutionPolicy
+    EMR3QueryMainExecutionEngine
     EMR3SetExecutionPolicy
-
-    FTMR3CancelStandby
-    FTMR3PowerOn
 
     MMHyperR3ToR0
     MMHyperR3ToRC
@@ -199,11 +259,9 @@ EXPORTS
 
     MMR3HeapFree
     MMR3HeapRealloc
+    MMR3HeapAllocU
 
     MMR3HyperAllocOnceNoRel
-
-    PATMR3AllowPatching
-    PATMR3IsEnabled
 
     PDMR3AsyncCompletionBwMgrSetMaxForFile
     PDMR3DeviceAttach
@@ -270,9 +328,13 @@ EXPORTS
     SSMR3DeregisterExternal
     SSMR3DeregisterInternal
     SSMR3GetBool
+    SSMR3GetBoolV
     SSMR3GetGCPhys
+    SSMR3GetGCPhysV
     SSMR3GetGCPhys32
+    SSMR3GetGCPhys32V
     SSMR3GetGCPhys64
+    SSMR3GetGCPhys64V
     SSMR3GetGCPtr
     SSMR3GetGCUInt
     SSMR3GetGCUIntPtr
@@ -281,10 +343,15 @@ EXPORTS
     SSMR3GetMem
     SSMR3GetRCPtr
     SSMR3GetS128
+    SSMR3GetS128V
     SSMR3GetS16
+    SSMR3GetS16V
     SSMR3GetS32
+    SSMR3GetS32V
     SSMR3GetS64
+    SSMR3GetS64V
     SSMR3GetS8
+    SSMR3GetS8V
     SSMR3GetSInt
     SSMR3GetSel
     SSMR3GetStrZ
@@ -292,10 +359,15 @@ EXPORTS
     SSMR3GetStruct
     SSMR3GetStructEx
     SSMR3GetU128
+    SSMR3GetU128V
     SSMR3GetU16
+    SSMR3GetU16V
     SSMR3GetU32
+    SSMR3GetU32V
     SSMR3GetU64
+    SSMR3GetU64V
     SSMR3GetU8
+    SSMR3GetU8V
     SSMR3GetUInt
     SSMR3HandleGetAfter
     SSMR3HandleGetStatus
@@ -351,10 +423,16 @@ EXPORTS
     STAMR3Snapshot
     STAMR3SnapshotFree
     STAMR3GetUnit
+    STAMR3RegisterFU
+    STAMR3RegisterVU
+    STAMR3DeregisterF
+    STAMR3DeregisterV
 
+    TMR3GetCpuLoadPercents
     TMR3TimerSetCritSect
     TMR3TimerLoad
     TMR3TimerSave
+    TMR3TimerSkip
     TMR3TimerDestroy
     TMTimerFromMicro
     TMTimerFromMilli

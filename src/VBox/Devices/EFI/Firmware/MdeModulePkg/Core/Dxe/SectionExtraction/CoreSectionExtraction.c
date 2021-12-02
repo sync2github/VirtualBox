@@ -27,14 +27,8 @@
   3) A support protocol is not found, and the data is not available to be read
      without it.  This results in EFI_PROTOCOL_ERROR.
 
-Copyright (c) 2006 - 2014, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -958,9 +952,12 @@ CreateChildNode (
                                  search.
   @param  SearchType             Indicates the type of section to search for.
   @param  SectionInstance        Indicates which instance of section to find.
-                                 This is an in/out parameter to deal with
-                                 recursions.
+                                 This is an in/out parameter and it is 1-based,
+                                 to deal with recursions.
   @param  SectionDefinitionGuid  Guid of section definition
+  @param  Depth                  Nesting depth of encapsulation sections.
+                                 Callers different from FindChildNode() are
+                                 responsible for passing in a zero Depth.
   @param  FoundChild             Output indicating the child node that is found.
   @param  FoundStream            Output indicating which section stream the child
                                  was found in.  If this stream was generated as a
@@ -974,6 +971,9 @@ CreateChildNode (
   @retval EFI_NOT_FOUND          Requested child node does not exist.
   @retval EFI_PROTOCOL_ERROR     a required GUIDED section extraction protocol
                                  does not exist
+  @retval EFI_ABORTED            Recursion aborted because Depth has been
+                                 greater than or equal to
+                                 PcdFwVolDxeMaxEncapsulationDepth.
 
 **/
 EFI_STATUS
@@ -982,6 +982,7 @@ FindChildNode (
   IN     EFI_SECTION_TYPE                           SearchType,
   IN OUT UINTN                                      *SectionInstance,
   IN     EFI_GUID                                   *SectionDefinitionGuid,
+  IN     UINT32                                     Depth,
   OUT    CORE_SECTION_CHILD_NODE                    **FoundChild,
   OUT    CORE_SECTION_STREAM_NODE                   **FoundStream,
   OUT    UINT32                                     *AuthenticationStatus
@@ -993,6 +994,12 @@ FindChildNode (
   UINT32                                        NextChildOffset;
   EFI_STATUS                                    ErrorStatus;
   EFI_STATUS                                    Status;
+
+  ASSERT (*SectionInstance > 0);
+
+  if (Depth >= PcdGet32 (PcdFwVolDxeMaxEncapsulationDepth)) {
+    return EFI_ABORTED;
+  }
 
   CurrentChildNode = NULL;
   ErrorStatus = EFI_NOT_FOUND;
@@ -1043,6 +1050,11 @@ FindChildNode (
       }
     }
 
+    //
+    // Type mismatch, or we haven't found the desired instance yet.
+    //
+    ASSERT (*SectionInstance > 0);
+
     if (CurrentChildNode->EncapsulatedStreamHandle != NULL_STREAM_HANDLE) {
       //
       // If the current node is an encapsulating node, recurse into it...
@@ -1052,20 +1064,33 @@ FindChildNode (
                 SearchType,
                 SectionInstance,
                 SectionDefinitionGuid,
+                Depth + 1,
                 &RecursedChildNode,
                 &RecursedFoundStream,
                 AuthenticationStatus
                 );
-      //
-      // If the status is not EFI_SUCCESS, just save the error code and continue
-      // to find the request child node in the rest stream.
-      //
       if (*SectionInstance == 0) {
+        //
+        // The recursive FindChildNode() call decreased (*SectionInstance) to
+        // zero.
+        //
         ASSERT_EFI_ERROR (Status);
         *FoundChild = RecursedChildNode;
         *FoundStream = RecursedFoundStream;
         return EFI_SUCCESS;
       } else {
+        if (Status == EFI_ABORTED) {
+          //
+          // If the recursive call was aborted due to nesting depth, stop
+          // looking for the requested child node. The skipped subtree could
+          // throw off the instance counting.
+          //
+          return Status;
+        }
+        //
+        // Save the error code and continue to find the requested child node in
+        // the rest of the stream.
+        //
         ErrorStatus = Status;
       }
     } else if ((CurrentChildNode->Type == EFI_SECTION_GUID_DEFINED) && (SearchType != EFI_SECTION_GUID_DEFINED)) {
@@ -1166,7 +1191,7 @@ FindStreamNode (
                                 non-null on input, then the buffer is caller
                                 allocated.  If Buffer is NULL, then the buffer
                                 is callee allocated.  In either case, the
-                                requried buffer size is returned in *BufferSize.
+                                required buffer size is returned in *BufferSize.
   @param  BufferSize            On input, indicates the size of *Buffer if
                                 *Buffer is non-null on input.  On output,
                                 indicates the required size (allocated size if
@@ -1267,11 +1292,20 @@ GetSection (
                *SectionType,
                &Instance,
                SectionDefinitionGuid,
+               0,                             // encapsulation depth
                &ChildNode,
                &ChildStreamNode,
                &ExtractedAuthenticationStatus
                );
     if (EFI_ERROR (Status)) {
+      if (Status == EFI_ABORTED) {
+        DEBUG ((DEBUG_ERROR, "%a: recursion aborted due to nesting depth\n",
+          __FUNCTION__));
+        //
+        // Map "aborted" to "not found".
+        //
+        Status = EFI_NOT_FOUND;
+      }
       goto GetSection_Done;
     }
 
@@ -1551,7 +1585,9 @@ CustomGuidedSectionExtract (
     //
     AllocatedOutputBuffer = AllocatePool (OutputBufferSize);
     if (AllocatedOutputBuffer == NULL) {
-      FreePool (ScratchBuffer);
+      if (ScratchBuffer != NULL) {
+        FreePool (ScratchBuffer);
+      }
       return EFI_OUT_OF_RESOURCES;
     }
     *OutputBuffer = AllocatedOutputBuffer;

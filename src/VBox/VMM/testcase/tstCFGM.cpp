@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstCFGM.cpp 86361 2020-09-30 18:59:31Z vboxsync $ */
 /** @file
  * Testcase for CFGM.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,6 +22,7 @@
 *********************************************************************************************************************************/
 #include <VBox/sup.h>
 #include <VBox/vmm/cfgm.h>
+#include <VBox/vmm/dbgf.h>
 #include <VBox/vmm/mm.h>
 #include <VBox/vmm/vm.h>
 #include <VBox/vmm/uvm.h>
@@ -104,7 +105,7 @@ static void doInVmmTests(RTTEST hTest)
     RTTESTI_CHECK_RC_RETV(SUPR3PageAlloc(RT_ALIGN_Z(sizeof(*pVM), PAGE_SIZE) >> PAGE_SHIFT, (void **)&pVM), VINF_SUCCESS);
 
 
-    PUVM pUVM = (PUVM)RTMemPageAlloc(sizeof(*pUVM));
+    PUVM pUVM = (PUVM)RTMemPageAllocZ(sizeof(*pUVM));
     pUVM->u32Magic = UVM_MAGIC;
     pUVM->pVM = pVM;
     pVM->pUVM = pUVM;
@@ -123,6 +124,10 @@ static void doInVmmTests(RTTEST hTest)
 
     /* done */
     RTTESTI_CHECK_RC_RETV(CFGMR3Term(pVM), VINF_SUCCESS);
+    MMR3TermUVM(pUVM);
+    STAMR3TermUVM(pUVM);
+    DBGFR3TermUVM(pUVM);
+    RTMemPageFree(pUVM, sizeof(*pUVM));
 }
 
 

@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: DrvUDPTunnel.cpp 91897 2021-10-20 13:42:39Z vboxsync $ */
 /** @file
  * DrvUDPTunnel - UDP tunnel network transport driver
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -100,7 +100,7 @@ typedef struct DRVUDPTUNNEL
 
 
 /** Converts a pointer to UDPTUNNEL::INetworkUp to a PRDVUDPTUNNEL. */
-#define PDMINETWORKUP_2_DRVUDPTUNNEL(pInterface) ( (PDRVUDPTUNNEL)((uintptr_t)pInterface - RT_OFFSETOF(DRVUDPTUNNEL, INetworkUp)) )
+#define PDMINETWORKUP_2_DRVUDPTUNNEL(pInterface) ( (PDRVUDPTUNNEL)((uintptr_t)pInterface - RT_UOFFSETOF(DRVUDPTUNNEL, INetworkUp)) )
 
 
 /*********************************************************************************************************************************
@@ -201,9 +201,6 @@ static DECLCALLBACK(int) drvUDPTunnelUp_SendBuf(PPDMINETWORKUP pInterface, PPDMS
     Assert((pSgBuf->fFlags & PDMSCATTERGATHER_FLAGS_MAGIC_MASK) == PDMSCATTERGATHER_FLAGS_MAGIC);
     Assert(RTCritSectIsOwner(&pThis->XmitLock));
 
-    /* Set an FTM checkpoint as this operation changes the state permanently. */
-    PDMDrvHlpFTSetCheckpoint(pThis->pDrvIns, FTMCHECKPOINTTYPE_NETWORK);
-
     int rc;
     if (!pSgBuf->pvUser)
     {
@@ -292,6 +289,7 @@ static DECLCALLBACK(void) drvUDPTunnelUp_NotifyLinkChanged(PPDMINETWORKUP pInter
             break;
         default:
             AssertMsgFailed(("enmLinkState=%d\n", enmLinkState));
+            RT_FALL_THRU();
         case PDMNETWORKLINKSTATE_UP:
             fLinkDown = false;
             break;
@@ -415,7 +413,7 @@ static DECLCALLBACK(void) drvUDPTunnelDestruct(PPDMDRVINS pDrvIns)
 
     if (pThis->pszDestIP)
     {
-        MMR3HeapFree(pThis->pszDestIP);
+        PDMDrvHlpMMHeapFree(pDrvIns, pThis->pszDestIP);
         pThis->pszDestIP = NULL;
     }
 
@@ -455,6 +453,7 @@ static DECLCALLBACK(int) drvUDPTunnelConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
     RT_NOREF(fFlags);
     PDMDRV_CHECK_VERSIONS_RETURN(pDrvIns);
     PDRVUDPTUNNEL pThis = PDMINS_2_DATA(pDrvIns, PDRVUDPTUNNEL);
+    PCPDMDRVHLPR3 pHlp  = pDrvIns->pHlpR3;
 
     /*
      * Init the static parts.
@@ -489,8 +488,10 @@ static DECLCALLBACK(int) drvUDPTunnelConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
     /*
      * Validate the config.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "sport\0dest\0dport"))
-        return PDMDRV_SET_ERROR(pDrvIns, VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES, "");
+    PDMDRV_VALIDATE_CONFIG_RETURN(pDrvIns,  "sport"
+                                            "|dest"
+                                            "|dport",
+                                            "");
 
     /*
      * Check that no-one is attached to us.
@@ -512,7 +513,7 @@ static DECLCALLBACK(int) drvUDPTunnelConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
      */
     int rc;
     char szVal[16];
-    rc = CFGMR3QueryStringDef(pCfg, "sport", szVal, sizeof(szVal), "4444");
+    rc = pHlp->pfnCFGMQueryStringDef(pCfg, "sport", szVal, sizeof(szVal), "4444");
     if (RT_FAILURE(rc))
         rc = PDMDRV_SET_ERROR(pDrvIns, rc,
                               N_("DrvUDPTunnel: Configuration error: Querying \"sport\" as string failed"));
@@ -523,7 +524,7 @@ static DECLCALLBACK(int) drvUDPTunnelConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
     if (!pThis->uSrcPort)
         pThis->uSrcPort = 4444;
 
-    rc = CFGMR3QueryStringDef(pCfg, "dport", szVal, sizeof(szVal), "4445");
+    rc = pHlp->pfnCFGMQueryStringDef(pCfg, "dport", szVal, sizeof(szVal), "4445");
     if (RT_FAILURE(rc))
         rc = PDMDRV_SET_ERROR(pDrvIns, rc,
                               N_("DrvUDPTunnel: Configuration error: Querying \"dport\" as string failed"));
@@ -534,7 +535,7 @@ static DECLCALLBACK(int) drvUDPTunnelConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
     if (!pThis->uDestPort)
         pThis->uDestPort = 4445;
 
-    rc = CFGMR3QueryStringAllocDef(pCfg, "dest", &pThis->pszDestIP, "127.0.0.1");
+    rc = pHlp->pfnCFGMQueryStringAllocDef(pCfg, "dest", &pThis->pszDestIP, "127.0.0.1");
     if (RT_FAILURE(rc))
         rc = PDMDRV_SET_ERROR(pDrvIns, rc,
                               N_("DrvUDPTunnel: Configuration error: Querying \"dest\" as string failed"));

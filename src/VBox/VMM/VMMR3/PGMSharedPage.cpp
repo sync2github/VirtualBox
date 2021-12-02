@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PGMSharedPage.cpp 90439 2021-07-30 16:41:49Z vboxsync $ */
 /** @file
  * PGM - Page Manager and Monitor, Shared page handling
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,6 +20,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_PGM_SHARED
+#define VBOX_WITHOUT_PAGING_BIT_FIELDS /* 64-bit bitfields are just asking for trouble. See @bugref{9841} and others. */
 #include <VBox/vmm/pgm.h>
 #include <VBox/vmm/stam.h>
 #include <VBox/vmm/uvm.h>
@@ -29,6 +30,7 @@
 #include <VBox/param.h>
 #include <VBox/err.h>
 #include <VBox/log.h>
+#include <VBox/VMMDev.h>
 #include <iprt/asm.h>
 #include <iprt/assert.h>
 #include <iprt/mem.h>
@@ -83,7 +85,7 @@ VMMR3DECL(int) PGMR3SharedModuleRegister(PVM pVM, VBOXOSFAMILY enmGuestOS, char 
      * Allocate and initialize a GMM request.
      */
     PGMMREGISTERSHAREDMODULEREQ pReq;
-    pReq = (PGMMREGISTERSHAREDMODULEREQ)RTMemAllocZ(RT_OFFSETOF(GMMREGISTERSHAREDMODULEREQ, aRegions[cRegions]));
+    pReq = (PGMMREGISTERSHAREDMODULEREQ)RTMemAllocZ(RT_UOFFSETOF_DYN(GMMREGISTERSHAREDMODULEREQ, aRegions[cRegions]));
     AssertReturn(pReq, VERR_NO_MEMORY);
 
     pReq->enmGuestOS    = enmGuestOS;
@@ -117,7 +119,7 @@ VMMR3DECL(int) PGMR3SharedModuleRegister(PVM pVM, VBOXOSFAMILY enmGuestOS, char 
                     if (g_apSharedModules[i] == NULL)
                     {
 
-                        size_t const cbSharedModule = RT_OFFSETOF(GMMREGISTERSHAREDMODULEREQ, aRegions[cRegions]);
+                        size_t const cbSharedModule = RT_UOFFSETOF_DYN(GMMREGISTERSHAREDMODULEREQ, aRegions[cRegions]);
                         g_apSharedModules[i] = (PGMMREGISTERSHAREDMODULEREQ)RTMemDup(pReq, cbSharedModule);
                         g_cSharedModules++;
                         break;
@@ -229,11 +231,11 @@ static DECLCALLBACK(VBOXSTRICTRC) pgmR3SharedModuleRegRendezvous(PVM pVM, PVMCPU
      */
     LogFlow(("pgmR3SharedModuleRegRendezvous: start (%d)\n", pVM->pgm.s.cSharedPages));
 
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     pgmR3PhysAssertSharedPageChecksums(pVM);
     rc = GMMR3CheckSharedModules(pVM);
     pgmR3PhysAssertSharedPageChecksums(pVM);
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     AssertLogRelRC(rc);
 
     LogFlow(("pgmR3SharedModuleRegRendezvous: done (%d)\n", pVM->pgm.s.cSharedPages));
@@ -288,7 +290,7 @@ VMMR3DECL(int) PGMR3SharedModuleGetPageState(PVM pVM, RTGCPTR GCPtrPage, bool *p
     RTGCPHYS GCPhys;
     uint64_t fFlags;
 
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
 
     int rc = PGMGstGetPage(VMMGetCpu(pVM), GCPtrPage, &fFlags, &GCPhys);
     switch (rc)
@@ -319,7 +321,7 @@ VMMR3DECL(int) PGMR3SharedModuleGetPageState(PVM pVM, RTGCPTR GCPtrPage, bool *p
             break;
     }
 
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return rc;
 }
 # endif /* DEBUG */
@@ -342,7 +344,7 @@ DECLCALLBACK(int) pgmR3CmdCheckDuplicatePages(PCDBGCCMD pCmd, PDBGCCMDHLP pCmdHl
     PVM      pVM = pUVM->pVM;
     VM_ASSERT_VALID_EXT_RETURN(pVM, VERR_INVALID_VM_HANDLE);
 
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
 
     for (PPGMRAMRANGE pRam = pVM->pgm.s.pRamRangesXR3; pRam; pRam = pRam->pNextR3)
     {
@@ -401,7 +403,7 @@ DECLCALLBACK(int) pgmR3CmdCheckDuplicatePages(PCDBGCCMD pCmd, PDBGCCMDHLP pCmdHl
                 pCmdHlp->pfnPrintf(pCmdHlp, NULL, ".");
         }
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     pCmdHlp->pfnPrintf(pCmdHlp, NULL, "\nNumber of zero pages      %08x (%d MB)\n", cZero, cZero / 256);
     pCmdHlp->pfnPrintf(pCmdHlp, NULL, "Number of alloczero pages %08x (%d MB)\n", cAllocZero, cAllocZero / 256);
@@ -422,7 +424,7 @@ DECLCALLBACK(int) pgmR3CmdShowSharedModules(PCDBGCCMD pCmd, PDBGCCMDHLP pCmdHlp,
     PVM pVM = pUVM->pVM;
     VM_ASSERT_VALID_EXT_RETURN(pVM, VERR_INVALID_VM_HANDLE);
 
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     for (unsigned i = 0; i < RT_ELEMENTS(g_apSharedModules); i++)
     {
         if (g_apSharedModules[i])
@@ -432,7 +434,7 @@ DECLCALLBACK(int) pgmR3CmdShowSharedModules(PCDBGCCMD pCmd, PDBGCCMDHLP pCmdHlp,
                 pCmdHlp->pfnPrintf(pCmdHlp, NULL, "--- Region %d: base %RGv size %x\n", j, g_apSharedModules[i]->aRegions[j].GCRegionAddr, g_apSharedModules[i]->aRegions[j].cbRegion);
         }
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     return VINF_SUCCESS;
 }

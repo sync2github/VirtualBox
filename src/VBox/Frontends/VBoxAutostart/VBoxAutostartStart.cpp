@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxAutostartStart.cpp 89571 2021-06-08 17:34:49Z vboxsync $ */
 /** @file
  * VBoxAutostart - VirtualBox Autostart service, start machines during system boot.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,14 +22,14 @@
 #include <VBox/com/ErrorInfo.h>
 #include <VBox/com/errorprint.h>
 
-#include <iprt/message.h>
-#include <iprt/thread.h>
-#include <iprt/stream.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
+#include <iprt/message.h>
+#include <iprt/stream.h>
+#include <iprt/thread.h>
 
 #include <algorithm>
 #include <list>
-#include <string>
 
 #include "VBoxAutostart.h"
 
@@ -112,6 +112,14 @@ DECLHIDDEN(RTEXITCODE) autostartStartMain(PCFGAST pCfgAst)
             }
         }
 
+        /**
+         * @todo r=uwe I'm not reindenting this whole burnt offering
+         * to mistinterpreted Dijkstra's "single exit" commandment
+         * just to add this log, hence a bit of duplicate logic here.
+         */
+        if (SUCCEEDED(rc) && listVM.empty())
+            LogRel(("No VMs configured for autostart\n"));
+
         if (   SUCCEEDED(rc)
             && !listVM.empty())
         {
@@ -138,7 +146,7 @@ DECLHIDDEN(RTEXITCODE) autostartStartMain(PCFGAST pCfgAst)
                                                              machine.asOutParam()));
 
                 CHECK_ERROR_BREAK(machine, LaunchVMProcess(g_pSession, Bstr("headless").raw(),
-                                                           Bstr("").raw(), progress.asOutParam()));
+                                                           ComSafeArrayNullInParam(), progress.asOutParam()));
                 if (SUCCEEDED(rc) && !progress.isNull())
                 {
                     autostartSvcLogVerbose("Waiting for VM \"%ls\" to power on...\n", (*it).strId.raw());
@@ -166,7 +174,10 @@ DECLHIDDEN(RTEXITCODE) autostartStartMain(PCFGAST pCfgAst)
                         }
                     }
                 }
-                g_pSession->UnlockMachine();
+                SessionState_T enmSessionState;
+                CHECK_ERROR(g_pSession, COMGETTER(State)(&enmSessionState));
+                if (SUCCEEDED(rc) && enmSessionState == SessionState_Locked)
+                    g_pSession->UnlockMachine();
             }
         }
     }

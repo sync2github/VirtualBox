@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIWithRetranslateUI.h 89960 2021-06-29 17:49:15Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Qt extensions: QIWithRetranslateUI class declaration.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,88 +15,43 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __QIWithRetranslateUI_h
-#define __QIWithRetranslateUI_h
+#ifndef FEQT_INCLUDED_SRC_globals_QIWithRetranslateUI_h
+#define FEQT_INCLUDED_SRC_globals_QIWithRetranslateUI_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/* Global includes */
+/* Qt includes: */
 #include <QApplication>
+#include <QDialog>
 #include <QEvent>
-#include <QObject>
 #include <QGraphicsWidget>
+#include <QObject>
+#include <QWidget>
 
+/* GUI includes: */
+#include "UILibraryDefs.h"
+
+
+/** Template for automatic language translations of underlying QWidget. */
 template <class Base>
-class QIWithRetranslateUI: public Base
+class QIWithRetranslateUI : public Base
 {
 public:
 
-    QIWithRetranslateUI(QWidget *pParent = 0) : Base(pParent) {}
-
-protected:
-
-    virtual void changeEvent(QEvent *pEvent)
-    {
-        Base::changeEvent (pEvent);
-        switch (pEvent->type())
-        {
-            case QEvent::LanguageChange:
-            {
-                retranslateUi();
-                pEvent->accept();
-                break;
-            }
-            default:
-                break;
-        }
-    }
-
-    virtual void retranslateUi() = 0;
-};
-
-template <class Base>
-class QIWithRetranslateUI2: public Base
-{
-public:
-
-    QIWithRetranslateUI2(QWidget *pParent = 0, Qt::WindowFlags fFlags = 0) : Base(pParent, fFlags) {}
-
-protected:
-
-    virtual void changeEvent(QEvent *pEvent)
-    {
-        Base::changeEvent (pEvent);
-        switch (pEvent->type())
-        {
-            case QEvent::LanguageChange:
-            {
-                retranslateUi();
-                pEvent->accept();
-                break;
-            }
-            default:
-                break;
-        }
-    }
-
-    virtual void retranslateUi() = 0;
-};
-
-template <class Base>
-class QIWithRetranslateUI3: public Base
-{
-public:
-
-    QIWithRetranslateUI3(QObject *pParent = 0)
-        : Base(pParent)
+    /** Constructs translatable widget passing @a pParent to the base-class. */
+    QIWithRetranslateUI(QWidget *pParent = 0) : Base(pParent)
     {
         qApp->installEventFilter(this);
     }
 
 protected:
 
+    /** Pre-handles standard Qt @a pEvent for passed @a pObject. */
     virtual bool eventFilter(QObject *pObject, QEvent *pEvent)
     {
-        /* Handle events for qApp only: */
-        if (pObject == qApp)
+        /* Handle LanguageChange events for qApp or this object: */
+        if (pObject == qApp || pObject == this)
         {
             switch (pEvent->type())
             {
@@ -108,14 +63,108 @@ protected:
         return Base::eventFilter(pObject, pEvent);
     }
 
+    /** Handles translation event. */
     virtual void retranslateUi() = 0;
 };
 
+/** Explicit QIWithRetranslateUI instantiation for QWidget & QDialog classes.
+  * @note  On Windows it's important that all template cases are instantiated just once across
+  *        the linking space. In case we have particular template case instantiated from both
+  *        library and executable sides, - we have multiple definition case and need to strictly
+  *        ask compiler to do it just once and link such cases against library only.
+  *        I would also note that it would be incorrect to just make whole the template exported
+  *        to library because latter can have lack of required instantiations (current case). */
+template class SHARED_LIBRARY_STUFF QIWithRetranslateUI<QWidget>;
+template class SHARED_LIBRARY_STUFF QIWithRetranslateUI<QDialog>;
+
+
+/** Template for automatic language translations of underlying QWidget with certain flags. */
 template <class Base>
-class QIWithRetranslateUI4: public Base
+class QIWithRetranslateUI2 : public Base
 {
 public:
 
+    /** Constructs translatable widget passing @a pParent and @a enmFlags to the base-class. */
+    QIWithRetranslateUI2(QWidget *pParent = 0, Qt::WindowFlags enmFlags = Qt::WindowFlags()) : Base(pParent, enmFlags)
+    {
+        qApp->installEventFilter(this);
+    }
+
+protected:
+
+    /** Pre-handles standard Qt @a pEvent for passed @a pObject. */
+    virtual bool eventFilter(QObject *pObject, QEvent *pEvent)
+    {
+        /* Handle LanguageChange events for qApp or this object: */
+        if (pObject == qApp || pObject == this)
+        {
+            switch (pEvent->type())
+            {
+                case QEvent::LanguageChange: retranslateUi(); break;
+                default: break;
+            }
+        }
+        /* Call to base-class: */
+        return Base::eventFilter(pObject, pEvent);
+    }
+
+    /** Handles translation event. */
+    virtual void retranslateUi() = 0;
+};
+
+
+/** Template for automatic language translations of underlying QObject. */
+template <class Base>
+class QIWithRetranslateUI3 : public Base
+{
+public:
+
+    /** Constructs translatable widget passing @a pParent to the base-class. */
+    QIWithRetranslateUI3(QObject *pParent = 0)
+        : Base(pParent)
+    {
+        qApp->installEventFilter(this);
+    }
+
+protected:
+
+    /** Pre-handles standard Qt @a pEvent for passed @a pObject. */
+    virtual bool eventFilter(QObject *pObject, QEvent *pEvent)
+    {
+        /* Handle LanguageChange events for qApp or this object: */
+        if (pObject == qApp || pObject == this)
+        {
+            switch (pEvent->type())
+            {
+                case QEvent::LanguageChange: retranslateUi(); break;
+                default: break;
+            }
+        }
+        /* Call to base-class: */
+        return Base::eventFilter(pObject, pEvent);
+    }
+
+    /** Handles translation event. */
+    virtual void retranslateUi() = 0;
+};
+
+/** Explicit QIWithRetranslateUI3 instantiation for QObject class.
+  * @note  On Windows it's important that all template cases are instantiated just once across
+  *        the linking space. In case we have particular template case instantiated from both
+  *        library and executable sides, - we have multiple definition case and need to strictly
+  *        ask compiler to do it just once and link such cases against library only.
+  *        I would also note that it would be incorrect to just make whole the template exported
+  *        to library because latter can have lack of required instantiations (current case). */
+template class SHARED_LIBRARY_STUFF QIWithRetranslateUI3<QObject>;
+
+
+/** Template for automatic language translations of underlying QGraphicsWidget. */
+template <class Base>
+class QIWithRetranslateUI4 : public Base
+{
+public:
+
+    /** Constructs translatable widget passing @a pParent to the base-class. */
     QIWithRetranslateUI4(QGraphicsWidget *pParent = 0)
         : Base(pParent)
     {
@@ -124,23 +173,27 @@ public:
 
 protected:
 
+    /** Pre-handles standard Qt @a pEvent for passed @a pObject. */
     virtual bool eventFilter(QObject *pObject, QEvent *pEvent)
     {
-        switch (pEvent->type())
+        /* Handle LanguageChange events for qApp or this object: */
+        if (pObject == qApp || pObject == this)
         {
-            case QEvent::LanguageChange:
+            /* Handle LanguageChange events: */
+            switch (pEvent->type())
             {
-                retranslateUi();
-                break;
+                case QEvent::LanguageChange: retranslateUi(); break;
+                default: break;
             }
-            default:
-                break;
         }
+        /* Call to base-class: */
         return Base::eventFilter(pObject, pEvent);
     }
 
+    /** Handles translation event. */
     virtual void retranslateUi() = 0;
 };
 
-#endif /* __QIWithRetranslateUI_h */
+
+#endif /* !FEQT_INCLUDED_SRC_globals_QIWithRetranslateUI_h */
 

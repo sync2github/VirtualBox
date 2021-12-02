@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UsbTestServiceTcp.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * UsbTestService - Remote USB test configuration and execution server, TCP/IP Transport Layer.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -99,7 +99,7 @@ static bool                 g_fTcpStopConnecting    = false;
  */
 static void utsTcpDisconnectClient(PUTSTRANSPORTCLIENT pClient)
 {
-    if (pClient->hTcpClient == NIL_RTSOCKET)
+    if (pClient->hTcpClient != NIL_RTSOCKET)
     {
         int rc = RTTcpServerDisconnectClient2(pClient->hTcpClient);
         pClient->hTcpClient = NIL_RTSOCKET;

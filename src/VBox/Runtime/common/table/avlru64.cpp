@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: avlru64.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - AVL tree, void *, range, unique keys.
  */
 
 /*
- * Copyright (C) 2001-2010 knut st. osmundsen (bird-src-spam@anduin.net)
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -65,7 +65,7 @@ static const char szFileId[] = "Id: kAVLULInt.c,v 1.5 2003/02/13 02:02:35 bird E
 *********************************************************************************************************************************/
 #include <iprt/avl.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 /*
  * Include the code.

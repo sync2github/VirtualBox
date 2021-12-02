@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: ErrorInfo.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 
 /** @file
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include <iprt/stream.h>
 #include <iprt/string.h>
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 namespace com
 {

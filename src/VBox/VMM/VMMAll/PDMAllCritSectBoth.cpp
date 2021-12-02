@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMAllCritSectBoth.cpp 90677 2021-08-13 10:30:37Z vboxsync $ */
 /** @file
  * PDM - Code Common to Both Critical Section Types, All Contexts.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,12 +19,12 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#define LOG_GROUP LOG_GROUP_PDM//_CRITSECT
+#define LOG_GROUP LOG_GROUP_PDM_CRITSECT
 #include "PDMInternal.h"
 #include <VBox/vmm/pdmcritsect.h>
 #include <VBox/vmm/pdmcritsectrw.h>
-#include <VBox/vmm/vm.h>
-#include <VBox/err.h>
+#include <VBox/vmm/vmcc.h>
+#include <iprt/errcore.h>
 
 #include <VBox/log.h>
 #include <iprt/assert.h>
@@ -35,9 +35,10 @@
 /**
  * Process the critical sections (both types) queued for ring-3 'leave'.
  *
+ * @param   pVM           The cross context VM structure.
  * @param   pVCpu         The cross context virtual CPU structure.
  */
-VMM_INT_DECL(void) PDMCritSectBothFF(PVMCPU pVCpu)
+VMM_INT_DECL(void) PDMCritSectBothFF(PVMCC pVM, PVMCPUCC pVCpu)
 {
     uint32_t i;
     Assert(   pVCpu->pdm.s.cQueuedCritSectLeaves       > 0
@@ -56,8 +57,8 @@ VMM_INT_DECL(void) PDMCritSectBothFF(PVMCPU pVCpu)
                                                                    pVCpu->pdm.s.apQueuedCritSectRwShrdLeaves[i]);
 # endif
 
-        pdmCritSectRwLeaveSharedQueued(pCritSectRw);
-        LogFlow(("PDMR3CritSectFF: %p (R/W)\n", pCritSectRw));
+        pdmCritSectRwLeaveSharedQueued(pVM, pCritSectRw);
+        LogIt(RTLOGGRPFLAGS_FLOW, LOG_GROUP_PDM_CRITSECTRW, ("PDMR3CritSectFF: %p (shared)\n", pCritSectRw));
     }
 
     /* Last, exclusive leaves. */
@@ -72,8 +73,8 @@ VMM_INT_DECL(void) PDMCritSectBothFF(PVMCPU pVCpu)
                                                                    pVCpu->pdm.s.apQueuedCritSectRwExclLeaves[i]);
 # endif
 
-        pdmCritSectRwLeaveExclQueued(pCritSectRw);
-        LogFlow(("PDMR3CritSectFF: %p (R/W)\n", pCritSectRw));
+        pdmCritSectRwLeaveExclQueued(pVM, pCritSectRw);
+        LogIt(RTLOGGRPFLAGS_FLOW, LOG_GROUP_PDM_CRITSECTRW, ("PDMR3CritSectFF: %p (exclusive)\n", pCritSectRw));
     }
 
     /* Normal leaves. */
@@ -86,8 +87,18 @@ VMM_INT_DECL(void) PDMCritSectBothFF(PVMCPU pVCpu)
 # else
         PPDMCRITSECT pCritSect = (PPDMCRITSECT)MMHyperR3ToCC(pVCpu->CTX_SUFF(pVM), pVCpu->pdm.s.apQueuedCritSectLeaves[i]);
 # endif
+        Assert(pCritSect->s.Core.NativeThreadOwner == pVCpu->hNativeThread);
 
-        PDMCritSectLeave(pCritSect);
+        /* Note! We *must* clear the pending-unlock flag here and not depend on
+                 PDMCritSectLeave to do it, as the EMT might be sitting on
+                 further nestings since it queued the section to be left, and
+                 leaving it set would throw subsequent PDMCritSectIsOwner calls.
+
+                 This will happen with the PGM lock if we nip back to ring-3 for
+                 more handy pages or similar where the lock is supposed to be
+                 held while in ring-3. */
+        ASMAtomicAndU32(&pCritSect->s.Core.fFlags, ~PDMCRITSECT_FLAGS_PENDING_UNLOCK);
+        PDMCritSectLeave(pVM, pCritSect);
         LogFlow(("PDMR3CritSectFF: %p\n", pCritSect));
     }
 

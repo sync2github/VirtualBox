@@ -1,11 +1,12 @@
-/* $Id$ */
+/* $Id: DrvVDE.cpp 91897 2021-10-20 13:42:39Z vboxsync $ */
 /** @file
  * VDE network transport driver.
  */
 
 /*
  * Contributed by Renzo Davoli. VirtualSquare. University of Bologna, 2010
- * Copyright (C) 2006-2016 Oracle Corporation
+ *
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -105,7 +106,7 @@ typedef struct DRVVDE
 
 
 /** Converts a pointer to VDE::INetworkUp to a PRDVVDE. */
-#define PDMINETWORKUP_2_DRVVDE(pInterface) ( (PDRVVDE)((uintptr_t)pInterface - RT_OFFSETOF(DRVVDE, INetworkUp)) )
+#define PDMINETWORKUP_2_DRVVDE(pInterface) ( (PDRVVDE)((uintptr_t)pInterface - RT_UOFFSETOF(DRVVDE, INetworkUp)) )
 
 
 /*********************************************************************************************************************************
@@ -214,9 +215,6 @@ static DECLCALLBACK(int) drvVDENetworkUp_SendBuf(PPDMINETWORKUP pInterface, PPDM
     AssertPtr(pSgBuf);
     Assert((pSgBuf->fFlags & PDMSCATTERGATHER_FLAGS_MAGIC_MASK) == PDMSCATTERGATHER_FLAGS_MAGIC);
     Assert(RTCritSectIsOwner(&pThis->XmitLock));
-
-    /* Set an FTM checkpoint as this operation changes the state permanently. */
-    PDMDrvHlpFTSetCheckpoint(pThis->pDrvIns, FTMCHECKPOINTTYPE_NETWORK);
 
     int rc;
     if (!pSgBuf->pvUser)
@@ -503,7 +501,7 @@ static DECLCALLBACK(void) drvVDEDestruct(PPDMDRVINS pDrvIns)
         pThis->hPipeRead = NIL_RTPIPE;
     }
 
-    MMR3HeapFree(pThis->pszDeviceName);
+    PDMDrvHlpMMHeapFree(pDrvIns, pThis->pszDeviceName);
     pThis->pszDeviceName = NULL;
 
     /*
@@ -541,7 +539,8 @@ static DECLCALLBACK(int) drvVDEConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
 {
     RT_NOREF(fFlags);
     PDMDRV_CHECK_VERSIONS_RETURN(pDrvIns);
-    PDRVVDE pThis = PDMINS_2_DATA(pDrvIns, PDRVVDE);
+    PDRVVDE         pThis = PDMINS_2_DATA(pDrvIns, PDRVVDE);
+    PCPDMDRVHLPR3   pHlp  = pDrvIns->pHlpR3;
 
     /*
      * Init the static parts.
@@ -577,8 +576,7 @@ static DECLCALLBACK(int) drvVDEConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
     /*
      * Validate the config.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "network"))
-        return PDMDRV_SET_ERROR(pDrvIns, VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES, "");
+    PDMDRV_VALIDATE_CONFIG_RETURN(pDrvIns, "network", "");
 
     /*
      * Check that no-one is attached to us.
@@ -600,7 +598,7 @@ static DECLCALLBACK(int) drvVDEConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
      */
     int rc;
     char szNetwork[RTPATH_MAX];
-    rc = CFGMR3QueryString(pCfg, "network", szNetwork, sizeof(szNetwork));
+    rc = pHlp->pfnCFGMQueryString(pCfg, "network", szNetwork, sizeof(szNetwork));
     if (RT_FAILURE(rc))
         *szNetwork=0;
 

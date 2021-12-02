@@ -1,12 +1,10 @@
-/* $Id$ */
-
+/* $Id: HostVideoInputDeviceImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
- *
  * A host video capture device description.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef HOSTVIDEOINPUTDEVICE_IMPL_H_
-#define HOSTVIDEOINPUTDEVICE_IMPL_H_
+#ifndef MAIN_INCLUDED_HostVideoInputDeviceImpl_h
+#define MAIN_INCLUDED_HostVideoInputDeviceImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "HostVideoInputDeviceWrap.h"
 
@@ -33,7 +34,7 @@ class ATL_NO_VTABLE HostVideoInputDevice :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(HostVideoInputDevice)
+    DECLARE_COMMON_CLASS_METHODS(HostVideoInputDevice)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -66,6 +67,6 @@ private:
     Data m;
 };
 
-#endif // HOSTVIDEOINPUTDEVICE_IMPL_H_
+#endif /* !MAIN_INCLUDED_HostVideoInputDeviceImpl_h */
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

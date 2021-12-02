@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: cidet-app.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * CPU Instruction Decoding & Execution Tests - Ring-3 Driver Application.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,7 @@
 
 #include <iprt/asm-amd64-x86.h>
 #include <iprt/buildconfig.h>
+#include <iprt/err.h>
 #include <iprt/getopt.h>
 #include <iprt/initterm.h>
 #include <iprt/mem.h>
@@ -184,7 +185,7 @@ DECLASM(void) CidetAppExecute(PCIDETCPUCTX pSaveCtx, PCCIDETCPUCTX pRestoreCtx);
  */
 
 #ifdef RT_OS_WINDOWS
-static int CidetAppXcptFilter(EXCEPTION_POINTERS *pXcptPtrs)
+static int CidetAppXcptFilter(EXCEPTION_POINTERS *pXcptPtrs) RT_NOTHROW_DEF
 {
     /*
      * Grab the this point. We expect at most one signal.
@@ -380,7 +381,7 @@ static int CidetAppXcptFilter(EXCEPTION_POINTERS *pXcptPtrs)
  * @returns Long jumps or terminates the process.
  * @param   pXcptPtrs   The exception record.
  */
-static LONG CALLBACK CidetAppVectoredXcptHandler(EXCEPTION_POINTERS *pXcptPtrs)
+static LONG CALLBACK CidetAppVectoredXcptHandler(EXCEPTION_POINTERS *pXcptPtrs) RT_NOTHROW_DEF
 {
     RTStrmPrintf(g_pStdErr, "CidetAppVectoredXcptHandler!\n");
     CidetAppXcptFilter(pXcptPtrs);
@@ -396,7 +397,7 @@ static LONG CALLBACK CidetAppVectoredXcptHandler(EXCEPTION_POINTERS *pXcptPtrs)
  * @returns Long jumps or terminates the process.
  * @param   pXcptPtrs   The exception record.
  */
-static LONG CALLBACK CidetAppUnhandledXcptFilter(EXCEPTION_POINTERS *pXcptPtrs)
+static LONG CALLBACK CidetAppUnhandledXcptFilter(EXCEPTION_POINTERS *pXcptPtrs) RT_NOTHROW_DEF
 {
     RTStrmPrintf(g_pStdErr, "CidetAppUnhandledXcptFilter!\n");
     CidetAppXcptFilter(pXcptPtrs);
@@ -975,8 +976,8 @@ static DECLCALLBACK(bool) CidetAppCbSetupCodeBuf(PCIDETCORE pThis, PCIDETBUF pBu
         *pbDst++ = 0x36;
         *pbDst++ = 0x8f;
         *pbDst++ = 0x41;
-        *pbDst++ = RT_OFFSETOF(CIDETCPUCTX, aGRegs[X86_GREG_xCX]);
-        Assert(RT_OFFSETOF(CIDETCPUCTX, aGRegs[X86_GREG_xCX]) < 0x7f);
+        *pbDst++ = RT_UOFFSETOF(CIDETCPUCTX, aGRegs[X86_GREG_xCX]);
+        Assert(RT_UOFFSETOF(CIDETCPUCTX, aGRegs[X86_GREG_xCX]) < 0x7f);
 
         /* mov      [ss:rcx + ActualCtx.aGRegs[X86_GREG_xDX]], rdx */
         *pbDst++ = 0x36;
@@ -985,14 +986,14 @@ static DECLCALLBACK(bool) CidetAppCbSetupCodeBuf(PCIDETCORE pThis, PCIDETBUF pBu
 #endif
         *pbDst++ = 0x89;
         *pbDst++ = 0x51;
-        *pbDst++ = RT_OFFSETOF(CIDETCPUCTX, aGRegs[X86_GREG_xDX]);
-        Assert(RT_OFFSETOF(CIDETCPUCTX, aGRegs[X86_GREG_xDX]) < 0x7f);
+        *pbDst++ = RT_UOFFSETOF(CIDETCPUCTX, aGRegs[X86_GREG_xDX]);
+        Assert(RT_UOFFSETOF(CIDETCPUCTX, aGRegs[X86_GREG_xDX]) < 0x7f);
 
         /* mov      [ss:rcx + ActualCtx.aSRegs[X86_GREG_DS]], ds */
         *pbDst++ = 0x36;
         *pbDst++ = 0x8c;
         *pbDst++ = 0x99;
-        *(uint32_t *)pbDst = RT_OFFSETOF(CIDETCPUCTX, aSRegs[X86_SREG_DS]);
+        *(uint32_t *)pbDst = RT_UOFFSETOF(CIDETCPUCTX, aSRegs[X86_SREG_DS]);
         pbDst += sizeof(uint32_t);
 
         /* mov      edx, 0XXYYh */

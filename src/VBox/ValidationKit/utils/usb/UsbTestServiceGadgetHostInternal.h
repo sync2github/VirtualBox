@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UsbTestServiceGadgetHostInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * UsbTestServ - Remote USB test configuration and execution server, Gadget API.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___UsbTestServiceGadgetHostInternal_h___
-#define ___UsbTestServiceGadgetHostInternal_h___
+#ifndef VBOX_INCLUDED_SRC_usb_UsbTestServiceGadgetHostInternal_h
+#define VBOX_INCLUDED_SRC_usb_UsbTestServiceGadgetHostInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -116,5 +119,5 @@ extern UTSGADGETHOSTIF const g_UtsGadgetHostIfUsbIp;
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_usb_UsbTestServiceGadgetHostInternal_h */
 

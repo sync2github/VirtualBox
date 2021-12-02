@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTNtPath-1.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - RTNtPath*.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,12 +30,13 @@
 *********************************************************************************************************************************/
 #include <iprt/nt/nt-and-windows.h>
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/dir.h>
 #include <iprt/env.h>
 #include <iprt/path.h>
 #include <iprt/string.h>
 #include <iprt/test.h>
+#include <iprt/utf16.h>
 
 
 /*********************************************************************************************************************************
@@ -65,7 +66,7 @@ void tstTraverse8dot3(TSTRAVERSE *pThis, size_t cchLong, size_t cchShort, uint32
     pThis->cDirs++;
 
     uint32_t cLeftToTest = 2;
-    PRTDIR  hDir;
+    RTDIR  hDir;
     int rc = RTDirOpen(&hDir, pThis->szLongPath);
     if (RT_FAILURE(rc))
         return;

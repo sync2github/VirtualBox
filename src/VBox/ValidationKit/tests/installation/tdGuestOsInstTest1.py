@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: tdGuestOsInstTest1.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 VirtualBox Validation Kit - Guest OS installation tests.
@@ -8,7 +8,7 @@ VirtualBox Validation Kit - Guest OS installation tests.
 
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,7 +27,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard Python imports.
@@ -63,6 +63,7 @@ class InstallTestVm(vboxtestvms.TestVm):
     ## @{
     kf32Bit                 = 0x01;
     kf64Bit                 = 0x02;
+    # most likely for ancient Linux kernels assuming that AMD processors have always an I/O-APIC
     kfReqIoApic             = 0x10;
     kfReqIoApicSmp          = 0x20;
     kfReqPae                = 0x40;
@@ -79,7 +80,7 @@ class InstallTestVm(vboxtestvms.TestVm):
 
 
     def __init__(self, oSet, sVmName, sKind, sInstallIso, sHdCtrlNm, cGbHdd, fFlags):
-        vboxtestvms.TestVm.__init__(self, oSet, sVmName, sKind = sKind, sHddControllerType = sHdCtrlNm,
+        vboxtestvms.TestVm.__init__(self, sVmName, oSet = oSet, sKind = sKind, sHddControllerType = sHdCtrlNm,
                                     fRandomPvPMode = (fFlags & self.kfNoWin81Paravirt) == 0);
         self.sDvdImage    = os.path.join(self.ksIsoPathBase, sInstallIso);
         self.cGbHdd       = cGbHdd;
@@ -178,9 +179,6 @@ class InstallTestVm(vboxtestvms.TestVm):
                     reporter.log('Set extradata: %s => %s' % (sKey, sValue))
                     fRc = fRc and oSession.setExtraData(sKey, sValue)
 
-                # Enable audio adapter
-                oSession.o.machine.audioAdapter.enabled = True;
-
                 # Other variations?
 
                 # Save the settings.
@@ -193,36 +191,6 @@ class InstallTestVm(vboxtestvms.TestVm):
 
         # Done.
         return (fRc, oVM)
-
-    def isHostCpuAffectedByUbuntuNewAmdBug(self, oTestDrv):
-        """
-        Checks if the host OS is affected by older ubuntu installers being very
-        picky about which families of AMD CPUs it would run on.
-
-        The installer checks for family 15, later 16, later 20, and in 11.10
-        they remove the family check for AMD CPUs.
-        """
-        if not oTestDrv.isHostCpuAmd():
-            return False;
-        try:
-            (uMaxExt, _, _, _) = oTestDrv.oVBox.host.getProcessorCPUIDLeaf(0, 0x80000000, 0);
-            (uFamilyModel, _, _, _) = oTestDrv.oVBox.host.getProcessorCPUIDLeaf(0, 0x80000001, 0);
-        except:
-            reporter.logXcpt();
-            return False;
-        if uMaxExt < 0x80000001 or uMaxExt > 0x8000ffff:
-            return False;
-
-        uFamily = (uFamilyModel >> 8) & 0xf
-        if uFamily == 0xf:
-            uFamily = ((uFamilyModel >> 20) & 0x7f) + 0xf;
-        ## @todo Break this down into which old ubuntu release supports exactly
-        ##       which AMD family, if we care.
-        if uFamily <= 15:
-            return False;
-        reporter.log('Skipping "%s" because host CPU is a family %u AMD, which may cause trouble for the guest OS installer.'
-                     % (self.sVmName, uFamily,));
-        return True;
 
 
 
@@ -254,7 +222,7 @@ class tdGuestOsInstTest1(vbox.TestDriver):
         #
         oSet = vboxtestvms.TestVmSet(self.oTestVmManager, fIgnoreSkippedVm = True);
         oSet.aoTestVms.extend([
-            # pylint: disable=C0301
+            # pylint: disable=line-too-long
             InstallTestVm(oSet, 'tst-fedora4',      'Fedora',           'fedora4-txs.iso',          InstallTestVm.ksIdeController,   8, InstallTestVm.kf32Bit),
             InstallTestVm(oSet, 'tst-fedora5',      'Fedora',           'fedora5-txs.iso',          InstallTestVm.ksSataController,  8, InstallTestVm.kf32Bit | InstallTestVm.kfReqPae | InstallTestVm.kfReqIoApicSmp),
             InstallTestVm(oSet, 'tst-fedora6',      'Fedora',           'fedora6-txs.iso',          InstallTestVm.ksSataController,  8, InstallTestVm.kf32Bit | InstallTestVm.kfReqIoApic),
@@ -277,6 +245,8 @@ class tdGuestOsInstTest1(vbox.TestDriver):
             InstallTestVm(oSet, 'tst-ubuntu1404-64','Ubuntu_64',        'ubuntu1404-amd64-txs.iso', InstallTestVm.ksSataController,  8, InstallTestVm.kf64Bit),
             InstallTestVm(oSet, 'tst-debian7',      'Debian',           'debian-7.0.0-txs.iso',     InstallTestVm.ksSataController,  8, InstallTestVm.kf32Bit),
             InstallTestVm(oSet, 'tst-debian7-64',   'Debian_64',        'debian-7.0.0-x64-txs.iso', InstallTestVm.ksScsiController,  8, InstallTestVm.kf64Bit),
+            InstallTestVm(oSet, 'tst-vista-64',     'WindowsVista_64',  'vista-x64-txs.iso',        InstallTestVm.ksSataController, 25, InstallTestVm.kf64Bit),
+            InstallTestVm(oSet, 'tst-vista-32',     'WindowsVista',     'vista-x86-txs.iso',        InstallTestVm.ksSataController, 25, InstallTestVm.kf32Bit),
             InstallTestVm(oSet, 'tst-w7-64',        'Windows7_64',      'win7-x64-txs.iso',         InstallTestVm.ksSataController, 25, InstallTestVm.kf64Bit),
             InstallTestVm(oSet, 'tst-w7-32',        'Windows7',         'win7-x86-txs.iso',         InstallTestVm.ksSataController, 25, InstallTestVm.kf32Bit),
             InstallTestVm(oSet, 'tst-w2k3',         'Windows2003',      'win2k3ent-txs.iso',        InstallTestVm.ksIdeController,  25, InstallTestVm.kf32Bit),
@@ -290,7 +260,7 @@ class tdGuestOsInstTest1(vbox.TestDriver):
             InstallTestVm(oSet, 'tst-w81-64',       'Windows81_64',     'win81-x64-txs.iso',        InstallTestVm.ksSataController, 25, InstallTestVm.kf64Bit),
             InstallTestVm(oSet, 'tst-w10-32',       'Windows10',        'win10-x86-txs.iso',        InstallTestVm.ksSataController, 25, InstallTestVm.kf32Bit | InstallTestVm.kfReqPae),
             InstallTestVm(oSet, 'tst-w10-64',       'Windows10_64',     'win10-x64-txs.iso',        InstallTestVm.ksSataController, 25, InstallTestVm.kf64Bit),
-            # pylint: enable=C0301
+            # pylint: enable=line-too-long
         ]);
         self.oTestVmSet = oSet;
 

@@ -1,0 +1,55 @@
+# $Id: Makefile.kmk 86815 2020-11-05 21:45:32Z vboxsync $
+## @file
+# Makefile for D3D test application.
+#
+
+#
+# Copyright (C) 2017-2020 Oracle Corporation
+#
+# This file is part of VirtualBox Open Source Edition (OSE), as
+# available from http://www.virtualbox.org. This file is free software;
+# you can redistribute it and/or modify it under the terms of the GNU
+# General Public License (GPL) as published by the Free Software
+# Foundation, in version 2 as it comes in the "COPYING" file of the
+# VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+# hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+
+SUB_DEPTH = ../../../../../../../../../..
+include $(KBUILD_PATH)/subheader.kmk
+
+PROGRAMS += VBoxGaD3DTest
+VBoxGaD3DTest_TEMPLATE    = VBOXR3STATIC
+VBoxGaD3DTest_SDKS        = ReorderCompilerIncs $(VBOX_WINDDK)
+VBoxGaD3DTest_DEFS        = D3DTEST_STANDALONE
+VBoxGaD3DTest_LIBS        = d3d9.lib
+VBoxGaD3DTest_SOURCES     = \
+	d3d9main.cpp \
+	d3d9render.cpp \
+	d3dhlp.cpp
+
+#
+# 32-bit version of VBoxGaD3DTest.
+#
+PROGRAMS.amd64 += VBoxGaD3DTest-x86
+VBoxGaD3DTest-x86_EXTENDS = VBoxGaD3DTest
+VBoxGaD3DTest-x86_BLD_TRG_ARCH = x86
+
+
+PROGRAMS += VBoxD3D11
+VBoxD3D11_TEMPLATE    = VBoxR3StaticNonPedantic
+VBoxD3D11_SDKS        = WINDDK80
+VBoxD3D11_CXXFLAGS   += -wd4458 -wd4838 -wd5029 -wd5039
+VBoxD3D11_LIBS        = d3d11.lib
+VBoxD3D11_SOURCES     = \
+	d3d11main.cpp \
+	d3d11render.cpp
+
+#
+# 32-bit version of VBoxD3D11.
+#
+PROGRAMS.amd64 += VBoxD3D11-x86
+VBoxD3D11-x86_EXTENDS = VBoxD3D11
+VBoxD3D11-x86_BLD_TRG_ARCH = x86
+
+include $(FILE_KBUILD_SUB_FOOTER)

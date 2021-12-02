@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VirtualBoxErrorInfoImpl.h 91312 2021-09-20 11:06:57Z vboxsync $ */
 /** @file
  * VirtualBoxErrorInfo COM class definition.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_VIRTUALBOXERRORINFOIMPL
-#define ____H_VIRTUALBOXERRORINFOIMPL
+#ifndef MAIN_INCLUDED_VirtualBoxErrorInfoImpl_h
+#define MAIN_INCLUDED_VirtualBoxErrorInfoImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VirtualBoxBase.h"
 
@@ -41,6 +44,8 @@ public:
         COM_INTERFACE_ENTRY(IDispatch)
         COM_INTERFACE_ENTRY_AGGREGATE(IID_IMarshal, m_pUnkMarshaler)
     END_COM_MAP()
+
+    DECLARE_TRANSLATE_METHODS(VirtualBoxErrorInfo)
 
     HRESULT FinalConstruct()
     {
@@ -135,10 +140,9 @@ public:
     STDMETHOD(COMGETTER(Text))(BSTR *aText);
     STDMETHOD(COMGETTER(Next))(IVirtualBoxErrorInfo **aNext);
 
+    const char* getComponentName() const { return "VirtualBoxErrorInfo"; }
+
 private:
-    // FIXME: declare these here until VBoxSupportsTranslation base
-    //        is available in this class.
-    static const char *tr(const char *a) { return a; }
     static HRESULT setError(HRESULT rc,
                             const char * /* a */,
                             const char * /* b */,
@@ -156,6 +160,6 @@ private:
 #endif
 };
 
-#endif // !____H_VIRTUALBOXERRORINFOIMPL
+#endif /* !MAIN_INCLUDED_VirtualBoxErrorInfoImpl_h */
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: timer-r0drv-nt.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Timers, Ring-0 Driver, NT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -492,7 +492,7 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
         Assert(cSubTimers <= RTCPUSET_MAX_CPUS); /* On Windows we have a 1:1 relationship between cpuid and set index. */
     }
 
-    PRTTIMER pTimer = (PRTTIMER)RTMemAllocZ(RT_OFFSETOF(RTTIMER, aSubTimers[cSubTimers]));
+    PRTTIMER pTimer = (PRTTIMER)RTMemAllocZ(RT_UOFFSETOF_DYN(RTTIMER, aSubTimers[cSubTimers]));
     if (!pTimer)
         return VERR_NO_MEMORY;
 
@@ -509,7 +509,10 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
     pTimer->pfnTimer = pfnTimer;
     pTimer->pvUser = pvUser;
     pTimer->u64NanoInterval = u64NanoInterval;
-    KeInitializeTimerEx(&pTimer->NtTimer, SynchronizationTimer);
+    if (g_pfnrtKeInitializeTimerEx)
+        g_pfnrtKeInitializeTimerEx(&pTimer->NtTimer, SynchronizationTimer);
+    else
+        KeInitializeTimer(&pTimer->NtTimer);
     int rc = VINF_SUCCESS;
     if (pTimer->fOmniTimer)
     {
@@ -532,7 +535,8 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
             }
             else
                 KeInitializeDpc(&pTimer->aSubTimers[iCpu].NtDpc, rtTimerNtOmniSlaveCallback, &pTimer->aSubTimers[iCpu]);
-            KeSetImportanceDpc(&pTimer->aSubTimers[iCpu].NtDpc, HighImportance);
+            if (g_pfnrtKeSetImportanceDpc)
+                g_pfnrtKeSetImportanceDpc(&pTimer->aSubTimers[iCpu].NtDpc, HighImportance);
             rc = rtMpNtSetTargetProcessorDpc(&pTimer->aSubTimers[iCpu].NtDpc, iCpu);
         }
         Assert(pTimer->idCpu != NIL_RTCPUID);
@@ -547,7 +551,8 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
         pTimer->aSubTimers[0].pParent = pTimer;
 
         KeInitializeDpc(&pTimer->aSubTimers[0].NtDpc, rtTimerNtSimpleCallback, pTimer);
-        KeSetImportanceDpc(&pTimer->aSubTimers[0].NtDpc, HighImportance);
+        if (g_pfnrtKeSetImportanceDpc)
+            g_pfnrtKeSetImportanceDpc(&pTimer->aSubTimers[0].NtDpc, HighImportance);
         if (pTimer->fSpecificCpu)
             rc = rtMpNtSetTargetProcessorDpc(&pTimer->aSubTimers[0].NtDpc, (int)pTimer->idCpu);
     }

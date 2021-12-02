@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: tstPDMAsyncCompletionStress.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * PDM Asynchronous Completion Stresstest.
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -179,8 +179,8 @@ static void tstPDMACStressTestFileVerify(PPDMACTESTFILE pTestFile, PPDMACTESTFIL
         {
             unsigned idx = 0;
 
-            while (   (pbBuf[idx] == pbTestPattern[idx])
-                   && (idx < cbCompare))
+            while (   (idx < cbCompare)
+                   && (pbBuf[idx] == pbTestPattern[idx]))
                 idx++;
 
             RTMsgError("Unexpected data for off=%RTfoff size=%u\n"

@@ -30,8 +30,11 @@
  * of the LGPL is applied is otherwise unspecified.
  */
 
-#ifndef __WINE_WINED3D_PRIVATE_H
-#define __WINE_WINED3D_PRIVATE_H
+#ifndef VBOX_INCLUDED_SRC_Graphics_shaderlib_wined3d_private_h
+#define VBOX_INCLUDED_SRC_Graphics_shaderlib_wined3d_private_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <stdarg.h>
 #include <math.h>
@@ -84,7 +87,7 @@
 # define VBoxTlsRefGetImpl(_tls) (TlsGetValue((DWORD)(_tls)))
 # define VBoxTlsRefSetImpl(_tls, _val) (TlsSetValue((DWORD)(_tls), (_val)))
 # define VBoxTlsRefAssertImpl Assert
-# include <VBox/VBoxVideo3D.h>
+# include <VBoxVideo3D.h>
 #endif
 
 /* Driver quirks */
@@ -569,6 +572,7 @@ typedef struct shader_reg_maps
     WORD labels;                            /* MAX_LABELS, 16 */
     DWORD temporary;                        /* MAX_REG_TEMP, 32 */
     DWORD *constf;                          /* pixel, vertex */
+    DWORD constf_size;
     DWORD texcoord_mask[MAX_REG_TEXCRD];    /* vertex < 3.0 */
     WORD input_registers;                   /* max(MAX_REG_INPUT, MAX_ATTRIBS), 16 */
     WORD output_registers;                  /* MAX_REG_OUTPUT, 12 */
@@ -671,7 +675,7 @@ struct wined3d_shader_loop_control
 
 struct wined3d_shader_frontend
 {
-    void *(*shader_init)(const DWORD *ptr, const struct wined3d_shader_signature *output_signature);
+    void *(*shader_init)(const DWORD *ptr, DWORD tokens_num, const struct wined3d_shader_signature *output_signature);
     void (*shader_free)(void *data);
     void (*shader_read_header)(void *data, const DWORD **ptr, struct wined3d_shader_version *shader_version);
     void (*shader_read_opcode)(void *data, const DWORD **ptr, struct wined3d_shader_instruction *ins, UINT *param_size);
@@ -1734,7 +1738,7 @@ typedef struct VBOXWINEPROFILE_HASHMAP_ELEMENT
     VBOXWINEPROFILE_ELEMENT Data;
 } VBOXWINEPROFILE_HASHMAP_ELEMENT, *PVBOXWINEPROFILE_HASHMAP_ELEMENT;
 
-#define VBOXWINEPROFILE_HASHMAP_ELEMENT_FROMENTRY(_p) ((PVBOXWINEPROFILE_HASHMAP_ELEMENT)(((uint8_t*)(_p)) - RT_OFFSETOF(VBOXWINEPROFILE_HASHMAP_ELEMENT, MapEntry)))
+#define VBOXWINEPROFILE_HASHMAP_ELEMENT_FROMENTRY(_p) ((PVBOXWINEPROFILE_HASHMAP_ELEMENT)(((uint8_t*)(_p)) - RT_UOFFSETOF(VBOXWINEPROFILE_HASHMAP_ELEMENT, MapEntry)))
 
 #define VBOXWINEPROFILE_ELEMENT_DUMP(_p, _pn) do { \
         PRLOG(("%s: t(%u);c(%u)\n", \
@@ -3472,4 +3476,4 @@ void *MyNSGLGetProcAddress(const char *name);
 # define VBOX_CHECK_GL_CALL(a_Expr) do { a_Expr; } while (0)
 #endif
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Graphics_shaderlib_wined3d_private_h */

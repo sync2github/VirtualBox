@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tcp.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - TCP/IP.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -873,9 +873,11 @@ RTR3DECL(int) RTTcpClientCancelConnect(PRTTCPCLIENTCONNECTCANCEL volatile *ppCan
 {
     AssertPtrReturn(ppCancelCookie, VERR_INVALID_POINTER);
 
+    RTSOCKET const hSockCancelled = (RTSOCKET)(uintptr_t)0xdead9999;
+
     AssertCompile(NIL_RTSOCKET == NULL);
-    RTSOCKET hSock = (RTSOCKET)ASMAtomicXchgPtr((void * volatile *)ppCancelCookie, (void *)(uintptr_t)0xdead9999);
-    if (hSock != NIL_RTSOCKET)
+    RTSOCKET hSock = (RTSOCKET)ASMAtomicXchgPtr((void * volatile *)ppCancelCookie, hSockCancelled);
+    if (hSock != NIL_RTSOCKET && hSock != hSockCancelled)
     {
         int rc = rtTcpClose(hSock, "RTTcpClientCancelConnect", false /*fTryGracefulShutdown*/);
         AssertRCReturn(rc, rc);
@@ -1020,6 +1022,31 @@ static int rtTcpClose(RTSOCKET Sock, const char *pszMsg, bool fTryGracefulShutdo
 }
 
 
+/**
+ * Creates connected pair of TCP sockets.
+ *
+ * @returns IPRT status code.
+ * @param   phServer            Where to return the "server" side of the pair.
+ * @param   phClient            Where to return the "client" side of the pair.
+ *
+ * @note    There is no server or client side, but we gotta call it something.
+ */
+RTR3DECL(int) RTTcpCreatePair(PRTSOCKET phServer, PRTSOCKET phClient, uint32_t fFlags)
+{
+    /*
+     * Validate input.
+     */
+    AssertPtrReturn(phServer, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(phClient, VERR_INVALID_PARAMETER);
+    AssertReturn(!fFlags, VERR_INVALID_PARAMETER);
+
+    /*
+     * Do the job.
+     */
+    return rtSocketCreateTcpPair(phServer, phClient);
+}
+
+
 RTR3DECL(int) RTTcpRead(RTSOCKET Sock, void *pvBuffer, size_t cbBuffer, size_t *pcbRead)
 {
     return RTSocketRead(Sock, pvBuffer, cbBuffer, pcbRead);
@@ -1049,6 +1076,17 @@ RTR3DECL(int)  RTTcpSetSendCoalescing(RTSOCKET Sock, bool fEnable)
 {
     int fFlag = fEnable ? 0 : 1;
     return rtSocketSetOpt(Sock, IPPROTO_TCP, TCP_NODELAY, &fFlag, sizeof(fFlag));
+}
+
+
+RTR3DECL(int)  RTTcpSetBufferSize(RTSOCKET hSocket, uint32_t cbSize)
+{
+    int cbIntSize = (int)cbSize;
+    AssertReturn(cbIntSize >= 0, VERR_OUT_OF_RANGE);
+    int rc = rtSocketSetOpt(hSocket, SOL_SOCKET, SO_SNDBUF, &cbIntSize, sizeof(cbIntSize));
+    if (RT_SUCCESS(rc))
+        rc = rtSocketSetOpt(hSocket, SOL_SOCKET, SO_RCVBUF, &cbIntSize, sizeof(cbIntSize));
+    return rc;
 }
 
 

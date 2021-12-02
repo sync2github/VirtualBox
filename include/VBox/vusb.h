@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vusb_h
-#define ___VBox_vusb_h
+#ifndef VBOX_INCLUDED_vusb_h
+#define VBOX_INCLUDED_vusb_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -332,6 +335,10 @@ typedef struct VUSBDESCCONFIGEX
     VUSBDESCCONFIG Core;
     /** Pointer to additional descriptor bytes following what's covered by VUSBDESCCONFIG. */
     void *pvMore;
+    /** Pointer to additional class- or vendor-specific interface descriptors. */
+    const void *pvClass;
+    /** Size of class- or vendor-specific descriptors. */
+    uint16_t cbClass;
     /** Pointer to an array of the interfaces referenced in the configuration.
      * Core.bNumInterfaces in size. */
     const struct VUSBINTERFACE *paIfs;
@@ -669,7 +676,7 @@ typedef struct VUSBIROOTHUBPORT
 
 } VUSBIROOTHUBPORT;
 /** VUSBIROOTHUBPORT interface ID. */
-#define VUSBIROOTHUBPORT_IID                    "6571aece-6c33-4714-a8ac-9508a3b8b429"
+# define VUSBIROOTHUBPORT_IID                   "6571aece-6c33-4714-a8ac-9508a3b8b429"
 
 /** Pointer to a VUSB RootHub connector interface. */
 typedef struct VUSBIROOTHUBCONNECTOR *PVUSBIROOTHUBCONNECTOR;
@@ -828,13 +835,32 @@ typedef struct VUSBIROOTHUBCONNECTOR
      */
     DECLR3CALLBACKMEMBER(uint32_t, pfnGetPeriodicFrameRate, (PVUSBIROOTHUBCONNECTOR pInterface));
 
+    /**
+     * Updates the internally stored isochronous scheduling frame for a given
+     * endpoint and returns the delta between the current and previous frame.
+     *
+     * @returns Delta between currently and previously scheduled frame.
+     * @retval  0 if no previous frame was set.
+     * @param   pInterface  Pointer to this struct.
+     * @param   pDevice     Pointer to a USB device.
+     * @param   EndPt       Endpoint number.
+     * @param   enmDir      Endpoint direction.
+     * @param   uNewFrameID The frame ID of a new transfer.
+     * @param   uBits       The number of significant bits in frame ID.
+     */
+    DECLR3CALLBACKMEMBER(uint32_t, pfnUpdateIsocFrameDelta, (PVUSBIROOTHUBCONNECTOR pInterface, PVUSBIDEVICE pDevice,
+                                                             int EndPt, VUSBDIRECTION enmDir, uint16_t uNewFrameID, uint8_t uBits));
+
+    /** Alignment dummy. */
+    RTR3PTR Alignment;
+
 } VUSBIROOTHUBCONNECTOR;
 AssertCompileSizeAlignment(VUSBIROOTHUBCONNECTOR, 8);
 /** VUSBIROOTHUBCONNECTOR interface ID. */
-#define VUSBIROOTHUBCONNECTOR_IID               "662d7822-b9c6-43b5-88b6-5d59f0106e46"
+# define VUSBIROOTHUBCONNECTOR_IID              "662d7822-b9c6-43b5-88b6-5d59f0106e46"
 
 
-#ifdef IN_RING3
+# ifdef IN_RING3
 /** @copydoc VUSBIROOTHUBCONNECTOR::pfnSetUrbParams */
 DECLINLINE(int) VUSBIRhSetUrbParams(PVUSBIROOTHUBCONNECTOR pInterface, size_t cbHci, size_t cbHciTd)
 {
@@ -895,7 +921,7 @@ DECLINLINE(uint32_t) VUSBIRhGetPeriodicFrameRate(PVUSBIROOTHUBCONNECTOR pInterfa
 {
     return pInterface->pfnGetPeriodicFrameRate(pInterface);
 }
-#endif /* IN_RING3 */
+# endif /* IN_RING3 */
 
 #endif /* ! RDESKTOP */
 
@@ -904,13 +930,13 @@ DECLINLINE(uint32_t) VUSBIRhGetPeriodicFrameRate(PVUSBIROOTHUBCONNECTOR pInterfa
  * VUSB device reset completion callback function.
  * This is called by the reset thread when the reset has been completed.
  *
- * @param   pDev        Pointer to the virtual USB device core.
+ * @param   pDevice Pointer to the virtual USB device core.
  * @param   rc      The VBox status code of the reset operation.
- * @param   pvUser      User specific argument.
+ * @param   pvUser  User specific argument.
  *
  * @thread  The reset thread or EMT.
  */
-typedef DECLCALLBACK(void) FNVUSBRESETDONE(PVUSBIDEVICE pDevice, int rc, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNVUSBRESETDONE,(PVUSBIDEVICE pDevice, int rc, void *pvUser));
 /** Pointer to a device reset completion callback function (FNUSBRESETDONE). */
 typedef FNVUSBRESETDONE *PFNVUSBRESETDONE;
 
@@ -968,7 +994,7 @@ typedef struct VUSBIDEVICE
      * @param   fResetOnLinux   Set if we can permit a real reset and a potential logical
      *                          device reconnect on linux hosts.
      * @param   pfnDone         Pointer to the completion routine. If NULL a synchronous
-     *                          reset  is preformed not respecting the 10ms.
+     *                          reset  is performed not respecting the 10ms.
      * @param   pvUser          User argument to the completion routine.
      * @param   pVM             The cross context VM structure.  Required if pfnDone
      *                          is not NULL.
@@ -1019,10 +1045,10 @@ typedef struct VUSBIDEVICE
 
 } VUSBIDEVICE;
 /** VUSBIDEVICE interface ID. */
-#define VUSBIDEVICE_IID                         "af576b38-e8ca-4db7-810a-2596d8d57ca0"
+# define VUSBIDEVICE_IID                        "af576b38-e8ca-4db7-810a-2596d8d57ca0"
 
 
-#ifdef IN_RING3
+# ifdef IN_RING3
 /**
  * Resets the device.
  *
@@ -1044,7 +1070,7 @@ typedef struct VUSBIDEVICE
  * @param   fResetOnLinux   Set if we can permit a real reset and a potential logical
  *                          device reconnect on linux hosts.
  * @param   pfnDone         Pointer to the completion routine.  If NULL a
- *                          synchronous reset is preformed not respecting the
+ *                          synchronous reset is performed not respecting the
  *                          10ms.
  * @param   pvUser          User argument to the completion routine.
  * @param   pVM             The cross context VM structure.  Required if pfnDone
@@ -1098,7 +1124,7 @@ DECLINLINE(bool) VUSBIDevIsSavedStateSupported(PVUSBIDEVICE pInterface)
 {
     return pInterface->pfnIsSavedStateSupported(pInterface);
 }
-#endif /* IN_RING3 */
+# endif /* IN_RING3 */
 
 #endif /* ! RDESKTOP */
 
@@ -1118,7 +1144,7 @@ typedef enum VUSBSTATUS
     VUSBSTATUS_DNR,
     /** CRC error. */
     VUSBSTATUS_CRC,
-    /** Data overrun error. */
+    /** Data underrun error. */
     VUSBSTATUS_DATA_UNDERRUN,
     /** Data overrun error. */
     VUSBSTATUS_DATA_OVERRUN,
@@ -1170,10 +1196,10 @@ typedef struct VUSBURBISOCPKT
     /** The size of the packet.
      * IN: The packet size. I.e. the number of bytes to the next packet or end of buffer.
      * OUT: The actual size transferred. */
-    uint16_t        cb;
+    uint32_t        cb;
     /** The offset of the packet. (Relative to VUSBURB::abData[0].)
      * OUT: This can be changed by the USB device if it does some kind of buffer squeezing. */
-    uint16_t        off;
+    uint32_t        off;
     /** The status of the transfer.
      * IN: VUSBSTATUS_INVALID
      * OUT: VUSBSTATUS_INVALID if nothing was done, otherwise the correct status. */
@@ -1219,19 +1245,19 @@ typedef struct VUSBURB
 #endif
 
     /** The VUSB stack private data. */
-    PVUSBURBVUSB        pVUsb;
+    PVUSBURBVUSB    pVUsb;
     /** Private host controller data associated with this URB. */
-    PVUSBURBHCI         pHci;
+    PVUSBURBHCI     pHci;
     /** Pointer to the host controller transfer descriptor array. */
-    PVUSBURBHCITD       paTds;
+    PVUSBURBHCITD   paTds;
 
     /** The device data. */
     struct VUSBURBDEV
     {
         /** Pointer to private device specific data.  */
-        void             *pvPrivate;
+        void       *pvPrivate;
         /** Used by the device when linking the URB in some list of its own.   */
-        PVUSBURB          pNext;
+        PVUSBURB    pNext;
     } Dev;
 
     /** The device address.
@@ -1255,9 +1281,17 @@ typedef struct VUSBURB
      * OUT: This is set when reaping the URB. */
     VUSBSTATUS      enmStatus;
 
+    /** The relative starting frame for isochronous transfers.
+     *  Zero indicates "transfer ASAP".
+     * This is ignored when enmType isn't VUSBXFERTYPE_ISOC. */
+    uint16_t        uStartFrameDelta;
+    /** Flag indicating whether the start frame delta is relative
+     *  to the previous transfer (false) or now (true).
+     * This is ignored when enmType isn't VUSBXFERTYPE_ISOC. */
+    bool            fStartRelToNow;
     /** The number of isochronous packets describe in aIsocPkts.
      * This is ignored when enmType isn't VUSBXFERTYPE_ISOC. */
-    uint32_t        cIsocPkts;
+    uint8_t         cIsocPkts;
     /** The iso packets within abData.
      * This is ignored when enmType isn't VUSBXFERTYPE_ISOC. */
     VUSBURBISOCPKT  aIsocPkts[8];
@@ -1283,4 +1317,4 @@ typedef struct VUSBURB
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vusb_h */

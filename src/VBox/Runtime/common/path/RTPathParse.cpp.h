@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: RTPathParse.cpp.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTPathParse - Code Template.
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -58,29 +58,26 @@ static int RTPATH_STYLE_FN(rtPathParse)(const char *pszPath, PRTPATHPARSED pPars
             cchPath = 0;
         }
 #if RTPATH_STYLE == RTPATH_STR_F_STYLE_DOS
-        else if (   RTPATH_IS_SLASH(pszPath[1])
-                 && !RTPATH_IS_SLASH(pszPath[2])
-                 && pszPath[2])
+        else if (RTPATH_IS_SLASH(pszPath[1]))
         {
-            /* UNC - skip to the end of the potential namespace or computer name. */
+            /* UNC - there are exactly two prefix slashes followed by a namespace
+               or computer name, which can be empty on windows.  */
             offCur = 2;
             while (!RTPATH_IS_SLASH(pszPath[offCur]) && pszPath[offCur])
                 offCur++;
 
-            /* If there is another slash, we considered it a valid UNC path, if
-               not it's just a root path with an extra slash thrown in. */
+            /* Special fun for windows. */
+            fProps = RTPATH_PROP_UNC | RTPATH_PROP_ABSOLUTE;
+            if (   offCur == 3
+                && (pszPath[2] == '.' || pszPath[2] == '?'))
+                fProps |= RTPATH_PROP_SPECIAL_UNC;
+
             if (RTPATH_IS_SLASH(pszPath[offCur]))
             {
-                fProps = RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_UNC | RTPATH_PROP_ABSOLUTE;
+                fProps |= RTPATH_PROP_ROOT_SLASH;
                 offCur++;
-                cchPath = offCur;
             }
-            else
-            {
-                fProps = RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_RELATIVE;
-                offCur = 1;
-                cchPath = 1;
-            }
+            cchPath = offCur;
         }
 #endif
         else
@@ -207,13 +204,13 @@ static int RTPATH_STYLE_FN(rtPathParse)(const char *pszPath, PRTPATHPARSED pPars
                 {
                     fProps |= RTPATH_PROP_FILENAME;
 
-                    /* look for an ? */
+                    /* Look for a suffix: */
                     uint32_t offSuffix = offStart + cchComp;
-                    while (offSuffix-- > offStart)
+                    while (--offSuffix > offStart)
                         if (pszPath[offSuffix] == '.')
                         {
                             uint32_t cchSuffix = offStart + cchComp - offSuffix;
-                            if (cchSuffix > 1 && offStart != offSuffix)
+                            if (cchSuffix > 1)
                             {
                                 pParsed->cchSuffix = cchSuffix;
                                 pParsed->offSuffix = offSuffix;

@@ -1,7 +1,10 @@
-/* $Id$ */
-
+/* $Id: DumpD3DCaps9.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * Copyright (C) 2011-2016 Oracle Corporation
+ * ???
+ */
+
+/*
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -11,6 +14,7 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
 #include <iprt/win/windows.h>
 #include <d3d9types.h>
 #include <d3d9caps.h>
@@ -747,7 +751,7 @@ static char * strDupSort(const char * pcszStr)
     const char *pPrevCmp = NULL;
     const char * pCmp = "\001";
     const char * pCur;
-    int cLength, cPrevLength;
+    int cLength, cPrevLength = 0;
 
     do
     {
@@ -982,11 +986,9 @@ static D3DCAPS9* selectCaps(D3DCAPS9 *pLocalStorage, D3DCAPS9 *pLocalEmbedded1, 
         default:
         {
             Log(("Unsupported type %d", enmCapsType));
-            return NULL;
         }
     }
 
-    Log(("Should not be here!"));
     return NULL;
 }
 

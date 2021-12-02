@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPDrvInternal.h 91559 2021-10-05 08:28:55Z vboxsync $ */
 /** @file
  * VirtualBox Support Driver - Internal header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,13 +24,16 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___SUPDrvInternal_h
-#define ___SUPDrvInternal_h
+#ifndef VBOX_INCLUDED_SRC_Support_SUPDrvInternal_h
+#define VBOX_INCLUDED_SRC_Support_SUPDrvInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
 #include <VBox/sup.h>
@@ -43,7 +46,7 @@
 #include <iprt/string.h>
 #include <iprt/err.h>
 
-#ifdef SUPDRV_AGNOSTIC
+#if defined(SUPDRV_AGNOSTIC) && !defined(RT_OS_LINUX)
 /* do nothing */
 
 #elif defined(RT_OS_WINDOWS)
@@ -51,8 +54,8 @@
 #   include <memory.h>
 
 #elif defined(RT_OS_LINUX)
-#   include <linux/version.h>
-#   if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 33)
+#   include <iprt/linux/version.h>
+#   if RTLNX_VER_MIN(2,6,33)
 #    include <generated/autoconf.h>
 #   else
 #    ifndef AUTOCONF_INCLUDED
@@ -61,26 +64,175 @@
 #   endif
 #   if defined(CONFIG_MODVERSIONS) && !defined(MODVERSIONS)
 #       define MODVERSIONS
-#       if LINUX_VERSION_CODE < KERNEL_VERSION(2, 5, 71)
+#       if RTLNX_VER_MAX(2,5,71)
 #           include <linux/modversions.h>
 #       endif
 #   endif
 #   ifndef KBUILD_STR
-#       if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 16)
+#       if RTLNX_VER_MAX(2,6,16)
 #            define KBUILD_STR(s) s
 #       else
 #            define KBUILD_STR(s) #s
 #       endif
 #   endif
-#   include <linux/string.h>
-#   include <linux/spinlock.h>
-#   include <linux/slab.h>
-#   if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-#       include <linux/semaphore.h>
-#   else /* older kernels */
-#       include <asm/semaphore.h>
-#   endif /* older kernels */
-#   include <linux/timer.h>
+#   ifndef SUPDRV_AGNOSTIC
+#       include <linux/string.h>
+#       include <linux/spinlock.h>
+#       include <linux/slab.h>
+#       if RTLNX_VER_MIN(2,6,27)
+#           include <linux/semaphore.h>
+#       else /* older kernels */
+#           include <asm/semaphore.h>
+#       endif /* older kernels */
+#       include <linux/timer.h>
+#   endif
+#   if RTLNX_VER_MIN(3,2,0)
+#       include <linux/export.h>
+#   else
+#       include <linux/module.h>
+#       if (defined(RT_ARCH_X86) || defined(RT_ARCH_AMD64)) && defined(SUPDRV_AGNOSTIC) /* fix conflicts with iprt/x86.h */
+#           undef CS
+#           undef DS
+#           undef ES
+#           undef FS
+#           undef GS
+#           undef SS
+#           undef EFLAGS
+#           undef R15
+#           undef R14
+#           undef R13
+#           undef R12
+#           undef R11
+#           undef R10
+#           undef R9
+#           undef R8
+#           undef RDI
+#           undef RSI
+#           undef RBP
+#           undef RSP
+#           undef RBX
+#           undef RDX
+#           undef RCX
+#           undef RAX
+#           undef MSR_CORE_PERF_LIMIT_REASONS
+#           undef MSR_DRAM_ENERGY_STATUS
+#           undef MSR_DRAM_PERF_STATUS
+#           undef MSR_DRAM_POWER_INFO
+#           undef MSR_DRAM_POWER_LIMIT
+#           undef MSR_IA32_APERF
+#           undef MSR_IA32_ARCH_CAPABILITIES
+#           undef MSR_IA32_CR_PAT
+#           undef MSR_IA32_DS_AREA
+#           undef MSR_IA32_FEATURE_CONTROL
+#           undef MSR_IA32_FLUSH_CMD
+#           undef MSR_IA32_MC0_CTL
+#           undef MSR_IA32_MC0_STATUS
+#           undef MSR_IA32_MCG_CAP
+#           undef MSR_IA32_MCG_STATUS
+#           undef MSR_IA32_MISC_ENABLE
+#           undef MSR_IA32_MISC_ENABLE_BTS_UNAVAIL
+#           undef MSR_IA32_MISC_ENABLE_LIMIT_CPUID
+#           undef MSR_IA32_MISC_ENABLE_PEBS_UNAVAIL
+#           undef MSR_IA32_MISC_ENABLE_TCC
+#           undef MSR_IA32_MISC_ENABLE_XD_DISABLE
+#           undef MSR_IA32_MPERF
+#           undef MSR_IA32_PEBS_ENABLE
+#           undef MSR_IA32_PERF_CTL
+#           undef MSR_IA32_PERF_STATUS
+#           undef MSR_IA32_PLATFORM_ID
+#           undef MSR_IA32_PMC0
+#           undef MSR_IA32_PRED_CMD
+#           undef MSR_IA32_RTIT_CTL
+#           undef MSR_IA32_SMBASE
+#           undef MSR_IA32_SMM_MONITOR_CTL
+#           undef MSR_IA32_SPEC_CTRL
+#           undef MSR_IA32_THERM_STATUS
+#           undef MSR_IA32_TSC
+#           undef MSR_IA32_TSC_ADJUST
+#           undef MSR_IA32_TSX_CTRL
+#           undef MSR_IA32_VMX_BASIC
+#           undef MSR_IA32_VMX_CR0_FIXED0
+#           undef MSR_IA32_VMX_CR0_FIXED1
+#           undef MSR_IA32_VMX_CR4_FIXED0
+#           undef MSR_IA32_VMX_CR4_FIXED1
+#           undef MSR_IA32_VMX_ENTRY_CTLS
+#           undef MSR_IA32_VMX_EPT_VPID_CAP
+#           undef MSR_IA32_VMX_EXIT_CTLS
+#           undef MSR_IA32_VMX_MISC
+#           undef MSR_IA32_VMX_PINBASED_CTLS
+#           undef MSR_IA32_VMX_PROCBASED_CTLS
+#           undef MSR_IA32_VMX_PROCBASED_CTLS2
+#           undef MSR_IA32_VMX_TRUE_ENTRY_CTLS
+#           undef MSR_IA32_VMX_TRUE_EXIT_CTLS
+#           undef MSR_IA32_VMX_TRUE_PINBASED_CTLS
+#           undef MSR_IA32_VMX_TRUE_PROCBASED_CTLS
+#           undef MSR_IA32_VMX_VMCS_ENUM
+#           undef MSR_IA32_VMX_VMFUNC
+#           undef MSR_K6_PFIR
+#           undef MSR_K6_PSOR
+#           undef MSR_K6_UWCCR
+#           undef MSR_K6_WHCR
+#           undef MSR_K7_EVNTSEL0
+#           undef MSR_K7_EVNTSEL1
+#           undef MSR_K7_EVNTSEL2
+#           undef MSR_K7_EVNTSEL3
+#           undef MSR_K7_PERFCTR0
+#           undef MSR_K7_PERFCTR1
+#           undef MSR_K7_PERFCTR2
+#           undef MSR_K7_PERFCTR3
+#           undef MSR_K8_SYSCFG
+#           undef MSR_K8_TOP_MEM1
+#           undef MSR_K8_TOP_MEM2
+#           undef MSR_OFFCORE_RSP_0
+#           undef MSR_OFFCORE_RSP_1
+#           undef MSR_PKG_C10_RESIDENCY
+#           undef MSR_PKG_C2_RESIDENCY
+#           undef MSR_PKG_CST_CONFIG_CONTROL
+#           undef MSR_PKG_ENERGY_STATUS
+#           undef MSR_PKG_PERF_STATUS
+#           undef MSR_PKG_POWER_INFO
+#           undef MSR_PKG_POWER_LIMIT
+#           undef MSR_PKGC3_IRTL
+#           undef MSR_PP0_ENERGY_STATUS
+#           undef MSR_PP1_ENERGY_STATUS
+#           undef MSR_RAPL_POWER_UNIT
+#           undef MSR_TURBO_ACTIVATION_RATIO
+#           undef VMX_BASIC_MEM_TYPE_WB
+#           undef X86_CR0_AM
+#           undef X86_CR0_CD
+#           undef X86_CR0_EM
+#           undef X86_CR0_ET
+#           undef X86_CR0_MP
+#           undef X86_CR0_NE
+#           undef X86_CR0_NW
+#           undef X86_CR0_PE
+#           undef X86_CR0_PG
+#           undef X86_CR0_TS
+#           undef X86_CR0_WP
+#           undef X86_CR3_PCD
+#           undef X86_CR3_PWT
+#           undef X86_CR4_DE
+#           undef X86_CR4_FSGSBASE
+#           undef X86_CR4_MCE
+#           undef X86_CR4_OSFXSR
+#           undef X86_CR4_OSXSAVE
+#           undef X86_CR4_PAE
+#           undef X86_CR4_PCE
+#           undef X86_CR4_PCIDE
+#           undef X86_CR4_PGE
+#           undef X86_CR4_PKE
+#           undef X86_CR4_PSE
+#           undef X86_CR4_PVI
+#           undef X86_CR4_SMAP
+#           undef X86_CR4_SMEP
+#           undef X86_CR4_SMXE
+#           undef X86_CR4_TSD
+#           undef X86_CR4_UMIP
+#           undef X86_CR4_VME
+#           undef X86_CR4_VMXE
+#       endif
+#   endif
+#   define SUPR0_EXPORT_SYMBOL(a_Name) EXPORT_SYMBOL(a_Name)
 
 #elif defined(RT_OS_DARWIN)
 #   include <libkern/libkern.h>
@@ -120,9 +272,9 @@
 
 
 
-/*******************************************************************************
-*   Defined Constants And Macros                                               *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
 /*
  * Hardcoded cookies.
  */
@@ -142,18 +294,20 @@
 # define SUPDRV_USE_MUTEX_FOR_GIP
 #endif
 
+#if defined(RT_OS_LINUX) /** @todo make everyone do this */
+/** Use the RTR0MemObj API rather than the RTMemExecAlloc for the images.
+ * This is a good idea in general, but a necessity for @bugref{9801}. */
+# define SUPDRV_USE_MEMOBJ_FOR_LDR_IMAGE
+#endif
+
+#ifndef SUPR0_EXPORT_SYMBOL
+# define SUPR0_EXPORT_SYMBOL(a_Name) extern int g_supDrvExportSymbolDummyVariable
+#endif
 
 /**
  * OS debug print macro.
  */
 #define OSDBGPRINT(a) SUPR0Printf a
-
-/** Debug printf macro shared with the ring-3 part. */
-#ifdef DEBUG_bird
-# define SUP_DPRINTF(a) SUPR0Printf a
-#else
-# define SUP_DPRINTF(a) do { } while (0)
-#endif
 
 
 /** @name Context values for the per-session handle tables.
@@ -174,7 +328,7 @@
  * @param   pSession    The session.
  */
 #define SUP_IS_SESSION_VALID(pSession)  \
-    (   VALID_PTR(pSession) \
+    (   RT_VALID_PTR(pSession) \
      && pSession->u32Cookie == BIRD_INV)
 
 /**
@@ -184,7 +338,7 @@
  * @param   pDevExt     The device extension.
  */
 #define SUP_IS_DEVEXT_VALID(pDevExt) \
-    (   VALID_PTR(pDevExt)\
+    (   RT_VALID_PTR(pDevExt) \
      && pDevExt->u32Cookie == BIRD)
 
 
@@ -216,9 +370,9 @@
 #endif
 
 
-/*******************************************************************************
-*   Structures and Typedefs                                                    *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
 /** Pointer to the device extension. */
 typedef struct SUPDRVDEVEXT *PSUPDRVDEVEXT;
 
@@ -323,13 +477,20 @@ typedef struct SUPDRVLDRIMAGE
     struct SUPDRVLDRIMAGE * volatile pNext;
     /** Pointer to the image. */
     void                           *pvImage;
+#ifdef SUPDRV_USE_MEMOBJ_FOR_LDR_IMAGE
+    /** The memory object for the module allocation. */
+    RTR0MEMOBJ                      hMemObjImage;
+#else
     /** Pointer to the allocated image buffer.
      * pvImage is 32-byte aligned or it may governed by the native loader (this
      * member is NULL then). */
     void                           *pvImageAlloc;
+#endif
+    /** Magic value (SUPDRVLDRIMAGE_MAGIC). */
+    uint32_t                        uMagic;
     /** Size of the image including the tables. This is mainly for verification
      * of the load request. */
-    uint32_t                        cbImageWithTabs;
+    uint32_t                        cbImageWithEverything;
     /** Size of the image. */
     uint32_t                        cbImageBits;
     /** The number of entries in the symbol table. */
@@ -340,6 +501,10 @@ typedef struct SUPDRVLDRIMAGE
     char                           *pachStrTab;
     /** Size of the string table. */
     uint32_t                        cbStrTab;
+    /** Number of segments. */
+    uint32_t                        cSegments;
+    /** Segments (for memory protection). */
+    PSUPLDRSEG                      paSegments;
     /** Pointer to the optional module initialization callback. */
     PFNR0MODULEINIT                 pfnModuleInit;
     /** Pointer to the optional module termination callback. */
@@ -349,9 +514,11 @@ typedef struct SUPDRVLDRIMAGE
     /** The ldr image state. (IOCtl code of last operation.) */
     uint32_t                        uState;
     /** Usage count. */
-    uint32_t volatile               cUsage;
+    uint32_t volatile               cImgUsage;
     /** Pointer to the device extension. */
     struct SUPDRVDEVEXT            *pDevExt;
+    /** Image (VMMR0.r0) containing functions/data that this one uses. */
+    struct SUPDRVLDRIMAGE          *pImageImport;
 #ifdef RT_OS_WINDOWS
     /** The section object for the loaded image (fNative=true). */
     void                           *pvNtSectionObj;
@@ -367,12 +534,31 @@ typedef struct SUPDRVLDRIMAGE
 #ifdef RT_OS_LINUX
     /** Hack for seeing the module in perf, dtrace and other stack crawlers. */
     struct module                  *pLnxModHack;
+    /** The wrapper module.  */
+    struct module                  *pLnxWrapperModule;
+    /** Set if we're holding a reference to the wrapper module. */
+    bool                            fLnxWrapperRef;
 #endif
+#if defined(RT_OS_DARWIN) && defined(VBOX_WITH_DARWIN_R0_DARWIN_IMAGE_VERIFICATION)
+    /** Load module handle. */
+    RTLDRMOD                        hLdrMod;
+    /** Allocate object. */
+    RTR0MEMOBJ                      hMemAlloc;
+#endif
+    /** This points to the module info if the image is a wrapped up in a native one. */
+    PCSUPLDRWRAPPEDMODULE           pWrappedModInfo;
+    /** OS specific information for wrapped modules. */
+    void                           *pvWrappedNative;
     /** Whether it's loaded by the native loader or not. */
     bool                            fNative;
     /** Image name. */
     char                            szName[32];
 } SUPDRVLDRIMAGE, *PSUPDRVLDRIMAGE;
+
+/** Magic value for SUPDRVLDRIMAGE::uMagic (Charlotte Bronte). */
+#define SUPDRVLDRIMAGE_MAGIC        UINT32_C(0x18160421)
+/** Magic value for SUPDRVLDRIMAGE::uMagic when freed. */
+#define SUPDRVLDRIMAGE_MAGIC_DEAD   UINT32_C(0x18550331)
 
 
 /** Image usage record. */
@@ -382,8 +568,10 @@ typedef struct SUPDRVLDRUSAGE
     struct SUPDRVLDRUSAGE * volatile pNext;
     /** The image. */
     PSUPDRVLDRIMAGE                 pImage;
-    /** Load count. */
-    uint32_t volatile               cUsage;
+    /** Load count (ring-3). */
+    uint32_t volatile               cRing3Usage;
+    /** Ring-0 usage counter. */
+    uint32_t volatile               cRing0Usage;
 } SUPDRVLDRUSAGE, *PSUPDRVLDRUSAGE;
 
 
@@ -457,6 +645,32 @@ typedef struct SUPDRVUSAGE
 
 
 /**
+ * I/O control context.
+ */
+typedef struct SUPR0IOCTLCTX
+{
+    /** Magic value (SUPR0IOCTLCTX_MAGIC). */
+    uint32_t                u32Magic;
+    /** Reference counter. */
+    uint32_t volatile       cRefs;
+#ifdef RT_OS_WINDOWS
+# ifndef SUPDRV_AGNOSTIC
+    /** The file object, referenced. */
+    PFILE_OBJECT            pFileObject;
+    /** The device object, not referenced. */
+    PDEVICE_OBJECT          pDeviceObject;
+    /** Pointer to fast I/O routine if available. */
+    FAST_IO_DEVICE_CONTROL *pfnFastIoDeviceControl;
+# else
+    void                   *apvPadding[3];
+# endif
+#endif
+} SUPR0IOCTLCTX;
+/** Magic value for SUPR0IOCTLCTX (Ahmad Jamal). */
+#define SUPR0IOCTLCTX_MAGIC     UINT32_C(0x19300702)
+
+
+/**
  * Per session data.
  * This is mainly for memory tracking.
  */
@@ -487,12 +701,18 @@ typedef struct SUPDRVSESSION
      * This is NIL_RTR0PROCESS for kernel sessions and valid for user ones. */
     RTR0PROCESS                     R0Process;
 
-    /** The VM associated with the session. */
-    PVM                             pVM;
+    /** The GVM associated with the session.
+     * This is set by VMMR0.  */
+    PGVM                            pSessionGVM;
+    /** The VM associated with the session.
+     * This is set by VMMR0.  */
+    PVM                             pSessionVM;
+    /** Set to pSessionVM if fast I/O controlls are enabled. */
+    PVM                             pFastIoCtrlVM;
     /** Handle table for IPRT semaphore wrapper APIs.
      * This takes care of its own locking in an IRQ safe manner. */
     RTHANDLETABLE                   hHandleTable;
-    /** Load usage records. (protected by SUPDRVDEVEXT::mtxLdr) */
+    /** Load usage records (LIFO!). (protected by SUPDRVDEVEXT::mtxLdr) */
     PSUPDRVLDRUSAGE volatile        pLdrUsage;
 
     /** Spinlock protecting the bundles, the GIP members and the
@@ -508,9 +728,11 @@ typedef struct SUPDRVSESSION
     /** List of generic usage records. (protected by SUPDRVDEVEXT::SpinLock) */
     PSUPDRVUSAGE volatile           pUsage;
 
-    /** The user id of the session. (Set by the OS part.) */
+    /** The user id of the session - set by the OS part or NIL_RTUID.
+     * This should be unique accross namespace/zones/whatever. */
     RTUID                           Uid;
-    /** The group id of the session. (Set by the OS part.) */
+    /** The group id of the session - set by the OS part or NIL_RTGID.
+     * This should be unique accross namespace/zones/whatever.  */
     RTGID                           Gid;
     /** Per session tracer specfic data. */
     uintptr_t                       uTracerData;
@@ -550,6 +772,10 @@ typedef struct SUPDRVSESSION
     /** Pointer to the process protection structure for this session. */
     struct SUPDRVNTPROTECT         *pNtProtect;
 # endif
+# if defined(RT_OS_WINDOWS)
+    /** Reference to the user ID structure corresponding to the Uid member. */
+    struct SUPDRVNTUSERID          *pNtUserId;
+# endif
 #endif /* !SUPDRV_AGNOSTIC */
 } SUPDRVSESSION;
 
@@ -587,9 +813,10 @@ typedef struct SUPDRVDEVEXT
      * 0 if the code VMM isn't loaded and Idt are nops. */
     void * volatile                 pvVMMR0;
     /** VMMR0EntryFast() pointer. */
-    DECLR0CALLBACKMEMBER(void,      pfnVMMR0EntryFast, (PVM pVM, VMCPUID idCpu, unsigned uOperation));
+    DECLR0CALLBACKMEMBER(void,      pfnVMMR0EntryFast, (PGVM pGVM, PVM pVM, VMCPUID idCpu, uint32_t uOperation));
     /** VMMR0EntryEx() pointer. */
-    DECLR0CALLBACKMEMBER(int,       pfnVMMR0EntryEx, (PVM pVM, VMCPUID idCpu, unsigned uOperation, PSUPVMMR0REQHDR pReq, uint64_t u64Arg, PSUPDRVSESSION pSession));
+    DECLR0CALLBACKMEMBER(int,       pfnVMMR0EntryEx, (PGVM pGVM, PVM pVM, VMCPUID idCpu, uint32_t uOperation,
+                                                      PSUPVMMR0REQHDR pReq, uint64_t u64Arg, PSUPDRVSESSION pSession));
 
     /** Linked list of loaded code. */
     PSUPDRVLDRIMAGE volatile        pLdrImages;
@@ -604,6 +831,8 @@ typedef struct SUPDRVDEVEXT
     PSUPDRVLDRIMAGE volatile        pLdrInitImage;
     /** The thread currently executing a ModuleInit function. */
     RTNATIVETHREAD volatile         hLdrInitThread;
+    /** The thread currently executing a ModuleTerm function. */
+    RTNATIVETHREAD volatile         hLdrTermThread;
     /** @} */
 
     /** Number of times someone reported bad execution context via SUPR0BadContext.
@@ -755,6 +984,11 @@ typedef struct SUPDRVDEVEXT
     PCALLBACK_OBJECT                pObjPowerCallback;
     /** Callback handle returned by ExRegisterCallback. */
     PVOID                           hPowerCallback;
+# elif defined(RT_OS_DARWIN) && defined(VBOX_WITH_DARWIN_R0_DARWIN_IMAGE_VERIFICATION)
+    /** Trusted root certificates for code signing validation. */
+    RTCRSTORE                       hRootStore;
+    /** Intermedite certificates for code signing validation. */
+    RTCRSTORE                       hAdditionalStore;
 # endif
 #endif
 } SUPDRVDEVEXT;
@@ -841,6 +1075,7 @@ int  VBOXCALL   supdrvOSEnableVTx(bool fEnabled);
 RTCCUINTREG VBOXCALL supdrvOSChangeCR4(RTCCUINTREG fOrMask, RTCCUINTREG fAndMask);
 bool VBOXCALL   supdrvOSSuspendVTxOnCpu(void);
 void VBOXCALL   supdrvOSResumeVTxOnCpu(bool fSuspended);
+int  VBOXCALL   supdrvOSGetCurrentGdtRw(RTHCUINTPTR *pGdtRw);
 
 /**
  * Try open the image using the native loader.
@@ -881,9 +1116,10 @@ void VBOXCALL   supdrvOSLdrNotifyOpened(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE p
  * @param   pImage              The image data (still in the open state).
  * @param   pv                  The address within the image.
  * @param   pbImageBits         The image bits as loaded by ring-3.
+ * @param   pszSymbol           The name of the entrypoint being checked.
  */
 int  VBOXCALL   supdrvOSLdrValidatePointer(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage,
-                                           void *pv, const uint8_t *pbImageBits);
+                                           void *pv, const uint8_t *pbImageBits, const char *pszSymbol);
 
 /**
  * Load the image.
@@ -897,7 +1133,6 @@ int  VBOXCALL   supdrvOSLdrValidatePointer(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAG
  *                              entry points can be adjusted.
  */
 int  VBOXCALL   supdrvOSLdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, const uint8_t *pbImageBits, PSUPLDRLOAD pReq);
-
 
 /**
  * Unload the image (only called if supdrvOSLdrOpen returned success).
@@ -918,6 +1153,38 @@ void VBOXCALL   supdrvOSLdrUnload(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
  */
 void VBOXCALL   supdrvOSLdrNotifyUnloaded(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage);
 
+/**
+ * Queries a symbol address is a native module.
+ *
+ * @returns IPRT status code.
+ * @param   pDevExt             The device globals.
+ * @param   pImage              The image to search.
+ * @param   pszSymbol           The symbol to search for.
+ * @param   cchSymbol           The length of the symbol.
+ * @param   ppvSymbol           Where to return the symbol address if found.
+ */
+int  VBOXCALL   supdrvOSLdrQuerySymbol(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage,
+                                       const char *pszSymbol, size_t cchSymbol, void **ppvSymbol);
+
+/**
+ * Retains a native wrapper module when it is first being used.
+ *
+ * This will be call when pImage->cImgUsage is incremented to 2.
+ *
+ * @param   pDevExt             The device globals.
+ * @param   pImage              The wrapped image.
+ */
+void VBOXCALL   supdrvOSLdrRetainWrapperModule(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage);
+
+/**
+ * Release a native wrapper module when it is no longer being used.
+ *
+ * This will be call when pImage->cImgUsage is decremented to 1.
+ *
+ * @param   pDevExt             The device globals.
+ * @param   pImage              The wrapped image.
+ */
+void VBOXCALL   supdrvOSLdrReleaseWrapperModule(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage);
 
 #ifdef SUPDRV_WITH_MSR_PROBER
 
@@ -971,12 +1238,13 @@ int VBOXCALL    supdrvOSMsrProberModify(RTCPUID idCpu, PSUPMSRPROBER pReq);
 int VBOXCALL    supdrvDarwinResumeSuspendedKbds(void);
 #endif
 
-/*******************************************************************************
-*   Shared Functions                                                           *
-*******************************************************************************/
+
+/*********************************************************************************************************************************
+*   Shared Functions                                                                                                             *
+*********************************************************************************************************************************/
 /* SUPDrv.c */
 int  VBOXCALL   supdrvIOCtl(uintptr_t uIOCtl, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, PSUPREQHDR pReqHdr, size_t cbReq);
-int  VBOXCALL   supdrvIOCtlFast(uintptr_t uIOCtl, VMCPUID idCpu, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession);
+int  VBOXCALL   supdrvIOCtlFast(uintptr_t uOperation, VMCPUID idCpu, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession);
 int  VBOXCALL   supdrvIDC(uintptr_t uIOCtl, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, PSUPDRVIDCREQHDR pReqHdr);
 int  VBOXCALL   supdrvInitDevExt(PSUPDRVDEVEXT pDevExt, size_t cbSession);
 void VBOXCALL   supdrvDeleteDevExt(PSUPDRVDEVEXT pDevExt);
@@ -990,6 +1258,11 @@ uint32_t VBOXCALL supdrvSessionRelease(PSUPDRVSESSION pSession);
 void VBOXCALL   supdrvBadContext(PSUPDRVDEVEXT pDevExt, const char *pszFile, uint32_t uLine, const char *pszExtra);
 int VBOXCALL    supdrvQueryVTCapsInternal(uint32_t *pfCaps);
 int VBOXCALL    supdrvLdrLoadError(int rc, PSUPLDRLOAD pReq, const char *pszFormat, ...);
+int VBOXCALL    supdrvLdrGetExportedSymbol(const char *pszSymbol, uintptr_t *puValue);
+int VBOXCALL    supdrvLdrRegisterWrappedModule(PSUPDRVDEVEXT pDevExt, PCSUPLDRWRAPPEDMODULE pWrappedModInfo,
+                                               void *pvNative, void **phMod);
+int VBOXCALL    supdrvLdrDeregisterWrappedModule(PSUPDRVDEVEXT pDevExt, PCSUPLDRWRAPPEDMODULE pWrappedModInfo, void **phMod);
+
 
 /* SUPDrvGip.cpp */
 int  VBOXCALL   supdrvGipCreate(PSUPDRVDEVEXT pDevExt);
@@ -1018,9 +1291,10 @@ DECLASM(void)   supdrvTracerProbeFireStub(void);
 
 #ifdef VBOX_WITH_NATIVE_DTRACE
 const SUPDRVTRACERREG * VBOXCALL supdrvDTraceInit(void);
+void                    VBOXCALL supdrvDTraceFini(void);
 #endif
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Support_SUPDrvInternal_h */
 

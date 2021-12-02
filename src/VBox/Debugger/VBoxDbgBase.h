@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDbgBase.h 86327 2020-09-28 16:20:50Z vboxsync $ */
 /** @file
  * VBox Debugger GUI - Base classes.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,9 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-
-#ifndef ___Debugger_VBoxDbgBase_h
-#define ___Debugger_VBoxDbgBase_h
+#ifndef DEBUGGER_INCLUDED_SRC_VBoxDbgBase_h
+#define DEBUGGER_INCLUDED_SRC_VBoxDbgBase_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #include <VBox/vmm/stam.h>
@@ -43,7 +45,7 @@ public:
     /**
      * Construct the object.
      *
-     * @param   pDbgGui     Pointer to the debugger gui object.
+     * @param   a_pDbgGui   Pointer to the debugger gui object.
      */
     VBoxDbgBase(VBoxDbgGui *a_pDbgGui);
 
@@ -84,7 +86,7 @@ public:
     /**
      * Wrapper for DBGCCreate().
      */
-    int dbgcCreate(PDBGCBACK pBack, unsigned fFlags);
+    int dbgcCreate(PCDBGCIO pIo, unsigned fFlags);
     /** @} */
 
 
@@ -129,9 +131,11 @@ public:
     /**
      * Construct the object.
      *
-     * @param   pDbgGui     Pointer to the debugger gui object.
+     * @param   a_pDbgGui   Pointer to the debugger gui object.
+     * @param   a_pParent   Pointer to the parent object.
+     * @param   a_pszTitle  The window title string (persistent, not copied).
      */
-    VBoxDbgBaseWindow(VBoxDbgGui *a_pDbgGui, QWidget *a_pParent);
+    VBoxDbgBaseWindow(VBoxDbgGui *a_pDbgGui, QWidget *a_pParent, const char *a_pszTitle);
 
     /**
      * Destructor.
@@ -164,6 +168,14 @@ protected:
     virtual bool event(QEvent *a_pEvt);
 
     /**
+     * Event filter for various purposes (mainly title bar).
+     *
+     * @param  pWatched         The object event came to.
+     * @param  pEvent           The event being handled.
+     */
+    virtual bool eventFilter(QObject *pWatched, QEvent *pEvent);
+
+    /**
      * Internal worker for polishing the size and position (X11 hacks).
      */
     void vPolishSizeAndPos();
@@ -173,8 +185,9 @@ protected:
      */
     QSize vGuessBorderSizes();
 
-
 private:
+    /** The Window title string (inflexible, read only). */
+    const char *m_pszTitle;
     /** Whether we've done the size polishing in showEvent or not. */
     bool m_fPolished;
     /** The desired x coordinate. */
@@ -192,5 +205,5 @@ private:
     static unsigned m_cyBorder;
 };
 
-#endif
+#endif /* !DEBUGGER_INCLUDED_SRC_VBoxDbgBase_h */
 

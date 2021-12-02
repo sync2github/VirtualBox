@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: dir-posix.cpp 91620 2021-10-07 20:11:46Z vboxsync $ */
 /** @file
  * IPRT - Directory manipulation, POSIX.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,12 +35,14 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <dlfcn.h>
 #include <stdio.h>
 
 #include <iprt/dir.h>
 #include "internal/iprt.h"
 
 #include <iprt/alloca.h>
+#include <iprt/asm.h>
 #include <iprt/assert.h>
 #include <iprt/err.h>
 #include <iprt/log.h>
@@ -81,52 +83,46 @@ RTDECL(int) RTDirCreate(const char *pszPath, RTFMODE fMode, uint32_t fCreate)
     RT_NOREF_PV(fCreate);
 
     int rc;
-    fMode = rtFsModeNormalize(fMode, pszPath, 0);
+    fMode = rtFsModeNormalize(fMode, pszPath, 0, RTFS_TYPE_DIRECTORY);
     if (rtFsModeIsValidPermissions(fMode))
     {
         char const *pszNativePath;
         rc = rtPathToNative(&pszNativePath, pszPath, NULL);
         if (RT_SUCCESS(rc))
         {
-            if (mkdir(pszNativePath, fMode & RTFS_UNIX_MASK))
+            struct stat st;
+            if (mkdir(pszNativePath, fMode & RTFS_UNIX_MASK) == 0)
+            {
+                /* If requested, we try make use the permission bits are set
+                   correctly when asked.  For now, we'll just ignore errors here. */
+                if (fCreate & RTDIRCREATE_FLAGS_IGNORE_UMASK)
+                {
+                    if (   stat(pszNativePath, &st)
+                        || (st.st_mode & 07777) != (fMode & 07777) )
+                        chmod(pszNativePath, fMode & RTFS_UNIX_MASK);
+                }
+                rc = VINF_SUCCESS;
+            }
+            else
             {
                 rc = errno;
-                bool fVerifyIsDir = true;
-#ifdef RT_OS_SOLARIS
                 /*
-                 * mkdir on nfs mount points has been/is busted in various
-                 * during the Nevada development cycle. We've observed:
-                 *  - Build 111b (2009.06) returns EACCES.
-                 *  - Build ca. 70-80 returns ENOSYS.
+                 * Solaris mkdir returns ENOSYS on autofs directories, and also
+                 * did this apparently for NFS mount points in some Nevada
+                 * development builds. It also returned EACCES when it should
+                 * have returned EEXIST, which actually is within the POSIX
+                 * spec (not that I like this interpretation, but it seems
+                 * valid). Check ourselves.
                  */
                 if (    rc == ENOSYS
                     ||  rc == EACCES)
                 {
                     rc = RTErrConvertFromErrno(rc);
-                    fVerifyIsDir = false;  /* We'll check if it's a dir ourselves since we're going to stat() anyway. */
-                    struct stat st;
                     if (!stat(pszNativePath, &st))
-                    {
                         rc = VERR_ALREADY_EXISTS;
-                        if (!S_ISDIR(st.st_mode))
-                            rc = VERR_IS_A_FILE;
-                    }
                 }
                 else
                     rc = RTErrConvertFromErrno(rc);
-#else
-                rc = RTErrConvertFromErrno(rc);
-#endif
-                if (   rc == VERR_ALREADY_EXISTS
-                    && fVerifyIsDir == true)
-                {
-                    /*
-                     * Verify that it really exists as a directory.
-                     */
-                    struct stat st;
-                    if (!stat(pszNativePath, &st) && !S_ISDIR(st.st_mode))
-                        rc = VERR_IS_A_FILE;
-                }
             }
         }
 
@@ -149,7 +145,41 @@ RTDECL(int) RTDirRemove(const char *pszPath)
     if (RT_SUCCESS(rc))
     {
         if (rmdir(pszNativePath))
-            rc = RTErrConvertFromErrno(errno);
+        {
+            rc = errno;
+            if (rc == EEXIST) /* Solaris returns this, the rest have ENOTEMPTY. */
+                rc = VERR_DIR_NOT_EMPTY;
+            else if (rc != ENOTDIR)
+                rc = RTErrConvertFromErrno(rc);
+            else
+            {
+                /*
+                 * This may be a valid path-not-found or it may be a non-directory in
+                 * the final component.  FsPerf want us to distinguish between the two,
+                 * and trailing slash shouldn't matter because it doesn't on windows...
+                 */
+                char       *pszFree = NULL;
+                const char *pszStat = pszNativePath;
+                size_t      cch     = strlen(pszNativePath);
+                if (cch > 2 && pszNativePath[cch - 1] == '/')
+                {
+                    pszStat = pszFree = (char *)RTMemTmpAlloc(cch);
+                    memcpy(pszFree, pszNativePath, cch);
+                    do
+                        pszFree[--cch] = '\0';
+                    while (cch > 2 && pszFree[cch - 1] == '/');
+                }
+
+                struct stat st;
+                if (!stat(pszStat, &st) && !S_ISDIR(st.st_mode))
+                    rc = VERR_NOT_A_DIRECTORY;
+                else
+                    rc = VERR_PATH_NOT_FOUND;
+
+                if (pszFree)
+                    RTMemTmpFree(pszFree);
+            }
+        }
 
         rtPathFreeNative(pszNativePath, pszPath);
     }
@@ -214,27 +244,111 @@ size_t rtDirNativeGetStructSize(const char *pszPath)
     if (cbNameMax < _XOPEN_NAME_MAX)    /* Ditto. */
         cbNameMax = _XOPEN_NAME_MAX;
 # endif
-    size_t cbDir = RT_OFFSETOF(RTDIR, Data.d_name[cbNameMax + 1]);
-    if (cbDir < sizeof(RTDIR))          /* Ditto. */
-        cbDir = sizeof(RTDIR);
+    size_t cbDir = RT_UOFFSETOF_DYN(RTDIRINTERNAL, Data.d_name[cbNameMax + 1]);
+    if (cbDir < sizeof(RTDIRINTERNAL))  /* Ditto. */
+        cbDir = sizeof(RTDIRINTERNAL);
     cbDir = RT_ALIGN_Z(cbDir, 8);
 
     return cbDir;
 }
 
 
-int rtDirNativeOpen(PRTDIR pDir, char *pszPathBuf)
+int rtDirNativeOpen(PRTDIRINTERNAL pDir, uintptr_t hRelativeDir, void *pvNativeRelative)
 {
-    NOREF(pszPathBuf); /* only used on windows */
+    NOREF(hRelativeDir);
+    NOREF(pvNativeRelative);
 
     /*
      * Convert to a native path and try opendir.
      */
+    char       *pszSlash = NULL;
     char const *pszNativePath;
-    int rc = rtPathToNative(&pszNativePath, pDir->pszPath, NULL);
+    int         rc;
+    if (   !(pDir->fFlags & RTDIR_F_NO_FOLLOW)
+        || pDir->fDirSlash
+        || pDir->cchPath <= 1)
+        rc = rtPathToNative(&pszNativePath, pDir->pszPath, NULL);
+    else
+    {
+        pszSlash = (char *)&pDir->pszPath[pDir->cchPath - 1];
+        *pszSlash = '\0';
+        rc = rtPathToNative(&pszNativePath, pDir->pszPath, NULL);
+    }
     if (RT_SUCCESS(rc))
     {
-        pDir->pDir = opendir(pszNativePath);
+        if (   !(pDir->fFlags & RTDIR_F_NO_FOLLOW)
+            || pDir->fDirSlash)
+            pDir->pDir = opendir(pszNativePath);
+        else
+        {
+            /*
+             * If we can get fdopendir() and have both O_NOFOLLOW and O_DIRECTORY,
+             * we will use open() to safely open the directory without following
+             * symlinks in the final component, and then use fdopendir to get a DIR
+             * from the file descriptor.
+             *
+             * If we cannot get that, we will use lstat() + opendir() as a fallback.
+             *
+             * We ASSUME that support for the O_NOFOLLOW and O_DIRECTORY flags is
+             * older than fdopendir().
+             */
+#if defined(O_NOFOLLOW) && defined(O_DIRECTORY)
+            /* Need to resolve fdopendir dynamically. */
+            typedef DIR * (*PFNFDOPENDIR)(int);
+            static PFNFDOPENDIR  s_pfnFdOpenDir = NULL;
+            static bool volatile s_fInitalized = false;
+
+            PFNFDOPENDIR pfnFdOpenDir = s_pfnFdOpenDir;
+            ASMCompilerBarrier();
+            if (s_fInitalized)
+            { /* likely */ }
+            else
+            {
+                pfnFdOpenDir = (PFNFDOPENDIR)(uintptr_t)dlsym(RTLD_DEFAULT, "fdopendir");
+                s_pfnFdOpenDir = pfnFdOpenDir;
+                ASMAtomicWriteBool(&s_fInitalized, true);
+            }
+
+            if (pfnFdOpenDir)
+            {
+                int fd = open(pszNativePath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+                if (fd >= 0)
+                {
+                    pDir->pDir = pfnFdOpenDir(fd);
+                    if (RT_UNLIKELY(!pDir->pDir))
+                    {
+                        rc = RTErrConvertFromErrno(errno);
+                        close(fd);
+                    }
+                }
+                else
+                {
+                    /* WSL returns ELOOP here, but we take no chances that O_NOFOLLOW
+                       takes precedence over O_DIRECTORY everywhere. */
+                    int iErr = errno;
+                    if (iErr == ELOOP || iErr == ENOTDIR)
+                    {
+                        struct stat St;
+                        if (   lstat(pszNativePath, &St) == 0
+                            && S_ISLNK(St.st_mode))
+                            rc = VERR_IS_A_SYMLINK;
+                        else
+                            rc = RTErrConvertFromErrno(iErr);
+                    }
+                }
+            }
+            else
+#endif
+            {
+                /* Fallback.  This contains a race condition. */
+                struct stat St;
+                if (   lstat(pszNativePath, &St) != 0
+                    || !S_ISLNK(St.st_mode))
+                    pDir->pDir = opendir(pszNativePath);
+                else
+                    rc = VERR_IS_A_SYMLINK;
+            }
+        }
         if (pDir->pDir)
         {
             /*
@@ -242,18 +356,21 @@ int rtDirNativeOpen(PRTDIR pDir, char *pszPathBuf)
              */
             pDir->fDataUnread = false; /* spelling it out */
         }
-        else
+        else if (RT_SUCCESS_NP(rc))
             rc = RTErrConvertFromErrno(errno);
 
         rtPathFreeNative(pszNativePath, pDir->pszPath);
     }
-
+    if (pszSlash)
+        *pszSlash = RTPATH_SLASH;
     return rc;
 }
 
 
-RTDECL(int) RTDirClose(PRTDIR pDir)
+RTDECL(int) RTDirClose(RTDIR hDir)
 {
+    PRTDIRINTERNAL pDir = hDir;
+
     /*
      * Validate input.
      */
@@ -288,7 +405,7 @@ RTDECL(int) RTDirClose(PRTDIR pDir)
  * @returns IPRT status code.
  * @param   pDir        the open directory. Fully validated.
  */
-static int rtDirReadMore(PRTDIR pDir)
+static int rtDirReadMore(PRTDIRINTERNAL pDir)
 {
     /** @todo try avoid the rematching on buffer overflow errors. */
     for (;;)
@@ -374,22 +491,24 @@ static RTDIRENTRYTYPE rtDirType(int iType)
 #endif /*HAVE_DIRENT_D_TYPE */
 
 
-RTDECL(int) RTDirRead(PRTDIR pDir, PRTDIRENTRY pDirEntry, size_t *pcbDirEntry)
+RTDECL(int) RTDirRead(RTDIR hDir, PRTDIRENTRY pDirEntry, size_t *pcbDirEntry)
 {
+    PRTDIRINTERNAL pDir = hDir;
+
     /*
      * Validate and digest input.
      */
     if (!rtDirValidHandle(pDir))
         return VERR_INVALID_PARAMETER;
-    AssertMsgReturn(VALID_PTR(pDirEntry), ("%p\n", pDirEntry), VERR_INVALID_POINTER);
+    AssertPtrReturn(pDirEntry, VERR_INVALID_POINTER);
 
     size_t cbDirEntry = sizeof(*pDirEntry);
     if (pcbDirEntry)
     {
-        AssertMsgReturn(VALID_PTR(pcbDirEntry), ("%p\n", pcbDirEntry), VERR_INVALID_POINTER);
+        AssertPtrReturn(pcbDirEntry, VERR_INVALID_POINTER);
         cbDirEntry = *pcbDirEntry;
         AssertMsgReturn(cbDirEntry >= RT_UOFFSETOF(RTDIRENTRY, szName[2]),
-                        ("Invalid *pcbDirEntry=%d (min %d)\n", *pcbDirEntry, RT_OFFSETOF(RTDIRENTRYEX, szName[2])),
+                        ("Invalid *pcbDirEntry=%d (min %zu)\n", *pcbDirEntry, RT_UOFFSETOF(RTDIRENTRYEX, szName[2])),
                         VERR_INVALID_PARAMETER);
     }
 
@@ -404,7 +523,7 @@ RTDECL(int) RTDirRead(PRTDIR pDir, PRTDIRENTRY pDirEntry, size_t *pcbDirEntry)
          */
         const char  *pszName    = pDir->pszName;
         const size_t cchName    = pDir->cchName;
-        const size_t cbRequired = RT_OFFSETOF(RTDIRENTRY, szName[1]) + cchName;
+        const size_t cbRequired = RT_UOFFSETOF(RTDIRENTRY, szName[1]) + cchName;
         if (pcbDirEntry)
             *pcbDirEntry = cbRequired;
         if (cbRequired <= cbDirEntry)
@@ -471,14 +590,17 @@ static void rtDirSetDummyInfo(PRTFSOBJINFO pInfo, RTDIRENTRYTYPE enmType)
 }
 
 
-RTDECL(int) RTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntry, RTFSOBJATTRADD enmAdditionalAttribs, uint32_t fFlags)
+RTDECL(int) RTDirReadEx(RTDIR hDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntry,
+                        RTFSOBJATTRADD enmAdditionalAttribs, uint32_t fFlags)
 {
+    PRTDIRINTERNAL pDir = hDir;
+
     /*
      * Validate and digest input.
      */
     if (!rtDirValidHandle(pDir))
         return VERR_INVALID_PARAMETER;
-    AssertMsgReturn(VALID_PTR(pDirEntry), ("%p\n", pDirEntry), VERR_INVALID_POINTER);
+    AssertPtrReturn(pDirEntry, VERR_INVALID_POINTER);
     AssertMsgReturn(    enmAdditionalAttribs >= RTFSOBJATTRADD_NOTHING
                     &&  enmAdditionalAttribs <= RTFSOBJATTRADD_LAST,
                     ("Invalid enmAdditionalAttribs=%p\n", enmAdditionalAttribs),
@@ -487,10 +609,10 @@ RTDECL(int) RTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntr
     size_t cbDirEntry = sizeof(*pDirEntry);
     if (pcbDirEntry)
     {
-        AssertMsgReturn(VALID_PTR(pcbDirEntry), ("%p\n", pcbDirEntry), VERR_INVALID_POINTER);
+        AssertPtrReturn(pcbDirEntry, VERR_INVALID_POINTER);
         cbDirEntry = *pcbDirEntry;
-        AssertMsgReturn(cbDirEntry >= (unsigned)RT_OFFSETOF(RTDIRENTRYEX, szName[2]),
-                        ("Invalid *pcbDirEntry=%d (min %d)\n", *pcbDirEntry, RT_OFFSETOF(RTDIRENTRYEX, szName[2])),
+        AssertMsgReturn(cbDirEntry >= RT_UOFFSETOF(RTDIRENTRYEX, szName[2]),
+                        ("Invalid *pcbDirEntry=%zu (min %zu)\n", *pcbDirEntry, RT_UOFFSETOF(RTDIRENTRYEX, szName[2])),
                         VERR_INVALID_PARAMETER);
     }
 
@@ -505,7 +627,7 @@ RTDECL(int) RTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntr
          */
         const char  *pszName    = pDir->pszName;
         const size_t cchName    = pDir->cchName;
-        const size_t cbRequired = RT_OFFSETOF(RTDIRENTRYEX, szName[1]) + cchName;
+        const size_t cbRequired = RT_UOFFSETOF(RTDIRENTRYEX, szName[1]) + cchName;
         if (pcbDirEntry)
             *pcbDirEntry = cbRequired;
         if (cbRequired <= cbDirEntry)
@@ -553,13 +675,34 @@ RTDECL(int) RTDirReadEx(PRTDIR pDir, PRTDIRENTRYEX pDirEntry, size_t *pcbDirEntr
 }
 
 
+RTDECL(int) RTDirRewind(RTDIR hDir)
+{
+    PRTDIRINTERNAL pDir = hDir;
+
+    /*
+     * Validate and digest input.
+     */
+    if (!rtDirValidHandle(pDir))
+        return VERR_INVALID_PARAMETER;
+
+    /*
+     * Do the rewinding.
+     */
+    /** @todo OS/2 does not rescan the directory as it should. */
+    rewinddir(pDir->pDir);
+    pDir->fDataUnread = false;
+
+    return VINF_SUCCESS;
+}
+
+
 RTDECL(int) RTDirRename(const char *pszSrc, const char *pszDst, unsigned fRename)
 {
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszSrc), ("%p\n", pszSrc), VERR_INVALID_POINTER);
-    AssertMsgReturn(VALID_PTR(pszDst), ("%p\n", pszDst), VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSrc, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszDst, VERR_INVALID_POINTER);
     AssertMsgReturn(*pszSrc, ("%p\n", pszSrc), VERR_INVALID_PARAMETER);
     AssertMsgReturn(*pszDst, ("%p\n", pszDst), VERR_INVALID_PARAMETER);
     AssertMsgReturn(!(fRename & ~RTPATHRENAME_FLAGS_REPLACE), ("%#x\n", fRename), VERR_INVALID_PARAMETER);

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: macstr.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Command Line Parsing
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,7 @@
 
 #include <iprt/assert.h>
 #include <iprt/ctype.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/message.h>
 #include <iprt/string.h>
 
@@ -50,6 +50,27 @@
 RTDECL(int) RTNetStrToMacAddr(const char *pszValue, PRTMAC pAddr)
 {
     /*
+     * First check if it might be a 12 xdigit string without any separators.
+     */
+    size_t cchValue = strlen(pszValue);
+    if (cchValue >= 12 && memchr(pszValue, ':', 12) == NULL)
+    {
+        bool fOkay = true;
+        for (size_t off = 0; off < 12 && fOkay; off++)
+            fOkay = RT_C_IS_XDIGIT(pszValue[off]);
+        if (fOkay && cchValue > 12)
+            for (size_t off = 12; off < cchValue && fOkay; off++)
+                fOkay = RT_C_IS_SPACE(pszValue[off]);
+        if (fOkay)
+        {
+            int rc = RTStrConvertHexBytes(pszValue, pAddr, sizeof(*pAddr), 0);
+            if (RT_SUCCESS(rc))
+                rc = VINF_SUCCESS;
+            return rc;
+        }
+    }
+
+    /*
      * Not quite sure if I should accept stuff like "08::27:::1" here...
      * The code is accepting "::" patterns now, except for for the first
      * and last parts.
@@ -59,9 +80,9 @@ RTDECL(int) RTNetStrToMacAddr(const char *pszValue, PRTMAC pAddr)
     char *pszNext;
     int rc = RTStrToUInt8Ex(RTStrStripL(pszValue), &pszNext, 16, &pAddr->au8[0]);
     if (rc != VINF_SUCCESS && rc != VWRN_TRAILING_CHARS)
-        return VERR_GETOPT_INVALID_ARGUMENT_FORMAT;
+        return VERR_INVALID_PARAMETER;
     if (*pszNext++ != ':')
-        return VERR_GETOPT_INVALID_ARGUMENT_FORMAT;
+        return VERR_INVALID_PARAMETER;
 
     /* middle */
     for (unsigned i = 1; i < 5; i++)

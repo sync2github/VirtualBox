@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: dbgcfg.cpp 89971 2021-06-30 09:37:27Z vboxsync $ */
 /** @file
  * IPRT - Debugging Configuration.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -130,25 +130,6 @@ typedef struct RTDBGCFGU64MNEMONIC
 } RTDBGCFGU64MNEMONIC;
 /** Pointer to a read only mnemonic map entry for a uint64_t property. */
 typedef RTDBGCFGU64MNEMONIC const *PCRTDBGCFGU64MNEMONIC;
-
-
-/** @name Open flags.
- * @{ */
-/** The operative system mask.  The values are RT_OPSYS_XXX. */
-#define RTDBGCFG_O_OPSYS_MASK           UINT32_C(0x000000ff)
-/** The files may be compressed MS styled. */
-#define RTDBGCFG_O_MAYBE_COMPRESSED_MS  RT_BIT_32(26)
-/** Whether to make a recursive search. */
-#define RTDBGCFG_O_RECURSIVE            RT_BIT_32(27)
-/** We're looking for a separate debug file. */
-#define RTDBGCFG_O_EXT_DEBUG_FILE       RT_BIT_32(28)
-/** We're looking for an executable image. */
-#define RTDBGCFG_O_EXECUTABLE_IMAGE     RT_BIT_32(29)
-/** The file search should be done in an case insensitive fashion. */
-#define RTDBGCFG_O_CASE_INSENSITIVE     RT_BIT_32(30)
-/** Use Windbg style symbol servers when encountered in the path. */
-#define RTDBGCFG_O_SYMSRV               RT_BIT_32(31)
-/** @} */
 
 
 /*********************************************************************************************************************************
@@ -356,8 +337,8 @@ static bool rtDbgCfgIsXxxxAndFixCaseWorker(char *pszPath, size_t offLastComp, RT
     char chSaved = *pszName;
     *pszName = '\0';
 
-    PRTDIR pDir;
-    int rc = RTDirOpen(&pDir, pszPath);
+    RTDIR hDir;
+    int rc = RTDirOpen(&hDir, pszPath);
     if (RT_FAILURE(rc))
         return false;
 
@@ -372,7 +353,7 @@ static bool rtDbgCfgIsXxxxAndFixCaseWorker(char *pszPath, size_t offLastComp, RT
             uint8_t     ab[_4K];
         } u;
         size_t cbBuf = sizeof(u);
-        rc = RTDirRead(pDir, &u.Entry, &cbBuf);
+        rc = RTDirRead(hDir, &u.Entry, &cbBuf);
         if (RT_FAILURE(rc))
             break;
 
@@ -386,13 +367,13 @@ static bool rtDbgCfgIsXxxxAndFixCaseWorker(char *pszPath, size_t offLastComp, RT
                 RTDirQueryUnknownType(pszPath, true /*fFollowSymlinks*/, &u.Entry.enmType);
             if (u.Entry.enmType == enmType)
             {
-                RTDirClose(pDir);
+                RTDirClose(hDir);
                 return true;
             }
         }
     }
 
-    RTDirClose(pDir);
+    RTDirClose(hDir);
     *pszName = '\0';
 
     return false;
@@ -630,6 +611,7 @@ static int rtDbgCfgTryOpenDir(PRTDBGCFGINT pThis, char *pszPath, PRTPATHSPLIT pS
      * Do a recursive search if requested.
      */
     if (   (fFlags & RTDBGCFG_O_RECURSIVE)
+        && pThis
         && !(pThis->fFlags & RTDBGCFG_FLAGS_NO_RECURSIV_SEARCH) )
     {
         /** @todo Recursive searching will be done later. */
@@ -738,7 +720,6 @@ static int rtDbgCfgTryDownloadAndOpen(PRTDBGCFGINT pThis, const char *pszServer,
                                       PRTPATHSPLIT pSplitFn, const char *pszCacheSuffix, uint32_t fFlags,
                                       PFNRTDBGCFGOPEN pfnCallback, void *pvUser1, void *pvUser2)
 {
-#ifdef IPRT_WITH_HTTP
     RT_NOREF_PV(pszUuidMappingSubDir); /** @todo do we bother trying pszUuidMappingSubDir? */
     RT_NOREF_PV(pszCacheSuffix); /** @todo do we bother trying pszUuidMappingSubDir? */
     RT_NOREF_PV(fFlags);
@@ -746,6 +727,9 @@ static int rtDbgCfgTryDownloadAndOpen(PRTDBGCFGINT pThis, const char *pszServer,
     if (pThis->fFlags & RTDBGCFG_FLAGS_NO_SYM_SRV)
         return VWRN_NOT_FOUND;
     if (!pszCacheSubDir || !*pszCacheSubDir)
+        return VWRN_NOT_FOUND;
+    if (   !(fFlags & RTDBGCFG_O_SYMSRV)
+        && !(fFlags & RTDBGCFG_O_DEBUGINFOD))
         return VWRN_NOT_FOUND;
 
     /*
@@ -794,55 +778,115 @@ static int rtDbgCfgTryDownloadAndOpen(PRTDBGCFGINT pThis, const char *pszServer,
         return rc;
 
     /*
-     * Download the file.
+     * Download/copy the file.
      */
-    RTHTTP hHttp;
-    rc = RTHttpCreate(&hHttp);
-    if (RT_FAILURE(rc))
-        return rc;
-    RTHttpUseSystemProxySettings(hHttp);
-
-    static const char * const s_apszHeaders[] =
+    char szUrl[_2K];
+    /* Download URL? */
+    if (   RTStrIStartsWith(pszServer, "http://")
+        || RTStrIStartsWith(pszServer, "https://")
+        || RTStrIStartsWith(pszServer, "ftp://") )
     {
-        "User-Agent: Microsoft-Symbol-Server/6.6.0999.9",
-        "Pragma: no-cache",
-    };
-
-    rc = RTHttpSetHeaders(hHttp, RT_ELEMENTS(s_apszHeaders), s_apszHeaders);
-    if (RT_SUCCESS(rc))
-    {
-        char szUrl[_2K];
-        RTStrPrintf(szUrl, sizeof(szUrl), "%s/%s/%s/%s", pszServer, pszFilename, pszCacheSubDir, pszFilename);
-
-        /** @todo Use some temporary file name and rename it after the operation
-         *        since not all systems support read-deny file sharing
-         *        settings. */
-        rtDbgCfgLog2(pThis, "Downloading '%s' to '%s'...\n", szUrl, pszPath);
-        rc = RTHttpGetFile(hHttp, szUrl, pszPath);
-        if (RT_FAILURE(rc))
+#ifdef IPRT_WITH_HTTP
+        RTHTTP hHttp;
+        rc = RTHttpCreate(&hHttp);
+        if (RT_SUCCESS(rc))
         {
-            RTFileDelete(pszPath);
-            rtDbgCfgLog1(pThis, "%Rrc on URL '%s'\n", rc, szUrl);
-        }
-        if (rc == VERR_HTTP_NOT_FOUND)
-        {
-            /* Try the compressed version of the file. */
-            pszPath[strlen(pszPath) - 1] = '_';
-            szUrl[strlen(szUrl)     - 1] = '_';
-            rtDbgCfgLog2(pThis, "Downloading '%s' to '%s'...\n", szUrl, pszPath);
-            rc = RTHttpGetFile(hHttp, szUrl, pszPath);
-            if (RT_SUCCESS(rc))
-                rc = rtDbgCfgUnpackMsCacheFile(pThis, pszPath, pszFilename);
-            else
+            RTHttpUseSystemProxySettings(hHttp);
+            RTHttpSetFollowRedirects(hHttp, 8);
+
+            static const char * const s_apszHeadersMsSymSrv[] =
             {
-                rtDbgCfgLog1(pThis, "%Rrc on URL '%s'\n", rc, pszPath);
+                "User-Agent: Microsoft-Symbol-Server/6.6.0999.9",
+                "Pragma: no-cache",
+            };
+
+            static const char * const s_apszHeadersDebuginfod[] =
+            {
+                "User-Agent: IPRT DbgCfg 1.0",
+                "Pragma: no-cache",
+            };
+
+            if (fFlags & RTDBGCFG_O_SYMSRV)
+                rc = RTHttpSetHeaders(hHttp, RT_ELEMENTS(s_apszHeadersMsSymSrv), s_apszHeadersMsSymSrv);
+            else /* Must be debuginfod. */
+                rc = RTHttpSetHeaders(hHttp, RT_ELEMENTS(s_apszHeadersDebuginfod), s_apszHeadersDebuginfod);
+            if (RT_SUCCESS(rc))
+            {
+                if (fFlags & RTDBGCFG_O_SYMSRV)
+                    RTStrPrintf(szUrl, sizeof(szUrl), "%s/%s/%s/%s", pszServer, pszFilename, pszCacheSubDir, pszFilename);
+                else
+                    RTStrPrintf(szUrl, sizeof(szUrl), "%s/buildid/%s/debuginfo", pszServer, pszCacheSubDir);
+
+                /** @todo Use some temporary file name and rename it after the operation
+                 *        since not all systems support read-deny file sharing
+                 *        settings. */
+                rtDbgCfgLog2(pThis, "Downloading '%s' to '%s'...\n", szUrl, pszPath);
+                rc = RTHttpGetFile(hHttp, szUrl, pszPath);
+                if (RT_FAILURE(rc))
+                {
+                    RTFileDelete(pszPath);
+                    rtDbgCfgLog1(pThis, "%Rrc on URL '%s'\n", rc, szUrl);
+                }
+                if (   rc == VERR_HTTP_NOT_FOUND
+                    && (fFlags & RTDBGCFG_O_SYMSRV))
+                {
+                    /* Try the compressed version of the file. */
+                    pszPath[strlen(pszPath) - 1] = '_';
+                    szUrl[strlen(szUrl)     - 1] = '_';
+                    rtDbgCfgLog2(pThis, "Downloading '%s' to '%s'...\n", szUrl, pszPath);
+                    rc = RTHttpGetFile(hHttp, szUrl, pszPath);
+                    if (RT_SUCCESS(rc))
+                        rc = rtDbgCfgUnpackMsCacheFile(pThis, pszPath, pszFilename);
+                    else
+                    {
+                        rtDbgCfgLog1(pThis, "%Rrc on URL '%s'\n", rc, pszPath);
+                        RTFileDelete(pszPath);
+                    }
+                }
+            }
+
+            RTHttpDestroy(hHttp);
+        }
+#else
+        rc = VWRN_NOT_FOUND;
+#endif
+    }
+    /* No download, assume dir on server share. */
+    else
+    {
+        if (RTStrIStartsWith(pszServer, "file:///"))
+            pszServer += 4 + 1 + 3 - 1;
+
+        /* Compose the path to the uncompressed file on the server. */
+        rc = RTPathJoin(szUrl, sizeof(szUrl), pszServer, pszFilename);
+        if (RT_SUCCESS(rc))
+            rc = RTPathAppend(szUrl, sizeof(szUrl), pszCacheSubDir);
+        if (RT_SUCCESS(rc))
+            rc = RTPathAppend(szUrl, sizeof(szUrl), pszFilename);
+        if (RT_SUCCESS(rc))
+        {
+            rtDbgCfgLog2(pThis, "Copying '%s' to '%s'...\n", szUrl, pszPath);
+            rc = RTFileCopy(szUrl, pszPath);
+            if (RT_FAILURE(rc))
+            {
                 RTFileDelete(pszPath);
+                rtDbgCfgLog1(pThis, "%Rrc on '%s'\n", rc, szUrl);
+
+                /* Try the compressed version. */
+                pszPath[strlen(pszPath) - 1] = '_';
+                szUrl[strlen(szUrl)     - 1] = '_';
+                rtDbgCfgLog2(pThis, "Copying '%s' to '%s'...\n", szUrl, pszPath);
+                rc = RTFileCopy(szUrl, pszPath);
+                if (RT_SUCCESS(rc))
+                    rc = rtDbgCfgUnpackMsCacheFile(pThis, pszPath, pszFilename);
+                else
+                {
+                    rtDbgCfgLog1(pThis, "%Rrc on '%s'\n", rc, pszPath);
+                    RTFileDelete(pszPath);
+                }
             }
         }
     }
-
-    RTHttpDestroy(hHttp);
-
     if (RT_SUCCESS(rc))
     {
         /*
@@ -868,13 +912,6 @@ static int rtDbgCfgTryDownloadAndOpen(PRTDBGCFGINT pThis, const char *pszServer,
     }
 
     return rc;
-
-#else  /* !IPRT_WITH_HTTP */
-    RT_NOREF_PV(pThis); RT_NOREF_PV(pszServer); RT_NOREF_PV(pszPath); RT_NOREF_PV(pszCacheSubDir);
-    RT_NOREF_PV(pszUuidMappingSubDir); RT_NOREF_PV(pSplitFn); RT_NOREF_PV(pszCacheSuffix); RT_NOREF_PV(fFlags);
-    RT_NOREF_PV(pfnCallback); RT_NOREF_PV(pvUser1); RT_NOREF_PV(pvUser2);
-    return VWRN_NOT_FOUND;
-#endif /* !IPRT_WITH_HTTP */
 }
 
 
@@ -1167,15 +1204,16 @@ static int rtDbgCfgOpenWithSubDir(RTDBGCFG hDbgCfg, const char *pszFilename, con
     AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
     AssertPtrReturn(pszCacheSubDir, VERR_INVALID_POINTER);
     AssertPtrReturn(pfnCallback, VERR_INVALID_POINTER);
+    AssertReturn(!(fFlags & ~RTDBGCFG_O_VALID_MASK), VERR_INVALID_FLAGS);
 
     /*
      * Do some guessing as to the way we should parse the filename and whether
      * it's case exact or not.
      */
-    bool fDosPath = strchr(pszFilename, ':')  != NULL
-                 || strchr(pszFilename, '\\') != NULL
-                 || RT_OPSYS_USES_DOS_PATHS(fFlags & RTDBGCFG_O_OPSYS_MASK)
-                 || (fFlags & RTDBGCFG_O_CASE_INSENSITIVE);
+    bool fDosPath = RT_OPSYS_USES_DOS_PATHS(fFlags & RTDBGCFG_O_OPSYS_MASK)
+                 || (fFlags & RTDBGCFG_O_CASE_INSENSITIVE)
+                 || strchr(pszFilename, ':')  != NULL
+                 || strchr(pszFilename, '\\') != NULL;
     if (fDosPath)
         fFlags |= RTDBGCFG_O_CASE_INSENSITIVE;
 
@@ -1242,6 +1280,7 @@ static int rtDbgCfgOpenWithSubDir(RTDBGCFG hDbgCfg, const char *pszFilename, con
                 if (   rc2 != VINF_CALLBACK_RETURN
                     && rc2 != VERR_CALLBACK_RETURN
                     && (fFlags & RTDBGCFG_O_EXECUTABLE_IMAGE)
+                    && !(fFlags & RTDBGCFG_O_NO_SYSTEM_PATHS)
                     && !(pThis->fFlags & RTDBGCFG_FLAGS_NO_SYSTEM_PATHS) )
                 {
                     rc2 = rtDbgCfgTryOpenList(pThis, &pThis->NtExecutablePathList, pSplitFn, pszCacheSubDir,
@@ -1252,6 +1291,7 @@ static int rtDbgCfgOpenWithSubDir(RTDBGCFG hDbgCfg, const char *pszFilename, con
 
                 if (   rc2 != VINF_CALLBACK_RETURN
                     && rc2 != VERR_CALLBACK_RETURN
+                    && !(fFlags & RTDBGCFG_O_NO_SYSTEM_PATHS)
                     && !(pThis->fFlags & RTDBGCFG_FLAGS_NO_SYSTEM_PATHS) )
                 {
                     rc2 = rtDbgCfgTryOpenList(pThis, &pThis->NtSymbolPathList, pSplitFn, pszCacheSubDir,
@@ -1275,6 +1315,17 @@ static int rtDbgCfgOpenWithSubDir(RTDBGCFG hDbgCfg, const char *pszFilename, con
         rcRet = VERR_NOT_FOUND;
     return rcRet;
 }
+
+
+RTDECL(int) RTDbgCfgOpenEx(RTDBGCFG hDbgCfg, const char *pszFilename, const char *pszCacheSubDir,
+                           const char *pszUuidMappingSubDir, uint32_t fFlags,
+                           PFNRTDBGCFGOPEN pfnCallback, void *pvUser1, void *pvUser2)
+{
+    return rtDbgCfgOpenWithSubDir(hDbgCfg, pszFilename, pszCacheSubDir, pszUuidMappingSubDir, fFlags,
+                                  pfnCallback, pvUser1, pvUser2);
+}
+
+
 
 
 RTDECL(int) RTDbgCfgOpenPeImage(RTDBGCFG hDbgCfg, const char *pszFilename, uint32_t cbImage, uint32_t uTimestamp,
@@ -1352,6 +1403,23 @@ RTDECL(int) RTDbgCfgOpenDwo(RTDBGCFG hDbgCfg, const char *pszFilename, uint32_t 
     return rtDbgCfgOpenWithSubDir(hDbgCfg, pszFilename, szSubDir, NULL,
                                   RT_OPSYS_UNKNOWN | RTDBGCFG_O_EXT_DEBUG_FILE,
                                   pfnCallback, pvUser1, pvUser2);
+}
+
+
+RTDECL(int) RTDbgCfgOpenDwoBuildId(RTDBGCFG hDbgCfg, const char *pszFilename, const uint8_t *pbBuildId,
+                                   size_t cbBuildId, PFNRTDBGCFGOPEN pfnCallback, void *pvUser1, void *pvUser2)
+{
+    char *pszSubDir = NULL;
+    int rc = RTStrAPrintf(&pszSubDir, "%#.*Rhxs", cbBuildId, pbBuildId);
+    if (RT_SUCCESS(rc))
+    {
+        rc = rtDbgCfgOpenWithSubDir(hDbgCfg, pszFilename, pszSubDir, NULL,
+                                    RTDBGCFG_O_DEBUGINFOD | RT_OPSYS_UNKNOWN | RTDBGCFG_O_EXT_DEBUG_FILE,
+                                    pfnCallback, pvUser1, pvUser2);
+        RTStrFree(pszSubDir);
+    }
+
+    return rc;
 }
 
 
@@ -1877,6 +1945,7 @@ static int rtDbgCfgChangeStringList(PRTDBGCFGINT pThis, RTDBGCFGOP enmOp, const 
     if (enmOp == RTDBGCFGOP_SET)
         rtDbgCfgFreeStrList(pList);
 
+    PRTLISTNODE pPrependTo = pList;
     while (*pszValue)
     {
         /* Skip separators. */
@@ -1916,7 +1985,7 @@ static int rtDbgCfgChangeStringList(PRTDBGCFGINT pThis, RTDBGCFGOP enmOp, const 
             /*
              * We're adding a new one.
              */
-            PRTDBGCFGSTR pNew = (PRTDBGCFGSTR)RTMemAlloc(RT_OFFSETOF(RTDBGCFGSTR, sz[cchPath + 1]));
+            PRTDBGCFGSTR pNew = (PRTDBGCFGSTR)RTMemAlloc(RT_UOFFSETOF_DYN(RTDBGCFGSTR, sz[cchPath + 1]));
             if (!pNew)
                 return VERR_NO_MEMORY;
             pNew->cch = (uint16_t)cchPath;
@@ -1925,7 +1994,10 @@ static int rtDbgCfgChangeStringList(PRTDBGCFGINT pThis, RTDBGCFGOP enmOp, const 
             pNew->sz[cchPath] = '\0';
 
             if (enmOp == RTDBGCFGOP_PREPEND)
-                RTListPrepend(pList, &pNew->ListEntry);
+            {
+                RTListNodeInsertAfter(pPrependTo, &pNew->ListEntry);
+                pPrependTo = &pNew->ListEntry;
+            }
             else
                 RTListAppend(pList, &pNew->ListEntry);
         }

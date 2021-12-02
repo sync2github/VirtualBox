@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_zip_h
-#define ___iprt_zip_h
+#ifndef IPRT_INCLUDED_zip_h
+#define IPRT_INCLUDED_zip_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -46,7 +49,7 @@ RT_C_DECLS_BEGIN
  * @param   pvBuf       Compressed data.
  * @param   cbBuf       Size of the compressed data.
  */
-typedef DECLCALLBACK(int) FNRTZIPOUT(void *pvUser, const void *pvBuf, size_t cbBuf);
+typedef DECLCALLBACKTYPE(int, FNRTZIPOUT,(void *pvUser, const void *pvBuf, size_t cbBuf));
 /** Pointer to FNRTZIPOUT() function. */
 typedef FNRTZIPOUT *PFNRTZIPOUT;
 
@@ -59,7 +62,7 @@ typedef FNRTZIPOUT *PFNRTZIPOUT;
  * @param   cbBuf       Size of the buffer.
  * @param   pcbBuf      Number of bytes actually stored in the buffer.
  */
-typedef DECLCALLBACK(int) FNRTZIPIN(void *pvUser, void *pvBuf, size_t cbBuf, size_t *pcbBuf);
+typedef DECLCALLBACKTYPE(int, FNRTZIPIN,(void *pvUser, void *pvBuf, size_t cbBuf, size_t *pcbBuf));
 /** Pointer to FNRTZIPIN() function. */
 typedef FNRTZIPIN *PFNRTZIPIN;
 
@@ -254,19 +257,181 @@ RTDECL(int) RTZipGzipDecompressIoStream(RTVFSIOSTREAM hVfsIosIn, uint32_t fFlags
 RTDECL(int) RTZipGzipCompressIoStream(RTVFSIOSTREAM hVfsIosDst, uint32_t fFlags, uint8_t uLevel, PRTVFSIOSTREAM phVfsIosGzip);
 
 /**
+ * A mini GZIP program.
+ *
+ * @returns Program exit code.
+ *
+ * @param   cArgs               The number of arguments.
+ * @param   papszArgs           The argument vector.  (Note that this may be
+ *                              reordered, so the memory must be writable.)
+ */
+RTDECL(RTEXITCODE) RTZipGzipCmd(unsigned cArgs, char **papszArgs);
+
+/**
  * Opens a TAR filesystem stream.
  *
  * This is used to extract, list or check a TAR archive.
  *
  * @returns IPRT status code.
  *
- * @param   hVfsIosIn           The compressed input stream.  The reference is
- *                              not consumed, instead another one is retained.
+ * @param   hVfsIosIn           The input stream.  The reference is not
+ *                              consumed, instead another one is retained.
  * @param   fFlags              Flags, MBZ.
  * @param   phVfsFss            Where to return the handle to the TAR
  *                              filesystem stream.
  */
 RTDECL(int) RTZipTarFsStreamFromIoStream(RTVFSIOSTREAM hVfsIosIn, uint32_t fFlags, PRTVFSFSSTREAM phVfsFss);
+
+/** TAR format type. */
+typedef enum RTZIPTARFORMAT
+{
+    /** Customary invalid zero value. */
+    RTZIPTARFORMAT_INVALID = 0,
+    /** Default format (GNU). */
+    RTZIPTARFORMAT_DEFAULT,
+    /** The GNU format. */
+    RTZIPTARFORMAT_GNU,
+    /** USTAR format from POSIX.1-1988. */
+    RTZIPTARFORMAT_USTAR,
+    /** PAX format from POSIX.1-2001. */
+    RTZIPTARFORMAT_PAX,
+    /** End of valid formats. */
+    RTZIPTARFORMAT_END,
+    /** Make sure the type is at least 32 bits wide. */
+    RTZIPTARFORMAT_32BIT_HACK = 0x7fffffff
+} RTZIPTARFORMAT;
+
+/**
+ * Opens a TAR filesystem stream for the purpose of create a new TAR archive.
+ *
+ * @returns IPRT status code.
+ *
+ * @param   hVfsIosOut          The output stream, i.e. where the tar stuff is
+ *                              written.  The reference is not consumed, instead
+ *                              another one is retained.
+ * @param   enmFormat           The desired output format.
+ * @param   fFlags              RTZIPTAR_C_XXX, except RTZIPTAR_C_UPDATE.
+ * @param   phVfsFss            Where to return the handle to the TAR
+ *                              filesystem stream.
+ */
+RTDECL(int) RTZipTarFsStreamToIoStream(RTVFSIOSTREAM hVfsIosOut, RTZIPTARFORMAT enmFormat,
+                                       uint32_t fFlags, PRTVFSFSSTREAM phVfsFss);
+
+/** @name RTZIPTAR_C_XXX - TAR creation flags (RTZipTarFsStreamToIoStream).
+ * @{ */
+/** Check for sparse files.
+ * @note Only supported when adding file objects.  The files will be read
+ *       twice. */
+#define RTZIPTAR_C_SPARSE           RT_BIT_32(0)
+/** Set if opening for updating. */
+#define RTZIPTAR_C_UPDATE           RT_BIT_32(1)
+/** Valid bits. */
+#define RTZIPTAR_C_VALID_MASK       UINT32_C(0x00000003)
+/** @} */
+
+/**
+ * Opens a TAR filesystem stream for the purpose of create a new TAR archive or
+ * updating an existing one.
+ *
+ * @returns IPRT status code.
+ *
+ * @param   hVfsFile            The TAR file handle, i.e. where the tar stuff is
+ *                              written and optionally read/update.  The
+ *                              reference is not consumed, instead another one
+ *                              is retained.
+ * @param   enmFormat           The desired output format.
+ * @param   fFlags              RTZIPTAR_C_XXX.
+ * @param   phVfsFss            Where to return the handle to the TAR
+ *                              filesystem stream.
+ */
+RTDECL(int) RTZipTarFsStreamForFile(RTVFSFILE hVfsFile, RTZIPTARFORMAT enmFormat, uint32_t fFlags, PRTVFSFSSTREAM phVfsFss);
+
+/**
+ * Set the owner to store the archive entries with.
+ *
+ * @returns IPRT status code.
+ * @param   hVfsFss             The handle to a TAR creator.
+ * @param   uid                 The UID value to set.  Passing NIL_RTUID makes
+ *                              it use the value found in RTFSOBJINFO.
+ * @param   pszOwner            The owner name to store.  Passing NULL makes it
+ *                              use the value found in RTFSOBJINFO.
+ */
+RTDECL(int) RTZipTarFsStreamSetOwner(RTVFSFSSTREAM hVfsFss, RTUID uid, const char *pszOwner);
+
+/**
+ * Set the group to store the archive entries with.
+ *
+ * @returns IPRT status code.
+ * @param   hVfsFss             The handle to a TAR creator.
+ * @param   gid                 The GID value to set.  Passing NIL_RTUID makes
+ *                              it use the value found in RTFSOBJINFO.
+ * @param   pszGroup            The group name to store.  Passing NULL makes it
+ *                              use the value found in RTFSOBJINFO.
+ */
+RTDECL(int) RTZipTarFsStreamSetGroup(RTVFSFSSTREAM hVfsFss, RTGID gid, const char *pszGroup);
+
+/**
+ * Set path prefix to store the archive entries with.
+ *
+ * @returns IPRT status code.
+ * @param   hVfsFss             The handle to a TAR creator.
+ * @param   pszPrefix           The path prefix to join the names with.  Pass
+ *                              NULL for no prefix.
+ */
+RTDECL(int) RTZipTarFsStreamSetPrefix(RTVFSFSSTREAM hVfsFss, const char *pszPrefix);
+
+/**
+ * Set the AND and OR masks to apply to file (non-dir) modes in the archive.
+ *
+ * @returns IPRT status code.
+ * @param   hVfsFss             The handle to a TAR creator.
+ * @param   fAndMode            The bits to keep
+ * @param   fOrMode             The bits to set.
+ */
+RTDECL(int) RTZipTarFsStreamSetFileMode(RTVFSFSSTREAM hVfsFss, RTFMODE fAndMode, RTFMODE fOrMode);
+
+/**
+ * Set the AND and OR masks to apply to directory modes in the archive.
+ *
+ * @returns IPRT status code.
+ * @param   hVfsFss             The handle to a TAR creator.
+ * @param   fAndMode            The bits to keep
+ * @param   fOrMode             The bits to set.
+ */
+RTDECL(int) RTZipTarFsStreamSetDirMode(RTVFSFSSTREAM hVfsFss, RTFMODE fAndMode, RTFMODE fOrMode);
+
+/**
+ * Set the modification time to store the archive entires with.
+ *
+ * @returns IPRT status code.
+ * @param   hVfsFss             The handle to a TAR creator.
+ * @param   pModificationTime   The modification time to use.  Pass NULL to use
+ *                              the value found in RTFSOBJINFO.
+ */
+RTDECL(int) RTZipTarFsStreamSetMTime(RTVFSFSSTREAM hVfsFss, PCRTTIMESPEC pModificationTime);
+
+/**
+ * Truncates a TAR creator stream in update mode.
+ *
+ * Use RTVfsFsStrmNext to examine the TAR stream and locate the cut-off point.
+ *
+ * After performing this call, the stream will be in write mode and
+ * RTVfsFsStrmNext will stop working (VERR_WRONG_ORDER).   The RTVfsFsStrmAdd()
+ * and RTVfsFsStrmPushFile() can be used to add new object to the TAR file,
+ * starting at the trunction point.  RTVfsFsStrmEnd() is used to finish the TAR
+ * file (this performs the actual file trunction).
+ *
+ * @returns IPRT status code.
+ * @param   hVfsFss             The handle to a TAR creator in update mode.
+ * @param   hVfsObj             Object returned by RTVfsFsStrmNext that the
+ *                              trunction is relative to.  This doesn't have to
+ *                              be the current stream object, it can be an
+ *                              earlier one too.
+ * @param   fAfter              If set, @a hVfsObj will remain in the update TAR
+ *                              file.  If clear, @a hVfsObj will not be
+ *                              included.
+ */
+RTDECL(int) RTZipTarFsStreamTruncate(RTVFSFSSTREAM hVfsFss, RTVFSOBJ hVfsObj, bool fAfter);
 
 /**
  * A mini TAR program.
@@ -335,9 +500,24 @@ RTDECL(int) RTZipPkzipMemDecompress(void **ppvDst, size_t *pcbDst, const void *p
  */
 RTDECL(int) RTZipXarFsStreamFromIoStream(RTVFSIOSTREAM hVfsIosIn, uint32_t fFlags, PRTVFSFSSTREAM phVfsFss);
 
+/**
+ * Opens a CPIO filesystem stream.
+ *
+ * This is used to extract, list or check a CPIO archive.
+ *
+ * @returns IPRT status code.
+ *
+ * @param   hVfsIosIn           The input stream.  The reference is not
+ *                              consumed, instead another one is retained.
+ * @param   fFlags              Flags, MBZ.
+ * @param   phVfsFss            Where to return the handle to the CPIO
+ *                              filesystem stream.
+ */
+RTDECL(int) RTZipCpioFsStreamFromIoStream(RTVFSIOSTREAM hVfsIosIn, uint32_t fFlags, PRTVFSFSSTREAM phVfsFss);
+
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_zip_h */
 

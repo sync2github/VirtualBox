@@ -1,18 +1,19 @@
-;;
-;; Copyright (C) 2006-2016 Oracle Corporation
-;;
-;; This file is part of VirtualBox Open Source Edition (OSE), as
-;; available from http://www.virtualbox.org. This file is free software;
-;; you can redistribute it and/or modify it under the terms of the GNU
-;; General Public License (GPL) as published by the Free Software
-;; Foundation, in version 2 as it comes in the "COPYING" file of the
-;; VirtualBox OSE distribution. VirtualBox OSE is distributed in the
-;; hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
-;;
-;; --------------------------------------------------------------------
-;;
-;; Protected-mode APM implementation.
-;;
+; $Id:
+;; @file
+; Protected-mode APM implementation.
+;
+
+;
+; Copyright (C) 2006-2020 Oracle Corporation
+;
+; This file is part of VirtualBox Open Source Edition (OSE), as
+; available from http://www.virtualbox.org. This file is free software;
+; you can redistribute it and/or modify it under the terms of the GNU
+; General Public License (GPL) as published by the Free Software
+; Foundation, in version 2 as it comes in the "COPYING" file of the
+; VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+; hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+;
 
 
 include commondefs.inc
@@ -70,6 +71,16 @@ apmf_disconnect:			; function 04h
 		jmp	apmw_success
 
 apmf_idle:				; function 05h
+                ;
+                ; Windows 3.1 POWER.DRV in Standard mode calls into APM
+                ; with CPL=3. If that happens, the HLT instruction will fault
+                ; and Windows will crash. To prevent that, we check the CPL
+                ; and do nothing (better than crashing).
+                ;
+                push    cs
+                pop     ax
+                test    ax, 3           ; CPL > 0?
+                jnz     apmw_success
 		sti
 		hlt
 		jmp	apmw_success
@@ -133,7 +144,7 @@ apm_worker	endp
 apm_pm16_entry:
 
 		mov	ah, 2		; mark as originating in 16-bit PM
-		
+
 					; fall through
 
 apm_pm16_entry_from_32:
@@ -156,6 +167,8 @@ apm_pm16_entry_from_32:
 
 _TEXT		ends
 
+
+if VBOX_BIOS_CPU ge 80386
 
 .386
 
@@ -200,5 +213,7 @@ apm_pm32_back:				; return here from 16-bit code
 		retf
 
 BIOS32		ends
+
+endif		; 32-bit code
 
 		end

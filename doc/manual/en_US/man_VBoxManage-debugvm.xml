@@ -2,7 +2,7 @@
 <!--
     manpage, user manual, usage: VBoxManage debugvm
 
-    Copyright (C) 2006-2015 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -12,11 +12,11 @@
     VirtualBox OSE distribution. VirtualBox OSE is distributed in the
     hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  -->
-<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN" "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN" "http://www.oasis-open.org/docbook/xml/4.5/docbookx.dtd">
 <refentry id="vboxmanage-debugvm" lang="en">
 
   <refentryinfo>
-    <pubdate>$Date$</pubdate>
+    <pubdate>$Date: 2021-06-26 02:35:48 +0800 (Sat, 26 Jun 2021) $</pubdate>
     <title>VBoxManage debugvm</title>
   </refentryinfo>
 
@@ -99,7 +99,7 @@
       <arg choice="req"><replaceable>uuid|vmname</replaceable></arg>
       <arg choice="plain">setregisters</arg>
       <arg>--cpu=<replaceable>id</replaceable></arg>
-      <arg rep="repeat"><replaceable>reg-set.reg-name=value</replaceable></arg>
+      <arg rep="repeat"><replaceable>reg-set.reg-name</replaceable>=<replaceable>value</replaceable></arg>
     </cmdsynopsis>
     <cmdsynopsis id="synopsis-vboxmanage-debugvm-show">
       <command>VBoxManage debugvm</command>
@@ -122,13 +122,21 @@
       <arg>--descriptions</arg>
       <arg>--pattern=<replaceable>pattern</replaceable></arg>
     </cmdsynopsis>
+    <cmdsynopsis id="synopsis-vboxmanage-debugvm-guestsample">
+      <command>VBoxManage debugvm</command>
+      <arg choice="req"><replaceable>uuid|vmname</replaceable></arg>
+      <arg choice="plain">guestsample</arg>
+      <arg>--filename=<replaceable>filename</replaceable></arg>
+      <arg>--sample-interval-us=<replaceable>interval</replaceable></arg>
+      <arg>--sample-time-us=<replaceable>time</replaceable></arg>
+    </cmdsynopsis>
   </refsynopsisdiv>
   <refsect1>
     <title>Description</title>
 
     <para>The "debugvm" commands are for experts who want to tinker with the
-      exact details of virtual machine execution.  Like the VM debugger<remark role="help-manual">
-      described in <xref linkend="ts_debugger" /></remark>, these commands are only useful if you are
+      exact details of virtual machine execution.  Like the VM debugger
+      described in <xref linkend="ts_debugger" />, these commands are only useful if you are
       very familiar with the details of the PC architecture and how to debug
       software.</para>
 
@@ -150,8 +158,8 @@
       <remark role="help-copy-synopsis"/>
       <para>
         Creates a system dump file of the specified VM.  This file will have
-        the standard ELF core format (with custom sections)<remark role="help-manual">; see
-        <xref linkend="ts_guest-core-format" /></remark>.
+        the standard ELF core format (with custom sections); see
+        <xref linkend="ts_guest-core-format" />.
       </para>
       <para>
         This corresponds to the <command>writecore</command> command in the debugger.
@@ -176,7 +184,7 @@
       </para>
       <variablelist>
         <varlistentry>
-          <term><replaceable>info</replaceable></term>
+          <term><replaceable>item</replaceable></term>
           <listitem>
             <para>Name of the info item to display.  The special name
             <option>help</option> will list all the available info items and
@@ -609,8 +617,36 @@
 
     </refsect2>
 
+    <refsect2 id="vboxmanage-debugvm-guestsample">
+      <title>debugvm guestsample</title>
+      <remark role="help-copy-synopsis"/>
+      <para>
+        Creates a sample report of the guest activity.
+      </para>
+      <para>
+        Retrieves the filename to dump the report to.
+      </para>
+      <variablelist>
+        <varlistentry>
+          <term><option>--filename=<replaceable>filename</replaceable></option></term>
+          <listitem><para>The filename to dump the sample report to.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><option>--sample-interval-us=<replaceable>interval</replaceable></option></term>
+          <listitem><para>The interval in microseconds between guest samples.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><option>--sample-time-us=<replaceable>time</replaceable></option></term>
+          <listitem><para>The amount of microseconds to take guest samples.</para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+
+    </refsect2>
+
   </refsect1>
 
 </refentry>
-
 

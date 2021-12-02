@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMThread.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * PDM Thread - VM Thread Management.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -185,7 +185,7 @@ static int pdmR3ThreadInit(PVM pVM, PPPDMTHREAD ppThread, size_t cbStack, RTTHRE
         RTSemEventMultiDestroy(pThread->Internal.s.BlockEvent);
         pThread->Internal.s.BlockEvent = NIL_RTSEMEVENTMULTI;
     }
-    MMHyperFree(pVM, pThread);
+    MMR3HeapFree(pThread);
     *ppThread = NULL;
 
     return rc;
@@ -984,7 +984,10 @@ int pdmR3ThreadSuspendAll(PVM pVM)
             case PDMTHREADSTATE_RUNNING:
             {
                 int rc = PDMR3ThreadSuspend(pThread);
-                AssertRCReturn(rc, rc);
+                AssertLogRelMsgReturnStmt(RT_SUCCESS(rc),
+                                          ("PDMR3ThreadSuspend -> %Rrc for '%s'\n", rc, RTThreadGetName(pThread->Thread)),
+                                          RTCritSectLeave(&pUVM->pdm.s.ListCritSect),
+                                          rc);
                 break;
             }
 

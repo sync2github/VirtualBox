@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_intnet_h
-#define ___VBox_intnet_h
+#ifndef VBOX_INCLUDED_intnet_h
+#define VBOX_INCLUDED_intnet_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <VBox/vmm/stam.h>
@@ -169,10 +172,10 @@ typedef INTNETBUF const *PCINTNETBUF;
         AssertPtr(pBuf); \
         Assert((pBuf)->u32Magic == INTNETBUF_MAGIC); \
         { \
-            uint32_t const offRecvStart = (pBuf)->Recv.offStart + RT_OFFSETOF(INTNETBUF, Recv); \
-            uint32_t const offRecvEnd   = (pBuf)->Recv.offStart + RT_OFFSETOF(INTNETBUF, Recv); \
-            uint32_t const offSendStart = (pBuf)->Send.offStart + RT_OFFSETOF(INTNETBUF, Send); \
-            uint32_t const offSendEnd   = (pBuf)->Send.offStart + RT_OFFSETOF(INTNETBUF, Send); \
+            uint32_t const offRecvStart = (pBuf)->Recv.offStart + RT_UOFFSETOF(INTNETBUF, Recv); \
+            uint32_t const offRecvEnd   = (pBuf)->Recv.offStart + RT_UOFFSETOF(INTNETBUF, Recv); \
+            uint32_t const offSendStart = (pBuf)->Send.offStart + RT_UOFFSETOF(INTNETBUF, Send); \
+            uint32_t const offSendEnd   = (pBuf)->Send.offStart + RT_UOFFSETOF(INTNETBUF, Send); \
             \
             Assert(offRecvEnd > offRecvStart); \
             Assert(offRecvEnd - offRecvStart == (pBuf)->cbRecv); \
@@ -416,7 +419,7 @@ typedef struct INTNETTRUNKIFPORT *PINTNETTRUNKIFPORT;
  *
  * @param   pIfPort     Pointer to the INTNETTRUNKIFPORT instance.
  */
-typedef DECLCALLBACK(void) FNINTNETTRUNKIFPORTRELEASEBUSY(PINTNETTRUNKIFPORT pIfPort);
+typedef DECLCALLBACKTYPE(void, FNINTNETTRUNKIFPORTRELEASEBUSY,(PINTNETTRUNKIFPORT pIfPort));
 /** Pointer to a FNINTNETTRUNKIFPORTRELEASEBUSY function. */
 typedef FNINTNETTRUNKIFPORTRELEASEBUSY *PFNINTNETTRUNKIFPORTRELEASEBUSY;
 
@@ -1299,4 +1302,4 @@ INTNETR0DECL(int)       IntNetR0IfAbortWait(INTNETIFHANDLE hIf, PSUPDRVSESSION p
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_intnet_h */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIInformationRuntime.h 85891 2020-08-26 16:56:11Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIInformationRuntime class declaration.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,27 +15,33 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIInformationRuntime_h___
-#define ___UIInformationRuntime_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_information_UIInformationRuntime_h
+#define FEQT_INCLUDED_SRC_runtime_information_UIInformationRuntime_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QWidget>
-#include <QListView>
 
 /* COM includes: */
 #include "COMEnums.h"
-#include "CMachine.h"
 #include "CConsole.h"
+#include "CGuest.h"
+#include "CMachine.h"
 
-/* Forward declartions: */
-class UIVMItem;
+/* GUI includes: */
+#include "QIWithRetranslateUI.h"
+
+/* Forward declarations: */
+class QAction;
 class QVBoxLayout;
-class UIInformationView;
-class UIInformationModel;
+class UISession;
+class UIRuntimeInfoWidget;
 
-/** QWidget extension
-  * providing GUI with configuration-information tab in session-information window. */
-class UIInformationRuntime : public QWidget
+/** UIInformationRuntime class displays a table including some
+  * run time attributes. */
+class UIInformationRuntime : public QIWithRetranslateUI<QWidget>
 {
     Q_OBJECT;
 
@@ -44,30 +50,37 @@ public:
     /** Constructs information-tab passing @a pParent to the QWidget base-class constructor.
       * @param machine is machine reference.
       * @param console is machine console reference. */
-    UIInformationRuntime(QWidget *pParent, const CMachine &machine, const CConsole &console);
+    UIInformationRuntime(QWidget *pParent, const CMachine &machine, const CConsole &console, const UISession *pSession);
+
+protected:
+
+    void retranslateUi();
+
+private slots:
+
+    /** @name These functions are connected to API events and implement necessary updates on the table.
+      * @{ */
+        void sltGuestAdditionsStateChange();
+        void sltGuestMonitorChange(KGuestMonitorChangedEventType changeType, ulong uScreenId, QRect screenGeo);
+        void sltVRDEChange();
+        void sltClipboardChange(KClipboardMode enmMode);
+        void sltDnDModeChange(KDnDMode enmMode);
+    /** @} */
+    void sltHandleTableContextMenuRequest(const QPoint &position);
+    void sltHandleCopyWholeTable();
 
 private:
 
-    /** Prepares main-layout. */
-    void prepareLayout();
+    void prepareObjects();
 
-    /** Prepares model. */
-    void prepareModel();
-
-    /** Prepares view. */
-    void prepareView();
-
-    /** Holds the machine instance. */
     CMachine m_machine;
-    /** Holds the console instance. */
     CConsole m_console;
-    /** Holds the instance of main-layout we create. */
+    CGuest m_comGuest;
+
+    /** Holds the instance of layout we create. */
     QVBoxLayout *m_pMainLayout;
-    /** Holds the instance of model we create. */
-    UIInformationModel *m_pModel;
-    /** Holds the instance of view we create. */
-    UIInformationView *m_pView;
+    UIRuntimeInfoWidget *m_pRuntimeInfoWidget;
+    QAction *m_pCopyWholeTableAction;
 };
 
-#endif /* !___UIInformationRuntime_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_runtime_information_UIInformationRuntime_h */

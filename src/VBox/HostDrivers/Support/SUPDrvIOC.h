@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPDrvIOC.h 92251 2021-11-06 15:59:09Z vboxsync $ */
 /** @file
  * VirtualBox Support Driver - IOCtl definitions.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,12 +24,12 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___SUPDrvIOC_h___
-#define ___SUPDrvIOC_h___
+#ifndef VBOX_INCLUDED_SRC_Support_SUPDrvIOC_h
+#define VBOX_INCLUDED_SRC_Support_SUPDrvIOC_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/*
- * Basic types.
- */
 #include <iprt/types.h>
 #include <VBox/sup.h>
 
@@ -39,9 +39,9 @@
  * The SUP_IOCTL_FLAG macro is used to separate requests from 32-bit
  * and 64-bit processes.
  */
-#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_SPARC64)
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_SPARC64) || defined(RT_ARCH_ARM64)
 # define SUP_IOCTL_FLAG     128
-#elif defined(RT_ARCH_X86) || defined(RT_ARCH_SPARC)
+#elif defined(RT_ARCH_X86) || defined(RT_ARCH_SPARC)   || defined(RT_ARCH_ARM32)
 # define SUP_IOCTL_FLAG     0
 #else
 # error "dunno which arch this is!"
@@ -80,7 +80,7 @@
 # define SUP_CTL_CODE_SIZE(Function, Size)      _IOWRN('V', (Function) | SUP_IOCTL_FLAG, sizeof(SUPREQHDR))
 # define SUP_CTL_CODE_BIG(Function)             _IOWRN('V', (Function) | SUP_IOCTL_FLAG, sizeof(SUPREQHDR))
 # define SUP_CTL_CODE_FAST(Function)            _IO(   'V', (Function) | SUP_IOCTL_FLAG)
-# define SUP_CTL_CODE_NO_SIZE(uIOCtl)           (uIOCtl)
+# define SUP_CTL_CODE_NO_SIZE(uIOCtl)           ((uintptr_t)(uIOCtl))
 
 #elif defined(RT_OS_OS2)
   /* No automatic buffering, size not encoded. */
@@ -115,12 +115,20 @@
 # define SUP_CTL_CODE_NO_SIZE(uIOCtl)           ( (uIOCtl) & ~_IOC(0,0,0,IOCPARM_MASK) )
 #endif
 
-/** Fast path IOCtl: VMMR0_DO_RAW_RUN */
-#define SUP_IOCTL_FAST_DO_RAW_RUN               SUP_CTL_CODE_FAST(64)
+/** @name Fast path I/O control codes.
+ * @note These must run parallel to SUP_VMMR0_DO_XXX
+ * @note Implementations ASSUMES up to 32 I/O controls codes in the fast range.
+ * @{ */
 /** Fast path IOCtl: VMMR0_DO_HM_RUN */
-#define SUP_IOCTL_FAST_DO_HM_RUN                SUP_CTL_CODE_FAST(65)
+#define SUP_IOCTL_FAST_DO_HM_RUN                SUP_CTL_CODE_FAST(64)
+/** Fast path IOCtl: VMMR0_DO_NEM_RUN */
+#define SUP_IOCTL_FAST_DO_NEM_RUN               SUP_CTL_CODE_FAST(65)
 /** Just a NOP call for profiling the latency of a fast ioctl call to VMMR0. */
 #define SUP_IOCTL_FAST_DO_NOP                   SUP_CTL_CODE_FAST(66)
+/** First fast path IOCtl number. */
+#define SUP_IOCTL_FAST_DO_FIRST                 SUP_IOCTL_FAST_DO_HM_RUN
+/** @} */
+
 
 #ifdef RT_OS_DARWIN
 /** Cookie used to fend off some unwanted clients to the IOService.  */
@@ -133,7 +141,7 @@
 *******************************************************************************/
 #ifdef RT_ARCH_AMD64
 # pragma pack(8)                        /* paranoia. */
-#else
+#elif defined(RT_ARCH_X86)
 # pragma pack(4)                        /* paranoia. */
 #endif
 
@@ -212,9 +220,9 @@ typedef SUPREQHDR *PSUPREQHDR;
  *  -# When increment the major number, execute all pending work.
  *
  * @todo Pending work on next major version change:
- *          - nothing.
+ *          - nothing
  */
-#define SUPDRV_IOC_VERSION                              0x00280000
+#define SUPDRV_IOC_VERSION                              0x00330002
 
 /** SUP_IOCTL_COOKIE. */
 typedef struct SUPCOOKIE
@@ -259,7 +267,7 @@ typedef struct SUPCOOKIE
  * @{
  */
 #define SUP_IOCTL_QUERY_FUNCS(cFuncs)                   SUP_CTL_CODE_BIG(2)
-#define SUP_IOCTL_QUERY_FUNCS_SIZE(cFuncs)              RT_UOFFSETOF(SUPQUERYFUNCS, u.Out.aFunctions[(cFuncs)])
+#define SUP_IOCTL_QUERY_FUNCS_SIZE(cFuncs)              RT_UOFFSETOF_DYN(SUPQUERYFUNCS, u.Out.aFunctions[(cFuncs)])
 #define SUP_IOCTL_QUERY_FUNCS_SIZE_IN                   sizeof(SUPREQHDR)
 #define SUP_IOCTL_QUERY_FUNCS_SIZE_OUT(cFuncs)          SUP_IOCTL_QUERY_FUNCS_SIZE(cFuncs)
 
@@ -267,7 +275,9 @@ typedef struct SUPCOOKIE
 typedef struct SUPFUNC
 {
     /** Name - mangled. */
-    char            szName[32];
+    char            szName[47];
+    /** For internal checking. Ignore. */
+    uint8_t         cArgs;
     /** Address. */
     RTR0PTR         pfn;
 } SUPFUNC, *PSUPFUNC;
@@ -306,9 +316,12 @@ typedef struct SUPLDROPEN
     {
         struct
         {
-            /** Size of the image we'll be loading (including tables). */
-            uint32_t        cbImageWithTabs;
-            /** The size of the image bits. (Less or equal to cbImageWithTabs.) */
+            /** Size of the image we'll be loading (including all tables).
+             * Zero if the caller does not wish to prepare loading anything, then
+             * cbImageBits must be zero too ofc. */
+            uint32_t        cbImageWithEverything;
+            /** The size of the image bits. (Less or equal to cbImageWithTabs.)
+             * Zero if the caller does not wish to prepare loading anything. */
             uint32_t        cbImageBits;
             /** Image name.
              * This is the NAME of the image, not the file name. It is used
@@ -337,8 +350,8 @@ typedef struct SUPLDROPEN
  * @{
  */
 #define SUP_IOCTL_LDR_LOAD                              SUP_CTL_CODE_BIG(4)
-#define SUP_IOCTL_LDR_LOAD_SIZE(cbImage)                RT_MAX(RT_UOFFSETOF(SUPLDRLOAD, u.In.abImage[cbImage]), SUP_IOCTL_LDR_LOAD_SIZE_OUT)
-#define SUP_IOCTL_LDR_LOAD_SIZE_IN(cbImage)             RT_UOFFSETOF(SUPLDRLOAD, u.In.abImage[cbImage])
+#define SUP_IOCTL_LDR_LOAD_SIZE(cbImage)                RT_MAX(RT_UOFFSETOF_DYN(SUPLDRLOAD, u.In.abImage[cbImage]), SUP_IOCTL_LDR_LOAD_SIZE_OUT)
+#define SUP_IOCTL_LDR_LOAD_SIZE_IN(cbImage)             RT_UOFFSETOF_DYN(SUPLDRLOAD, u.In.abImage[cbImage])
 #define SUP_IOCTL_LDR_LOAD_SIZE_OUT                     (RT_UOFFSETOF(SUPLDRLOAD, u.Out.szError) + RT_SIZEOFMEMB(SUPLDRLOAD, u.Out.szError))
 
 /**
@@ -349,7 +362,7 @@ typedef struct SUPLDROPEN
  * @returns Appropriate error code on failure.
  * @param   hMod        Image handle for use in APIs.
  */
-typedef DECLCALLBACK(int) FNR0MODULEINIT(void *hMod);
+typedef DECLCALLBACKTYPE(int, FNR0MODULEINIT,(void *hMod));
 /** Pointer to a FNR0MODULEINIT(). */
 typedef R0PTRTYPE(FNR0MODULEINIT *) PFNR0MODULEINIT;
 
@@ -359,7 +372,7 @@ typedef R0PTRTYPE(FNR0MODULEINIT *) PFNR0MODULEINIT;
  *
  * @param   hMod        Image handle for use in APIs.
  */
-typedef DECLCALLBACK(void) FNR0MODULETERM(void *hMod);
+typedef DECLCALLBACKTYPE(void, FNR0MODULETERM,(void *hMod));
 /** Pointer to a FNR0MODULETERM(). */
 typedef R0PTRTYPE(FNR0MODULETERM *) PFNR0MODULETERM;
 
@@ -381,6 +394,29 @@ typedef struct SUPLDRSYM
 typedef SUPLDRSYM *PSUPLDRSYM;
 /** Pointer to a const symbol table entry. */
 typedef SUPLDRSYM const *PCSUPLDRSYM;
+
+#define SUPLDR_PROT_READ    1   /**< Grant read access (RTMEM_PROT_READ). */
+#define SUPLDR_PROT_WRITE   2   /**< Grant write access (RTMEM_PROT_WRITE). */
+#define SUPLDR_PROT_EXEC    4   /**< Grant execute access (RTMEM_PROT_EXEC). */
+
+/**
+ * A segment table entry - chiefly for conveying memory protection.
+ */
+typedef struct SUPLDRSEG
+{
+    /** The RVA of the segment. */
+    uint32_t        off;
+    /** The size of the segment. */
+    uint32_t        cb : 28;
+    /** The segment protection (SUPLDR_PROT_XXX). */
+    uint32_t        fProt : 3;
+    /** MBZ. */
+    uint32_t        fUnused;
+} SUPLDRSEG;
+/** Pointer to a segment table entry. */
+typedef SUPLDRSEG *PSUPLDRSEG;
+/** Pointer to a const segment table entry. */
+typedef SUPLDRSEG const *PCSUPLDRSEG;
 
 /**
  * SUPLDRLOAD::u::In::EP type.
@@ -411,8 +447,6 @@ typedef struct SUPLDRLOAD
                 /** SUPLDRLOADEP_VMMR0. */
                 struct
                 {
-                    /** The module handle (i.e. address). */
-                    RTR0PTR                 pvVMMR0;
                     /** Address of VMMR0EntryFast function. */
                     RTR0PTR                 pvVMMR0EntryFast;
                     /** Address of VMMR0EntryEx function. */
@@ -435,7 +469,7 @@ typedef struct SUPLDRLOAD
             /** The size of the image bits (starting at offset 0 and
              * approaching offSymbols). */
             uint32_t        cbImageBits;
-            /** The offset of the symbol table. */
+            /** The offset of the symbol table (SUPLDRSYM array). */
             uint32_t        offSymbols;
             /** The number of entries in the symbol table. */
             uint32_t        cSymbols;
@@ -443,8 +477,14 @@ typedef struct SUPLDRLOAD
             uint32_t        offStrTab;
             /** Size of the string table. */
             uint32_t        cbStrTab;
+            /** Offset to the segment table (SUPLDRSEG array). */
+            uint32_t        offSegments;
+            /** Number of segments. */
+            uint32_t        cSegments;
             /** Size of image data in achImage. */
-            uint32_t        cbImageWithTabs;
+            uint32_t        cbImageWithEverything;
+            /** Flags (SUPLDRLOAD_F_XXX). */
+            uint32_t        fFlags;
             /** The image data. */
             uint8_t         abImage[1];
         } In;
@@ -462,6 +502,10 @@ typedef struct SUPLDRLOAD
  * present on SUP_IOCTL_LDR_LOAD failure.
  * @remarks The value is choosen to be an unlikely init and term address. */
 #define SUPLDRLOAD_ERROR_MAGIC      UINT64_C(0xabcdefef0feddcb9)
+/** The module depends on VMMR0. */
+#define SUPLDRLOAD_F_DEP_VMMR0      RT_BIT_32(0)
+/** Valid flag mask. */
+#define SUPLDRLOAD_F_VALID_MASK     UINT32_C(0x00000001)
 /** @} */
 
 
@@ -537,7 +581,7 @@ typedef struct SUPLDRGETSYMBOL
  */
 #define SUP_IOCTL_CALL_VMMR0(cbReq)                     SUP_CTL_CODE_SIZE(7, SUP_IOCTL_CALL_VMMR0_SIZE(cbReq))
 #define SUP_IOCTL_CALL_VMMR0_NO_SIZE()                  SUP_CTL_CODE_SIZE(7, 0)
-#define SUP_IOCTL_CALL_VMMR0_SIZE(cbReq)                RT_UOFFSETOF(SUPCALLVMMR0, abReqPkt[cbReq])
+#define SUP_IOCTL_CALL_VMMR0_SIZE(cbReq)                RT_UOFFSETOF_DYN(SUPCALLVMMR0, abReqPkt[cbReq])
 #define SUP_IOCTL_CALL_VMMR0_SIZE_IN(cbReq)             SUP_IOCTL_CALL_VMMR0_SIZE(cbReq)
 #define SUP_IOCTL_CALL_VMMR0_SIZE_OUT(cbReq)            SUP_IOCTL_CALL_VMMR0_SIZE(cbReq)
 typedef struct SUPCALLVMMR0
@@ -569,7 +613,7 @@ typedef struct SUPCALLVMMR0
  * @{
  */
 #define SUP_IOCTL_CALL_VMMR0_BIG                        SUP_CTL_CODE_BIG(27)
-#define SUP_IOCTL_CALL_VMMR0_BIG_SIZE(cbReq)            RT_UOFFSETOF(SUPCALLVMMR0, abReqPkt[cbReq])
+#define SUP_IOCTL_CALL_VMMR0_BIG_SIZE(cbReq)            RT_UOFFSETOF_DYN(SUPCALLVMMR0, abReqPkt[cbReq])
 #define SUP_IOCTL_CALL_VMMR0_BIG_SIZE_IN(cbReq)         SUP_IOCTL_CALL_VMMR0_SIZE(cbReq)
 #define SUP_IOCTL_CALL_VMMR0_BIG_SIZE_OUT(cbReq)        SUP_IOCTL_CALL_VMMR0_SIZE(cbReq)
 /** @} */
@@ -580,7 +624,7 @@ typedef struct SUPCALLVMMR0
  * @{
  */
 #define SUP_IOCTL_LOW_ALLOC                             SUP_CTL_CODE_BIG(8)
-#define SUP_IOCTL_LOW_ALLOC_SIZE(cPages)                ((uint32_t)RT_UOFFSETOF(SUPLOWALLOC, u.Out.aPages[cPages]))
+#define SUP_IOCTL_LOW_ALLOC_SIZE(cPages)                ((uint32_t)RT_UOFFSETOF_DYN(SUPLOWALLOC, u.Out.aPages[cPages]))
 #define SUP_IOCTL_LOW_ALLOC_SIZE_IN                     (sizeof(SUPREQHDR) + RT_SIZEOFMEMB(SUPLOWALLOC, u.In))
 #define SUP_IOCTL_LOW_ALLOC_SIZE_OUT(cPages)            SUP_IOCTL_LOW_ALLOC_SIZE(cPages)
 typedef struct SUPLOWALLOC
@@ -642,7 +686,7 @@ typedef struct SUPLOWFREE
  * @{
  */
 #define SUP_IOCTL_PAGE_ALLOC_EX                         SUP_CTL_CODE_BIG(10)
-#define SUP_IOCTL_PAGE_ALLOC_EX_SIZE(cPages)            RT_UOFFSETOF(SUPPAGEALLOCEX, u.Out.aPages[cPages])
+#define SUP_IOCTL_PAGE_ALLOC_EX_SIZE(cPages)            RT_UOFFSETOF_DYN(SUPPAGEALLOCEX, u.Out.aPages[cPages])
 #define SUP_IOCTL_PAGE_ALLOC_EX_SIZE_IN                 (sizeof(SUPREQHDR) + RT_SIZEOFMEMB(SUPPAGEALLOCEX, u.In))
 #define SUP_IOCTL_PAGE_ALLOC_EX_SIZE_OUT(cPages)        SUP_IOCTL_PAGE_ALLOC_EX_SIZE(cPages)
 typedef struct SUPPAGEALLOCEX
@@ -791,7 +835,7 @@ typedef struct SUPPAGEFREE
 #define SUP_IOCTL_PAGE_LOCK                             SUP_CTL_CODE_BIG(14)
 #define SUP_IOCTL_PAGE_LOCK_SIZE(cPages)                (RT_MAX((size_t)SUP_IOCTL_PAGE_LOCK_SIZE_IN, (size_t)SUP_IOCTL_PAGE_LOCK_SIZE_OUT(cPages)))
 #define SUP_IOCTL_PAGE_LOCK_SIZE_IN                     (sizeof(SUPREQHDR) + RT_SIZEOFMEMB(SUPPAGELOCK, u.In))
-#define SUP_IOCTL_PAGE_LOCK_SIZE_OUT(cPages)            RT_UOFFSETOF(SUPPAGELOCK, u.Out.aPages[cPages])
+#define SUP_IOCTL_PAGE_LOCK_SIZE_OUT(cPages)            RT_UOFFSETOF_DYN(SUPPAGELOCK, u.Out.aPages[cPages])
 typedef struct SUPPAGELOCK
 {
     /** The header. */
@@ -998,7 +1042,7 @@ typedef struct SUPGIPUNMAP
  */
 #define SUP_IOCTL_CALL_SERVICE(cbReq)                   SUP_CTL_CODE_SIZE(22, SUP_IOCTL_CALL_SERVICE_SIZE(cbReq))
 #define SUP_IOCTL_CALL_SERVICE_NO_SIZE()                SUP_CTL_CODE_SIZE(22, 0)
-#define SUP_IOCTL_CALL_SERVICE_SIZE(cbReq)              RT_UOFFSETOF(SUPCALLSERVICE, abReqPkt[cbReq])
+#define SUP_IOCTL_CALL_SERVICE_SIZE(cbReq)              RT_UOFFSETOF_DYN(SUPCALLSERVICE, abReqPkt[cbReq])
 #define SUP_IOCTL_CALL_SERVICE_SIZE_IN(cbReq)           SUP_IOCTL_CALL_SERVICE_SIZE(cbReq)
 #define SUP_IOCTL_CALL_SERVICE_SIZE_OUT(cbReq)          SUP_IOCTL_CALL_SERVICE_SIZE(cbReq)
 typedef struct SUPCALLSERVICE
@@ -1029,8 +1073,8 @@ typedef struct SUPCALLSERVICE
  */
 #define SUP_IOCTL_LOGGER_SETTINGS(cbStrTab)             SUP_CTL_CODE_SIZE(23, SUP_IOCTL_LOGGER_SETTINGS_SIZE(cbStrTab))
 #define SUP_IOCTL_LOGGER_SETTINGS_NO_SIZE()             SUP_CTL_CODE_SIZE(23, 0)
-#define SUP_IOCTL_LOGGER_SETTINGS_SIZE(cbStrTab)        RT_UOFFSETOF(SUPLOGGERSETTINGS, u.In.szStrings[cbStrTab])
-#define SUP_IOCTL_LOGGER_SETTINGS_SIZE_IN(cbStrTab)     RT_UOFFSETOF(SUPLOGGERSETTINGS, u.In.szStrings[cbStrTab])
+#define SUP_IOCTL_LOGGER_SETTINGS_SIZE(cbStrTab)        RT_UOFFSETOF_DYN(SUPLOGGERSETTINGS, u.In.szStrings[cbStrTab])
+#define SUP_IOCTL_LOGGER_SETTINGS_SIZE_IN(cbStrTab)     RT_UOFFSETOF_DYN(SUPLOGGERSETTINGS, u.In.szStrings[cbStrTab])
 #define SUP_IOCTL_LOGGER_SETTINGS_SIZE_OUT              sizeof(SUPREQHDR)
 typedef struct SUPLOGGERSETTINGS
 {
@@ -1209,7 +1253,7 @@ typedef struct SUPVTCAPS
         struct
         {
             /** The VT capability dword. */
-            uint32_t        Caps;
+            uint32_t        fCaps;
         } Out;
     } u;
 } SUPVTCAPS, *PSUPVTCAPS;
@@ -1596,7 +1640,76 @@ typedef struct SUPGIPSETFLAGS
 } SUPGIPSETFLAGS, *PSUPGIPSETFLAGS;
 /** @} */
 
-#pragma pack()                          /* paranoia */
 
+/** @name SUP_IOCTL_UCODE_REV
+ * Get the CPU microcode revision.
+ *
+ * @{
+ */
+#define SUP_IOCTL_UCODE_REV                             SUP_CTL_CODE_SIZE(40, SUP_IOCTL_UCODE_REV_SIZE)
+#define SUP_IOCTL_UCODE_REV_SIZE                        sizeof(SUPUCODEREV)
+#define SUP_IOCTL_UCODE_REV_SIZE_IN                     sizeof(SUPREQHDR)
+#define SUP_IOCTL_UCODE_REV_SIZE_OUT                    sizeof(SUPUCODEREV)
+typedef struct SUPUCODEREV
+{
+    /** The header. */
+    SUPREQHDR               Hdr;
+    union
+    {
+        struct
+        {
+            /** The microcode revision dword. */
+            uint32_t        MicrocodeRev;
+        } Out;
+    } u;
+} SUPUCODEREV, *PSUPUCODEREV;
+/** @} */
+
+
+/** @name SUP_IOCTL_HWVIRT_MSRS
+ * Get hardware-virtualization MSRs.
+ *
+ * This queries a lot more information than merely VT-x/AMD-V basic capabilities
+ * provided by SUP_IOCTL_VT_CAPS.
+ *
+ * @{
+ */
+#define SUP_IOCTL_GET_HWVIRT_MSRS                       SUP_CTL_CODE_SIZE(41, SUP_IOCTL_GET_HWVIRT_MSRS_SIZE)
+#define SUP_IOCTL_GET_HWVIRT_MSRS_SIZE                  sizeof(SUPGETHWVIRTMSRS)
+#define SUP_IOCTL_GET_HWVIRT_MSRS_SIZE_IN               (sizeof(SUPREQHDR) + RT_SIZEOFMEMB(SUPGETHWVIRTMSRS, u.In))
+#define SUP_IOCTL_GET_HWVIRT_MSRS_SIZE_OUT              sizeof(SUPGETHWVIRTMSRS)
+
+typedef struct SUPGETHWVIRTMSRS
+{
+    /** The header. */
+    SUPREQHDR               Hdr;
+    union
+    {
+        struct
+        {
+            /** Whether to force re-querying of MSRs. */
+            bool                fForce;
+            /** Reserved. Must be false. */
+            bool                fReserved0;
+            /** Reserved. Must be false. */
+            bool                fReserved1;
+            /** Reserved. Must be false. */
+            bool                fReserved2;
+        } In;
+
+        struct
+        {
+            /** Hardware-virtualization MSRs. */
+            SUPHWVIRTMSRS      HwvirtMsrs;
+        } Out;
+    } u;
+} SUPGETHWVIRTMSRS, *PSUPGETHWVIRTMSRS;
+/** @} */
+
+
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
+# pragma pack()                         /* paranoia */
 #endif
+
+#endif /* !VBOX_INCLUDED_SRC_Support_SUPDrvIOC_h */
 

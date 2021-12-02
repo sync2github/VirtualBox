@@ -1,4 +1,4 @@
-# $Id$
+# $Id: Makefile.kmk 91769 2021-10-15 19:24:43Z vboxsync $
 ## @file
 # Sub-Makefile for VBoxAdpCtl
 #
@@ -6,7 +6,7 @@
 #
 
 #
-# Copyright (C) 2009-2016 Oracle Corporation
+# Copyright (C) 2009-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -20,10 +20,15 @@
 SUB_DEPTH = ../../../..
 include $(KBUILD_PATH)/subheader.kmk
 
-PROGRAMS              += VBoxNetAdpCtl
+PROGRAMS               += VBoxNetAdpCtl
 ### Another template? We must *not* set RPATH!
-VBoxNetAdpCtl_TEMPLATE = VBOXR3HARDENEDEXE
-VBoxNetAdpCtl_SOURCES  = VBoxNetAdpCtl.cpp
+ifneq ($(KBUILD_TYPE),debug)
+ VBoxNetAdpCtl_TEMPLATE = VBoxR3SetUidToRoot
+ VBoxNetAdpCtl_LIBS    += $(LIB_RUNTIME)
+else
+ VBoxNetAdpCtl_TEMPLATE = VBoxR3Static
+endif
+VBoxNetAdpCtl_SOURCES   = VBoxNetAdpCtl.cpp
 
 include $(FILE_KBUILD_SUB_FOOTER)
 

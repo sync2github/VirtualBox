@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-rm-InitGdt.c 83013 2020-02-07 02:13:38Z vboxsync $ */
 /** @file
  * BS3Kit - Bs3InitGdt
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -40,7 +40,7 @@
 
 BS3_DECL_FAR(void) Bs3InitGdt_rm_far(void)
 {
-#if 1
+#if 0 /* This totaly messes us up when going back to raw-mode for BIOS work. */
     Bs3Gdte_R0_CS16.Gen.u16LimitLow     = Bs3Text16_Size - 1;
     Bs3Gdte_R1_CS16.Gen.u16LimitLow     = Bs3Text16_Size - 1;
     Bs3Gdte_R2_CS16.Gen.u16LimitLow     = Bs3Text16_Size - 1;

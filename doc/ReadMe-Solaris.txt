@@ -1,5 +1,5 @@
 
-@VBOX_PRODUCT@ for Solaris (TM) Operating System
+@VBOX_PRODUCT@ for Oracle Solaris (TM) Operating System
 --------------------------------------------------------
 
 Upgrading:
@@ -20,7 +20,7 @@ After extracting the contents of the tar.gz file perform the following steps:
 
 2. Install the VirtualBox package:
 
-      pkgadd -d VirtualBox-@VBOX_VERSION_STRING@-SunOS-@BUILD_TARGET_ARCH@-r@VBOX_SVN_REV@.pkg
+      pkgadd -d VirtualBox-@VBOX_VERSION_STRING@-SunOS-@KBUILD_TARGET_ARCH@-r@VBOX_SVN_REV@.pkg
 
       To perform an unattended (non-interactive) installation of this
       package, add "-n -a autoresponse SUNWvbox" (without quotes)
@@ -44,8 +44,4 @@ To remove VirtualBox from your system, perform the following steps:
 
 2. To remove VirtualBox, run the command:
         pkgrm SUNWvbox
-
-3. To remove the VirtualBox kernel interface module, run the command:
-        pkgrm SUNWvboxkern
-    * Only required if you're uninstalling VirtualBox versions 3.0.x or lower.
 

@@ -1,12 +1,10 @@
-/* $Id$ */
-
+/* $Id: BusAssignmentManager.h 87242 2021-01-13 16:02:24Z vboxsync $ */
 /** @file
- *
  * VirtualBox bus slots assignment manager
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-#ifndef __BusAssignmentManager_h
-#define __BusAssignmentManager_h
+
+#ifndef MAIN_INCLUDED_BusAssignmentManager_h
+#define MAIN_INCLUDED_BusAssignmentManager_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VBox/types.h"
 #include "VBox/pci.h"
@@ -44,7 +46,7 @@ public:
         PCIBusAddress hostAddress;
     };
 
-    static BusAssignmentManager *createInstance(ChipsetType_T chipsetType);
+    static BusAssignmentManager *createInstance(ChipsetType_T chipsetType, IommuType_T iommuType);
     virtual void AddRef();
     virtual void Release();
 
@@ -75,4 +77,4 @@ public:
     virtual void listAttachedPCIDevices(std::vector<PCIDeviceInfo> &aAttached);
 };
 
-#endif //  __BusAssignmentManager_h
+#endif /* !MAIN_INCLUDED_BusAssignmentManager_h */

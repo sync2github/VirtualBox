@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTStrCopy.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTStrCopy.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,6 +30,8 @@
 *********************************************************************************************************************************/
 #include <iprt/string.h>
 #include "internal/iprt.h"
+
+#include <iprt/errcore.h>
 
 
 RTDECL(int) RTStrCopy(char *pszDst, size_t cbDst, const char *pszSrc)

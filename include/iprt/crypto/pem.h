@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,10 +23,15 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_crypto_pem_h
-#define ___iprt_crypto_pem_h
+#ifndef IPRT_INCLUDED_crypto_pem_h
+#define IPRT_INCLUDED_crypto_pem_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
+#include <iprt/asn1.h>   /* PRTASN1CORE */
+#include <iprt/string.h> /* PFNRTSTROUTPUT */
 
 
 RT_C_DECLS_BEGIN
@@ -71,6 +76,29 @@ typedef RTCRPEMMARKER const *PCRTCRPEMMARKER;
 
 
 /**
+ * A PEM field.
+ */
+typedef struct RTCRPEMFIELD
+{
+    /** Pointer to the next field. */
+    struct RTCRPEMFIELD const *pNext;
+    /** The field value. */
+    char const         *pszValue;
+    /** The field value length. */
+    size_t              cchValue;
+    /** The field name length. */
+    size_t              cchName;
+    /** The field name. */
+    RT_FLEXIBLE_ARRAY_EXTENSION
+    char                szName[RT_FLEXIBLE_ARRAY];
+} RTCRPEMFIELD;
+/** Pointer to a PEM field. */
+typedef RTCRPEMFIELD *PRTCRPEMFIELD;
+/** Pointer to a const PEM field. */
+typedef RTCRPEMFIELD const *PCRTCRPEMFIELD;
+
+
+/**
  * A PEM section.
  *
  * The API works on linked lists of these.
@@ -85,10 +113,10 @@ typedef struct RTCRPEMSECTION
     uint8_t            *pbData;
     /** The size of the binary data. */
     size_t              cbData;
-    /** Additional text preceeding the binary data.  NULL if none. */
-    char               *pszPreamble;
-    /** The length of the preamble. */
-    size_t              cchPreamble;
+    /** List of fields, NULL if none. */
+    PCRTCRPEMFIELD      pFieldHead;
+    /** Set if RTCRPEMREADFILE_F_SENSITIVE was specified. */
+    bool                fSensitive;
 } RTCRPEMSECTION;
 /** Pointer to a PEM section. */
 typedef RTCRPEMSECTION *PRTCRPEMSECTION;
@@ -157,8 +185,10 @@ RTDECL(int) RTCrPemReadFile(const char *pszFilename, uint32_t fFlags, PCRTCRPEMM
 #define RTCRPEMREADFILE_F_CONTINUE_ON_ENCODING_ERROR    RT_BIT(0)
 /** Only PEM sections, no binary fallback. */
 #define RTCRPEMREADFILE_F_ONLY_PEM                      RT_BIT(1)
+/** Sensitive data, use the safer allocator. */
+#define RTCRPEMREADFILE_F_SENSITIVE                     RT_BIT(2)
 /** Valid flags. */
-#define RTCRPEMREADFILE_F_VALID_MASK                    UINT32_C(0x00000003)
+#define RTCRPEMREADFILE_F_VALID_MASK                    UINT32_C(0x00000007)
 /** @} */
 
 /**
@@ -177,9 +207,88 @@ RTDECL(int) RTCrPemReadFile(const char *pszFilename, uint32_t fFlags, PCRTCRPEMM
 RTDECL(const char *) RTCrPemFindFirstSectionInContent(void const *pvContent, size_t cbContent,
                                                       PCRTCRPEMMARKER paMarkers, size_t cMarkers);
 
+
+/**
+ * PEM formatter for a binary data blob.
+ *
+ * @returns Number of output bytes (sum of @a pfnOutput return values).
+ * @param   pfnOutput       The output callback function.
+ * @param   pvUser          The user argument to the output callback.
+ * @param   pvContent       The binary blob to output.
+ * @param   cbContent       Size of the binary blob.
+ * @param   pszMarker       The PEM marker, .e.g "PRIVATE KEY", "CERTIFICATE" or
+ *                          similar.
+ * @sa      RTCrPemWriteAsn1, RTCrPemWriteAsn1ToVfsFile,
+ *          RTCrPemWriteAsn1ToVfsFile
+ */
+RTDECL(size_t) RTCrPemWriteBlob(PFNRTSTROUTPUT pfnOutput, void *pvUser,
+                                const void *pvContent, size_t cbContent, const char *pszMarker);
+
+RTDECL(ssize_t) RTCrPemWriteBlobToVfsIoStrm(RTVFSIOSTREAM hVfsIos, const void *pvContent, size_t cbContent, const char *pszMarker);
+RTDECL(ssize_t) RTCrPemWriteBlobToVfsFile(RTVFSFILE hVfsFile, const void *pvContent, size_t cbContent, const char *pszMarker);
+
+/**
+ * PEM formatter for a generic ASN.1 structure.
+ *
+ * This will call both RTAsn1EncodePrepare() and RTAsn1EncodeWrite() on
+ * @a pRoot.  Uses DER encoding.
+ *
+ * @returns Number of outputted chars (sum of @a pfnOutput return values),
+ *          negative values are error status codes from the ASN.1 encoding.
+ * @param   pfnOutput       The output callback function.
+ * @param   pvUser          The user argument to the output callback.
+ * @param   fFlags          Reserved, MBZ.
+ * @param   pRoot           The root of the ASN.1 to encode and format as PEM.
+ * @param   pszMarker       The PEM marker, .e.g "PRIVATE KEY", "CERTIFICATE" or
+ *                          similar.
+ * @param   pErrInfo        For encoding errors. Optional.
+ * @sa      RTCrPemWriteAsn1ToVfsFile, RTCrPemWriteAsn1ToVfsFile,
+ *          RTCrPemWriteBlob
+ */
+RTDECL(ssize_t) RTCrPemWriteAsn1(PFNRTSTROUTPUT pfnOutput, void *pvUser, PRTASN1CORE pRoot,
+                                 uint32_t fFlags, const char *pszMarker, PRTERRINFO pErrInfo);
+
+/**
+ * PEM formatter for a generic ASN.1 structure and output it to @a hVfsIos.
+ *
+ * This will call both RTAsn1EncodePrepare() and RTAsn1EncodeWrite() on
+ * @a pRoot.  Uses DER encoding.
+ *
+ * @returns Number of chars written, negative values are error status codes from
+ *          the ASN.1 encoding or from RTVfsIoStrmWrite().
+ * @param   hVfsIos         Handle to the I/O stream to write it to.
+ * @param   fFlags          Reserved, MBZ.
+ * @param   pRoot           The root of the ASN.1 to encode and format as PEM.
+ * @param   pszMarker       The PEM marker, .e.g "PRIVATE KEY", "CERTIFICATE" or
+ *                          similar.
+ * @param   pErrInfo        For encoding errors. Optional.
+ * @sa      RTCrPemWriteAsn1ToVfsFile, RTCrPemWriteAsn1, RTCrPemWriteBlob
+ */
+RTDECL(ssize_t) RTCrPemWriteAsn1ToVfsIoStrm(RTVFSIOSTREAM hVfsIos, PRTASN1CORE pRoot,
+                                            uint32_t fFlags, const char *pszMarker, PRTERRINFO pErrInfo);
+
+/**
+ * PEM formatter for a generic ASN.1 structure and output it to @a hVfsFile.
+ *
+ * This will call both RTAsn1EncodePrepare() and RTAsn1EncodeWrite() on
+ * @a pRoot.  Uses DER encoding.
+ *
+ * @returns Number of chars written, negative values are error status codes from
+ *          the ASN.1 encoding or from RTVfsIoStrmWrite().
+ * @param   hVfsFile        Handle to the file to write it to.
+ * @param   fFlags          Reserved, MBZ.
+ * @param   pRoot           The root of the ASN.1 to encode and format as PEM.
+ * @param   pszMarker       The PEM marker, .e.g "PRIVATE KEY", "CERTIFICATE" or
+ *                          similar.
+ * @param   pErrInfo        For encoding errors. Optional.
+ * @sa      RTCrPemWriteAsn1ToVfsIoStrm, RTCrPemWriteAsn1, RTCrPemWriteBlob
+ */
+RTDECL(ssize_t) RTCrPemWriteAsn1ToVfsFile(RTVFSFILE hVfsFile, PRTASN1CORE pRoot,
+                                          uint32_t fFlags, const char *pszMarker, PRTERRINFO pErrInfo);
+
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_crypto_pem_h */
 

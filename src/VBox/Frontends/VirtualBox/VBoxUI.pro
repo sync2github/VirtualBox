@@ -6,7 +6,7 @@
 #
 
 #
-# Copyright (C) 2006-2012 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -20,35 +20,6 @@
 TEMPLATE	= app
 LANGUAGE	= C++
 
-FORMS = \
-    src/VBoxSnapshotDetailsDlg.ui \
-    src/VBoxTakeSnapshotDlg.ui \
-    src/UIVMLogViewer.ui \
-    src/settings/UISettingsDialog.ui \
-    src/settings/global/UIGlobalSettingsGeneral.ui \
-    src/settings/global/UIGlobalSettingsInput.ui \
-    src/settings/global/UIGlobalSettingsUpdate.ui \
-    src/settings/global/UIGlobalSettingsLanguage.ui \
-    src/settings/global/UIGlobalSettingsDisplay.ui \
-    src/settings/global/UIGlobalSettingsNetwork.ui \
-    src/settings/global/UIGlobalSettingsNetworkDetailsNAT.ui \
-    src/settings/global/UIGlobalSettingsNetworkDetailsHost.ui \
-    src/settings/global/UIGlobalSettingsExtension.ui \
-    src/settings/global/UIGlobalSettingsProxy.ui \
-    src/settings/machine/UIMachineSettingsGeneral.ui \
-    src/settings/machine/UIMachineSettingsSystem.ui \
-    src/settings/machine/UIMachineSettingsDisplay.ui \
-    src/settings/machine/UIMachineSettingsStorage.ui \
-    src/settings/machine/UIMachineSettingsAudio.ui \
-    src/settings/machine/UIMachineSettingsNetwork.ui \
-    src/settings/machine/UIMachineSettingsSerial.ui \
-    src/settings/machine/UIMachineSettingsParallel.ui \
-    src/settings/machine/UIMachineSettingsUSB.ui \
-    src/settings/machine/UIMachineSettingsUSBFilterDetails.ui \
-    src/settings/machine/UIMachineSettingsSF.ui \
-    src/settings/machine/UIMachineSettingsSFDetails.ui \
-    src/settings/machine/UIMachineSettingsInterface.ui
-
 TRANSLATIONS = \
 	nls/VirtualBox_bg.ts \
 	nls/VirtualBox_ca.ts \
@@ -60,11 +31,12 @@ TRANSLATIONS = \
 	nls/VirtualBox_en.ts \
 	nls/VirtualBox_es.ts \
 	nls/VirtualBox_eu.ts \
-	nls/VirtualBox_fa_IR.ts \
+	nls/VirtualBox_fa.ts \
 	nls/VirtualBox_fi.ts \
 	nls/VirtualBox_fr.ts \
-	nls/VirtualBox_gl_ES.ts \
+	nls/VirtualBox_gl.ts \
 	nls/VirtualBox_he.ts \
+	nls/VirtualBox_hr_HR.ts \
 	nls/VirtualBox_hu.ts \
 	nls/VirtualBox_id.ts \
 	nls/VirtualBox_it.ts \
@@ -82,6 +54,7 @@ TRANSLATIONS = \
 	nls/VirtualBox_sl.ts \
 	nls/VirtualBox_sr.ts \
 	nls/VirtualBox_sv.ts \
+	nls/VirtualBox_th.ts \
 	nls/VirtualBox_tr.ts \
 	nls/VirtualBox_uk.ts \
 	nls/VirtualBox_zh_CN.ts \

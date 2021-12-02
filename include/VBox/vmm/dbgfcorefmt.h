@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,12 +23,15 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_dbgfcore_h
-#define ___VBox_vmm_dbgfcore_h
+#ifndef VBOX_INCLUDED_vmm_dbgfcorefmt_h
+#define VBOX_INCLUDED_vmm_dbgfcorefmt_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <VBox/vmm/cpumctx.h>
-#include <iprt/assert.h>
+#include <iprt/assertcompile.h>
 
 
 RT_C_DECLS_BEGIN
@@ -48,7 +51,7 @@ RT_C_DECLS_BEGIN
 /** DBGCORECOREDESCRIPTOR::u32Magic. */
 #define DBGFCORE_MAGIC          UINT32_C(0xc01ac0de)
 /** DBGCORECOREDESCRIPTOR::u32FmtVersion. */
-#define DBGFCORE_FMT_VERSION    UINT32_C(0x00010005)
+#define DBGFCORE_FMT_VERSION    UINT32_C(0x00010006)
 
 /**
  * An x86 segment selector.
@@ -61,7 +64,7 @@ typedef struct DBGFCORESEL
     uint16_t        uSel;
     uint16_t        uReserved0;
     uint32_t        uReserved1;
-} VBOXX86SEL;
+} DBGFCORESEL;
 AssertCompileSizeAlignment(DBGFCORESEL, 8);
 
 /**
@@ -72,8 +75,8 @@ typedef struct DBGFCOREXDTR
     uint64_t        uAddr;
     uint32_t        cb;
     uint32_t        uReserved0;
-} DBGFXDTR;
-AssertCompileSizeAlignment(DBGFCORESEL, 8);
+} DBGFCOREXDTR;
+AssertCompileSizeAlignment(DBGFCOREXDTR, 8);
 
 /**
  * A simpler to parse CPU dump than CPUMCTX.
@@ -114,8 +117,8 @@ typedef struct DBGFCORECPU
     uint64_t            dr[8];
     DBGFCOREXDTR        gdtr;
     DBGFCOREXDTR        idtr;
-    VBOXX86SEL          ldtr;
-    VBOXX86SEL          tr;
+    DBGFCORESEL         ldtr;
+    DBGFCORESEL         tr;
     struct
     {
         uint64_t        cs;
@@ -130,6 +133,7 @@ typedef struct DBGFCORECPU
     uint64_t            msrSFMASK;
     uint64_t            msrKernelGSBase;
     uint64_t            msrApicBase;
+    uint64_t            msrTscAux;
     uint64_t            aXcr[2];
     uint32_t            cbExt;
     uint32_t            uPadding0;
@@ -170,5 +174,5 @@ typedef DBGFCOREDESCRIPTOR  *PDBGFCOREDESCRIPTOR;
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_dbgfcorefmt_h */
 

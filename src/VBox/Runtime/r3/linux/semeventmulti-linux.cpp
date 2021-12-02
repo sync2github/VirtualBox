@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semeventmulti-linux.cpp 90789 2021-08-23 10:27:29Z vboxsync $ */
 /** @file
  * IPRT - Multiple Release Event Semaphore, Linux (2.6.x+).
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -39,7 +39,7 @@
  * against glibc < 2.6.
  */
 #include "../posix/semeventmulti-posix.cpp"
-asm volatile (".global epoll_pwait");
+__asm__ (".global epoll_pwait");
 
 #else /* glibc < 2.6 */
 
@@ -201,8 +201,8 @@ RTDECL(int)  RTSemEventMultiSignal(RTSEMEVENTMULTI hEventMultiSem)
      * Validate input.
      */
     struct RTSEMEVENTMULTIINTERNAL *pThis = hEventMultiSem;
-    AssertReturn(VALID_PTR(pThis) && pThis->u32Magic == RTSEMEVENTMULTI_MAGIC,
-                 VERR_INVALID_HANDLE);
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+    AssertReturn(pThis->u32Magic == RTSEMEVENTMULTI_MAGIC, VERR_INVALID_HANDLE);
 
 #ifdef RTSEMEVENTMULTI_STRICT
     if (pThis->fEverHadSignallers)
@@ -235,8 +235,8 @@ RTDECL(int)  RTSemEventMultiReset(RTSEMEVENTMULTI hEventMultiSem)
      * Validate input.
      */
     struct RTSEMEVENTMULTIINTERNAL *pThis = hEventMultiSem;
-    AssertReturn(VALID_PTR(pThis) && pThis->u32Magic == RTSEMEVENTMULTI_MAGIC,
-                 VERR_INVALID_HANDLE);
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+    AssertReturn(pThis->u32Magic == RTSEMEVENTMULTI_MAGIC, VERR_INVALID_HANDLE);
 #ifdef RT_STRICT
     int32_t i = pThis->iState;
     Assert(i == 0 || i == -1 || i == 1);

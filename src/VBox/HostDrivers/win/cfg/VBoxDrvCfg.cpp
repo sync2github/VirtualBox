@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDrvCfg.cpp 83780 2020-04-17 22:26:07Z vboxsync $ */
 /** @file
  * VBoxDrvCfg.cpp - Windows Driver Manipulation API implementation
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -287,7 +296,7 @@ static HRESULT vboxDrvCfgInfQueryModelsSectionName(HINF hInf, LPWSTR *lppszValue
 
     for (DWORD i = 2; (hr = vboxDrvCfgInfQueryKeyValue(&InfCtx, i, &lpszPlatformCur, &cPlatformCur)) == S_OK; ++i)
     {
-        if (wcsicmp(lpszPlatformCur, L"NT"VBOXDRVCFG_ARCHSTR))
+        if (wcsicmp(lpszPlatformCur, L"NT" VBOXDRVCFG_ARCHSTR))
         {
             if (bNt)
             {
@@ -489,9 +498,11 @@ static HRESULT vboxDrvCfgCollectInfsSetupDi(const GUID * pGuid, LPCWSTR pPnPId, 
                             &dwReq /*OUT PDWORD RequiredSize OPTIONAL*/
                             ))
                     {
-                        for (WCHAR * pHwId = pDrvDetail->HardwareID; pHwId && *pHwId && pHwId < (TCHAR*)(DetailBuf + sizeof(DetailBuf)/sizeof(DetailBuf[0])) ;pHwId += wcslen(pHwId) + 1)
+                        for (WCHAR *pwszHwId = pDrvDetail->HardwareID;
+                             pwszHwId && *pwszHwId && (uintptr_t)pwszHwId < (uintptr_t)DetailBuf + sizeof(DetailBuf);
+                             pwszHwId += wcslen(pwszHwId) + 1)
                         {
-                            if (!wcsicmp(pHwId, pPnPId))
+                            if (!wcsicmp(pwszHwId, pPnPId))
                             {
                                 NonStandardAssert(pDrvDetail->InfFileName[0]);
                                 if (pDrvDetail->InfFileName)
@@ -504,16 +515,16 @@ static HRESULT vboxDrvCfgCollectInfsSetupDi(const GUID * pGuid, LPCWSTR pPnPId, 
                     }
                     else
                     {
-                        DWORD dwErr = GetLastError();
-                        NonStandardLogRelCrap((__FUNCTION__": SetupDiGetDriverInfoDetail fail dwErr=%ld, size(%d)", dwErr, dwReq));
+                        DWORD dwErr2 = GetLastError();
+                        NonStandardLogRelCrap((__FUNCTION__": SetupDiGetDriverInfoDetail fail dwErr=%ld, size(%d)", dwErr2, dwReq));
 //                        NonStandardAssert(0);
                     }
 
                 }
                 else
                 {
-                    DWORD dwErr = GetLastError();
-                    if (dwErr == ERROR_NO_MORE_ITEMS)
+                    DWORD dwErr2 = GetLastError();
+                    if (dwErr2 == ERROR_NO_MORE_ITEMS)
                     {
                         NonStandardLogRelCrap((__FUNCTION__": dwErr == ERROR_NO_MORE_ITEMS -> search was finished "));
                         break;

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCredProvProvider.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxCredProvProvider - The actual credential provider class.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,10 +15,13 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBOX_CREDPROV_PROVIDER_H___
-#define ___VBOX_CREDPROV_PROVIDER_H___
+#ifndef GA_INCLUDED_SRC_WINNT_VBoxCredProv_VBoxCredProvProvider_h
+#define GA_INCLUDED_SRC_WINNT_VBoxCredProv_VBoxCredProvProvider_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-#include <credentialprovider.h>
+#include <iprt/win/credentialprovider.h>
 #include <iprt/win/windows.h>
 #include <strsafe.h>
 
@@ -54,10 +57,10 @@ public:
                                       __out DWORD *pdwDefault,
                                       __out BOOL *pfAutoLogonWithDefault);
     IFACEMETHODIMP GetCredentialAt(DWORD dwIndex,
-                                   __out ICredentialProviderCredential **ppcpc);
+                                   __out ICredentialProviderCredential **ppCredProvCredential);
     /** @} */
 
-    friend HRESULT VBoxCredProvProviderCreate(REFIID riid, __deref_out void **ppv);
+    friend HRESULT VBoxCredProvProviderCreate(REFIID riid, __deref_out void **ppvInterface);
 
 protected:
 
@@ -94,5 +97,5 @@ private:
     bool                                     m_fHandleRemoteSessions;
 };
 
-#endif /* !___VBOX_CREDPROV_PROVIDER_H___ */
+#endif /* !GA_INCLUDED_SRC_WINNT_VBoxCredProv_VBoxCredProvProvider_h */
 

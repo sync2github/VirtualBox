@@ -4,14 +4,8 @@
      - Instances of the other objects of the editor
      - Main Interfaces
 
-  Copyright (c) 2005 - 2011, Intel Corporation. All rights reserved. <BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  Copyright (c) 2005 - 2018, Intel Corporation. All rights reserved. <BR>
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -24,7 +18,7 @@
   Init function for MainEditor
 
   @retval EFI_SUCCESS             The operation was successful.
-  @retval EFI_LOAD_ERROR          A load error occured.
+  @retval EFI_LOAD_ERROR          A load error occurred.
 **/
 EFI_STATUS
 HMainEditorInit (
@@ -35,7 +29,7 @@ HMainEditorInit (
   Cleanup function for MainEditor.
 
   @retval EFI_SUCCESS             The operation was successful.
-  @retval EFI_LOAD_ERROR          A load error occured.
+  @retval EFI_LOAD_ERROR          A load error occurred.
 **/
 EFI_STATUS
 HMainEditorCleanup (
@@ -56,8 +50,8 @@ HMainEditorRefresh (
   Handle user key input. will route it to other components handle function.
 
   @retval EFI_SUCCESS             The operation was successful.
-  @retval EFI_OUT_OF_RESOURCES    A memory allocation occured.
-  @retval EFI_LOAD_ERROR          A load error occured.
+  @retval EFI_OUT_OF_RESOURCES    A memory allocation occurred.
+  @retval EFI_LOAD_ERROR          A load error occurred.
 **/
 EFI_STATUS
 HMainEditorKeyInput (
@@ -68,7 +62,6 @@ HMainEditorKeyInput (
   Backup function for MainEditor.
 **/
 VOID
-EFIAPI
 HMainEditorBackup (
   VOID
   );

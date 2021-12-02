@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: AutostartDb.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Main - Autostart database Interfaces.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___autostart_h
-#define ___autostart_h
+#ifndef MAIN_INCLUDED_AutostartDb_h
+#define MAIN_INCLUDED_AutostartDb_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -92,5 +95,5 @@ class AutostartDb
 #endif
 };
 
-#endif  /* !___autostart_h */
+#endif /* !MAIN_INCLUDED_AutostartDb_h */
 

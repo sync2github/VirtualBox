@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: HostPower.cpp 85280 2020-07-12 14:31:42Z vboxsync $ */
 /** @file
- *
  * VirtualBox interface to host's power notification service
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,9 +19,9 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-
+#define LOG_GROUP LOG_GROUP_MAIN_HOST
 #include "HostPower.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/com/ptr.h>
 
@@ -176,7 +175,7 @@ void HostPowerService::notify(Reason_T aReason)
                     {
                         LONG iRc;
                         progress->COMGETTER(ResultCode)(&iRc);
-                        rc = iRc;
+                        rc = (HRESULT)iRc;
                     }
 
                     AssertMsg(SUCCEEDED(rc), ("SaveState WaitForCompletion failed with %Rhrc (%#08X)\n", rc, rc));

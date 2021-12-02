@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: xarvfs.cpp 84192 2020-05-07 20:56:01Z vboxsync $ */
 /** @file
  * IPRT - XAR Virtual Filesystem.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -1162,7 +1162,7 @@ static const RTVFSFILEOPS g_rtZipXarFssFileOps =
     0,
     { /* ObjSet */
         RTVFSOBJSETOPS_VERSION,
-        RT_OFFSETOF(RTVFSFILEOPS, Stream.Obj) - RT_OFFSETOF(RTVFSFILEOPS, ObjSet),
+        RT_UOFFSETOF(RTVFSFILEOPS, ObjSet) - RT_UOFFSETOF(RTVFSFILEOPS, Stream.Obj),
         rtZipXarFssFile_SetMode,
         rtZipXarFssFile_SetTimes,
         rtZipXarFssFile_SetOwner,
@@ -1170,6 +1170,8 @@ static const RTVFSFILEOPS g_rtZipXarFssFileOps =
     },
     rtZipXarFssFile_Seek,
     rtZipXarFssFile_QuerySize,
+    NULL /*SetSize*/,
+    NULL /*QueryMaxSize*/,
     RTVFSFILEOPS_VERSION,
 };
 
@@ -1430,7 +1432,7 @@ static const RTVFSSYMLINKOPS g_rtZipXarFssSymOps =
     0,
     { /* ObjSet */
         RTVFSOBJSETOPS_VERSION,
-        RT_OFFSETOF(RTVFSSYMLINKOPS, Obj) - RT_OFFSETOF(RTVFSSYMLINKOPS, ObjSet),
+        RT_UOFFSETOF(RTVFSSYMLINKOPS, ObjSet) - RT_UOFFSETOF(RTVFSSYMLINKOPS, Obj),
         rtZipXarFssSym_SetMode,
         rtZipXarFssSym_SetTimes,
         rtZipXarFssSym_SetOwner,
@@ -1801,6 +1803,9 @@ static const RTVFSFSSTREAMOPS rtZipXarFssOps =
     RTVFSFSSTREAMOPS_VERSION,
     0,
     rtZipXarFss_Next,
+    NULL,
+    NULL,
+    NULL,
     RTVFSFSSTREAMOPS_VERSION
 };
 
@@ -1935,7 +1940,7 @@ static int rtZipXarReadAndValidateToc(RTVFSIOSTREAM hVfsIosIn, PCXARHEADER pXarH
                 {
                     Parser.read(pszOutput, cchToc, RTCString("xar-toc.xml"), *pDoc);
                 }
-                catch (xml::XmlError Err)
+                catch (xml::XmlError &)
                 {
                     rc = VERR_XAR_TOC_XML_PARSE_ERROR;
                 }
@@ -2084,7 +2089,8 @@ RTDECL(int) RTZipXarFsStreamFromIoStream(RTVFSIOSTREAM hVfsIosIn, uint32_t fFlag
                      */
                     PRTZIPXARFSSTREAM pThis;
                     RTVFSFSSTREAM     hVfsFss;
-                    rc = RTVfsNewFsStream(&rtZipXarFssOps, sizeof(*pThis), NIL_RTVFS, NIL_RTVFSLOCK, &hVfsFss, (void **)&pThis);
+                    rc = RTVfsNewFsStream(&rtZipXarFssOps, sizeof(*pThis), NIL_RTVFS, NIL_RTVFSLOCK, RTFILE_O_READ,
+                                          &hVfsFss, (void **)&pThis);
                     if (RT_SUCCESS(rc))
                     {
                         pThis->hVfsIos              = hVfsIosIn;

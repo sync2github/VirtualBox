@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetBaseService.h 87450 2021-01-27 02:00:34Z vboxsync $ */
 /** @file
  * VBoxNetUDP - IntNet Client Library.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxNetBaseService_h___
-#define ___VBoxNetBaseService_h___
+#ifndef VBOX_INCLUDED_SRC_NetLib_VBoxNetBaseService_h
+#define VBOX_INCLUDED_SRC_NetLib_VBoxNetBaseService_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/critsect.h>
 
@@ -24,14 +27,15 @@
 class VBoxNetHlpUDPService
 {
 public:
-virtual int                 hlpUDPBroadcast(unsigned uSrcPort, unsigned uDstPort,
-                                        void const *pvData, size_t cbData) const = 0;
+    virtual ~VBoxNetHlpUDPService() { /* Make VC++ 19.2 happy. */ }
+    virtual int hlpUDPBroadcast(unsigned uSrcPort, unsigned uDstPort, void const *pvData, size_t cbData) const = 0;
 };
 
 
 class VBoxNetLockee
 {
 public:
+    virtual ~VBoxNetLockee() { /* Make VC++ 19.2 happy. */ }
     virtual int  syncEnter() = 0;
     virtual int  syncLeave() = 0;
 };
@@ -40,7 +44,7 @@ public:
 class VBoxNetALock
 {
 public:
-    VBoxNetALock(VBoxNetLockee *a_lck):m_lck(a_lck)
+    VBoxNetALock(VBoxNetLockee *a_lck) : m_lck(a_lck)
     {
         if (m_lck)
             m_lck->syncEnter();
@@ -57,7 +61,7 @@ private:
 };
 
 # ifndef BASE_SERVICES_ONLY
-class VBoxNetBaseService: public VBoxNetHlpUDPService, public VBoxNetLockee
+class VBoxNetBaseService : public VBoxNetHlpUDPService, public VBoxNetLockee
 {
 public:
     VBoxNetBaseService(const std::string& aName, const std::string& aNetworkName);
@@ -110,7 +114,7 @@ protected:
     int32_t getVerbosityLevel() const;
     void setVerbosityLevel(int32_t);
 
-    void addCommandLineOption(const PRTGETOPTDEF);
+    void addCommandLineOption(PCRTGETOPTDEF);
 
     /**
      * Print debug message depending on the m_cVerbosity level.
@@ -142,4 +146,4 @@ protected:
     PRTGETOPTDEF getOptionsPtr();
 };
 # endif
-#endif
+#endif /* !VBOX_INCLUDED_SRC_NetLib_VBoxNetBaseService_h */

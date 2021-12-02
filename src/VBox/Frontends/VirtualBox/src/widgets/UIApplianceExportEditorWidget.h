@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIApplianceExportEditorWidget.h 91579 2021-10-05 17:32:35Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIApplianceExportEditorWidget class declaration.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,24 +15,33 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIApplianceExportEditorWidget_h__
-#define __UIApplianceExportEditorWidget_h__
+#ifndef FEQT_INCLUDED_SRC_widgets_UIApplianceExportEditorWidget_h
+#define FEQT_INCLUDED_SRC_widgets_UIApplianceExportEditorWidget_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UIApplianceEditorWidget.h"
 
+/* COM includes: */
+#include "CAppliance.h"
+
+/** UIApplianceEditorWidget subclass for Export Appliance wizard. */
 class UIApplianceExportEditorWidget: public UIApplianceEditorWidget
 {
     Q_OBJECT;
 
 public:
-    UIApplianceExportEditorWidget(QWidget *pParent = NULL);
 
-    CAppliance *init();
+    /** Constructs widget passing @a pParent to the base-class. */
+    UIApplianceExportEditorWidget(QWidget *pParent = 0);
 
-    void populate();
+    /** Assigns @a comAppliance and populates widget contents. */
+    virtual void setAppliance(const CAppliance &comAppliance) /* override final */;
+
+    /** Prepares export by pushing edited data back to appliance. */
     void prepareExport();
 };
 
-#endif /* __UIApplianceExportEditorWidget_h__ */
-
+#endif /* !FEQT_INCLUDED_SRC_widgets_UIApplianceExportEditorWidget_h */

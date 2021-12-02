@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTSystemQueryOSInfo-win.cpp 91605 2021-10-06 20:13:37Z vboxsync $ */
 /** @file
  * IPRT - RTSystemQueryOSInfo, generic stub.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,8 +35,10 @@
 #include "internal-r3-win.h"
 #include <iprt/system.h>
 #include <iprt/assert.h>
-#include <iprt/string.h>
 #include <iprt/ctype.h>
+#include <iprt/errcore.h>
+#include <iprt/string.h>
+#include <iprt/utf16.h>
 
 
 /*********************************************************************************************************************************
@@ -190,6 +192,8 @@ static int rtSystemWinQueryOSVersion(RTSYSOSINFO enmInfo, char *pszInfo, size_t 
                 case kRTWinOSType_98SP1:        strcpy(szTmp, "Windows 98 (Service Pack 1)"); break;
                 case kRTWinOSType_98SE:         strcpy(szTmp, "Windows 98 (Second Edition)"); break;
                 case kRTWinOSType_ME:           strcpy(szTmp, "Windows Me"); break;
+                case kRTWinOSType_NT310:        strcpy(szTmp, "Windows NT 3.10"); break;
+                case kRTWinOSType_NT350:        strcpy(szTmp, "Windows NT 3.50"); break;
                 case kRTWinOSType_NT351:        strcpy(szTmp, "Windows NT 3.51"); break;
                 case kRTWinOSType_NT4:          strcpy(szTmp, "Windows NT 4.0"); break;
                 case kRTWinOSType_2K:           strcpy(szTmp, "Windows 2000"); break;
@@ -222,6 +226,9 @@ static int rtSystemWinQueryOSVersion(RTSYSOSINFO enmInfo, char *pszInfo, size_t 
                 case kRTWinOSType_2012R2:       strcpy(szTmp, "Windows 2012 R2"); break;
                 case kRTWinOSType_10:           strcpy(szTmp, "Windows 10"); break;
                 case kRTWinOSType_2016:         strcpy(szTmp, "Windows 2016"); break;
+                case kRTWinOSType_2019:         strcpy(szTmp, "Windows 2019"); break;
+                case kRTWinOSType_2022:         strcpy(szTmp, "Windows 2022"); break;
+                case kRTWinOSType_11:           strcpy(szTmp, "Windows 11"); break;
 
                 case kRTWinOSType_NT_UNKNOWN:
                     RTStrPrintf(szTmp, sizeof(szTmp), "Unknown NT v%u.%u",
@@ -336,5 +343,17 @@ RTDECL(int) RTSystemQueryOSInfo(RTSYSOSINFO enmInfo, char *pszInfo, size_t cchIn
     }
 
     return VERR_NOT_SUPPORTED;
+}
+
+
+RTDECL(uint32_t) RTSystemGetNtBuildNo(void)
+{
+    return g_WinOsInfoEx.dwBuildNumber;
+}
+
+
+RTDECL(uint64_t) RTSystemGetNtVersion(void)
+{
+    return RTSYSTEM_MAKE_NT_VERSION(g_WinOsInfoEx.dwMajorVersion, g_WinOsInfoEx.dwMinorVersion, g_WinOsInfoEx.dwBuildNumber);
 }
 

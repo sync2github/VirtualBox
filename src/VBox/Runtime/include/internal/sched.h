@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: sched.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Internal RTSched header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_sched_h
-#define ___internal_sched_h
+#ifndef IPRT_INCLUDED_INTERNAL_sched_h
+#define IPRT_INCLUDED_INTERNAL_sched_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/thread.h>
 #include "internal/process.h"
@@ -44,4 +47,4 @@ DECLHIDDEN(int) rtSchedNativeCalcDefaultPriority(RTTHREADTYPE enmType);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_sched_h */

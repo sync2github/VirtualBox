@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: test.cpp 92258 2021-11-08 09:18:20Z vboxsync $ */
 /** @file
  * IPRT - Testcase Framework.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -124,6 +124,9 @@ typedef struct RTTESTINT
     uint32_t            cSubTests;
     /** The number of sub tests that failed. */
     uint32_t            cSubTestsFailed;
+
+    /** Error context message. */
+    char               *pszErrCtx;
 
     /** Set if XML output is enabled. */
     bool                fXmlEnabled;
@@ -519,6 +522,8 @@ RTR3DECL(int) RTTestDestroy(RTTEST hTest)
     pTest->pszSubTest = NULL;
     RTStrFree((char *)pTest->pszTest);
     pTest->pszTest = NULL;
+    RTStrFree(pTest->pszErrCtx);
+    pTest->pszErrCtx = NULL;
     RTMemFree(pTest);
     return VINF_SUCCESS;
 }
@@ -1217,13 +1222,13 @@ static int rtTestSubTestReport(PRTTESTINT pTest)
             {
                 rtTestXmlElem(pTest, "Passed", NULL);
                 rtTestXmlElemEnd(pTest, "Test");
-                cch += RTTestPrintfNl(pTest, RTTESTLVL_SUB_TEST, "%-50s: PASSED\n", pTest->pszSubTest);
+                cch += RTTestPrintfNl(pTest, RTTESTLVL_SUB_TEST, "%-60s: PASSED\n", pTest->pszSubTest);
             }
             else
             {
                 rtTestXmlElem(pTest, "Skipped", NULL);
                 rtTestXmlElemEnd(pTest, "Test");
-                cch += RTTestPrintfNl(pTest, RTTESTLVL_SUB_TEST, "%-50s: SKIPPED\n", pTest->pszSubTest);
+                cch += RTTestPrintfNl(pTest, RTTESTLVL_SUB_TEST, "%-60s: SKIPPED\n", pTest->pszSubTest);
             }
         }
         else
@@ -1231,7 +1236,7 @@ static int rtTestSubTestReport(PRTTESTINT pTest)
             pTest->cSubTestsFailed++;
             rtTestXmlElem(pTest, "Failed", "errors=\"%u\"", cErrors);
             rtTestXmlElemEnd(pTest, "Test");
-            cch += RTTestPrintfNl(pTest, RTTESTLVL_SUB_TEST, "%-50s: FAILED (%u errors)\n",
+            cch += RTTestPrintfNl(pTest, RTTESTLVL_SUB_TEST, "%-60s: FAILED (%u errors)\n",
                                   pTest->pszSubTest, cErrors);
         }
     }
@@ -1258,6 +1263,8 @@ static int rtTestSubCleanup(PRTTESTINT pTest)
         pTest->pszSubTest = NULL;
         pTest->fSubTestReported = true;
     }
+    RTStrFree(pTest->pszErrCtx);
+    pTest->pszErrCtx = NULL;
     return cch;
 }
 
@@ -1359,6 +1366,7 @@ RTR3DECL(int) RTTestSub(RTTEST hTest, const char *pszSubTest)
     pTest->cSubTestAtErrors = ASMAtomicUoReadU32(&pTest->cErrors);
     pTest->pszSubTest = RTStrDup(pszSubTest);
     pTest->cchSubTest = strlen(pszSubTest);
+    Assert(pTest->cchSubTest < 64 /* See g_kcchMaxTestResultName in testmanager/config.py. */);
     pTest->fSubTestSkipped  = false;
     pTest->fSubTestReported = false;
 
@@ -1583,6 +1591,13 @@ static const char *rtTestUnitName(RTTESTUNIT enmUnit)
         case RTTESTUNIT_PP10K:                  return "pp10k";
         case RTTESTUNIT_PPM:                    return "ppm";
         case RTTESTUNIT_PPB:                    return "ppb";
+        case RTTESTUNIT_TICKS:                  return "ticks";
+        case RTTESTUNIT_TICKS_PER_CALL:         return "ticks/call";
+        case RTTESTUNIT_TICKS_PER_OCCURENCE:    return "ticks/occ";
+        case RTTESTUNIT_PAGES:                  return "pages";
+        case RTTESTUNIT_PAGES_PER_SEC:          return "pages/s";
+        case RTTESTUNIT_TICKS_PER_PAGE:         return "ticks/page";
+        case RTTESTUNIT_NS_PER_PAGE:            return "ns/page";
 
         /* No default so gcc helps us keep this up to date. */
         case RTTESTUNIT_INVALID:
@@ -1599,6 +1614,8 @@ RTR3DECL(int) RTTestValue(RTTEST hTest, const char *pszName, uint64_t u64Value, 
     PRTTESTINT pTest = hTest;
     RTTEST_GET_VALID_RETURN(pTest);
 
+    Assert(strlen(pszName) < 56 /* See g_kcchMaxTestValueName in testmanager/config.py. */);
+
     const char *pszUnit = rtTestUnitName(enmUnit);
 
     RTCritSectEnter(&pTest->Lock);
@@ -1606,7 +1623,7 @@ RTR3DECL(int) RTTestValue(RTTEST hTest, const char *pszName, uint64_t u64Value, 
     RTCritSectLeave(&pTest->Lock);
 
     RTCritSectEnter(&pTest->OutputLock);
-    rtTestPrintf(pTest, "  %-48s: %'16llu %s\n", pszName, u64Value, pszUnit);
+    rtTestPrintf(pTest, "  %-58s: %'16llu %s\n", pszName, u64Value, pszUnit);
     RTCritSectLeave(&pTest->OutputLock);
 
     return VINF_SUCCESS;
@@ -1707,6 +1724,12 @@ RTR3DECL(int) RTTestFailedV(RTTEST hTest, const char *pszFormat, va_list va)
 
         RTCritSectEnter(&pTest->OutputLock);
         cch += rtTestPrintf(pTest, fHasNewLine ? "%N" : "%N\n", pszFormat, &va2);
+        if (pTest->pszErrCtx)
+        {
+            cch += rtTestPrintf(pTest, "context: %s\n", pTest->pszErrCtx);
+            RTStrFree(pTest->pszErrCtx);
+            pTest->pszErrCtx = NULL;
+        }
         RTCritSectLeave(&pTest->OutputLock);
 
         va_end(va2);
@@ -1768,6 +1791,35 @@ RTR3DECL(int) RTTestFailureDetails(RTTEST hTest, const char *pszFormat, ...)
     int cch = RTTestFailureDetailsV(hTest, pszFormat, va);
     va_end(va);
     return cch;
+}
+
+
+RTR3DECL(int) RTTestErrContextV(RTTEST hTest, const char *pszFormat, va_list va)
+{
+    PRTTESTINT pTest = hTest;
+    RTTEST_GET_VALID_RETURN(pTest);
+
+    RTStrFree(pTest->pszErrCtx);
+    pTest->pszErrCtx = NULL;
+
+    if (pszFormat && *pszFormat)
+    {
+        pTest->pszErrCtx = RTStrAPrintf2V(pszFormat, va);
+        AssertReturn(pTest->pszErrCtx, VERR_NO_STR_MEMORY);
+        RTStrStripR(pTest->pszErrCtx);
+    }
+
+    return VINF_SUCCESS;
+}
+
+
+RTR3DECL(int) RTTestErrContext(RTTEST hTest, const char *pszFormat, ...)
+{
+    va_list va;
+    va_start(va, pszFormat);
+    int rc = RTTestErrContextV(hTest, pszFormat, va);
+    va_end(va);
+    return rc;
 }
 
 

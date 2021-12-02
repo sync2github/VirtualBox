@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: DevVGA-SVGA3d-cocoa.m 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox OpenGL Cocoa Window System Helper Implementation.
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2009-2015 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -41,17 +41,17 @@
  * Define this to experiment with using NSOpenGLView instead
  * of NSView.  There are transparency issues with the former,
  * so for the time being we're using the latter.  */
-#if 0
-#define USE_NSOPENGLVIEW
+#if 0 || DOXYGEN_RUNNING
+# define USE_NSOPENGLVIEW
 #endif
 
 /**@def FLOAT_FMT_STR
  * Format string bits to go with FLOAT_FMT_ARGS. */
-#define FLOAT_FMT_STR                           "%d.%06d"
+#define FLOAT_FMT_STR                           "%d.%06u"
 /** @def FLOAT_FMT_ARGS
  * Format arguments for a float value, corresponding to FLOAT_FMT_STR.
  * @param   r       The floating point value to format.  */
-#define FLOAT_FMT_ARGS(r)                       (int)(r), ((unsigned)((r) * 1000000) % 1000000U)
+#define FLOAT_FMT_ARGS(r)                       (int)(r), ((unsigned)(RT_ABS(r) * 1000000) % 1000000U)
 
 
 
@@ -698,8 +698,14 @@ VMSVGA3DCOCOA_DECL(void) vmsvga3dCocoaServiceRunLoop(void)
 /**
  * Document me later.
  *
+ * @param   ppView
+ * @param   ppCtx
  * @param   pParentView     The parent view if this is a context we'll be
  *                          presenting to.
+ * @param   cx
+ * @param   cy
+ * @param   pSharedCtx
+ * @param   fOtherProfile
  */
 VMSVGA3DCOCOA_DECL(bool) vmsvga3dCocoaCreateViewAndContext(NativeNSViewRef *ppView, NativeNSOpenGLContextRef *ppCtx,
                                                            NativeNSViewRef pParentView, uint32_t cx, uint32_t cy,

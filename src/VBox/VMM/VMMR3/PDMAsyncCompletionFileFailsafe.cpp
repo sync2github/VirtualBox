@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: PDMAsyncCompletionFileFailsafe.cpp 90784 2021-08-23 09:42:32Z vboxsync $ */
 /** @file
  * PDM Async I/O - Transport data asynchronous in R3 using EMT.
  * Simple File I/O manager.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -26,6 +26,8 @@
 #include <VBox/log.h>
 
 #include "PDMAsyncCompletionFileInternal.h"
+
+
 
 /**
  * Put a list of tasks in the pending request list of an endpoint.
@@ -188,7 +190,7 @@ DECLCALLBACK(int) pdmacFileAioMgrFailsafe(RTTHREAD hThreadSelf, void *pvUser)
                 case PDMACEPFILEAIOMGRBLOCKINGEVENT_ADD_ENDPOINT:
                 {
                     PPDMASYNCCOMPLETIONENDPOINTFILE pEndpointNew = pAioMgr->BlockingEventData.AddEndpoint.pEndpoint;
-                    AssertMsg(VALID_PTR(pEndpointNew), ("Adding endpoint event without a endpoint to add\n"));
+                    AssertMsg(RT_VALID_PTR(pEndpointNew), ("Adding endpoint event without a endpoint to add\n"));
 
                     pEndpointNew->enmState = PDMASYNCCOMPLETIONENDPOINTFILESTATE_ACTIVE;
 
@@ -211,7 +213,7 @@ DECLCALLBACK(int) pdmacFileAioMgrFailsafe(RTTHREAD hThreadSelf, void *pvUser)
                 case PDMACEPFILEAIOMGRBLOCKINGEVENT_REMOVE_ENDPOINT:
                 {
                     PPDMASYNCCOMPLETIONENDPOINTFILE pEndpointRemove = pAioMgr->BlockingEventData.RemoveEndpoint.pEndpoint;
-                    AssertMsg(VALID_PTR(pEndpointRemove), ("Removing endpoint event without a endpoint to remove\n"));
+                    AssertMsg(RT_VALID_PTR(pEndpointRemove), ("Removing endpoint event without a endpoint to remove\n"));
 
                     pEndpointRemove->enmState = PDMASYNCCOMPLETIONENDPOINTFILESTATE_REMOVING;
 
@@ -232,7 +234,7 @@ DECLCALLBACK(int) pdmacFileAioMgrFailsafe(RTTHREAD hThreadSelf, void *pvUser)
                 case PDMACEPFILEAIOMGRBLOCKINGEVENT_CLOSE_ENDPOINT:
                 {
                     PPDMASYNCCOMPLETIONENDPOINTFILE pEndpointClose = pAioMgr->BlockingEventData.CloseEndpoint.pEndpoint;
-                    AssertMsg(VALID_PTR(pEndpointClose), ("Close endpoint event without a endpoint to Close\n"));
+                    AssertMsg(RT_VALID_PTR(pEndpointClose), ("Close endpoint event without a endpoint to Close\n"));
 
                     pEndpointClose->enmState = PDMASYNCCOMPLETIONENDPOINTFILESTATE_CLOSING;
 

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,12 +23,15 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_formats_hfs_h
-#define ___iprt_formats_hfs_h
+#ifndef IPRT_INCLUDED_formats_hfs_h
+#define IPRT_INCLUDED_formats_hfs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #include <iprt/types.h>
-#include <iprt/assert.h>
+#include <iprt/assertcompile.h>
 
 
 /** @defgroup grp_rt_fmt_hfs    HFS - Hierarchical File System.
@@ -212,7 +215,8 @@
 
 /** @} */
 
-/** @name B-tree compare types (BTHeaderRec::keyCompareType) */
+/** @name B-tree compare types (BTHeaderRec::keyCompareType)
+ * @{ */
 #define kHFSCaseFolding                 UINT8_C(0xcf)
 #define kHFSBinaryCompare               UINT8_C(0xbc)
 /** @} */
@@ -673,5 +677,5 @@ AssertCompileSize(JournalInfoBlock, 180);
 
 /** @}  */
 
-#endif
+#endif /* !IPRT_INCLUDED_formats_hfs_h */
 

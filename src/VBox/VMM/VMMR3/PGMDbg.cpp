@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PGMDbg.cpp 91904 2021-10-20 16:54:47Z vboxsync $ */
 /** @file
  * PGM - Page Manager and Monitor - Debugger & Debugging APIs.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,6 +20,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_PGM
+/** @todo define VBOX_WITHOUT_PAGING_BIT_FIELDS - not so important here, should only be reading for debugging purposes. */
 #include <VBox/vmm/pgm.h>
 #include <VBox/vmm/stam.h>
 #include "PGMInternal.h"
@@ -104,8 +105,8 @@ typedef PGMR3DUMPHIERARCHYSTATE *PPGMR3DUMPHIERARCHYSTATE;
  * @param   cbNeedle        Size of what we're searching for.
  */
 
-typedef DECLCALLBACK(uint8_t const *) FNPGMR3DBGFIXEDMEMSCAN(void const *pvHaystack, uint32_t cbHaystack,
-                                                             void const *pvNeedle, size_t cbNeedle);
+typedef DECLCALLBACKTYPE(uint8_t const *, FNPGMR3DBGFIXEDMEMSCAN,(void const *pvHaystack, uint32_t cbHaystack,
+                                                                  void const *pvNeedle, size_t cbNeedle));
 /** Pointer to an fixed size and step assembly scanner function. */
 typedef FNPGMR3DBGFIXEDMEMSCAN *PFNPGMR3DBGFIXEDMEMSCAN;
 
@@ -332,7 +333,7 @@ VMMR3_INT_DECL(int) PGMR3DbgReadGCPtr(PVM pVM, void *pvDst, RTGCPTR GCPtrSrc, si
     AssertReturn(pVM, VERR_INVALID_PARAMETER);
 
     /** @todo SMP support! */
-    PVMCPU pVCpu = &pVM->aCpus[0];
+    PVMCPU pVCpu = pVM->apCpusR3[0];
 
 /** @todo deal with HMA */
     /* try simple first. */
@@ -388,7 +389,7 @@ VMMR3_INT_DECL(int) PGMR3DbgWriteGCPtr(PVM pVM, RTGCPTR GCPtrDst, void const *pv
     AssertReturn(pVM, VERR_INVALID_PARAMETER);
 
     /** @todo SMP support! */
-    PVMCPU pVCpu = &pVM->aCpus[0];
+    PVMCPU pVCpu = pVM->apCpusR3[0];
 
 /** @todo deal with HMA */
     /* try simple first. */
@@ -588,32 +589,30 @@ static bool pgmR3DbgScanPage(const uint8_t *pbPage, int32_t *poff, uint32_t cb, 
 }
 
 
-static void pgmR3DbgSelectMemScanFunction(PFNPGMR3DBGFIXEDMEMSCAN *ppfnMemScan, uint32_t GCPhysAlign, size_t cbNeedle)
+static PFNPGMR3DBGFIXEDMEMSCAN pgmR3DbgSelectMemScanFunction(uint32_t GCPhysAlign, size_t cbNeedle)
 {
-    *ppfnMemScan = NULL;
     switch (GCPhysAlign)
     {
         case 1:
             if (cbNeedle >= 8)
-                *ppfnMemScan = pgmR3DbgFixedMemScan8Wide1Step;
-            else if (cbNeedle >= 4)
-                *ppfnMemScan = pgmR3DbgFixedMemScan4Wide1Step;
-            else
-                *ppfnMemScan = pgmR3DbgFixedMemScan1Wide1Step;
-            break;
+                return pgmR3DbgFixedMemScan8Wide1Step;
+            if (cbNeedle >= 4)
+                return pgmR3DbgFixedMemScan4Wide1Step;
+            return pgmR3DbgFixedMemScan1Wide1Step;
         case 2:
             if (cbNeedle >= 2)
-                *ppfnMemScan = pgmR3DbgFixedMemScan2Wide2Step;
+                return pgmR3DbgFixedMemScan2Wide2Step;
             break;
         case 4:
             if (cbNeedle >= 4)
-                *ppfnMemScan = pgmR3DbgFixedMemScan4Wide4Step;
+                return pgmR3DbgFixedMemScan4Wide4Step;
             break;
         case 8:
             if (cbNeedle >= 8)
-                *ppfnMemScan = pgmR3DbgFixedMemScan8Wide8Step;
+                return pgmR3DbgFixedMemScan8Wide8Step;
             break;
     }
+    return NULL;
 }
 
 
@@ -642,11 +641,11 @@ VMMR3_INT_DECL(int) PGMR3DbgScanPhysical(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cbRa
     /*
      * Validate and adjust the input a bit.
      */
-    if (!VALID_PTR(pGCPhysHit))
+    if (!RT_VALID_PTR(pGCPhysHit))
         return VERR_INVALID_POINTER;
     *pGCPhysHit = NIL_RTGCPHYS;
 
-    if (    !VALID_PTR(pabNeedle)
+    if (    !RT_VALID_PTR(pabNeedle)
         ||  GCPhys == NIL_RTGCPHYS)
         return VERR_INVALID_POINTER;
     if (!cbNeedle)
@@ -684,14 +683,13 @@ VMMR3_INT_DECL(int) PGMR3DbgScanPhysical(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cbRa
                                ? GCPhys + cbRange - 1
                                : ~(RTGCPHYS)0;
 
-    PFNPGMR3DBGFIXEDMEMSCAN pfnMemScan;
-    pgmR3DbgSelectMemScanFunction(&pfnMemScan, (uint32_t)GCPhysAlign, cbNeedle);
+    PFNPGMR3DBGFIXEDMEMSCAN pfnMemScan = pgmR3DbgSelectMemScanFunction((uint32_t)GCPhysAlign, cbNeedle);
 
     /*
      * Search the memory - ignore MMIO and zero pages, also don't
      * bother to match across ranges.
      */
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     for (PPGMRAMRANGE pRam = pVM->pgm.s.CTX_SUFF(pRamRangesX);
          pRam;
          pRam = pRam->CTX_SUFF(pNext))
@@ -751,7 +749,7 @@ VMMR3_INT_DECL(int) PGMR3DbgScanPhysical(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cbRa
                         if (fRc)
                         {
                             *pGCPhysHit = GCPhys + offHit;
-                            pgmUnlock(pVM);
+                            PGM_UNLOCK(pVM);
                             return VINF_SUCCESS;
                         }
                     }
@@ -765,7 +763,7 @@ VMMR3_INT_DECL(int) PGMR3DbgScanPhysical(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cbRa
                 GCPhys += (RTGCPHYS)cIncPages << PAGE_SHIFT;
                 if (GCPhys >= GCPhysLast) /* (may not always hit, but we're run out of ranges.) */
                 {
-                    pgmUnlock(pVM);
+                    PGM_UNLOCK(pVM);
                     return VERR_DBGF_MEM_NOT_FOUND;
                 }
                 iPage += cIncPages;
@@ -775,7 +773,7 @@ VMMR3_INT_DECL(int) PGMR3DbgScanPhysical(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cbRa
             }
         }
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return VERR_DBGF_MEM_NOT_FOUND;
 }
 
@@ -808,11 +806,11 @@ VMMR3_INT_DECL(int) PGMR3DbgScanVirtual(PVM pVM, PVMCPU pVCpu, RTGCPTR GCPtr, RT
     /*
      * Validate and adjust the input a bit.
      */
-    if (!VALID_PTR(pGCPtrHit))
+    if (!RT_VALID_PTR(pGCPtrHit))
         return VERR_INVALID_POINTER;
     *pGCPtrHit = 0;
 
-    if (!VALID_PTR(pabNeedle))
+    if (!RT_VALID_PTR(pabNeedle))
         return VERR_INVALID_POINTER;
     if (!cbNeedle)
         return VERR_INVALID_PARAMETER;
@@ -863,52 +861,71 @@ VMMR3_INT_DECL(int) PGMR3DbgScanVirtual(PVM pVM, PVMCPU pVCpu, RTGCPTR GCPtr, RT
     uint32_t        offPage   = GCPtr & PAGE_OFFSET_MASK;
     GCPtr &= ~(RTGCPTR)PAGE_OFFSET_MASK;
 
-    PFNPGMR3DBGFIXEDMEMSCAN pfnMemScan;
-    pgmR3DbgSelectMemScanFunction(&pfnMemScan, (uint32_t)GCPtrAlign, cbNeedle);
+    PFNPGMR3DBGFIXEDMEMSCAN pfnMemScan = pgmR3DbgSelectMemScanFunction((uint32_t)GCPtrAlign, cbNeedle);
 
-    uint32_t        cYieldCountDown = 4096;
-    pgmLock(pVM);
+    VMSTATE         enmVMState              = pVM->enmVMState;
+    uint32_t const  cYieldCountDownReload   = VMSTATE_IS_RUNNING(enmVMState) ? 4096 : 65536;
+    uint32_t        cYieldCountDown         = cYieldCountDownReload;
+    RTGCPHYS        GCPhysPrev              = NIL_RTGCPHYS;
+    bool            fFullWalk               = true;
+    PGMPTWALKGST    Walk;
+    RT_ZERO(Walk);
+
+    PGM_LOCK_VOID(pVM);
     for (;; offPage = 0)
     {
-        PGMPTWALKGST Walk;
-        int rc = pgmGstPtWalk(pVCpu, GCPtr, &Walk);
+        int rc;
+        if (fFullWalk)
+            rc = pgmGstPtWalk(pVCpu, GCPtr, &Walk);
+        else
+            rc = pgmGstPtWalkNext(pVCpu, GCPtr, &Walk);
         if (RT_SUCCESS(rc) && Walk.u.Core.fSucceeded)
         {
-            PPGMPAGE pPage = pgmPhysGetPage(pVM, Walk.u.Core.GCPhys);
-            if (   pPage
-                && (   !PGM_PAGE_IS_ZERO(pPage)
-                    || fAllZero)
-                && !PGM_PAGE_IS_MMIO_OR_ALIAS(pPage)
-                && !PGM_PAGE_IS_BALLOONED(pPage))
+            fFullWalk = false;
+
+            /* Skip if same page as previous one (W10 optimization). */
+            if (   Walk.u.Core.GCPhys != GCPhysPrev
+                || cbPrev != 0)
             {
-                void const *pvPage;
-                PGMPAGEMAPLOCK Lock;
-                rc = PGMPhysGCPhys2CCPtrReadOnly(pVM, Walk.u.Core.GCPhys, &pvPage, &Lock);
-                if (RT_SUCCESS(rc))
+                PPGMPAGE pPage = pgmPhysGetPage(pVM, Walk.u.Core.GCPhys);
+                if (   pPage
+                    && (   !PGM_PAGE_IS_ZERO(pPage)
+                        || fAllZero)
+                    && !PGM_PAGE_IS_MMIO_OR_ALIAS(pPage)
+                    && !PGM_PAGE_IS_BALLOONED(pPage))
                 {
-                    int32_t offHit = offPage;
-                    bool    fRc;
-                    if (GCPtrAlign < PAGE_SIZE)
+                    GCPhysPrev = Walk.u.Core.GCPhys;
+                    void const *pvPage;
+                    PGMPAGEMAPLOCK Lock;
+                    rc = PGMPhysGCPhys2CCPtrReadOnly(pVM, Walk.u.Core.GCPhys, &pvPage, &Lock);
+                    if (RT_SUCCESS(rc))
                     {
-                        uint32_t cbSearch = cPages > 0
-                                          ? PAGE_SIZE                          - (uint32_t)offPage
-                                          : (GCPtrLast & PAGE_OFFSET_MASK) + 1 - (uint32_t)offPage;
-                        fRc = pgmR3DbgScanPage((uint8_t const *)pvPage, &offHit, cbSearch, (uint32_t)GCPtrAlign,
-                                               pabNeedle, cbNeedle, pfnMemScan, &abPrev[0], &cbPrev);
+                        int32_t offHit = offPage;
+                        bool    fRc;
+                        if (GCPtrAlign < PAGE_SIZE)
+                        {
+                            uint32_t cbSearch = cPages > 0
+                                              ? PAGE_SIZE                          - (uint32_t)offPage
+                                              : (GCPtrLast & PAGE_OFFSET_MASK) + 1 - (uint32_t)offPage;
+                            fRc = pgmR3DbgScanPage((uint8_t const *)pvPage, &offHit, cbSearch, (uint32_t)GCPtrAlign,
+                                                   pabNeedle, cbNeedle, pfnMemScan, &abPrev[0], &cbPrev);
+                        }
+                        else
+                            fRc = memcmp(pvPage, pabNeedle, cbNeedle) == 0
+                               && (GCPtrLast - GCPtr) >= cbNeedle;
+                        PGMPhysReleasePageMappingLock(pVM, &Lock);
+                        if (fRc)
+                        {
+                            *pGCPtrHit = GCPtr + offHit;
+                            PGM_UNLOCK(pVM);
+                            return VINF_SUCCESS;
+                        }
                     }
                     else
-                        fRc = memcmp(pvPage, pabNeedle, cbNeedle) == 0
-                           && (GCPtrLast - GCPtr) >= cbNeedle;
-                    PGMPhysReleasePageMappingLock(pVM, &Lock);
-                    if (fRc)
-                    {
-                        *pGCPtrHit = GCPtr + offHit;
-                        pgmUnlock(pVM);
-                        return VINF_SUCCESS;
-                    }
+                        cbPrev = 0; /* ignore error. */
                 }
                 else
-                    cbPrev = 0; /* ignore error. */
+                    cbPrev = 0;
             }
             else
                 cbPrev = 0;
@@ -965,6 +982,7 @@ VMMR3_INT_DECL(int) PGMR3DbgScanVirtual(PVM pVM, PVMCPU pVCpu, RTGCPTR GCPtr, RT
             }
             if (cPages <= cPagesCanSkip)
                 break;
+            fFullWalk = true;
             if (cPagesCanSkip >= cIncPages)
             {
                 cPages -= cPagesCanSkip;
@@ -982,11 +1000,11 @@ VMMR3_INT_DECL(int) PGMR3DbgScanVirtual(PVM pVM, PVMCPU pVCpu, RTGCPTR GCPtr, RT
         /* Yield the PGM lock every now and then. */
         if (!--cYieldCountDown)
         {
-            PDMR3CritSectYield(&pVM->pgm.s.CritSectX);
-            cYieldCountDown = 4096;
+            fFullWalk = PDMR3CritSectYield(pVM, &pVM->pgm.s.CritSectX);
+            cYieldCountDown = cYieldCountDownReload;
         }
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return VERR_DBGF_MEM_NOT_FOUND;
 }
 
@@ -1085,50 +1103,18 @@ static uint64_t pgmR3DumpHierarchyCalcRange(PPGMR3DUMPHIERARCHYSTATE pState, uin
  * @param   pState              The dumper state.
  * @param   HCPhys              The physical address of the shadow page.
  * @param   pszDesc             The description.
- * @param   fIsMapping          Set if it's a mapping.
  * @param   ppv                 Where to return the pointer.
  */
-static int pgmR3DumpHierarchyShwMapPage(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys, const char *pszDesc,
-                                        bool fIsMapping, void const **ppv)
+static int pgmR3DumpHierarchyShwMapPage(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys, const char *pszDesc, void const **ppv)
 {
-    void *pvPage;
-    if (!fIsMapping)
+    PPGMPOOLPAGE pPoolPage = pgmPoolQueryPageForDbg(pState->pVM->pgm.s.pPoolR3, HCPhys);
+    if (pPoolPage)
     {
-        int rc = MMPagePhys2PageTry(pState->pVM, HCPhys, &pvPage);
-        if (RT_FAILURE(rc))
-        {
-            pState->pHlp->pfnPrintf(pState->pHlp, "%0*llx error! %s at HCPhys=%RHp was not found in the page pool!\n",
-                                    pState->cchAddress, pState->u64Address, pszDesc, HCPhys);
-            return rc;
-        }
+        pState->pHlp->pfnPrintf(pState->pHlp, "%0*llx error! %s at HCPhys=%RHp was not found in the page pool!\n",
+                                pState->cchAddress, pState->u64Address, pszDesc, HCPhys);
+        return VERR_PGM_POOL_GET_PAGE_FAILED;
     }
-    else
-    {
-        pvPage = NULL;
-        for (PPGMMAPPING pMap = pState->pVM->pgm.s.pMappingsR3; pMap; pMap = pMap->pNextR3)
-        {
-            uint64_t off = pState->u64Address - pMap->GCPtr;
-            if (off < pMap->cb)
-            {
-                const int iPDE = (uint32_t)(off >> X86_PD_SHIFT);
-                const int iSub = (int)((off >> X86_PD_PAE_SHIFT) & 1); /* MSC is a pain sometimes */
-                if ((iSub ? pMap->aPTs[iPDE].HCPhysPaePT1 : pMap->aPTs[iPDE].HCPhysPaePT0) != HCPhys)
-                    pState->pHlp->pfnPrintf(pState->pHlp,
-                                            "%0*llx error! Mapping error! PT %d has HCPhysPT=%RHp not %RHp is in the PD.\n",
-                                            pState->cchAddress, pState->u64Address, iPDE,
-                                            iSub ? pMap->aPTs[iPDE].HCPhysPaePT1 : pMap->aPTs[iPDE].HCPhysPaePT0, HCPhys);
-                pvPage = &pMap->aPTs[iPDE].paPaePTsR3[iSub];
-                break;
-            }
-        }
-        if (!pvPage)
-        {
-            pState->pHlp->pfnPrintf(pState->pHlp, "%0*llx error! PT mapping %s at HCPhys=%RHp was not found in the page pool!\n",
-                                    pState->cchAddress, pState->u64Address, pszDesc, HCPhys);
-            return VERR_INVALID_PARAMETER;
-        }
-    }
-    *ppv = pvPage;
+    *ppv = (uint8_t *)pPoolPage->pvPageR3 + (HCPhys & PAGE_OFFSET_MASK);
     return VINF_SUCCESS;
 }
 
@@ -1141,34 +1127,14 @@ static int pgmR3DumpHierarchyShwMapPage(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHY
  */
 static void pgmR3DumpHierarchyShwTablePageInfo(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys)
 {
-    pgmLock(pState->pVM);
+    PGM_LOCK_VOID(pState->pVM);
     char            szPage[80];
     PPGMPOOLPAGE    pPage = pgmPoolQueryPageForDbg(pState->pVM->pgm.s.CTX_SUFF(pPool), HCPhys);
     if (pPage)
         RTStrPrintf(szPage, sizeof(szPage), " idx=0i%u", pPage->idx);
     else
-    {
-        /* probably a mapping */
         strcpy(szPage, " not found");
-        for (PPGMMAPPING pMap = pState->pVM->pgm.s.pMappingsR3; pMap; pMap = pMap->pNextR3)
-        {
-            uint64_t off = pState->u64Address - pMap->GCPtr;
-            if (off < pMap->cb)
-            {
-                const int iPDE = (uint32_t)(off >> X86_PD_SHIFT);
-                if (pMap->aPTs[iPDE].HCPhysPT == HCPhys)
-                    RTStrPrintf(szPage, sizeof(szPage), " #%u: %s", iPDE, pMap->pszDesc);
-                else if (pMap->aPTs[iPDE].HCPhysPaePT0 == HCPhys)
-                    RTStrPrintf(szPage, sizeof(szPage), " #%u/0: %s", iPDE, pMap->pszDesc);
-                else if (pMap->aPTs[iPDE].HCPhysPaePT1 == HCPhys)
-                    RTStrPrintf(szPage, sizeof(szPage), " #%u/1: %s", iPDE, pMap->pszDesc);
-                else
-                    continue;
-                break;
-            }
-        }
-    }
-    pgmUnlock(pState->pVM);
+    PGM_UNLOCK(pState->pVM);
     pState->pHlp->pfnPrintf(pState->pHlp, "%s", szPage);
 }
 
@@ -1187,25 +1153,17 @@ static void pgmR3DumpHierarchyShwGuestPageInfo(PPGMR3DUMPHIERARCHYSTATE pState, 
     int rc = PGMR3DbgHCPhys2GCPhys(pState->pVM->pUVM, HCPhys, &GCPhys);
     if (RT_SUCCESS(rc))
     {
-        pgmLock(pState->pVM);
+        PGM_LOCK_VOID(pState->pVM);
         PCPGMPAGE pPage = pgmPhysGetPage(pState->pVM, GCPhys);
         if (pPage)
             RTStrPrintf(szPage, sizeof(szPage), "%R[pgmpage]", pPage);
         else
             strcpy(szPage, "not found");
-        pgmUnlock(pState->pVM);
+        PGM_UNLOCK(pState->pVM);
         pState->pHlp->pfnPrintf(pState->pHlp, " -> %RGp %s", GCPhys, szPage);
     }
     else
-    {
-        /* check the heap */
-        uint32_t cbAlloc;
-        rc = MMR3HyperQueryInfoFromHCPhys(pState->pVM, HCPhys, szPage, sizeof(szPage), &cbAlloc);
-        if (RT_SUCCESS(rc))
-            pState->pHlp->pfnPrintf(pState->pHlp, " %s %#x bytes", szPage, cbAlloc);
-        else
-            pState->pHlp->pfnPrintf(pState->pHlp, " not found");
-    }
+        pState->pHlp->pfnPrintf(pState->pHlp, " not found");
     NOREF(cbPage);
 }
 
@@ -1216,12 +1174,11 @@ static void pgmR3DumpHierarchyShwGuestPageInfo(PPGMR3DUMPHIERARCHYSTATE pState, 
  * @returns VBox status code (VINF_SUCCESS).
  * @param   pState              The dumper state.
  * @param   HCPhys              The page table address.
- * @param   fIsMapping          Whether it is a mapping.
  */
-static int pgmR3DumpHierarchyShwPaePT(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys, bool fIsMapping)
+static int pgmR3DumpHierarchyShwPaePT(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys)
 {
     PCPGMSHWPTPAE pPT;
-    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page table", fIsMapping, (void const **)&pPT);
+    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page table", (void const **)&pPT);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -1289,7 +1246,7 @@ static int pgmR3DumpHierarchyShwPaePT(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS 
 static int  pgmR3DumpHierarchyShwPaePD(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys, unsigned cMaxDepth)
 {
     PCX86PDPAE pPD;
-    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page directory", false, (void const **)&pPD);
+    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page directory", (void const **)&pPD);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -1320,8 +1277,8 @@ static int  pgmR3DumpHierarchyShwPaePD(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS
                                         Pde.b.u1CacheDisable? "CD" : "--",
                                         Pde.b.u1PAT         ? "AT" : "--",
                                         Pde.b.u1NoExecute   ? "NX" : "--",
-                                        Pde.u & RT_BIT_64(9)            ? '1' : '0',
-                                        Pde.u & PGM_PDFLAGS_MAPPING     ? 'm' : '-',
+                                        Pde.u & PGM_PDFLAGS_BIG_PAGE    ? 'b' : '-',
+                                        '-',
                                         Pde.u & PGM_PDFLAGS_TRACK_DIRTY ? 'd' : '-',
                                         Pde.u & X86_PDE2M_PAE_PG_MASK);
                 if (pState->fDumpPageInfo)
@@ -1349,8 +1306,8 @@ static int  pgmR3DumpHierarchyShwPaePD(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS
                                         Pde.n.u1WriteThru   ? "WT" : "--",
                                         Pde.n.u1CacheDisable? "CD" : "--",
                                         Pde.n.u1NoExecute   ? "NX" : "--",
-                                        Pde.u & RT_BIT_64(9)            ? '1' : '0',
-                                        Pde.u & PGM_PDFLAGS_MAPPING     ? 'm' : '-',
+                                        Pde.u & PGM_PDFLAGS_BIG_PAGE    ? 'b' : '-',
+                                        '-',
                                         Pde.u & PGM_PDFLAGS_TRACK_DIRTY ? 'd' : '-',
                                         Pde.u & X86_PDE_PAE_PG_MASK);
                 if (pState->fDumpPageInfo)
@@ -1361,7 +1318,7 @@ static int  pgmR3DumpHierarchyShwPaePD(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS
 
                 if (cMaxDepth)
                 {
-                    int rc2 = pgmR3DumpHierarchyShwPaePT(pState, Pde.u & X86_PDE_PAE_PG_MASK, !!(Pde.u & PGM_PDFLAGS_MAPPING));
+                    int rc2 = pgmR3DumpHierarchyShwPaePT(pState, Pde.u & X86_PDE_PAE_PG_MASK);
                     if (rc2 < rc && RT_SUCCESS(rc))
                         rc = rc2;
                 }
@@ -1389,7 +1346,7 @@ static int  pgmR3DumpHierarchyShwPaePDPT(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPH
         return VINF_SUCCESS;
 
     PCX86PDPT pPDPT;
-    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page directory pointer table", false, (void const **)&pPDPT);
+    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page directory pointer table", (void const **)&pPDPT);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -1479,7 +1436,7 @@ static int  pgmR3DumpHierarchyShwPaePDPT(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPH
 static int pgmR3DumpHierarchyShwPaePML4(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys, unsigned cMaxDepth)
 {
     PCX86PML4 pPML4;
-    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page map level 4", false, (void const **)&pPML4);
+    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page map level 4", (void const **)&pPML4);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -1551,12 +1508,11 @@ static int pgmR3DumpHierarchyShwPaePML4(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHY
  * @returns VBox status code (VINF_SUCCESS).
  * @param   pState      The dumper state.
  * @param   HCPhys      The physical address of the table.
- * @param   fMapping    Set if it's a guest mapping.
  */
-static int pgmR3DumpHierarchyShw32BitPT(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys, bool fMapping)
+static int pgmR3DumpHierarchyShw32BitPT(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHYS HCPhys)
 {
     PCX86PT pPT;
-    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page table", fMapping, (void const **)&pPT);
+    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page table", (void const **)&pPT);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -1606,7 +1562,7 @@ static int pgmR3DumpHierarchyShw32BitPD(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHY
         return VINF_SUCCESS;
 
     PCX86PD pPD;
-    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page directory", false, (void const **)&pPD);
+    int rc = pgmR3DumpHierarchyShwMapPage(pState, HCPhys, "Page directory", (void const **)&pPD);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -1636,8 +1592,8 @@ static int pgmR3DumpHierarchyShw32BitPD(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHY
                                         Pde.b.u1WriteThru   ? "WT" : "--",
                                         Pde.b.u1CacheDisable? "CD" : "--",
                                         Pde.b.u1PAT         ? "AT" : "--",
-                                        Pde.u & RT_BIT_32(9)            ? '1' : '0',
-                                        Pde.u & PGM_PDFLAGS_MAPPING     ? 'm' : '-',
+                                        Pde.u & PGM_PDFLAGS_BIG_PAGE    ? 'b' : '-',
+                                        '-',
                                         Pde.u & PGM_PDFLAGS_TRACK_DIRTY ? 'd' : '-',
                                         u64Phys);
                 if (pState->fDumpPageInfo)
@@ -1657,8 +1613,8 @@ static int pgmR3DumpHierarchyShw32BitPD(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHY
                                         Pde.n.u1Reserved1   ? '?'  : '.', /* ignored */
                                         Pde.n.u1WriteThru   ? "WT" : "--",
                                         Pde.n.u1CacheDisable? "CD" : "--",
-                                        Pde.u & RT_BIT_32(9)            ? '1' : '0',
-                                        Pde.u & PGM_PDFLAGS_MAPPING     ? 'm' : '-',
+                                        Pde.u & PGM_PDFLAGS_BIG_PAGE    ? 'b' : '-',
+                                        '-',
                                         Pde.u & PGM_PDFLAGS_TRACK_DIRTY ? 'd' : '-',
                                         Pde.u & X86_PDE_PG_MASK);
                 if (pState->fDumpPageInfo)
@@ -1667,7 +1623,7 @@ static int pgmR3DumpHierarchyShw32BitPD(PPGMR3DUMPHIERARCHYSTATE pState, RTHCPHY
 
                 if (cMaxDepth)
                 {
-                    int rc2 = pgmR3DumpHierarchyShw32BitPT(pState, Pde.u & X86_PDE_PG_MASK, !!(Pde.u & PGM_PDFLAGS_MAPPING));
+                    int rc2 = pgmR3DumpHierarchyShw32BitPT(pState, Pde.u & X86_PDE_PG_MASK);
                     if (rc2 < rc && RT_SUCCESS(rc))
                         rc = rc2;
                 }
@@ -1693,7 +1649,7 @@ static int pgmR3DumpHierarchyShwDoIt(PPGMR3DUMPHIERARCHYSTATE pState, uint64_t c
 {
     int             rc;
     unsigned const  cch     = pState->cchAddress;
-    uint64_t const  cr3Mask = pState->fEpt ? X86_CR3_AMD64_PAGE_MASK
+    uint64_t const  cr3Mask = pState->fEpt ? X86_CR3_AMD64_PAGE_MASK    /** @todo this should be X86_CR3_EPT_PAGE_MASK */
                             : pState->fLme ? X86_CR3_AMD64_PAGE_MASK
                             : pState->fPae ? X86_CR3_PAE_PAGE_MASK
                             :                X86_CR3_PAGE_MASK;
@@ -1820,7 +1776,7 @@ VMMR3DECL(int) PGMR3DumpHierarchyHC(PVM pVM, uint64_t cr3, uint64_t cr4, bool fL
 
     PVMCPU pVCpu = VMMGetCpu(pVM);
     if (!pVCpu)
-        pVCpu = &pVM->aCpus[0];
+        pVCpu = pVM->apCpusR3[0];
 
     uint32_t fFlags = DBGFPGDMP_FLAGS_HEADER | DBGFPGDMP_FLAGS_PRINT_CR3 | DBGFPGDMP_FLAGS_PAGE_INFO | DBGFPGDMP_FLAGS_SHADOW;
     fFlags |= cr4 & (X86_CR4_PAE | X86_CR4_PSE);
@@ -1866,13 +1822,13 @@ static int pgmR3DumpHierarchyGstMapPage(PPGMR3DUMPHIERARCHYSTATE pState, RTGCPHY
 static void pgmR3DumpHierarchyGstPageInfo(PPGMR3DUMPHIERARCHYSTATE pState, RTGCPHYS GCPhys, uint32_t cbPage)
 {
     char szPage[80];
-    pgmLock(pState->pVM);
+    PGM_LOCK_VOID(pState->pVM);
     PCPGMPAGE pPage = pgmPhysGetPage(pState->pVM, GCPhys);
     if (pPage)
         RTStrPrintf(szPage, sizeof(szPage), " %R[pgmpage]", pPage);
     else
         strcpy(szPage, " not found");
-    pgmUnlock(pState->pVM);
+    PGM_UNLOCK(pState->pVM);
     pState->pHlp->pfnPrintf(pState->pHlp, "%s", szPage);
     NOREF(cbPage);
 }
@@ -2372,7 +2328,7 @@ static int pgmR3DumpHierarchyGstDoIt(PPGMR3DUMPHIERARCHYSTATE pState, uint64_t c
 {
     int             rc;
     unsigned const  cch     = pState->cchAddress;
-    uint64_t const  cr3Mask = pState->fEpt ? X86_CR3_AMD64_PAGE_MASK
+    uint64_t const  cr3Mask = pState->fEpt ? X86_CR3_AMD64_PAGE_MASK    /** @todo this should be X86_CR3_EPT_PAGE_MASK */
                             : pState->fLme ? X86_CR3_AMD64_PAGE_MASK
                             : pState->fPae ? X86_CR3_PAE_PAGE_MASK
                             :                X86_CR3_PAGE_MASK;
@@ -2475,5 +2431,353 @@ VMMR3_INT_DECL(int) PGMR3DumpHierarchyGst(PVM pVM, uint64_t cr3, uint32_t fFlags
     PGMR3DUMPHIERARCHYSTATE State;
     pgmR3DumpHierarchyInitState(&State, pVM, fFlags, FirstAddr, LastAddr, pHlp);
     return pgmR3DumpHierarchyGstDoIt(&State, cr3, cMaxDepth);
+}
+
+
+/**
+ * For aiding with reset problems and similar.
+ *
+ * @param   pVM                 The cross context VM handle.
+ */
+void pgmLogState(PVM pVM)
+{
+#if 0
+    RTLogRelPrintf("\npgmLogState pgmLogState pgmLogState pgmLogState pgmLogState\n");
+
+    /*
+     * Per CPU stuff.
+     */
+    for (VMCPUID iCpu = 0; iCpu < pVM->cCpus; iCpu++)
+    {
+        PPGMCPU pPgmCpu = &pVM->aCpus[iCpu].pgm.s;
+        RTLogRelPrintf("pgmLogState: CPU #%u\n", iCpu);
+# define LOG_PGMCPU_MEMBER(aFmt, aMember) RTLogRelPrintf(" %32s: %" aFmt "\n", #aMember, pPgmCpu->aMember)
+        LOG_PGMCPU_MEMBER("#RX32",  offVM);
+        LOG_PGMCPU_MEMBER("#RX32",  offVCpu);
+        LOG_PGMCPU_MEMBER("#RX32",  offPGM);
+        LOG_PGMCPU_MEMBER("RGp",    GCPhysA20Mask);
+        LOG_PGMCPU_MEMBER("RTbool", fA20Enabled);
+        LOG_PGMCPU_MEMBER("RTbool", fNoExecuteEnabled);
+        LOG_PGMCPU_MEMBER("#RX32",  fSyncFlags);
+        LOG_PGMCPU_MEMBER("d",      enmShadowMode);
+        LOG_PGMCPU_MEMBER("d",      enmGuestMode);
+        LOG_PGMCPU_MEMBER("RGp",    GCPhysCR3);
+
+        LOG_PGMCPU_MEMBER("p",      pGst32BitPdR3);
+        LOG_PGMCPU_MEMBER("p",      pGst32BitPdR0);
+        LOG_PGMCPU_MEMBER("RRv",    pGst32BitPdRC);
+        LOG_PGMCPU_MEMBER("#RX32",  fGst32BitMbzBigPdeMask);
+        LOG_PGMCPU_MEMBER("RTbool", fGst32BitPageSizeExtension);
+
+        LOG_PGMCPU_MEMBER("p",      pGstPaePdptR3);
+        LOG_PGMCPU_MEMBER("p",      pGstPaePdptR0);
+        LOG_PGMCPU_MEMBER("RRv",    pGstPaePdptRC);
+        LOG_PGMCPU_MEMBER("p",      apGstPaePDsR3[0]);
+        LOG_PGMCPU_MEMBER("p",      apGstPaePDsR3[1]);
+        LOG_PGMCPU_MEMBER("p",      apGstPaePDsR3[2]);
+        LOG_PGMCPU_MEMBER("p",      apGstPaePDsR3[3]);
+        LOG_PGMCPU_MEMBER("p",      apGstPaePDsR0[0]);
+        LOG_PGMCPU_MEMBER("p",      apGstPaePDsR0[1]);
+        LOG_PGMCPU_MEMBER("p",      apGstPaePDsR0[2]);
+        LOG_PGMCPU_MEMBER("p",      apGstPaePDsR0[3]);
+        LOG_PGMCPU_MEMBER("RRv",    apGstPaePDsR0[0]);
+        LOG_PGMCPU_MEMBER("RRv",    apGstPaePDsR0[1]);
+        LOG_PGMCPU_MEMBER("RRv",    apGstPaePDsR0[2]);
+        LOG_PGMCPU_MEMBER("RRv",    apGstPaePDsR0[3]);
+        LOG_PGMCPU_MEMBER("RGp",    aGCPhysGstPaePDs[0]);
+        LOG_PGMCPU_MEMBER("RGp",    aGCPhysGstPaePDs[1]);
+        LOG_PGMCPU_MEMBER("RGp",    aGCPhysGstPaePDs[2]);
+        LOG_PGMCPU_MEMBER("RGp",    aGCPhysGstPaePDs[3]);
+        LOG_PGMCPU_MEMBER("#RX64",  aGstPaePdpeRegs[0].u);
+        LOG_PGMCPU_MEMBER("#RX64",  aGstPaePdpeRegs[1].u);
+        LOG_PGMCPU_MEMBER("#RX64",  aGstPaePdpeRegs[2].u);
+        LOG_PGMCPU_MEMBER("#RX64",  aGstPaePdpeRegs[3].u);
+        LOG_PGMCPU_MEMBER("RGp",    aGCPhysGstPaePDsMonitored[0]);
+        LOG_PGMCPU_MEMBER("RGp",    aGCPhysGstPaePDsMonitored[1]);
+        LOG_PGMCPU_MEMBER("RGp",    aGCPhysGstPaePDsMonitored[2]);
+        LOG_PGMCPU_MEMBER("RGp",    aGCPhysGstPaePDsMonitored[3]);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstPaeMbzPteMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstPaeMbzPdeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstPaeMbzBigPdeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstPaeMbzBigPdeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstPaeMbzPdpeMask);
+
+        LOG_PGMCPU_MEMBER("p",      pGstAmd64Pml4R3);
+        LOG_PGMCPU_MEMBER("p",      pGstAmd64Pml4R0);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstAmd64MbzPteMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstAmd64MbzPdeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstAmd64MbzBigPdeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstAmd64MbzPdpeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstAmd64MbzBigPdpeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstAmd64MbzPml4eMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstAmd64ShadowedPdpeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGstAmd64ShadowedPml4eMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGst64ShadowedPteMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGst64ShadowedPdeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGst64ShadowedBigPdeMask);
+        LOG_PGMCPU_MEMBER("#RX64",  fGst64ShadowedBigPde4PteMask);
+
+        LOG_PGMCPU_MEMBER("p",      pShwPageCR3R3);
+        LOG_PGMCPU_MEMBER("p",      pShwPageCR3R0);
+        LOG_PGMCPU_MEMBER("RRv",    pShwPageCR3RC);
+
+        LOG_PGMCPU_MEMBER("p",      pfnR3ShwRelocate);
+        LOG_PGMCPU_MEMBER("p",      pfnR3ShwExit);
+        LOG_PGMCPU_MEMBER("p",      pfnR3ShwGetPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR3ShwModifyPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR0ShwGetPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR0ShwModifyPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR3GstRelocate);
+        LOG_PGMCPU_MEMBER("p",      pfnR3GstExit);
+        LOG_PGMCPU_MEMBER("p",      pfnR3GstGetPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR3GstModifyPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR0GstGetPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR0GstModifyPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR3BthRelocate);
+        LOG_PGMCPU_MEMBER("p",      pfnR3BthInvalidatePage);
+        LOG_PGMCPU_MEMBER("p",      pfnR3BthSyncCR3);
+        LOG_PGMCPU_MEMBER("p",      pfnR3BthPrefetchPage);
+        LOG_PGMCPU_MEMBER("p",      pfnR3BthMapCR3);
+        LOG_PGMCPU_MEMBER("p",      pfnR3BthUnmapCR3);
+        LOG_PGMCPU_MEMBER("p",      pfnR0BthMapCR3);
+        LOG_PGMCPU_MEMBER("p",      pfnR0BthUnmapCR3);
+        LOG_PGMCPU_MEMBER("#RX64",  cNetwareWp0Hacks);
+        LOG_PGMCPU_MEMBER("#RX64",  cPoolAccessHandler);
+
+    }
+
+    /*
+     * PGM globals.
+     */
+    RTLogRelPrintf("PGM globals\n");
+    PPGM pPgm = &pVM->pgm.s;
+# define LOG_PGM_MEMBER(aFmt, aMember) RTLogRelPrintf(" %32s: %" aFmt "\n", #aMember, pPgm->aMember)
+    LOG_PGM_MEMBER("#RX32",         offVM);
+    LOG_PGM_MEMBER("#RX32",         offVCpuPGM);
+    LOG_PGM_MEMBER("RTbool",        fRamPreAlloc);
+    LOG_PGM_MEMBER("RTbool",        fPhysWriteMonitoringEngaged);
+    LOG_PGM_MEMBER("RTbool",        fLessThan52PhysicalAddressBits);
+    LOG_PGM_MEMBER("RTbool",        fNestedPaging);
+    LOG_PGM_MEMBER("d",             enmHostMode);
+    LOG_PGM_MEMBER("RTbool",        fNoMorePhysWrites);
+    LOG_PGM_MEMBER("RTbool",        fPageFusionAllowed);
+    LOG_PGM_MEMBER("RTbool",        fPciPassthrough);
+    LOG_PGM_MEMBER("#x",            cMmio2Regions);
+    LOG_PGM_MEMBER("RTbool",        fRestoreRomPagesOnReset);
+    LOG_PGM_MEMBER("RTbool",        fZeroRamPagesOnReset);
+    LOG_PGM_MEMBER("RTbool",        fFinalizedMappings);
+    LOG_PGM_MEMBER("RTbool",        fMappingsFixed);
+    LOG_PGM_MEMBER("RTbool",        fMappingsFixedRestored);
+    LOG_PGM_MEMBER("%#x",           cbMappingFixed);
+    LOG_PGM_MEMBER("%#x",           idRamRangesGen);
+    LOG_PGM_MEMBER("#RGv",          GCPtrMappingFixed);
+    LOG_PGM_MEMBER("#RGv",          GCPtrPrevRamRangeMapping);
+    LOG_PGM_MEMBER("%#x",           hRomPhysHandlerType);
+    LOG_PGM_MEMBER("#RGp",          GCPhys4MBPSEMask);
+    LOG_PGM_MEMBER("#RGp",          GCPhysInvAddrMask);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR3[0]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR3[1]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR3[2]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR3[3]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR3[4]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR3[5]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR3[6]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR3[7]);
+    LOG_PGM_MEMBER("p",             pRamRangesXR3);
+    LOG_PGM_MEMBER("p",             pRamRangeTreeR3);
+    LOG_PGM_MEMBER("p",             pTreesR3);
+    LOG_PGM_MEMBER("p",             pLastPhysHandlerR3);
+    LOG_PGM_MEMBER("p",             pPoolR3);
+    LOG_PGM_MEMBER("p",             pMappingsR3);
+    LOG_PGM_MEMBER("p",             pRomRangesR3);
+    LOG_PGM_MEMBER("p",             pRegMmioRangesR3);
+    LOG_PGM_MEMBER("p",             paModeData);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR3[0]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR3[1]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR3[2]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR3[3]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR3[4]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR3[5]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR0[0]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR0[1]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR0[2]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR0[3]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR0[4]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR0[5]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR0[6]);
+    LOG_PGM_MEMBER("p",             apRamRangesTlbR0[7]);
+    LOG_PGM_MEMBER("p",             pRamRangesXR0);
+    LOG_PGM_MEMBER("p",             pRamRangeTreeR0);
+    LOG_PGM_MEMBER("p",             pTreesR0);
+    LOG_PGM_MEMBER("p",             pLastPhysHandlerR0);
+    LOG_PGM_MEMBER("p",             pPoolR0);
+    LOG_PGM_MEMBER("p",             pMappingsR0);
+    LOG_PGM_MEMBER("p",             pRomRangesR0);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR0[0]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR0[1]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR0[2]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR0[3]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR0[4]);
+    LOG_PGM_MEMBER("p",             apMmio2RangesR0[5]);
+    LOG_PGM_MEMBER("RRv",           apRamRangesTlbRC[0]);
+    LOG_PGM_MEMBER("RRv",           apRamRangesTlbRC[1]);
+    LOG_PGM_MEMBER("RRv",           apRamRangesTlbRC[2]);
+    LOG_PGM_MEMBER("RRv",           apRamRangesTlbRC[3]);
+    LOG_PGM_MEMBER("RRv",           apRamRangesTlbRC[4]);
+    LOG_PGM_MEMBER("RRv",           apRamRangesTlbRC[5]);
+    LOG_PGM_MEMBER("RRv",           apRamRangesTlbRC[6]);
+    LOG_PGM_MEMBER("RRv",           apRamRangesTlbRC[7]);
+    LOG_PGM_MEMBER("RRv",           pRamRangesXRC);
+    LOG_PGM_MEMBER("RRv",           pRamRangeTreeRC);
+    LOG_PGM_MEMBER("RRv",           pTreesRC);
+    LOG_PGM_MEMBER("RRv",           pLastPhysHandlerRC);
+    LOG_PGM_MEMBER("RRv",           pPoolRC);
+    LOG_PGM_MEMBER("RRv",           pMappingsRC);
+    LOG_PGM_MEMBER("RRv",           pRomRangesRC);
+    LOG_PGM_MEMBER("RRv",           paDynPageMap32BitPTEsGC);
+    LOG_PGM_MEMBER("RRv",           paDynPageMapPaePTEsGC);
+
+    LOG_PGM_MEMBER("#RGv",          GCPtrCR3Mapping);
+    LOG_PGM_MEMBER("p",             pInterPD);
+    LOG_PGM_MEMBER("p",             apInterPTs[0]);
+    LOG_PGM_MEMBER("p",             apInterPTs[1]);
+    LOG_PGM_MEMBER("p",             apInterPaePTs[0]);
+    LOG_PGM_MEMBER("p",             apInterPaePTs[1]);
+    LOG_PGM_MEMBER("p",             apInterPaePDs[0]);
+    LOG_PGM_MEMBER("p",             apInterPaePDs[1]);
+    LOG_PGM_MEMBER("p",             apInterPaePDs[2]);
+    LOG_PGM_MEMBER("p",             apInterPaePDs[3]);
+    LOG_PGM_MEMBER("p",             pInterPaePDPT);
+    LOG_PGM_MEMBER("p",             pInterPaePML4);
+    LOG_PGM_MEMBER("p",             pInterPaePDPT64);
+    LOG_PGM_MEMBER("#RHp",          HCPhysInterPD);
+    LOG_PGM_MEMBER("#RHp",          HCPhysInterPaePDPT);
+    LOG_PGM_MEMBER("#RHp",          HCPhysInterPaePML4);
+    LOG_PGM_MEMBER("RRv",           pbDynPageMapBaseGC);
+    LOG_PGM_MEMBER("RRv",           pRCDynMap);
+    LOG_PGM_MEMBER("p",             pvR0DynMapUsed);
+    LOG_PGM_MEMBER("%#x",           cDeprecatedPageLocks);
+
+    /**
+     * Data associated with managing the ring-3 mappings of the allocation chunks.
+     */
+    LOG_PGM_MEMBER("p",             ChunkR3Map.pTree);
+    //LOG_PGM_MEMBER(PGMCHUNKR3MAPTLB ChunkR3Map.Tlb);
+    LOG_PGM_MEMBER("%#x",           ChunkR3Map.c);
+    LOG_PGM_MEMBER("%#x",           ChunkR3Map.cMax);
+    LOG_PGM_MEMBER("%#x",           ChunkR3Map.iNow);
+    //LOG_PGM_MEMBER(PGMPAGER3MAPTLB  PhysTlbHC);
+
+    LOG_PGM_MEMBER("#RHp",          HCPhysZeroPg);
+    LOG_PGM_MEMBER("p",             pvZeroPgR3);
+    LOG_PGM_MEMBER("p",             pvZeroPgR0);
+    LOG_PGM_MEMBER("RRv",           pvZeroPgRC);
+    LOG_PGM_MEMBER("#RHp",          HCPhysMmioPg);
+    LOG_PGM_MEMBER("#RHp",          HCPhysInvMmioPg);
+    LOG_PGM_MEMBER("p",             pvMmioPgR3);
+    LOG_PGM_MEMBER("RTbool",        fErrInjHandyPages);
+
+    /*
+     * PGM page pool.
+     */
+    PPGMPOOL pPool = pVM->pgm.s.pPoolR3;
+    RTLogRelPrintf("PGM Page Pool\n");
+# define LOG_PGMPOOL_MEMBER(aFmt, aMember) RTLogRelPrintf(" %32s: %" aFmt "\n", #aMember, pPool->aMember)
+    LOG_PGMPOOL_MEMBER("p",         pVMR3);
+    LOG_PGMPOOL_MEMBER("p",         pVMR0);
+    LOG_PGMPOOL_MEMBER("RRv",       pVMRC);
+    LOG_PGMPOOL_MEMBER("#x",        cMaxPages);
+    LOG_PGMPOOL_MEMBER("#x",        cCurPages);
+    LOG_PGMPOOL_MEMBER("#x",        iFreeHead);
+    LOG_PGMPOOL_MEMBER("#x",        u16Padding);
+    LOG_PGMPOOL_MEMBER("#x",        iUserFreeHead);
+    LOG_PGMPOOL_MEMBER("#x",        cMaxUsers);
+    LOG_PGMPOOL_MEMBER("#x",        cPresent);
+    LOG_PGMPOOL_MEMBER("RRv",       paUsersRC);
+    LOG_PGMPOOL_MEMBER("p",         paUsersR3);
+    LOG_PGMPOOL_MEMBER("p",         paUsersR0);
+    LOG_PGMPOOL_MEMBER("#x",        iPhysExtFreeHead);
+    LOG_PGMPOOL_MEMBER("#x",        cMaxPhysExts);
+    LOG_PGMPOOL_MEMBER("RRv",       paPhysExtsRC);
+    LOG_PGMPOOL_MEMBER("p",         paPhysExtsR3);
+    LOG_PGMPOOL_MEMBER("p",         paPhysExtsR0);
+    for (uint32_t i = 0; i < RT_ELEMENTS(pPool->aiHash); i++)
+        RTLogRelPrintf(" aiHash[%u]: %#x\n", i, pPool->aiHash[i]);
+    LOG_PGMPOOL_MEMBER("#x",        iAgeHead);
+    LOG_PGMPOOL_MEMBER("#x",        iAgeTail);
+    LOG_PGMPOOL_MEMBER("RTbool",    fCacheEnabled);
+    LOG_PGMPOOL_MEMBER("RTbool",    afPadding1[0]);
+    LOG_PGMPOOL_MEMBER("RTbool",    afPadding1[1]);
+    LOG_PGMPOOL_MEMBER("RTbool",    afPadding1[2]);
+    LOG_PGMPOOL_MEMBER("#x",        iModifiedHead);
+    LOG_PGMPOOL_MEMBER("#x",        cModifiedPages);
+    LOG_PGMPOOL_MEMBER("#x",        hAccessHandlerType);
+    LOG_PGMPOOL_MEMBER("#x",        idxFreeDirtyPage);
+    LOG_PGMPOOL_MEMBER("#x",        cDirtyPages);
+    for (uint32_t i = 0; i < RT_ELEMENTS(pPool->aDirtyPages); i++)
+        RTLogRelPrintf(" aDirtyPages[%u].uIdx: %#x\n", i, pPool->aDirtyPages[i].uIdx);
+    LOG_PGMPOOL_MEMBER("#x",        cUsedPages);
+    LOG_PGMPOOL_MEMBER("#x",        HCPhysTree);
+    for (uint32_t i = 0; i < pPool->cCurPages; i++)
+    {
+        PPGMPOOLPAGE pPage = &pPool->aPages[i];
+# define LOG_PAGE_MEMBER(aFmt, aMember) RTLogRelPrintf(" %3u:%-32s: %" aFmt "\n", i, #aMember, pPage->aMember)
+        RTLogRelPrintf("%3u:%-32s: %p\n", i, "", pPage);
+        LOG_PAGE_MEMBER("RHp",      Core.Key);
+        LOG_PAGE_MEMBER("p",        pvPageR3);
+        LOG_PAGE_MEMBER("RGp",      GCPhys);
+        LOG_PAGE_MEMBER("d",        enmKind);
+        LOG_PAGE_MEMBER("d",        enmAccess);
+        LOG_PAGE_MEMBER("RTbool",   fA20Enabled);
+        LOG_PAGE_MEMBER("RTbool",   fZeroed);
+        LOG_PAGE_MEMBER("RTbool",   fSeenNonGlobal);
+        LOG_PAGE_MEMBER("RTbool",   fMonitored);
+        LOG_PAGE_MEMBER("RTbool",   fCached);
+        LOG_PAGE_MEMBER("RTbool",   fReusedFlushPending);
+        LOG_PAGE_MEMBER("RTbool",   fDirty);
+        LOG_PAGE_MEMBER("RTbool",   fPadding1);
+        LOG_PAGE_MEMBER("RTbool",   fPadding2);
+        LOG_PAGE_MEMBER("#x",       idx);
+        LOG_PAGE_MEMBER("#x",       iNext);
+        LOG_PAGE_MEMBER("#x",       iUserHead);
+        LOG_PAGE_MEMBER("#x",       cPresent);
+        LOG_PAGE_MEMBER("#x",       iFirstPresent);
+        LOG_PAGE_MEMBER("#x",       cModifications);
+        LOG_PAGE_MEMBER("#x",       iModifiedNext);
+        LOG_PAGE_MEMBER("#x",       iModifiedPrev);
+        LOG_PAGE_MEMBER("#x",       iMonitoredNext);
+        LOG_PAGE_MEMBER("#x",       iMonitoredPrev);
+        LOG_PAGE_MEMBER("#x",       iAgeNext);
+        LOG_PAGE_MEMBER("#x",       iAgePrev);
+        LOG_PAGE_MEMBER("#x",       idxDirtyEntry);
+        LOG_PAGE_MEMBER("RGv",      GCPtrLastAccessHandlerRip);
+        LOG_PAGE_MEMBER("RGv",      GCPtrLastAccessHandlerFault);
+        LOG_PAGE_MEMBER("#RX64",    cLastAccessHandler);
+        LOG_PAGE_MEMBER("#RX32",    cLocked);
+# ifdef VBOX_STRICT
+        LOG_PAGE_MEMBER("RGv",      GCPtrDirtyFault);
+# endif
+        if (   pPage->enmKind == PGMPOOLKIND_32BIT_PT_FOR_32BIT_PT
+            || pPage->enmKind == PGMPOOLKIND_32BIT_PT_FOR_32BIT_4MB
+            || pPage->enmKind == PGMPOOLKIND_32BIT_PD
+            || pPage->enmKind == PGMPOOLKIND_32BIT_PD_PHYS)
+        {
+            uint32_t const *pu32Page = (uint32_t const *)pPage->pvPageR3;
+            for (uint32_t i = 0; i < 1024/2; i += 4)
+                RTLogRelPrintf(" %#05x: %RX32 %RX32 %RX32 %RX32\n", i, pu32Page[i], pu32Page[i+1], pu32Page[i+2], pu32Page[i+3]);
+        }
+        else if (   pPage->enmKind != PGMPOOLKIND_FREE
+                 && pPage->enmKind != PGMPOOLKIND_INVALID)
+        {
+            uint64_t const *pu64Page = (uint64_t const *)pPage->pvPageR3;
+            for (uint32_t i = 0; i < 512/2; i += 2)
+                RTLogRelPrintf(" %#05x: %RX64 %RX64\n", i, pu64Page[i], pu64Page[i+1]);
+        }
+    }
+
+    RTLogRelPrintf("pgmLogState pgmLogState pgmLogState pgmLogState pgmLogState\n\n");
+#else
+    RT_NOREF(pVM);
+#endif
 }
 

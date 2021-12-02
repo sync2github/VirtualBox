@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxDTraceR0.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxDTraceR0.
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,7 +15,6 @@
  * comes in the "COPYING.CDDL" file of the VirtualBox OSE distribution.
  * VirtualBox OSE is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY of any kind.
- *
  */
 
 
@@ -943,7 +942,7 @@ struct VBoxDtVMem *VBoxDtVMemCreate(const char *pszName, void *pvBase, size_t cb
     uint32_t cChunks = (uint32_t)cb / VBOXDTVMEMCHUNK_BITS;
     if (cb % VBOXDTVMEMCHUNK_BITS)
         cChunks++;
-    PVBOXDTVMEM pThis = (PVBOXDTVMEM)RTMemAllocZ(RT_OFFSETOF(VBOXDTVMEM, apChunks[cChunks]));
+    PVBOXDTVMEM pThis = (PVBOXDTVMEM)RTMemAllocZ(RT_UOFFSETOF_DYN(VBOXDTVMEM, apChunks[cChunks]));
     if (!pThis)
         return NULL;
     int rc = RTSpinlockCreate(&pThis->hSpinlock, RTSPINLOCK_FLAGS_INTERRUPT_SAFE, "VBoxDtVMem");

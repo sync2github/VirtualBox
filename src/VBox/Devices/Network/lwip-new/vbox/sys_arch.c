@@ -1,10 +1,10 @@
-/** $Id$ */
+/** $Id: sys_arch.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * System dependent parts of lwIP, implemented with IPRT.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,7 +19,7 @@
 #include <lwip/sys.h>
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
 #include <iprt/critsect.h>

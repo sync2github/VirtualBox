@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManageSnapshot.cpp 85138 2020-07-09 07:26:26Z vboxsync $ */
 /** @file
  * VBoxManage - The 'snapshot' command.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,8 +27,8 @@
 
 #include <VBox/com/VirtualBox.h>
 
-#include <iprt/stream.h>
 #include <iprt/getopt.h>
+#include <iprt/stream.h>
 #include <iprt/time.h>
 
 #include "VBoxManage.h"
@@ -185,7 +185,7 @@ static RTEXITCODE handleSnapshotList(HandlerArg *pArgs, ComPtr<IMachine> &pMachi
         {
             case 'D':   enmDetails = VMINFO_FULL; break;
             case 'M':   enmDetails = VMINFO_MACHINEREADABLE; break;
-            default:    return errorGetOpt(USAGE_SNAPSHOT, c, &ValueUnion);
+            default:    return errorGetOpt(c, &ValueUnion);
         }
     }
 
@@ -315,9 +315,16 @@ RTEXITCODE handleSnapshot(HandlerArg *a)
 {
     HRESULT rc;
 
+/** @todo r=bird: sub-standard command line parsing here!
+ *
+ * 'VBoxManage snapshot empty take --help' takes a snapshot rather than display
+ * help as you would expect.
+ *
+ */
+
     /* we need at least a VM and a command */
     if (a->argc < 2)
-        return errorSyntax(USAGE_SNAPSHOT, "Not enough parameters");
+        return errorSyntax("Not enough parameters");
 
     /* the first argument must be the VM */
     Bstr bstrMachine(a->argv[0]);
@@ -342,10 +349,12 @@ RTEXITCODE handleSnapshot(HandlerArg *a)
 
         if (!strcmp(a->argv[1], "take"))
         {
+            setCurrentSubcommand(HELP_SCOPE_SNAPSHOT_TAKE);
+
             /* there must be a name */
             if (a->argc < 3)
             {
-                errorSyntax(USAGE_SNAPSHOT, "Missing snapshot name");
+                errorSyntax("Missing snapshot name");
                 rc = E_FAIL;
                 break;
             }
@@ -394,7 +403,7 @@ RTEXITCODE handleSnapshot(HandlerArg *a)
                         break;
 
                     default:
-                        errorGetOpt(USAGE_SNAPSHOT, ch, &Value);
+                        errorGetOpt(ch, &Value);
                         rc = E_FAIL;
                         break;
                 }
@@ -478,11 +487,15 @@ RTEXITCODE handleSnapshot(HandlerArg *a)
                   || (fRestoreCurrent = !strcmp(a->argv[1], "restorecurrent"))
                 )
         {
+            setCurrentSubcommand(fDelete    ? HELP_SCOPE_SNAPSHOT_DELETE
+                                 : fRestore ? HELP_SCOPE_SNAPSHOT_RESTORE
+                                            : HELP_SCOPE_SNAPSHOT_RESTORECURRENT);
+
             if (fRestoreCurrent)
             {
                 if (a->argc > 2)
                 {
-                    errorSyntax(USAGE_SNAPSHOT, "Too many arguments");
+                    errorSyntax("Too many arguments");
                     rc = E_FAIL;
                     break;
                 }
@@ -490,7 +503,7 @@ RTEXITCODE handleSnapshot(HandlerArg *a)
             /* exactly one parameter: snapshot name */
             else if (a->argc != 3)
             {
-                errorSyntax(USAGE_SNAPSHOT, "Expecting snapshot name only");
+                errorSyntax("Expecting snapshot name only");
                 rc = E_FAIL;
                 break;
             }
@@ -540,75 +553,77 @@ RTEXITCODE handleSnapshot(HandlerArg *a)
         }
         else if (!strcmp(a->argv[1], "edit"))
         {
+            setCurrentSubcommand(HELP_SCOPE_SNAPSHOT_EDIT);
             if (a->argc < 3)
             {
-                errorSyntax(USAGE_SNAPSHOT, "Missing snapshot name");
+                errorSyntax("Missing snapshot name");
                 rc = E_FAIL;
                 break;
             }
 
+            /* Parse the optional arguments, allowing more freedom than the
+             * synopsis explains. Can rename multiple snapshots and so on. */
             ComPtr<ISnapshot> pSnapshot;
-
-            if (   !strcmp(a->argv[2], "--current")
-                || !strcmp(a->argv[2], "-current"))
+            static const RTGETOPTDEF s_aEditOptions[] =
             {
-                CHECK_ERROR_BREAK(sessionMachine, COMGETTER(CurrentSnapshot)(pSnapshot.asOutParam()));
-                if (pSnapshot.isNull())
+                { "--current",     'c', RTGETOPT_REQ_NOTHING },
+                { "-current",      'c', RTGETOPT_REQ_NOTHING },
+                { "--name",        'n', RTGETOPT_REQ_STRING },
+                { "-name",         'n', RTGETOPT_REQ_STRING },
+                { "-newname",      'n', RTGETOPT_REQ_STRING },
+                { "--description", 'd', RTGETOPT_REQ_STRING },
+                { "-description",  'd', RTGETOPT_REQ_STRING },
+                { "-desc",         'd', RTGETOPT_REQ_STRING }
+            };
+            RTGETOPTSTATE GetOptState;
+            RTGetOptInit(&GetOptState, a->argc, a->argv, s_aEditOptions, RT_ELEMENTS(s_aEditOptions),
+                         2, RTGETOPTINIT_FLAGS_NO_STD_OPTS);
+            int ch;
+            RTGETOPTUNION Value;
+            while (   SUCCEEDED(rc)
+                   && (ch = RTGetOpt(&GetOptState, &Value)))
+            {
+                switch (ch)
                 {
-                    RTPrintf("This machine does not have any snapshots\n");
-                    return RTEXITCODE_FAILURE;
-                }
-            }
-            else
-            {
-                CHECK_ERROR_BREAK(sessionMachine, FindSnapshot(Bstr(a->argv[2]).raw(),
-                                                               pSnapshot.asOutParam()));
-            }
+                    case 'c':
+                        CHECK_ERROR_BREAK(sessionMachine, COMGETTER(CurrentSnapshot)(pSnapshot.asOutParam()));
+                        if (pSnapshot.isNull())
+                        {
+                            RTPrintf("This machine does not have any snapshots\n");
+                            return RTEXITCODE_FAILURE;
+                        }
+                        break;
 
-            /* parse options */
-            for (int i = 3; i < a->argc; i++)
-            {
-                if (   !strcmp(a->argv[i], "--name")
-                    || !strcmp(a->argv[i], "-name")
-                    || !strcmp(a->argv[i], "-newname"))
-                {
-                    if (a->argc <= i + 1)
-                    {
-                        errorArgument("Missing argument to '%s'", a->argv[i]);
+                    case 'n':
+                        CHECK_ERROR_BREAK(pSnapshot, COMSETTER(Name)(Bstr(Value.psz).raw()));
+                        break;
+
+                    case 'd':
+                        CHECK_ERROR_BREAK(pSnapshot, COMSETTER(Description)(Bstr(Value.psz).raw()));
+                        break;
+
+                    case VINF_GETOPT_NOT_OPTION:
+                        CHECK_ERROR_BREAK(sessionMachine, FindSnapshot(Bstr(Value.psz).raw(), pSnapshot.asOutParam()));
+                        break;
+
+                    default:
+                        errorGetOpt(ch, &Value);
                         rc = E_FAIL;
                         break;
-                    }
-                    i++;
-                    pSnapshot->COMSETTER(Name)(Bstr(a->argv[i]).raw());
-                }
-                else if (   !strcmp(a->argv[i], "--description")
-                         || !strcmp(a->argv[i], "-description")
-                         || !strcmp(a->argv[i], "-newdesc"))
-                {
-                    if (a->argc <= i + 1)
-                    {
-                        errorArgument("Missing argument to '%s'", a->argv[i]);
-                        rc = E_FAIL;
-                        break;
-                    }
-                    i++;
-                    pSnapshot->COMSETTER(Description)(Bstr(a->argv[i]).raw());
-                }
-                else
-                {
-                    errorSyntax(USAGE_SNAPSHOT, "Invalid parameter '%s'", Utf8Str(a->argv[i]).c_str());
-                    rc = E_FAIL;
-                    break;
                 }
             }
 
+            if (FAILED(rc))
+                break;
         }
         else if (!strcmp(a->argv[1], "showvminfo"))
         {
+            setCurrentSubcommand(HELP_SCOPE_SNAPSHOT_SHOWVMINFO);
+
             /* exactly one parameter: snapshot name */
             if (a->argc != 3)
             {
-                errorSyntax(USAGE_SNAPSHOT, "Expecting snapshot name only");
+                errorSyntax("Expecting snapshot name only");
                 rc = E_FAIL;
                 break;
             }
@@ -624,12 +639,15 @@ RTEXITCODE handleSnapshot(HandlerArg *a)
             showVMInfo(a->virtualBox, pMachine2, NULL, VMINFO_NONE);
         }
         else if (!strcmp(a->argv[1], "list"))
+        {
+            setCurrentSubcommand(HELP_SCOPE_SNAPSHOT_LIST);
             rc = handleSnapshotList(a, sessionMachine) == RTEXITCODE_SUCCESS ? S_OK : E_FAIL;
+        }
         else if (!strcmp(a->argv[1], "dump"))          // undocumented parameter to debug snapshot info
             DumpSnapshot(sessionMachine);
         else
         {
-            errorSyntax(USAGE_SNAPSHOT, "Invalid parameter '%s'", Utf8Str(a->argv[1]).c_str());
+            errorSyntax("Invalid parameter '%s'", a->argv[1]);
             rc = E_FAIL;
         }
     } while (0);

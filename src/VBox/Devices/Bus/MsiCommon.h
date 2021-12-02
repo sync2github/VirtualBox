@@ -1,9 +1,10 @@
-/* $Id$ */
+/* $Id: MsiCommon.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Header for MSI/MSI-X support routines.
  */
+
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,47 +15,27 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-/* Maybe belongs to types.h */
-#ifdef IN_RING3
-typedef PCPDMPCIHLPR3 PCPDMPCIHLP;
+#ifndef VBOX_INCLUDED_SRC_Bus_MsiCommon_h
+#define VBOX_INCLUDED_SRC_Bus_MsiCommon_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
 #endif
 
-#ifdef IN_RING0
-typedef PCPDMPCIHLPR0 PCPDMPCIHLP;
-#endif
-
-#ifdef IN_RC
-typedef PCPDMPCIHLPRC PCPDMPCIHLP;
-#endif
+typedef CTX_SUFF(PCPDMPCIHLP) PCPDMPCIHLP;
 
 #ifdef IN_RING3
-/* Init MSI support in the device. */
-int      MsiInit(PPDMPCIDEV pDev, PPDMMSIREG pMsiReg);
+int      MsiR3Init(PPDMPCIDEV pDev, PPDMMSIREG pMsiReg);
+void     MsiR3PciConfigWrite(PPDMDEVINS pDevIns, PCPDMPCIHLP pPciHlp, PPDMPCIDEV pDev, uint32_t u32Address, uint32_t val, unsigned len);
 #endif
-
-/* If MSI is enabled, so that MSINotify() shall be used for notifications.  */
 bool     MsiIsEnabled(PPDMPCIDEV pDev);
-
-/* Device notification (aka interrupt). */
 void     MsiNotify(PPDMDEVINS pDevIns, PCPDMPCIHLP pPciHlp, PPDMPCIDEV pDev, int iVector, int iLevel, uint32_t uTagSrc);
 
 #ifdef IN_RING3
-/* PCI config space accessors for MSI registers */
-void     MsiPciConfigWrite(PPDMDEVINS pDevIns, PCPDMPCIHLP pPciHlp, PPDMPCIDEV pDev, uint32_t u32Address, uint32_t val, unsigned len);
+int      MsixR3Init(PCPDMPCIHLP pPciHlp, PPDMPCIDEV pDev, PPDMMSIREG pMsiReg);
+void     MsixR3PciConfigWrite(PPDMDEVINS pDevIns, PCPDMPCIHLP pPciHlp, PPDMPCIDEV pDev, uint32_t u32Address, uint32_t val, unsigned len);
 #endif
-
-#ifdef IN_RING3
-/* Init MSI-X support in the device. */
-int      MsixInit(PCPDMPCIHLP pPciHlp, PPDMPCIDEV pDev, PPDMMSIREG pMsiReg);
-#endif
-
-/* If MSI-X is enabled, so that MSIXNotify() shall be used for notifications.  */
 bool     MsixIsEnabled(PPDMPCIDEV pDev);
-
-/* Device notification (aka interrupt). */
 void     MsixNotify(PPDMDEVINS pDevIns, PCPDMPCIHLP pPciHlp, PPDMPCIDEV pDev, int iVector, int iLevel, uint32_t uTagSrc);
 
-#ifdef IN_RING3
-/* PCI config space accessors for MSI-X */
-void     MsixPciConfigWrite(PPDMDEVINS pDevIns, PCPDMPCIHLP pPciHlp, PPDMPCIDEV pDev, uint32_t u32Address, uint32_t val, unsigned len);
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Bus_MsiCommon_h */
+

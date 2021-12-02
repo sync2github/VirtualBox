@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0302
+# $Id: utils.py 86919 2020-11-19 11:09:11Z vboxsync $
+# pylint: disable=too-many-lines
 
 """
 Common Utility Functions.
 """
 
+from __future__ import print_function;
+
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,7 +29,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 86919 $"
 
 
 # Standard Python imports.
@@ -44,10 +46,14 @@ import unittest;
 
 if sys.platform == 'win32':
     import ctypes;
-    import win32api;            # pylint: disable=F0401
-    import win32con;            # pylint: disable=F0401
-    import win32console;        # pylint: disable=F0401
-    import win32process;        # pylint: disable=F0401
+    import msvcrt;              # pylint: disable=import-error
+    import win32api;            # pylint: disable=import-error
+    import win32con;            # pylint: disable=import-error
+    import win32console;        # pylint: disable=import-error
+    import win32file;           # pylint: disable=import-error
+    import win32process;        # pylint: disable=import-error
+    import winerror;            # pylint: disable=import-error
+    import pywintypes;          # pylint: disable=import-error
 else:
     import signal;
 
@@ -56,6 +62,53 @@ if sys.version_info[0] >= 3:
     unicode = str;  # pylint: disable=redefined-builtin,invalid-name
     xrange = range; # pylint: disable=redefined-builtin,invalid-name
     long = int;     # pylint: disable=redefined-builtin,invalid-name
+
+
+#
+# Strings.
+#
+
+def toUnicode(sString, encoding = None, errors = 'strict'):
+    """
+    A little like the python 2 unicode() function.
+    """
+    if sys.version_info[0] >= 3:
+        if isinstance(sString, bytes):
+            return str(sString, encoding if encoding else 'utf-8', errors);
+    else:
+        if not isinstance(sString, unicode):
+            return unicode(sString, encoding if encoding else 'utf-8', errors);
+    return sString;
+
+
+
+#
+# Output.
+#
+
+def printOut(sString):
+    """
+    Outputs a string to standard output, dealing with python 2.x encoding stupidity.
+    """
+    sStreamEncoding = sys.stdout.encoding;
+    if sStreamEncoding is None:         # Files, pipes and such on 2.x.  (pylint is confused here)
+        sStreamEncoding = 'US-ASCII';   # pylint: disable=redefined-variable-type
+    if sStreamEncoding == 'UTF-8' or not isinstance(sString, unicode):
+        print(sString);
+    else:
+        print(sString.encode(sStreamEncoding, 'backslashreplace').decode(sStreamEncoding));
+
+def printErr(sString):
+    """
+    Outputs a string to standard error, dealing with python 2.x encoding stupidity.
+    """
+    sStreamEncoding = sys.stderr.encoding;
+    if sStreamEncoding is None:         # Files, pipes and such on 2.x. (pylint is confused here)
+        sStreamEncoding = 'US-ASCII';   # pylint: disable=redefined-variable-type
+    if sStreamEncoding == 'UTF-8' or not isinstance(sString, unicode):
+        print(sString, file = sys.stderr);
+    else:
+        print(sString.encode(sStreamEncoding, 'backslashreplace').decode(sStreamEncoding), file = sys.stderr);
 
 
 #
@@ -99,7 +152,7 @@ def getHostArch():
                 sArch = 'amd64';
             else:
                 try:
-                    sArch = processOutputChecked(['/usr/bin/isainfo', '-n',]);
+                    sArch = str(processOutputChecked(['/usr/bin/isainfo', '-n',]));
                 except:
                     pass;
                 sArch = sArch.strip();
@@ -186,7 +239,7 @@ def getHostOsVersion():
                     except:
                         continue;
                     sLine = sLine.strip()
-                    if len(sLine) > 0:
+                    if sLine:
                         sVersion += ' / ' + sPrefix + sLine;
                     break;
 
@@ -198,7 +251,7 @@ def getHostOsVersion():
                 sLast = oFile.readlines()[-1];
                 oFile.close();
                 sLast = sLast.strip();
-                if len(sLast) > 0:
+                if sLast:
                     sVersion += ' (' + sLast + ')';
             except:
                 pass;
@@ -214,11 +267,83 @@ def getHostOsVersion():
                      "10": "Yosemite",
                      "11": "El Capitan",
                      "12": "Sierra",
-                     "13": "Unknown 13",
-                     "14": "Unknown 14", }
+                     "13": "High Sierra",
+                     "14": "Mojave",
+                     "15": "Catalina",
+                     "16": "Unknown 16",
+                     "17": "Unknown 17",
+                     "18": "Unknown 18",
+                     "19": "Unknown 19", }
         sVersion += ' / OS X ' + sOsxVersion + ' (' + codenames[sOsxVersion.split('.')[1]] + ')'
 
+    elif sOs == 'win':
+        class OSVersionInfoEx(ctypes.Structure):
+            """ OSVERSIONEX """
+            kaFields = [
+                    ('dwOSVersionInfoSize', ctypes.c_ulong),
+                    ('dwMajorVersion',      ctypes.c_ulong),
+                    ('dwMinorVersion',      ctypes.c_ulong),
+                    ('dwBuildNumber',       ctypes.c_ulong),
+                    ('dwPlatformId',        ctypes.c_ulong),
+                    ('szCSDVersion',        ctypes.c_wchar*128),
+                    ('wServicePackMajor',   ctypes.c_ushort),
+                    ('wServicePackMinor',   ctypes.c_ushort),
+                    ('wSuiteMask',          ctypes.c_ushort),
+                    ('wProductType',        ctypes.c_byte),
+                    ('wReserved',           ctypes.c_byte)]
+            _fields_ = kaFields # pylint: disable=invalid-name
+
+            def __init__(self):
+                super(OSVersionInfoEx, self).__init__()
+                self.dwOSVersionInfoSize = ctypes.sizeof(self)
+
+        oOsVersion = OSVersionInfoEx()
+        rc = ctypes.windll.Ntdll.RtlGetVersion(ctypes.byref(oOsVersion))
+        if rc == 0:
+            # Python platform.release() is not reliable for newer server releases
+            if oOsVersion.wProductType != 1:
+                if oOsVersion.dwMajorVersion == 10 and oOsVersion.dwMinorVersion == 0:
+                    sVersion = '2016Server';
+                elif oOsVersion.dwMajorVersion == 6 and oOsVersion.dwMinorVersion == 3:
+                    sVersion = '2012ServerR2';
+                elif oOsVersion.dwMajorVersion == 6 and oOsVersion.dwMinorVersion == 2:
+                    sVersion = '2012Server';
+                elif oOsVersion.dwMajorVersion == 6 and oOsVersion.dwMinorVersion == 1:
+                    sVersion = '2008ServerR2';
+                elif oOsVersion.dwMajorVersion == 6 and oOsVersion.dwMinorVersion == 0:
+                    sVersion = '2008Server';
+                elif oOsVersion.dwMajorVersion == 5 and oOsVersion.dwMinorVersion == 2:
+                    sVersion = '2003Server';
+            sVersion += ' build ' + str(oOsVersion.dwBuildNumber)
+            if oOsVersion.wServicePackMajor:
+                sVersion += ' SP' + str(oOsVersion.wServicePackMajor)
+                if oOsVersion.wServicePackMinor:
+                    sVersion += '.' + str(oOsVersion.wServicePackMinor)
+
     return sVersion;
+
+def getPresentCpuCount():
+    """
+    Gets the number of CPUs present in the system.
+
+    This differs from multiprocessor.cpu_count() and os.cpu_count() on windows in
+    that we return the active count rather than the maximum count.  If we don't,
+    we will end up thinking testboxmem1 has 512 CPU threads, which it doesn't and
+    never will have.
+
+    @todo This is probably not exactly what we get on non-windows...
+    """
+
+    if getHostOs() == 'win':
+        fnGetActiveProcessorCount = getattr(ctypes.windll.kernel32, 'GetActiveProcessorCount', None);
+        if fnGetActiveProcessorCount:
+            cCpus = fnGetActiveProcessorCount(ctypes.c_ushort(0xffff));
+            if cCpus > 0:
+                return cCpus;
+
+    import multiprocessing
+    return multiprocessing.cpu_count();
+
 
 #
 # File system.
@@ -234,26 +359,108 @@ def openNoInherit(sFile, sMode = 'r'):
     multithreaded programs.
     """
 
-    try:
-        from fcntl import FD_CLOEXEC, F_GETFD, F_SETFD, fcntl; # pylint: disable=F0401
-    except:
-        return open(sFile, sMode);
+    # Python 3.4 and later automatically creates non-inherit handles. See PEP-0446.
+    uPythonVer = (sys.version_info[0] << 16) | (sys.version_info[1] & 0xffff);
+    if uPythonVer >= ((3 << 16) | 4):
+        oFile = open(sFile, sMode);
+    else:
+        try:
+            from fcntl import FD_CLOEXEC, F_GETFD, F_SETFD, fcntl; # pylint: disable=import-error
+        except:
+            # On windows, we can use the 'N' flag introduced in Visual C++ 7.0 or 7.1 with python 2.x.
+            if getHostOs() == 'win':
+                if uPythonVer < (3 << 16):
+                    offComma = sMode.find(',');
+                    if offComma < 0:
+                        return open(sFile, sMode + 'N');
+                    return open(sFile, sMode[:offComma] + 'N' + sMode[offComma:]); # pylint: disable=bad-open-mode
 
-    oFile = open(sFile, sMode)
-    #try:
-    fcntl(oFile, F_SETFD, fcntl(oFile, F_GETFD) | FD_CLOEXEC);
-    #except:
-    #    pass;
+            # Just in case.
+            return open(sFile, sMode);
+
+        oFile = open(sFile, sMode);
+        #try:
+        fcntl(oFile, F_SETFD, fcntl(oFile, F_GETFD) | FD_CLOEXEC);
+        #except:
+        #    pass;
     return oFile;
 
-def noxcptReadLink(sPath, sXcptRet):
+def openNoDenyDeleteNoInherit(sFile, sMode = 'r'):
+    """
+    Wrapper around open() that tries it's best to make sure the file isn't
+    inherited by child processes.
+
+    This is a best effort thing at the moment as it doesn't synchronizes with
+    child process spawning in any way.  Thus it can be subject to races in
+    multithreaded programs.
+    """
+
+    if getHostOs() == 'win':
+        # Need to use CreateFile directly to open the file so we can feed it FILE_SHARE_DELETE.
+        # pylint: disable=no-member,c-extension-no-member
+        fAccess = 0;
+        fDisposition = win32file.OPEN_EXISTING;
+        if 'r' in sMode or '+' in sMode:
+            fAccess |= win32file.GENERIC_READ;
+        if 'a' in sMode:
+            fAccess |= win32file.GENERIC_WRITE;
+            fDisposition = win32file.OPEN_ALWAYS;
+        elif 'w' in sMode:
+            fAccess = win32file.GENERIC_WRITE;
+            if '+' in sMode:
+                fDisposition = win32file.OPEN_ALWAYS;
+                fAccess |= win32file.GENERIC_READ;
+            else:
+                fDisposition = win32file.CREATE_ALWAYS;
+        if not fAccess:
+            fAccess |= win32file.GENERIC_READ;
+        fSharing = (win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE
+                    | win32file.FILE_SHARE_DELETE);
+        hFile = win32file.CreateFile(sFile, fAccess, fSharing, None, fDisposition, 0, None);
+        if 'a' in sMode:
+            win32file.SetFilePointer(hFile, 0, win32file.FILE_END);
+
+        # Turn the NT handle into a CRT file descriptor.
+        hDetachedFile = hFile.Detach();
+        if fAccess == win32file.GENERIC_READ:
+            fOpen = os.O_RDONLY;
+        elif fAccess == win32file.GENERIC_WRITE:
+            fOpen = os.O_WRONLY;
+        else:
+            fOpen = os.O_RDWR;
+        # pulint: enable=no-member,c-extension-no-member
+        if 'a' in sMode:
+            fOpen |= os.O_APPEND;
+        if 'b' in sMode or 't' in sMode:
+            fOpen |= os.O_TEXT;                                                                 # pylint: disable=no-member
+        fdFile = msvcrt.open_osfhandle(hDetachedFile, fOpen);
+
+        # Tell python to use this handle.
+        oFile = os.fdopen(fdFile, sMode);
+    else:
+        oFile = open(sFile, sMode);
+
+        # Python 3.4 and later automatically creates non-inherit handles. See PEP-0446.
+        uPythonVer = (sys.version_info[0] << 16) | (sys.version_info[1] & 0xffff);
+        if uPythonVer < ((3 << 16) | 4):
+            try:
+                from fcntl import FD_CLOEXEC, F_GETFD, F_SETFD, fcntl; # pylint: disable=import-error
+            except:
+                pass;
+            else:
+                fcntl(oFile, F_SETFD, fcntl(oFile, F_GETFD) | FD_CLOEXEC);
+    return oFile;
+
+def noxcptReadLink(sPath, sXcptRet, sEncoding = 'utf-8'):
     """
     No exceptions os.readlink wrapper.
     """
     try:
-        sRet = os.readlink(sPath); # pylint: disable=E1101
+        sRet = os.readlink(sPath); # pylint: disable=no-member
     except:
-        sRet = sXcptRet;
+        return sXcptRet;
+    if hasattr(sRet, 'decode'):
+        sRet = sRet.decode(sEncoding, 'ignore');
     return sRet;
 
 def readFile(sFile, sMode = 'rb'):
@@ -265,7 +472,7 @@ def readFile(sFile, sMode = 'rb'):
     oFile.close();
     return sRet;
 
-def noxcptReadFile(sFile, sXcptRet, sMode = 'rb'):
+def noxcptReadFile(sFile, sXcptRet, sMode = 'rb', sEncoding = 'utf-8'):
     """
     No exceptions common.readFile wrapper.
     """
@@ -273,6 +480,8 @@ def noxcptReadFile(sFile, sXcptRet, sMode = 'rb'):
         sRet = readFile(sFile, sMode);
     except:
         sRet = sXcptRet;
+    if sEncoding is not None and hasattr(sRet, 'decode'):
+        sRet = sRet.decode(sEncoding, 'ignore');
     return sRet;
 
 def noxcptRmDir(sDir, oXcptRet = False):
@@ -406,6 +615,29 @@ def copyFileSimple(sFileSrc, sFileDst):
     __installShUtilHacks(shutil);
     return shutil.copyfile(sFileSrc, sFileDst);
 
+
+def getDiskUsage(sPath):
+    """
+    Get free space of a partition that corresponds to specified sPath in MB.
+
+    Returns partition free space value in MB.
+    """
+    if platform.system() == 'Windows':
+        oCTypeFreeSpace = ctypes.c_ulonglong(0);
+        ctypes.windll.kernel32.GetDiskFreeSpaceExW(ctypes.c_wchar_p(sPath), None, None,
+                                                   ctypes.pointer(oCTypeFreeSpace));
+        cbFreeSpace = oCTypeFreeSpace.value;
+    else:
+        oStats = os.statvfs(sPath); # pylint: disable=no-member
+        cbFreeSpace = long(oStats.f_frsize) * oStats.f_bfree;
+
+    # Convert to MB
+    cMbFreeSpace = long(cbFreeSpace) / (1024 * 1024);
+
+    return cMbFreeSpace;
+
+
+
 #
 # SubProcess.
 #
@@ -422,7 +654,7 @@ def _processFixPythonInterpreter(aPositionalArgs, dKeywordArgs):
         asArgs = aPositionalArgs[0];
 
     if asArgs[0].endswith('.py'):
-        if sys.executable is not None  and  len(sys.executable) > 0:
+        if sys.executable:
             asArgs.insert(0, sys.executable);
         else:
             asArgs.insert(0, 'python');
@@ -434,37 +666,89 @@ def _processFixPythonInterpreter(aPositionalArgs, dKeywordArgs):
             aPositionalArgs = (asArgs,) + aPositionalArgs[1:];
     return None;
 
+def processPopenSafe(*aPositionalArgs, **dKeywordArgs):
+    """
+    Wrapper for subprocess.Popen that's Ctrl-C safe on windows.
+    """
+    if getHostOs() == 'win':
+        if dKeywordArgs.get('creationflags', 0) == 0:
+            dKeywordArgs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP;
+    return subprocess.Popen(*aPositionalArgs, **dKeywordArgs);
+
 def processCall(*aPositionalArgs, **dKeywordArgs):
     """
-    Wrapper around subprocess.call to deal with its absense in older
+    Wrapper around subprocess.call to deal with its absence in older
     python versions.
     Returns process exit code (see subprocess.poll).
     """
     assert dKeywordArgs.get('stdout') is None;
     assert dKeywordArgs.get('stderr') is None;
     _processFixPythonInterpreter(aPositionalArgs, dKeywordArgs);
-    oProcess = subprocess.Popen(*aPositionalArgs, **dKeywordArgs);
+    oProcess = processPopenSafe(*aPositionalArgs, **dKeywordArgs);
     return oProcess.wait();
 
 def processOutputChecked(*aPositionalArgs, **dKeywordArgs):
     """
     Wrapper around subprocess.check_output to deal with its absense in older
     python versions.
+
+    Extra keywords for specifying now output is to be decoded:
+        sEncoding='utf-8
+        fIgnoreEncoding=True/False
     """
+    sEncoding = dKeywordArgs.get('sEncoding');
+    if sEncoding is not None:   del dKeywordArgs['sEncoding'];
+    else:                       sEncoding = 'utf-8';
+
+    fIgnoreEncoding = dKeywordArgs.get('fIgnoreEncoding');
+    if fIgnoreEncoding is not None:   del dKeywordArgs['fIgnoreEncoding'];
+    else:                             fIgnoreEncoding = True;
+
     _processFixPythonInterpreter(aPositionalArgs, dKeywordArgs);
-    oProcess = subprocess.Popen(stdout=subprocess.PIPE, *aPositionalArgs, **dKeywordArgs);
+    oProcess = processPopenSafe(stdout=subprocess.PIPE, *aPositionalArgs, **dKeywordArgs);
 
     sOutput, _ = oProcess.communicate();
     iExitCode  = oProcess.poll();
 
-    if iExitCode is not 0:
+    if iExitCode != 0:
         asArgs = dKeywordArgs.get('args');
         if asArgs is None:
             asArgs = aPositionalArgs[0];
         print(sOutput);
         raise subprocess.CalledProcessError(iExitCode, asArgs);
 
-    return str(sOutput); # str() make pylint happy.
+    if hasattr(sOutput, 'decode'):
+        sOutput = sOutput.decode(sEncoding, 'ignore' if fIgnoreEncoding else 'strict');
+    return sOutput;
+
+def processOutputUnchecked(*aPositionalArgs, **dKeywordArgs):
+    """
+    Similar to processOutputChecked, but returns status code and both stdout
+    and stderr results.
+
+    Extra keywords for specifying now output is to be decoded:
+        sEncoding='utf-8
+        fIgnoreEncoding=True/False
+    """
+    sEncoding = dKeywordArgs.get('sEncoding');
+    if sEncoding is not None:   del dKeywordArgs['sEncoding'];
+    else:                       sEncoding = 'utf-8';
+
+    fIgnoreEncoding = dKeywordArgs.get('fIgnoreEncoding');
+    if fIgnoreEncoding is not None:   del dKeywordArgs['fIgnoreEncoding'];
+    else:                             fIgnoreEncoding = True;
+
+    _processFixPythonInterpreter(aPositionalArgs, dKeywordArgs);
+    oProcess = processPopenSafe(stdout = subprocess.PIPE, stderr = subprocess.PIPE, *aPositionalArgs, **dKeywordArgs);
+
+    sOutput, sError = oProcess.communicate();
+    iExitCode       = oProcess.poll();
+
+    if hasattr(sOutput, 'decode'):
+        sOutput = sOutput.decode(sEncoding, 'ignore' if fIgnoreEncoding else 'strict');
+    if hasattr(sError, 'decode'):
+        sError = sError.decode(sEncoding, 'ignore' if fIgnoreEncoding else 'strict');
+    return (iExitCode, sOutput, sError);
 
 g_fOldSudo = None;
 def _sudoFixArguments(aPositionalArgs, dKeywordArgs, fInitialEnv = True):
@@ -475,7 +759,7 @@ def _sudoFixArguments(aPositionalArgs, dKeywordArgs, fInitialEnv = True):
     # Are we root?
     fIsRoot = True;
     try:
-        fIsRoot = os.getuid() == 0; # pylint: disable=E1101
+        fIsRoot = os.getuid() == 0; # pylint: disable=no-member
     except:
         pass;
 
@@ -489,7 +773,7 @@ def _sudoFixArguments(aPositionalArgs, dKeywordArgs, fInitialEnv = True):
         global g_fOldSudo;
         if g_fOldSudo is None:
             try:
-                sVersion = processOutputChecked(['sudo', '-V']);
+                sVersion = str(processOutputChecked(['sudo', '-V']));
             except:
                 sVersion = '1.7.0';
             sVersion = sVersion.strip().split('\n')[0];
@@ -540,12 +824,40 @@ def sudoProcessOutputCheckedNoI(*aPositionalArgs, **dKeywordArgs):
 
 def sudoProcessPopen(*aPositionalArgs, **dKeywordArgs):
     """
-    sudo (or similar) + subprocess.Popen.
+    sudo (or similar) + processPopenSafe.
     """
     _processFixPythonInterpreter(aPositionalArgs, dKeywordArgs);
     _sudoFixArguments(aPositionalArgs, dKeywordArgs);
-    return subprocess.Popen(*aPositionalArgs, **dKeywordArgs);
+    return processPopenSafe(*aPositionalArgs, **dKeywordArgs);
 
+
+def whichProgram(sName, sPath = None):
+    """
+    Works similar to the 'which' utility on unix.
+
+    Returns path to the given program if found.
+    Returns None if not found.
+    """
+    sHost = getHostOs();
+    sSep  = ';' if sHost in [ 'win', 'os2' ] else ':';
+
+    if sPath is None:
+        if sHost == 'win':
+            sPath = os.environ.get('Path', None);
+        else:
+            sPath = os.environ.get('PATH', None);
+        if sPath is None:
+            return None;
+
+    for sDir in sPath.split(sSep):
+        if sDir.strip() != '':
+            sTest = os.path.abspath(os.path.join(sDir, sName));
+        else:
+            sTest = os.path.abspath(sName);
+        if os.path.exists(sTest):
+            return sTest;
+
+    return None;
 
 #
 # Generic process stuff.
@@ -561,7 +873,8 @@ def processInterrupt(uPid):
     """
     if sys.platform == 'win32':
         try:
-            win32console.GenerateConsoleCtrlEvent(win32con.CTRL_BREAK_EVENT, uPid);             # pylint: disable=no-member
+            win32console.GenerateConsoleCtrlEvent(win32con.CTRL_BREAK_EVENT, # pylint: disable=no-member,c-extension-no-member
+                                                  uPid);
             fRc = True;
         except:
             fRc = False;
@@ -586,7 +899,7 @@ def sendUserSignal1(uPid):
         fRc = False;
     else:
         try:
-            os.kill(uPid, signal.SIGUSR1); # pylint: disable=E1101
+            os.kill(uPid, signal.SIGUSR1); # pylint: disable=no-member
             fRc = True;
         except:
             fRc = False;
@@ -600,16 +913,18 @@ def processTerminate(uPid):
     fRc = False;
     if sys.platform == 'win32':
         try:
-            hProcess = win32api.OpenProcess(win32con.PROCESS_TERMINATE, False, uPid);           # pylint: disable=no-member
+            hProcess = win32api.OpenProcess(win32con.PROCESS_TERMINATE,     # pylint: disable=no-member,c-extension-no-member
+                                            False, uPid);
         except:
             pass;
         else:
             try:
-                win32process.TerminateProcess(hProcess, 0x40010004); # DBG_TERMINATE_PROCESS    # pylint: disable=no-member
+                win32process.TerminateProcess(hProcess,                     # pylint: disable=no-member,c-extension-no-member
+                                              0x40010004); # DBG_TERMINATE_PROCESS
                 fRc = True;
             except:
                 pass;
-            win32api.CloseHandle(hProcess)                                                      # pylint: disable=no-member
+            hProcess.Close(); #win32api.CloseHandle(hProcess)
     else:
         try:
             os.kill(uPid, signal.SIGTERM);
@@ -627,7 +942,7 @@ def processKill(uPid):
         fRc = processTerminate(uPid);
     else:
         try:
-            os.kill(uPid, signal.SIGKILL); # pylint: disable=E1101
+            os.kill(uPid, signal.SIGKILL); # pylint: disable=no-member
             fRc = True;
         except:
             fRc = False;
@@ -655,18 +970,23 @@ def processExists(uPid):
     """
     if sys.platform == 'win32':
         fRc = False;
+        # We try open the process for waiting since this is generally only forbidden in a very few cases.
         try:
-            hProcess = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION, False, uPid);   # pylint: disable=no-member
-        except:
+            hProcess = win32api.OpenProcess(win32con.SYNCHRONIZE,           # pylint: disable=no-member,c-extension-no-member
+                                            False, uPid);
+        except pywintypes.error as oXcpt:                                   # pylint: disable=no-member
+            if oXcpt.winerror == winerror.ERROR_ACCESS_DENIED:
+                fRc = True;
+        except Exception as oXcpt:
             pass;
         else:
-            win32api.CloseHandle(hProcess);                                                     # pylint: disable=no-member
+            hProcess.Close();
             fRc = True;
     else:
         try:
             os.kill(uPid, 0);
             fRc = True;
-        except:
+        except: ## @todo check error code.
             fRc = False;
     return fRc;
 
@@ -680,7 +1000,7 @@ def processCheckPidAndName(uPid, sName):
 
     if sys.platform == 'win32':
         try:
-            from win32com.client import GetObject; # pylint: disable=F0401
+            from win32com.client import GetObject; # pylint: disable=import-error
             oWmi = GetObject('winmgmts:');
             aoProcesses = oWmi.InstancesOf('Win32_Process');
             for oProcess in aoProcesses:
@@ -701,7 +1021,7 @@ def processCheckPidAndName(uPid, sName):
             #reporter.logXcpt('uPid=%s sName=%s' % (uPid, sName));
             pass;
     else:
-        if sys.platform in ('linux2', ):
+        if sys.platform in ('linux2', 'linux', 'linux3', 'linux4', 'linux5', 'linux6'):
             asPsCmd = ['/bin/ps',     '-p', '%u' % (uPid,), '-o', 'fname='];
         elif sys.platform in ('sunos5',):
             asPsCmd = ['/usr/bin/ps', '-p', '%u' % (uPid,), '-o', 'fname='];
@@ -720,12 +1040,12 @@ def processCheckPidAndName(uPid, sName):
                 return False;
 
             # ps fails with non-zero exit code if the pid wasn't found.
-            if iExitCode is not 0:
+            if iExitCode != 0:
                 return False;
             if sCurName is None:
                 return False;
             sCurName = sCurName.strip();
-            if sCurName is '':
+            if not sCurName:
                 return False;
 
             if os.path.basename(sName) == sName:
@@ -738,6 +1058,66 @@ def processCheckPidAndName(uPid, sName):
 
             fRc = True;
     return fRc;
+
+def processGetInfo(uPid, fSudo = False):
+    """
+    Tries to acquire state information of the given process.
+
+    Returns a string with the information on success or None on failure or
+    if the host is not supported.
+
+    Note that the format of the information is host system dependent and will
+    likely differ much between different hosts.
+    """
+    fRc = processExists(uPid);
+    if fRc is not True:
+        return None;
+
+    sHostOs = getHostOs();
+    if sHostOs in [ 'linux',]:
+        sGdb = '/usr/bin/gdb';
+        if not os.path.isfile(sGdb): sGdb = '/usr/local/bin/gdb';
+        if not os.path.isfile(sGdb): sGdb = 'gdb';
+        aasCmd = [
+            [ sGdb, '-batch',
+              '-ex', 'set pagination off',
+              '-ex', 'thread apply all bt',
+              '-ex', 'info proc mapping',
+              '-ex', 'info sharedlibrary',
+              '-p', '%u' % (uPid,), ],
+        ];
+    elif sHostOs == 'darwin':
+        # LLDB doesn't work in batch mode when attaching to a process, at least
+        # with macOS Sierra (10.12). GDB might not be installed. Use the sample
+        # tool instead with a 1 second duration and 1000ms sampling interval to
+        # get one stack trace.  For the process mappings use vmmap.
+        aasCmd = [
+            [ '/usr/bin/sample', '-mayDie', '%u' % (uPid,), '1', '1000', ],
+            [ '/usr/bin/vmmap', '%u' % (uPid,), ],
+        ];
+    elif sHostOs == 'solaris':
+        aasCmd = [
+            [ '/usr/bin/pstack', '%u' % (uPid,), ],
+            [ '/usr/bin/pmap', '%u' % (uPid,), ],
+        ];
+    else:
+        aasCmd = [];
+
+    sInfo = '';
+    for asCmd in aasCmd:
+        try:
+            if fSudo:
+                sThisInfo = sudoProcessOutputChecked(asCmd);
+            else:
+                sThisInfo = processOutputChecked(asCmd);
+            if sThisInfo is not None:
+                sInfo += sThisInfo;
+        except:
+            pass;
+    if not sInfo:
+        sInfo = None;
+
+    return sInfo;
 
 
 class ProcessInfo(object):
@@ -762,10 +1142,10 @@ class ProcessInfo(object):
             if self.sImage   is None: self.sImage = noxcptReadLink(sProc + 'exe', None);
             if self.sCwd     is None: self.sCwd   = noxcptReadLink(sProc + 'cwd', None);
             if self.asArgs   is None: self.asArgs = noxcptReadFile(sProc + 'cmdline', '').split('\x00');
-        elif sOs == 'solaris':
-            sProc = '/proc/%s/' % (self.iPid,);
-            if self.sImage   is None: self.sImage = noxcptReadLink(sProc + 'path/a.out', None);
-            if self.sCwd     is None: self.sCwd   = noxcptReadLink(sProc + 'path/cwd', None);
+        #elif sOs == 'solaris': - doesn't work for root processes, suid proces, and other stuff.
+        #    sProc = '/proc/%s/' % (self.iPid,);
+        #    if self.sImage   is None: self.sImage = noxcptReadLink(sProc + 'path/a.out', None);
+        #    if self.sCwd     is None: self.sCwd   = noxcptReadLink(sProc + 'path/cwd', None);
         else:
             pass;
         if self.sName is None and self.sImage is not None:
@@ -777,7 +1157,7 @@ class ProcessInfo(object):
         except: pass;
         try:    self.sImage     = oProcess.Properties_("ExecutablePath").Value;
         except: pass;
-        try:    self.asArgs     = oProcess.Properties_("CommandLine").Value; ## @todo split it.
+        try:    self.asArgs     = [oProcess.Properties_("CommandLine").Value]; ## @todo split it.
         except: pass;
         try:    self.iParentPid = oProcess.Properties_("ParentProcessId").Value;
         except: pass;
@@ -796,10 +1176,10 @@ class ProcessInfo(object):
             self.loadAll();
             sRet = self.sImage if self.sName is None else self.sName;
             if sRet is None:
-                if self.asArgs is None or len(self.asArgs) == 0:
+                if not self.asArgs:
                     return None;
                 sRet = self.asArgs[0];
-                if len(sRet) == 0:
+                if not sRet:
                     return None;
         return os.path.basename(sRet);
 
@@ -814,7 +1194,7 @@ class ProcessInfo(object):
         return sRet;
 
 
-def processListAll(): # pylint: disable=R0914
+def processListAll():
     """
     Return a list of ProcessInfo objects for all the processes in the system
     that the current user can see.
@@ -823,7 +1203,7 @@ def processListAll(): # pylint: disable=R0914
 
     sOs = getHostOs();
     if sOs == 'win':
-        from win32com.client import GetObject; # pylint: disable=F0401
+        from win32com.client import GetObject; # pylint: disable=import-error
         oWmi = GetObject('winmgmts:');
         aoProcesses = oWmi.InstancesOf('Win32_Process');
         for oProcess in aoProcesses:
@@ -834,8 +1214,9 @@ def processListAll(): # pylint: disable=R0914
             oMyInfo = ProcessInfo(iPid);
             oMyInfo.windowsGrabProcessInfo(oProcess);
             asProcesses.append(oMyInfo);
+        return asProcesses;
 
-    elif sOs in [ 'linux', 'solaris' ]:
+    if sOs in [ 'linux', ]:  # Not solaris, ps gets more info than /proc/.
         try:
             asDirs = os.listdir('/proc');
         except:
@@ -843,64 +1224,77 @@ def processListAll(): # pylint: disable=R0914
         for sDir in asDirs:
             if sDir.isdigit():
                 asProcesses.append(ProcessInfo(int(sDir),));
+        return asProcesses;
 
-    elif sOs == 'darwin':
-        # Try our best to parse ps output. (Not perfect but does the job most of the time.)
-        try:
-            sRaw = processOutputChecked([ '/bin/ps', '-A',
-                                          '-o', 'pid=',
-                                          '-o', 'ppid=',
-                                          '-o', 'pgid=',
-                                          '-o', 'sess=',
-                                          '-o', 'uid=',
-                                          '-o', 'gid=',
-                                          '-o', 'comm=' ]);
-        except:
-            return asProcesses;
+    #
+    # The other OSes parses the output from the 'ps' utility.
+    #
+    asPsCmd = [
+        '/bin/ps',          # 0
+        '-A',               # 1
+        '-o', 'pid=',       # 2,3
+        '-o', 'ppid=',      # 4,5
+        '-o', 'pgid=',      # 6,7
+        '-o', 'sid=',       # 8,9
+        '-o', 'uid=',       # 10,11
+        '-o', 'gid=',       # 12,13
+        '-o', 'comm='       # 14,15
+    ];
 
-        for sLine in sRaw.split('\n'):
-            sLine = sLine.lstrip();
-            if len(sLine) < 7 or not sLine[0].isdigit():
-                continue;
+    if sOs == 'darwin':
+        assert asPsCmd[9] == 'sid=';
+        asPsCmd[9] = 'sess=';
+    elif sOs == 'solaris':
+        asPsCmd[0] = '/usr/bin/ps';
 
-            iField   = 0;
-            off      = 0;
-            aoFields = [None, None, None, None, None, None, None];
-            while iField < 7:
-                # Eat whitespace.
-                while off < len(sLine) and (sLine[off] == ' ' or sLine[off] == '\t'):
-                    off += 1;
+    try:
+        sRaw = processOutputChecked(asPsCmd);
+    except:
+        return asProcesses;
 
-                # Final field / EOL.
-                if iField == 6:
-                    aoFields[6] = sLine[off:];
-                    break;
-                if off >= len(sLine):
-                    break;
+    for sLine in sRaw.split('\n'):
+        sLine = sLine.lstrip();
+        if len(sLine) < 7 or not sLine[0].isdigit():
+            continue;
 
-                # Generic field parsing.
-                offStart = off;
+        iField   = 0;
+        off      = 0;
+        aoFields = [None, None, None, None, None, None, None];
+        while iField < 7:
+            # Eat whitespace.
+            while off < len(sLine) and (sLine[off] == ' ' or sLine[off] == '\t'):
                 off += 1;
-                while off < len(sLine) and sLine[off] != ' ' and sLine[off] != '\t':
-                    off += 1;
-                try:
-                    if iField != 3:
-                        aoFields[iField] = int(sLine[offStart:off]);
-                    else:
-                        aoFields[iField] = long(sLine[offStart:off], 16); # sess is a hex address.
-                except:
-                    pass;
-                iField += 1;
 
-            if aoFields[0] is not None:
-                oMyInfo = ProcessInfo(aoFields[0]);
-                oMyInfo.iParentPid = aoFields[1];
-                oMyInfo.iProcGroup = aoFields[2];
-                oMyInfo.iSessionId = aoFields[3];
-                oMyInfo.iUid       = aoFields[4];
-                oMyInfo.iGid       = aoFields[5];
-                oMyInfo.sName      = aoFields[6];
-                asProcesses.append(oMyInfo);
+            # Final field / EOL.
+            if iField == 6:
+                aoFields[6] = sLine[off:];
+                break;
+            if off >= len(sLine):
+                break;
+
+            # Generic field parsing.
+            offStart = off;
+            off += 1;
+            while off < len(sLine) and sLine[off] != ' ' and sLine[off] != '\t':
+                off += 1;
+            try:
+                if iField != 3:
+                    aoFields[iField] = int(sLine[offStart:off]);
+                else:
+                    aoFields[iField] = long(sLine[offStart:off], 16); # sess is a hex address.
+            except:
+                pass;
+            iField += 1;
+
+        if aoFields[0] is not None:
+            oMyInfo = ProcessInfo(aoFields[0]);
+            oMyInfo.iParentPid = aoFields[1];
+            oMyInfo.iProcGroup = aoFields[2];
+            oMyInfo.iSessionId = aoFields[3];
+            oMyInfo.iUid       = aoFields[4];
+            oMyInfo.iGid       = aoFields[5];
+            oMyInfo.sName      = aoFields[6];
+            asProcesses.append(oMyInfo);
 
     return asProcesses;
 
@@ -1005,6 +1399,7 @@ def processCollectCrashInfo(uPid, fnLog, fnCrashFile):
 #
 # Note! We cannot use time.clock() as the timestamp must be portable across
 #       processes.  See timeout testcase problem on win hosts (no logs).
+#       Also, time.clock() was axed in python 3.8 (https://bugs.python.org/issue31803).
 #
 #import sys;
 #import time;
@@ -1060,7 +1455,6 @@ def _winFloatTime():
             return float(uCurValue.value) / g_fpWinPerfCounterFreq;
     return time.time();
 
-
 def timestampNano():
     """
     Gets a nanosecond timestamp.
@@ -1085,6 +1479,13 @@ def timestampSecond():
         return long(_winFloatTime());
     return long(time.time());
 
+def secondsSinceUnixEpoch():
+    """
+    Returns unix time, floating point second count since 1970-01-01T00:00:00Z
+    """
+    ## ASSUMES This returns unix epoch time on all systems we care about...
+    return time.time();
+
 def getTimePrefix():
     """
     Returns a timestamp prefix, typically used for logging. UTC.
@@ -1108,9 +1509,32 @@ def getTimePrefixAndIsoTimestamp():
         sTsPrf = sTsIso = 'getTimePrefix-exception';
     return (sTsPrf, sTsIso);
 
+class UtcTzInfo(datetime.tzinfo):
+    """UTC TZ Info Class"""
+    def utcoffset(self, _):
+        return datetime.timedelta(0);
+    def tzname(self, _):
+        return "UTC";
+    def dst(self, _):
+        return datetime.timedelta(0);
+
+class GenTzInfo(datetime.tzinfo):
+    """Generic TZ Info Class"""
+    def __init__(self, offInMin):
+        datetime.tzinfo.__init__(self);
+        self.offInMin = offInMin;
+    def utcoffset(self, _):
+        return datetime.timedelta(minutes = self.offInMin);
+    def tzname(self, _):
+        if self.offInMin >= 0:
+            return "+%02d%02d" % (self.offInMin // 60, self.offInMin % 60);
+        return "-%02d%02d" % (-self.offInMin // 60, -self.offInMin % 60);
+    def dst(self, _):
+        return datetime.timedelta(0);
+
 def formatIsoTimestamp(oNow):
     """Formats the datetime object as an ISO timestamp."""
-    assert oNow.tzinfo is None;
+    assert oNow.tzinfo is None or isinstance(oNow.tzinfo, UtcTzInfo);
     sTs = '%s.%09uZ' % (oNow.strftime('%Y-%m-%dT%H:%M:%S'), oNow.microsecond * 1000);
     return sTs;
 
@@ -1118,6 +1542,104 @@ def getIsoTimestamp():
     """Returns the current UTC timestamp as a string."""
     return formatIsoTimestamp(datetime.datetime.utcnow());
 
+def formatShortIsoTimestamp(oNow):
+    """Formats the datetime object as an ISO timestamp, but w/o microseconds."""
+    assert oNow.tzinfo is None or isinstance(oNow.tzinfo, UtcTzInfo);
+    return oNow.strftime('%Y-%m-%dT%H:%M:%SZ');
+
+def getShortIsoTimestamp():
+    """Returns the current UTC timestamp as a string, but w/o microseconds."""
+    return formatShortIsoTimestamp(datetime.datetime.utcnow());
+
+def convertDateTimeToZulu(oDateTime):
+    """ Converts oDateTime to zulu time if it has timezone info. """
+    if oDateTime.tzinfo is not None:
+        oDateTime = oDateTime.astimezone(UtcTzInfo());
+    else:
+        oDateTime = oDateTime.replace(tzinfo = UtcTzInfo());
+    return oDateTime;
+
+def parseIsoTimestamp(sTs):
+    """
+    Parses a typical ISO timestamp, returing a datetime object, reasonably
+    forgiving, but will throw weird indexing/conversion errors if the input
+    is malformed.
+    """
+    # YYYY-MM-DD
+    iYear  = int(sTs[0:4]);
+    assert(sTs[4] == '-');
+    iMonth = int(sTs[5:7]);
+    assert(sTs[7] == '-');
+    iDay   = int(sTs[8:10]);
+
+    # Skip separator
+    sTime = sTs[10:];
+    while sTime[0] in 'Tt \t\n\r':
+        sTime = sTime[1:];
+
+    # HH:MM[:SS]
+    iHour = int(sTime[0:2]);
+    assert(sTime[2] == ':');
+    iMin  = int(sTime[3:5]);
+    if sTime[5] == ':':
+        iSec = int(sTime[6:8]);
+
+        # Fraction?
+        offTime = 8;
+        iMicroseconds = 0;
+        if offTime < len(sTime) and sTime[offTime] in '.,':
+            offTime += 1;
+            cchFraction = 0;
+            while offTime + cchFraction < len(sTime) and sTime[offTime + cchFraction] in '0123456789':
+                cchFraction += 1;
+            if cchFraction > 0:
+                iMicroseconds = int(sTime[offTime : (offTime + cchFraction)]);
+                offTime += cchFraction;
+                while cchFraction < 6:
+                    iMicroseconds *= 10;
+                    cchFraction += 1;
+                while cchFraction > 6:
+                    iMicroseconds = iMicroseconds // 10;
+                    cchFraction -= 1;
+
+    else:
+        iSec          = 0;
+        iMicroseconds = 0;
+        offTime       = 5;
+
+    # Naive?
+    if offTime >= len(sTime):
+        return datetime.datetime(iYear, iMonth, iDay, iHour, iMin, iSec, iMicroseconds);
+
+    # Zulu?
+    if offTime >= len(sTime) or sTime[offTime] in 'Zz':
+        return datetime.datetime(iYear, iMonth, iDay, iHour, iMin, iSec, iMicroseconds, tzinfo = UtcTzInfo());
+
+    # Some kind of offset afterwards, and strptime is useless. sigh.
+    if sTime[offTime] in '+-':
+        chSign = sTime[offTime];
+        offTime += 1;
+        cMinTz = int(sTime[offTime : (offTime + 2)]) * 60;
+        offTime += 2;
+        if offTime  < len(sTime) and sTime[offTime] in ':':
+            offTime += 1;
+        if offTime + 2 <= len(sTime):
+            cMinTz += int(sTime[offTime : (offTime + 2)]);
+            offTime += 2;
+        assert offTime == len(sTime);
+        if chSign == '-':
+            cMinTz = -cMinTz;
+        return datetime.datetime(iYear, iMonth, iDay, iHour, iMin, iSec, iMicroseconds, tzinfo = GenTzInfo(cMinTz));
+    assert False, sTs;
+    return datetime.datetime(iYear, iMonth, iDay, iHour, iMin, iSec, iMicroseconds);
+
+def normalizeIsoTimestampToZulu(sTs):
+    """
+    Takes a iso timestamp string and normalizes it (basically parseIsoTimestamp
+    + convertDateTimeToZulu + formatIsoTimestamp).
+    Returns ISO tiemstamp string.
+    """
+    return formatIsoTimestamp(convertDateTimeToZulu(parseIsoTimestamp(sTs)));
 
 def getLocalHourOfWeek():
     """ Local hour of week (0 based). """
@@ -1131,18 +1653,18 @@ def formatIntervalSeconds(cSeconds):
     if cSeconds < 60:
         return '%ss' % (cSeconds,);
     if cSeconds < 3600:
-        cMins = cSeconds / 60;
+        cMins = cSeconds // 60;
         cSecs = cSeconds % 60;
         if cSecs == 0:
             return '%sm' % (cMins,);
         return '%sm %ss' % (cMins, cSecs,);
 
     # Generic and a bit slower.
-    cDays     = cSeconds / 86400;
+    cDays     = cSeconds // 86400;
     cSeconds %= 86400;
-    cHours    = cSeconds / 3600;
+    cHours    = cSeconds // 3600;
     cSeconds %= 3600;
-    cMins     = cSeconds / 60;
+    cMins     = cSeconds // 60;
     cSecs     = cSeconds % 60;
     sRet = '';
     if cDays > 0:
@@ -1153,7 +1675,7 @@ def formatIntervalSeconds(cSeconds):
         sRet += '%sm ' % (cMins,);
     if cSecs > 0:
         sRet += '%ss ' % (cSecs,);
-    assert len(sRet) > 0; assert sRet[-1] == ' ';
+    assert sRet; assert sRet[-1] == ' ';
     return sRet[:-1];
 
 def formatIntervalSeconds2(oSeconds):
@@ -1161,7 +1683,7 @@ def formatIntervalSeconds2(oSeconds):
     Flexible input version of formatIntervalSeconds for use in WUI forms where
     data is usually already string form.
     """
-    if isinstance(oSeconds, int) or isinstance(oSeconds, long):
+    if isinstance(oSeconds, (int, long)):
         return formatIntervalSeconds(oSeconds);
     if not isString(oSeconds):
         try:
@@ -1182,14 +1704,14 @@ def parseIntervalSeconds(sString):
 
     # We might given non-strings, just return them without any fuss.
     if not isString(sString):
-        if isinstance(sString, int) or isinstance(sString, long) or  sString is None:
+        if isinstance(sString, (int, long)) or sString is None:
             return (sString, None);
         ## @todo time/date objects?
         return (int(sString), None);
 
     # Strip it and make sure it's not empty.
     sString = sString.strip();
-    if len(sString) == 0:
+    if not sString:
         return (0, 'Empty interval string.');
 
     #
@@ -1202,9 +1724,9 @@ def parseIntervalSeconds(sString):
     asParts    = [];
     for sPart in asRawParts:
         sPart = sPart.strip();
-        if len(sPart) > 0:
+        if sPart:
             asParts.append(sPart);
-    if len(asParts) == 0:
+    if not asParts:
         return (0, 'Empty interval string or something?');
 
     #
@@ -1240,7 +1762,7 @@ def parseIntervalSeconds(sString):
             cSeconds += iNumber;
         else:
             asErrors.append('Bad number "%s".' % (sNumber,));
-    return (cSeconds, None if len(asErrors) == 0 else ' '.join(asErrors));
+    return (cSeconds, None if not asErrors else ' '.join(asErrors));
 
 def formatIntervalHours(cHours):
     """ Format a hours interval into a nice 1w 2d 1h string. """
@@ -1260,7 +1782,7 @@ def formatIntervalHours(cHours):
         sRet = '%sd ' % (cDays,);
     if cHours > 0:
         sRet += '%sh ' % (cHours,);
-    assert len(sRet) > 0; assert sRet[-1] == ' ';
+    assert sRet; assert sRet[-1] == ' ';
     return sRet[:-1];
 
 def parseIntervalHours(sString):
@@ -1272,14 +1794,14 @@ def parseIntervalHours(sString):
 
     # We might given non-strings, just return them without any fuss.
     if not isString(sString):
-        if isinstance(sString, int) or isinstance(sString, long) or  sString is None:
+        if isinstance(sString, (int, long)) or sString is None:
             return (sString, None);
         ## @todo time/date objects?
         return (int(sString), None);
 
     # Strip it and make sure it's not empty.
     sString = sString.strip();
-    if len(sString) == 0:
+    if not sString:
         return (0, 'Empty interval string.');
 
     #
@@ -1292,9 +1814,9 @@ def parseIntervalHours(sString):
     asParts    = [];
     for sPart in asRawParts:
         sPart = sPart.strip();
-        if len(sPart) > 0:
+        if sPart:
             asParts.append(sPart);
-    if len(asParts) == 0:
+    if not asParts:
         return (0, 'Empty interval string or something?');
 
     #
@@ -1326,7 +1848,7 @@ def parseIntervalHours(sString):
             cHours += iNumber;
         else:
             asErrors.append('Bad number "%s".' % (sNumber,));
-    return (cHours, None if len(asErrors) == 0 else ' '.join(asErrors));
+    return (cHours, None if not asErrors else ' '.join(asErrors));
 
 
 #
@@ -1386,13 +1908,60 @@ def getXcptInfo(cFrames = 1):
             except:
                 asRet.append('internal-error: Hit exception #2! %s' % (traceback.format_exc(),));
 
-            if len(asRet) == 0:
+            if not asRet:
                 asRet.append('No exception info...');
         except:
             asRet.append('internal-error: Hit exception! %s' % (traceback.format_exc(),));
     else:
         asRet = ['Couldn\'t find exception traceback.'];
     return asRet;
+
+
+def getObjectTypeName(oObject):
+    """
+    Get the type name of the given object.
+    """
+    if oObject is None:
+        return 'None';
+
+    # Get the type object.
+    try:
+        oType = type(oObject);
+    except:
+        return 'type-throws-exception';
+
+    # Python 2.x only: Handle old-style object wrappers.
+    if sys.version_info[0] < 3:
+        try:
+            from types import InstanceType;     # pylint: disable=no-name-in-module
+            if oType == InstanceType:
+                oType = oObject.__class__;
+        except:
+            pass;
+
+    # Get the name.
+    try:
+        return oType.__name__;
+    except:
+        return '__type__-throws-exception';
+
+
+def chmodPlusX(sFile):
+    """
+    Makes the specified file or directory executable.
+    Returns success indicator, no exceptions.
+
+    Note! Symbolic links are followed and the target will be changed.
+    """
+    try:
+        oStat = os.stat(sFile);
+    except:
+        return False;
+    try:
+        os.chmod(sFile, oStat.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH);
+    except:
+        return False;
+    return True;
 
 
 #
@@ -1442,7 +2011,7 @@ def argsGetFirst(sCmdLine):
     Returns None on invalid syntax, otherwise the parsed and unescaped argv[0] string.
     """
     asArgs = argsSplit(sCmdLine);
-    if asArgs is None  or  len(asArgs) == 0:
+    if not asArgs:
         return None;
 
     return asArgs[0];
@@ -1468,10 +2037,6 @@ def stricmp(sFirst, sSecond):
         return -1;
     return 1;
 
-
-#
-# Misc.
-#
 
 def versionCompare(sVer1, sVer2):
     """
@@ -1517,34 +2082,28 @@ def isString(oString):
     """
     if sys.version_info[0] >= 3:
         return isinstance(oString, str);
-    return isinstance(oString, basestring);
+    return isinstance(oString, basestring);     # pylint: disable=undefined-variable
 
 
 def hasNonAsciiCharacters(sText):
     """
     Returns True is specified string has non-ASCII characters, False if ASCII only.
     """
-    sTmp = unicode(sText, errors='ignore') if isinstance(sText, str) else sText;
-    return not all(ord(ch) < 128 for ch in sTmp);
+    if isString(sText):
+        for ch in sText:
+            if ord(ch) >= 128:
+                return True;
+    else:
+        # Probably byte array or some such thing.
+        for ch in sText:
+            if ch >= 128 or ch < 0:
+                return True;
+    return False;
 
 
-def chmodPlusX(sFile):
-    """
-    Makes the specified file or directory executable.
-    Returns success indicator, no exceptions.
-
-    Note! Symbolic links are followed and the target will be changed.
-    """
-    try:
-        oStat = os.stat(sFile);
-    except:
-        return False;
-    try:
-        os.chmod(sFile, oStat.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH);
-    except:
-        return False;
-    return True;
-
+#
+# Unpacking.
+#
 
 def unpackZipFile(sArchive, sDstDir, fnLog, fnError = None, fnFilter = None):
     # type: (string, string, (string) -> None, (string) -> None, (string) -> bool) -> list[string]
@@ -1589,8 +2148,9 @@ def unpackZipFile(sArchive, sDstDir, fnLog, fnError = None, fnFilter = None):
 ## Set if we've replaced tarfile.copyfileobj with __mytarfilecopyfileobj already.
 g_fTarCopyFileObjOverriddend = False;
 
-def __mytarfilecopyfileobj(src, dst, length = None, exception = OSError):
+def __mytarfilecopyfileobj(src, dst, length = None, exception = OSError, bufsize = None):
     """ tarfile.copyfileobj with different buffer size (16384 is slow on windows). """
+    _ = bufsize;
     if length is None:
         __myshutilcopyfileobj(src, dst, g_cbGoodBufferSize);
     elif length > 0:
@@ -1624,11 +2184,12 @@ def unpackTarFile(sArchive, sDstDir, fnLog, fnError = None, fnFilter = None):
     # 60%+ speedup for python 2.7 and 50%+ speedup for python 3.5, both on windows with PDBs.
     # 20%+ speedup for python 2.7 and 15%+ speedup for python 3.5, both on windows skipping PDBs.
     #
-    if True is True:
+    if True is True: # pylint: disable=comparison-with-itself
         __installShUtilHacks(shutil);
         global g_fTarCopyFileObjOverriddend;
         if g_fTarCopyFileObjOverriddend is False:
             g_fTarCopyFileObjOverriddend = True;
+            #if sys.hexversion < 0x03060000:
             tarfile.copyfileobj = __mytarfilecopyfileobj;
 
     #
@@ -1637,7 +2198,11 @@ def unpackTarFile(sArchive, sDstDir, fnLog, fnError = None, fnFilter = None):
     # Note! We not using 'r:*' because we cannot allow seeking compressed files!
     #       That's how we got a 13 min unpack time for VBoxAll on windows (hardlinked pdb).
     #
-    try: oTarFile = tarfile.open(sArchive, 'r|*', bufsize = g_cbGoodBufferSize);
+    try:
+        if sys.hexversion >= 0x03060000:
+            oTarFile = tarfile.open(sArchive, 'r|*', bufsize = g_cbGoodBufferSize, copybufsize = g_cbGoodBufferSize);
+        else:
+            oTarFile = tarfile.open(sArchive, 'r|*', bufsize = g_cbGoodBufferSize);
     except Exception as oXcpt:
         fnError('Error opening "%s" for unpacking into "%s": %s' % (sArchive, sDstDir, oXcpt,));
         return None;
@@ -1656,7 +2221,7 @@ def unpackTarFile(sArchive, sDstDir, fnLog, fnError = None, fnFilter = None):
                         sParentDir    = os.path.dirname(sLinkFile);
                         try:    os.unlink(sLinkFile);
                         except: pass;
-                        if sParentDir is not ''  and  not os.path.exists(sParentDir):
+                        if sParentDir and not os.path.exists(sParentDir):
                             os.makedirs(sParentDir);
                         try:    os.link(sLinkTarget, sLinkFile);
                         except: shutil.copy2(sLinkTarget, sLinkFile);
@@ -1728,32 +2293,113 @@ def unpackFile(sArchive, sDstDir, fnLog, fnError = None, fnFilter = None):
     return [];
 
 
-def getDiskUsage(sPath):
+#
+# Misc.
+#
+def areBytesEqual(oLeft, oRight):
     """
-    Get free space of a partition that corresponds to specified sPath in MB.
+    Compares two byte arrays, strings or whatnot.
 
-    Returns partition free space value in MB.
+    returns true / false accordingly.
     """
-    if platform.system() == 'Windows':
-        oCTypeFreeSpace = ctypes.c_ulonglong(0);
-        ctypes.windll.kernel32.GetDiskFreeSpaceExW(ctypes.c_wchar_p(sPath), None, None,
-                                                   ctypes.pointer(oCTypeFreeSpace));
-        cbFreeSpace = oCTypeFreeSpace.value;
+
+    # If both are None, consider them equal (bogus?):
+    if oLeft is None and oRight is None:
+        return True;
+
+    # If just one is None, they can't match:
+    if oLeft is None or oRight is None:
+        return False;
+
+    # If both have the same type, use the compare operator of the class:
+    if type(oLeft) is type(oRight):
+        #print('same type: %s' % (oLeft == oRight,));
+        return oLeft == oRight;
+
+    # On the offchance that they're both strings, but of different types.
+    if isString(oLeft) and isString(oRight):
+        #print('string compare: %s' % (oLeft == oRight,));
+        return oLeft == oRight;
+
+    #
+    # See if byte/buffer stuff that can be compared directory. If not convert
+    # strings to bytes.
+    #
+    # Note! For 2.x, we must convert both sides to the buffer type or the
+    #       comparison may fail despite it working okay in test cases.
+    #
+    if sys.version_info[0] >= 3:
+        if isinstance(oLeft, (bytearray, memoryview, bytes)) and isinstance(oRight, (bytearray, memoryview, bytes)):  # pylint: disable=undefined-variable
+            return oLeft == oRight;
+
+        if isString(oLeft):
+            try:    oLeft = bytes(oLeft, 'utf-8');
+            except: pass;
+        if isString(oRight):
+            try:    oRight = bytes(oRight, 'utf-8');
+            except: pass;
     else:
-        oStats = os.statvfs(sPath); # pylint: disable=E1101
-        cbFreeSpace = long(oStats.f_frsize) * oStats.f_bfree;
+        if isinstance(oLeft, (bytearray, buffer)) and isinstance(oRight, (bytearray, buffer)): # pylint: disable=undefined-variable
+            if isinstance(oLeft, bytearray):
+                oLeft  = buffer(oLeft);                     # pylint: disable=redefined-variable-type,undefined-variable
+            else:
+                oRight = buffer(oRight);                    # pylint: disable=redefined-variable-type,undefined-variable
+            #print('buf/byte #1 compare: %s (%s vs %s)' % (oLeft == oRight, type(oLeft), type(oRight),));
+            return oLeft == oRight;
 
-    # Convert to MB
-    cMbFreeSpace = long(cbFreeSpace) / (1024 * 1024);
+        if isString(oLeft):
+            try:    oLeft = bytearray(oLeft, 'utf-8');      # pylint: disable=redefined-variable-type
+            except: pass;
+        if isString(oRight):
+            try:    oRight = bytearray(oRight, 'utf-8');    # pylint: disable=redefined-variable-type
+            except: pass;
 
-    return cMbFreeSpace;
+    # Check if we now have the same type for both:
+    if type(oLeft) is type(oRight):
+        #print('same type now: %s' % (oLeft == oRight,));
+        return oLeft == oRight;
+
+    # Check if we now have buffer/memoryview vs bytes/bytesarray again.
+    if sys.version_info[0] >= 3:
+        if isinstance(oLeft, (bytearray, memoryview, bytes)) and isinstance(oRight, (bytearray, memoryview, bytes)):  # pylint: disable=undefined-variable
+            return oLeft == oRight;
+    else:
+        if isinstance(oLeft, (bytearray, buffer)) and isinstance(oRight, (bytearray, buffer)): # pylint: disable=undefined-variable
+            if isinstance(oLeft, bytearray):
+                oLeft  = buffer(oLeft);                     # pylint: disable=redefined-variable-type,undefined-variable
+            else:
+                oRight = buffer(oRight);                    # pylint: disable=redefined-variable-type,undefined-variable
+            #print('buf/byte #2 compare: %s (%s vs %s)' % (oLeft == oRight, type(oLeft), type(oRight),));
+            return oLeft == oRight;
+
+    # Do item by item comparison:
+    if len(oLeft) != len(oRight):
+        #print('different length: %s vs %s' % (len(oLeft), len(oRight)));
+        return False;
+    i = len(oLeft);
+    while i > 0:
+        i = i - 1;
+
+        iElmLeft = oLeft[i];
+        if not isinstance(iElmLeft, int) and not isinstance(iElmLeft, long):
+            iElmLeft = ord(iElmLeft);
+
+        iElmRight = oRight[i];
+        if not isinstance(iElmRight, int) and not isinstance(iElmRight, long):
+            iElmRight = ord(iElmRight);
+
+        if iElmLeft != iElmRight:
+            #print('element %d differs: %x %x' % (i, iElmLeft, iElmRight,));
+            return False;
+    return True;
 
 
 #
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
+# pylint: disable=undefined-variable
 class BuildCategoryDataTestCase(unittest.TestCase):
     def testIntervalSeconds(self):
         self.assertEqual(parseIntervalSeconds(formatIntervalSeconds(3600)), (3600, None));
@@ -1768,13 +2414,55 @@ class BuildCategoryDataTestCase(unittest.TestCase):
         self.assertEqual(parseIntervalSeconds('1 hour 2m 5second'), (3725, None));
         self.assertEqual(parseIntervalSeconds('1 hour,2m ; 5second'), (3725, None));
 
+    def testZuluNormalization(self):
+        self.assertEqual(normalizeIsoTimestampToZulu('2011-01-02T03:34:25.000000000Z'), '2011-01-02T03:34:25.000000000Z');
+        self.assertEqual(normalizeIsoTimestampToZulu('2011-01-02T03:04:25-0030'), '2011-01-02T03:34:25.000000000Z');
+        self.assertEqual(normalizeIsoTimestampToZulu('2011-01-02T03:04:25+0030'), '2011-01-02T02:34:25.000000000Z');
+        self.assertEqual(normalizeIsoTimestampToZulu('2020-03-20T20:47:39,832312863+01:00'), '2020-03-20T19:47:39.832312000Z');
+        self.assertEqual(normalizeIsoTimestampToZulu('2020-03-20T20:47:39,832312863-02:00'), '2020-03-20T22:47:39.832312000Z');
+
     def testHasNonAsciiChars(self):
         self.assertEqual(hasNonAsciiCharacters(''), False);
         self.assertEqual(hasNonAsciiCharacters('asdfgebASDFKJ@#$)(!@#UNASDFKHB*&$%&)@#(!)@(#!(#$&*#$&%*Y@#$IQWN---00;'), False);
+        self.assertEqual(hasNonAsciiCharacters('\x80 '), True);
+        self.assertEqual(hasNonAsciiCharacters('\x79 '), False);
         self.assertEqual(hasNonAsciiCharacters(u'12039889y!@#$%^&*()0-0asjdkfhoiuyweasdfASDFnvV'), False);
         self.assertEqual(hasNonAsciiCharacters(u'\u0079'), False);
         self.assertEqual(hasNonAsciiCharacters(u'\u0080'), True);
         self.assertEqual(hasNonAsciiCharacters(u'\u0081 \u0100'), True);
+        self.assertEqual(hasNonAsciiCharacters(b'\x20\x20\x20'), False);
+        self.assertEqual(hasNonAsciiCharacters(b'\x20\x81\x20'), True);
+
+    def testAreBytesEqual(self):
+        self.assertEqual(areBytesEqual(None, None), True);
+        self.assertEqual(areBytesEqual(None, ''), False);
+        self.assertEqual(areBytesEqual('', ''), True);
+        self.assertEqual(areBytesEqual('1', '1'), True);
+        self.assertEqual(areBytesEqual('12345', '1234'), False);
+        self.assertEqual(areBytesEqual('1234', '1234'), True);
+        self.assertEqual(areBytesEqual('1234', b'1234'), True);
+        self.assertEqual(areBytesEqual(b'1234', b'1234'), True);
+        self.assertEqual(areBytesEqual(b'1234', '1234'), True);
+        self.assertEqual(areBytesEqual(b'1234', bytearray([0x31,0x32,0x33,0x34])), True);
+        self.assertEqual(areBytesEqual('1234', bytearray([0x31,0x32,0x33,0x34])), True);
+        self.assertEqual(areBytesEqual(u'1234', bytearray([0x31,0x32,0x33,0x34])), True);
+        self.assertEqual(areBytesEqual(bytearray([0x31,0x32,0x33,0x34]), bytearray([0x31,0x32,0x33,0x34])), True);
+        self.assertEqual(areBytesEqual(bytearray([0x31,0x32,0x33,0x34]), '1224'), False);
+        self.assertEqual(areBytesEqual(bytearray([0x31,0x32,0x33,0x34]), bytearray([0x31,0x32,0x32,0x34])), False);
+        if sys.version_info[0] >= 3:
+            pass;
+        else:
+            self.assertEqual(areBytesEqual(buffer(bytearray([0x30,0x31,0x32,0x33,0x34]), 1),
+                                                       bytearray([0x31,0x32,0x33,0x34])), True);
+            self.assertEqual(areBytesEqual(buffer(bytearray([0x30,0x31,0x32,0x33,0x34]), 1),
+                                                       bytearray([0x99,0x32,0x32,0x34])), False);
+            self.assertEqual(areBytesEqual(buffer(bytearray([0x30,0x31,0x32,0x33,0x34]), 1),
+                                                buffer(bytearray([0x31,0x32,0x33,0x34,0x34]), 0, 4)), True);
+            self.assertEqual(areBytesEqual(buffer(bytearray([0x30,0x31,0x32,0x33,0x34]), 1),
+                                                buffer(bytearray([0x99,0x32,0x33,0x34,0x34]), 0, 4)), False);
+            self.assertEqual(areBytesEqual(buffer(bytearray([0x30,0x31,0x32,0x33,0x34]), 1), b'1234'), True);
+            self.assertEqual(areBytesEqual(buffer(bytearray([0x30,0x31,0x32,0x33,0x34]), 1),  '1234'), True);
+            self.assertEqual(areBytesEqual(buffer(bytearray([0x30,0x31,0x32,0x33,0x34]), 1), u'1234'), True);
 
 if __name__ == '__main__':
     unittest.main();

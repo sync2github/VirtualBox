@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: CertificateImpl.cpp 91503 2021-10-01 08:57:59Z vboxsync $ */
 /** @file
  * ICertificate COM class implementations.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,8 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_CERTIFICATE
+#include <iprt/err.h>
 #include <iprt/path.h>
 #include <iprt/cpp/utils.h>
 #include <VBox/com/array.h>
@@ -24,7 +26,7 @@
 #include "CertificateImpl.h"
 #include "AutoCaller.h"
 #include "Global.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 using namespace std;
 
@@ -133,7 +135,7 @@ void Certificate::uninit()
 }
 
 
-/** @name wrapped ICertificate properties
+/** @name Wrapped ICertificate properties
  * @{
  */
 
@@ -144,10 +146,10 @@ HRESULT Certificate::getVersionNumber(CertificateVersion_T *aVersionNumber)
     Assert(m->fValidX509);
     switch (m->X509.TbsCertificate.T0.Version.uValue.u)
     {
-        case RTCRX509TBSCERTIFICATE_V1: *aVersionNumber = (CertificateVersion_T)CertificateVersion_V1; break;
-        case RTCRX509TBSCERTIFICATE_V2: *aVersionNumber = (CertificateVersion_T)CertificateVersion_V2; break;
-        case RTCRX509TBSCERTIFICATE_V3: *aVersionNumber = (CertificateVersion_T)CertificateVersion_V3; break;
-        default: AssertFailed();        *aVersionNumber = (CertificateVersion_T)CertificateVersion_Unknown; break;
+        case RTCRX509TBSCERTIFICATE_V1: *aVersionNumber = CertificateVersion_V1; break;
+        case RTCRX509TBSCERTIFICATE_V2: *aVersionNumber = CertificateVersion_V2; break;
+        case RTCRX509TBSCERTIFICATE_V3: *aVersionNumber = CertificateVersion_V3; break;
+        default: AssertFailed();        *aVersionNumber = CertificateVersion_Unknown; break;
     }
     return S_OK;
 }
@@ -414,7 +416,7 @@ HRESULT Certificate::queryInfo(LONG aWhat, com::Utf8Str &aResult)
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
     /* Insurance. */
     NOREF(aResult);
-    return setError(E_FAIL, "Unknown item %u", aWhat);
+    return setError(E_FAIL, tr("Unknown item %u"), aWhat);
 }
 
 /** @} */
@@ -446,6 +448,8 @@ HRESULT Certificate::i_getAlgorithmName(PCRTCRX509ALGORITHMIDENTIFIER a_pAlgId, 
     else if (strcmp(pszOid, RTCRX509ALGORITHMIDENTIFIERID_SHA256_WITH_RSA))     pszName = "sha256WithRSAEncryption";
     else if (strcmp(pszOid, RTCRX509ALGORITHMIDENTIFIERID_SHA384_WITH_RSA))     pszName = "sha384WithRSAEncryption";
     else if (strcmp(pszOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512_WITH_RSA))     pszName = "sha512WithRSAEncryption";
+    else if (strcmp(pszOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T224_WITH_RSA)) pszName = "sha512-224WithRSAEncryption";
+    else if (strcmp(pszOid, RTCRX509ALGORITHMIDENTIFIERID_SHA512T256_WITH_RSA)) pszName = "sha512-256WithRSAEncryption";
     else
         pszName = pszOid;
     a_rReturn = pszName;
@@ -563,11 +567,11 @@ HRESULT Certificate::i_getEncodedBytes(PRTASN1CORE a_pAsn1Obj, std::vector<BYTE>
             {
                 vrc = RTAsn1EncodeToBuffer(a_pAsn1Obj, 0, &a_rReturn.front(), a_rReturn.size(), NULL);
                 if (RT_FAILURE(vrc))
-                    hrc = setErrorVrc(vrc, "RTAsn1EncodeToBuffer failed with %Rrc", vrc);
+                    hrc = setErrorVrc(vrc, tr("RTAsn1EncodeToBuffer failed with %Rrc"), vrc);
             }
         }
         else
-            hrc = setErrorVrc(vrc, "RTAsn1EncodePrepare failed with %Rrc", vrc);
+            hrc = setErrorVrc(vrc, tr("RTAsn1EncodePrepare failed with %Rrc"), vrc);
     }
     return hrc;
 }

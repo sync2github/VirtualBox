@@ -315,7 +315,7 @@ dt_sqrt_128(uint64_t *square)
 	uint64_t next_pair[2];
 	uint64_t next_try[2];
 	uint64_t bit_pairs, pair_shift;
-	int i;
+	VBDTTYPE(uint64_t,int) i;
 
 	bit_pairs = dt_nbits_128(square) / 2;
 	pair_shift = bit_pairs * 2;
@@ -2267,10 +2267,10 @@ dtrace_consume(dtrace_hdl_t *dtp, FILE *fp,
 #endif
 
 	if (pf == NULL)
-		pf = (dtrace_consume_probe_f *)dt_nullprobe;
+		pf = (dtrace_consume_probe_f *)(uintptr_t)dt_nullprobe;
 
 	if (rf == NULL)
-		rf = (dtrace_consume_rec_f *)dt_nullrec;
+		rf = (dtrace_consume_rec_f *)(uintptr_t)dt_nullrec;
 
 	if (buf->dtbd_data == NULL) {
 		(void) dtrace_getopt(dtp, "bufsize", &size);

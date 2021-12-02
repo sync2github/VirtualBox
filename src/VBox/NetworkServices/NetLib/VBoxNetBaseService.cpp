@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetBaseService.cpp 87450 2021-01-27 02:00:34Z vboxsync $ */
 /** @file
  * VBoxNetBaseService - common services for VBoxNetDHCP and VBoxNetNAT.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -54,7 +54,7 @@
 #include <VBox/version.h>
 
 #include <vector>
-#include <string>
+#include <iprt/sanitized/string>
 
 #include <VBox/err.h>
 #include <VBox/log.h>
@@ -107,7 +107,7 @@ struct VBoxNetBaseService::Data
     INTNETIFHANDLE      m_hIf;          /**< The handle to the network interface. */
     PINTNETBUF          m_pIfBuf;       /**< Interface buffer. */
 
-    std::vector<PRTGETOPTDEF> m_vecOptionDefs;
+    std::vector<PCRTGETOPTDEF> m_vecOptionDefs;
 
     int32_t             m_cVerbosity;
 
@@ -383,7 +383,7 @@ int VBoxNetBaseService::tryGoOnline(void)
         return rc;
     }
 
-    rc = SUPR3LoadVMM(strcat(szPath, "/VMMR0.r0"));
+    rc = SUPR3LoadVMM(strcat(szPath, "/VMMR0.r0"), NULL);
     if (RT_FAILURE(rc))
     {
         LogRel(("VBoxNetBaseService: SUPR3LoadVMM(\"%s\") -> %Rrc\n", szPath, rc));
@@ -681,7 +681,7 @@ void VBoxNetBaseService::setVerbosityLevel(int32_t aVerbosity)
 }
 
 
-void VBoxNetBaseService::addCommandLineOption(const PRTGETOPTDEF optDef)
+void VBoxNetBaseService::addCommandLineOption(PCRTGETOPTDEF optDef)
 {
     m->m_vecOptionDefs.push_back(optDef);
 }
@@ -842,7 +842,7 @@ PRTGETOPTDEF VBoxNetBaseService::getOptionsPtr()
         return NULL;
     for (unsigned int i = 0; i < m->m_vecOptionDefs.size(); ++i)
     {
-        PRTGETOPTDEF pOpt = m->m_vecOptionDefs[i];
+        PCRTGETOPTDEF pOpt = m->m_vecOptionDefs[i];
         memcpy(&pOptArray[i], pOpt, sizeof(*pOpt));
     }
     return pOptArray;

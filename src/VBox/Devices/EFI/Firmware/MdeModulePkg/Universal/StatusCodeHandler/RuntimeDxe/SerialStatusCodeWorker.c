@@ -1,14 +1,8 @@
 /** @file
   Serial I/O status code reporting worker.
 
-  Copyright (c) 2006 - 2014, Intel Corporation. All rights reserved.<BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -135,7 +129,7 @@ SerialStatusCodeReportWorker (
     CharCount = AsciiSPrint (
                   Buffer,
                   sizeof (Buffer),
-                  "%a\n\r",
+                  "%a",
                   ((EFI_STATUS_CODE_STRING_DATA *) Data)->String.Ascii
                   );
   } else {
@@ -156,6 +150,16 @@ SerialStatusCodeReportWorker (
   // Call SerialPort Lib function to do print.
   //
   SerialPortWrite ((UINT8 *) Buffer, CharCount);
+
+  //
+  // If register an unregister function of gEfiEventExitBootServicesGuid,
+  // then some log called in ExitBootServices() will be lost,
+  // so unregister the handler after receive the value of exit boot service.
+  //
+  if ((CodeType & EFI_STATUS_CODE_TYPE_MASK) == EFI_PROGRESS_CODE &&
+      Value == (EFI_SOFTWARE_EFI_BOOT_SERVICE | EFI_SW_BS_PC_EXIT_BOOT_SERVICES)) {
+    UnregisterSerialBootTimeHandlers();
+  }
 
   return EFI_SUCCESS;
 }

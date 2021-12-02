@@ -1,16 +1,9 @@
 /** @file
 Usb Peim definition.
 
-Copyright (c) 2006 - 2014, Intel Corporation. All rights reserved. <BR>
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved. <BR>
 
-This program and the accompanying materials
-are licensed and made available under the terms and conditions
-of the BSD License which accompanies this distribution.  The
-full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -32,6 +25,17 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/PcdLib.h>
 
 #include <IndustryStandard/Usb.h>
+
+//
+// A common header for usb standard descriptor.
+// Each stand descriptor has a length and type.
+//
+#pragma pack(1)
+typedef struct {
+  UINT8                   Len;
+  UINT8                   Type;
+} USB_DESC_HEAD;
+#pragma pack()
 
 #define MAX_INTERFACE             8
 #define MAX_ENDPOINT              16
@@ -150,7 +154,7 @@ PeiUsbControlTransfer (
   @param  DeviceEndpoint        Endpoint number and its direction in bit 7.
   @param  Data                  A pointer to the buffer of data to transmit
                                 from or receive into.
-  @param  DataLength            The lenght of the data buffer.
+  @param  DataLength            The length of the data buffer.
   @param  Timeout               Indicates the maximum time, in millisecond, which the
                                 transfer is allowed to complete. If Timeout is 0, then
                                 the caller must wait for the function to be completed

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFR3Type.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, Type Management.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -735,7 +735,7 @@ static int dbgfR3TypeParseBufferByType(PUVM pUVM, PDBGFTYPE pType, uint8_t *pbBu
     int rc = VINF_SUCCESS;
     uint32_t cEntries = pType->pReg ? pType->pReg->cMembers : 1;
     PDBGFTYPEVAL pVal = (PDBGFTYPEVAL)MMR3HeapAllocZU(pUVM, MM_TAG_DBGF_TYPE,
-                                                      RT_OFFSETOF(DBGFTYPEVAL, aEntries[cEntries]));
+                                                      RT_UOFFSETOF_DYN(DBGFTYPEVAL, aEntries[cEntries]));
     if (RT_LIKELY(pVal))
     {
         size_t cbParsed = 0;

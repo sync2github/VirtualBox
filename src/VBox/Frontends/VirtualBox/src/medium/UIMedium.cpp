@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMedium.cpp 91125 2021-09-06 14:32:23Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMedium class implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,47 +15,53 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
 /* Qt includes: */
-# include <QDir>
-/* GUI includes: */
-# include "UIMedium.h"
-# include "VBoxGlobal.h"
-# include "UIConverter.h"
-# include "UIMessageCenter.h"
-# include "UIExtraDataManager.h"
-# include "UIIconPool.h"
-/* COM includes: */
-# include "CMachine.h"
-# include "CSnapshot.h"
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include <QApplication>
+#include <QDir>
 
-QString UIMedium::m_sstrNullID = QUuid().toString().remove('{').remove('}');
+/* GUI includes: */
+#include "UICommon.h"
+#include "UIConverter.h"
+#include "UIErrorString.h"
+#include "UIExtraDataManager.h"
+#include "UIIconPool.h"
+#include "UIMedium.h"
+#include "UITranslator.h"
+
+/* COM includes: */
+#include "CMachine.h"
+#include "CSnapshot.h"
+
+QUuid   UIMedium::m_uNullID;
 QString UIMedium::m_sstrTable = QString("<table>%1</table>");
 QString UIMedium::m_sstrRow = QString("<tr><td>%1</td></tr>");
 
 UIMedium::UIMedium()
-    : m_type(UIMediumType_Invalid)
+    : m_type(UIMediumDeviceType_Invalid)
     , m_medium(CMedium())
     , m_state(KMediumState_NotCreated)
+    , m_enmMediumType(KMediumType_Max)
+    , m_enmMediumVariant(KMediumVariant_Max)
 {
     refresh();
 }
 
-UIMedium::UIMedium(const CMedium &medium, UIMediumType type)
+UIMedium::UIMedium(const CMedium &medium, UIMediumDeviceType type)
     : m_type(type)
     , m_medium(medium)
     , m_state(KMediumState_NotCreated)
+    , m_enmMediumType(KMediumType_Max)
+    , m_enmMediumVariant(KMediumVariant_Max)
 {
     refresh();
 }
 
-UIMedium::UIMedium(const CMedium &medium, UIMediumType type, KMediumState state)
+UIMedium::UIMedium(const CMedium &medium, UIMediumDeviceType type, KMediumState state)
     : m_type(type)
     , m_medium(medium)
     , m_state(state)
+    , m_enmMediumType(KMediumType_Max)
+    , m_enmMediumVariant(KMediumVariant_Max)
 {
     refresh();
 }
@@ -75,20 +81,27 @@ UIMedium& UIMedium::operator=(const UIMedium &other)
     m_result = other.result();
     m_strLastAccessError = other.lastAccessError();
 
-    m_strId = other.id();
-    m_strRootId = other.rootID();
-    m_strParentId = other.parentID();
+    m_uId = other.id();
+    m_uRootId = other.rootID();
+    m_uParentId = other.parentID();
 
-    m_strKey = other.key();
+    m_uKey = other.key();
 
     m_strName = other.name();
     m_strLocation = other.location();
+    m_strDescription = other.description();
 
+    m_uSize = other.sizeInBytes();
+    m_uLogicalSize = other.logicalSizeInBytes();
     m_strSize = other.size();
     m_strLogicalSize = other.logicalSize();
 
+    m_enmMediumType = other.mediumType();
+    m_enmMediumVariant = other.mediumVariant();
+
     m_strHardDiskType = other.hardDiskType();
     m_strHardDiskFormat = other.hardDiskFormat();
+    m_fHasChildren = other.hasChildren();
     m_strStorageDetails = other.storageDetails();
     m_strEncryptionPasswordID = other.encryptionPasswordID();
 
@@ -136,20 +149,27 @@ void UIMedium::blockAndQueryState()
 void UIMedium::refresh()
 {
     /* Reset ID parameters: */
-    m_strId = nullID();
-    m_strRootId = nullID();
-    m_strParentId = nullID();
+    m_uId = nullID();
+    m_uRootId = nullID();
+    m_uParentId = nullID();
 
     /* Reset cache parameters: */
     //m_strKey = nullID();
 
-    /* Reset name/location/size parameters: */
-    m_strName = VBoxGlobal::tr("Empty", "medium");
+    /* Reset name/location/description/size parameters: */
+    m_strName = QApplication::translate("UICommon", "Empty", "medium");
     m_strLocation = m_strSize = m_strLogicalSize = QString("--");
+    m_strDescription = QString();
+    m_uSize = m_uLogicalSize = 0;
+
+    /* Reset medium type & variant parameter: */
+    m_enmMediumType = KMediumType_Max;
+    m_enmMediumVariant = KMediumVariant_Max;
 
     /* Reset hard drive related parameters: */
     m_strHardDiskType = QString();
     m_strHardDiskFormat = QString();
+    m_fHasChildren = false;
     m_strStorageDetails = QString();
     m_strEncryptionPasswordID = QString();
 
@@ -174,24 +194,27 @@ void UIMedium::refresh()
     if (!m_medium.isNull())
     {
         /* Refresh medium ID: */
-        m_strId = normalizedID(m_medium.GetId());
+        m_uId = normalizedID(m_medium.GetId());
         /* Refresh root medium ID: */
-        m_strRootId = m_strId;
+        m_uRootId = m_uId;
 
         /* Init medium key if necessary: */
-        if (m_strKey.isNull())
-            m_strKey = m_strId;
+        if (m_uKey.isNull())
+            m_uKey = m_uId;
 
         /* Check whether this is host-drive medium: */
         m_fHostDrive = m_medium.GetHostDrive();
 
+        /* Refresh medium description: */
+        m_strDescription = m_medium.GetDescription();
+
         /* Refresh medium name: */
         if (!m_fHostDrive)
             m_strName = m_medium.GetName();
-        else if (m_medium.GetDescription().isEmpty())
-            m_strName = VBoxGlobal::tr("Host Drive '%1'", "medium").arg(QDir::toNativeSeparators(m_medium.GetLocation()));
+        else if (m_strDescription.isEmpty())
+            m_strName = QApplication::translate("UICommon", "Host Drive '%1'", "medium").arg(QDir::toNativeSeparators(m_medium.GetLocation()));
         else
-            m_strName = VBoxGlobal::tr("Host Drive %1 (%2)", "medium").arg(m_medium.GetDescription(), m_medium.GetName());
+            m_strName = QApplication::translate("UICommon", "Host Drive %1 (%2)", "medium").arg(m_strDescription, m_medium.GetName());
         /* Refresh medium location: */
         if (!m_fHostDrive)
             m_strLocation = QDir::toNativeSeparators(m_medium.GetLocation());
@@ -199,30 +222,44 @@ void UIMedium::refresh()
         /* Refresh medium size and logical size: */
         if (!m_fHostDrive)
         {
-            /* Only for created and accessible mediums: */
+            /* Only for created and accessible media: */
             if (m_state != KMediumState_Inaccessible && m_state != KMediumState_NotCreated)
             {
-                m_strSize = vboxGlobal().formatSize(m_medium.GetSize());
-                if (m_type == UIMediumType_HardDisk)
-                    m_strLogicalSize = vboxGlobal().formatSize(m_medium.GetLogicalSize());
+                m_uSize = m_medium.GetSize();
+                m_strSize = UITranslator::formatSize(m_uSize);
+                if (m_type == UIMediumDeviceType_HardDisk)
+                {
+                    m_uLogicalSize = m_medium.GetLogicalSize();
+                    m_strLogicalSize = UITranslator::formatSize(m_uLogicalSize);
+                }
                 else
+                {
+                    m_uLogicalSize = m_uSize;
                     m_strLogicalSize = m_strSize;
+                }
             }
         }
 
+        /* Refresh medium type & variant: */
+        m_enmMediumType = m_medium.GetType();
+        qlonglong iMediumVariant = 0;
+        foreach (const KMediumVariant &enmVariant, m_medium.GetVariant())
+            iMediumVariant |= enmVariant;
+        m_enmMediumVariant = (KMediumVariant)iMediumVariant;
+
         /* For hard drive medium: */
-        if (m_type == UIMediumType_HardDisk)
+        if (m_type == UIMediumDeviceType_HardDisk)
         {
             /* Refresh hard drive disk type: */
-            m_strHardDiskType = vboxGlobal().mediumTypeString(m_medium);
+            m_strHardDiskType = mediumTypeToString(m_medium);
             /* Refresh hard drive format: */
             m_strHardDiskFormat = m_medium.GetFormat();
 
+            /* Refresh hard drive parental status: */
+            m_fHasChildren = m_medium.GetChildren().size();
+
             /* Refresh hard drive storage details: */
-            qlonglong iMediumVariant = 0;
-            foreach (const KMediumVariant &enmVariant, m_medium.GetVariant())
-                iMediumVariant |= enmVariant;
-            m_strStorageDetails = gpConverter->toString((KMediumVariant)iMediumVariant);
+            m_strStorageDetails = gpConverter->toString(m_enmMediumVariant);
 
             /* Check whether this is read-only hard drive: */
             m_fReadOnly = m_medium.GetReadOnly();
@@ -230,20 +267,20 @@ void UIMedium::refresh()
             /* Refresh parent hard drive ID: */
             CMedium parentMedium = m_medium.GetParent();
             if (!parentMedium.isNull())
-                m_strParentId = normalizedID(parentMedium.GetId());
+                m_uParentId = normalizedID(parentMedium.GetId());
 
-            /* Only for created and accessible mediums: */
+            /* Only for created and accessible media: */
             if (m_state != KMediumState_Inaccessible && m_state != KMediumState_NotCreated)
             {
                 /* Refresh root hard drive ID: */
                 while (!parentMedium.isNull())
                 {
-                    m_strRootId = normalizedID(parentMedium.GetId());
+                    m_uRootId = normalizedID(parentMedium.GetId());
                     parentMedium = parentMedium.GetParent();
                 }
 
                 /* Refresh encryption attributes: */
-                if (m_strRootId != m_strId)
+                if (m_uRootId != m_uId)
                 {
                     m_strEncryptionPasswordID = root().encryptionPasswordID();
                     m_fEncrypted = root().isEncrypted();
@@ -277,7 +314,7 @@ void UIMedium::refresh()
         if (m_machineIds.size() > 0)
         {
             /* Get CVirtualBox object: */
-            CVirtualBox vbox = vboxGlobal().virtualBox();
+            CVirtualBox vbox = uiCommon().virtualBox();
 
             /* By default we assuming that this medium is attached
              * to 'hidden' machines only, if at least one machine present: */
@@ -286,10 +323,10 @@ void UIMedium::refresh()
             /* Prepare machine usage: */
             QString strMachineUsage;
             /* Walk through all the machines this medium attached to: */
-            foreach (const QString &strMachineID, m_machineIds)
+            foreach (const QUuid &uMachineID, m_machineIds)
             {
                 /* Look for the corresponding machine: */
-                CMachine machine = vbox.FindMachine(strMachineID);
+                CMachine machine = vbox.FindMachine(uMachineID.toString());
 
                 /* UIMedium object can wrap newly created CMedium object
                  * which belongs to not yet registered machine, like while creating VM clone.
@@ -303,25 +340,25 @@ void UIMedium::refresh()
                 }
 
                 /* Finally we can precisely check if current machine is 'hidden': */
-                if (gEDataManager->showMachineInSelectorChooser(strMachineID))
+                if (gEDataManager->showMachineInVirtualBoxManagerChooser(uMachineID))
                     m_fUsedByHiddenMachinesOnly = false;
 
                 /* Prepare snapshot usage: */
                 QString strSnapshotUsage;
                 /* Walk through all the snapshots this medium attached to: */
-                foreach (const QString &strSnapshotID, m_medium.GetSnapshotIds(strMachineID))
+                foreach (const QUuid &uSnapshotID, m_medium.GetSnapshotIds(uMachineID))
                 {
-                    if (strSnapshotID == strMachineID)
+                    if (uSnapshotID == uMachineID)
                     {
                         /* The medium is attached to the machine in the current
                          * state, we don't distinguish this for now by always
                          * giving the VM name in front of snapshot names. */
-                        m_curStateMachineIds.push_back(strSnapshotID);
+                        m_curStateMachineIds.push_back(uSnapshotID);
                         continue;
                     }
 
                     /* Look for the corresponding snapshot: */
-                    CSnapshot snapshot = machine.FindSnapshot(strSnapshotID);
+                    CSnapshot snapshot = machine.FindSnapshot(uSnapshotID.toString());
 
                     /* Snapshot can be NULL while takeSnaphot is in progress: */
                     if (snapshot.isNull())
@@ -353,18 +390,18 @@ void UIMedium::refresh()
 
         /* Refresh tool-tip: */
         m_strToolTip = m_sstrRow.arg(QString("<p style=white-space:pre><b>%1</b></p>").arg(m_fHostDrive ? m_strName : m_strLocation));
-        if (m_type == UIMediumType_HardDisk)
+        if (m_type == UIMediumDeviceType_HardDisk)
         {
-            m_strToolTip += m_sstrRow.arg(VBoxGlobal::tr("<p style=white-space:pre>Type (Format):  %1 (%2)</p>", "medium")
-                                                         .arg(m_strHardDiskType).arg(m_strHardDiskFormat));
+            m_strToolTip += m_sstrRow.arg(QApplication::translate("UICommon", "<p style=white-space:pre>Type (Format):  %1 (%2)</p>", "medium")
+                                                                  .arg(m_strHardDiskType).arg(m_strHardDiskFormat));
         }
-        m_strToolTip += m_sstrRow.arg(VBoxGlobal::tr("<p>Attached to:  %1</p>", "image")
-                                                     .arg(m_strUsage.isNull() ? VBoxGlobal::tr("<i>Not Attached</i>", "image") : m_strUsage));
+        m_strToolTip += m_sstrRow.arg(QApplication::translate("UICommon", "<p>Attached to:  %1</p>", "image")
+                                                              .arg(m_strUsage.isNull() ? QApplication::translate("UICommon", "<i>Not Attached</i>", "image") : m_strUsage));
         switch (m_state)
         {
             case KMediumState_NotCreated:
             {
-                m_strToolTip += m_sstrRow.arg(VBoxGlobal::tr("<i>Checking accessibility...</i>", "medium"));
+                m_strToolTip += m_sstrRow.arg(QApplication::translate("UICommon", "<i>Checking accessibility...</i>", "medium"));
                 break;
             }
             case KMediumState_Inaccessible:
@@ -372,13 +409,13 @@ void UIMedium::refresh()
                 if (m_result.isOk())
                 {
                     /* Not Accessible: */
-                    m_strToolTip += m_sstrRow.arg("<hr>") + m_sstrRow.arg(VBoxGlobal::highlight(m_strLastAccessError, true /* aToolTip */));
+                    m_strToolTip += m_sstrRow.arg("<hr>") + m_sstrRow.arg(UITranslator::highlight(m_strLastAccessError, true /* aToolTip */));
                 }
                 else
                 {
                     /* Accessibility check (eg GetState()) itself failed: */
-                    m_strToolTip += m_sstrRow.arg("<hr>") + m_sstrRow.arg(VBoxGlobal::tr("Failed to check accessibility of disk image files.", "medium")) +
-                                    m_sstrRow.arg(UIMessageCenter::formatErrorInfo(m_result) + ".");
+                    m_strToolTip += m_sstrRow.arg("<hr>") + m_sstrRow.arg(QApplication::translate("UICommon", "Failed to check accessibility of disk image files.", "medium")) +
+                                    m_sstrRow.arg(UIErrorString::formatErrorInfo(m_result) + ".");
                 }
                 break;
             }
@@ -390,12 +427,12 @@ void UIMedium::refresh()
 
 void UIMedium::updateParentID()
 {
-    m_strParentId = nullID();
-    if (m_type == UIMediumType_HardDisk)
+    m_uParentId = nullID();
+    if (m_type == UIMediumDeviceType_HardDisk)
     {
         CMedium parentMedium = m_medium.GetParent();
         if (!parentMedium.isNull())
-            m_strParentId = normalizedID(parentMedium.GetId());
+            m_uParentId = normalizedID(parentMedium.GetId());
     }
 }
 
@@ -405,10 +442,10 @@ QString UIMedium::toolTip(bool fNoDiffs /* = false */, bool fCheckRO /* = false 
 
     if (m_medium.isNull())
     {
-        strTip = fNullAllowed ? m_sstrRow.arg(VBoxGlobal::tr("<b>No disk image file selected</b>", "medium")) +
-                                m_sstrRow.arg(VBoxGlobal::tr("You can also change this while the machine is running.")) :
-                                m_sstrRow.arg(VBoxGlobal::tr("<b>No disk image files available</b>", "medium")) +
-                                m_sstrRow.arg(VBoxGlobal::tr("You can create or add disk image files in the virtual machine settings."));
+        strTip = fNullAllowed ? m_sstrRow.arg(QApplication::translate("UICommon", "<b>No disk image file selected</b>", "medium")) +
+                                m_sstrRow.arg(QApplication::translate("UICommon", "You can also change this while the machine is running.")) :
+                                m_sstrRow.arg(QApplication::translate("UICommon", "<b>No disk image files available</b>", "medium")) +
+                                m_sstrRow.arg(QApplication::translate("UICommon", "You can create or add disk image files in the virtual machine settings."));
     }
     else
     {
@@ -418,8 +455,9 @@ QString UIMedium::toolTip(bool fNoDiffs /* = false */, bool fCheckRO /* = false 
 
         if (fCheckRO && m_fReadOnly)
             strTip += m_sstrRow.arg("<hr>") +
-                      m_sstrRow.arg(VBoxGlobal::tr("Attaching this hard disk will be performed indirectly using "
-                                                   "a newly created differencing hard disk.", "medium"));
+                      m_sstrRow.arg(QApplication::translate("UICommon",
+                                                            "Attaching this hard disk will be performed indirectly using "
+                                                            "a newly created differencing hard disk.", "medium"));
     }
 
     return m_sstrTable.arg(strTip);
@@ -430,12 +468,12 @@ QPixmap UIMedium::icon(bool fNoDiffs /* = false */, bool fCheckRO /* = false */)
     QPixmap pixmap;
 
     if (state(fNoDiffs) == KMediumState_Inaccessible)
-        pixmap = result(fNoDiffs).isOk() ? vboxGlobal().warningIcon() : vboxGlobal().errorIcon();
+        pixmap = result(fNoDiffs).isOk() ? generalIconPool().warningIcon() : generalIconPool().errorIcon();
 
     if (fCheckRO && m_fReadOnly)
     {
-        QIcon icon = UIIconPool::iconSet(":/hd_new_16px.png");
-        pixmap = VBoxGlobal::joinPixmaps(pixmap, icon.pixmap(icon.availableSizes().first()));
+        QIcon icon = UIIconPool::iconSet(":/hd_create_16px.png");
+        pixmap = UIIconPool::joinPixmaps(pixmap, icon.pixmap(icon.availableSizes().value(0, QSize(16, 16))));
     }
 
     return pixmap;
@@ -472,7 +510,7 @@ QString UIMedium::details(bool fNoDiffs /* = false */,
     UIMedium rootMedium = root();
     KMediumState eState = m_state;
 
-    if (m_type == UIMediumType_HardDisk)
+    if (m_type == UIMediumDeviceType_HardDisk)
     {
         if (fNoDiffs)
         {
@@ -494,7 +532,7 @@ QString UIMedium::details(bool fNoDiffs /* = false */,
 
         /* Add encryption status: */
         if (m_fEncrypted)
-            strDetails += QString("%1, ").arg(VBoxGlobal::tr("Encrypted", "medium"));
+            strDetails += QString("%1, ").arg(QApplication::translate("UICommon", "Encrypted", "medium"));
     }
 
     /// @todo prepend the details with the warning/error icon when not accessible
@@ -502,38 +540,36 @@ QString UIMedium::details(bool fNoDiffs /* = false */,
     switch (eState)
     {
         case KMediumState_NotCreated:
-            strText = VBoxGlobal::tr("Checking...", "medium");
+            strText = QApplication::translate("UICommon", "Checking...", "medium");
             strDetails += fUseHTML ? QString("<i>%1</i>").arg(strText) : strText;
             break;
         case KMediumState_Inaccessible:
-            strText = VBoxGlobal::tr("Inaccessible", "medium");
+            strText = QApplication::translate("UICommon", "Inaccessible", "medium");
             strDetails += fUseHTML ? QString("<b>%1</b>").arg(strText) : strText;
             break;
         default:
-            strDetails += m_type == UIMediumType_HardDisk ? rootMedium.m_strLogicalSize : rootMedium.m_strSize;
+            strDetails += m_type == UIMediumDeviceType_HardDisk ? rootMedium.m_strLogicalSize : rootMedium.m_strSize;
             break;
     }
 
     strDetails = fUseHTML ?
-        QString("%1 (<nobr>%2</nobr>)").arg(VBoxGlobal::locationForHTML(rootMedium.m_strName), strDetails) :
-        QString("%1 (%2)").arg(VBoxGlobal::locationForHTML(rootMedium.m_strName), strDetails);
+        QString("%1 (<nobr>%2</nobr>)").arg(QFileInfo(rootMedium.m_strName).fileName(), strDetails) :
+        QString("%1 (%2)").arg(QFileInfo(rootMedium.m_strName).fileName(), strDetails);
 
     return strDetails;
 }
 
 /* static */
-QString UIMedium::nullID()
+QUuid UIMedium::nullID()
 {
-    return m_sstrNullID;
+    return m_uNullID;
 }
 
 /* static */
-QString UIMedium::normalizedID(const QString &strID)
+QUuid UIMedium::normalizedID(const QUuid &uID)
 {
-    /* Handle wrong UUID (null/empty or invalid format): */
-    if (QUuid(strID).toString().remove('{').remove('}') != strID)
-        return nullID();
-    return strID;
+    /// @todo wipe out!
+    return uID;
 }
 
 /* static */
@@ -557,14 +593,14 @@ bool UIMedium::isMediumAttachedToHiddenMachinesOnly(const UIMedium &medium)
 
 UIMedium UIMedium::root() const
 {
-    /* Redirect call to VBoxGlobal: */
-    return vboxGlobal().medium(m_strRootId);
+    /* Redirect call to UICommon: */
+    return uiCommon().medium(m_uRootId);
 }
 
 UIMedium UIMedium::parent() const
 {
-    /* Redirect call to VBoxGlobal: */
-    return vboxGlobal().medium(m_strParentId);
+    /* Redirect call to UICommon: */
+    return uiCommon().medium(m_uParentId);
 }
 
 void UIMedium::checkNoDiffs(bool fNoDiffs)
@@ -582,9 +618,10 @@ void UIMedium::checkNoDiffs(bool fNoDiffs)
             m_noDiffs.state = parentMedium.m_state;
 
             if (m_noDiffs.toolTip.isNull())
-                m_noDiffs.toolTip = m_sstrRow.arg(VBoxGlobal::tr("Some of the files in this hard disk chain "
-                                                                 "are inaccessible. Please use the Virtual Medium "
-                                                                 "Manager to inspect these files.", "medium"));
+                m_noDiffs.toolTip = m_sstrRow.arg(QApplication::translate("UICommon",
+                                                                          "Some of the files in this hard disk chain "
+                                                                          "are inaccessible. Please use the Virtual Medium "
+                                                                          "Manager to inspect these files.", "medium"));
 
             if (!parentMedium.m_result.isOk())
             {
@@ -598,8 +635,9 @@ void UIMedium::checkNoDiffs(bool fNoDiffs)
     {
         m_noDiffs.toolTip = root().tip() +
                             m_sstrRow.arg("<hr>") +
-                            m_sstrRow.arg(VBoxGlobal::tr("This base hard disk is indirectly attached using "
-                                                         "the following differencing hard disk:", "medium")) +
+                            m_sstrRow.arg(QApplication::translate("UICommon",
+                                                                  "This base hard disk is indirectly attached using "
+                                                                  "the following differencing hard disk:", "medium")) +
                             m_strToolTip + m_noDiffs.toolTip;
     }
 
@@ -609,3 +647,13 @@ void UIMedium::checkNoDiffs(bool fNoDiffs)
     m_noDiffs.isSet = true;
 }
 
+/* static */
+QString UIMedium::mediumTypeToString(const CMedium &comMedium)
+{
+    if (!comMedium.GetParent().isNull())
+    {
+        Assert(comMedium.GetType() == KMediumType_Normal);
+        return QApplication::translate("UICommon", "Differencing", "MediumType");
+    }
+    return gpConverter->toString(comMedium.GetType());
+}

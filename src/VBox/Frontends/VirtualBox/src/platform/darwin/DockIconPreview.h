@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DockIconPreview.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIDockIconPreview class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIDockIconPreview_h___
-#define ___UIDockIconPreview_h___
+#ifndef FEQT_INCLUDED_SRC_platform_darwin_DockIconPreview_h
+#define FEQT_INCLUDED_SRC_platform_darwin_DockIconPreview_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UICocoaDockIconPreview.h"
@@ -32,5 +35,5 @@ public:
         : UICocoaDockIconPreview(pSession, overlayImage) {}
 };
 
-#endif /* !___UIDockIconPreview_h___ */
+#endif /* !FEQT_INCLUDED_SRC_platform_darwin_DockIconPreview_h */
 

@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bootsector-pae.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; Bootsector that switches the CPU info PAE mode.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -26,6 +26,7 @@
 
 %include "iprt/asmdefs.mac"
 %include "iprt/x86.mac"
+%include "VBox/bios.mac"
 
 
 ;; The boot sector load address.
@@ -114,11 +115,13 @@ code32_start:
     ; Boch shutdown request.
     ;
     mov bl, 64
-    mov dx, 08900h
+    mov dx, VBOX_BIOS_SHUTDOWN_PORT
+    mov ax, VBOX_BIOS_OLD_SHUTDOWN_PORT
 retry:
     mov ecx, 8
     mov esi, (szShutdown - start) + BS_ADDR
     rep outsb
+    xchg dx, ax                         ; alternate between the new (VBox) and old (Bochs) ports.
     dec bl
     jnz retry
     ; Shutdown failed!
@@ -159,5 +162,4 @@ szShutdown:
 padding:
 times 510 - (padding - start) db 0
     db 055h, 0aah
-
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0301
+# $Id: check_for_deleted_builds.py 82968 2020-02-04 10:35:17Z vboxsync $
+# pylint: disable=line-too-long
 
 """
 Admin job for checking detecting deleted builds.
@@ -12,9 +12,11 @@ a lot of skipped tests because of missing builds, typically during
 bisecting problems.
 """
 
+from __future__ import print_function;
+
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -33,12 +35,12 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 # Standard python imports
 import sys;
 import os;
-from optparse import OptionParser;
+from optparse import OptionParser;  # pylint: disable=deprecated-module
 
 # Add Test Manager's modules path
 g_ksTestManagerDir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))));
@@ -48,7 +50,9 @@ sys.path.append(g_ksTestManagerDir);
 from testmanager.core.db    import TMDatabaseConnection;
 from testmanager.core.build import BuildLogic;
 
-class BuildChecker(object): # pylint: disable=R0903
+
+
+class BuildChecker(object): # pylint: disable=too-few-public-methods
     """
     Add build info into Test Manager database.
     """
@@ -69,9 +73,9 @@ class BuildChecker(object): # pylint: disable=R0903
         (self.oConfig, _) = oParser.parse_args();
         if not self.oConfig.fQuiet:
             if not self.oConfig.fRealRun:
-                print 'Dry run.';
+                print('Dry run.');
             else:
-                print 'Real run! Will commit findings!';
+                print('Real run! Will commit findings!');
 
 
     def checkBuilds(self):
@@ -86,25 +90,25 @@ class BuildChecker(object): # pylint: disable=R0903
         iStart   = 0;
         while True:
             aoBuilds = oBuildLogic.fetchForListing(iStart, cMaxRows, tsNow);
-            if not self.oConfig.fQuiet and len(aoBuilds) > 0:
-                print 'Processing builds #%s thru #%s' % (aoBuilds[0].idBuild, aoBuilds[-1].idBuild);
+            if not self.oConfig.fQuiet and aoBuilds:
+                print('Processing builds #%s thru #%s' % (aoBuilds[0].idBuild, aoBuilds[-1].idBuild));
 
             for oBuild in aoBuilds:
                 if oBuild.fBinariesDeleted is False:
                     rc = oBuild.areFilesStillThere();
                     if rc is False:
                         if not self.oConfig.fQuiet:
-                            print 'missing files for build #%s / r%s / %s / %s / %s / %s / %s' \
-                                % (oBuild.idBuild, oBuild.iRevision, oBuild.sVersion, oBuild.oCat.sType,
-                                   oBuild.oCat.sBranch, oBuild.oCat.sProduct, oBuild.oCat.asOsArches,);
-                            print '  %s' % (oBuild.sBinaries,);
+                            print('missing files for build #%s / r%s / %s / %s / %s / %s / %s'
+                                  % (oBuild.idBuild, oBuild.iRevision, oBuild.sVersion, oBuild.oCat.sType,
+                                     oBuild.oCat.sBranch, oBuild.oCat.sProduct, oBuild.oCat.asOsArches,));
+                            print('  %s' % (oBuild.sBinaries,));
                         if self.oConfig.fRealRun is True:
                             oBuild.fBinariesDeleted = True;
                             oBuildLogic.editEntry(oBuild, fCommit = True);
                     elif rc is True and not self.oConfig.fQuiet:
-                        print 'build #%s still have its files' % (oBuild.idBuild,);
+                        print('build #%s still have its files' % (oBuild.idBuild,));
                     elif rc is None and not self.oConfig.fQuiet:
-                        print 'Unable to determine state of build #%s' % (oBuild.idBuild,);
+                        print('Unable to determine state of build #%s' % (oBuild.idBuild,));
 
             # advance
             if len(aoBuilds) < cMaxRows:

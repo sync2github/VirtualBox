@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPInternal.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox XPDM Miniport internal functions
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,7 +16,7 @@
  */
 
 #include "VBoxMPInternal.h"
-#include <VBox/VBoxVideo.h>
+#include <VBoxVideo.h>
 #include <VBox/VBoxGuestLib.h>
 #include <iprt/asm.h>
 
@@ -200,7 +200,7 @@ static DECLCALLBACK(void) VBoxVbvaFlush(void *pvFlush)
 
         if (req)
         {
-            int rc = VbglGRPerform (&req->header);
+            int rc = VbglR0GRPerform (&req->header);
 
             if (RT_FAILURE(rc))
             {
@@ -218,10 +218,10 @@ int VBoxVbvaEnable(PVBOXMP_DEVEXT pExt, BOOLEAN bEnable, VBVAENABLERESULT *pResu
 
     VMMDevMemory *pVMMDevMemory = NULL;
 
-    rc = VbglQueryVMMDevMemory (&pVMMDevMemory);
+    rc = VbglR0QueryVMMDevMemory(&pVMMDevMemory);
     if (RT_FAILURE(rc))
     {
-        WARN(("VbglQueryVMMDevMemory rc = %#xrc", rc));
+        WARN(("VbglR0QueryVMMDevMemory rc = %#xrc", rc));
         LOGF_LEAVE();
         return rc;
     }
@@ -251,7 +251,7 @@ int VBoxVbvaEnable(PVBOXMP_DEVEXT pExt, BOOLEAN bEnable, VBVAENABLERESULT *pResu
     {
         VMMDevVideoAccelFlush *req = NULL;
 
-        rc = VbglGRAlloc((VMMDevRequestHeader **)&req, sizeof(VMMDevVideoAccelFlush), VMMDevReq_VideoAccelFlush);
+        rc = VbglR0GRAlloc((VMMDevRequestHeader **)&req, sizeof(VMMDevVideoAccelFlush), VMMDevReq_VideoAccelFlush);
 
         if (RT_SUCCESS(rc))
         {
@@ -259,7 +259,7 @@ int VBoxVbvaEnable(PVBOXMP_DEVEXT pExt, BOOLEAN bEnable, VBVAENABLERESULT *pResu
         }
         else
         {
-            WARN(("VbglGRAlloc(VMMDevVideoAccelFlush) rc = %#xrc", rc));
+            WARN(("VbglR0GRAlloc(VMMDevVideoAccelFlush) rc = %#xrc", rc));
             LOGF_LEAVE();
             return rc;
         }
@@ -268,7 +268,7 @@ int VBoxVbvaEnable(PVBOXMP_DEVEXT pExt, BOOLEAN bEnable, VBVAENABLERESULT *pResu
     ULONG ulEnabled = 0;
 
     VMMDevVideoAccelEnable *req = NULL;
-    rc = VbglGRAlloc((VMMDevRequestHeader **)&req, sizeof(VMMDevVideoAccelEnable), VMMDevReq_VideoAccelEnable);
+    rc = VbglR0GRAlloc((VMMDevRequestHeader **)&req, sizeof(VMMDevVideoAccelEnable), VMMDevReq_VideoAccelEnable);
 
     if (RT_SUCCESS(rc))
     {
@@ -276,7 +276,7 @@ int VBoxVbvaEnable(PVBOXMP_DEVEXT pExt, BOOLEAN bEnable, VBVAENABLERESULT *pResu
         req->cbRingBuffer = VBVA_RING_BUFFER_SIZE;
         req->fu32Status   = 0;
 
-        rc = VbglGRPerform(&req->header);
+        rc = VbglR0GRPerform(&req->header);
         if (RT_SUCCESS(rc))
         {
             if (req->fu32Status & VBVA_F_STATUS_ACCEPTED)
@@ -305,7 +305,7 @@ int VBoxVbvaEnable(PVBOXMP_DEVEXT pExt, BOOLEAN bEnable, VBVAENABLERESULT *pResu
                 req->cbRingBuffer = VBVA_RING_BUFFER_SIZE;
                 req->fu32Status = 0;
 
-                VbglGRPerform(&req->header);
+                VbglR0GRPerform(&req->header);
 
                 rc = VERR_NOT_SUPPORTED;
             }
@@ -315,11 +315,11 @@ int VBoxVbvaEnable(PVBOXMP_DEVEXT pExt, BOOLEAN bEnable, VBVAENABLERESULT *pResu
             WARN(("rc = %#xrc", rc));
         }
 
-        VbglGRFree(&req->header);
+        VbglR0GRFree(&req->header);
     }
     else
     {
-        WARN(("VbglGRAlloc(VMMDevVideoAccelEnable) rc = %#xrc", rc));
+        WARN(("VbglR0GRAlloc(VMMDevVideoAccelEnable) rc = %#xrc", rc));
     }
 
     pExt->u.primary.ulVbvaEnabled = ulEnabled;
@@ -355,14 +355,16 @@ static VBVAHOSTCMD *VBoxVbvaReverseList(VBVAHOSTCMD *pList)
     return pFirst;
 }
 
-DECLCALLBACK(void) VBoxMPHGSMIHostCmdCompleteCB(HVBOXVIDEOHGSMI hHGSMI, struct VBVAHOSTCMD *pCmd)
+/** @callback_method_impl{FNVBOXVIDEOHGSMICOMPLETION} */
+DECLCALLBACK(void) VBoxMPHGSMIHostCmdCompleteCB(HVBOXVIDEOHGSMI hHGSMI, struct VBVAHOSTCMD RT_UNTRUSTED_VOLATILE_HOST *pCmd)
 {
     PHGSMIHOSTCOMMANDCONTEXT pCtx = &((PVBOXMP_COMMON)hHGSMI)->hostCtx;
     VBoxHGSMIHostCmdComplete(pCtx, pCmd);
 }
 
+/** @callback_method_impl{FNVBOXVIDEOHGSMICOMMANDS} */
 DECLCALLBACK(int) VBoxMPHGSMIHostCmdRequestCB(HVBOXVIDEOHGSMI hHGSMI, uint8_t u8Channel,
-                                              uint32_t iDisplay, struct VBVAHOSTCMD **ppCmd)
+                                              uint32_t iDisplay, struct VBVAHOSTCMD RT_UNTRUSTED_VOLATILE_HOST **ppCmd)
 {
     LOGF_ENTER();
 
@@ -378,29 +380,28 @@ DECLCALLBACK(int) VBoxMPHGSMIHostCmdRequestCB(HVBOXVIDEOHGSMI hHGSMI, uint8_t u8
     VBoxHGSMIProcessHostQueue(pCtx);
 
     HGSMICHANNEL *pChannel = HGSMIChannelFindById(&pCtx->channels, u8Channel);
-    if(pChannel)
+    if (pChannel)
     {
         VBVA_CHANNELCONTEXTS * pContexts = (VBVA_CHANNELCONTEXTS *)pChannel->handler.pvHandler;
         VBVADISP_CHANNELCONTEXT *pDispContext = VBoxVbvaFindHandlerInfo(pContexts, iDisplay);
 
-        if(pDispContext)
+        if (pDispContext)
         {
             VBVAHOSTCMD *pCmd;
             do
             {
                 pCmd = ASMAtomicReadPtrT(&pDispContext->pCmd, VBVAHOSTCMD *);
             } while (!ASMAtomicCmpXchgPtr(&pDispContext->pCmd, NULL, pCmd));
+
             *ppCmd = VBoxVbvaReverseList(pCmd);
 
             LOGF_LEAVE();
             return VINF_SUCCESS;
         }
-        else
-        {
-            WARN(("!pDispContext for display %d", iDisplay));
-        }
+        WARN(("!pDispContext for display %d", iDisplay));
     }
 
+    *ppCmd = NULL;
     LOGF_LEAVE();
     return VERR_INVALID_PARAMETER;
 }
@@ -422,7 +423,7 @@ static void VBoxMPMemFreeDriver(PVBOXMP_COMMON pCommon, void *pv)
 static int VBoxVbvaCreateChannelContexts(PVBOXMP_COMMON pCommon, VBVA_CHANNELCONTEXTS **ppContext)
 {
     uint32_t cDisplays = (uint32_t)pCommon->cDisplays;
-    const size_t size = RT_OFFSETOF(VBVA_CHANNELCONTEXTS, aContexts[cDisplays]);
+    const size_t size = RT_UOFFSETOF_DYN(VBVA_CHANNELCONTEXTS, aContexts[cDisplays]);
     VBVA_CHANNELCONTEXTS *pContext = (VBVA_CHANNELCONTEXTS*) VBoxMPMemAllocDriver(pCommon, size);
     if (pContext)
     {
@@ -451,7 +452,8 @@ static void VBoxMPSignalEvent(PVBOXMP_COMMON pCommon, uint64_t pvEvent)
 }
 
 static DECLCALLBACK(int)
-VBoxVbvaChannelGenericHandlerCB(void *pvHandler, uint16_t u16ChannelInfo, void *pvBuffer, HGSMISIZE cbBuffer)
+VBoxVbvaChannelGenericHandlerCB(void *pvHandler, uint16_t u16ChannelInfo,
+                                void RT_UNTRUSTED_VOLATILE_HOST *pvBuffer, HGSMISIZE cbBuffer)
 {
     VBVA_CHANNELCONTEXTS *pCallbacks = (VBVA_CHANNELCONTEXTS*)pvHandler;
     LOGF_ENTER();
@@ -508,11 +510,13 @@ VBoxVbvaChannelGenericHandlerCB(void *pvHandler, uint16_t u16ChannelInfo, void *
                             Assert(pFirst == pLast);
                             break;
                         }
+
                         case VBVAHG_EVENT:
                         {
-                            VBVAHOSTCMDEVENT *pEventCmd = VBVAHOSTCMD_BODY(pCur, VBVAHOSTCMDEVENT);
+                            VBVAHOSTCMDEVENT RT_UNTRUSTED_VOLATILE_HOST *pEventCmd = VBVAHOSTCMD_BODY(pCur, VBVAHOSTCMDEVENT);
                             VBoxMPSignalEvent(pCallbacks->pCommon, pEventCmd->pEvent);
                         }
+
                         default:
                         {
                             Assert(u16ChannelInfo==VBVAHG_EVENT);

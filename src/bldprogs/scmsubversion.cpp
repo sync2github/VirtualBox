@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: scmsubversion.cpp 86066 2020-09-08 14:16:53Z vboxsync $ */
 /** @file
  * IPRT Testcase / Tool - Source Code Massager, Subversion Access.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -159,6 +159,22 @@ static svn_error_t *         (SVN_CALL *g_pfnSvnClientPropGet4)(apr_hash_t **ppH
                                                                 svn_client_ctx_t *pCtx, apr_pool_t *pResultPool,
                                                                 apr_pool_t *pScratchPool);
 /**@} */
+
+/** Cached APR pool. */
+static apr_pool_t          *g_pSvnPool = NULL;
+/** Cached SVN client context. */
+static svn_client_ctx_t    *g_pSvnClientCtx = NULL;
+/** Number of times the current context has been used. */
+static uint32_t             g_cSvnClientCtxUsed = 0;
+
+#endif
+
+
+/*********************************************************************************************************************************
+*   Internal Functions                                                                                                           *
+*********************************************************************************************************************************/
+#ifdef SCM_WITH_DYNAMIC_LIB_SVN
+static void scmSvnFlushClientContextAndPool(void);
 #endif
 
 
@@ -402,6 +418,7 @@ int RTProcExecToString(const char *pszExec, const char * const *papszArgs, RTENV
                                 phChildStdErr,
                                 NULL /*pszAsUser*/,
                                 NULL /*pszPassword*/,
+                                NULL /*pvExtraData*/,
                                 &hProc);
             rc2 = RTHandleClose(&hChildStdErr); AssertRC(rc2);
             rc2 = RTHandleClose(&hChildStdOut); AssertRC(rc2);
@@ -539,6 +556,7 @@ int RTProcExec(const char *pszExec, const char * const *papszArgs, RTENV hEnv, u
                             aph[2],
                             NULL /*pszAsUser*/,
                             NULL /*pszPassword*/,
+                            NULL /*pvExtraData*/,
                             &hProc);
 
     for (uint32_t i = 0; i < 3; i++)
@@ -566,6 +584,10 @@ static int scmSvnRunAndGetOutput(PSCMRWSTATE pState, const char **papszArgs, boo
 {
     *ppszStdOut = NULL;
 
+#ifdef SCM_WITH_DYNAMIC_LIB_SVN
+    scmSvnFlushClientContextAndPool();
+#endif
+
     char *pszCmdLine = NULL;
     int rc = RTGetOptArgvToString(&pszCmdLine, papszArgs, RTGETOPTARGV_CNV_QUOTE_BOURNE_SH);
     if (RT_FAILURE(rc))
@@ -582,7 +604,7 @@ static int scmSvnRunAndGetOutput(PSCMRWSTATE pState, const char **papszArgs, boo
     {
         if (fNormalFailureOk || Status.enmReason != RTPROCEXITREASON_NORMAL)
             RTMsgError("%s: %s -> %s %u\n",
-                       pState->pszFilename, pszCmdLine,
+                       pState ? pState->pszFilename : "<NONE>", pszCmdLine,
                        Status.enmReason == RTPROCEXITREASON_NORMAL   ? "exit code"
                        : Status.enmReason == RTPROCEXITREASON_SIGNAL ? "signal"
                        : Status.enmReason == RTPROCEXITREASON_ABEND  ? "abnormal end"
@@ -620,13 +642,17 @@ static int scmSvnRunAndGetOutput(PSCMRWSTATE pState, const char **papszArgs, boo
  */
 static int scmSvnRun(PSCMRWSTATE pState, const char **papszArgs, bool fNormalFailureOk)
 {
+#ifdef SCM_WITH_DYNAMIC_LIB_SVN
+    scmSvnFlushClientContextAndPool();
+#endif
+
     char *pszCmdLine = NULL;
     int rc = RTGetOptArgvToString(&pszCmdLine, papszArgs, RTGETOPTARGV_CNV_QUOTE_BOURNE_SH);
     if (RT_FAILURE(rc))
         return rc;
     ScmVerbose(pState, 2, "executing: %s\n", pszCmdLine);
 
-    /* Lazy bird uses RTProcExecToString. */
+    /* Lazy bird uses RTProcExec. */
     RTPROCSTATUS Status;
     rc = RTProcExec(g_szSvnPath, papszArgs, RTENV_DEFAULT, RTPROCEXEC_FLAGS_STD_NULL, &Status);
 
@@ -690,9 +716,29 @@ static void scmSvnTryResolveFunctions(void)
 # else
             { "../lib/lib", ".so" },
             { "../lib/lib", "-1.so" },
+#  if ARCH_BITS == 32
+            { "../lib32/lib", ".so" },
+            { "../lib32/lib", "-1.so" },
+#  else
+            { "../lib64/lib", ".so" },
+            { "../lib64/lib", "-1.so" },
+#   ifdef RT_OS_SOLARIS
+            { "../lib/svn/amd64/lib", ".so" },
+            { "../lib/svn/amd64/lib", "-1.so" },
+            { "../apr/1.6/lib/amd64/lib", ".so" },
+            { "../apr/1.6/lib/amd64/lib", "-1.so" },
+#   endif
+#  endif
+#  ifdef RT_ARCH_X86
+            { "../lib/i386-linux-gnu/lib", ".so" },
+            { "../lib/i386-linux-gnu/lib", "-1.so" },
+#  elif defined(RT_ARCH_AMD64)
+            { "../lib/x86_64-linux-gnu/lib", ".so" },
+            { "../lib/x86_64-linux-gnu/lib", "-1.so" },
+#  endif
 # endif
         };
-        for (unsigned iVar = 0; RT_ELEMENTS(s_aVariations); iVar++)
+        for (unsigned iVar = 0; iVar < RT_ELEMENTS(s_aVariations); iVar++)
         {
             /*
              * Try load the svn_client library ...
@@ -704,19 +750,61 @@ static void scmSvnTryResolveFunctions(void)
             unsigned iLib;
             for (iLib = 0; iLib < RT_ELEMENTS(s_apszLibraries) && RT_SUCCESS(rc); iLib++)
             {
-                *pszEndPath = '\0';
-                rc = RTPathAppend(szPath, sizeof(szPath), s_aVariations[iVar].pszPrefix);
-                if (RT_SUCCESS(rc))
-                    rc = RTStrCat(szPath, sizeof(szPath), s_apszLibraries[iLib]);
-                if (RT_SUCCESS(rc))
-                    rc = RTStrCat(szPath, sizeof(szPath), s_aVariations[iVar].pszSuffix);
-                if (RT_SUCCESS(rc))
+                static const char * const s_apszSuffixes[] = { "", ".0", ".1" };
+                for (unsigned iSuff = 0; iSuff < RT_ELEMENTS(s_apszSuffixes); iSuff++)
                 {
+                    *pszEndPath = '\0';
+                    rc = RTPathAppend(szPath, sizeof(szPath), s_aVariations[iVar].pszPrefix);
+                    if (RT_SUCCESS(rc))
+                        rc = RTStrCat(szPath, sizeof(szPath), s_apszLibraries[iLib]);
+                    if (RT_SUCCESS(rc))
+                        rc = RTStrCat(szPath, sizeof(szPath), s_aVariations[iVar].pszSuffix);
+                    if (RT_SUCCESS(rc))
+                        rc = RTStrCat(szPath, sizeof(szPath), s_apszSuffixes[iSuff]);
+                    if (RT_SUCCESS(rc))
+                    {
 # ifdef RT_OS_WINDOWS
-                    RTPathChangeToDosSlashes(pszEndPath, false);
+                        RTPathChangeToDosSlashes(pszEndPath, false);
 # endif
-                    rc = RTLdrLoadEx(szPath, &ahMods[iLib], RTLDRLOAD_FLAGS_NT_SEARCH_DLL_LOAD_DIR , NULL);
+                        rc = RTLdrLoadEx(szPath, &ahMods[iLib], RTLDRLOAD_FLAGS_NT_SEARCH_DLL_LOAD_DIR , NULL);
+                        if (RT_SUCCESS(rc))
+                        {
+                            RTMEM_WILL_LEAK(ahMods[iLib]);
+                            break;
+                        }
+                    }
                 }
+# ifdef RT_OS_SOLARIS
+                /*
+                 * HACK: Solaris may keep libapr.so separately from svn, so do a separate search for it.
+                 */
+                /** @todo It would make a lot more sense to use the dlfcn.h machinery to figure
+                 *        out which libapr*.so* file was loaded into the process together with
+                 *        the two svn libraries and get a dlopen handle for it.  We risk ending
+                 *        up with the completely wrong libapr here! */
+                if (iLib == RT_ELEMENTS(s_apszLibraries) - 1 && RT_FAILURE(rc))
+                {
+                    ahMods[iLib] = NIL_RTLDRMOD;
+                    for (unsigned iVar2 = 0; iVar2 < RT_ELEMENTS(s_aVariations) && ahMods[iLib] == NIL_RTLDRMOD; iVar2++)
+                        for (unsigned iSuff2 = 0; iSuff2 < RT_ELEMENTS(s_apszSuffixes) && ahMods[iLib] == NIL_RTLDRMOD; iSuff2++)
+                        {
+                            *pszEndPath = '\0';
+                            rc = RTPathAppend(szPath, sizeof(szPath), s_aVariations[iVar2].pszPrefix);
+                            if (RT_SUCCESS(rc))
+                                rc = RTStrCat(szPath, sizeof(szPath), s_apszLibraries[iLib]);
+                            if (RT_SUCCESS(rc))
+                                rc = RTStrCat(szPath, sizeof(szPath), s_aVariations[iVar2].pszSuffix);
+                            if (RT_SUCCESS(rc))
+                                rc = RTStrCat(szPath, sizeof(szPath), s_apszSuffixes[iSuff2]);
+                            if (RT_SUCCESS(rc))
+                                rc = RTLdrLoadEx(szPath, &ahMods[iLib], RTLDRLOAD_FLAGS_NT_SEARCH_DLL_LOAD_DIR, NULL);
+                            if (RT_SUCCESS(rc))
+                                RTMEM_WILL_LEAK(ahMods[iLib]);
+                            else
+                                ahMods[iLib] = NIL_RTLDRMOD;
+                        }
+                }
+# endif /* RT_OS_SOLARIS */
             }
             if (iLib == RT_ELEMENTS(s_apszLibraries) && RT_SUCCESS(rc))
             {
@@ -724,18 +812,18 @@ static void scmSvnTryResolveFunctions(void)
                 {
                     unsigned    iLib;
                     const char *pszSymbol;
-                    PFNRT      *ppfn;
+                    uintptr_t  *ppfn;   /**< The nothrow attrib of PFNRT goes down the wrong way with Clang 11, thus uintptr_t. */
                 } s_aSymbols[] =
                 {
-                    { 2, "apr_initialize",              (PFNRT *)&g_pfnAprInitialize },
-                    { 2, "apr_hash_first",              (PFNRT *)&g_pfnAprHashFirst },
-                    { 2, "apr_hash_next",               (PFNRT *)&g_pfnAprHashNext },
-                    { 2, "apr_hash_this_val",           (PFNRT *)&g_pfnAprHashThisVal },
-                    { 1, "svn_pool_create_ex",          (PFNRT *)&g_pfnSvnPoolCreateEx },
-                    { 2, "apr_pool_clear",              (PFNRT *)&g_pfnAprPoolClear },
-                    { 2, "apr_pool_destroy",            (PFNRT *)&g_pfnAprPoolDestroy },
-                    { 0, "svn_client_create_context",   (PFNRT *)&g_pfnSvnClientCreateContext },
-                    { 0, "svn_client_propget4",         (PFNRT *)&g_pfnSvnClientPropGet4 },
+                    { 2, "apr_initialize",              (uintptr_t *)&g_pfnAprInitialize },
+                    { 2, "apr_hash_first",              (uintptr_t *)&g_pfnAprHashFirst },
+                    { 2, "apr_hash_next",               (uintptr_t *)&g_pfnAprHashNext },
+                    { 2, "apr_hash_this_val",           (uintptr_t *)&g_pfnAprHashThisVal },
+                    { 1, "svn_pool_create_ex",          (uintptr_t *)&g_pfnSvnPoolCreateEx },
+                    { 2, "apr_pool_clear",              (uintptr_t *)&g_pfnAprPoolClear },
+                    { 2, "apr_pool_destroy",            (uintptr_t *)&g_pfnAprPoolDestroy },
+                    { 0, "svn_client_create_context",   (uintptr_t *)&g_pfnSvnClientCreateContext },
+                    { 0, "svn_client_propget4",         (uintptr_t *)&g_pfnSvnClientPropGet4 },
                 };
                 for (unsigned i = 0; i < RT_ELEMENTS(s_aSymbols); i++)
                 {
@@ -908,11 +996,94 @@ static bool scmSvnReadNumber(const char *pch, size_t cch, size_t *pu)
 static int scmSvnAbsPath(const char *pszPath, char *pszAbsPath, size_t cbAbsPath)
 {
     int rc = RTPathAbs(pszPath, pszAbsPath, cbAbsPath);
-# if defined(RT_OS_WINDOWS) || defined(RT_OS_OS2)
+# if RTPATH_STYLE == RTPATH_STR_F_STYLE_DOS
     if (RT_SUCCESS(rc))
+    {
         RTPathChangeToUnixSlashes(pszAbsPath, true /*fForce*/);
+        /* To avoid: svn: E235000: In file '..\..\..\subversion\libsvn_client\prop_commands.c' line 796: assertion failed (svn_dirent_is_absolute(target)) */
+        if (pszAbsPath[1] == ':')
+            pszAbsPath[0] = RT_C_TO_UPPER(pszAbsPath[0]);
+    }
 # endif
     return rc;
+}
+
+
+/**
+ * Gets a client context and pool.
+ *
+ * This implements caching.
+ *
+ * @returns IPRT status code.
+ * @param   ppCtx               Where to return the context
+ * @param   ppPool              Where to return the pool.
+ */
+static int scmSvnGetClientContextAndPool(svn_client_ctx_t **ppCtx, apr_pool_t **ppPool)
+{
+    /*
+     * Use cached if present.
+     */
+    if (g_pSvnClientCtx && g_pSvnPool)
+    {
+        g_cSvnClientCtxUsed++;
+        *ppCtx  = g_pSvnClientCtx;
+        *ppPool = g_pSvnPool;
+        return VINF_SUCCESS;
+    }
+    Assert(!g_pSvnClientCtx);
+    Assert(!g_pSvnPool);
+
+    /*
+     * Create new pool and context.
+     */
+    apr_pool_t *pPool = g_pfnSvnPoolCreateEx(NULL, NULL);
+    if (pPool)
+    {
+        svn_client_ctx_t *pCtx = NULL;
+        svn_error_t *pErr = g_pfnSvnClientCreateContext(&pCtx, pPool);
+        if (!pErr)
+        {
+            g_cSvnClientCtxUsed = 1;
+            g_pSvnClientCtx     = *ppCtx  = pCtx;
+            g_pSvnPool          = *ppPool = pPool;
+            return VINF_SUCCESS;
+        }
+        g_pfnAprPoolDestroy(pPool);
+    }
+
+    *ppCtx  = NULL;
+    *ppPool = NULL;
+    return VERR_GENERAL_FAILURE;
+}
+
+
+/**
+ * Puts back a client context and pool after use.
+ *
+ * @param   pCtx                The context.
+ * @param   pPool               The pool.
+ * @param   fFlush              Whether to flush it.
+ */
+static void scmSvnPutClientContextAndPool(svn_client_ctx_t *pCtx, apr_pool_t *pPool, bool fFlush)
+{
+    if (fFlush || g_cSvnClientCtxUsed > 4096) /* Disable this to force new context every time. */
+    {
+        g_pfnAprPoolDestroy(pPool);
+        g_pSvnPool = NULL;
+        g_pSvnClientCtx = NULL;
+    }
+    RT_NOREF(pCtx, fFlush);
+}
+
+
+/**
+ * Flushes the cached client context and pool
+ */
+static void scmSvnFlushClientContextAndPool(void)
+{
+    if (g_pSvnPool)
+        scmSvnPutClientContextAndPool(g_pSvnClientCtx, g_pSvnPool, true /*fFlush*/);
+    Assert(!g_pSvnPool);
 }
 
 
@@ -924,35 +1095,31 @@ static int scmSvnAbsPath(const char *pszPath, char *pszAbsPath, size_t cbAbsPath
  */
 static int scmSvnIsObjectInWorkingCopy(const char *pszPath)
 {
-    int rc = -1;
-
     /* svn_client_propget4 and later requires absolute target path. */
     char szAbsPath[RTPATH_MAX];
-    int  rc2 = scmSvnAbsPath(pszPath, szAbsPath, sizeof(szAbsPath));
-    if (RT_SUCCESS(rc2))
+    int  rc = scmSvnAbsPath(pszPath, szAbsPath, sizeof(szAbsPath));
+    if (RT_SUCCESS(rc))
     {
-        /* Create calling context. */
-        apr_pool_t *pPool = g_pfnSvnPoolCreateEx(NULL, NULL);
-        if (pPool)
+        apr_pool_t *pPool;
+        svn_client_ctx_t *pCtx = NULL;
+        rc = scmSvnGetClientContextAndPool(&pCtx, &pPool);
+        if (RT_SUCCESS(rc))
         {
-            svn_client_ctx_t *pCtx = NULL;
-            svn_error_t *pErr = g_pfnSvnClientCreateContext(&pCtx, pPool);
+            /* Make the call. */
+            apr_hash_t         *pHash = NULL;
+            svn_opt_revision_t  Rev;
+            RT_ZERO(Rev);
+            Rev.kind          = svn_opt_revision_working;
+            Rev.value.number  = -1L;
+            svn_error_t *pErr = g_pfnSvnClientPropGet4(&pHash, "svn:no-such-property", szAbsPath, &Rev, &Rev,
+                                                       NULL /*pActualRev*/, svn_depth_empty, NULL /*pChangeList*/,
+                                                       pCtx, pPool, pPool);
             if (!pErr)
-            {
-                /* Make the call. */
-                apr_hash_t         *pHash = NULL;
-                svn_opt_revision_t  Rev;
-                RT_ZERO(Rev);
-                Rev.kind          = svn_opt_revision_base;
-                Rev.value.number  = -1L;
-                pErr = g_pfnSvnClientPropGet4(&pHash, "svn:no-such-property", szAbsPath, &Rev, &Rev,
-                                              NULL /*pActualRev*/, svn_depth_empty, NULL /*pChangeList*/, pCtx, pPool, pPool);
-                if (!pErr)
-                    rc = true;
-                else if (pErr->apr_err == SVN_ERR_UNVERSIONED_RESOURCE)
-                    rc = false;
-            }
-            g_pfnAprPoolDestroy(pPool);
+                rc = true;
+            else if (pErr->apr_err == SVN_ERR_UNVERSIONED_RESOURCE)
+                rc = false;
+
+            scmSvnPutClientContextAndPool(pCtx, pPool, false);
         }
     }
     return rc;
@@ -965,18 +1132,26 @@ static int scmSvnIsObjectInWorkingCopy(const char *pszPath)
  * Checks if the file we're operating on is part of a SVN working copy.
  *
  * @returns true if it is, false if it isn't or we cannot tell.
- * @param   pState              The rewrite state to work on.
+ * @param   pState      The rewrite state to work on.  Will use the
+ *                      fIsInSvnWorkingCopy member for caching the result.
  */
 bool ScmSvnIsInWorkingCopy(PSCMRWSTATE pState)
 {
-    scmSvnFindSvnBinary(pState);
+    /*
+     * We don't ask SVN twice as that's expensive.
+     */
+    if (pState->fIsInSvnWorkingCopy != 0)
+        return pState->fIsInSvnWorkingCopy > 0;
 
 #ifdef SCM_WITH_DYNAMIC_LIB_SVN
     if (g_fSvnFunctionPointersValid)
     {
         int rc = scmSvnIsObjectInWorkingCopy(pState->pszFilename);
         if (rc == (int)true || rc == (int)false)
+        {
+            pState->fIsInSvnWorkingCopy = rc == (int)true ? 1 : -1;
             return rc == (int)true;
+        }
     }
 
     /* Fallback: */
@@ -989,19 +1164,27 @@ bool ScmSvnIsInWorkingCopy(PSCMRWSTATE pState)
         char szPath[RTPATH_MAX];
         int rc = scmSvnConstructName(pState, ".svn/text-base/", ".svn-base", szPath);
         if (RT_SUCCESS(rc))
-            return RTFileExists(szPath);
+        {
+            if (RTFileExists(szPath))
+            {
+                pState->fIsInSvnWorkingCopy = 1;
+                return true;
+            }
+        }
     }
     else
     {
-        const char *apszArgs[] = { g_szSvnPath, "propget", "svn:no-such-property", pState->pszFilename, NULL };
+        const char *apszArgs[] = { g_szSvnPath, "proplist", pState->pszFilename, NULL };
         char       *pszValue;
         int rc = scmSvnRunAndGetOutput(pState, apszArgs, true, &pszValue);
         if (RT_SUCCESS(rc))
         {
             RTStrFree(pszValue);
+            pState->fIsInSvnWorkingCopy = 1;
             return true;
         }
     }
+    pState->fIsInSvnWorkingCopy = -1;
     return false;
 }
 
@@ -1014,8 +1197,6 @@ bool ScmSvnIsInWorkingCopy(PSCMRWSTATE pState)
  */
 bool ScmSvnIsDirInWorkingCopy(const char *pszDir)
 {
-    scmSvnFindSvnBinary(NULL);
-
 #ifdef SCM_WITH_DYNAMIC_LIB_SVN
     if (g_fSvnFunctionPointersValid)
     {
@@ -1062,52 +1243,48 @@ bool ScmSvnIsDirInWorkingCopy(const char *pszDir)
  */
 static int scmSvnQueryPropertyUsingApi(const char *pszPath, const char *pszProperty, char **ppszValue)
 {
-    int rc = VERR_NOT_SUPPORTED;
-
     /* svn_client_propget4 and later requires absolute target path. */
     char szAbsPath[RTPATH_MAX];
-    int  rc2 = scmSvnAbsPath(pszPath, szAbsPath, sizeof(szAbsPath));
-    if (RT_SUCCESS(rc2))
+    int  rc = scmSvnAbsPath(pszPath, szAbsPath, sizeof(szAbsPath));
+    if (RT_SUCCESS(rc))
     {
-        /* Create calling context. */
-        apr_pool_t *pPool = g_pfnSvnPoolCreateEx(NULL, NULL);
-        if (pPool)
+        apr_pool_t *pPool;
+        svn_client_ctx_t *pCtx = NULL;
+        rc = scmSvnGetClientContextAndPool(&pCtx, &pPool);
+        if (RT_SUCCESS(rc))
         {
-            svn_client_ctx_t *pCtx = NULL;
-            svn_error_t *pErr = g_pfnSvnClientCreateContext(&pCtx, pPool);
+            /* Make the call. */
+            apr_hash_t         *pHash = NULL;
+            svn_opt_revision_t  Rev;
+            RT_ZERO(Rev);
+            Rev.kind          = svn_opt_revision_working;
+            Rev.value.number  = -1L;
+            svn_error_t *pErr = g_pfnSvnClientPropGet4(&pHash, pszProperty, szAbsPath, &Rev, &Rev,
+                                                       NULL /*pActualRev*/, svn_depth_empty, NULL /*pChangeList*/,
+                                                       pCtx, pPool, pPool);
             if (!pErr)
             {
-                /* Make the call. */
-                apr_hash_t         *pHash = NULL;
-                svn_opt_revision_t  Rev;
-                RT_ZERO(Rev);
-                Rev.kind          = svn_opt_revision_base;
-                Rev.value.number  = -1L;
-                pErr = g_pfnSvnClientPropGet4(&pHash, pszProperty, szAbsPath, &Rev, &Rev,
-                                              NULL /*pActualRev*/, svn_depth_empty, NULL /*pChangeList*/, pCtx, pPool, pPool);
-                if (!pErr)
+                /* Get the first value, if any. */
+                rc = VERR_NOT_FOUND;
+                apr_hash_index_t *pHashIdx = g_pfnAprHashFirst(pPool, pHash);
+                if (pHashIdx)
                 {
-                    /* Get the first value, if any. */
-                    rc = VERR_NOT_FOUND;
-                    apr_hash_index_t *pHashIdx = g_pfnAprHashFirst(pPool, pHash);
-                    if (pHashIdx)
+                    const char **ppszFirst = (const char **)g_pfnAprHashThisVal(pHashIdx);
+                    if (ppszFirst && *ppszFirst)
                     {
-                        const char **ppszFirst = (const char **)g_pfnAprHashThisVal(pHashIdx);
-                        if (ppszFirst && *ppszFirst)
-                        {
-                            if (ppszValue)
-                                rc = RTStrDupEx(ppszValue, *ppszFirst);
-                            else
-                                rc = VINF_SUCCESS;
-                        }
+                        if (ppszValue)
+                            rc = RTStrDupEx(ppszValue, *ppszFirst);
+                        else
+                            rc = VINF_SUCCESS;
                     }
                 }
-                else if (pErr->apr_err == SVN_ERR_UNVERSIONED_RESOURCE)
-                    rc = VERR_INVALID_STATE;
-                else
-                    rc = VERR_GENERAL_FAILURE;
             }
-            g_pfnAprPoolDestroy(pPool);
+            else if (pErr->apr_err == SVN_ERR_UNVERSIONED_RESOURCE)
+                rc = VERR_INVALID_STATE;
+            else
+                rc = VERR_GENERAL_FAILURE;
+
+            scmSvnPutClientContextAndPool(pCtx, pPool, false);
         }
     }
     return rc;
@@ -1146,8 +1323,6 @@ int ScmSvnQueryProperty(PSCMRWSTATE pState, const char *pszName, char **ppszValu
                 return RTStrDupEx(ppszValue, pszValue);
             return VINF_SUCCESS;
         }
-
-    scmSvnFindSvnBinary(pState);
 
 #ifdef SCM_WITH_DYNAMIC_LIB_SVN
     if (g_fSvnFunctionPointersValid)
@@ -1309,6 +1484,44 @@ int ScmSvnQueryProperty(PSCMRWSTATE pState, const char *pszName, char **ppszValu
 
 
 /**
+ * Queries the value of an SVN property on the parent dir/whatever.
+ *
+ * This will not adjust for scheduled changes to the parent!
+ *
+ * @returns IPRT status code.
+ * @retval  VERR_INVALID_STATE if not a SVN WC file.
+ * @retval  VERR_NOT_FOUND if the property wasn't found.
+ * @param   pState              The rewrite state to work on.
+ * @param   pszName             The property name.
+ * @param   ppszValue           Where to return the property value.  Free this
+ *                              using RTStrFree.  Optional.
+ */
+int ScmSvnQueryParentProperty(PSCMRWSTATE pState, const char *pszName, char **ppszValue)
+{
+    /*
+     * Strip the filename and use ScmSvnQueryProperty.
+     */
+    char szPath[RTPATH_MAX];
+    int rc = RTStrCopy(szPath, sizeof(szPath), pState->pszFilename);
+    if (RT_SUCCESS(rc))
+    {
+        RTPathStripFilename(szPath);
+        SCMRWSTATE ParentState;
+        ParentState.pszFilename         = szPath;
+        ParentState.fFirst              = false;
+        ParentState.fIsInSvnWorkingCopy = true;
+        ParentState.cSvnPropChanges     = 0;
+        ParentState.paSvnPropChanges    = NULL;
+        ParentState.rc                  = VINF_SUCCESS;
+        rc = ScmSvnQueryProperty(&ParentState, pszName, ppszValue);
+        if (RT_SUCCESS(rc))
+            rc = ParentState.rc;
+    }
+    return rc;
+}
+
+
+/**
  * Schedules the setting of a property.
  *
  * @returns IPRT status code.
@@ -1416,8 +1629,6 @@ int ScmSvnDisplayChanges(PSCMRWSTATE pState)
  */
 int ScmSvnApplyChanges(PSCMRWSTATE pState)
 {
-    scmSvnFindSvnBinary(pState);
-
 #ifdef SCM_WITH_LATER
     if (0)
     {
@@ -1450,3 +1661,19 @@ int ScmSvnApplyChanges(PSCMRWSTATE pState)
     return VINF_SUCCESS;
 }
 
+
+/**
+ * Initializes the subversion interface.
+ */
+void ScmSvnInit(void)
+{
+    scmSvnFindSvnBinary(NULL);
+}
+
+
+void ScmSvnTerm(void)
+{
+#ifdef SCM_WITH_DYNAMIC_LIB_SVN
+    scmSvnFlushClientContextAndPool();
+#endif
+}

@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 87259 2021-01-15 11:10:47Z vboxsync $
 ## @file
 # Sub-Makefile for the Darwin VBoxUSB kernel extension.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -14,9 +14,19 @@
 # VirtualBox OSE distribution. VirtualBox OSE is distributed in the
 # hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 #
+# The contents of this file may alternatively be used under the terms
+# of the Common Development and Distribution License Version 1.0
+# (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+# VirtualBox OSE distribution, in which case the provisions of the
+# CDDL are applicable instead of those of the GPL.
+#
+# You may elect to license modified versions of this file under the
+# terms and conditions of either the GPL or the CDDL or both.
+#
 
 SUB_DEPTH = ../../../../..
 include $(KBUILD_PATH)/subheader.kmk
+ifn1of ($(KBUILD_TARGET_ARCH), arm64)
 
 #
 # VBoxUSB.kext - The Darwin Kernel Extension.
@@ -24,7 +34,12 @@ include $(KBUILD_PATH)/subheader.kmk
 
 # Leopard (x86) and Snow Leopard (x86/amd64)
 SYSMODS.darwin       += VBoxUSB
-VBoxUSB_TEMPLATE      = VBOXR0DRV
+VBoxUSB_TEMPLATE     := VBOXR0DRV
+ifdef KMK_WITH_VERSION_COMPARE ## @todo @bugref{9790}: Remove after updating kmk.
+if "$(VBOX_DEF_MACOSX_VERSION_MIN)" vge "10.11" # The IOUSBDevice.h header was removed in 10.11.
+VBoxUSB_TEMPLATE     := VBoxR0DrvOSX10.10
+endif
+endif                          ## @todo @bugref{9790}: Remove after updating kmk.
 VBoxUSB_INST          = $(INST_VBOXUSB)Contents/MacOS/
 VBoxUSB_DEBUG_INST.darwin = $(patsubst %/,%,$(INST_VBOXUSB))
 VBoxUSB_INCS          = \
@@ -74,5 +89,6 @@ tstOpenUSBDev_SOURCES = testcase/tstOpenUSBDev.cpp
 tstOpenUSBDev_LDFLAGS = -framework CoreFoundation -framework IOKit
 endif
 
+endif # ! arm64
 include $(FILE_KBUILD_SUB_FOOTER)
 

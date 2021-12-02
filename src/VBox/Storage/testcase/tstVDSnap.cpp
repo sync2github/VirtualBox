@@ -1,10 +1,10 @@
+/* $Id: tstVDSnap.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * Snapshot VBox HDD container test utility.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,7 +16,7 @@
  */
 
 #include <VBox/vd.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 #include <iprt/asm.h>
 #include <iprt/dir.h>
@@ -124,7 +124,7 @@ static void tstVDSnapSegmentsDice(PVDSNAPTEST pTest, PVDDISKSEG paDiskSeg, uint3
     }
 }
 
-static int tstVDSnapWrite(PVBOXHDD pVD, PVDDISKSEG paDiskSegments, uint32_t cDiskSegments, uint64_t cbDisk, bool fInit)
+static int tstVDSnapWrite(PVDISK pVD, PVDDISKSEG paDiskSegments, uint32_t cDiskSegments, uint64_t cbDisk, bool fInit)
 {
     RT_NOREF1(cbDisk);
     int rc = VINF_SUCCESS;
@@ -151,7 +151,7 @@ static int tstVDSnapWrite(PVBOXHDD pVD, PVDDISKSEG paDiskSegments, uint32_t cDis
     return rc;
 }
 
-static int tstVDSnapReadVerify(PVBOXHDD pVD, PVDDISKSEG paDiskSegments, uint32_t cDiskSegments, uint64_t cbDisk)
+static int tstVDSnapReadVerify(PVDISK pVD, PVDDISKSEG paDiskSegments, uint32_t cDiskSegments, uint64_t cbDisk)
 {
     RT_NOREF1(cbDisk);
     int rc = VINF_SUCCESS;
@@ -217,7 +217,7 @@ static int tstVDSnapReadVerify(PVBOXHDD pVD, PVDDISKSEG paDiskSegments, uint32_t
 static int tstVDOpenCreateWriteMerge(PVDSNAPTEST pTest)
 {
     int rc;
-    PVBOXHDD pVD = NULL;
+    PVDISK pVD = NULL;
     VDGEOMETRY       PCHS = { 0, 0, 0 };
     VDGEOMETRY       LCHS = { 0, 0, 0 };
     PVDINTERFACE     pVDIfs = NULL;

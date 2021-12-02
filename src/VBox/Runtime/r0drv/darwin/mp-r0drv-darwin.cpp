@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: mp-r0drv-darwin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Multiprocessor, Ring-0 Driver, Darwin.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -300,6 +300,7 @@ RTDECL(int) RTMpPokeCpu(RTCPUID idCpu)
     if (g_pfnR0DarwinCpuInterrupt == NULL)
         return VERR_NOT_SUPPORTED;
     IPRT_DARWIN_SAVE_EFL_AC(); /* paranoia */
+    /// @todo use mp_cpus_kick() when available (since 10.10)?  It's probably slower (locks, mask iteration, checks), though...
     g_pfnR0DarwinCpuInterrupt(idCpu);
     IPRT_DARWIN_RESTORE_EFL_AC();
     return VINF_SUCCESS;

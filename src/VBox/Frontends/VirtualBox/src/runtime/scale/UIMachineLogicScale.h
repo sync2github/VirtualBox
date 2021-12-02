@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineLogicScale.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineLogicScale class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineLogicScale_h___
-#define ___UIMachineLogicScale_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_scale_UIMachineLogicScale_h
+#define FEQT_INCLUDED_SRC_runtime_scale_UIMachineLogicScale_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Local includes: */
 #include "UIMachineLogic.h"
@@ -74,5 +77,5 @@ private:
     friend class UIMachineLogic;
 };
 
-#endif /* !___UIMachineLogicScale_h___ */
+#endif /* !FEQT_INCLUDED_SRC_runtime_scale_UIMachineLogicScale_h */
 

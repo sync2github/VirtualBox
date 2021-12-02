@@ -1,11 +1,12 @@
 #!/bin/sh
-# $Id$
+# $Id: prerm-common.sh 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # Oracle VM VirtualBox
 # VirtualBox Linux pre-uninstaller common portions
 #
 
-# Copyright (C) 2015 Oracle Corporation
+#
+# Copyright (C) 2015-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +30,6 @@
 # stopped (installers may show an error themselves or just pass on standard
 # error).
 
-OLDMODULES="vboxdrv vboxnetflt vboxnetadp vboxpci"
 
 # The below is GNU-specific.  See VBox.sh for the longer Solaris/OS X version.
 TARGET=`readlink -e -- "${0}"` || exit 1
@@ -66,18 +66,6 @@ remove_init_script vboxdrv
 stop_init_script vboxnet >/dev/null 2>&1
 delrunlevel vboxnet >/dev/null 2>&1
 remove_init_script vboxnet >/dev/null 2>&1
+finish_init_script_install
 rm -f /sbin/vboxconfig
-# Remove any generated modules
-if [ -z "$VBOX_DONT_REMOVE_OLD_MODULES" ]; then
-    for i in ${OLDMODULES}; do
-        # Remove old modules.
-        rm -f /lib/modules/*/misc/"${i}"*
-        # This second is no longer used.  Remove the line some time.
-        rm -f /lib/modules/*/kernel/misc/"${i}"*
-    done
-    # Remove leftover module folders.
-    for i in /lib/modules/*/misc; do
-        test -d "${i}" && rmdir -p "${i}" 2>/dev/null
-    done
-fi
 exit 0

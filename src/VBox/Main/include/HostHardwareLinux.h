@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: HostHardwareLinux.h 85929 2020-08-28 14:40:55Z vboxsync $ */
 /** @file
  * VirtualBox Main - Classes for handling hardware detection under Linux.
  *
@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -18,8 +18,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_HOSTHARDWARELINUX
-# define ____H_HOSTHARDWARELINUX
+#ifndef MAIN_INCLUDED_HostHardwareLinux_h
+#define MAIN_INCLUDED_HostHardwareLinux_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/err.h>
 #include <iprt/cpp/ministring.h>
@@ -65,14 +68,21 @@ public:
      * until the first time this method is called.
      * @returns iprt status code
      */
-    int updateFloppies();
+    int updateFloppies() RT_NOEXCEPT;
 
     /**
      * Search for host DVD drives and rebuild the list, which remains empty
      * until the first time this method is called.
      * @returns iprt status code
      */
-    int updateDVDs();
+    int updateDVDs() RT_NOEXCEPT;
+
+    /**
+     * Search for fixed disks (HDDs) and rebuild the list, which remains empty until
+     * the first time this method is called.
+     * @returns iprt status code
+     */
+    int updateFixedDrives() RT_NOEXCEPT;
 
     /** Get the first element in the list of floppy drives. */
     DriveInfoList::const_iterator FloppyBegin()
@@ -97,11 +107,25 @@ public:
     {
         return mDVDList.end();
     }
+
+    /** Get the first element in the list of fixed drives. */
+    DriveInfoList::const_iterator FixedDriveBegin()
+    {
+        return mFixedDriveList.begin();
+    }
+
+    /** Get the last element in the list of fixed drives. */
+    DriveInfoList::const_iterator FixedDriveEnd()
+    {
+        return mFixedDriveList.end();
+    }
 private:
     /** The list of currently available floppy drives */
     DriveInfoList mFloppyList;
     /** The list of currently available DVD drives */
     DriveInfoList mDVDList;
+    /** The list of currently available fixed drives */
+    DriveInfoList mFixedDriveList;
 };
 
 /** Convenience typedef. */
@@ -171,5 +195,5 @@ public:
     }
 };
 
-#endif /* ____H_HOSTHARDWARELINUX */
+#endif /* !MAIN_INCLUDED_HostHardwareLinux_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

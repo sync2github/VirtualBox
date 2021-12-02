@@ -1,9 +1,10 @@
+/* $Id: post.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BIOS POST routines. Used only during initialization.
  */
 
 /*
- * Copyright (C) 2004-2016 Oracle Corporation
+ * Copyright (C) 2004-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -68,6 +69,10 @@ static inline uint8_t rom_checksum(uint8_t __far *rom, uint8_t blocks)
     return sum;
 }
 
+/* The ROM init routine might trash register. Give the compiler a heads-up. */
+typedef void (rom_init_rtn)(void);
+#pragma aux rom_init_rtn modify [ax bx cx dx si di es] loadds;
+
 /* Scan for ROMs in the given range and execute their POST code. */
 void rom_scan(uint16_t start_seg, uint16_t end_seg)
 {
@@ -82,7 +87,7 @@ void rom_scan(uint16_t start_seg, uint16_t end_seg)
         if (rom->signature == 0xAA55) {
             DPRINT("Found ROM at segment %04X\n", start_seg);
             if (!rom_checksum((void __far *)rom, rom->num_blks)) {
-                void (__far * rom_init)(void);
+                rom_init_rtn    __far *rom_init;
 
                 /* Checksum good, initialize ROM. */
                 rom_init = (void __far *)&rom->code;
@@ -103,13 +108,27 @@ void rom_scan(uint16_t start_seg, uint16_t end_seg)
 
 #if VBOX_BIOS_CPU >= 80386
 
+/* NB: The CPUID detection is generic but currently not used elsewhere. */
+
+/* Check CPUID availability. */
+int is_cpuid_supported( void )
+{
+    uint32_t    old_flags, new_flags;
+
+    old_flags = eflags_read();
+    new_flags = old_flags ^ (1L << 21); /* Toggle CPUID bit. */
+    eflags_write( new_flags );
+    new_flags = eflags_read();
+    return( old_flags != new_flags );   /* Supported if bit changed. */
+}
+
 #define APICMODE_DISABLED   0
 #define APICMODE_APIC       1
 #define APICMODE_X2APIC     2
 
 #define APIC_BASE_MSR       0x1B
 #define APICBASE_X2APIC     0x400   /* bit 10 */
-#define APICBASE_DISABLE    0x800   /* bit 11 */
+#define APICBASE_ENABLE     0x800   /* bit 11 */
 
 /*
  * Set up APIC/x2APIC. See also DevPcBios.cpp.
@@ -120,29 +139,47 @@ void rom_scan(uint16_t start_seg, uint16_t end_seg)
  * and needs no 32-bit addressing. Going to x2APIC mode does not lose the
  * existing virtual wire setup.
  *
- * NB: This code assumes that there *is* a local APIC.
+ * NB: This code does not assume that there is a local APIC. It is necessary
+ * to check CPUID whether APIC is present; the CPUID instruction might not be
+ * available either.
  *
  * NB: Destroys high bits of 32-bit registers.
  */
 void BIOSCALL apic_setup(void)
 {
     uint64_t    base_msr;
-    uint16_t    mask;
+    uint16_t    mask_set;
+    uint16_t    mask_clr;
     uint8_t     apic_mode;
+    uint32_t    cpu_id[4];
+
+    /* If there's no CPUID, there's certainly no APIC. */
+    if (!is_cpuid_supported()) {
+        return;
+    }
+
+    /* Check EDX bit 9 */
+    cpuid(&cpu_id, 1);
+    BX_DEBUG("CPUID EDX: 0x%lx\n", cpu_id[3]);
+    if ((cpu_id[3] & (1 << 9)) == 0) {
+        return; /* No local APIC, nothing to do. */
+    }
 
     /* APIC mode at offset 78h in CMOS NVRAM. */
     apic_mode = inb_cmos(0x78);
 
+    mask_set = mask_clr = 0;
     if (apic_mode == APICMODE_X2APIC)
-        mask = APICBASE_X2APIC;
+        mask_set = APICBASE_X2APIC;
     else if (apic_mode == APICMODE_DISABLED)
-        mask = APICBASE_DISABLE;
+        mask_clr = APICBASE_ENABLE;
     else
-        mask = 0;   /* Any other setting leaves things alone. */
+        ;   /* Any other setting leaves things alone. */
 
-    if (mask) {
+    if (mask_set || mask_clr) {
         base_msr = msr_read(APIC_BASE_MSR);
-        base_msr |= mask;
+        base_msr &= ~(uint64_t)mask_clr;
+        base_msr |= mask_set;
         msr_write(base_msr, APIC_BASE_MSR);
     }
 }

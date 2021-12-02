@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UILineTextEdit.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UILineTextEdit class definitions.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,24 +15,19 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
+/* Qt includes: */
+#include <QDialogButtonBox>
+#include <QFile>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QTextEdit>
+#include <QTextStream>
+#include <QVBoxLayout>
 
-/* VBox includes */
-# include "VBoxGlobal.h"
-# include "UILineTextEdit.h"
-# include "QIFileDialog.h"
-
-/* Qt includes */
-# include <QDialogButtonBox>
-# include <QFile>
-# include <QLineEdit>
-# include <QPushButton>
-# include <QTextEdit>
-# include <QTextStream>
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+/* GUI includes: */
+#include "QIFileDialog.h"
+#include "UICommon.h"
+#include "UILineTextEdit.h"
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -53,12 +48,12 @@ UITextEditor::UITextEditor(QWidget *pParent /* = NULL */)
     m_pButtonBox->addButton(m_pOpenButton, QDialogButtonBox::ActionRole);
     pMainLayout->addWidget(m_pButtonBox);
     /* Connect the buttons so that they are useful */
-    connect(m_pButtonBox, SIGNAL(accepted()),
-            this, SLOT(accept()));
-    connect(m_pButtonBox, SIGNAL(rejected()),
-            this, SLOT(reject()));
-    connect(m_pOpenButton, SIGNAL(clicked()),
-            this, SLOT(open()));
+    connect(m_pButtonBox, &QDialogButtonBox::accepted,
+            this, &UITextEditor::accept);
+    connect(m_pButtonBox, &QDialogButtonBox::rejected,
+            this, &UITextEditor::reject);
+    connect(m_pOpenButton, &QPushButton::clicked,
+            this, &UITextEditor::open);
 
     /* Applying language settings */
     retranslateUi();
@@ -83,7 +78,7 @@ void UITextEditor::retranslateUi()
 
 void UITextEditor::open()
 {
-    QString fileName = QIFileDialog::getOpenFileName(vboxGlobal().documentsPath(), tr("Text (*.txt);;All (*.*)"), this, tr("Select a file to open..."));
+    QString fileName = QIFileDialog::getOpenFileName(uiCommon().documentsPath(), tr("Text (*.txt);;All (*.*)"), this, tr("Select a file to open..."));
     if (!fileName.isEmpty())
     {
         QFile file(fileName);
@@ -102,8 +97,8 @@ void UITextEditor::open()
 UILineTextEdit::UILineTextEdit(QWidget *pParent /* = NULL */)
   : QIWithRetranslateUI<QPushButton>(pParent)
 {
-    connect(this, SIGNAL(clicked()),
-            this, SLOT(edit()));
+    connect(this, &UILineTextEdit::clicked,
+            this, &UILineTextEdit::edit);
 
     /* Don't interpret the Enter Key. */
     setAutoDefault(false);
@@ -129,4 +124,3 @@ void UILineTextEdit::edit()
         emit sigFinished(this);
     }
 }
-

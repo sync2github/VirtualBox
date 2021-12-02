@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: utf-8.cpp 90794 2021-08-23 13:16:11Z vboxsync $ */
 /** @file
  * IPRT - UTF-8 Decoding.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,9 +29,11 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <iprt/string.h>
+#include <iprt/latin1.h>
 #include "internal/iprt.h"
 
 #include <iprt/uni.h>
+#include <iprt/asm.h>
 #include <iprt/alloc.h>
 #include <iprt/assert.h>
 #include <iprt/err.h>
@@ -93,12 +95,16 @@ DECLHIDDEN(int) rtUtf8Length(const char *psz, size_t cch, size_t *pcuc, size_t *
             {
                 case 6:
                     RTStrAssertMsgReturn((puch[5] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("6/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
+                    RT_FALL_THRU();
                 case 5:
                     RTStrAssertMsgReturn((puch[4] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("5/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
+                    RT_FALL_THRU();
                 case 4:
                     RTStrAssertMsgReturn((puch[3] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("4/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
+                    RT_FALL_THRU();
                 case 3:
                     RTStrAssertMsgReturn((puch[2] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("3/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
+                    RT_FALL_THRU();
                 case 2:
                     RTStrAssertMsgReturn((puch[1] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("2/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
                    break;
@@ -440,8 +446,8 @@ RTDECL(int) RTStrToUni(const char *pszString, PRTUNICP *ppaCps)
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(pszString));
-    Assert(VALID_PTR(ppaCps));
+    AssertPtr(pszString);
+    AssertPtr(ppaCps);
     *ppaCps = NULL;
 
     /*
@@ -481,9 +487,9 @@ RTDECL(int)  RTStrToUniEx(const char *pszString, size_t cchString, PRTUNICP *ppa
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(pszString));
-    Assert(VALID_PTR(ppaCps));
-    Assert(!pcCps || VALID_PTR(pcCps));
+    AssertPtr(pszString);
+    AssertPtr(ppaCps);
+    AssertPtrNull(pcCps);
 
     /*
      * Validate the UTF-8 input and count the code points.
@@ -601,12 +607,16 @@ static int rtUtf8CalcUtf16LengthN(const char *psz, size_t cch, size_t *pcwc)
             {
                 case 6:
                     RTStrAssertMsgReturn((puch[5] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("6/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
+                    RT_FALL_THRU();
                 case 5:
                     RTStrAssertMsgReturn((puch[4] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("5/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
+                    RT_FALL_THRU();
                 case 4:
                     RTStrAssertMsgReturn((puch[3] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("4/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
+                    RT_FALL_THRU();
                 case 3:
                     RTStrAssertMsgReturn((puch[2] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("3/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
+                    RT_FALL_THRU();
                 case 2:
                     RTStrAssertMsgReturn((puch[1] & (RT_BIT(7) | RT_BIT(6))) == RT_BIT(7), ("2/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, cch), puch), VERR_INVALID_UTF8_ENCODING);
                    break;
@@ -820,6 +830,8 @@ static int rtUtf8CalcUtf16Length(const char *psz, size_t *pcwc)
  *                  The recoding will stop when cch or '\\0' is reached. Pass RTSTR_MAX to process up to '\\0'.
  * @param   pwsz    Where to store the UTF-16 string.
  * @param   cwc     The number of RTUTF16 items the pwsz buffer can hold, excluding the terminator ('\\0').
+ *
+ * @note    rtUtf8RecodeAsUtf16Big is a duplicate with RT_H2BE_U16 applied.
  */
 static int rtUtf8RecodeAsUtf16(const char *psz, size_t cch, PRTUTF16 pwsz, size_t cwc)
 {
@@ -898,13 +910,104 @@ static int rtUtf8RecodeAsUtf16(const char *psz, size_t cch, PRTUTF16 pwsz, size_
 }
 
 
+/**
+ * Recodes a valid UTF-8 string as UTF-16BE.
+ *
+ * Since we know the input is valid, we do *not* perform encoding or length checks.
+ *
+ * @returns iprt status code.
+ * @param   psz     The UTF-8 string to recode. This is a valid encoding.
+ * @param   cch     The number of chars (the type char, so bytes if you like) to process of the UTF-8 string.
+ *                  The recoding will stop when cch or '\\0' is reached. Pass RTSTR_MAX to process up to '\\0'.
+ * @param   pwsz    Where to store the UTF-16BE string.
+ * @param   cwc     The number of RTUTF16 items the pwsz buffer can hold, excluding the terminator ('\\0').
+ *
+ * @note    This is a copy of rtUtf8RecodeAsUtf16 with RT_H2BE_U16 applied.
+ */
+static int rtUtf8RecodeAsUtf16Big(const char *psz, size_t cch, PRTUTF16 pwsz, size_t cwc)
+{
+    int                     rc   = VINF_SUCCESS;
+    const unsigned char    *puch = (const unsigned char *)psz;
+    PRTUTF16                pwc  = pwsz;
+    while (cch > 0)
+    {
+        /* read the next char and check for terminator. */
+        const unsigned char uch = *puch;
+        if (uch)
+        { /* we only break once, so consider this the likely branch. */ }
+        else
+            break;
+
+        /* check for output overflow */
+        if (RT_LIKELY(cwc >= 1))
+        { /* likely */ }
+        else
+        {
+            rc = VERR_BUFFER_OVERFLOW;
+            break;
+        }
+        cwc--;
+
+        /* decode and recode the code point */
+        if (!(uch & RT_BIT(7)))
+        {
+            *pwc++ = RT_H2BE_U16((RTUTF16)uch);
+            puch++;
+            cch--;
+        }
+        else if ((uch & (RT_BIT(7) | RT_BIT(6) | RT_BIT(5))) == (RT_BIT(7) | RT_BIT(6)))
+        {
+            uint16_t uc = (puch[1] & 0x3f)
+                    | ((uint16_t)(uch     & 0x1f) << 6);
+            *pwc++ = RT_H2BE_U16(uc);
+            puch += 2;
+            cch -= 2;
+        }
+        else if ((uch & (RT_BIT(7) | RT_BIT(6) | RT_BIT(5) | RT_BIT(4))) == (RT_BIT(7) | RT_BIT(6) | RT_BIT(5)))
+        {
+            uint16_t uc = (puch[2] & 0x3f)
+                    | ((uint16_t)(puch[1] & 0x3f) << 6)
+                    | ((uint16_t)(uch     & 0x0f) << 12);
+            *pwc++ = RT_H2BE_U16(uc);
+            puch += 3;
+            cch -= 3;
+        }
+        else
+        {
+            /* generate surrogate pair */
+            Assert((uch & (RT_BIT(7) | RT_BIT(6) | RT_BIT(5) | RT_BIT(4) | RT_BIT(3))) == (RT_BIT(7) | RT_BIT(6) | RT_BIT(5) | RT_BIT(4)));
+            RTUNICP uc =           (puch[3] & 0x3f)
+                       | ((RTUNICP)(puch[2] & 0x3f) << 6)
+                       | ((RTUNICP)(puch[1] & 0x3f) << 12)
+                       | ((RTUNICP)(uch     & 0x07) << 18);
+            if (RT_UNLIKELY(cwc < 1))
+            {
+                rc = VERR_BUFFER_OVERFLOW;
+                break;
+            }
+            cwc--;
+
+            uc -= 0x10000;
+            *pwc++ = RT_H2BE_U16(0xd800 | (uc >> 10));
+            *pwc++ = RT_H2BE_U16(0xdc00 | (uc & 0x3ff));
+            puch += 4;
+            cch -= 4;
+        }
+    }
+
+    /* done */
+    *pwc = '\0';
+    return rc;
+}
+
+
 RTDECL(int) RTStrToUtf16Tag(const char *pszString, PRTUTF16 *ppwszString, const char *pszTag)
 {
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(ppwszString));
-    Assert(VALID_PTR(pszString));
+    AssertPtr(ppwszString);
+    AssertPtr(pszString);
     *ppwszString = NULL;
 
     /*
@@ -939,15 +1042,56 @@ RTDECL(int) RTStrToUtf16Tag(const char *pszString, PRTUTF16 *ppwszString, const 
 RT_EXPORT_SYMBOL(RTStrToUtf16Tag);
 
 
+RTDECL(int) RTStrToUtf16BigTag(const char *pszString, PRTUTF16 *ppwszString, const char *pszTag)
+{
+    /*
+     * Validate input.
+     */
+    AssertPtr(ppwszString);
+    AssertPtr(pszString);
+    *ppwszString = NULL;
+
+    /*
+     * Validate the UTF-8 input and calculate the length of the UTF-16 string.
+     */
+    size_t cwc;
+    int rc = rtUtf8CalcUtf16Length(pszString, &cwc);
+    if (RT_SUCCESS(rc))
+    {
+        /*
+         * Allocate buffer.
+         */
+        PRTUTF16 pwsz = (PRTUTF16)RTMemAllocTag((cwc + 1) * sizeof(RTUTF16), pszTag);
+        if (pwsz)
+        {
+            /*
+             * Encode the UTF-16 string.
+             */
+            rc = rtUtf8RecodeAsUtf16Big(pszString, RTSTR_MAX, pwsz, cwc);
+            if (RT_SUCCESS(rc))
+            {
+                *ppwszString = pwsz;
+                return rc;
+            }
+            RTMemFree(pwsz);
+        }
+        else
+            rc = VERR_NO_UTF16_MEMORY;
+    }
+    return rc;
+}
+RT_EXPORT_SYMBOL(RTStrToUtf16BigTag);
+
+
 RTDECL(int)  RTStrToUtf16ExTag(const char *pszString, size_t cchString,
                                PRTUTF16 *ppwsz, size_t cwc, size_t *pcwc, const char *pszTag)
 {
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(pszString));
-    Assert(VALID_PTR(ppwsz));
-    Assert(!pcwc || VALID_PTR(pcwc));
+    AssertPtr(pszString);
+    AssertPtr(ppwsz);
+    AssertPtrNull(pcwc);
 
     /*
      * Validate the UTF-8 input and calculate the length of the UTF-16 string.
@@ -1002,6 +1146,71 @@ RTDECL(int)  RTStrToUtf16ExTag(const char *pszString, size_t cchString,
     return rc;
 }
 RT_EXPORT_SYMBOL(RTStrToUtf16ExTag);
+
+
+RTDECL(int)  RTStrToUtf16BigExTag(const char *pszString, size_t cchString,
+                                  PRTUTF16 *ppwsz, size_t cwc, size_t *pcwc, const char *pszTag)
+{
+    /*
+     * Validate input.
+     */
+    AssertPtr(pszString);
+    AssertPtr(ppwsz);
+    AssertPtrNull(pcwc);
+
+    /*
+     * Validate the UTF-8 input and calculate the length of the UTF-16 string.
+     */
+    size_t cwcResult;
+    int rc;
+    if (cchString != RTSTR_MAX)
+        rc = rtUtf8CalcUtf16LengthN(pszString, cchString, &cwcResult);
+    else
+        rc = rtUtf8CalcUtf16Length(pszString, &cwcResult);
+    if (RT_SUCCESS(rc))
+    {
+        if (pcwc)
+            *pcwc = cwcResult;
+
+        /*
+         * Check buffer size / Allocate buffer.
+         */
+        bool fShouldFree;
+        PRTUTF16 pwszResult;
+        if (cwc > 0 && *ppwsz)
+        {
+            fShouldFree = false;
+            if (cwc <= cwcResult)
+                return VERR_BUFFER_OVERFLOW;
+            pwszResult = *ppwsz;
+        }
+        else
+        {
+            *ppwsz = NULL;
+            fShouldFree = true;
+            cwc = RT_MAX(cwcResult + 1, cwc);
+            pwszResult = (PRTUTF16)RTMemAllocTag(cwc * sizeof(RTUTF16), pszTag);
+        }
+        if (pwszResult)
+        {
+            /*
+             * Encode the UTF-16BE string.
+             */
+            rc = rtUtf8RecodeAsUtf16Big(pszString, cchString, pwszResult, cwc - 1);
+            if (RT_SUCCESS(rc))
+            {
+                *ppwsz = pwszResult;
+                return rc;
+            }
+            if (fShouldFree)
+                RTMemFree(pwszResult);
+        }
+        else
+            rc = VERR_NO_UTF16_MEMORY;
+    }
+    return rc;
+}
+RT_EXPORT_SYMBOL(RTStrToUtf16BigExTag);
 
 
 RTDECL(size_t) RTStrCalcUtf16Len(const char *psz)
@@ -1101,8 +1310,8 @@ RTDECL(int)  RTLatin1ToUtf8Tag(const char *pszString, char **ppszString, const c
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(ppszString));
-    Assert(VALID_PTR(pszString));
+    AssertPtr(ppszString);
+    AssertPtr(pszString);
     *ppszString = NULL;
 
     /*
@@ -1140,9 +1349,9 @@ RTDECL(int)  RTLatin1ToUtf8ExTag(const char *pszString, size_t cchString, char *
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(pszString));
-    Assert(VALID_PTR(ppsz));
-    Assert(!pcch || VALID_PTR(pcch));
+    AssertPtr(pszString);
+    AssertPtr(ppsz);
+    AssertPtrNull(pcch);
 
     /*
      * Calculate the length of the UTF-8 encoding of the Latin-1 string.
@@ -1294,8 +1503,8 @@ RTDECL(int) RTStrToLatin1Tag(const char *pszString, char **ppszString, const cha
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(ppszString));
-    Assert(VALID_PTR(pszString));
+    AssertPtr(ppszString);
+    AssertPtr(pszString);
     *ppszString = NULL;
 
     /*
@@ -1336,9 +1545,9 @@ RTDECL(int)  RTStrToLatin1ExTag(const char *pszString, size_t cchString,
     /*
      * Validate input.
      */
-    Assert(VALID_PTR(pszString));
-    Assert(VALID_PTR(ppsz));
-    Assert(!pcch || VALID_PTR(pcch));
+    AssertPtr(pszString);
+    AssertPtr(ppsz);
+    AssertPtrNull(pcch);
 
     /*
      * Validate the UTF-8 input and calculate the length of the UTF-16 string.
@@ -1388,7 +1597,7 @@ RTDECL(int)  RTStrToLatin1ExTag(const char *pszString, size_t cchString,
     }
     return rc;
 }
-RT_EXPORT_SYMBOL(RTStrToLatin1Tag);
+RT_EXPORT_SYMBOL(RTStrToLatin1ExTag);
 
 
 RTDECL(size_t) RTStrCalcLatin1Len(const char *psz)
@@ -1477,15 +1686,19 @@ RTDECL(int) RTStrGetCpExInternal(const char **ppsz, PRTUNICP pCp)
             case 6:
                 RTStrAssertMsgReturn((puch[5] & 0xc0) == 0x80, ("6/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpExFailure(ppsz, pCp, VERR_INVALID_UTF8_ENCODING));
+                RT_FALL_THRU();
             case 5:
                 RTStrAssertMsgReturn((puch[4] & 0xc0) == 0x80, ("5/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpExFailure(ppsz, pCp, VERR_INVALID_UTF8_ENCODING));
+                RT_FALL_THRU();
             case 4:
                 RTStrAssertMsgReturn((puch[3] & 0xc0) == 0x80, ("4/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpExFailure(ppsz, pCp, VERR_INVALID_UTF8_ENCODING));
+                RT_FALL_THRU();
             case 3:
                 RTStrAssertMsgReturn((puch[2] & 0xc0) == 0x80, ("3/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpExFailure(ppsz, pCp, VERR_INVALID_UTF8_ENCODING));
+                RT_FALL_THRU();
             case 2:
                 RTStrAssertMsgReturn((puch[1] & 0xc0) == 0x80, ("2/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpExFailure(ppsz, pCp, VERR_INVALID_UTF8_ENCODING));
@@ -1632,15 +1845,19 @@ RTDECL(int) RTStrGetCpNExInternal(const char **ppsz, size_t *pcch, PRTUNICP pCp)
             case 6:
                 RTStrAssertMsgReturn((puch[5] & 0xc0) == 0x80, ("6/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpNExFailure(ppsz, pcch, pCp, VERR_INVALID_UTF8_ENCODING));
+                RT_FALL_THRU();
             case 5:
                 RTStrAssertMsgReturn((puch[4] & 0xc0) == 0x80, ("5/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpNExFailure(ppsz, pcch, pCp, VERR_INVALID_UTF8_ENCODING));
+                RT_FALL_THRU();
             case 4:
                 RTStrAssertMsgReturn((puch[3] & 0xc0) == 0x80, ("4/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpNExFailure(ppsz, pcch, pCp, VERR_INVALID_UTF8_ENCODING));
+                RT_FALL_THRU();
             case 3:
                 RTStrAssertMsgReturn((puch[2] & 0xc0) == 0x80, ("3/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpNExFailure(ppsz, pcch, pCp, VERR_INVALID_UTF8_ENCODING));
+                RT_FALL_THRU();
             case 2:
                 RTStrAssertMsgReturn((puch[1] & 0xc0) == 0x80, ("2/%u: %.*Rhxs\n", cb, RT_MIN(cb + 10, strlen((char *)puch)), puch),
                                      rtStrGetCpNExFailure(ppsz, pcch, pCp, VERR_INVALID_UTF8_ENCODING));

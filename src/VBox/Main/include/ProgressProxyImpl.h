@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ProgressProxyImpl.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IProgress implementation for Machine::LaunchVMProcess in VBoxSVC.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_PROGRESSPROXYIMPL
-#define ____H_PROGRESSPROXYIMPL
+#ifndef MAIN_INCLUDED_ProgressProxyImpl_h
+#define MAIN_INCLUDED_ProgressProxyImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "ProgressImpl.h"
 #include "AutoCaller.h"
@@ -49,17 +52,17 @@ public:
                  VirtualBox *pParent,
 #endif
                  IUnknown *pInitiator,
-                 CBSTR bstrDescription,
+                 Utf8Str strDescription,
                  BOOL fCancelable);
     HRESULT init(
 #ifndef VBOX_COM_INPROC
                  VirtualBox *pParent,
 #endif
                  IUnknown *pInitiator,
-                 CBSTR bstrDescription,
+                 Utf8Str strDescription,
                  BOOL fCancelable,
                  ULONG uTotalOperationsWeight,
-                 CBSTR bstrFirstOperationDescription,
+                 Utf8Str strFirstOperationDescription,
                  ULONG uFirstOperationWeight,
                  ULONG cOtherProgressObjectOperations);
     void    uninit();
@@ -113,5 +116,5 @@ private:
 
 };
 
-#endif /* !____H_PROGRESSPROXYIMPL */
+#endif /* !MAIN_INCLUDED_ProgressProxyImpl_h */
 

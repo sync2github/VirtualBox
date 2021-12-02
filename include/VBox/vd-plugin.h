@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vd_plugin_h
-#define ___VBox_vd_plugin_h
+#ifndef VBOX_INCLUDED_vd_plugin_h
+#define VBOX_INCLUDED_vd_plugin_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vd.h>
 #include <VBox/vd-common.h>
@@ -81,7 +84,7 @@ typedef VDBACKENDREGISTER *PVDBACKENDREGISTER;
  * @param   pvUser             Opaque user data passed in the register callbacks.
  * @param   pRegisterCallbacks Pointer to the register callbacks structure.
  */
-typedef DECLCALLBACK(int) FNVDPLUGINLOAD(void *pvUser, PVDBACKENDREGISTER pRegisterCallbacks);
+typedef DECLCALLBACKTYPE(int, FNVDPLUGINLOAD,(void *pvUser, PVDBACKENDREGISTER pRegisterCallbacks));
 typedef FNVDPLUGINLOAD *PFNVDPLUGINLOAD;
 #define VD_PLUGIN_LOAD_NAME "VDPluginLoad"
 
@@ -90,4 +93,4 @@ typedef FNVDPLUGINLOAD *PFNVDPLUGINLOAD;
 /** The size of the prefix excluding the '\\0' terminator. */
 #define VD_PLUGIN_PREFIX_LENGTH (sizeof(VD_PLUGIN_PREFIX)-1)
 
-#endif
+#endif /* !VBOX_INCLUDED_vd_plugin_h */

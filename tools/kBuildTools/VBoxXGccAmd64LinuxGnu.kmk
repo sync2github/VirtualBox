@@ -1,4 +1,4 @@
-# $Id$
+# $Id: VBoxXGccAmd64LinuxGnu.kmk 62534 2016-07-22 19:30:22Z vboxsync $
 ## @file
 # VBox kBuild Tool Config - GCC Cross compiler for Debian 4.0 AMD64.
 #

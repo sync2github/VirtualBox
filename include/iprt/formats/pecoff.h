@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pecoff.h 84509 2020-05-25 15:09:24Z vboxsync $ */
 /** @file
  * IPRT - Windows NT PE & COFF Structures and Constants.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,11 +24,14 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_formats_pecoff_h
-#define ___iprt_formats_pecoff_h
+#ifndef IPRT_INCLUDED_formats_pecoff_h
+#define IPRT_INCLUDED_formats_pecoff_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
-#include <iprt/assert.h>
+#include <iprt/assertcompile.h>
 
 
 /** @defgroup grp_rt_formats_pecoff     PE & Microsoft COFF structures and definitions
@@ -61,43 +64,59 @@ typedef IMAGE_FILE_HEADER const *PCIMAGE_FILE_HEADER;
 /** @name PE & COFF machine types.
  * Used by IMAGE_FILE_HEADER::Machine and IMAGE_SEPARATE_DEBUG_HEADER::Machine.
  * @{ */
-/** X86 compatible CPU, 32-bit instructions.   */
+/** X86 compatible CPU, 32-bit instructions. */
 #define IMAGE_FILE_MACHINE_I386             UINT16_C(0x014c)
-/** AMD64 compatible CPU, 64-bit instructions.   */
+/** AMD64 compatible CPU, 64-bit instructions. */
 #define IMAGE_FILE_MACHINE_AMD64            UINT16_C(0x8664)
 
 /** Unknown target CPU. */
 #define IMAGE_FILE_MACHINE_UNKNOWN          UINT16_C(0x0000)
-/** Matshushita AM33 CPU. */
-#define IMAGE_FILE_MACHINE_AM33             UINT16_C(0x01d3)
-/** Little endian ARM CPU. */
-#define IMAGE_FILE_MACHINE_ARM              UINT16_C(0x01c0)
-/** ARM or Thumb stuff. */
-#define IMAGE_FILE_MACHINE_THUMB            UINT16_C(0x01c2)
-/** ARMv7 or higher CPU, Thumb mode. */
-#define IMAGE_FILE_MACHINE_ARMNT            UINT16_C(0x01c4)
-/** ARMv8 CPU, 64-bit mode. */
-#define IMAGE_FILE_MACHINE_ARM64            UINT16_C(0xaa64)
-/** EFI byte code. */
-#define IMAGE_FILE_MACHINE_EBC              UINT16_C(0x0ebc)
-/** "Itanic" CPU. */
-#define IMAGE_FILE_MACHINE_IA64             UINT16_C(0x0200)
-/** Mitsubishi M32R CPU, little endian. */
-#define IMAGE_FILE_MACHINE_M32R             UINT16_C(0x9041)
-/** MIPS CPU, compact 16-bit instructions only? */
-#define IMAGE_FILE_MACHINE_MIPS16           UINT16_C(0x0266)
-/** MIPS CPU with FPU, full 32-bit instructions only? */
-#define IMAGE_FILE_MACHINE_MIPSFPU          UINT16_C(0x0366)
-/** MIPS CPU with FPU, compact 16-bit instructions? */
-#define IMAGE_FILE_MACHINE_MIPSFPU16        UINT16_C(0x0466)
-/** MIPS CPU, little endian, Windows CE (?) v2 designation. */
-#define IMAGE_FILE_MACHINE_WCEMIPSV2        UINT16_C(0x0169)
-/** Power PC CPU, little endian. */
-#define IMAGE_FILE_MACHINE_POWERPC          UINT16_C(0x01f0)
-/** Power PC CPU with FPU, also little endian? */
-#define IMAGE_FILE_MACHINE_POWERPCFP        UINT16_C(0x01f1)
+/** Basic-16 (whatever that is). */
+#define IMAGE_FILE_MACHINE_BASIC_16         UINT16_C(0x0142)
+/** Basic-16 (whatever that is) w/ transfer vector(s?) (TV). */
+#define IMAGE_FILE_MACHINE_BASIC_16_TV      UINT16_C(0x0143)
+/** Intel iAPX 16 (8086?). */
+#define IMAGE_FILE_MACHINE_IAPX16           UINT16_C(0x0144)
+/** Intel iAPX 16 (8086?) w/ transfer vector(s?) (TV). */
+#define IMAGE_FILE_MACHINE_IAPX16_TV        UINT16_C(0x0145)
+/** Intel iAPX 20 (80286?). */
+#define IMAGE_FILE_MACHINE_IAPX20           UINT16_C(0x0144)
+/** Intel iAPX 20 (80286?) w/ transfer vector(s?) (TV). */
+#define IMAGE_FILE_MACHINE_IAPX20_TV        UINT16_C(0x0145)
+/** X86 compatible CPU, 8086. */
+#define IMAGE_FILE_MACHINE_I8086            UINT16_C(0x0148)
+/** X86 compatible CPU, 8086 w/ transfer vector(s?) (TV). */
+#define IMAGE_FILE_MACHINE_I8086_TV         UINT16_C(0x0149)
+/** X86 compatible CPU, 80286 small model program. */
+#define IMAGE_FILE_MACHINE_I286_SMALL       UINT16_C(0x014a)
+/** Motorola 68000. */
+#define IMAGE_FILE_MACHINE_MC68             UINT16_C(0x0150)
+/** Motorola 68000 w/ writable text sections. */
+#define IMAGE_FILE_MACHINE_MC68_WR          UINT16_C(0x0150)
+/** Motorola 68000 w/ transfer vector(s?). */
+#define IMAGE_FILE_MACHINE_MC68_TV          UINT16_C(0x0151)
+/** Motorola 68000 w/ demand paged text.
+ * @note shared with 80286 large model program. */
+#define IMAGE_FILE_MACHINE_MC68_PG          UINT16_C(0x0152)
+/** X86 compatible CPU, 80286 large model program.
+ * @note shared with MC68000 w/ demand paged text */
+#define IMAGE_FILE_MACHINE_I286_LARGE       UINT16_C(0x0152)
+/** IBM 370 (writable text). */
+#define IMAGE_FILE_MACHINE_U370_WR          UINT16_C(0x0158)
+/** Amdahl 470/580 (writable text). */
+#define IMAGE_FILE_MACHINE_AMDAHL_470_WR    UINT16_C(0x0159)
+/** Amdahl 470/580 (read only text). */
+#define IMAGE_FILE_MACHINE_AMDAHL_470_RO    UINT16_C(0x015c)
+/** IBM 370 (read only text). */
+#define IMAGE_FILE_MACHINE_U370_RO          UINT16_C(0x015d)
 /** MIPS R4000 CPU, little endian. */
 #define IMAGE_FILE_MACHINE_R4000            UINT16_C(0x0166)
+/** MIPS CPU, little endian, Windows CE (?) v2 designation. */
+#define IMAGE_FILE_MACHINE_WCEMIPSV2        UINT16_C(0x0169)
+/** VAX-11/750 and VAX-11/780 (writable text). */
+#define IMAGE_FILE_MACHINE_VAX_WR           UINT16_C(0x0178)
+/** VAX-11/750 and VAX-11/780 (read-only text). */
+#define IMAGE_FILE_MACHINE_VAX_RO           UINT16_C(0x017d)
 /** Hitachi SH3 CPU. */
 #define IMAGE_FILE_MACHINE_SH3              UINT16_C(0x01a2)
 /** Hitachi SH3 DSP. */
@@ -106,6 +125,32 @@ typedef IMAGE_FILE_HEADER const *PCIMAGE_FILE_HEADER;
 #define IMAGE_FILE_MACHINE_SH4              UINT16_C(0x01a6)
 /** Hitachi SH5 CPU. */
 #define IMAGE_FILE_MACHINE_SH5              UINT16_C(0x01a8)
+/** Little endian ARM CPU. */
+#define IMAGE_FILE_MACHINE_ARM              UINT16_C(0x01c0)
+/** ARM or Thumb stuff. */
+#define IMAGE_FILE_MACHINE_THUMB            UINT16_C(0x01c2)
+/** ARMv7 or higher CPU, Thumb mode. */
+#define IMAGE_FILE_MACHINE_ARMNT            UINT16_C(0x01c4)
+/** Matshushita AM33 CPU. */
+#define IMAGE_FILE_MACHINE_AM33             UINT16_C(0x01d3)
+/** Power PC CPU, little endian. */
+#define IMAGE_FILE_MACHINE_POWERPC          UINT16_C(0x01f0)
+/** Power PC CPU with FPU, also little endian? */
+#define IMAGE_FILE_MACHINE_POWERPCFP        UINT16_C(0x01f1)
+/** "Itanic" CPU. */
+#define IMAGE_FILE_MACHINE_IA64             UINT16_C(0x0200)
+/** MIPS CPU, compact 16-bit instructions only? */
+#define IMAGE_FILE_MACHINE_MIPS16           UINT16_C(0x0266)
+/** MIPS CPU with FPU, full 32-bit instructions only? */
+#define IMAGE_FILE_MACHINE_MIPSFPU          UINT16_C(0x0366)
+/** MIPS CPU with FPU, compact 16-bit instructions? */
+#define IMAGE_FILE_MACHINE_MIPSFPU16        UINT16_C(0x0466)
+/** EFI byte code. */
+#define IMAGE_FILE_MACHINE_EBC              UINT16_C(0x0ebc)
+/** Mitsubishi M32R CPU, little endian. */
+#define IMAGE_FILE_MACHINE_M32R             UINT16_C(0x9041)
+/** ARMv8 CPU, 64-bit mode. */
+#define IMAGE_FILE_MACHINE_ARM64            UINT16_C(0xaa64)
 /** @} */
 
 /** @name File header characteristics (IMAGE_FILE_HEADER::Characteristics)
@@ -122,8 +167,8 @@ typedef IMAGE_FILE_HEADER const *PCIMAGE_FILE_HEADER;
 #define IMAGE_FILE_DEBUG_STRIPPED           UINT16_C(0x0200)
 #define IMAGE_FILE_REMOVABLE_RUN_FROM_SWAP  UINT16_C(0x0400)
 #define IMAGE_FILE_NET_RUN_FROM_SWAP        UINT16_C(0x0800)
-#define IMAGE_FILE_SYSTEM                   UINT16_C(0x1000)
-#define IMAGE_FILE_DLL                      UINT16_C(0x2000)
+#define IMAGE_FILE_SYSTEM                   UINT16_C(0x1000) /**< (COFF/IAPX*: Used to indicate 80186 instructions) */
+#define IMAGE_FILE_DLL                      UINT16_C(0x2000) /**< (COFF/IAPX*: Used to indicate 80286 instructions) */
 #define IMAGE_FILE_UP_SYSTEM_ONLY           UINT16_C(0x4000)
 #define IMAGE_FILE_BYTES_REVERSED_HI        UINT16_C(0x8000)
 /** @} */
@@ -544,6 +589,227 @@ typedef IMAGE_THUNK_DATA32 const *PCIMAGE_THUNK_DATA32;
 #define IMAGE_SNAP_BY_ORDINAL64(ord)        (!!((ord) & IMAGE_ORDINAL_FLAG64))
 /** @} */
 
+/** @name PE Resource directory
+ * @{ */
+typedef struct _IMAGE_RESOURCE_DIRECTORY
+{
+    uint32_t    Characteristics;
+    uint32_t    TimeDateStamp;
+    uint16_t    MajorVersion;
+    uint16_t    MinorVersion;
+    uint16_t    NumberOfNamedEntries;
+    uint16_t    NumberOfIdEntries;
+} IMAGE_RESOURCE_DIRECTORY;
+typedef IMAGE_RESOURCE_DIRECTORY *PIMAGE_RESOURCE_DIRECTORY;
+typedef IMAGE_RESOURCE_DIRECTORY const *PCIMAGE_RESOURCE_DIRECTORY;
+
+typedef struct _IMAGE_RESOURCE_DIRECTORY_ENTRY
+{
+    union
+    {
+        struct
+        {
+            uint32_t NameOffset        : 31;
+            uint32_t NameIsString      : 1; /**< IMAGE_RESOURCE_NAME_IS_STRING */
+        } s;
+        uint32_t Name;
+        uint16_t Id;
+    } u;
+    union
+    {
+        struct
+        {
+            uint32_t OffsetToDirectory : 31;
+            uint32_t DataIsDirectory   : 1; /**< IMAGE_RESOURCE_DATA_IS_DIRECTORY*/
+        } s2;
+        uint32_t OffsetToData;
+    } u2;
+} IMAGE_RESOURCE_DIRECTORY_ENTRY;
+typedef IMAGE_RESOURCE_DIRECTORY_ENTRY *PIMAGE_RESOURCE_DIRECTORY_ENTRY;
+typedef IMAGE_RESOURCE_DIRECTORY_ENTRY const *PCIMAGE_RESOURCE_DIRECTORY_ENTRY;
+
+#define IMAGE_RESOURCE_NAME_IS_STRING       UINT32_C(0x80000000)
+#define IMAGE_RESOURCE_DATA_IS_DIRECTORY    UINT32_C(0x80000000)
+
+typedef struct _IMAGE_RESOURCE_DIRECTORY_STRING
+{
+    uint16_t    Length;
+    char        NameString[1];
+} IMAGE_RESOURCE_DIRECTORY_STRING;
+typedef IMAGE_RESOURCE_DIRECTORY_STRING *PIMAGE_RESOURCE_DIRECTORY_STRING;
+typedef IMAGE_RESOURCE_DIRECTORY_STRING const *PCIMAGE_RESOURCE_DIRECTORY_STRING;
+
+
+typedef struct _IMAGE_RESOURCE_DIR_STRING_U
+{
+    uint16_t    Length;
+    RTUTF16     NameString[1];
+} IMAGE_RESOURCE_DIR_STRING_U;
+typedef IMAGE_RESOURCE_DIR_STRING_U *PIMAGE_RESOURCE_DIR_STRING_U;
+typedef IMAGE_RESOURCE_DIR_STRING_U const *PCIMAGE_RESOURCE_DIR_STRING_U;
+
+
+typedef struct _IMAGE_RESOURCE_DATA_ENTRY
+{
+    uint32_t    OffsetToData;
+    uint32_t    Size;
+    uint32_t    CodePage;
+    uint32_t    Reserved;
+} IMAGE_RESOURCE_DATA_ENTRY;
+typedef IMAGE_RESOURCE_DATA_ENTRY *PIMAGE_RESOURCE_DATA_ENTRY;
+typedef IMAGE_RESOURCE_DATA_ENTRY const *PCIMAGE_RESOURCE_DATA_ENTRY;
+
+/** @} */
+
+/** @name Image exception information
+ * @{ */
+
+/** This structure is used by AMD64 and "Itanic".
+ * MIPS uses a different one.  ARM, SH3, SH4 and PPC on WinCE also uses a different one.  */
+typedef struct _IMAGE_RUNTIME_FUNCTION_ENTRY
+{
+    uint32_t    BeginAddress;
+    uint32_t    EndAddress;
+    uint32_t    UnwindInfoAddress;
+} IMAGE_RUNTIME_FUNCTION_ENTRY;
+AssertCompileSize(IMAGE_RUNTIME_FUNCTION_ENTRY, 12);
+typedef IMAGE_RUNTIME_FUNCTION_ENTRY *PIMAGE_RUNTIME_FUNCTION_ENTRY;
+typedef IMAGE_RUNTIME_FUNCTION_ENTRY const *PCIMAGE_RUNTIME_FUNCTION_ENTRY;
+
+/**
+ * An unwind code for AMD64 and ARM64.
+ *
+ * @note Also known as UNWIND_CODE or _UNWIND_CODE.
+ */
+typedef union IMAGE_UNWIND_CODE
+{
+    struct
+    {
+        /** The prolog offset where the change takes effect.
+         * This means the instruction following the one being described.  */
+        uint8_t CodeOffset;
+        /** Unwind opcode.
+         * For AMD64 see IMAGE_AMD64_UNWIND_OP_CODES. */
+        RT_GCC_EXTENSION uint8_t UnwindOp : 4;
+        /** Opcode specific. */
+        RT_GCC_EXTENSION uint8_t OpInfo   : 4;
+    } u;
+    uint16_t    FrameOffset;
+} IMAGE_UNWIND_CODE;
+AssertCompileSize(IMAGE_UNWIND_CODE, 2);
+
+/**
+ * Unwind information for AMD64 and ARM64.
+ *
+ * Pointed to by IMAGE_RUNTIME_FUNCTION_ENTRY::UnwindInfoAddress,
+ *
+ * @note Also known as UNWIND_INFO or _UNWIND_INFO.
+ */
+typedef struct IMAGE_UNWIND_INFO
+{
+    /** Version, currently 1 or 2.  The latter if IMAGE_AMD64_UWOP_EPILOG is used. */
+    RT_GCC_EXTENSION uint8_t    Version : 3;
+    /** IMAGE_UNW_FLAG_XXX */
+    RT_GCC_EXTENSION uint8_t    Flags : 5;
+    /** Size of function prolog. */
+    uint8_t                     SizeOfProlog;
+    /** Number of opcodes in aOpcodes. */
+    uint8_t                     CountOfCodes;
+    /** Initial frame register. */
+    RT_GCC_EXTENSION uint8_t    FrameRegister : 4;
+    /** Scaled frame register offset. */
+    RT_GCC_EXTENSION uint8_t    FrameOffset : 4;
+    /** Unwind opcodes. */
+    RT_FLEXIBLE_ARRAY_EXTENSION
+    IMAGE_UNWIND_CODE           aOpcodes[RT_FLEXIBLE_ARRAY];
+} IMAGE_UNWIND_INFO;
+AssertCompileMemberOffset(IMAGE_UNWIND_INFO, aOpcodes, 4);
+typedef IMAGE_UNWIND_INFO *PIMAGE_UNWIND_INFO;
+typedef IMAGE_UNWIND_INFO const *PCIMAGE_UNWIND_INFO;
+
+/** IMAGE_UNW_FLAGS_XXX - IMAGE_UNWIND_INFO::Flags.
+ * @{  */
+/** No handler.
+ * @note Aslo know as UNW_FLAG_NHANDLER. */
+#define IMAGE_UNW_FLAGS_NHANDLER        0
+/** Have exception handler (RVA after codes, dword aligned.)
+ * @note Aslo know as UNW_FLAG_NHANDLER. */
+#define IMAGE_UNW_FLAGS_EHANDLER        1
+/** Have unwind handler (RVA after codes, dword aligned.)
+ * @note Aslo know as UNW_FLAG_NHANDLER. */
+#define IMAGE_UNW_FLAGS_UHANDLER        2
+/** Set if not primary unwind info for a function.  An
+ * IMAGE_RUNTIME_FUNCTION_ENTRY giving the chained unwind info follows the
+ * aOpcodes array at a dword aligned offset. */
+#define IMAGE_UNW_FLAGS_CHAININFO       4
+/** @}  */
+
+/**
+ * AMD64 unwind opcodes.
+ */
+typedef enum IMAGE_AMD64_UNWIND_OP_CODES
+{
+    /** Push non-volatile register (OpInfo).
+     * YASM: [pushreg reg]
+     * MASM: .PUSHREG reg */
+    IMAGE_AMD64_UWOP_PUSH_NONVOL = 0,
+    /** Stack allocation: Size stored in scaled in the next slot if OpInfo == 0,
+     * otherwise stored unscaled in the next two slots.
+     * YASM: [allocstack size]
+     * MASM: .ALLOCSTACK size */
+    IMAGE_AMD64_UWOP_ALLOC_LARGE,
+    /** Stack allocation: OpInfo = size / 8 - 1.
+     * YASM: [allocstack size]
+     * MASM: .ALLOCSTACK size  */
+    IMAGE_AMD64_UWOP_ALLOC_SMALL,
+    /** Set frame pointer register: RSP + FrameOffset * 16.
+     * YASM: [setframe reg, offset]
+     * MASM: .SETFRAME reg, offset
+     * @code
+     *      LEA     RBP, [RSP + 20h]
+     *      [setframe RBP, 20h]
+     * @endcode */
+    IMAGE_AMD64_UWOP_SET_FPREG,
+    /** Save non-volatile register (OpInfo) on stack (RSP/FP + next slot).
+     * YASM: [savereg reg, offset]
+     * MASM: .SAVEREG reg, offset */
+    IMAGE_AMD64_UWOP_SAVE_NONVOL,
+    /** Save non-volatile register (OpInfo) on stack (RSP/FP + next two slots).
+     * YASM: [savereg reg, offset]
+     * MASM: .SAVEREG reg, offset  */
+    IMAGE_AMD64_UWOP_SAVE_NONVOL_FAR,
+    /** Epilog info, version 2+.
+     *
+     * The first time this opcode is used, the CodeOffset gives the size of the
+     * epilog and bit 0 of the OpInfo field indicates that there is only one
+     * epilog at the very end of the function.
+     *
+     * Subsequent uses of this opcode specifies epilog start offsets relative to
+     * the end of the function, using CodeOffset for the 8 lower bits and OpInfo
+     * for bits 8 thru 11.
+     *
+     * The compiler seems to stack allocations and register saving opcodes and
+     * indicates the location mirroring the first IMAGE_AMD64_UWOP_PUSH_NONVOL. */
+    IMAGE_AMD64_UWOP_EPILOG,
+    /** Undefined. */
+    IMAGE_AMD64_UWOP_RESERVED_7,
+    /** Save 128-bit XMM register (OpInfo) on stack (RSP/FP + next slot).
+     * YASM: [savexmm128 reg, offset]
+     * MASM: .SAVEXMM128 reg, offset */
+    IMAGE_AMD64_UWOP_SAVE_XMM128,
+    /** Save 128-bit XMM register (OpInfo) on stack (RSP/FP + next two slots).
+     * YASM: [savexmm128 reg, offset]
+     * MASM: .SAVEXMM128 reg, offset  */
+    IMAGE_AMD64_UWOP_SAVE_XMM128_FAR,
+    /** IRET frame, OpInfo serves as error code indicator.
+     * YASM: [pushframe with-code]
+     * MASM: .pushframe with-code  */
+    IMAGE_AMD64_UWOP_PUSH_MACHFRAME
+} IMAGE_AMD64_UNWIND_OP_CODES;
+/** @} */
+
+
+
 /** @name Image load config directories
  * @{ */
 
@@ -789,18 +1055,273 @@ typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY32_V7
     uint32_t  GuardLongJumpTargetTable;             /**< 0x70 */
     uint32_t  GuardLongJumpTargetCount;             /**< 0x74 */
     uint32_t  DynamicValueRelocTable;               /**< 0x78 */
-    uint32_t  HybridMetadataPointer;                /**< 0x7c */
-    uint32_t  FailFastIndirectProc;                 /**< 0x80 - temporary name, rename when we get symbols */
-    uint32_t  FailFastPointer;                      /**< 0x84 - temporary name, rename when we get symbols */
-    uint32_t  UnknownZero1;                         /**< 0x88 - temporary name, rename when we get symbols */
+    uint32_t  CHPEMetadataPointer;                  /**< 0x7c Not sure when this was renamed from HybridMetadataPointer. */
+    uint32_t  GuardRFFailureRoutine;                /**< 0x80 */
+    uint32_t  GuardRFFailureRoutineFunctionPointer; /**< 0x84 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0x88 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0x8c */
+    uint16_t  Reserved2;                            /**< 0x8e */
 } IMAGE_LOAD_CONFIG_DIRECTORY32_V7;
-AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY32_V7, 0x8c);
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY32_V7, 0x90);
 typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V7 *PIMAGE_LOAD_CONFIG_DIRECTORY32_V7;
 typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V7 const *PCIMAGE_LOAD_CONFIG_DIRECTORY32_V7;
 
-typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V7   IMAGE_LOAD_CONFIG_DIRECTORY32;
-typedef PIMAGE_LOAD_CONFIG_DIRECTORY32_V7  PIMAGE_LOAD_CONFIG_DIRECTORY32;
-typedef PCIMAGE_LOAD_CONFIG_DIRECTORY32_V7 PCIMAGE_LOAD_CONFIG_DIRECTORY32;
+/** @since  Windows 10 build 15002 (or maybe earlier). */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY32_V8
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint32_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint32_t  DeCommitTotalFreeThreshold;           /**< 0x1c */
+    uint32_t  LockPrefixTable;                      /**< 0x20 */
+    uint32_t  MaximumAllocationSize;                /**< 0x24 */
+    uint32_t  VirtualMemoryThreshold;               /**< 0x28 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x2c */
+    uint32_t  ProcessAffinityMask;                  /**< 0x30 */
+    uint16_t  CSDVersion;                           /**< 0x34 */
+    uint16_t  DependentLoadFlags;                   /**< 0x36 */
+    uint32_t  EditList;                             /**< 0x38 */
+    uint32_t  SecurityCookie;                       /**< 0x3c */
+    uint32_t  SEHandlerTable;                       /**< 0x40 */
+    uint32_t  SEHandlerCount;                       /**< 0x44 */
+    uint32_t  GuardCFCCheckFunctionPointer;         /**< 0x48 */
+    uint32_t  GuardCFDispatchFunctionPointer;       /**< 0x4c */
+    uint32_t  GuardCFFunctionTable;                 /**< 0x50 */
+    uint32_t  GuardCFFunctionCount;                 /**< 0x54 */
+    uint32_t  GuardFlags;                           /**< 0x58 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x5c */
+    uint32_t  GuardAddressTakenIatEntryTable;       /**< 0x68 */
+    uint32_t  GuardAddressTakenIatEntryCount;       /**< 0x6c */
+    uint32_t  GuardLongJumpTargetTable;             /**< 0x70 */
+    uint32_t  GuardLongJumpTargetCount;             /**< 0x74 */
+    uint32_t  DynamicValueRelocTable;               /**< 0x78 */
+    uint32_t  CHPEMetadataPointer;                  /**< 0x7c Not sure when this was renamed from HybridMetadataPointer. */
+    uint32_t  GuardRFFailureRoutine;                /**< 0x80 */
+    uint32_t  GuardRFFailureRoutineFunctionPointer; /**< 0x84 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0x88 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0x8c */
+    uint16_t  Reserved2;                            /**< 0x8e */
+    uint32_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0x90 */
+    uint32_t  HotPatchTableOffset;                  /**< 0x94 */
+} IMAGE_LOAD_CONFIG_DIRECTORY32_V8;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY32_V8, 0x98);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V8 *PIMAGE_LOAD_CONFIG_DIRECTORY32_V8;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V8 const *PCIMAGE_LOAD_CONFIG_DIRECTORY32_V8;
+
+/** @since  Windows 10 build 16237 (or maybe earlier). */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY32_V9
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint32_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint32_t  DeCommitTotalFreeThreshold;           /**< 0x1c */
+    uint32_t  LockPrefixTable;                      /**< 0x20 */
+    uint32_t  MaximumAllocationSize;                /**< 0x24 */
+    uint32_t  VirtualMemoryThreshold;               /**< 0x28 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x2c */
+    uint32_t  ProcessAffinityMask;                  /**< 0x30 */
+    uint16_t  CSDVersion;                           /**< 0x34 */
+    uint16_t  DependentLoadFlags;                   /**< 0x36 */
+    uint32_t  EditList;                             /**< 0x38 */
+    uint32_t  SecurityCookie;                       /**< 0x3c */
+    uint32_t  SEHandlerTable;                       /**< 0x40 */
+    uint32_t  SEHandlerCount;                       /**< 0x44 */
+    uint32_t  GuardCFCCheckFunctionPointer;         /**< 0x48 */
+    uint32_t  GuardCFDispatchFunctionPointer;       /**< 0x4c */
+    uint32_t  GuardCFFunctionTable;                 /**< 0x50 */
+    uint32_t  GuardCFFunctionCount;                 /**< 0x54 */
+    uint32_t  GuardFlags;                           /**< 0x58 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x5c */
+    uint32_t  GuardAddressTakenIatEntryTable;       /**< 0x68 */
+    uint32_t  GuardAddressTakenIatEntryCount;       /**< 0x6c */
+    uint32_t  GuardLongJumpTargetTable;             /**< 0x70 */
+    uint32_t  GuardLongJumpTargetCount;             /**< 0x74 */
+    uint32_t  DynamicValueRelocTable;               /**< 0x78 */
+    uint32_t  CHPEMetadataPointer;                  /**< 0x7c Not sure when this was renamed from HybridMetadataPointer. */
+    uint32_t  GuardRFFailureRoutine;                /**< 0x80 */
+    uint32_t  GuardRFFailureRoutineFunctionPointer; /**< 0x84 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0x88 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0x8c */
+    uint16_t  Reserved2;                            /**< 0x8e */
+    uint32_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0x90 */
+    uint32_t  HotPatchTableOffset;                  /**< 0x94 */
+    uint32_t  Reserved3;                            /**< 0x98 */
+    uint32_t  EnclaveConfigurationPointer;          /**< 0x9c */
+} IMAGE_LOAD_CONFIG_DIRECTORY32_V9;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY32_V9, 0xa0);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V9 *PIMAGE_LOAD_CONFIG_DIRECTORY32_V9;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V9 const *PCIMAGE_LOAD_CONFIG_DIRECTORY32_V9;
+
+/** @since  Windows 10 build 18362 (or maybe earlier). */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY32_V10
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint32_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint32_t  DeCommitTotalFreeThreshold;           /**< 0x1c */
+    uint32_t  LockPrefixTable;                      /**< 0x20 */
+    uint32_t  MaximumAllocationSize;                /**< 0x24 */
+    uint32_t  VirtualMemoryThreshold;               /**< 0x28 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x2c */
+    uint32_t  ProcessAffinityMask;                  /**< 0x30 */
+    uint16_t  CSDVersion;                           /**< 0x34 */
+    uint16_t  DependentLoadFlags;                   /**< 0x36 */
+    uint32_t  EditList;                             /**< 0x38 */
+    uint32_t  SecurityCookie;                       /**< 0x3c */
+    uint32_t  SEHandlerTable;                       /**< 0x40 */
+    uint32_t  SEHandlerCount;                       /**< 0x44 */
+    uint32_t  GuardCFCCheckFunctionPointer;         /**< 0x48 */
+    uint32_t  GuardCFDispatchFunctionPointer;       /**< 0x4c */
+    uint32_t  GuardCFFunctionTable;                 /**< 0x50 */
+    uint32_t  GuardCFFunctionCount;                 /**< 0x54 */
+    uint32_t  GuardFlags;                           /**< 0x58 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x5c */
+    uint32_t  GuardAddressTakenIatEntryTable;       /**< 0x68 */
+    uint32_t  GuardAddressTakenIatEntryCount;       /**< 0x6c */
+    uint32_t  GuardLongJumpTargetTable;             /**< 0x70 */
+    uint32_t  GuardLongJumpTargetCount;             /**< 0x74 */
+    uint32_t  DynamicValueRelocTable;               /**< 0x78 */
+    uint32_t  CHPEMetadataPointer;                  /**< 0x7c Not sure when this was renamed from HybridMetadataPointer. */
+    uint32_t  GuardRFFailureRoutine;                /**< 0x80 */
+    uint32_t  GuardRFFailureRoutineFunctionPointer; /**< 0x84 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0x88 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0x8c */
+    uint16_t  Reserved2;                            /**< 0x8e */
+    uint32_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0x90 */
+    uint32_t  HotPatchTableOffset;                  /**< 0x94 */
+    uint32_t  Reserved3;                            /**< 0x98 */
+    uint32_t  EnclaveConfigurationPointer;          /**< 0x9c */
+    uint32_t  VolatileMetadataPointer;              /**< 0xa0 */
+} IMAGE_LOAD_CONFIG_DIRECTORY32_V10;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY32_V10, 0xa4);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V10 *PIMAGE_LOAD_CONFIG_DIRECTORY32_V10;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V10 const *PCIMAGE_LOAD_CONFIG_DIRECTORY32_V10;
+
+/** @since  Windows 10 build 19564 (or maybe earlier). */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY32_V11
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint32_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint32_t  DeCommitTotalFreeThreshold;           /**< 0x1c */
+    uint32_t  LockPrefixTable;                      /**< 0x20 */
+    uint32_t  MaximumAllocationSize;                /**< 0x24 */
+    uint32_t  VirtualMemoryThreshold;               /**< 0x28 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x2c */
+    uint32_t  ProcessAffinityMask;                  /**< 0x30 */
+    uint16_t  CSDVersion;                           /**< 0x34 */
+    uint16_t  DependentLoadFlags;                   /**< 0x36 */
+    uint32_t  EditList;                             /**< 0x38 */
+    uint32_t  SecurityCookie;                       /**< 0x3c */
+    uint32_t  SEHandlerTable;                       /**< 0x40 */
+    uint32_t  SEHandlerCount;                       /**< 0x44 */
+    uint32_t  GuardCFCCheckFunctionPointer;         /**< 0x48 */
+    uint32_t  GuardCFDispatchFunctionPointer;       /**< 0x4c */
+    uint32_t  GuardCFFunctionTable;                 /**< 0x50 */
+    uint32_t  GuardCFFunctionCount;                 /**< 0x54 */
+    uint32_t  GuardFlags;                           /**< 0x58 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x5c */
+    uint32_t  GuardAddressTakenIatEntryTable;       /**< 0x68 */
+    uint32_t  GuardAddressTakenIatEntryCount;       /**< 0x6c */
+    uint32_t  GuardLongJumpTargetTable;             /**< 0x70 */
+    uint32_t  GuardLongJumpTargetCount;             /**< 0x74 */
+    uint32_t  DynamicValueRelocTable;               /**< 0x78 */
+    uint32_t  CHPEMetadataPointer;                  /**< 0x7c Not sure when this was renamed from HybridMetadataPointer. */
+    uint32_t  GuardRFFailureRoutine;                /**< 0x80 */
+    uint32_t  GuardRFFailureRoutineFunctionPointer; /**< 0x84 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0x88 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0x8c */
+    uint16_t  Reserved2;                            /**< 0x8e */
+    uint32_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0x90 */
+    uint32_t  HotPatchTableOffset;                  /**< 0x94 */
+    uint32_t  Reserved3;                            /**< 0x98 */
+    uint32_t  EnclaveConfigurationPointer;          /**< 0x9c - virtual address */
+    uint32_t  VolatileMetadataPointer;              /**< 0xa0 */
+    uint32_t  GuardEHContinuationTable;             /**< 0xa4 - virtual address */
+    uint32_t  GuardEHContinuationCount;             /**< 0xa8 */
+} IMAGE_LOAD_CONFIG_DIRECTORY32_V11;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY32_V11, 0xac);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V11 *PIMAGE_LOAD_CONFIG_DIRECTORY32_V11;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V11 const *PCIMAGE_LOAD_CONFIG_DIRECTORY32_V11;
+
+/** @since  Visual C++ 2019 / RS5_IMAGE_LOAD_CONFIG_DIRECTORY32. */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY32_V12
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint32_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint32_t  DeCommitTotalFreeThreshold;           /**< 0x1c */
+    uint32_t  LockPrefixTable;                      /**< 0x20 */
+    uint32_t  MaximumAllocationSize;                /**< 0x24 */
+    uint32_t  VirtualMemoryThreshold;               /**< 0x28 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x2c */
+    uint32_t  ProcessAffinityMask;                  /**< 0x30 */
+    uint16_t  CSDVersion;                           /**< 0x34 */
+    uint16_t  DependentLoadFlags;                   /**< 0x36 */
+    uint32_t  EditList;                             /**< 0x38 */
+    uint32_t  SecurityCookie;                       /**< 0x3c */
+    uint32_t  SEHandlerTable;                       /**< 0x40 */
+    uint32_t  SEHandlerCount;                       /**< 0x44 */
+    uint32_t  GuardCFCCheckFunctionPointer;         /**< 0x48 */
+    uint32_t  GuardCFDispatchFunctionPointer;       /**< 0x4c */
+    uint32_t  GuardCFFunctionTable;                 /**< 0x50 */
+    uint32_t  GuardCFFunctionCount;                 /**< 0x54 */
+    uint32_t  GuardFlags;                           /**< 0x58 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x5c */
+    uint32_t  GuardAddressTakenIatEntryTable;       /**< 0x68 */
+    uint32_t  GuardAddressTakenIatEntryCount;       /**< 0x6c */
+    uint32_t  GuardLongJumpTargetTable;             /**< 0x70 */
+    uint32_t  GuardLongJumpTargetCount;             /**< 0x74 */
+    uint32_t  DynamicValueRelocTable;               /**< 0x78 */
+    uint32_t  CHPEMetadataPointer;                  /**< 0x7c Not sure when this was renamed from HybridMetadataPointer. */
+    uint32_t  GuardRFFailureRoutine;                /**< 0x80 */
+    uint32_t  GuardRFFailureRoutineFunctionPointer; /**< 0x84 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0x88 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0x8c */
+    uint16_t  Reserved2;                            /**< 0x8e */
+    uint32_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0x90 */
+    uint32_t  HotPatchTableOffset;                  /**< 0x94 */
+    uint32_t  Reserved3;                            /**< 0x98 */
+    uint32_t  EnclaveConfigurationPointer;          /**< 0x9c - virtual address */
+    uint32_t  VolatileMetadataPointer;              /**< 0xa0 */
+    uint32_t  GuardEHContinuationTable;             /**< 0xa4 - virtual address */
+    uint32_t  GuardEHContinuationCount;             /**< 0xa8 */
+    uint32_t  GuardXFGCheckFunctionPointer;         /**< 0xac */
+    uint32_t  GuardXFGDispatchFunctionPointer;      /**< 0xb0 */
+    uint32_t  GuardXFGTableDispatchFunctionPointer; /**< 0xb4 */
+} IMAGE_LOAD_CONFIG_DIRECTORY32_V12;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY32_V12, 0xb8);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V12 *PIMAGE_LOAD_CONFIG_DIRECTORY32_V12;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V12 const *PCIMAGE_LOAD_CONFIG_DIRECTORY32_V12;
+
+typedef IMAGE_LOAD_CONFIG_DIRECTORY32_V12   IMAGE_LOAD_CONFIG_DIRECTORY32;
+typedef PIMAGE_LOAD_CONFIG_DIRECTORY32_V12  PIMAGE_LOAD_CONFIG_DIRECTORY32;
+typedef PCIMAGE_LOAD_CONFIG_DIRECTORY32_V12 PCIMAGE_LOAD_CONFIG_DIRECTORY32;
 
 
 /* No _IMAGE_LOAD_CONFIG_DIRECTORY64_V1 exists. */
@@ -1012,18 +1533,275 @@ typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY64_V7
     uint64_t  GuardLongJumpTargetTable;             /**< 0xb0 */
     uint64_t  GuardLongJumpTargetCount;             /**< 0xb8 */
     uint64_t  DynamicValueRelocTable;               /**< 0xc0 */
-    uint64_t  HybridMetadataPointer;                /**< 0xc8 */
-    uint64_t  FailFastIndirectProc;                 /**< 0xd0 - temporary name, rename when we get symbols */
-    uint64_t  FailFastPointer;                      /**< 0xd8 - temporary name, rename when we get symbols */
-    uint64_t  UnknownZero1;                         /**< 0xe0 - temporary name, rename when we get symbols */
+    uint64_t  CHPEMetadataPointer;                  /**< 0xc8 Not sure when this was renamed from HybridMetadataPointer. */
+    uint64_t  GuardRFFailureRoutine;                /**< 0xd0 */
+    uint64_t  GuardRFFailureRoutineFunctionPointer; /**< 0xd8 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0xe0 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0xe4 */
+    uint16_t  Reserved2;                            /**< 0xe6 */
 } IMAGE_LOAD_CONFIG_DIRECTORY64_V7;
 AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY64_V7, 0xe8);
 typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V7 *PIMAGE_LOAD_CONFIG_DIRECTORY64_V7;
 typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V7 const *PCIMAGE_LOAD_CONFIG_DIRECTORY64_V7;
 
-typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V7   IMAGE_LOAD_CONFIG_DIRECTORY64;
-typedef PIMAGE_LOAD_CONFIG_DIRECTORY64_V7  PIMAGE_LOAD_CONFIG_DIRECTORY64;
-typedef PCIMAGE_LOAD_CONFIG_DIRECTORY64_V7 PCIMAGE_LOAD_CONFIG_DIRECTORY64;
+/** @since  Windows 10 build 15002 (or maybe earlier). */
+#pragma pack(4) /* Stupid, stupid microsofties! */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY64_V8
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint64_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint64_t  DeCommitTotalFreeThreshold;           /**< 0x20 */
+    uint64_t  LockPrefixTable;                      /**< 0x28 */
+    uint64_t  MaximumAllocationSize;                /**< 0x30 */
+    uint64_t  VirtualMemoryThreshold;               /**< 0x38 */
+    uint64_t  ProcessAffinityMask;                  /**< 0x40 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x48 */
+    uint16_t  CSDVersion;                           /**< 0x4c */
+    uint16_t  DependentLoadFlags;                   /**< 0x4e */
+    uint64_t  EditList;                             /**< 0x50 */
+    uint64_t  SecurityCookie;                       /**< 0x58 */
+    uint64_t  SEHandlerTable;                       /**< 0x60 */
+    uint64_t  SEHandlerCount;                       /**< 0x68 */
+    uint64_t  GuardCFCCheckFunctionPointer;         /**< 0x70 */
+    uint64_t  GuardCFDispatchFunctionPointer;       /**< 0x78 */
+    uint64_t  GuardCFFunctionTable;                 /**< 0x80 */
+    uint64_t  GuardCFFunctionCount;                 /**< 0x88 */
+    uint32_t  GuardFlags;                           /**< 0x90 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x94 */
+    uint64_t  GuardAddressTakenIatEntryTable;       /**< 0xa0 */
+    uint64_t  GuardAddressTakenIatEntryCount;       /**< 0xa8 */
+    uint64_t  GuardLongJumpTargetTable;             /**< 0xb0 */
+    uint64_t  GuardLongJumpTargetCount;             /**< 0xb8 */
+    uint64_t  DynamicValueRelocTable;               /**< 0xc0 */
+    uint64_t  CHPEMetadataPointer;                  /**< 0xc8 */
+    uint64_t  GuardRFFailureRoutine;                /**< 0xd0 */
+    uint64_t  GuardRFFailureRoutineFunctionPointer; /**< 0xd8 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0xe0 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0xe4 */
+    uint16_t  Reserved2;                            /**< 0xe6 */
+    uint64_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0xe8 */
+    uint32_t  HotPatchTableOffset;                  /**< 0xf0 */
+} IMAGE_LOAD_CONFIG_DIRECTORY64_V8;
+#pragma pack()
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY64_V8, 0xf4);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V8 *PIMAGE_LOAD_CONFIG_DIRECTORY64_V8;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V8 const *PCIMAGE_LOAD_CONFIG_DIRECTORY64_V8;
+
+/** @since  Windows 10 build 15002 (or maybe earlier). */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY64_V9
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint64_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint64_t  DeCommitTotalFreeThreshold;           /**< 0x20 */
+    uint64_t  LockPrefixTable;                      /**< 0x28 */
+    uint64_t  MaximumAllocationSize;                /**< 0x30 */
+    uint64_t  VirtualMemoryThreshold;               /**< 0x38 */
+    uint64_t  ProcessAffinityMask;                  /**< 0x40 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x48 */
+    uint16_t  CSDVersion;                           /**< 0x4c */
+    uint16_t  DependentLoadFlags;                   /**< 0x4e */
+    uint64_t  EditList;                             /**< 0x50 */
+    uint64_t  SecurityCookie;                       /**< 0x58 */
+    uint64_t  SEHandlerTable;                       /**< 0x60 */
+    uint64_t  SEHandlerCount;                       /**< 0x68 */
+    uint64_t  GuardCFCCheckFunctionPointer;         /**< 0x70 */
+    uint64_t  GuardCFDispatchFunctionPointer;       /**< 0x78 */
+    uint64_t  GuardCFFunctionTable;                 /**< 0x80 */
+    uint64_t  GuardCFFunctionCount;                 /**< 0x88 */
+    uint32_t  GuardFlags;                           /**< 0x90 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x94 */
+    uint64_t  GuardAddressTakenIatEntryTable;       /**< 0xa0 */
+    uint64_t  GuardAddressTakenIatEntryCount;       /**< 0xa8 */
+    uint64_t  GuardLongJumpTargetTable;             /**< 0xb0 */
+    uint64_t  GuardLongJumpTargetCount;             /**< 0xb8 */
+    uint64_t  DynamicValueRelocTable;               /**< 0xc0 */
+    uint64_t  CHPEMetadataPointer;                  /**< 0xc8 */
+    uint64_t  GuardRFFailureRoutine;                /**< 0xd0 */
+    uint64_t  GuardRFFailureRoutineFunctionPointer; /**< 0xd8 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0xe0 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0xe4 */
+    uint16_t  Reserved2;                            /**< 0xe6 */
+    uint64_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0xe8 */
+    uint32_t  HotPatchTableOffset;                  /**< 0xf0 */
+    uint32_t  Reserved3;                            /**< 0xf4 */
+    uint64_t  EnclaveConfigurationPointer;          /**< 0xf8 - seen in bcrypt and bcryptprimitives pointing to the string "L". */
+} IMAGE_LOAD_CONFIG_DIRECTORY64_V9;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY64_V9, 0x100);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V9 *PIMAGE_LOAD_CONFIG_DIRECTORY64_V9;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V9 const *PCIMAGE_LOAD_CONFIG_DIRECTORY64_V9;
+
+/** @since  Windows 10 build 18362 (or maybe earlier). */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY64_V10
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint64_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint64_t  DeCommitTotalFreeThreshold;           /**< 0x20 */
+    uint64_t  LockPrefixTable;                      /**< 0x28 */
+    uint64_t  MaximumAllocationSize;                /**< 0x30 */
+    uint64_t  VirtualMemoryThreshold;               /**< 0x38 */
+    uint64_t  ProcessAffinityMask;                  /**< 0x40 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x48 */
+    uint16_t  CSDVersion;                           /**< 0x4c */
+    uint16_t  DependentLoadFlags;                   /**< 0x4e */
+    uint64_t  EditList;                             /**< 0x50 */
+    uint64_t  SecurityCookie;                       /**< 0x58 */
+    uint64_t  SEHandlerTable;                       /**< 0x60 */
+    uint64_t  SEHandlerCount;                       /**< 0x68 */
+    uint64_t  GuardCFCCheckFunctionPointer;         /**< 0x70 */
+    uint64_t  GuardCFDispatchFunctionPointer;       /**< 0x78 */
+    uint64_t  GuardCFFunctionTable;                 /**< 0x80 */
+    uint64_t  GuardCFFunctionCount;                 /**< 0x88 */
+    uint32_t  GuardFlags;                           /**< 0x90 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x94 */
+    uint64_t  GuardAddressTakenIatEntryTable;       /**< 0xa0 */
+    uint64_t  GuardAddressTakenIatEntryCount;       /**< 0xa8 */
+    uint64_t  GuardLongJumpTargetTable;             /**< 0xb0 */
+    uint64_t  GuardLongJumpTargetCount;             /**< 0xb8 */
+    uint64_t  DynamicValueRelocTable;               /**< 0xc0 */
+    uint64_t  CHPEMetadataPointer;                  /**< 0xc8 */
+    uint64_t  GuardRFFailureRoutine;                /**< 0xd0 */
+    uint64_t  GuardRFFailureRoutineFunctionPointer; /**< 0xd8 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0xe0 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0xe4 */
+    uint16_t  Reserved2;                            /**< 0xe6 */
+    uint64_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0xe8 */
+    uint32_t  HotPatchTableOffset;                  /**< 0xf0 */
+    uint32_t  Reserved3;                            /**< 0xf4 */
+    uint64_t  EnclaveConfigurationPointer;          /**< 0xf8 - seen in bcrypt and bcryptprimitives pointing to the string "L". */
+    uint64_t  VolatileMetadataPointer;              /**< 0x100 */
+} IMAGE_LOAD_CONFIG_DIRECTORY64_V10;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY64_V10, 0x108);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V10 *PIMAGE_LOAD_CONFIG_DIRECTORY64_V10;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V10 const *PCIMAGE_LOAD_CONFIG_DIRECTORY64_V10;
+
+/** @since  Windows 10 build 19534 (or maybe earlier). */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY64_V11
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint64_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint64_t  DeCommitTotalFreeThreshold;           /**< 0x20 */
+    uint64_t  LockPrefixTable;                      /**< 0x28 */
+    uint64_t  MaximumAllocationSize;                /**< 0x30 */
+    uint64_t  VirtualMemoryThreshold;               /**< 0x38 */
+    uint64_t  ProcessAffinityMask;                  /**< 0x40 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x48 */
+    uint16_t  CSDVersion;                           /**< 0x4c */
+    uint16_t  DependentLoadFlags;                   /**< 0x4e */
+    uint64_t  EditList;                             /**< 0x50 */
+    uint64_t  SecurityCookie;                       /**< 0x58 */
+    uint64_t  SEHandlerTable;                       /**< 0x60 */
+    uint64_t  SEHandlerCount;                       /**< 0x68 */
+    uint64_t  GuardCFCCheckFunctionPointer;         /**< 0x70 */
+    uint64_t  GuardCFDispatchFunctionPointer;       /**< 0x78 */
+    uint64_t  GuardCFFunctionTable;                 /**< 0x80 */
+    uint64_t  GuardCFFunctionCount;                 /**< 0x88 */
+    uint32_t  GuardFlags;                           /**< 0x90 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x94 */
+    uint64_t  GuardAddressTakenIatEntryTable;       /**< 0xa0 */
+    uint64_t  GuardAddressTakenIatEntryCount;       /**< 0xa8 */
+    uint64_t  GuardLongJumpTargetTable;             /**< 0xb0 */
+    uint64_t  GuardLongJumpTargetCount;             /**< 0xb8 */
+    uint64_t  DynamicValueRelocTable;               /**< 0xc0 */
+    uint64_t  CHPEMetadataPointer;                  /**< 0xc8 */
+    uint64_t  GuardRFFailureRoutine;                /**< 0xd0 */
+    uint64_t  GuardRFFailureRoutineFunctionPointer; /**< 0xd8 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0xe0 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0xe4 */
+    uint16_t  Reserved2;                            /**< 0xe6 */
+    uint64_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0xe8 */
+    uint32_t  HotPatchTableOffset;                  /**< 0xf0 */
+    uint32_t  Reserved3;                            /**< 0xf4 */
+    uint64_t  EnclaveConfigurationPointer;          /**< 0xf8 - seen in bcrypt and bcryptprimitives pointing to the string "L". */
+    uint64_t  VolatileMetadataPointer;              /**< 0x100 */
+    uint64_t  GuardEHContinuationTable;             /**< 0x108 - virtual address */
+    uint64_t  GuardEHContinuationCount;             /**< 0x110 */
+} IMAGE_LOAD_CONFIG_DIRECTORY64_V11;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY64_V11, 0x118);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V11 *PIMAGE_LOAD_CONFIG_DIRECTORY64_V11;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V11 const *PCIMAGE_LOAD_CONFIG_DIRECTORY64_V11;
+
+/** @since  Visual C++ 2019 / RS5_IMAGE_LOAD_CONFIG_DIRECTORY64. */
+typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY64_V12
+{
+    uint32_t  Size;                                 /**< 0x00 */
+    uint32_t  TimeDateStamp;                        /**< 0x04 */
+    uint16_t  MajorVersion;                         /**< 0x08 */
+    uint16_t  MinorVersion;                         /**< 0x0a */
+    uint32_t  GlobalFlagsClear;                     /**< 0x0c */
+    uint32_t  GlobalFlagsSet;                       /**< 0x10 */
+    uint32_t  CriticalSectionDefaultTimeout;        /**< 0x14 */
+    uint64_t  DeCommitFreeBlockThreshold;           /**< 0x18 */
+    uint64_t  DeCommitTotalFreeThreshold;           /**< 0x20 */
+    uint64_t  LockPrefixTable;                      /**< 0x28 */
+    uint64_t  MaximumAllocationSize;                /**< 0x30 */
+    uint64_t  VirtualMemoryThreshold;               /**< 0x38 */
+    uint64_t  ProcessAffinityMask;                  /**< 0x40 */
+    uint32_t  ProcessHeapFlags;                     /**< 0x48 */
+    uint16_t  CSDVersion;                           /**< 0x4c */
+    uint16_t  DependentLoadFlags;                   /**< 0x4e */
+    uint64_t  EditList;                             /**< 0x50 */
+    uint64_t  SecurityCookie;                       /**< 0x58 */
+    uint64_t  SEHandlerTable;                       /**< 0x60 */
+    uint64_t  SEHandlerCount;                       /**< 0x68 */
+    uint64_t  GuardCFCCheckFunctionPointer;         /**< 0x70 */
+    uint64_t  GuardCFDispatchFunctionPointer;       /**< 0x78 */
+    uint64_t  GuardCFFunctionTable;                 /**< 0x80 */
+    uint64_t  GuardCFFunctionCount;                 /**< 0x88 */
+    uint32_t  GuardFlags;                           /**< 0x90 */
+    IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity; /**< 0x94 */
+    uint64_t  GuardAddressTakenIatEntryTable;       /**< 0xa0 */
+    uint64_t  GuardAddressTakenIatEntryCount;       /**< 0xa8 */
+    uint64_t  GuardLongJumpTargetTable;             /**< 0xb0 */
+    uint64_t  GuardLongJumpTargetCount;             /**< 0xb8 */
+    uint64_t  DynamicValueRelocTable;               /**< 0xc0 */
+    uint64_t  CHPEMetadataPointer;                  /**< 0xc8 */
+    uint64_t  GuardRFFailureRoutine;                /**< 0xd0 */
+    uint64_t  GuardRFFailureRoutineFunctionPointer; /**< 0xd8 */
+    uint32_t  DynamicValueRelocTableOffset;         /**< 0xe0 */
+    uint16_t  DynamicValueRelocTableSection;        /**< 0xe4 */
+    uint16_t  Reserved2;                            /**< 0xe6 */
+    uint64_t  GuardRFVerifyStackPointerFunctionPointer; /**< 0xe8 */
+    uint32_t  HotPatchTableOffset;                  /**< 0xf0 */
+    uint32_t  Reserved3;                            /**< 0xf4 */
+    uint64_t  EnclaveConfigurationPointer;          /**< 0xf8 - seen in bcrypt and bcryptprimitives pointing to the string "L". */
+    uint64_t  VolatileMetadataPointer;              /**< 0x100 */
+    uint64_t  GuardEHContinuationTable;             /**< 0x108 - virtual address */
+    uint64_t  GuardEHContinuationCount;             /**< 0x110 */
+    uint64_t  GuardXFGCheckFunctionPointer;         /**< 0x118 */
+    uint64_t  GuardXFGDispatchFunctionPointer;      /**< 0x120 */
+    uint64_t  GuardXFGTableDispatchFunctionPointer; /**< 0x128 */
+} IMAGE_LOAD_CONFIG_DIRECTORY64_V12;
+AssertCompileSize(IMAGE_LOAD_CONFIG_DIRECTORY64_V12, 0x130);
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V12 *PIMAGE_LOAD_CONFIG_DIRECTORY64_V12;
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V12 const *PCIMAGE_LOAD_CONFIG_DIRECTORY64_V12;
+
+typedef IMAGE_LOAD_CONFIG_DIRECTORY64_V12   IMAGE_LOAD_CONFIG_DIRECTORY64;
+typedef PIMAGE_LOAD_CONFIG_DIRECTORY64_V12  PIMAGE_LOAD_CONFIG_DIRECTORY64;
+typedef PCIMAGE_LOAD_CONFIG_DIRECTORY64_V12 PCIMAGE_LOAD_CONFIG_DIRECTORY64;
 
 /** @} */
 
@@ -1045,8 +1823,9 @@ typedef WIN_CERTIFICATE *PWIN_CERTIFICATE;
 typedef WIN_CERTIFICATE const *PCWIN_CERTIFICATE;
 
 /** @name WIN_CERT_REVISION_XXX - Certificate data directory revision.
- * Used WIN_CERTIFICATE::wRevision found in the
- * IMAGE_DIRECTORY_ENTRY_SECURITY data directory. */
+ * Used WIN_CERTIFICATE::wRevision found in the IMAGE_DIRECTORY_ENTRY_SECURITY
+ * data directory.
+ * @{ */
 #define WIN_CERT_REVISION_1_0               UINT16_C(0x0100)
 #define WIN_CERT_REVISION_2_0               UINT16_C(0x0200)
 /** @} */
@@ -1090,17 +1869,23 @@ typedef IMAGE_DEBUG_DIRECTORY const *PCIMAGE_DEBUG_DIRECTORY;
 /** @name IMAGE_DEBUG_TYPE_XXX - Debug format types.
  * Used by IMAGE_DEBUG_DIRECTORY::Type.
  * @{  */
-#define IMAGE_DEBUG_TYPE_UNKNOWN            UINT32_C(0x0)
-#define IMAGE_DEBUG_TYPE_COFF               UINT32_C(0x1)
-#define IMAGE_DEBUG_TYPE_CODEVIEW           UINT32_C(0x2)
-#define IMAGE_DEBUG_TYPE_FPO                UINT32_C(0x3)
-#define IMAGE_DEBUG_TYPE_MISC               UINT32_C(0x4)
-#define IMAGE_DEBUG_TYPE_EXCEPTION          UINT32_C(0x5)
-#define IMAGE_DEBUG_TYPE_FIXUP              UINT32_C(0x6)
-#define IMAGE_DEBUG_TYPE_OMAP_TO_SRC        UINT32_C(0x7)
-#define IMAGE_DEBUG_TYPE_OMAP_FROM_SRC      UINT32_C(0x8)
-#define IMAGE_DEBUG_TYPE_BORLAND            UINT32_C(0x9)
-#define IMAGE_DEBUG_TYPE_RESERVED10         UINT32_C(0x10)
+#define IMAGE_DEBUG_TYPE_UNKNOWN            UINT32_C(0x00)
+#define IMAGE_DEBUG_TYPE_COFF               UINT32_C(0x01)
+#define IMAGE_DEBUG_TYPE_CODEVIEW           UINT32_C(0x02)
+#define IMAGE_DEBUG_TYPE_FPO                UINT32_C(0x03)
+#define IMAGE_DEBUG_TYPE_MISC               UINT32_C(0x04)
+#define IMAGE_DEBUG_TYPE_EXCEPTION          UINT32_C(0x05)
+#define IMAGE_DEBUG_TYPE_FIXUP              UINT32_C(0x06)
+#define IMAGE_DEBUG_TYPE_OMAP_TO_SRC        UINT32_C(0x07)
+#define IMAGE_DEBUG_TYPE_OMAP_FROM_SRC      UINT32_C(0x08)
+#define IMAGE_DEBUG_TYPE_BORLAND            UINT32_C(0x09)
+#define IMAGE_DEBUG_TYPE_RESERVED10         UINT32_C(0x0a)
+#define IMAGE_DEBUG_TYPE_CLSID              UINT32_C(0x0b)
+#define IMAGE_DEBUG_TYPE_VC_FEATURE         UINT32_C(0x0c)
+#define IMAGE_DEBUG_TYPE_POGO               UINT32_C(0x0d)
+#define IMAGE_DEBUG_TYPE_ILTCG              UINT32_C(0x0e)
+#define IMAGE_DEBUG_TYPE_MPX                UINT32_C(0x0f)
+#define IMAGE_DEBUG_TYPE_REPRO              UINT32_C(0x10)
 /** @} */
 
 /** @name IMAGE_DEBUG_MISC_XXX - Misc debug data type.
@@ -1698,5 +2483,5 @@ typedef IMAGE_RELOCATION const *PCIMAGE_RELOCATION;
 
 /** @} */
 
-#endif
+#endif /* !IPRT_INCLUDED_formats_pecoff_h */
 

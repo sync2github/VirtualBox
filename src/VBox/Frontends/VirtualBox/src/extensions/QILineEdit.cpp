@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QILineEdit.cpp 90642 2021-08-12 06:47:02Z vboxsync $ */
 /** @file
- * VirtualBox Qt GUI - QILineEdit class implementation.
+ * VBox Qt GUI - Qt extensions: QILineEdit class implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,92 +15,165 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# ifdef VBOX_WS_WIN
-#  include <QtGlobal> /* for QT_VERSION */
-#  if QT_VERSION < 0x050000
-#   include <QLibrary>
-#  endif
-# endif
+#include <QApplication>
+#include <QClipboard>
+#include <QContextMenuEvent>
+#include <QLabel>
+#include <QMenu>
+#include <QPalette>
+#include <QStyleOptionFrame>
 
 /* GUI includes: */
-# include "QILineEdit.h"
+#include "QILineEdit.h"
+#include "UIIconPool.h"
 
-/* Other VBox includes: */
-# ifdef VBOX_WS_WIN
-#  if QT_VERSION < 0x050000
-#   include "iprt/ldr.h"
-#  endif
-# endif
-
-/* External includes: */
-# ifdef VBOX_WS_WIN
-#  if QT_VERSION < 0x050000
-#   include <iprt/win/windows.h>
-#  endif
-# endif
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
-/* Qt includes: */
-#include <QStyleOptionFrame>
-#ifdef VBOX_WS_WIN
-# if QT_VERSION < 0x050000
-#  include <QWindowsVistaStyle>
-# endif
-#endif
-
-
-void QILineEdit::setMinimumWidthByText (const QString &aText)
+QILineEdit::QILineEdit(QWidget *pParent /* = 0 */)
+    : QLineEdit(pParent)
+    , m_fAllowToCopyContentsWhenDisabled(false)
+    , m_pCopyAction(0)
+    , m_pIconLabel(0)
+    , m_fMarkForError(false)
 {
-    setMinimumWidth (featTextWidth (aText).width());
+    prepare();
 }
 
-void QILineEdit::setFixedWidthByText (const QString &aText)
+QILineEdit::QILineEdit(const QString &strText, QWidget *pParent /* = 0 */)
+    : QLineEdit(strText, pParent)
+    , m_fAllowToCopyContentsWhenDisabled(false)
+    , m_pCopyAction(0)
+    , m_pIconLabel(0)
+    , m_fMarkForError(false)
 {
-    setFixedWidth (featTextWidth (aText).width());
+    prepare();
 }
 
-QSize QILineEdit::featTextWidth (const QString &aText) const
+void QILineEdit::setAllowToCopyContentsWhenDisabled(bool fAllow)
+{
+    m_fAllowToCopyContentsWhenDisabled = fAllow;
+}
+
+void QILineEdit::setMinimumWidthByText(const QString &strText)
+{
+    setMinimumWidth(featTextWidth(strText).width());
+}
+
+void QILineEdit::setFixedWidthByText(const QString &strText)
+{
+    setFixedWidth(featTextWidth(strText).width());
+}
+
+void QILineEdit::mark(bool fError, const QString &strErrorMessage /* = QString() */)
+{
+    /* Check if something really changed: */
+    if (fError == m_fMarkForError && m_strErrorMessage == strErrorMessage)
+        return;
+
+    /* Save new values: */
+    m_fMarkForError = fError;
+    m_strErrorMessage = strErrorMessage;
+
+    /* Update accordingly: */
+    if (m_fMarkForError)
+    {
+        /* Create label if absent: */
+        if (!m_pIconLabel)
+            m_pIconLabel = new QLabel(this);
+
+        /* Update label content, visibility & position: */
+        const int iIconMetric = QApplication::style()->pixelMetric(QStyle::PM_SmallIconSize) * .625;
+        const int iShift = height() > iIconMetric ? (height() - iIconMetric) / 2 : 0;
+        m_pIconLabel->setPixmap(m_markIcon.pixmap(windowHandle(), QSize(iIconMetric, iIconMetric)));
+        m_pIconLabel->setToolTip(m_strErrorMessage);
+        m_pIconLabel->move(width() - iIconMetric - iShift, iShift);
+        m_pIconLabel->show();
+    }
+    else
+    {
+        /* Hide label: */
+        if (m_pIconLabel)
+            m_pIconLabel->hide();
+    }
+}
+
+bool QILineEdit::event(QEvent *pEvent)
+{
+    switch (pEvent->type())
+    {
+        case QEvent::ContextMenu:
+        {
+            /* For disabled widget if requested: */
+            if (!isEnabled() && m_fAllowToCopyContentsWhenDisabled)
+            {
+                /* Create a context menu for the copy to clipboard action: */
+                QContextMenuEvent *pContextMenuEvent = static_cast<QContextMenuEvent*>(pEvent);
+                QMenu menu;
+                m_pCopyAction->setText(tr("&Copy"));
+                menu.addAction(m_pCopyAction);
+                menu.exec(pContextMenuEvent->globalPos());
+                pEvent->accept();
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return QLineEdit::event(pEvent);
+}
+
+void QILineEdit::resizeEvent(QResizeEvent *pResizeEvent)
+{
+    /* Call to base-class: */
+    QLineEdit::resizeEvent(pResizeEvent);
+
+    /* Update error label position: */
+    if (m_pIconLabel)
+    {
+        const int iIconMetric = QApplication::style()->pixelMetric(QStyle::PM_SmallIconSize) * .625;
+        const int iShift = height() > iIconMetric ? (height() - iIconMetric) / 2 : 0;
+        m_pIconLabel->move(width() - iIconMetric - iShift, iShift);
+    }
+}
+
+void QILineEdit::copy()
+{
+    /* Copy the current text to the global and selection clipboards: */
+    QApplication::clipboard()->setText(text(), QClipboard::Clipboard);
+    QApplication::clipboard()->setText(text(), QClipboard::Selection);
+}
+
+void QILineEdit::prepare()
+{
+    /* Prepare invisible copy action: */
+    m_pCopyAction = new QAction(this);
+    if (m_pCopyAction)
+    {
+        m_pCopyAction->setShortcut(QKeySequence(QKeySequence::Copy));
+        m_pCopyAction->setShortcutContext(Qt::WidgetShortcut);
+        connect(m_pCopyAction, &QAction::triggered, this, &QILineEdit::copy);
+        addAction(m_pCopyAction);
+    }
+
+    /* Prepare warning icon: */
+    m_markIcon = UIIconPool::iconSet(":/status_error_16px.png");
+}
+
+QSize QILineEdit::featTextWidth(const QString &strText) const
 {
     QStyleOptionFrame sof;
-    sof.initFrom (this);
+    sof.initFrom(this);
     sof.rect = contentsRect();
-    sof.lineWidth = hasFrame() ? style()->pixelMetric (QStyle::PM_DefaultFrameWidth) : 0;
+    sof.lineWidth = hasFrame() ? style()->pixelMetric(QStyle::PM_DefaultFrameWidth) : 0;
     sof.midLineWidth = 0;
     sof.state |= QStyle::State_Sunken;
 
-    /* The margins are based on qlineedit.cpp of Qt. Maybe they where changed
-     * at some time in the future. */
-    QSize sc (fontMetrics().width (aText) + 2*2,
-              fontMetrics().xHeight()     + 2*1);
-    QSize sa = style()->sizeFromContents (QStyle::CT_LineEdit, &sof, sc, this);
-
-#ifdef VBOX_WS_WIN
-# if QT_VERSION < 0x050000
-    /* Vista l&f style has a bug where the last parameter of sizeFromContents
-     * function ('widget' what corresponds to 'this' in our class) is ignored.
-     * Due to it QLineEdit processed as QComboBox and size calculation includes
-     * non-existing combo-box button of 23 pix in width. So fixing it here: */
-    if (qobject_cast <QWindowsVistaStyle*> (style()))
-    {
-        /* Check if l&f style theme is really active else painting performed by
-         * Windows Classic theme and there is no such shifting error. */
-        typedef BOOL (WINAPI *PFNISAPPTHEMED)(VOID);
-        static PFNISAPPTHEMED s_pfnIsAppThemed = (PFNISAPPTHEMED)~(uintptr_t)0;
-        if (s_pfnIsAppThemed == (PFNISAPPTHEMED)~(uintptr_t)0 )
-            s_pfnIsAppThemed = (PFNISAPPTHEMED)RTLdrGetSystemSymbol("uxtheme.dll", "IsAppThemed");
-
-        if (s_pfnIsAppThemed && s_pfnIsAppThemed())
-            sa -= QSize(23, 0);
-    }
-# endif /* QT_VERSION < 0x050000 */
-#endif /* VBOX_WS_WIN */
+    /** @todo make it wise.. */
+    // WORKAROUND:
+    // The margins are based on qlineedit.cpp of Qt.
+    // Maybe they where changed at some time in the future.
+    QSize sc(fontMetrics().width(strText) + 2 * 2,
+             fontMetrics().xHeight()     + 2 * 1);
+    const QSize sa = style()->sizeFromContents(QStyle::CT_LineEdit, &sof, sc, this);
 
     return sa;
 }
-

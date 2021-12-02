@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: elf32.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - ELF 32-bit header.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,11 +24,13 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_formats_elf32_h
-#define ___iprt_formats_elf32_h
+#ifndef IPRT_INCLUDED_formats_elf32_h
+#define IPRT_INCLUDED_formats_elf32_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-#include <iprt/assert.h>
-
+#include <iprt/assertcompile.h>
 #include "elf-common.h"
 
 /*
@@ -184,5 +186,5 @@ typedef struct
 #define ELF32_R_INFO(sym, type)     (((sym) << 8) + (unsigned char)(type))
 
 
-#endif
+#endif /* !IPRT_INCLUDED_formats_elf32_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: env-posix.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Environment, Posix.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,12 +33,14 @@
 # define _POSIX_C_SOURCE 1
 #endif
 #include <iprt/env.h>
-#include <iprt/string.h>
+
 #include <iprt/alloca.h>
 #include <iprt/assert.h>
 #if defined(DEBUG) && defined(RT_OS_LINUX)
 # include <iprt/asm.h>
 #endif
+#include <iprt/err.h>
+#include <iprt/string.h>
 
 #include <stdlib.h>
 #include <errno.h>

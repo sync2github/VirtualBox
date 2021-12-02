@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBProxyBackendFreeBSD.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox USB Proxy Service, FreeBSD Specialization.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,18 +19,19 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_MAIN_USBPROXYBACKEND
 #include "USBProxyBackend.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/usb.h>
 #include <VBox/usblib.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 #include <iprt/string.h>
 #include <iprt/alloc.h>
 #include <iprt/assert.h>
 #include <iprt/file.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/param.h>
 #include <iprt/path.h>
@@ -46,15 +47,6 @@
 #include <dev/usb/usb.h>
 #include <dev/usb/usb_ioctl.h>
 
-
-/*********************************************************************************************************************************
-*   Structures and Typedefs                                                                                                      *
-*********************************************************************************************************************************/
-
-
-/*********************************************************************************************************************************
-*   Global Variables                                                                                                             *
-*********************************************************************************************************************************/
 
 /**
  * Initialize data members.
@@ -75,9 +67,10 @@ USBProxyBackendFreeBSD::~USBProxyBackendFreeBSD()
  *
  * @returns S_OK on success and non-fatal failures, some COM error otherwise.
  */
-int USBProxyBackendFreeBSD::init(USBProxyService *pUsbProxyService, const com::Utf8Str &strId, const com::Utf8Str &strAddress)
+int USBProxyBackendFreeBSD::init(USBProxyService *pUsbProxyService, const com::Utf8Str &strId,
+                                 const com::Utf8Str &strAddress, bool fLoadingSettings)
 {
-    USBProxyBackend::init(pUsbProxyService, strId, strAddress);
+    USBProxyBackend::init(pUsbProxyService, strId, strAddress, fLoadingSettings);
 
     unconst(m_strBackend) = Utf8Str("host");
 
@@ -150,6 +143,12 @@ int USBProxyBackendFreeBSD::releaseDevice(HostUSBDevice *aDevice)
     interruptWait();
 
     return VINF_SUCCESS;
+}
+
+
+bool USBProxyBackendFreeBSD::isFakeUpdateRequired()
+{
+    return true;
 }
 
 
@@ -270,8 +269,9 @@ PUSBDEVICE USBProxyBackendFreeBSD::getDevices(void)
                 break;
             }
 
-            pDevice->enmState           = USBDEVICESTATE_UNUSED;
+            pDevice->enmState           = USBDEVICESTATE_USED_BY_HOST_CAPTURABLE;
             pDevice->bBus               = UsbDevInfo.udi_bus;
+            pDevice->bPort              = UsbDevInfo.udi_hubport;
             pDevice->bDeviceClass       = UsbDevInfo.udi_class;
             pDevice->bDeviceSubClass    = UsbDevInfo.udi_subclass;
             pDevice->bDeviceProtocol    = UsbDevInfo.udi_protocol;
@@ -292,28 +292,33 @@ PUSBDEVICE USBProxyBackendFreeBSD::getDevices(void)
                     pDevice->enmSpeed = USBDEVICESPEED_HIGH;
                     break;
                 case USB_SPEED_SUPER:
+                    pDevice->enmSpeed = USBDEVICESPEED_SUPER;
+                    break;
                 case USB_SPEED_VARIABLE:
+                    pDevice->enmSpeed = USBDEVICESPEED_VARIABLE;
+                    break;
                 default:
                     pDevice->enmSpeed = USBDEVICESPEED_UNKNOWN;
+                    break;
             }
 
             if (UsbDevInfo.udi_vendor[0] != '\0')
             {
+                USBLibPurgeEncoding(UsbDevInfo.udi_vendor);
                 pDevice->pszManufacturer = RTStrDupN(UsbDevInfo.udi_vendor, sizeof(UsbDevInfo.udi_vendor));
-                USBLibPurgeEncoding(pDevice->pszManufacturer);
             }
 
             if (UsbDevInfo.udi_product[0] != '\0')
             {
+                USBLibPurgeEncoding(UsbDevInfo.udi_product);
                 pDevice->pszProduct = RTStrDupN(UsbDevInfo.udi_product, sizeof(UsbDevInfo.udi_product));
-                USBLibPurgeEncoding(pDevice->pszProduct);
             }
 
             if (UsbDevInfo.udi_serial[0] != '\0')
             {
+                USBLibPurgeEncoding(UsbDevInfo.udi_serial);
                 pDevice->pszSerialNumber = RTStrDupN(UsbDevInfo.udi_serial, sizeof(UsbDevInfo.udi_serial));
-                USBLibPurgeEncoding(pDevice->pszSerialNumber);
-                pDevice->u64SerialHash   = USBLibHashSerial(pDevice->pszSerialNumber);
+                pDevice->u64SerialHash = USBLibHashSerial(UsbDevInfo.udi_serial);
             }
             rc = ioctl(FileUsb, USB_GET_PLUGTIME, &PlugTime);
             if (rc == 0)
@@ -321,7 +326,6 @@ PUSBDEVICE USBProxyBackendFreeBSD::getDevices(void)
 
             pDevice->pszAddress = RTStrDup(pszDevicePath);
             pDevice->pszBackend = RTStrDup("host");
-            pDevice->enmState   = USBDEVICESTATE_USED_BY_HOST_CAPTURABLE;
 
             usbLogDevice(pDevice);
 
@@ -337,4 +341,3 @@ PUSBDEVICE USBProxyBackendFreeBSD::getDevices(void)
 
     return pDevices;
 }
-

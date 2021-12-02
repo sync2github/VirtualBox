@@ -1,10 +1,10 @@
--- $Id$
+-- $Id: tmdb-r18-testresultfiles-1-testresultmsgs-1.pgsql 82968 2020-02-04 10:35:17Z vboxsync $
 --- @file
 -- VBox Test Manager Database - Adds an idTestSet to TestResultFiles and TestResultMsgs.
 --
 
 --
--- Copyright (C) 2013-2016 Oracle Corporation
+-- Copyright (C) 2013-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;
@@ -36,11 +36,11 @@ DROP TABLE IF EXISTS OldTestResultMsgs;
 \set ON_ERROR_STOP 1
 \set AUTOCOMMIT 0
 
-                                                                                  
---                                                                                
--- Rename the original table, drop constrains and foreign key references so we    
--- get the right name automatic when creating the new one.                        
---                                                                                
+
+--
+-- Rename the original table, drop constrains and foreign key references so we
+-- get the right name automatic when creating the new one.
+--
 \d+ TestResultFiles;
 ALTER TABLE TestResultFiles RENAME TO OldTestResultFiles;
 
@@ -81,14 +81,14 @@ CREATE TABLE TestResultFiles (
     idStrMime           INTEGER     NOT NULL
 );
 
-INSERT INTO TestResultFiles ( idTestResultFile, idTestResult, idTestSet, tsCreated, idStrFile, idStrDescription, 
+INSERT INTO TestResultFiles ( idTestResultFile, idTestResult, idTestSet, tsCreated, idStrFile, idStrDescription,
                               idStrKind, idStrMime)
-    SELECT o.idTestResultFile, o.idTestResult, tr.idTestSet, o.tsCreated, o.idStrFile, o.idStrDescription, 
+    SELECT o.idTestResultFile, o.idTestResult, tr.idTestSet, o.tsCreated, o.idStrFile, o.idStrDescription,
            o.idStrKind, o.idStrMime
     FROM   OldTestResultFiles o,
            TestResults tr
     WHERE  o.idTestResult = tr.idTestResult;
-   
+
 -- Add new indexes.
 CREATE INDEX TestResultFilesIdx  ON TestResultFiles(idTestResult);
 CREATE INDEX TestResultFilesIdx2 ON TestResultFiles(idTestSet, tsCreated DESC);
@@ -104,10 +104,10 @@ ALTER TABLE TestResultFiles ADD CONSTRAINT TestResultFiles_idStrMime_fkey       
 \d TestResultFiles;
 
 
---                                                                                
--- Rename the original table, drop constrains and foreign key references so we    
--- get the right name automatic when creating the new one.                        
---                                                                                
+--
+-- Rename the original table, drop constrains and foreign key references so we
+-- get the right name automatic when creating the new one.
+--
 \d+ TestResultMsgs;
 ALTER TABLE TestResultMsgs RENAME TO OldTestResultMsgs;
 
@@ -133,11 +133,11 @@ CREATE TABLE TestResultMsgs (
 );
 
 INSERT INTO TestResultMsgs ( idTestResultMsg, idTestResult, idTestSet, tsCreated, idStrMsg, enmLevel)
-    SELECT o.idTestResultMsg, o.idTestResult, tr.idTestSet, o.tsCreated, o.idStrMsg, o.enmLevel 
+    SELECT o.idTestResultMsg, o.idTestResult, tr.idTestSet, o.tsCreated, o.idStrMsg, o.enmLevel
     FROM   OldTestResultMsgs o,
            TestResults tr
     WHERE  o.idTestResult = tr.idTestResult;
-   
+
 -- Add new indexes.
 CREATE INDEX TestResultMsgsIdx  ON TestResultMsgs(idTestResult);
 CREATE INDEX TestResultMsgsIdx2 ON TestResultMsgs(idTestSet, tsCreated DESC);
@@ -158,6 +158,4 @@ DROP TABLE OldTestResultFiles;
 DROP TABLE OldTestResultMsgs;
 
 COMMIT;
-
-
 

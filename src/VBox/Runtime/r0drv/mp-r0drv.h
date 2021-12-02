@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: mp-r0drv.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * IPRT - Multiprocessor, Ring-0 Driver, Internal Header.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___r0drv_mp_r0drv_h
-#define ___r0drv_mp_r0drv_h
+#ifndef IPRT_INCLUDED_SRC_r0drv_mp_r0drv_h
+#define IPRT_INCLUDED_SRC_r0drv_mp_r0drv_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/mp.h>
 
@@ -38,7 +41,7 @@ RT_C_DECLS_BEGIN
  * @param   pvUser1     The first user argument.
  * @param   pvUser2     The second user argument.
  */
-typedef DECLCALLBACK(void) FNMPWORKER(RTCPUID idCpu, void *pvUser1, void *pvUser2);
+typedef DECLCALLBACKTYPE(void, FNMPWORKER,(RTCPUID idCpu, void *pvUser1, void *pvUser2));
 /** Pointer to a FNMPWORKER(). */
 typedef FNMPWORKER *PFNMPWORKER;
 
@@ -78,5 +81,5 @@ DECLHIDDEN(void) rtMpNotificationDoCallbacks(RTMPEVENT enmEvent, RTCPUID idCpu);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_SRC_r0drv_mp_r0drv_h */
 

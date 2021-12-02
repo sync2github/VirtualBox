@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxAutostart-posix.cpp 83799 2020-04-18 14:16:46Z vboxsync $ */
 /** @file
  * VBoxAutostart - VirtualBox Autostart service.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 #include <VBox/com/listeners.h>
 #include <VBox/com/VirtualBox.h>
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 #include <VBox/version.h>
 
@@ -52,9 +52,6 @@
 #include <iprt/ctype.h>
 #include <iprt/dir.h>
 
-#include <algorithm>
-#include <list>
-#include <string>
 #include <signal.h>
 
 #include "VBoxAutostart.h"
@@ -267,29 +264,18 @@ static void displayHelp(const char *pszImage)
     displayHeader();
 
     RTStrmPrintf(g_pStdErr,
-                 "Usage:\n"
-                 " %s [-v|--verbose] [-h|-?|--help]\n"
-                 " [-F|--logfile=<file>] [-R|--logrotate=<num>] [-S|--logsize=<bytes>]\n"
-                 " [-I|--loginterval=<seconds>]\n"
-                 " [-c|--config=<config file>]\n", pszImage);
+                 "Usage: %s [-v|--verbose] [-h|-?|--help]\n"
+                 "           [-F|--logfile=<file>] [-R|--logrotate=<num>]\n"
+                 "           [-S|--logsize=<bytes>] [-I|--loginterval=<seconds>]\n"
+                 "           [-c|--config=<config file>]\n",
+                 pszImage);
 
-    RTStrmPrintf(g_pStdErr, "\n"
+    RTStrmPrintf(g_pStdErr,
+                 "\n"
                  "Options:\n");
-
-    for (unsigned i = 0;
-         i < RT_ELEMENTS(g_aOptions);
-         ++i)
+    for (unsigned i = 0; i < RT_ELEMENTS(g_aOptions); i++)
     {
-        std::string str(g_aOptions[i].pszLong);
-        if (g_aOptions[i].iShort < 1000) /* Don't show short options which are defined by an ID! */
-        {
-            str += ", -";
-            str += g_aOptions[i].iShort;
-        }
-        str += ":";
-
-        const char *pcszDescr = "";
-
+        const char *pcszDescr;
         switch (g_aOptions[i].iShort)
         {
             case 'h':
@@ -321,12 +307,23 @@ static void displayHelp(const char *pszImage)
             case 'c':
                 pcszDescr = "Name of the configuration file for the global overrides.";
                 break;
+            default:
+                AssertFailedBreakStmt(pcszDescr = "");
         }
 
-        RTStrmPrintf(g_pStdErr, "%-23s%s\n", str.c_str(), pcszDescr);
+        if (g_aOptions[i].iShort < 1000)
+            RTStrmPrintf(g_pStdErr,
+                         "  %s, -%c\n"
+                         "      %s\n", g_aOptions[i].pszLong, g_aOptions[i].iShort, pcszDescr);
+        else
+            RTStrmPrintf(g_pStdErr,
+                         "  %s\n"
+                         "      %s\n", g_aOptions[i].pszLong, pcszDescr);
     }
 
-    RTStrmPrintf(g_pStdErr, "\nUse environment variable VBOXAUTOSTART_RELEASE_LOG for logging options.\n");
+    RTStrmPrintf(g_pStdErr,
+                 "\n"
+                 "Use environment variable VBOXAUTOSTART_RELEASE_LOG for logging options.\n");
 }
 
 int main(int argc, char *argv[])
@@ -497,15 +494,15 @@ int main(int argc, char *argv[])
         return RTEXITCODE_SUCCESS;
 
     /* create release logger, to stdout */
-    char szError[RTPATH_MAX + 128];
+    RTERRINFOSTATIC ErrInfo;
     rc = com::VBoxLogRelCreate("Autostart", g_fDaemonize ? NULL : pszLogFile,
                                RTLOGFLAGS_PREFIX_THREAD | RTLOGFLAGS_PREFIX_TIME_PROG,
                                "all", "VBOXAUTOSTART_RELEASE_LOG",
                                RTLOGDEST_STDOUT, UINT32_MAX /* cMaxEntriesPerGroup */,
                                g_cHistory, g_uHistoryFileTime, g_uHistoryFileSize,
-                               szError, sizeof(szError));
+                               RTErrInfoInitStatic(&ErrInfo));
     if (RT_FAILURE(rc))
-        return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", szError, rc);
+        return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", ErrInfo.Core.pszMsg, rc);
 
 #ifdef VBOXAUTOSTART_DAEMONIZE
     if (g_fDaemonize)
@@ -533,9 +530,9 @@ int main(int argc, char *argv[])
                                    "all", "VBOXAUTOSTART_RELEASE_LOG",
                                    RTLOGDEST_FILE, UINT32_MAX /* cMaxEntriesPerGroup */,
                                    g_cHistory, g_uHistoryFileTime, g_uHistoryFileSize,
-                                   szError, sizeof(szError));
+                                   RTErrInfoInitStatic(&ErrInfo));
         if (RT_FAILURE(rc))
-            return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", szError, rc);
+            return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", ErrInfo.Core.pszMsg, rc);
     }
 #endif
 

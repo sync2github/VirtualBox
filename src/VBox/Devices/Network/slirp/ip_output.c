@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ip_output.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT - IP output.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -62,6 +62,7 @@
  */
 
 #include <slirp.h>
+#include <iprt/errcore.h>
 #include "alias.h"
 
 static const uint8_t broadcast_ethaddr[6] =
@@ -150,8 +151,9 @@ ip_output0(PNATState pData, struct socket *so, struct mbuf *m0, int urg)
      */
     ip->ip_v = IPVERSION;
     ip->ip_off &= IP_DF;
-    ip->ip_id = RT_H2N_U16(ip_currid++);
+    ip->ip_id = RT_H2N_U16(ip_currid);
     ip->ip_hl = hlen >> 2;
+    ip_currid++;
     ipstat.ips_localout++;
 
     /* Current TCP/IP stack hasn't routing information at
@@ -230,7 +232,7 @@ ip_output0(PNATState pData, struct socket *so, struct mbuf *m0, int urg)
             {
                 error = -1;
                 ipstat.ips_odropped++;
-                goto send_or_free;
+                goto exit_drop_package;
             }
             m->m_data += if_maxlinkhdr;
             mhip = mtod(m, struct ip *);
@@ -289,7 +291,6 @@ ip_output0(PNATState pData, struct socket *so, struct mbuf *m0, int urg)
         ip->ip_sum = 0;
         ip->ip_sum = cksum(m, mhlen);
 
-send_or_free:
         if (!(m->m_flags & M_SKIP_FIREWALL)){
             /** @todo We can't alias all fragments because the way libalias processing
              * the fragments brake the sequence. libalias put alias_address to the source

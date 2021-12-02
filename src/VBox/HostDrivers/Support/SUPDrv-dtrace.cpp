@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPDrv-dtrace.cpp 85771 2020-08-14 13:33:12Z vboxsync $ */
 /** @file
  * VBoxDrv - The VirtualBox Support Driver - DTrace Provider.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -88,7 +88,7 @@
 #  include <dtrace/enabling.h> /* Missing from provider.h. */
 #  include <dtrace/arg.h> /* Missing from provider.h. */
 # endif
-# include <linux/kallsyms.h>
+# include <linux/module.h>
 /** Status code fixer (UEK uses linux convension unlike the others). */
 # define FIX_UEK_RC(a_rc) (-(a_rc))
 #else
@@ -236,13 +236,17 @@ typedef VBDTSTACKDATA *PVBDTSTACKDATA;
 #if defined(RT_OS_DARWIN) || defined(RT_OS_LINUX)
 /** @name DTrace kernel interface used on Darwin and Linux.
  * @{ */
-static void        (* g_pfnDTraceProbeFire)(dtrace_id_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-static dtrace_id_t (* g_pfnDTraceProbeCreate)(dtrace_provider_id_t, const char *, const char *, const char *, int, void *);
-static dtrace_id_t (* g_pfnDTraceProbeLookup)(dtrace_provider_id_t, const char *, const char *, const char *);
-static int         (* g_pfnDTraceProviderRegister)(const char *, const dtrace_pattr_t *, uint32_t, /*cred_t*/ void *,
-                                                   const dtrace_pops_t *, void *, dtrace_provider_id_t *);
-static void        (* g_pfnDTraceProviderInvalidate)(dtrace_provider_id_t);
-static int         (* g_pfnDTraceProviderUnregister)(dtrace_provider_id_t);
+static DECLCALLBACKPTR_EX(void,        RT_NOTHING, g_pfnDTraceProbeFire,(dtrace_id_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                                                                         uint64_t));
+static DECLCALLBACKPTR_EX(dtrace_id_t, RT_NOTHING, g_pfnDTraceProbeCreate,(dtrace_provider_id_t, const char *, const char *,
+                                                                           const char *, int, void *));
+static DECLCALLBACKPTR_EX(dtrace_id_t, RT_NOTHING, g_pfnDTraceProbeLookup,(dtrace_provider_id_t, const char *, const char *,
+                                                                           const char *));
+static DECLCALLBACKPTR_EX(int,         RT_NOTHING, g_pfnDTraceProviderRegister,(const char *, const dtrace_pattr_t *, uint32_t,
+                                                                                /*cred_t*/ void *, const dtrace_pops_t *,
+                                                                                void *, dtrace_provider_id_t *));
+static DECLCALLBACKPTR_EX(void,        RT_NOTHING, g_pfnDTraceProviderInvalidate,(dtrace_provider_id_t));
+static DECLCALLBACKPTR_EX(int,         RT_NOTHING, g_pfnDTraceProviderUnregister,(dtrace_provider_id_t));
 
 #define dtrace_probe            g_pfnDTraceProbeFire
 #define dtrace_probe_create     g_pfnDTraceProbeCreate
@@ -250,6 +254,21 @@ static int         (* g_pfnDTraceProviderUnregister)(dtrace_provider_id_t);
 #define dtrace_register         g_pfnDTraceProviderRegister
 #define dtrace_invalidate       g_pfnDTraceProviderInvalidate
 #define dtrace_unregister       g_pfnDTraceProviderUnregister
+
+/** For dynamical resolving and releasing.   */
+static const struct
+{
+    const char *pszName;
+    uintptr_t  *ppfn; /**< @note Clang 11 nothrow weirdness forced this from PFNRT * to uintptr_t *. */
+} g_aDTraceFunctions[] =
+{
+    { "dtrace_probe",        (uintptr_t *)&dtrace_probe        },
+    { "dtrace_probe_create", (uintptr_t *)&dtrace_probe_create },
+    { "dtrace_probe_lookup", (uintptr_t *)&dtrace_probe_lookup },
+    { "dtrace_register",     (uintptr_t *)&dtrace_register     },
+    { "dtrace_invalidate",   (uintptr_t *)&dtrace_invalidate   },
+    { "dtrace_unregister",   (uintptr_t *)&dtrace_unregister   },
+};
 
 /** @} */
 #endif
@@ -1107,51 +1126,58 @@ const SUPDRVTRACERREG * VBOXCALL supdrvDTraceInit(void)
     }
 # endif
 
-    static const struct
-    {
-        const char *pszName;
-        PFNRT      *ppfn;
-    } s_aDTraceFunctions[] =
-    {
-        { "dtrace_probe",        (PFNRT*)&dtrace_probe        },
-        { "dtrace_probe_create", (PFNRT*)&dtrace_probe_create },
-        { "dtrace_probe_lookup", (PFNRT*)&dtrace_probe_lookup },
-        { "dtrace_register",     (PFNRT*)&dtrace_register     },
-        { "dtrace_invalidate",   (PFNRT*)&dtrace_invalidate   },
-        { "dtrace_unregister",   (PFNRT*)&dtrace_unregister   },
-    };
     unsigned i;
-    for (i = 0; i < RT_ELEMENTS(s_aDTraceFunctions); i++)
+    for (i = 0; i < RT_ELEMENTS(g_aDTraceFunctions); i++)
     {
 # ifndef RT_OS_LINUX
-        rc = RTR0DbgKrnlInfoQuerySymbol(hKrnlInfo, NULL, s_aDTraceFunctions[i].pszName,
-                                        (void **)s_aDTraceFunctions[i].ppfn);
+        rc = RTR0DbgKrnlInfoQuerySymbol(hKrnlInfo, NULL, g_aDTraceFunctions[i].pszName,
+                                        (void **)g_aDTraceFunctions[i].ppfn);
         if (RT_FAILURE(rc))
         {
-            SUPR0Printf("supdrvDTraceInit: Failed to resolved '%s' (rc=%Rrc, i=%u).\n", s_aDTraceFunctions[i].pszName, rc, i);
+            SUPR0Printf("supdrvDTraceInit: Failed to resolved '%s' (rc=%Rrc, i=%u).\n", g_aDTraceFunctions[i].pszName, rc, i);
             break;
         }
-# else
-        unsigned long ulAddr = kallsyms_lookup_name(s_aDTraceFunctions[i].pszName);
+# else /* RT_OS_LINUX */
+        uintptr_t ulAddr = (uintptr_t)__symbol_get(g_aDTraceFunctions[i].pszName);
         if (!ulAddr)
         {
-            SUPR0Printf("supdrvDTraceInit: Failed to resolved '%s' (i=%u).\n", s_aDTraceFunctions[i].pszName, i);
+            SUPR0Printf("supdrvDTraceInit: Failed to resolved '%s' (i=%u).\n", g_aDTraceFunctions[i].pszName, i);
+            while (i-- > 0)
+            {
+                __symbol_put(g_aDTraceFunctions[i].pszName);
+                *g_aDTraceFunctions[i].ppfn = NULL;
+            }
             return NULL;
         }
-        *s_aDTraceFunctions[i].ppfn = (PFNRT)ulAddr;
-# endif
+        *g_aDTraceFunctions[i].ppfn = (PFNRT)ulAddr;
+# endif /* RT_OS_LINUX */
     }
 
 # ifndef RT_OS_LINUX
     RTR0DbgKrnlInfoRelease(hKrnlInfo);
     if (RT_FAILURE(rc))
         return NULL;
-# else
-    /** @todo grab a reference to the dtrace module... */
 # endif
 #endif
 
     return &g_VBoxDTraceReg;
+}
+
+/**
+ * Module teardown code.
+ */
+void VBOXCALL supdrvDTraceFini(void)
+{
+#ifdef RT_OS_LINUX
+    /* Release the references. */
+    unsigned i;
+    for (i = 0; i < RT_ELEMENTS(g_aDTraceFunctions); i++)
+        if (*g_aDTraceFunctions[i].ppfn)
+        {
+            __symbol_put(g_aDTraceFunctions[i].pszName);
+            *g_aDTraceFunctions[i].ppfn = NULL;
+        }
+#endif
 }
 
 #ifndef VBOX_WITH_NATIVE_DTRACE

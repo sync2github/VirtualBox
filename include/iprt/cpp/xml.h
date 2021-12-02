@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_xml_h
-#define ___iprt_xml_h
+#ifndef IPRT_INCLUDED_cpp_xml_h
+#define IPRT_INCLUDED_cpp_xml_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifndef IN_RING3
 # error "There are no XML APIs available in Ring-0 Context!"
@@ -53,6 +56,13 @@ typedef xmlError *xmlErrorPtr;
 
 typedef struct _xmlAttr xmlAttr;
 typedef struct _xmlNode xmlNode;
+
+#define RT_XML_CONTENT_SMALL _8K
+#define RT_XML_CONTENT_LARGE _128K
+#define RT_XML_ATTR_TINY 64
+#define RT_XML_ATTR_SMALL _1K
+#define RT_XML_ATTR_MEDIUM _8K
+#define RT_XML_ATTR_LARGE _64K
 
 /** @} */
 
@@ -133,7 +143,7 @@ class RT_DECL_CLASS EIPRTFailure : public RuntimeError
 {
 public:
 
-    EIPRTFailure(int aRC, const char *pcszContext, ...);
+    EIPRTFailure(int aRC, const char *pszContextFmt, ...);
 
     int rc() const
     {
@@ -249,7 +259,7 @@ public:
     /**
      * Opens a file with the given name in the given mode. If @a aMode is Read
      * or ReadWrite, the file must exist. If @a aMode is Write, the file must
-     * not exist. Otherwise, an EIPRTFailure excetion will be thrown.
+     * not exist. Otherwise, an EIPRTFailure exception will be thrown.
      *
      * @param aMode     File mode.
      * @param aFileName File name.
@@ -352,10 +362,14 @@ private:
  *
  */
 
-typedef xmlParserInput* FNEXTERNALENTITYLOADER(const char *aURI,
-                                               const char *aID,
-                                               xmlParserCtxt *aCtxt);
-typedef FNEXTERNALENTITYLOADER *PFNEXTERNALENTITYLOADER;
+
+#if RT_CLANG_PREREQ(4, 0) /* VC++ needs the nothrow'ed-ness, while clang barfs at it. */
+typedef xmlParserInput *FNEXTERNALENTITYLOADER(const char *aURI, const char *aID, xmlParserCtxt *aCtxt);
+#else
+typedef DECLCALLBACKTYPE_EX(xmlParserInput *, RT_NOTHING, FNEXTERNALENTITYLOADER,(const char *aURI, const char *aID,
+                                                                                  xmlParserCtxt *aCtxt));
+#endif
+typedef FNEXTERNALENTITYLOADER *PFNEXTERNALENTITYLOADER; /**< xmlExternalEntityLoader */
 
 class RT_DECL_CLASS GlobalLock
 {
@@ -406,6 +420,7 @@ public:
     bool nameEqualsN(const char *pcsz, size_t cchMax, const char *pcszNamespace = NULL) const;
 
     const char *getValue() const;
+    const char *getValueN(size_t cchValueLimit) const;
     bool copyValue(int32_t &i) const;
     bool copyValue(uint32_t &i) const;
     bool copyValue(int64_t &i) const;
@@ -431,7 +446,7 @@ public:
      * @returns true / false  */
     bool isAttribute() const
     {
-        return m_Type == IsElement;
+        return m_Type == IsAttribute;
     }
 
     int getLineNumber() const;
@@ -492,7 +507,8 @@ protected:
     const char *m_pcszName;            ///< element or attribute name, points either into pLibNode or pLibAttr;
                                        ///< NULL if this is a content node
 
-    /** Child list entry of this node. (List head m_pParent->m_children.) */
+    /** Child list entry of this node. (List head m_pParent->m_children or
+     *  m_pParent->m_attribute depending on the type.) */
     RTLISTNODE      m_listEntry;
     /** Pointer to the parent list anchor.
      * This allows us to use m_listEntry both for children and attributes. */
@@ -565,8 +581,8 @@ public:
      *  optionally namespace.
      *
      * @returns Pointer to the child string value, NULL if not found or no value.
-     * @param   pcszPath        The attribute name.  Slashes can be used to make a
-     *                          simple path to any decendant.
+     * @param   pcszPath        Path to the child element.  Slashes can be used to
+     *                          make a simple path to any decendant.
      * @param   pcszNamespace   The namespace to match, NULL (default) match any
      *                          namespace.  When using a path, this matches all
      *                          elements along the way.
@@ -578,8 +594,8 @@ public:
      *  returning its value.
      *
      * @returns Pointer to the child string value, NULL if not found or no value.
-     * @param   pcszPath        The attribute name.  Slashes can be used to make a
-     *                          simple path to any decendant.
+     * @param   pcszPath        Path to the child element.  Slashes can be used to
+     *                          make a simple path to any decendant.
      * @param   pcszNamespace   The namespace to match, NULL (default) match any
      *                          namespace.  When using a path, this matches all
      *                          elements along the way.
@@ -593,12 +609,58 @@ public:
         return NULL;
     }
 
+    /** Finds the first child with matching the give name and optionally namspace,
+     *  returning its value. Checks the length against the limit.
+     *
+     * @returns Pointer to the child string value, NULL if not found or no value.
+     * @param   pcszPath        Path to the child element.  Slashes can be used to
+     *                          make a simple path to any decendant.
+     * @param   cchValueLimit   If the length of the returned value exceeds this
+     *                          limit a EIPRTFailure exception will be thrown.
+     * @param   pcszNamespace   The namespace to match, NULL (default) match any
+     *                          namespace.  When using a path, this matches all
+     *                          elements along the way.
+     * @see     findChildElement, findChildElementP
+     */
+    const char *findChildElementValuePN(const char *pcszPath, size_t cchValueLimit, const char *pcszNamespace = NULL) const
+    {
+        const ElementNode *pElem = findChildElementP(pcszPath, pcszNamespace);
+        if (pElem)
+            return pElem->getValueN(cchValueLimit);
+        return NULL;
+    }
+
+    /** Combines findChildElementNS and findAttributeValue.
+     *
+     * @returns Pointer to attribute string value, NULL if either the element or
+     *          the attribute was not found.
+     * @param   pcszChild           The child element name.
+     * @param   pcszAttribute       The attribute name.
+     * @param   pcszChildNamespace  The namespace to match @a pcszChild with, NULL
+     *                              (default) match any namespace.
+     * @param   pcszAttributeNamespace  The namespace prefix to apply to the
+     *                              attribute, NULL (default) match any namespace.
+     * @see     findChildElementNS and findAttributeValue
+     * @note    The findChildElementAttributeValueP() method would do the same thing
+     *          given the same inputs, but it would be slightly slower, thus the
+     *          separate method.
+                                                                                    */
+    const char *findChildElementAttributeValue(const char *pcszChild, const char *pcszAttribute,
+                                               const char *pcszChildNamespace = NULL,
+                                               const char *pcszAttributeNamespace = NULL) const
+    {
+        const ElementNode *pElem = findChildElementNS(pcszChildNamespace, pcszChild);
+        if (pElem)
+            return pElem->findAttributeValue(pcszAttribute, pcszAttributeNamespace);
+        return NULL;
+    }
+
     /** Combines findChildElementP and findAttributeValue.
      *
      * @returns Pointer to attribute string value, NULL if either the element or
      *          the attribute was not found.
-     * @param   pcszPath            The attribute name.  Slashes can be used to make a
-     *                              simple path to any decendant.
+     * @param   pcszPath            Path to the child element.  Slashes can be used
+     *                              to make a simple path to any decendant.
      * @param   pcszAttribute       The attribute name.
      * @param   pcszPathNamespace   The namespace to match @a pcszPath with, NULL
      *                              (default) match any namespace.  When using a
@@ -614,6 +676,33 @@ public:
         const ElementNode *pElem = findChildElementP(pcszPath, pcszPathNamespace);
         if (pElem)
             return pElem->findAttributeValue(pcszAttribute, pcszAttributeNamespace);
+        return NULL;
+    }
+
+    /** Combines findChildElementP and findAttributeValueN.
+     *
+     * @returns Pointer to attribute string value, NULL if either the element or
+     *          the attribute was not found.
+     * @param   pcszPath            The attribute name.  Slashes can be used to make a
+     *                              simple path to any decendant.
+     * @param   pcszAttribute       The attribute name.
+     * @param   cchValueLimit       If the length of the returned value exceeds this
+     *                              limit a EIPRTFailure exception will be thrown.
+     * @param   pcszPathNamespace   The namespace to match @a pcszPath with, NULL
+     *                              (default) match any namespace.  When using a
+     *                              path, this matches all elements along the way.
+     * @param   pcszAttributeNamespace  The namespace prefix to apply to the
+     *                              attribute, NULL (default) match any namespace.
+     * @see     findChildElementP and findAttributeValue
+     */
+    const char *findChildElementAttributeValuePN(const char *pcszPath, const char *pcszAttribute,
+                                                 size_t cchValueLimit,
+                                                 const char *pcszPathNamespace = NULL,
+                                                 const char *pcszAttributeNamespace = NULL) const
+    {
+        const ElementNode *pElem = findChildElementP(pcszPath, pcszPathNamespace);
+        if (pElem)
+            return pElem->findAttributeValueN(pcszAttribute, cchValueLimit, pcszAttributeNamespace);
         return NULL;
     }
 
@@ -690,6 +779,24 @@ public:
     const ElementNode *findNextSibilingElement(const char *pcszName, const char *pcszNamespace = NULL) const;
     /** @} */
 
+    /** @name Attribute enumeration
+     * @{ */
+
+    /** Get the first attribute node.
+     * @returns Pointer to the first child node, NULL if no attributes. */
+    const AttributeNode *getFirstAttribute() const
+    {
+        return RTListGetFirstCpp(&m_attributes, const AttributeNode, m_listEntry);
+    }
+
+    /** Get the last attribute node.
+     * @returns Pointer to the last child node, NULL if no attributes. */
+    const AttributeNode *getLastAttribute() const
+    {
+        return RTListGetLastCpp(&m_attributes, const AttributeNode, m_listEntry);
+    }
+
+    /** @} */
 
     const AttributeNode *findAttribute(const char *pcszMatch, const char *pcszNamespace = NULL) const;
     /** Find the first attribute with the given name, returning its value string.
@@ -704,6 +811,22 @@ public:
         const AttributeNode *pAttr = findAttribute(pcszName, pcszNamespace);
         if (pAttr)
             return pAttr->getValue();
+        return NULL;
+    }
+    /** Find the first attribute with the given name, returning its value string.
+     * @returns Pointer to the attribute string value.
+     * @param   pcszName        The attribute name.
+     * @param   cchValueLimit   If the length of the returned value exceeds this
+     *                          limit a EIPRTFailure exception will be thrown.
+     * @param   pcszNamespace   The namespace name, default is NULL which means
+     *                          anything goes.
+     * @see getAttributeValue
+     */
+    const char *findAttributeValueN(const char *pcszName, size_t cchValueLimit, const char *pcszNamespace = NULL) const
+    {
+        const AttributeNode *pAttr = findAttribute(pcszName, pcszNamespace);
+        if (pAttr)
+            return pAttr->getValueN(cchValueLimit);
         return NULL;
     }
 
@@ -723,6 +846,12 @@ public:
     { return getAttributeValue(pcszMatch, &u, pcszNamespace); }
     bool getAttributeValue(const char *pcszMatch, bool &f, const char *pcszNamespace = NULL) const
     { return getAttributeValue(pcszMatch, &f, pcszNamespace); }
+    bool getAttributeValueN(const char *pcszMatch, const char *&pcsz, size_t cchValueLimit, const char *pcszNamespace = NULL) const
+    { return getAttributeValueN(pcszMatch, &pcsz, cchValueLimit, pcszNamespace); }
+    bool getAttributeValueN(const char *pcszMatch, RTCString &str, size_t cchValueLimit, const char *pcszNamespace = NULL) const
+    { return getAttributeValueN(pcszMatch, &str, cchValueLimit, pcszNamespace); }
+    bool getAttributeValuePathN(const char *pcszMatch, RTCString &str, size_t cchValueLimit, const char *pcszNamespace = NULL) const
+    { return getAttributeValueN(pcszMatch, &str, cchValueLimit, pcszNamespace); }
 
     /** @name Variants that for clarity does not use references for output params.
      * @{ */
@@ -734,6 +863,9 @@ public:
     bool getAttributeValue(const char *pcszMatch, int64_t *piValue, const char *pcszNamespace = NULL) const;
     bool getAttributeValue(const char *pcszMatch, uint64_t *pu, const char *pcszNamespace = NULL) const;
     bool getAttributeValue(const char *pcszMatch, bool *pf, const char *pcszNamespace = NULL) const;
+    bool getAttributeValueN(const char *pcszMatch, const char **ppcsz, size_t cchValueLimit, const char *pcszNamespace = NULL) const;
+    bool getAttributeValueN(const char *pcszMatch, RTCString *pStr, size_t cchValueLimit, const char *pcszNamespace = NULL) const;
+    bool getAttributeValuePathN(const char *pcszMatch, RTCString *pStr, size_t cchValueLimit, const char *pcszNamespace = NULL) const;
     /** @} */
 
     /** @name Convenience methods for convering the element value.
@@ -745,7 +877,7 @@ public:
     bool getElementValue(bool     *pfValue) const;
     /** @} */
 
-    /** @name Convenience findChildElementAttributeValueP and getElementValue.
+    /** @name Convenience findChildElementValueP and getElementValue.
      * @{ */
     bool getChildElementValueP(const char *pcszPath, int32_t  *piValue, const char *pcszNamespace = NULL) const
     {
@@ -775,7 +907,7 @@ public:
 
     /** @} */
 
-    /** @name Convenience findChildElementAttributeValueP and getElementValue with a
+    /** @name Convenience findChildElementValueP and getElementValue with a
      *        default value being return if the child element isn't present.
      *
      * @remarks These will return false on conversion errors.
@@ -828,6 +960,12 @@ public:
     ContentNode *addContent(const RTCString &strContent)
     {
         return addContent(strContent.c_str());
+    }
+
+    ContentNode *setContent(const char *pcszContent);
+    ContentNode *setContent(const RTCString &strContent)
+    {
+        return setContent(strContent.c_str());
     }
 
     AttributeNode *setAttribute(const char *pcszName, const char *pcszValue);
@@ -948,6 +1086,7 @@ private:
     friend class XmlMemParser;
     friend class XmlFileParser;
     friend class XmlMemWriter;
+    friend class XmlStringWriter;
     friend class XmlFileWriter;
 
     void refreshInternals();
@@ -1003,15 +1142,13 @@ private:
     struct Data;
     struct Data *m;
 
-    static int ReadCallback(void *aCtxt, char *aBuf, int aLen);
-    static int CloseCallback (void *aCtxt);
+    static int ReadCallback(void *aCtxt, char *aBuf, int aLen) RT_NOTHROW_PROTO;
+    static int CloseCallback(void *aCtxt) RT_NOTHROW_PROTO;
 };
 
-/*
- * XmlMemParser
- *
+/**
+ * XmlMemWriter
  */
-
 class RT_DECL_CLASS XmlMemWriter
 {
 public:
@@ -1024,11 +1161,32 @@ private:
     void* m_pBuf;
 };
 
-/*
- * XmlFileWriter
- *
- */
 
+/**
+ * XmlStringWriter - writes the XML to an RTCString instance.
+ */
+class RT_DECL_CLASS XmlStringWriter
+{
+public:
+    XmlStringWriter();
+
+    int write(const Document &rDoc, RTCString *pStrDst);
+
+private:
+    static int WriteCallbackForSize(void *pvUser, const char *pachBuf, int cbToWrite) RT_NOTHROW_PROTO;
+    static int WriteCallbackForReal(void *pvUser, const char *pachBuf, int cbToWrite) RT_NOTHROW_PROTO;
+    static int CloseCallback(void *pvUser) RT_NOTHROW_PROTO;
+
+    /** Pointer to the destination string while we're in the write() call.   */
+    RTCString  *m_pStrDst;
+    /** Set by WriteCallback if we cannot grow the destination string. */
+    bool        m_fOutOfMemory;
+};
+
+
+/**
+ * XmlFileWriter
+ */
 class RT_DECL_CLASS XmlFileWriter
 {
 public:
@@ -1052,8 +1210,8 @@ public:
      */
     void write(const char *pcszFilename, bool fSafe);
 
-    static int WriteCallback(void *aCtxt, const char *aBuf, int aLen);
-    static int CloseCallback(void *aCtxt);
+    static int WriteCallback(void *aCtxt, const char *aBuf, int aLen) RT_NOTHROW_PROTO;
+    static int CloseCallback(void *aCtxt) RT_NOTHROW_PROTO;
 
     /** The suffix used by XmlFileWriter::write() for the temporary file. */
     static const char * const s_pszTmpSuff;
@@ -1076,5 +1234,5 @@ private:
 
 } // end namespace xml
 
-#endif /* !___iprt_xml_h */
+#endif /* !IPRT_INCLUDED_cpp_xml_h */
 

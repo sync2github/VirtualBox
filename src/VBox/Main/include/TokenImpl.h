@@ -1,12 +1,10 @@
-/* $Id$ */
-
+/* $Id: TokenImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
- *
- * Token COM class implementations: MachineToken and MediumLockToken
+ * Token COM class implementations - MachineToken and MediumLockToken
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef TOKEN_IMPL_H_
-#define TOKEN_IMPL_H_
+#ifndef MAIN_INCLUDED_TokenImpl_h
+#define MAIN_INCLUDED_TokenImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "TokenWrap.h"
 #include "MachineImpl.h"
@@ -32,7 +33,7 @@ class ATL_NO_VTABLE MachineToken :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(MachineToken)
+    DECLARE_COMMON_CLASS_METHODS(MachineToken)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -71,7 +72,7 @@ class ATL_NO_VTABLE MediumLockToken :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(MediumLockToken)
+    DECLARE_COMMON_CLASS_METHODS(MediumLockToken)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -102,6 +103,6 @@ private:
 };
 
 
-#endif // TOKEN_IMPL_H_
+#endif /* !MAIN_INCLUDED_TokenImpl_h */
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

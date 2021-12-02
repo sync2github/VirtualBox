@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VSCSIVpdPages.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual SCSI driver: Definitions for VPD pages.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,8 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-#ifndef ___VSCSIVpdPages_h
-#define ___VSCSIVpdPages_h
+
+#ifndef VBOX_INCLUDED_SRC_Storage_VSCSI_VSCSIVpdPages_h
+#define VBOX_INCLUDED_SRC_Storage_VSCSI_VSCSIVpdPages_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/stdint.h>
 
@@ -194,5 +198,5 @@ AssertCompileSize(VSCSIVPDPAGEBLOCKPROV, VSCSI_VPD_BLOCK_PROV_SIZE);
 typedef VSCSIVPDPAGEBLOCKPROV *PVSCSIVPDPAGEBLOCKPROV;
 typedef const VSCSIVPDPAGEBLOCKPROV *PCVSCSIVPDPAGEBLOCKPROVS;
 
-#endif /* ___VSCSIVpdPages_h */
+#endif /* !VBOX_INCLUDED_SRC_Storage_VSCSI_VSCSIVpdPages_h */
 

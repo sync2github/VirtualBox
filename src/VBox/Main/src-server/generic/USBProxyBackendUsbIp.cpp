@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBProxyBackendUsbIp.cpp 85279 2020-07-12 14:26:32Z vboxsync $ */
 /** @file
  * VirtualBox USB Proxy Backend, USB/IP.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,9 +19,10 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_MAIN_USBPROXYBACKEND
 #include "USBProxyService.h"
 #include "USBGetDevices.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/usb.h>
 #include <VBox/usblib.h>
@@ -38,6 +39,7 @@
 #include <iprt/pipe.h>
 #include <iprt/asm.h>
 #include <iprt/cdefs.h>
+#include <iprt/time.h>
 
 /** The USB/IP default port to connect to. */
 #define USBIP_PORT_DEFAULT    3240
@@ -120,7 +122,7 @@ typedef struct UsbIpReqDevList
     /** Command code. */
     uint16_t     u16Cmd;
     /** Status field, unused. */
-    int32_t      u32Status;
+    int32_t      i32Status;
 } UsbIpReqDevList;
 /** Pointer to a device list request. */
 typedef UsbIpReqDevList *PUsbIpReqDevList;
@@ -141,7 +143,7 @@ typedef struct UsbIpRetDevList
     /** Command code. */
     uint16_t     u16Cmd;
     /** Status field, unused. */
-    int32_t      u32Status;
+    int32_t      i32Status;
     /** Number of exported devices. */
     uint32_t     u32DevicesExported;
 } UsbIpRetDevList;
@@ -243,6 +245,8 @@ struct USBProxyBackendUsbIp::Data
     PUSBDEVICE              *ppNext;
     /** Current amount of devices in the list. */
     uint32_t                 cDevicesCur;
+    /** Timestamp of the last time we successfully connected. */
+    uint64_t                 tsConnectSuccessLast;
 };
 
 /**
@@ -279,15 +283,18 @@ USBProxyBackendUsbIp::~USBProxyBackendUsbIp()
  *
  * @returns S_OK on success and non-fatal failures, some COM error otherwise.
  */
-int USBProxyBackendUsbIp::init(USBProxyService *aUsbProxyService, const com::Utf8Str &strId, const com::Utf8Str &strAddress)
+int USBProxyBackendUsbIp::init(USBProxyService *pUsbProxyService, const com::Utf8Str &strId,
+                               const com::Utf8Str &strAddress, bool fLoadingSettings)
 {
     int rc = VINF_SUCCESS;
 
-    USBProxyBackend::init(aUsbProxyService, strId, strAddress);
+    USBProxyBackend::init(pUsbProxyService, strId, strAddress, fLoadingSettings);
 
     unconst(m_strBackend) = Utf8Str("USBIP");
 
     m = new Data;
+
+    m->tsConnectSuccessLast = 0;
 
     /* Split address into hostname and port. */
     RTCList<RTCString> lstAddress = strAddress.split(":");
@@ -317,9 +324,17 @@ int USBProxyBackendUsbIp::init(USBProxyService *aUsbProxyService, const com::Utf
                                       RTPOLL_EVT_READ, USBIP_POLL_ID_PIPE);
                 if (RT_SUCCESS(rc))
                 {
-                    /* Connect to the USB/IP host. */
+                    /*
+                     * Connect to the USB/IP host. Be more graceful to connection errors
+                     * if we are instantiated while the settings are loaded to let
+                     * VBoxSVC start.
+                     *
+                     * The worker thread keeps trying to connect every few seconds until
+                     * either the USB source is removed by the user or the USB server is
+                     * reachable.
+                     */
                     rc = reconnect();
-                    if (RT_SUCCESS(rc))
+                    if (RT_SUCCESS(rc) || fLoadingSettings)
                         rc = start(); /* Start service thread. */
                 }
 
@@ -445,12 +460,16 @@ int USBProxyBackendUsbIp::wait(RTMSINTERVAL aMillies)
     int rc = VINF_SUCCESS;
     bool fDeviceListChangedOrWokenUp = false;
 
+    /* Don't start any possibly lengthy operation if we are supposed to return immediately again. */
+    if (!aMillies)
+        return VINF_SUCCESS;
+
     /* Try to reconnect once when we enter if we lost the connection earlier. */
     if (m->hSocket == NIL_RTSOCKET)
-        rc = reconnect();
+        reconnect();
 
     /* Query a new device list upon entering. */
-    if (   RT_SUCCESS(rc)
+    if (   m->hSocket != NIL_RTSOCKET
         && m->enmRecvState == kUsbIpRecvState_None)
     {
         rc = startListExportedDevicesReq();
@@ -473,9 +492,9 @@ int USBProxyBackendUsbIp::wait(RTMSINTERVAL aMillies)
         uint32_t uIdReady = 0;
         uint32_t fEventsRecv = 0;
 
-        /* Limit the waiting time to 1sec so we can either reconnect or get a new device list. */
+        /* Limit the waiting time to 3sec so we can either reconnect or get a new device list. */
         if (m->hSocket == NIL_RTSOCKET || m->enmRecvState == kUsbIpRecvState_None)
-            msWait = RT_MIN(1000, aMillies);
+            msWait = RT_MIN(3000, aMillies);
 
         rc = RTPoll(m->hPollSet, msWait, &fEventsRecv, &uIdReady);
         if (RT_SUCCESS(rc))
@@ -540,10 +559,20 @@ int USBProxyBackendUsbIp::wait(RTMSINTERVAL aMillies)
             {
                 /* Try to reconnect and start a new request if we lost the connection before. */
                 if (m->hSocket == NIL_RTSOCKET)
+                {
                     rc = reconnect();
-
-                if (RT_SUCCESS(rc))
-                    rc = startListExportedDevicesReq();
+                    if (RT_SUCCESS(rc))
+                        rc = startListExportedDevicesReq();
+                    else if (   rc == VERR_NET_SHUTDOWN
+                             || rc == VERR_BROKEN_PIPE
+                             || rc == VERR_NET_CONNECTION_RESET_BY_PEER
+                             || rc == VERR_NET_CONNECTION_REFUSED)
+                    {
+                        if (hasDevListChanged(m->pHead))
+                            fDeviceListChangedOrWokenUp = true;
+                        rc = VINF_SUCCESS;
+                    }
+                }
             }
         }
     }
@@ -705,7 +734,22 @@ int USBProxyBackendUsbIp::reconnect()
             m->hSocket = NIL_RTSOCKET;
         }
         else
+        {
             LogFlowFunc(("Connected to host \"%s\"\n", m->pszHost));
+            m->tsConnectSuccessLast = RTTimeMilliTS();
+        }
+    }
+    else if (m->tsConnectSuccessLast + 10 * RT_MS_1SEC < RTTimeMilliTS())
+    {
+        /* Make sure the device list is clear if we failed to reconnect for some time. */
+        RTSemFastMutexRequest(m->hMtxDevices);
+        if (m->pUsbDevicesCur)
+        {
+            freeDeviceList(m->pUsbDevicesCur);
+            m->cUsbDevicesCur = 0;
+            m->pUsbDevicesCur = NULL;
+        }
+        RTSemFastMutexRelease(m->hMtxDevices);
     }
 
     LogFlowFunc(("returns rc=%Rrc\n", rc));
@@ -737,7 +781,8 @@ int USBProxyBackendUsbIp::startListExportedDevicesReq()
         UsbIpReqDevList ReqDevList;
         ReqDevList.u16Version = RT_H2N_U16(USBIP_VERSION);
         ReqDevList.u16Cmd     = RT_H2N_U16(USBIP_INDICATOR_REQ | USBIP_REQ_RET_DEVLIST);
-        ReqDevList.u32Status  = RT_H2N_U32(0);
+        ReqDevList.i32Status  = RT_H2N_S32(0);
+
         rc = RTTcpWrite(m->hSocket, &ReqDevList, sizeof(ReqDevList));
         if (RT_SUCCESS(rc))
             advanceState(kUsbIpRecvState_Hdr);
@@ -808,14 +853,13 @@ int USBProxyBackendUsbIp::receiveData()
         LogFlowFunc(("RTTcpReadNB(%#p, %#p, %zu, %zu) -> %Rrc\n",
                      m->hSocket, m->pbRecvBuf, m->cbResidualRecv, cbRecvd, rc));
 
-        if (rc == VINF_SUCCESS)
+        if (   rc == VINF_SUCCESS
+            && cbRecvd > 0)
         {
-            Assert(cbRecvd > 0);
             m->cbResidualRecv -= cbRecvd;
             m->pbRecvBuf      += cbRecvd;
             /* In case we received everything for the current state process the data. */
-            if (   !m->cbResidualRecv
-                && cbRecvd > 0)
+            if (!m->cbResidualRecv)
             {
                 rc = processData();
                 if (   RT_SUCCESS(rc)
@@ -851,7 +895,8 @@ int USBProxyBackendUsbIp::processData()
             /* Check that the reply matches our expectations. */
             if (   RT_N2H_U16(m->Scratch.RetDevList.u16Version) == USBIP_VERSION
                 && RT_N2H_U16(m->Scratch.RetDevList.u16Cmd) == USBIP_REQ_RET_DEVLIST
-                && RT_N2H_U32(m->Scratch.RetDevList.u32Status) == USBIP_STATUS_SUCCESS)
+                && RT_N2H_S32(m->Scratch.RetDevList.i32Status) == USBIP_STATUS_SUCCESS)
+
             {
                 /* Populate the number of exported devices in the list and go to the next state. */
                 m->cDevicesLeft = RT_N2H_U32(m->Scratch.RetDevList.u32DevicesExported);
@@ -864,7 +909,7 @@ int USBProxyBackendUsbIp::processData()
             {
                 LogRelMax(10, ("USB/IP: Host sent an invalid reply to the list exported device request (Version: %#x Cmd: %#x Status: %#x)\n",
                                RT_N2H_U16(m->Scratch.RetDevList.u16Version), RT_N2H_U16(m->Scratch.RetDevList.u16Cmd),
-                               RT_N2H_U32(m->Scratch.RetDevList.u32Status)));
+                               RT_N2H_S32(m->Scratch.RetDevList.i32Status)));
                 /* Disconnect and start over. */
                 advanceState(kUsbIpRecvState_None);
                 disconnect();

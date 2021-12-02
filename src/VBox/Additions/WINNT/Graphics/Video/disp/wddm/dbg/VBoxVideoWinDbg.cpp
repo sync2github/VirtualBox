@@ -1,7 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxVideoWinDbg.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * Copyright (C) 2011-2016 Oracle Corporation
+ * ???
+ */
+
+/*
+ * Copyright (C) 2017-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -88,7 +91,7 @@ VOID WDBGAPI WinDbgExtensionDllInit(PWINDBG_EXTENSION_APIS64 lpExtensionApis, US
 
 DECLARE_API(help)
 {
-    dprintf("**** VirtulBox Video Driver debugging extension ****\n"
+    dprintf("**** VirtualBox Video Driver debugging extension ****\n"
             " The following commands are supported: \n"
             " !ms - save memory (video data) to clipboard \n"
             "  usage: !ms <virtual memory address> <width> <height> [bitsPerPixel (default is 32)] [pitch (default is ((width * bpp + 7) >> 3) + 3) & ~3)]\n");

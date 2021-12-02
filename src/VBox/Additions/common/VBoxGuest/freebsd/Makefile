@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile 91789 2021-10-17 18:16:11Z vboxsync $
 ## @file
 # VirtualBox Guest Additions Module Makefile.
 #
 
 #
-# Copyright (C) 2006-2015 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
 # Foundation, in version 2 as it comes in the "COPYING" file of the
 # VirtualBox OSE distribution. VirtualBox OSE is distributed in the
 # hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+# The contents of this file may alternatively be used under the terms
+# of the Common Development and Distribution License Version 1.0
+# (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+# VirtualBox OSE distribution, in which case the provisions of the
+# CDDL are applicable instead of those of the GPL.
+#
+# You may elect to license modified versions of this file under the
+# terms and conditions of either the GPL or the CDDL or both.
 #
 KMOD = vboxguest
 
@@ -27,12 +36,11 @@ CFLAGS += -DRT_OS_FREEBSD -DIN_RING0 -DIN_RT_R0 -DIN_SUP_R0 -DVBOX -DRT_WITH_VBO
 SRCS = \
 	VBoxGuest.c \
 	VBoxGuest-freebsd.c \
-	GenericRequest.c \
-	HGCMInternal.c \
-	Init.c \
-	PhysHeap.c \
-	SysHlp.c \
-	VMMDev.c
+	VBoxGuestR0LibGenericRequest.c \
+	VBoxGuestR0LibHGCMInternal.c \
+	VBoxGuestR0LibInit.c \
+	VBoxGuestR0LibPhysHeap.c \
+	VBoxGuestR0LibVMMDev.c
 
 # Include needed interface headers so they are created during build
 SRCS += \
@@ -47,7 +55,8 @@ SRCS += \
 .PATH:	${.CURDIR}/common/err
 SRCS += \
 	RTErrConvertFromErrno.c \
-	RTErrConvertToErrno.c
+	RTErrConvertToErrno.c \
+	errinfo.c
 
 .PATH:	${.CURDIR}/common/log
 SRCS += \
@@ -56,7 +65,8 @@ SRCS += \
 	logrel.c \
 	logrelellipsis.c \
 	logcom.c \
-	logformat.c
+	logformat.c \
+	RTLogCreateEx.c
 
 .PATH:	${.CURDIR}/common/misc
 SRCS += \
@@ -75,15 +85,29 @@ SRCS += \
 
 .PATH:	${.CURDIR}/common/string
 SRCS += \
+	RTStrCat.c \
+	RTStrCmp.c \
 	RTStrCopy.c \
 	RTStrCopyEx.c \
 	RTStrCopyP.c \
+	RTStrEnd.c \
+	RTStrICmpAscii.c \
+	RTStrNICmpAscii.c \
+	RTStrNCmp.c \
+	RTStrNLen.c \
+	stringalloc.c \
 	strformat.c \
+	RTStrFormat.c \
+	strformatnum.c \
 	strformatrt.c \
 	strformattype.c \
 	strprintf.c \
+	strprintf-ellipsis.c \
+	strprintf2.c \
+	strprintf2-ellipsis.c \
 	strtonum.c \
-	memchr.c
+	memchr.c \
+	utf-8.c
 
 .PATH:	${.CURDIR}/common/rand
 SRCS += \
@@ -122,6 +146,7 @@ SRCS += \
 	RTSemEventMultiWait-2-ex-generic.c \
 	RTSemEventMultiWaitNoResume-2-ex-generic.c \
 	RTTimerCreate-generic.c \
+	rtStrFormatKernelAddress-generic.c \
 	timer-generic.c \
 	errvars-generic.c \
 	mppresent-generic.c
@@ -149,8 +174,7 @@ SRCS += \
 	spinlock-r0drv-freebsd.c \
 	thread-r0drv-freebsd.c \
 	thread2-r0drv-freebsd.c \
-	time-r0drv-freebsd.c \
-	timer-r0drv-freebsd.c
+	time-r0drv-freebsd.c
 
 .PATH:	${.CURDIR}/r0drv/generic
 SRCS += \

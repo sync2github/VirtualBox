@@ -1,10 +1,10 @@
- ; $Id$
+ ; $Id: CPUMRZA.asm 91283 2021-09-16 13:58:36Z vboxsync $
 ;; @file
 ; CPUM - Raw-mode and Ring-0 Context Assembly Routines.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -34,9 +34,7 @@ BEGINCODE
 ;;
 ; Saves the host FPU/SSE/AVX state.
 ;
-; Will return with CR0.EM and CR0.TS cleared!  This is the normal state in
-; ring-0, whereas in raw-mode the caller will probably set VMCPU_FF_CPUM to
-; re-evaluate the situation before executing more guest code.
+; Will return with CR0.EM and CR0.TS cleared!  This is the normal state in ring-0.
 ;
 ; @returns  VINF_SUCCESS (0) or VINF_CPUM_HOST_CR0_MODIFIED. (EAX)
 ; @param    pCpumCpu  x86:[ebp+8] gcc:rdi msc:rcx     CPUMCPU pointer
@@ -105,6 +103,12 @@ ENDPROC   cpumRZSaveHostFPUState
 ; @param    fLeaveFpuAccessible  x86:[ebp+c] gcc:sil msc:dl      Whether to restore CR0 and XCR0 on
 ;                                                                the way out. Only really applicable to RC.
 ;
+; @remarks  64-bit Windows drivers shouldn't use AVX registers without saving+loading:
+;               https://msdn.microsoft.com/en-us/library/windows/hardware/ff545910%28v=vs.85%29.aspx?f=255&MSPPError=-2147217396
+;           However the compiler docs have different idea:
+;               https://msdn.microsoft.com/en-us/library/9z1stfyw.aspx
+;           We'll go with the former for now.
+;
 align 16
 BEGINPROC cpumRZSaveGuestFpuState
         push    xBP
@@ -154,7 +158,7 @@ SEH64_END_PROLOGUE
         ;
 
         ; Save caller's XMM registers.
-        mov     pXState, [pCpumCpu + CPUMCPU.Host.pXStateR0]
+        lea     pXState, [pCpumCpu + CPUMCPU.Host.XState]
         movdqa  [pXState + X86FXSTATE.xmm6 ], xmm6
         movdqa  [pXState + X86FXSTATE.xmm7 ], xmm7
         movdqa  [pXState + X86FXSTATE.xmm8 ], xmm8
@@ -165,9 +169,10 @@ SEH64_END_PROLOGUE
         movdqa  [pXState + X86FXSTATE.xmm13], xmm13
         movdqa  [pXState + X86FXSTATE.xmm14], xmm14
         movdqa  [pXState + X86FXSTATE.xmm15], xmm15
+        stmxcsr [pXState + X86FXSTATE.MXCSR]
 
         ; Load the guest XMM register values we already saved in HMR0VMXStartVMWrapXMM.
-        mov     pXState, [pCpumCpu + CPUMCPU.Guest.pXStateR0]
+        lea     pXState, [pCpumCpu + CPUMCPU.Guest.XState]
         movdqa  xmm0,  [pXState + X86FXSTATE.xmm0]
         movdqa  xmm1,  [pXState + X86FXSTATE.xmm1]
         movdqa  xmm2,  [pXState + X86FXSTATE.xmm2]
@@ -184,11 +189,12 @@ SEH64_END_PROLOGUE
         movdqa  xmm13, [pXState + X86FXSTATE.xmm13]
         movdqa  xmm14, [pXState + X86FXSTATE.xmm14]
         movdqa  xmm15, [pXState + X86FXSTATE.xmm15]
+        ldmxcsr        [pXState + X86FXSTATE.MXCSR]
 
         CPUMR0_SAVE_GUEST
 
         ; Restore caller's XMM registers.
-        mov     pXState, [pCpumCpu + CPUMCPU.Host.pXStateR0]
+        lea     pXState, [pCpumCpu + CPUMCPU.Host.XState]
         movdqa  xmm6,  [pXState + X86FXSTATE.xmm6 ]
         movdqa  xmm7,  [pXState + X86FXSTATE.xmm7 ]
         movdqa  xmm8,  [pXState + X86FXSTATE.xmm8 ]
@@ -199,10 +205,12 @@ SEH64_END_PROLOGUE
         movdqa  xmm13, [pXState + X86FXSTATE.xmm13]
         movdqa  xmm14, [pXState + X86FXSTATE.xmm14]
         movdqa  xmm15, [pXState + X86FXSTATE.xmm15]
+        ldmxcsr        [pXState + X86FXSTATE.MXCSR]
 
  %endif
 
         and     dword [pCpumCpu + CPUMCPU.fUseFlags], ~CPUM_USED_FPU_GUEST
+        mov     byte [pCpumCpu + CPUMCPU.Guest.fUsedFpuGuest], 0
  %ifdef IN_RC
         test    byte [ebp + 0ch], 1     ; fLeaveFpuAccessible
         jz      .no_cr0_restore
@@ -222,7 +230,7 @@ ENDPROC   cpumRZSaveGuestFpuState
 
 
 ;;
-; Saves the guest XMM0..15 registers.
+; Saves the guest XMM0..15 registers and MXCSR.
 ;
 ; The purpose is to actualize the register state for read-only use, so CR0 is
 ; restored in raw-mode context (so, the FPU/SSE/AVX CPU features can be
@@ -240,20 +248,14 @@ SEH64_END_PROLOGUE
 
 %ifndef VBOX_WITH_KERNEL_USING_XMM
         ;
-        ; Load xCX with the guest pXStateR0.
+        ; Load xCX with the guest pXState.
         ;
  %ifdef ASM_CALL64_GCC
         mov     xCX, rdi
  %elifdef RT_ARCH_X86
         mov     xCX, dword [ebp + 8]
  %endif
- %ifdef IN_RING0
-        mov     xCX, [xCX + CPUMCPU.Guest.pXStateR0]
- %elifdef IN_RC
-        mov     xCX, [xCX + CPUMCPU.Guest.pXStateRC]
- %else
-  %error "Invalid context!"
- %endif
+        lea     xCX, [xCX + CPUMCPU.Guest.XState]
 
  %ifdef IN_RC
         ; Temporarily grant access to the SSE state. xDX must be preserved until CR0 is restored!
@@ -269,6 +271,7 @@ SEH64_END_PROLOGUE
         ;
         ; Do the job.
         ;
+        stmxcsr [xCX + X86FXSTATE.MXCSR]
         movdqa  [xCX + X86FXSTATE.xmm0 ], xmm0
         movdqa  [xCX + X86FXSTATE.xmm1 ], xmm1
         movdqa  [xCX + X86FXSTATE.xmm2 ], xmm2
@@ -297,4 +300,74 @@ SEH64_END_PROLOGUE
         leave
         ret
 ENDPROC   cpumRZSaveGuestSseRegisters
+
+;;
+; Saves the guest YMM0..15 registers.
+;
+; The purpose is to actualize the register state for read-only use, so CR0 is
+; restored in raw-mode context (so, the FPU/SSE/AVX CPU features can be
+; inaccessible upon return).
+;
+; @param    pCpumCpu  x86:[ebp+8] gcc:rdi msc:rcx     CPUMCPU pointer
+;
+align 16
+BEGINPROC cpumRZSaveGuestAvxRegisters
+        push    xBP
+        SEH64_PUSH_xBP
+        mov     xBP, xSP
+        SEH64_SET_FRAME_xBP 0
+%ifdef IN_RC
+        push    xBX
+%endif
+SEH64_END_PROLOGUE
+
+        ;
+        ; Load xCX with the guest pXState.
+        ;
+%ifdef ASM_CALL64_GCC
+        mov     xCX, rdi
+%elifdef RT_ARCH_X86
+        mov     xCX, dword [ebp + 8]
+%endif
+        lea     xCX, [xCX + CPUMCPU.Guest.XState]
+
+%ifdef IN_RC
+        ; Temporarily grant access to the SSE state. xBX must be preserved until CR0 is restored!
+        mov     ebx, cr0
+        test    ebx, X86_CR0_TS | X86_CR0_EM
+        jz      .skip_cr0_write
+        mov     eax, ebx
+        and     eax, ~(X86_CR0_TS | X86_CR0_EM)
+        mov     cr0, eax
+.skip_cr0_write:
+%endif
+
+        ;
+        ; Use XSAVE to do the job.
+        ;
+        ; Drivers shouldn't use AVX registers without saving+loading:
+        ;     https://msdn.microsoft.com/en-us/library/windows/hardware/ff545910%28v=vs.85%29.aspx?f=255&MSPPError=-2147217396
+        ; However the compiler docs have different idea:
+        ;     https://msdn.microsoft.com/en-us/library/9z1stfyw.aspx
+        ; We'll go with the former for now.
+        ;
+%ifdef VBOX_WITH_KERNEL_USING_XMM
+        mov     eax, XSAVE_C_YMM
+%else
+        mov     eax, XSAVE_C_YMM | XSAVE_C_SSE ; The SSE component includes MXCSR.
+%endif
+        xor     edx, edx
+%if ARCH_BITS == 64
+        o64 xsave [xCX]
+%else
+        xsave   [xCX]
+%endif
+
+%ifdef IN_RC
+        CPUMRZ_RESTORE_CR0_IF_TS_OR_EM_SET ebx  ; Restore CR0 if we changed it above.
+        pop     xBX
+%endif
+        leave
+        ret
+ENDPROC   cpumRZSaveGuestAvxRegisters
 

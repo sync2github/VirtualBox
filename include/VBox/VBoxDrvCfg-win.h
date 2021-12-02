@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDrvCfg-win.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * Windows Driver Manipulation API.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_VBoxDrvCfg_win_h
-#define ___VBox_VBoxDrvCfg_win_h
+#ifndef VBOX_INCLUDED_VBoxDrvCfg_win_h
+#define VBOX_INCLUDED_VBoxDrvCfg_win_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/win/windows.h>
 #include <VBox/cdefs.h>
@@ -51,12 +54,12 @@ typedef enum
     VBOXDRVCFG_LOG_SEVERITY_REL
 } VBOXDRVCFG_LOG_SEVERITY;
 
-typedef DECLCALLBACK(void) FNVBOXDRVCFG_LOG(VBOXDRVCFG_LOG_SEVERITY enmSeverity, char *pszMsg, void *pvContext);
+typedef DECLCALLBACKTYPE(void, FNVBOXDRVCFG_LOG,(VBOXDRVCFG_LOG_SEVERITY enmSeverity, char *pszMsg, void *pvContext));
 typedef FNVBOXDRVCFG_LOG *PFNVBOXDRVCFG_LOG;
 
 VBOXDRVCFG_DECL(void) VBoxDrvCfgLoggerSet(PFNVBOXDRVCFG_LOG pfnLog, void *pvLog);
 
-typedef DECLCALLBACK(void) FNVBOXDRVCFG_PANIC(void * pvPanic);
+typedef DECLCALLBACKTYPE(void, FNVBOXDRVCFG_PANIC,(void *pvPanic));
 typedef FNVBOXDRVCFG_PANIC *PFNVBOXDRVCFG_PANIC;
 VBOXDRVCFG_DECL(void) VBoxDrvCfgPanicSet(PFNVBOXDRVCFG_PANIC pfnPanic, void *pvPanic);
 
@@ -73,5 +76,5 @@ HRESULT VBoxDrvCfgDrvUpdate(LPCWSTR pcszwHwId, LPCWSTR pcsxwInf, BOOL *pbRebootR
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_VBoxDrvCfg_win_h */
 

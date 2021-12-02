@@ -1,12 +1,10 @@
-/* $Id$ */
-
+/* $Id: PerformanceLinux.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * VBox Linux-specific Performance Classes implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_PERFORMANCECOLLECTOR
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/statvfs.h>
@@ -36,7 +35,7 @@
 #include <map>
 #include <vector>
 
-#include "Logging.h"
+#include "LoggingNew.h"
 #include "Performance.h"
 
 #define VBOXVOLINFO_NAME "VBoxVolInfo"

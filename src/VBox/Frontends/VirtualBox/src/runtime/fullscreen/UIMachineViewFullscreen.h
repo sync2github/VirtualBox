@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineViewFullscreen.h 84790 2020-06-11 10:30:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineViewFullscreen class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineViewFullscreen_h___
-#define ___UIMachineViewFullscreen_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_fullscreen_UIMachineViewFullscreen_h
+#define FEQT_INCLUDED_SRC_runtime_fullscreen_UIMachineViewFullscreen_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Local includes */
 #include "UIMachineView.h"
@@ -28,12 +31,7 @@ class UIMachineViewFullscreen : public UIMachineView
 protected:
 
     /* Fullscreen machine-view constructor: */
-    UIMachineViewFullscreen(  UIMachineWindow *pMachineWindow
-                            , ulong uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                            , bool bAccelerate2DVideo
-#endif
-    );
+    UIMachineViewFullscreen(UIMachineWindow *pMachineWindow, ulong uScreenId);
     /* Fullscreen machine-view destructor: */
     virtual ~UIMachineViewFullscreen() {}
 
@@ -76,5 +74,5 @@ private:
     friend class UIMachineView;
 };
 
-#endif // !___UIMachineViewFullscreen_h___
+#endif /* !FEQT_INCLUDED_SRC_runtime_fullscreen_UIMachineViewFullscreen_h */
 

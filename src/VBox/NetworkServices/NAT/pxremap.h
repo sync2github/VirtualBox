@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pxremap.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT Network - Loopback remapping, declarations and definitions.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef _pxremap_h_
-#define _pxremap_h_
+#ifndef VBOX_INCLUDED_SRC_NAT_pxremap_h
+#define VBOX_INCLUDED_SRC_NAT_pxremap_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "lwip/err.h"
 #include "lwip/ip_addr.h"
@@ -46,4 +49,4 @@ int pxremap_inbound_ip6(ip6_addr_t *dst, ip6_addr_t *src);
     ((is_ipv6) ? pxremap_outbound_ip6(&(dst)->ip6, &(src)->ip6)         \
                : pxremap_outbound_ip4(&(dst)->ip4, &(src)->ip4))
 
-#endif /* _pxremap_h_ */
+#endif /* !VBOX_INCLUDED_SRC_NAT_pxremap_h */

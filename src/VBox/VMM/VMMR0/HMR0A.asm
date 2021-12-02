@@ -1,10 +1,10 @@
-; $Id$
+; $Id: HMR0A.asm 91281 2021-09-16 13:32:18Z vboxsync $
 ;; @file
-; HM - Ring-0 VMX, SVM world-switch and helper routines
+; HM - Ring-0 VMX, SVM world-switch and helper routines.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -18,29 +18,20 @@
 ;*********************************************************************************************************************************
 ;*  Header Files                                                                                                                 *
 ;*********************************************************************************************************************************
+;%define RT_ASM_WITH_SEH64  - trouble with SEH, alignment and (probably) 2nd pass optimizations.
+%define RT_ASM_WITH_SEH64_ALT ; Use asmdefs.mac hackery for manually emitting unwind info.
 %include "VBox/asmdefs.mac"
 %include "VBox/err.mac"
 %include "VBox/vmm/hm_vmx.mac"
 %include "VBox/vmm/cpum.mac"
-%include "VBox/vmm/vm.mac"
+%include "VBox/vmm/gvm.mac"
 %include "iprt/x86.mac"
 %include "HMInternal.mac"
 
-%ifdef RT_OS_OS2 ;; @todo fix OMF support in yasm and kick nasm out completely.
- %macro vmwrite 2,
-    int3
- %endmacro
- %define vmlaunch int3
- %define vmresume int3
- %define vmsave int3
- %define vmload int3
- %define vmrun int3
- %define clgi int3
- %define stgi int3
- %macro invlpga 2,
-    int3
- %endmacro
+%ifndef RT_ARCH_AMD64
+ %error AMD64 only.
 %endif
+
 
 ;*********************************************************************************************************************************
 ;*  Defined Constants And Macros                                                                                                 *
@@ -49,180 +40,193 @@
 ; Use define because I'm too lazy to convert the struct.
 %define XMM_OFF_IN_X86FXSTATE   160
 
+;; Spectre filler for 64-bit mode.
+; Choosen to be an invalid address (also with 5 level paging).
+%define SPECTRE_FILLER          0x02204204207fffff
+
 ;;
-; Determine skipping restoring of GDTR, IDTR, TR across VMX non-root operation
+; Determine skipping restoring of GDTR, IDTR, TR across VMX non-root operation.
 ;
-%ifdef RT_ARCH_AMD64
- %define VMX_SKIP_GDTR
- %define VMX_SKIP_TR
- %define VBOX_SKIP_RESTORE_SEG
- %ifdef RT_OS_DARWIN
-  ; Load the NULL selector into DS, ES, FS and GS on 64-bit darwin so we don't
-  ; risk loading a stale LDT value or something invalid.
-  %define HM_64_BIT_USE_NULL_SEL
-  ; Darwin (Mavericks) uses IDTR limit to store the CPU Id so we need to restore it always.
-  ; See @bugref{6875}.
- %else
-  %define VMX_SKIP_IDTR
- %endif
-%endif
-
-;; @def MYPUSHAD
-; Macro generating an equivalent to pushad
-
-;; @def MYPOPAD
-; Macro generating an equivalent to popad
-
-;; @def MYPUSHSEGS
-; Macro saving all segment registers on the stack.
-; @param 1  full width register name
-; @param 2  16-bit register name for \a 1.
-
-;; @def MYPOPSEGS
-; Macro restoring all segment registers on the stack
-; @param 1  full width register name
-; @param 2  16-bit register name for \a 1.
-
-%ifdef ASM_CALL64_GCC
- %macro MYPUSHAD64 0
-   push    r15
-   push    r14
-   push    r13
-   push    r12
-   push    rbx
- %endmacro
- %macro MYPOPAD64 0
-   pop     rbx
-   pop     r12
-   pop     r13
-   pop     r14
-   pop     r15
- %endmacro
-
-%else ; ASM_CALL64_MSC
- %macro MYPUSHAD64 0
-   push    r15
-   push    r14
-   push    r13
-   push    r12
-   push    rbx
-   push    rsi
-   push    rdi
- %endmacro
- %macro MYPOPAD64 0
-   pop     rdi
-   pop     rsi
-   pop     rbx
-   pop     r12
-   pop     r13
-   pop     r14
-   pop     r15
- %endmacro
-%endif
-
-%ifdef VBOX_SKIP_RESTORE_SEG
- %macro MYPUSHSEGS64 2
- %endmacro
-
- %macro MYPOPSEGS64 2
- %endmacro
-%else       ; !VBOX_SKIP_RESTORE_SEG
- ; trashes, rax, rdx & rcx
- %macro MYPUSHSEGS64 2
-  %ifndef HM_64_BIT_USE_NULL_SEL
-   mov     %2, es
-   push    %1
-   mov     %2, ds
-   push    %1
-  %endif
-
-   ; Special case for FS; Windows and Linux either don't use it or restore it when leaving kernel mode, Solaris OTOH doesn't and we must save it.
-   mov     ecx, MSR_K8_FS_BASE
-   rdmsr
-   push    rdx
-   push    rax
-  %ifndef HM_64_BIT_USE_NULL_SEL
-   push    fs
-  %endif
-
-   ; Special case for GS; OSes typically use swapgs to reset the hidden base register for GS on entry into the kernel. The same happens on exit
-   mov     ecx, MSR_K8_GS_BASE
-   rdmsr
-   push    rdx
-   push    rax
-  %ifndef HM_64_BIT_USE_NULL_SEL
-   push    gs
-  %endif
- %endmacro
-
- ; trashes, rax, rdx & rcx
- %macro MYPOPSEGS64 2
-   ; Note: do not step through this code with a debugger!
-  %ifndef HM_64_BIT_USE_NULL_SEL
-   xor     eax, eax
-   mov     ds, ax
-   mov     es, ax
-   mov     fs, ax
-   mov     gs, ax
-  %endif
-
-  %ifndef HM_64_BIT_USE_NULL_SEL
-   pop     gs
-  %endif
-   pop     rax
-   pop     rdx
-   mov     ecx, MSR_K8_GS_BASE
-   wrmsr
-
-  %ifndef HM_64_BIT_USE_NULL_SEL
-   pop     fs
-  %endif
-   pop     rax
-   pop     rdx
-   mov     ecx, MSR_K8_FS_BASE
-   wrmsr
-   ; Now it's safe to step again
-
-  %ifndef HM_64_BIT_USE_NULL_SEL
-   pop     %1
-   mov     ds, %2
-   pop     %1
-   mov     es, %2
-  %endif
- %endmacro
-%endif ; VBOX_SKIP_RESTORE_SEG
-
-%macro MYPUSHAD32 0
-  pushad
-%endmacro
-%macro MYPOPAD32 0
-  popad
-%endmacro
-
-%macro MYPUSHSEGS32 2
-  push    ds
-  push    es
-  push    fs
-  push    gs
-%endmacro
-%macro MYPOPSEGS32 2
-  pop     gs
-  pop     fs
-  pop     es
-  pop     ds
-%endmacro
-
-%ifdef RT_ARCH_AMD64
- %define MYPUSHAD       MYPUSHAD64
- %define MYPOPAD        MYPOPAD64
- %define MYPUSHSEGS     MYPUSHSEGS64
- %define MYPOPSEGS      MYPOPSEGS64
+; @note This is normally done by hmR0VmxExportHostSegmentRegs and VMXRestoreHostState,
+;       so much of this is untested code.
+; @{
+%define VMX_SKIP_GDTR
+%define VMX_SKIP_TR
+%define VBOX_SKIP_RESTORE_SEG
+%ifdef RT_OS_DARWIN
+ ; Load the NULL selector into DS, ES, FS and GS on 64-bit darwin so we don't
+ ; risk loading a stale LDT value or something invalid.
+ %define HM_64_BIT_USE_NULL_SEL
+ ; Darwin (Mavericks) uses IDTR limit to store the CPU number so we need to always restore it.
+ ; See @bugref{6875}.
+ %undef VMX_SKIP_IDTR
 %else
- %define MYPUSHAD       MYPUSHAD32
- %define MYPOPAD        MYPOPAD32
- %define MYPUSHSEGS     MYPUSHSEGS32
- %define MYPOPSEGS      MYPOPSEGS32
+ %define VMX_SKIP_IDTR
 %endif
+;; @}
+
+;; @def CALLEE_PRESERVED_REGISTER_COUNT
+; Number of registers pushed by PUSH_CALLEE_PRESERVED_REGISTERS
+%ifdef ASM_CALL64_GCC
+ %define CALLEE_PRESERVED_REGISTER_COUNT 5
+%else
+ %define CALLEE_PRESERVED_REGISTER_COUNT 7
+%endif
+
+;; @def PUSH_CALLEE_PRESERVED_REGISTERS
+; Macro for pushing all GPRs we must preserve for the caller.
+%macro PUSH_CALLEE_PRESERVED_REGISTERS 0
+        push    r15
+        SEH64_PUSH_GREG r15
+        %assign cbFrame         cbFrame + 8
+        %assign frm_saved_r15   -cbFrame
+
+        push    r14
+        SEH64_PUSH_GREG r14
+        %assign cbFrame         cbFrame + 8
+        %assign frm_saved_r14   -cbFrame
+
+        push    r13
+        SEH64_PUSH_GREG r13
+        %assign cbFrame         cbFrame + 8
+        %assign frm_saved_r13   -cbFrame
+
+        push    r12
+        SEH64_PUSH_GREG r12
+        %assign cbFrame         cbFrame + 8
+        %assign frm_saved_r12   -cbFrame
+
+        push    rbx
+        SEH64_PUSH_GREG rbx
+        %assign cbFrame         cbFrame + 8
+        %assign frm_saved_rbx   -cbFrame
+
+ %ifdef ASM_CALL64_MSC
+        push    rsi
+        SEH64_PUSH_GREG rsi
+        %assign cbFrame         cbFrame + 8
+        %assign frm_saved_rsi   -cbFrame
+
+        push    rdi
+        SEH64_PUSH_GREG rdi
+        %assign cbFrame         cbFrame + 8
+        %assign frm_saved_rdi   -cbFrame
+ %endif
+%endmacro
+
+;; @def POP_CALLEE_PRESERVED_REGISTERS
+; Counterpart to PUSH_CALLEE_PRESERVED_REGISTERS for use in the epilogue.
+%macro POP_CALLEE_PRESERVED_REGISTERS 0
+ %ifdef ASM_CALL64_MSC
+        pop     rdi
+        %assign cbFrame         cbFrame - 8
+        %undef  frm_saved_rdi
+
+        pop     rsi
+        %assign cbFrame         cbFrame - 8
+        %undef  frm_saved_rsi
+ %endif
+        pop     rbx
+        %assign cbFrame         cbFrame - 8
+        %undef  frm_saved_rbx
+
+        pop     r12
+        %assign cbFrame         cbFrame - 8
+        %undef  frm_saved_r12
+
+        pop     r13
+        %assign cbFrame         cbFrame - 8
+        %undef  frm_saved_r13
+
+        pop     r14
+        %assign cbFrame         cbFrame - 8
+        %undef  frm_saved_r14
+
+        pop     r15
+        %assign cbFrame         cbFrame - 8
+        %undef  frm_saved_r15
+%endmacro
+
+
+;; @def PUSH_RELEVANT_SEGMENT_REGISTERS
+; Macro saving all segment registers on the stack.
+; @param 1  Full width register name.
+; @param 2  16-bit register name for \a 1.
+; @cobbers rax, rdx, rcx
+%macro PUSH_RELEVANT_SEGMENT_REGISTERS 2
+ %ifndef VBOX_SKIP_RESTORE_SEG
+  %error untested code. probably does not work any more!
+  %ifndef HM_64_BIT_USE_NULL_SEL
+        mov     %2, es
+        push    %1
+        mov     %2, ds
+        push    %1
+  %endif
+
+        ; Special case for FS; Windows and Linux either don't use it or restore it when leaving kernel mode,
+        ; Solaris OTOH doesn't and we must save it.
+        mov     ecx, MSR_K8_FS_BASE
+        rdmsr
+        push    rdx
+        push    rax
+  %ifndef HM_64_BIT_USE_NULL_SEL
+        push    fs
+  %endif
+
+   ; Special case for GS; OSes typically use swapgs to reset the hidden base register for GS on entry into the kernel.
+   ; The same happens on exit.
+        mov     ecx, MSR_K8_GS_BASE
+        rdmsr
+        push    rdx
+        push    rax
+  %ifndef HM_64_BIT_USE_NULL_SEL
+        push    gs
+  %endif
+ %endif   ; !VBOX_SKIP_RESTORE_SEG
+%endmacro ; PUSH_RELEVANT_SEGMENT_REGISTERS
+
+;; @def POP_RELEVANT_SEGMENT_REGISTERS
+; Macro restoring all segment registers on the stack.
+; @param 1  Full width register name.
+; @param 2  16-bit register name for \a 1.
+; @cobbers rax, rdx, rcx
+%macro POP_RELEVANT_SEGMENT_REGISTERS 2
+ %ifndef VBOX_SKIP_RESTORE_SEG
+  %error untested code. probably does not work any more!
+        ; Note: do not step through this code with a debugger!
+  %ifndef HM_64_BIT_USE_NULL_SEL
+        xor     eax, eax
+        mov     ds, ax
+        mov     es, ax
+        mov     fs, ax
+        mov     gs, ax
+  %endif
+
+  %ifndef HM_64_BIT_USE_NULL_SEL
+        pop     gs
+  %endif
+        pop     rax
+        pop     rdx
+        mov     ecx, MSR_K8_GS_BASE
+        wrmsr
+
+  %ifndef HM_64_BIT_USE_NULL_SEL
+        pop     fs
+  %endif
+        pop     rax
+        pop     rdx
+        mov     ecx, MSR_K8_FS_BASE
+        wrmsr
+        ; Now it's safe to step again
+
+  %ifndef HM_64_BIT_USE_NULL_SEL
+        pop     %1
+        mov     ds, %2
+        pop     %1
+        mov     es, %2
+  %endif
+ %endif   ; !VBOX_SKIP_RESTORE_SEG
+%endmacro ; POP_RELEVANT_SEGMENT_REGISTERS
 
 
 ;*********************************************************************************************************************************
@@ -236,1828 +240,1266 @@ extern NAME(CPUMIsGuestFPUStateActive)
 BEGINCODE
 
 
-;/**
-; * Restores host-state fields.
-; *
-; * @returns VBox status code
-; * @param   f32RestoreHost x86: [ebp + 08h]  msc: ecx  gcc: edi   RestoreHost flags.
-; * @param   pRestoreHost   x86: [ebp + 0ch]  msc: rdx  gcc: rsi   Pointer to the RestoreHost struct.
-; */
+;;
+; Used on platforms with poor inline assembly support to retrieve all the
+; info from the CPU and put it in the @a pRestoreHost structure.
+;
+; @returns VBox status code
+; @param   pRestoreHost   msc: rcx  gcc: rdi    Pointer to the RestoreHost struct.
+; @param   fHaveFsGsBase  msc: dl   gcc: sil    Whether we can use rdfsbase or not.
+;
+ALIGNCODE(64)
+BEGINPROC hmR0VmxExportHostSegmentRegsAsmHlp
+%ifdef ASM_CALL64_MSC
+ %define pRestoreHost rcx
+%elifdef ASM_CALL64_GCC
+ %define pRestoreHost rdi
+%else
+ %error Unknown calling convension.
+%endif
+        SEH64_END_PROLOGUE
+
+        ; Start with the FS and GS base so we can trash DL/SIL.
+%ifdef ASM_CALL64_MSC
+        or      dl, dl
+%else
+        or      sil, sil
+%endif
+        jz      .use_rdmsr_for_fs_and_gs_base
+        rdfsbase rax
+        mov     [pRestoreHost + VMXRESTOREHOST.uHostFSBase], rax
+        rdgsbase rax
+        mov     [pRestoreHost + VMXRESTOREHOST.uHostGSBase], rax
+.done_fs_and_gs_base:
+
+        ; TR, GDTR and IDTR
+        str     [pRestoreHost + VMXRESTOREHOST.uHostSelTR]
+        sgdt    [pRestoreHost + VMXRESTOREHOST.HostGdtr]
+        sidt    [pRestoreHost + VMXRESTOREHOST.HostIdtr]
+
+        ; Segment registers.
+        xor     eax, eax
+        mov     eax, cs
+        mov     [pRestoreHost + VMXRESTOREHOST.uHostSelCS], ax
+
+        mov     eax, ss
+        mov     [pRestoreHost + VMXRESTOREHOST.uHostSelSS], ax
+
+        mov     eax, gs
+        mov     [pRestoreHost + VMXRESTOREHOST.uHostSelGS], ax
+
+        mov     eax, fs
+        mov     [pRestoreHost + VMXRESTOREHOST.uHostSelFS], ax
+
+        mov     eax, es
+        mov     [pRestoreHost + VMXRESTOREHOST.uHostSelES], ax
+
+        mov     eax, ds
+        mov     [pRestoreHost + VMXRESTOREHOST.uHostSelDS], ax
+
+        ret
+
 ALIGNCODE(16)
+.use_rdmsr_for_fs_and_gs_base:
+%ifdef ASM_CALL64_MSC
+        mov     r8, pRestoreHost
+%endif
+
+        mov     ecx, MSR_K8_FS_BASE
+        rdmsr
+        shl     rdx, 32
+        or      rdx, rax
+        mov     [r8 + VMXRESTOREHOST.uHostFSBase], rdx
+
+        mov     ecx, MSR_K8_GS_BASE
+        rdmsr
+        shl     rdx, 32
+        or      rdx, rax
+        mov     [r8 + VMXRESTOREHOST.uHostGSBase], rdx
+
+%ifdef ASM_CALL64_MSC
+        mov     pRestoreHost, r8
+%endif
+        jmp     .done_fs_and_gs_base
+%undef pRestoreHost
+ENDPROC hmR0VmxExportHostSegmentRegsAsmHlp
+
+
+;;
+; Restores host-state fields.
+;
+; @returns VBox status code
+; @param   f32RestoreHost   msc: ecx  gcc: edi   RestoreHost flags.
+; @param   pRestoreHost     msc: rdx  gcc: rsi   Pointer to the RestoreHost struct.
+;
+ALIGNCODE(64)
 BEGINPROC VMXRestoreHostState
-%ifdef RT_ARCH_AMD64
- %ifndef ASM_CALL64_GCC
-    ; Use GCC's input registers since we'll be needing both rcx and rdx further
-    ; down with the wrmsr instruction.  Use the R10 and R11 register for saving
-    ; RDI and RSI since MSC preserve the two latter registers.
-    mov         r10, rdi
-    mov         r11, rsi
-    mov         rdi, rcx
-    mov         rsi, rdx
- %endif
+%ifndef ASM_CALL64_GCC
+        ; Use GCC's input registers since we'll be needing both rcx and rdx further
+        ; down with the wrmsr instruction.  Use the R10 and R11 register for saving
+        ; RDI and RSI since MSC preserve the two latter registers.
+        mov     r10, rdi
+        mov     r11, rsi
+        mov     rdi, rcx
+        mov     rsi, rdx
+%endif
+        SEH64_END_PROLOGUE
 
-    test        edi, VMX_RESTORE_HOST_GDTR
-    jz          .test_idtr
-    lgdt        [rsi + VMXRESTOREHOST.HostGdtr]
+.restore_gdtr:
+        test    edi, VMX_RESTORE_HOST_GDTR
+        jz      .restore_idtr
+        lgdt    [rsi + VMXRESTOREHOST.HostGdtr]
 
-.test_idtr:
-    test        edi, VMX_RESTORE_HOST_IDTR
-    jz          .test_ds
-    lidt        [rsi + VMXRESTOREHOST.HostIdtr]
+.restore_idtr:
+        test    edi, VMX_RESTORE_HOST_IDTR
+        jz      .restore_ds
+        lidt    [rsi + VMXRESTOREHOST.HostIdtr]
 
-.test_ds:
-    test        edi, VMX_RESTORE_HOST_SEL_DS
-    jz          .test_es
-    mov         ax, [rsi + VMXRESTOREHOST.uHostSelDS]
-    mov         ds, eax
+.restore_ds:
+        test    edi, VMX_RESTORE_HOST_SEL_DS
+        jz      .restore_es
+        mov     ax, [rsi + VMXRESTOREHOST.uHostSelDS]
+        mov     ds, eax
 
-.test_es:
-    test        edi, VMX_RESTORE_HOST_SEL_ES
-    jz          .test_tr
-    mov         ax, [rsi + VMXRESTOREHOST.uHostSelES]
-    mov         es, eax
+.restore_es:
+        test    edi, VMX_RESTORE_HOST_SEL_ES
+        jz      .restore_tr
+        mov     ax, [rsi + VMXRESTOREHOST.uHostSelES]
+        mov     es, eax
 
-.test_tr:
-    test        edi, VMX_RESTORE_HOST_SEL_TR
-    jz          .test_fs
-    ; When restoring the TR, we must first clear the busy flag or we'll end up faulting.
-    mov         dx, [rsi + VMXRESTOREHOST.uHostSelTR]
-    mov         ax, dx
-    and         eax, X86_SEL_MASK_OFF_RPL                       ; Mask away TI and RPL bits leaving only the descriptor offset.
-    add         rax, qword [rsi + VMXRESTOREHOST.HostGdtr + 2]  ; xAX <- descriptor offset + GDTR.pGdt.
-    test        edi, VMX_RESTORE_HOST_GDT_READ_ONLY
-    jnz         .gdt_readonly
-    and         dword [rax + 4], ~RT_BIT(9)                     ; Clear the busy flag in TSS desc (bits 0-7=base, bit 9=busy bit).
-    ltr         dx
-    jmp short   .test_fs
-.gdt_readonly:
-    mov         rcx, cr0
-    mov         r9, rcx
-    and         rcx, ~X86_CR0_WP
-    mov         cr0, rcx
-    and         dword [rax + 4], ~RT_BIT(9)                     ; Clear the busy flag in TSS desc (bits 0-7=base, bit 9=busy bit).
-    ltr         dx
-    mov         cr0, r9
+.restore_tr:
+        test    edi, VMX_RESTORE_HOST_SEL_TR
+        jz      .restore_fs
+        ; When restoring the TR, we must first clear the busy flag or we'll end up faulting.
+        mov     dx, [rsi + VMXRESTOREHOST.uHostSelTR]
+        mov     ax, dx
+        and     eax, X86_SEL_MASK_OFF_RPL                       ; mask away TI and RPL bits leaving only the descriptor offset
+        test    edi, VMX_RESTORE_HOST_GDT_READ_ONLY | VMX_RESTORE_HOST_GDT_NEED_WRITABLE
+        jnz     .gdt_readonly_or_need_writable
+        add     rax, qword [rsi + VMXRESTOREHOST.HostGdtr + 2]  ; xAX <- descriptor offset + GDTR.pGdt.
+        and     dword [rax + 4], ~RT_BIT(9)                     ; clear the busy flag in TSS desc (bits 0-7=base, bit 9=busy bit)
+        ltr     dx
 
-.test_fs:
-    ;
-    ; When restoring the selector values for FS and GS, we'll temporarily trash
-    ; the base address (at least the high 32-bit bits, but quite possibly the
-    ; whole base address), the wrmsr will restore it correctly. (VT-x actually
-    ; restores the base correctly when leaving guest mode, but not the selector
-    ; value, so there is little problem with interrupts being enabled prior to
-    ; this restore job.)
-    ; We'll disable ints once for both FS and GS as that's probably faster.
-    ;
-    test        edi, VMX_RESTORE_HOST_SEL_FS | VMX_RESTORE_HOST_SEL_GS
-    jz          .restore_success
-    pushfq
-    cli                                   ; (see above)
+.restore_fs:
+        ;
+        ; When restoring the selector values for FS and GS, we'll temporarily trash
+        ; the base address (at least the high 32-bit bits, but quite possibly the
+        ; whole base address), the wrmsr will restore it correctly. (VT-x actually
+        ; restores the base correctly when leaving guest mode, but not the selector
+        ; value, so there is little problem with interrupts being enabled prior to
+        ; this restore job.)
+        ; We'll disable ints once for both FS and GS as that's probably faster.
+        ;
+        test    edi, VMX_RESTORE_HOST_SEL_FS | VMX_RESTORE_HOST_SEL_GS
+        jz      .restore_success
+        pushfq
+        cli                                   ; (see above)
 
-    test        edi, VMX_RESTORE_HOST_SEL_FS
-    jz          .test_gs
-    mov         ax, word [rsi + VMXRESTOREHOST.uHostSelFS]
-    mov         fs, eax
-    mov         eax, dword [rsi + VMXRESTOREHOST.uHostFSBase]         ; uHostFSBase - Lo
-    mov         edx, dword [rsi + VMXRESTOREHOST.uHostFSBase + 4h]    ; uHostFSBase - Hi
-    mov         ecx, MSR_K8_FS_BASE
-    wrmsr
+        test    edi, VMX_RESTORE_HOST_CAN_USE_WRFSBASE_AND_WRGSBASE
+        jz      .restore_fs_using_wrmsr
 
-.test_gs:
-    test        edi, VMX_RESTORE_HOST_SEL_GS
-    jz          .restore_flags
-    mov         ax, word [rsi + VMXRESTOREHOST.uHostSelGS]
-    mov         gs, eax
-    mov         eax, dword [rsi + VMXRESTOREHOST.uHostGSBase]         ; uHostGSBase - Lo
-    mov         edx, dword [rsi + VMXRESTOREHOST.uHostGSBase + 4h]    ; uHostGSBase - Hi
-    mov         ecx, MSR_K8_GS_BASE
-    wrmsr
+.restore_fs_using_wrfsbase:
+        test    edi, VMX_RESTORE_HOST_SEL_FS
+        jz      .restore_gs_using_wrgsbase
+        mov     rax, qword [rsi + VMXRESTOREHOST.uHostFSBase]
+        mov     cx, word [rsi + VMXRESTOREHOST.uHostSelFS]
+        mov     fs, ecx
+        wrfsbase rax
+
+.restore_gs_using_wrgsbase:
+        test    edi, VMX_RESTORE_HOST_SEL_GS
+        jz      .restore_flags
+        mov     rax, qword [rsi + VMXRESTOREHOST.uHostGSBase]
+        mov     cx, word [rsi + VMXRESTOREHOST.uHostSelGS]
+        mov     gs, ecx
+        wrgsbase rax
 
 .restore_flags:
-    popfq
+        popfq
 
 .restore_success:
-    mov         eax, VINF_SUCCESS
- %ifndef ASM_CALL64_GCC
-    ; Restore RDI and RSI on MSC.
-    mov         rdi, r10
-    mov         rsi, r11
- %endif
-%else  ; RT_ARCH_X86
-    mov         eax, VERR_NOT_IMPLEMENTED
+        mov     eax, VINF_SUCCESS
+%ifndef ASM_CALL64_GCC
+        ; Restore RDI and RSI on MSC.
+        mov     rdi, r10
+        mov     rsi, r11
 %endif
-    ret
+        ret
+
+ALIGNCODE(8)
+.gdt_readonly_or_need_writable:
+        test    edi, VMX_RESTORE_HOST_GDT_NEED_WRITABLE
+        jnz     .gdt_readonly_need_writable
+.gdt_readonly:
+        mov     rcx, cr0
+        mov     r9, rcx
+        add     rax, qword [rsi + VMXRESTOREHOST.HostGdtr + 2]  ; xAX <- descriptor offset + GDTR.pGdt.
+        and     rcx, ~X86_CR0_WP
+        mov     cr0, rcx
+        and     dword [rax + 4], ~RT_BIT(9)                     ; clear the busy flag in TSS desc (bits 0-7=base, bit 9=busy bit)
+        ltr     dx
+        mov     cr0, r9
+        jmp     .restore_fs
+
+ALIGNCODE(8)
+.gdt_readonly_need_writable:
+        add     rax, qword [rsi + VMXRESTOREHOST.HostGdtrRw + 2]  ; xAX <- descriptor offset + GDTR.pGdtRw
+        and     dword [rax + 4], ~RT_BIT(9)                     ; clear the busy flag in TSS desc (bits 0-7=base, bit 9=busy bit)
+        lgdt    [rsi + VMXRESTOREHOST.HostGdtrRw]
+        ltr     dx
+        lgdt    [rsi + VMXRESTOREHOST.HostGdtr]                 ; load the original GDT
+        jmp     .restore_fs
+
+ALIGNCODE(8)
+.restore_fs_using_wrmsr:
+        test    edi, VMX_RESTORE_HOST_SEL_FS
+        jz      .restore_gs_using_wrmsr
+        mov     eax, dword [rsi + VMXRESTOREHOST.uHostFSBase]         ; uHostFSBase - Lo
+        mov     edx, dword [rsi + VMXRESTOREHOST.uHostFSBase + 4h]    ; uHostFSBase - Hi
+        mov     cx, word [rsi + VMXRESTOREHOST.uHostSelFS]
+        mov     fs, ecx
+        mov     ecx, MSR_K8_FS_BASE
+        wrmsr
+
+.restore_gs_using_wrmsr:
+        test    edi, VMX_RESTORE_HOST_SEL_GS
+        jz      .restore_flags
+        mov     eax, dword [rsi + VMXRESTOREHOST.uHostGSBase]         ; uHostGSBase - Lo
+        mov     edx, dword [rsi + VMXRESTOREHOST.uHostGSBase + 4h]    ; uHostGSBase - Hi
+        mov     cx, word [rsi + VMXRESTOREHOST.uHostSelGS]
+        mov     gs, ecx
+        mov     ecx, MSR_K8_GS_BASE
+        wrmsr
+        jmp     .restore_flags
 ENDPROC VMXRestoreHostState
 
 
-;/**
-; * Dispatches an NMI to the host.
-; */
+;;
+; Clears the MDS buffers using VERW.
+ALIGNCODE(16)
+BEGINPROC hmR0MdsClear
+        SEH64_END_PROLOGUE
+        sub     xSP, xCB
+        mov     [xSP], ds
+        verw    [xSP]
+        add     xSP, xCB
+        ret
+ENDPROC   hmR0MdsClear
+
+
+;;
+; Dispatches an NMI to the host.
+;
 ALIGNCODE(16)
 BEGINPROC VMXDispatchHostNmi
-    int 2   ; NMI is always vector 2. The IDT[2] IRQ handler cannot be anything else. See Intel spec. 6.3.1 "External Interrupts".
-    ret
+        ; NMI is always vector 2. The IDT[2] IRQ handler cannot be anything else. See Intel spec. 6.3.1 "External Interrupts".
+        SEH64_END_PROLOGUE
+        int 2
+        ret
 ENDPROC VMXDispatchHostNmi
 
 
-;/**
-; * Executes VMWRITE, 64-bit value.
-; *
-; * @returns VBox status code.
-; * @param   idxField   x86: [ebp + 08h]  msc: rcx  gcc: rdi   VMCS index.
-; * @param   u64Data    x86: [ebp + 0ch]  msc: rdx  gcc: rsi   VM field value.
-; */
-ALIGNCODE(16)
-BEGINPROC VMXWriteVmcs64
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    and         edi, 0ffffffffh
-    xor         rax, rax
-    vmwrite     rdi, rsi
- %else
-    and         ecx, 0ffffffffh
-    xor         rax, rax
-    vmwrite     rcx, rdx
+;;
+; Common restore logic for success and error paths.  We duplicate this because we
+; don't want to waste writing the VINF_SUCCESS return value to the stack in the
+; regular code path.
+;
+; @param    1   Zero if regular return, non-zero if error return.  Controls label emission.
+; @param    2   fLoadSaveGuestXcr0 value
+; @param    3   The (HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY) + HM_WSF_IBPB_EXIT value.
+;               The entry values are either all set or not at all, as we're too lazy to flesh out all the variants.
+; @param    4   The SSE saving/restoring: 0 to do nothing, 1 to do it manually, 2 to use xsave/xrstor.
+;
+; @note Important that this does not modify cbFrame or rsp.
+%macro RESTORE_STATE_VMX 4
+        ; Restore base and limit of the IDTR & GDTR.
+ %ifndef VMX_SKIP_IDTR
+        lidt    [rsp + cbFrame + frm_saved_idtr]
  %endif
-%else  ; RT_ARCH_X86
-    mov         ecx, [esp + 4]          ; idxField
-    lea         edx, [esp + 8]          ; &u64Data
-    vmwrite     ecx, [edx]              ; low dword
-    jz          .done
-    jc          .done
-    inc         ecx
-    xor         eax, eax
-    vmwrite     ecx, [edx + 4]          ; high dword
-.done:
-%endif ; RT_ARCH_X86
-    jnc         .valid_vmcs
-    mov         eax, VERR_VMX_INVALID_VMCS_PTR
-    ret
-.valid_vmcs:
-    jnz         .the_end
-    mov         eax, VERR_VMX_INVALID_VMCS_FIELD
-.the_end:
-    ret
-ENDPROC VMXWriteVmcs64
-
-
-;/**
-; * Executes VMREAD, 64-bit value.
-; *
-; * @returns VBox status code.
-; * @param   idxField        VMCS index.
-; * @param   pData           Where to store VM field value.
-; */
-;DECLASM(int) VMXReadVmcs64(uint32_t idxField, uint64_t *pData);
-ALIGNCODE(16)
-BEGINPROC VMXReadVmcs64
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    and         edi, 0ffffffffh
-    xor         rax, rax
-    vmread      [rsi], rdi
- %else
-    and         ecx, 0ffffffffh
-    xor         rax, rax
-    vmread      [rdx], rcx
+ %ifndef VMX_SKIP_GDTR
+        lgdt    [rsp + cbFrame + frm_saved_gdtr]
  %endif
-%else  ; RT_ARCH_X86
-    mov         ecx, [esp + 4]          ; idxField
-    mov         edx, [esp + 8]          ; pData
-    vmread      [edx], ecx              ; low dword
-    jz          .done
-    jc          .done
-    inc         ecx
-    xor         eax, eax
-    vmread      [edx + 4], ecx          ; high dword
-.done:
-%endif ; RT_ARCH_X86
-    jnc         .valid_vmcs
-    mov         eax, VERR_VMX_INVALID_VMCS_PTR
-    ret
-.valid_vmcs:
-    jnz         .the_end
-    mov         eax, VERR_VMX_INVALID_VMCS_FIELD
-.the_end:
-    ret
-ENDPROC VMXReadVmcs64
 
+        ; Save the guest state and restore the non-volatile registers.  We use rcx=pGstCtx (&pVCpu->cpum.GstCtx) here.
+        mov     [rsp + cbFrame + frm_guest_rcx], rcx
+        mov     rcx, [rsp + cbFrame + frm_pGstCtx]
 
-;/**
-; * Executes VMREAD, 32-bit value.
-; *
-; * @returns VBox status code.
-; * @param   idxField        VMCS index.
-; * @param   pu32Data        Where to store VM field value.
-; */
-;DECLASM(int) VMXReadVmcs32(uint32_t idxField, uint32_t *pu32Data);
-ALIGNCODE(16)
-BEGINPROC VMXReadVmcs32
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    and     edi, 0ffffffffh
-    xor     rax, rax
-    vmread  r10, rdi
-    mov     [rsi], r10d
+        mov     qword [rcx + CPUMCTX.eax], rax
+        mov     qword [rcx + CPUMCTX.edx], rdx
+        rdtsc
+        mov     qword [rcx + CPUMCTX.ebp], rbp
+        lea     rbp, [rsp + cbFrame]    ; re-establish the frame pointer as early as possible.
+        shl     rdx, 20h
+        or      rax, rdx                ; TSC value in RAX
+        mov     rdx, [rbp + frm_guest_rcx]
+        mov     qword [rcx + CPUMCTX.ecx], rdx
+        mov     rdx, SPECTRE_FILLER     ; FILLER in RDX
+        mov     qword [rcx + GVMCPU.hmr0 + HMR0PERVCPU.uTscExit - VMCPU.cpum.GstCtx], rax
+        mov     qword [rcx + CPUMCTX.r8],  r8
+        mov     r8, rdx
+        mov     qword [rcx + CPUMCTX.r9],  r9
+        mov     r9, rdx
+        mov     qword [rcx + CPUMCTX.r10], r10
+        mov     r10, rdx
+        mov     qword [rcx + CPUMCTX.r11], r11
+        mov     r11, rdx
+        mov     qword [rcx + CPUMCTX.esi], rsi
+ %ifdef ASM_CALL64_MSC
+        mov     rsi, [rbp + frm_saved_rsi]
  %else
-    and     ecx, 0ffffffffh
-    xor     rax, rax
-    vmread  r10, rcx
-    mov     [rdx], r10d
+        mov     rsi, rdx
  %endif
-%else  ; RT_ARCH_X86
-    mov     ecx, [esp + 4]              ; idxField
-    mov     edx, [esp + 8]              ; pu32Data
-    xor     eax, eax
-    vmread  [edx], ecx
-%endif ; RT_ARCH_X86
-    jnc     .valid_vmcs
-    mov     eax, VERR_VMX_INVALID_VMCS_PTR
-    ret
-.valid_vmcs:
-    jnz     .the_end
-    mov     eax, VERR_VMX_INVALID_VMCS_FIELD
-.the_end:
-    ret
-ENDPROC VMXReadVmcs32
-
-
-;/**
-; * Executes VMWRITE, 32-bit value.
-; *
-; * @returns VBox status code.
-; * @param   idxField        VMCS index.
-; * @param   u32Data         Where to store VM field value.
-; */
-;DECLASM(int) VMXWriteVmcs32(uint32_t idxField, uint32_t u32Data);
-ALIGNCODE(16)
-BEGINPROC VMXWriteVmcs32
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    and     edi, 0ffffffffh
-    and     esi, 0ffffffffh
-    xor     rax, rax
-    vmwrite rdi, rsi
+        mov     qword [rcx + CPUMCTX.edi], rdi
+ %ifdef ASM_CALL64_MSC
+        mov     rdi, [rbp + frm_saved_rdi]
  %else
-    and     ecx, 0ffffffffh
-    and     edx, 0ffffffffh
-    xor     rax, rax
-    vmwrite rcx, rdx
+        mov     rdi, rdx
  %endif
-%else  ; RT_ARCH_X86
-    mov     ecx, [esp + 4]              ; idxField
-    mov     edx, [esp + 8]              ; u32Data
-    xor     eax, eax
-    vmwrite ecx, edx
-%endif ; RT_ARCH_X86
-    jnc     .valid_vmcs
-    mov     eax, VERR_VMX_INVALID_VMCS_PTR
-    ret
-.valid_vmcs:
-    jnz     .the_end
-    mov     eax, VERR_VMX_INVALID_VMCS_FIELD
-.the_end:
-    ret
-ENDPROC VMXWriteVmcs32
+        mov     qword [rcx + CPUMCTX.ebx], rbx
+        mov     rbx, [rbp + frm_saved_rbx]
+        mov     qword [rcx + CPUMCTX.r12], r12
+        mov     r12,  [rbp + frm_saved_r12]
+        mov     qword [rcx + CPUMCTX.r13], r13
+        mov     r13,  [rbp + frm_saved_r13]
+        mov     qword [rcx + CPUMCTX.r14], r14
+        mov     r14,  [rbp + frm_saved_r14]
+        mov     qword [rcx + CPUMCTX.r15], r15
+        mov     r15,  [rbp + frm_saved_r15]
 
+        mov     rax, cr2
+        mov     qword [rcx + CPUMCTX.cr2], rax
+        mov     rax, rdx
 
-;/**
-; * Executes VMXON.
-; *
-; * @returns VBox status code.
-; * @param   HCPhysVMXOn      Physical address of VMXON structure.
-; */
-;DECLASM(int) VMXEnable(RTHCPHYS HCPhysVMXOn);
-BEGINPROC VMXEnable
-%ifdef RT_ARCH_AMD64
-    xor     rax, rax
- %ifdef ASM_CALL64_GCC
-    push    rdi
- %else
-    push    rcx
+ %if %4 != 0
+        ; Save the context pointer in r8 for the SSE save/restore.
+        mov     r8, rcx
  %endif
-    vmxon   [rsp]
-%else  ; RT_ARCH_X86
-    xor     eax, eax
-    vmxon   [esp + 4]
-%endif ; RT_ARCH_X86
-    jnc     .good
-    mov     eax, VERR_VMX_INVALID_VMXON_PTR
-    jmp     .the_end
 
-.good:
-    jnz     .the_end
-    mov     eax, VERR_VMX_VMXON_FAILED
-
-.the_end:
-%ifdef RT_ARCH_AMD64
-    add     rsp, 8
-%endif
-    ret
-ENDPROC VMXEnable
-
-
-;/**
-; * Executes VMXOFF.
-; */
-;DECLASM(void) VMXDisable(void);
-BEGINPROC VMXDisable
-    vmxoff
-.the_end:
-    ret
-ENDPROC VMXDisable
-
-
-;/**
-; * Executes VMCLEAR.
-; *
-; * @returns VBox status code.
-; * @param   HCPhysVmcs     Physical address of VM control structure.
-; */
-;DECLASM(int) VMXClearVmcs(RTHCPHYS HCPhysVmcs);
-ALIGNCODE(16)
-BEGINPROC VMXClearVmcs
-%ifdef RT_ARCH_AMD64
-    xor     rax, rax
- %ifdef ASM_CALL64_GCC
-    push    rdi
- %else
-    push    rcx
- %endif
-    vmclear [rsp]
-%else  ; RT_ARCH_X86
-    xor     eax, eax
-    vmclear [esp + 4]
-%endif ; RT_ARCH_X86
-    jnc     .the_end
-    mov     eax, VERR_VMX_INVALID_VMCS_PTR
-.the_end:
-%ifdef RT_ARCH_AMD64
-    add     rsp, 8
-%endif
-    ret
-ENDPROC VMXClearVmcs
-
-
-;/**
-; * Executes VMPTRLD.
-; *
-; * @returns VBox status code.
-; * @param   HCPhysVmcs     Physical address of VMCS structure.
-; */
-;DECLASM(int) VMXActivateVmcs(RTHCPHYS HCPhysVmcs);
-ALIGNCODE(16)
-BEGINPROC VMXActivateVmcs
-%ifdef RT_ARCH_AMD64
-    xor     rax, rax
- %ifdef ASM_CALL64_GCC
-    push    rdi
- %else
-    push    rcx
- %endif
-    vmptrld [rsp]
-%else
-    xor     eax, eax
-    vmptrld [esp + 4]
-%endif
-    jnc     .the_end
-    mov     eax, VERR_VMX_INVALID_VMCS_PTR
-.the_end:
-%ifdef RT_ARCH_AMD64
-    add     rsp, 8
-%endif
-    ret
-ENDPROC VMXActivateVmcs
-
-
-;/**
-; * Executes VMPTRST.
-; *
-; * @returns VBox status code.
-; * @param    [esp + 04h]  gcc:rdi  msc:rcx   Param 1 - First parameter - Address that will receive the current pointer.
-; */
-;DECLASM(int) VMXGetActivatedVmcs(RTHCPHYS *pVMCS);
-BEGINPROC VMXGetActivatedVmcs
-%ifdef RT_OS_OS2
-    mov     eax, VERR_NOT_SUPPORTED
-    ret
-%else
- %ifdef RT_ARCH_AMD64
-  %ifdef ASM_CALL64_GCC
-    vmptrst qword [rdi]
-  %else
-    vmptrst qword [rcx]
+ %if %3 & HM_WSF_IBPB_EXIT
+        ; Fight spectre (trashes rax, rdx and rcx).
+  %if %1 = 0 ; Skip this in failure branch (=> guru)
+        mov     ecx, MSR_IA32_PRED_CMD
+        mov     eax, MSR_IA32_PRED_CMD_F_IBPB
+        xor     edx, edx
+        wrmsr
   %endif
- %else
-    vmptrst qword [esp+04h]
- %endif
-    xor     eax, eax
-.the_end:
-    ret
-%endif
-ENDPROC VMXGetActivatedVmcs
-
-;/**
-; * Invalidate a page using INVEPT.
-; @param   enmFlush     msc:ecx  gcc:edi  x86:[esp+04]  Type of flush.
-; @param   pDescriptor  msc:edx  gcc:esi  x86:[esp+08]  Descriptor pointer.
-; */
-;DECLASM(int) VMXR0InvEPT(VMX_FLUSH enmFlush, uint64_t *pDescriptor);
-BEGINPROC VMXR0InvEPT
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    and         edi, 0ffffffffh
-    xor         rax, rax
-;    invept      rdi, qword [rsi]
-    DB          0x66, 0x0F, 0x38, 0x80, 0x3E
- %else
-    and         ecx, 0ffffffffh
-    xor         rax, rax
-;    invept      rcx, qword [rdx]
-    DB          0x66, 0x0F, 0x38, 0x80, 0xA
- %endif
-%else
-    mov         ecx, [esp + 4]
-    mov         edx, [esp + 8]
-    xor         eax, eax
-;    invept      ecx, qword [edx]
-    DB          0x66, 0x0F, 0x38, 0x80, 0xA
-%endif
-    jnc         .valid_vmcs
-    mov         eax, VERR_VMX_INVALID_VMCS_PTR
-    ret
-.valid_vmcs:
-    jnz         .the_end
-    mov         eax, VERR_INVALID_PARAMETER
-.the_end:
-    ret
-ENDPROC VMXR0InvEPT
-
-
-;/**
-; * Invalidate a page using invvpid
-; @param   enmFlush     msc:ecx  gcc:edi  x86:[esp+04]  Type of flush
-; @param   pDescriptor  msc:edx  gcc:esi  x86:[esp+08]  Descriptor pointer
-; */
-;DECLASM(int) VMXR0InvVPID(VMX_FLUSH enmFlush, uint64_t *pDescriptor);
-BEGINPROC VMXR0InvVPID
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    and         edi, 0ffffffffh
-    xor         rax, rax
-;    invvpid     rdi, qword [rsi]
-    DB          0x66, 0x0F, 0x38, 0x81, 0x3E
- %else
-    and         ecx, 0ffffffffh
-    xor         rax, rax
-;    invvpid     rcx, qword [rdx]
-    DB          0x66, 0x0F, 0x38, 0x81, 0xA
- %endif
-%else
-    mov         ecx, [esp + 4]
-    mov         edx, [esp + 8]
-    xor         eax, eax
-;    invvpid     ecx, qword [edx]
-    DB          0x66, 0x0F, 0x38, 0x81, 0xA
-%endif
-    jnc         .valid_vmcs
-    mov         eax, VERR_VMX_INVALID_VMCS_PTR
-    ret
-.valid_vmcs:
-    jnz         .the_end
-    mov         eax, VERR_INVALID_PARAMETER
-.the_end:
-    ret
-ENDPROC VMXR0InvVPID
-
-
-%if GC_ARCH_BITS == 64
-;;
-; Executes INVLPGA
-;
-; @param   pPageGC  msc:rcx  gcc:rdi  x86:[esp+04]  Virtual page to invalidate
-; @param   uASID    msc:rdx  gcc:rsi  x86:[esp+0C]  Tagged TLB id
-;
-;DECLASM(void) SVMR0InvlpgA(RTGCPTR pPageGC, uint32_t uASID);
-BEGINPROC SVMR0InvlpgA
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    mov     rax, rdi
-    mov     rcx, rsi
- %else
-    mov     rax, rcx
-    mov     rcx, rdx
- %endif
-%else
-    mov     eax, [esp + 4]
-    mov     ecx, [esp + 0Ch]
-%endif
-    invlpga [xAX], ecx
-    ret
-ENDPROC SVMR0InvlpgA
-
-%else ; GC_ARCH_BITS != 64
-;;
-; Executes INVLPGA
-;
-; @param   pPageGC  msc:ecx  gcc:edi  x86:[esp+04]  Virtual page to invalidate
-; @param   uASID    msc:edx  gcc:esi  x86:[esp+08]  Tagged TLB id
-;
-;DECLASM(void) SVMR0InvlpgA(RTGCPTR pPageGC, uint32_t uASID);
-BEGINPROC SVMR0InvlpgA
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    movzx   rax, edi
-    mov     ecx, esi
- %else
-    ; from http://www.cs.cmu.edu/~fp/courses/15213-s06/misc/asm64-handout.pdf:
-    ; ``Perhaps unexpectedly, instructions that move or generate 32-bit register
-    ;   values also set the upper 32 bits of the register to zero. Consequently
-    ;   there is no need for an instruction movzlq.''
-    mov     eax, ecx
-    mov     ecx, edx
- %endif
-%else
-    mov     eax, [esp + 4]
-    mov     ecx, [esp + 8]
-%endif
-    invlpga [xAX], ecx
-    ret
-ENDPROC SVMR0InvlpgA
-
-%endif ; GC_ARCH_BITS != 64
-
-
-%ifdef VBOX_WITH_KERNEL_USING_XMM
-
-;;
-; Wrapper around vmx.pfnStartVM that preserves host XMM registers and
-; load the guest ones when necessary.
-;
-; @cproto       DECLASM(int) HMR0VMXStartVMWrapXMM(RTHCUINT fResume, PCPUMCTX pCtx, PVMCSCACHE pCache, PVM pVM, PVMCPU pVCpu, PFNHMVMXSTARTVM pfnStartVM);
-;
-; @returns      eax
-;
-; @param        fResumeVM       msc:rcx
-; @param        pCtx            msc:rdx
-; @param        pVMCSCache      msc:r8
-; @param        pVM             msc:r9
-; @param        pVCpu           msc:[rbp+30h]   The cross context virtual CPU structure of the calling EMT.
-; @param        pfnStartVM      msc:[rbp+38h]
-;
-; @remarks      This is essentially the same code as HMR0SVMRunWrapXMM, only the parameters differ a little bit.
-;
-; ASSUMING 64-bit and windows for now.
-ALIGNCODE(16)
-BEGINPROC HMR0VMXStartVMWrapXMM
-        push    xBP
-        mov     xBP, xSP
-        sub     xSP, 0a0h + 040h        ; Don't bother optimizing the frame size.
-
-        ; spill input parameters.
-        mov     [xBP + 010h], rcx       ; fResumeVM
-        mov     [xBP + 018h], rdx       ; pCtx
-        mov     [xBP + 020h], r8        ; pVMCSCache
-        mov     [xBP + 028h], r9        ; pVM
-
-        ; Ask CPUM whether we've started using the FPU yet.
-        mov     rcx, [xBP + 30h]        ; pVCpu
-        call    NAME(CPUMIsGuestFPUStateActive)
-        test    al, al
-        jnz     .guest_fpu_state_active
-
-        ; No need to mess with XMM registers just call the start routine and return.
-        mov     r11, [xBP + 38h]        ; pfnStartVM
-        mov     r10, [xBP + 30h]        ; pVCpu
-        mov     [xSP + 020h], r10
-        mov     rcx, [xBP + 010h]       ; fResumeVM
-        mov     rdx, [xBP + 018h]       ; pCtx
-        mov     r8,  [xBP + 020h]       ; pVMCSCache
-        mov     r9,  [xBP + 028h]       ; pVM
-        call    r11
-
-        leave
-        ret
-
-ALIGNCODE(8)
-.guest_fpu_state_active:
-        ; Save the non-volatile host XMM registers.
-        movdqa  [rsp + 040h + 000h], xmm6
-        movdqa  [rsp + 040h + 010h], xmm7
-        movdqa  [rsp + 040h + 020h], xmm8
-        movdqa  [rsp + 040h + 030h], xmm9
-        movdqa  [rsp + 040h + 040h], xmm10
-        movdqa  [rsp + 040h + 050h], xmm11
-        movdqa  [rsp + 040h + 060h], xmm12
-        movdqa  [rsp + 040h + 070h], xmm13
-        movdqa  [rsp + 040h + 080h], xmm14
-        movdqa  [rsp + 040h + 090h], xmm15
-
-        mov     r10, [xBP + 018h]       ; pCtx
-        mov     eax, [r10 + CPUMCTX.fXStateMask]
-        test    eax, eax
-        jz      .guest_fpu_state_manually
-
-        ;
-        ; Using XSAVE to load the guest XMM, YMM and ZMM registers.
-        ;
-        and     eax, CPUM_VOLATILE_XSAVE_GUEST_COMPONENTS
-        xor     edx, edx
-        mov     r10, [r10 + CPUMCTX.pXStateR0]
-        xrstor  [r10]
-
-        ; Make the call (same as in the other case ).
-        mov     r11, [xBP + 38h]        ; pfnStartVM
-        mov     r10, [xBP + 30h]        ; pVCpu
-        mov     [xSP + 020h], r10
-        mov     rcx, [xBP + 010h]       ; fResumeVM
-        mov     rdx, [xBP + 018h]       ; pCtx
-        mov     r8,  [xBP + 020h]       ; pVMCSCache
-        mov     r9,  [xBP + 028h]       ; pVM
-        call    r11
-
-        mov     r11d, eax               ; save return value (xsave below uses eax)
-
-        ; Save the guest XMM registers.
-        mov     r10, [xBP + 018h]       ; pCtx
-        mov     eax, [r10 + CPUMCTX.fXStateMask]
-        and     eax, CPUM_VOLATILE_XSAVE_GUEST_COMPONENTS
-        xor     edx, edx
-        mov     r10, [r10 + CPUMCTX.pXStateR0]
-        xsave  [r10]
-
-        mov     eax, r11d               ; restore return value.
-
-.restore_non_volatile_host_xmm_regs:
-        ; Load the non-volatile host XMM registers.
-        movdqa  xmm6,  [rsp + 040h + 000h]
-        movdqa  xmm7,  [rsp + 040h + 010h]
-        movdqa  xmm8,  [rsp + 040h + 020h]
-        movdqa  xmm9,  [rsp + 040h + 030h]
-        movdqa  xmm10, [rsp + 040h + 040h]
-        movdqa  xmm11, [rsp + 040h + 050h]
-        movdqa  xmm12, [rsp + 040h + 060h]
-        movdqa  xmm13, [rsp + 040h + 070h]
-        movdqa  xmm14, [rsp + 040h + 080h]
-        movdqa  xmm15, [rsp + 040h + 090h]
-        leave
-        ret
-
-        ;
-        ; No XSAVE, load and save the guest XMM registers manually.
-        ;
-.guest_fpu_state_manually:
-        ; Load the full guest XMM register state.
-        mov     r10, [r10 + CPUMCTX.pXStateR0]
-        movdqa  xmm0,  [r10 + XMM_OFF_IN_X86FXSTATE + 000h]
-        movdqa  xmm1,  [r10 + XMM_OFF_IN_X86FXSTATE + 010h]
-        movdqa  xmm2,  [r10 + XMM_OFF_IN_X86FXSTATE + 020h]
-        movdqa  xmm3,  [r10 + XMM_OFF_IN_X86FXSTATE + 030h]
-        movdqa  xmm4,  [r10 + XMM_OFF_IN_X86FXSTATE + 040h]
-        movdqa  xmm5,  [r10 + XMM_OFF_IN_X86FXSTATE + 050h]
-        movdqa  xmm6,  [r10 + XMM_OFF_IN_X86FXSTATE + 060h]
-        movdqa  xmm7,  [r10 + XMM_OFF_IN_X86FXSTATE + 070h]
-        movdqa  xmm8,  [r10 + XMM_OFF_IN_X86FXSTATE + 080h]
-        movdqa  xmm9,  [r10 + XMM_OFF_IN_X86FXSTATE + 090h]
-        movdqa  xmm10, [r10 + XMM_OFF_IN_X86FXSTATE + 0a0h]
-        movdqa  xmm11, [r10 + XMM_OFF_IN_X86FXSTATE + 0b0h]
-        movdqa  xmm12, [r10 + XMM_OFF_IN_X86FXSTATE + 0c0h]
-        movdqa  xmm13, [r10 + XMM_OFF_IN_X86FXSTATE + 0d0h]
-        movdqa  xmm14, [r10 + XMM_OFF_IN_X86FXSTATE + 0e0h]
-        movdqa  xmm15, [r10 + XMM_OFF_IN_X86FXSTATE + 0f0h]
-
-        ; Make the call (same as in the other case ).
-        mov     r11, [xBP + 38h]        ; pfnStartVM
-        mov     r10, [xBP + 30h]        ; pVCpu
-        mov     [xSP + 020h], r10
-        mov     rcx, [xBP + 010h]       ; fResumeVM
-        mov     rdx, [xBP + 018h]       ; pCtx
-        mov     r8,  [xBP + 020h]       ; pVMCSCache
-        mov     r9,  [xBP + 028h]       ; pVM
-        call    r11
-
-        ; Save the guest XMM registers.
-        mov     r10, [xBP + 018h]       ; pCtx
-        mov     r10, [r10 + CPUMCTX.pXStateR0]
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 000h], xmm0
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 010h], xmm1
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 020h], xmm2
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 030h], xmm3
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 040h], xmm4
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 050h], xmm5
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 060h], xmm6
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 070h], xmm7
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 080h], xmm8
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 090h], xmm9
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0a0h], xmm10
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0b0h], xmm11
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0c0h], xmm12
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0d0h], xmm13
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0e0h], xmm14
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0f0h], xmm15
-        jmp     .restore_non_volatile_host_xmm_regs
-ENDPROC   HMR0VMXStartVMWrapXMM
-
-;;
-; Wrapper around svm.pfnVMRun that preserves host XMM registers and
-; load the guest ones when necessary.
-;
-; @cproto       DECLASM(int) HMR0SVMRunWrapXMM(RTHCPHYS pVMCBHostPhys, RTHCPHYS pVMCBPhys, PCPUMCTX pCtx, PVM pVM, PVMCPU pVCpu, PFNHMSVMVMRUN pfnVMRun);
-;
-; @returns      eax
-;
-; @param        pVMCBHostPhys   msc:rcx
-; @param        pVMCBPhys       msc:rdx
-; @param        pCtx            msc:r8
-; @param        pVM             msc:r9
-; @param        pVCpu           msc:[rbp+30h]   The cross context virtual CPU structure of the calling EMT.
-; @param        pfnVMRun        msc:[rbp+38h]
-;
-; @remarks      This is essentially the same code as HMR0VMXStartVMWrapXMM, only the parameters differ a little bit.
-;
-; ASSUMING 64-bit and windows for now.
-ALIGNCODE(16)
-BEGINPROC HMR0SVMRunWrapXMM
-        push    xBP
-        mov     xBP, xSP
-        sub     xSP, 0a0h + 040h        ; Don't bother optimizing the frame size.
-
-        ; spill input parameters.
-        mov     [xBP + 010h], rcx       ; pVMCBHostPhys
-        mov     [xBP + 018h], rdx       ; pVMCBPhys
-        mov     [xBP + 020h], r8        ; pCtx
-        mov     [xBP + 028h], r9        ; pVM
-
-        ; Ask CPUM whether we've started using the FPU yet.
-        mov     rcx, [xBP + 30h]        ; pVCpu
-        call    NAME(CPUMIsGuestFPUStateActive)
-        test    al, al
-        jnz     .guest_fpu_state_active
-
-        ; No need to mess with XMM registers just call the start routine and return.
-        mov     r11, [xBP + 38h]        ; pfnVMRun
-        mov     r10, [xBP + 30h]        ; pVCpu
-        mov     [xSP + 020h], r10
-        mov     rcx, [xBP + 010h]       ; pVMCBHostPhys
-        mov     rdx, [xBP + 018h]       ; pVMCBPhys
-        mov     r8,  [xBP + 020h]       ; pCtx
-        mov     r9,  [xBP + 028h]       ; pVM
-        call    r11
-
-        leave
-        ret
-
-ALIGNCODE(8)
-.guest_fpu_state_active:
-        ; Save the non-volatile host XMM registers.
-        movdqa  [rsp + 040h + 000h], xmm6
-        movdqa  [rsp + 040h + 010h], xmm7
-        movdqa  [rsp + 040h + 020h], xmm8
-        movdqa  [rsp + 040h + 030h], xmm9
-        movdqa  [rsp + 040h + 040h], xmm10
-        movdqa  [rsp + 040h + 050h], xmm11
-        movdqa  [rsp + 040h + 060h], xmm12
-        movdqa  [rsp + 040h + 070h], xmm13
-        movdqa  [rsp + 040h + 080h], xmm14
-        movdqa  [rsp + 040h + 090h], xmm15
-
-        mov     r10, [xBP + 020h]       ; pCtx
-        mov     eax, [r10 + CPUMCTX.fXStateMask]
-        test    eax, eax
-        jz      .guest_fpu_state_manually
-
-        ;
-        ; Using XSAVE.
-        ;
-        and     eax, CPUM_VOLATILE_XSAVE_GUEST_COMPONENTS
-        xor     edx, edx
-        mov     r10, [r10 + CPUMCTX.pXStateR0]
-        xrstor  [r10]
-
-        ; Make the call (same as in the other case ).
-        mov     r11, [xBP + 38h]        ; pfnVMRun
-        mov     r10, [xBP + 30h]        ; pVCpu
-        mov     [xSP + 020h], r10
-        mov     rcx, [xBP + 010h]       ; pVMCBHostPhys
-        mov     rdx, [xBP + 018h]       ; pVMCBPhys
-        mov     r8,  [xBP + 020h]       ; pCtx
-        mov     r9,  [xBP + 028h]       ; pVM
-        call    r11
-
-        mov     r11d, eax               ; save return value (xsave below uses eax)
-
-        ; Save the guest XMM registers.
-        mov     r10, [xBP + 020h]       ; pCtx
-        mov     eax, [r10 + CPUMCTX.fXStateMask]
-        and     eax, CPUM_VOLATILE_XSAVE_GUEST_COMPONENTS
-        xor     edx, edx
-        mov     r10, [r10 + CPUMCTX.pXStateR0]
-        xsave  [r10]
-
-        mov     eax, r11d               ; restore return value.
-
-.restore_non_volatile_host_xmm_regs:
-        ; Load the non-volatile host XMM registers.
-        movdqa  xmm6,  [rsp + 040h + 000h]
-        movdqa  xmm7,  [rsp + 040h + 010h]
-        movdqa  xmm8,  [rsp + 040h + 020h]
-        movdqa  xmm9,  [rsp + 040h + 030h]
-        movdqa  xmm10, [rsp + 040h + 040h]
-        movdqa  xmm11, [rsp + 040h + 050h]
-        movdqa  xmm12, [rsp + 040h + 060h]
-        movdqa  xmm13, [rsp + 040h + 070h]
-        movdqa  xmm14, [rsp + 040h + 080h]
-        movdqa  xmm15, [rsp + 040h + 090h]
-        leave
-        ret
-
-        ;
-        ; No XSAVE, load and save the guest XMM registers manually.
-        ;
-.guest_fpu_state_manually:
-        ; Load the full guest XMM register state.
-        mov     r10, [r10 + CPUMCTX.pXStateR0]
-        movdqa  xmm0,  [r10 + XMM_OFF_IN_X86FXSTATE + 000h]
-        movdqa  xmm1,  [r10 + XMM_OFF_IN_X86FXSTATE + 010h]
-        movdqa  xmm2,  [r10 + XMM_OFF_IN_X86FXSTATE + 020h]
-        movdqa  xmm3,  [r10 + XMM_OFF_IN_X86FXSTATE + 030h]
-        movdqa  xmm4,  [r10 + XMM_OFF_IN_X86FXSTATE + 040h]
-        movdqa  xmm5,  [r10 + XMM_OFF_IN_X86FXSTATE + 050h]
-        movdqa  xmm6,  [r10 + XMM_OFF_IN_X86FXSTATE + 060h]
-        movdqa  xmm7,  [r10 + XMM_OFF_IN_X86FXSTATE + 070h]
-        movdqa  xmm8,  [r10 + XMM_OFF_IN_X86FXSTATE + 080h]
-        movdqa  xmm9,  [r10 + XMM_OFF_IN_X86FXSTATE + 090h]
-        movdqa  xmm10, [r10 + XMM_OFF_IN_X86FXSTATE + 0a0h]
-        movdqa  xmm11, [r10 + XMM_OFF_IN_X86FXSTATE + 0b0h]
-        movdqa  xmm12, [r10 + XMM_OFF_IN_X86FXSTATE + 0c0h]
-        movdqa  xmm13, [r10 + XMM_OFF_IN_X86FXSTATE + 0d0h]
-        movdqa  xmm14, [r10 + XMM_OFF_IN_X86FXSTATE + 0e0h]
-        movdqa  xmm15, [r10 + XMM_OFF_IN_X86FXSTATE + 0f0h]
-
-        ; Make the call (same as in the other case ).
-        mov     r11, [xBP + 38h]        ; pfnVMRun
-        mov     r10, [xBP + 30h]        ; pVCpu
-        mov     [xSP + 020h], r10
-        mov     rcx, [xBP + 010h]       ; pVMCBHostPhys
-        mov     rdx, [xBP + 018h]       ; pVMCBPhys
-        mov     r8,  [xBP + 020h]       ; pCtx
-        mov     r9,  [xBP + 028h]       ; pVM
-        call    r11
-
-        ; Save the guest XMM registers.
-        mov     r10, [xBP + 020h]       ; pCtx
-        mov     r10, [r10 + CPUMCTX.pXStateR0]
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 000h], xmm0
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 010h], xmm1
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 020h], xmm2
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 030h], xmm3
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 040h], xmm4
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 050h], xmm5
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 060h], xmm6
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 070h], xmm7
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 080h], xmm8
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 090h], xmm9
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0a0h], xmm10
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0b0h], xmm11
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0c0h], xmm12
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0d0h], xmm13
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0e0h], xmm14
-        movdqa  [r10 + XMM_OFF_IN_X86FXSTATE + 0f0h], xmm15
-        jmp     .restore_non_volatile_host_xmm_regs
-ENDPROC   HMR0SVMRunWrapXMM
-
-%endif ; VBOX_WITH_KERNEL_USING_XMM
-
-
-;; @def RESTORE_STATE_VM32
-; Macro restoring essential host state and updating guest state
-; for common host, 32-bit guest for VT-x.
-%macro RESTORE_STATE_VM32 0
-    ; Restore base and limit of the IDTR & GDTR.
- %ifndef VMX_SKIP_IDTR
-    lidt    [xSP]
-    add     xSP, xCB * 2
- %endif
- %ifndef VMX_SKIP_GDTR
-    lgdt    [xSP]
-    add     xSP, xCB * 2
- %endif
-
-    push    xDI
- %ifndef VMX_SKIP_TR
-    mov     xDI, [xSP + xCB * 3]         ; pCtx (*3 to skip the saved xDI, TR, LDTR).
- %else
-    mov     xDI, [xSP + xCB * 2]         ; pCtx (*2 to skip the saved xDI, LDTR).
- %endif
-
-    mov     [ss:xDI + CPUMCTX.eax], eax
-    mov     [ss:xDI + CPUMCTX.ebx], ebx
-    mov     [ss:xDI + CPUMCTX.ecx], ecx
-    mov     [ss:xDI + CPUMCTX.edx], edx
-    mov     [ss:xDI + CPUMCTX.esi], esi
-    mov     [ss:xDI + CPUMCTX.ebp], ebp
-    mov     xAX, cr2
-    mov     [ss:xDI + CPUMCTX.cr2], xAX
-
- %ifdef RT_ARCH_AMD64
-    pop     xAX                                 ; The guest edi we pushed above.
-    mov     dword [ss:xDI + CPUMCTX.edi], eax
- %else
-    pop     dword [ss:xDI + CPUMCTX.edi]        ; The guest edi we pushed above.
  %endif
 
  %ifndef VMX_SKIP_TR
-    ; Restore TSS selector; must mark it as not busy before using ltr (!)
-    ; ASSUME that this is supposed to be 'BUSY'. (saves 20-30 ticks on the T42p)
-    ; @todo get rid of sgdt
-    pop     xBX         ; Saved TR
-    sub     xSP, xCB * 2
-    sgdt    [xSP]
-    mov     xAX, xBX
-    and     eax, X86_SEL_MASK_OFF_RPL               ; Mask away TI and RPL bits leaving only the descriptor offset.
-    add     xAX, [xSP + 2]                          ; eax <- GDTR.address + descriptor offset.
-    and     dword [ss:xAX + 4], ~RT_BIT(9)          ; Clear the busy flag in TSS desc (bits 0-7=base, bit 9=busy bit).
-    ltr     bx
-    add     xSP, xCB * 2
+        ; Restore TSS selector; must mark it as not busy before using ltr!
+        ; ASSUME that this is supposed to be 'BUSY' (saves 20-30 ticks on the T42p).
+  %ifndef VMX_SKIP_GDTR
+        lgdt    [rbp + frm_saved_gdtr]
+  %endif
+        movzx   eax, word [rbp + frm_saved_tr]
+        mov     ecx, eax
+        and     eax, X86_SEL_MASK_OFF_RPL           ; mask away TI and RPL bits leaving only the descriptor offset
+        add     rax, [rbp + frm_saved_gdtr + 2]     ; eax <- GDTR.address + descriptor offset
+        and     dword [rax + 4], ~RT_BIT(9)         ; clear the busy flag in TSS desc (bits 0-7=base, bit 9=busy bit)
+        ltr     cx
  %endif
+        movzx   edx, word [rbp + frm_saved_ldtr]
+        test    edx, edx
+        jz      %%skip_ldt_write
+        lldt    dx
+%%skip_ldt_write:
 
-    pop     xAX         ; Saved LDTR
- %ifdef RT_ARCH_AMD64
-    cmp     eax, 0
-    je      %%skip_ldt_write32
+ %if %1 != 0
+.return_after_vmwrite_error:
  %endif
-    lldt    ax
+        ; Restore segment registers.
+        ;POP_RELEVANT_SEGMENT_REGISTERS rax, ax - currently broken.
 
-%%skip_ldt_write32:
-    add     xSP, xCB     ; pCtx
-
- %ifdef VMX_USE_CACHED_VMCS_ACCESSES
-    pop     xDX         ; Saved pCache
-
-    ; Note! If we get here as a result of invalid VMCS pointer, all the following
-    ; vmread's will fail (only eflags.cf=1 will be set) but that shouldn't cause any
-    ; trouble only just less efficient.
-    mov     ecx, [ss:xDX + VMCSCACHE.Read.cValidEntries]
-    cmp     ecx, 0      ; Can't happen
-    je      %%no_cached_read32
-    jmp     %%cached_read32
-
-ALIGN(16)
-%%cached_read32:
-    dec     xCX
-    mov     eax, [ss:xDX + VMCSCACHE.Read.aField + xCX * 4]
-    ; Note! This leaves the high 32 bits of the cache entry unmodified!!
-    vmread  [ss:xDX + VMCSCACHE.Read.aFieldVal + xCX * 8], xAX
-    cmp     xCX, 0
-    jnz     %%cached_read32
-%%no_cached_read32:
+ %if %2 != 0
+        ; Restore the host XCR0.
+        xor     ecx, ecx
+        mov     eax, [rbp + frm_uHostXcr0]
+        mov     edx, [rbp + frm_uHostXcr0 + 4]
+        xsetbv
  %endif
-
-    ; Restore segment registers.
-    MYPOPSEGS xAX, ax
-
-    ; Restore the host XCR0 if necessary.
-    pop     xCX
-    test    ecx, ecx
-    jnz     %%xcr0_after_skip
-    pop     xAX
-    pop     xDX
-    xsetbv                              ; ecx is already zero.
-%%xcr0_after_skip:
-
-    ; Restore general purpose registers.
-    MYPOPAD
-%endmacro
+%endmacro ; RESTORE_STATE_VMX
 
 
 ;;
-; Prepares for and executes VMLAUNCH/VMRESUME (32 bits guest mode)
+; hmR0VmxStartVm template
 ;
-; @returns VBox status code
-; @param    fResume    x86:[ebp+8], msc:rcx,gcc:rdi     Whether to use vmlauch/vmresume.
-; @param    pCtx       x86:[ebp+c], msc:rdx,gcc:rsi     Pointer to the guest-CPU context.
-; @param    pCache     x86:[ebp+10],msc:r8, gcc:rdx     Pointer to the VMCS cache.
-; @param    pVM        x86:[ebp+14],msc:r9, gcc:rcx     The cross context VM structure.
-; @param    pVCpu      x86:[ebp+18],msc:[ebp+30],gcc:r8 The cross context virtual CPU structure of the calling EMT.
+; @param    1   The suffix of the variation.
+; @param    2   fLoadSaveGuestXcr0 value
+; @param    3   The HM_WSF_IBPB_ENTRY + HM_WSF_IBPB_EXIT value.
+; @param    4   The SSE saving/restoring: 0 to do nothing, 1 to do it manually, 2 to use xsave/xrstor.
+;               Drivers shouldn't use AVX registers without saving+loading:
+;                   https://msdn.microsoft.com/en-us/library/windows/hardware/ff545910%28v=vs.85%29.aspx?f=255&MSPPError=-2147217396
+;               However the compiler docs have different idea:
+;                   https://msdn.microsoft.com/en-us/library/9z1stfyw.aspx
+;               We'll go with the former for now.
 ;
-ALIGNCODE(16)
-BEGINPROC VMXR0StartVM32
-    push    xBP
-    mov     xBP, xSP
-
-    pushf
-    cli
-
-    ;
-    ; Save all general purpose host registers.
-    ;
-    MYPUSHAD
-
-    ;
-    ; First we have to write some final guest CPU context registers.
-    ;
-    mov     eax, VMX_VMCS_HOST_RIP
-%ifdef RT_ARCH_AMD64
-    lea     r10, [.vmlaunch_done wrt rip]
-    vmwrite rax, r10
-%else
-    mov     ecx, .vmlaunch_done
-    vmwrite eax, ecx
-%endif
-    ; Note: assumes success!
-
-    ;
-    ; Unify input parameter registers.
-    ;
-%ifdef RT_ARCH_AMD64
- %ifdef ASM_CALL64_GCC
-    ; fResume already in rdi
-    ; pCtx    already in rsi
-    mov     rbx, rdx        ; pCache
- %else
-    mov     rdi, rcx        ; fResume
-    mov     rsi, rdx        ; pCtx
-    mov     rbx, r8         ; pCache
- %endif
-%else
-    mov     edi, [ebp + 8]  ; fResume
-    mov     esi, [ebp + 12] ; pCtx
-    mov     ebx, [ebp + 16] ; pCache
-%endif
-
-    ;
-    ; Save the host XCR0 and load the guest one if necessary.
-    ; Note! Trashes rdx and rcx.
-    ;
-%ifdef ASM_CALL64_MSC
-    mov     rax, [xBP + 30h]            ; pVCpu
-%elifdef ASM_CALL64_GCC
-    mov     rax, r8                     ; pVCpu
-%else
-    mov     eax, [xBP + 18h]            ; pVCpu
-%endif
-    test    byte [xAX + VMCPU.hm + HMCPU.fLoadSaveGuestXcr0], 1
-    jz      .xcr0_before_skip
-
-    xor     ecx, ecx
-    xgetbv                              ; Save the host one on the stack.
-    push    xDX
-    push    xAX
-
-    mov     eax, [xSI + CPUMCTX.aXcr]   ; Load the guest one.
-    mov     edx, [xSI + CPUMCTX.aXcr + 4]
-    xor     ecx, ecx                    ; paranoia
-    xsetbv
-
-    push    0                           ; Indicate that we must restore XCR0 (popped into ecx, thus 0).
-    jmp     .xcr0_before_done
-
-.xcr0_before_skip:
-    push    3fh                         ; indicate that we need not.
-.xcr0_before_done:
-
-    ;
-    ; Save segment registers.
-    ; Note! Trashes rdx & rcx, so we moved it here (amd64 case).
-    ;
-    MYPUSHSEGS xAX, ax
-
-%ifdef VMX_USE_CACHED_VMCS_ACCESSES
-    mov     ecx, [xBX + VMCSCACHE.Write.cValidEntries]
-    cmp     ecx, 0
-    je      .no_cached_writes
-    mov     edx, ecx
-    mov     ecx, 0
-    jmp     .cached_write
-
-ALIGN(16)
-.cached_write:
-    mov     eax, [xBX + VMCSCACHE.Write.aField + xCX * 4]
-    vmwrite xAX, [xBX + VMCSCACHE.Write.aFieldVal + xCX * 8]
-    inc     xCX
-    cmp     xCX, xDX
-    jl     .cached_write
-
-    mov     dword [xBX + VMCSCACHE.Write.cValidEntries], 0
-.no_cached_writes:
-
-    ; Save the pCache pointer.
-    push    xBX
-%endif
-
-    ; Save the pCtx pointer.
-    push    xSI
-
-    ; Save host LDTR.
-    xor     eax, eax
-    sldt    ax
-    push    xAX
-
-%ifndef VMX_SKIP_TR
-    ; The host TR limit is reset to 0x67; save & restore it manually.
-    str     eax
-    push    xAX
-%endif
-
-%ifndef VMX_SKIP_GDTR
-    ; VT-x only saves the base of the GDTR & IDTR and resets the limit to 0xffff; we must restore the limit correctly!
-    sub     xSP, xCB * 2
-    sgdt    [xSP]
-%endif
-%ifndef VMX_SKIP_IDTR
-    sub     xSP, xCB * 2
-    sidt    [xSP]
-%endif
-
-    ; Load CR2 if necessary (may be expensive as writing CR2 is a synchronizing instruction).
-    mov     xBX, [xSI + CPUMCTX.cr2]
-    mov     xDX, cr2
-    cmp     xBX, xDX
-    je      .skip_cr2_write32
-    mov     cr2, xBX
-
-.skip_cr2_write32:
-    mov     eax, VMX_VMCS_HOST_RSP
-    vmwrite xAX, xSP
-    ; Note: assumes success!
-    ; Don't mess with ESP anymore!!!
-
-    ; Load guest general purpose registers.
-    mov     eax, [xSI + CPUMCTX.eax]
-    mov     ebx, [xSI + CPUMCTX.ebx]
-    mov     ecx, [xSI + CPUMCTX.ecx]
-    mov     edx, [xSI + CPUMCTX.edx]
-    mov     ebp, [xSI + CPUMCTX.ebp]
-
-    ; Resume or start VM?
-    cmp     xDI, 0                  ; fResume
-
-    ; Load guest edi & esi.
-    mov     edi, [xSI + CPUMCTX.edi]
-    mov     esi, [xSI + CPUMCTX.esi]
-
-    je      .vmlaunch_launch
-
-    vmresume
-    jc      near .vmxstart_invalid_vmcs_ptr
-    jz      near .vmxstart_start_failed
-    jmp     .vmlaunch_done;      ; Here if vmresume detected a failure.
-
-.vmlaunch_launch:
-    vmlaunch
-    jc      near .vmxstart_invalid_vmcs_ptr
-    jz      near .vmxstart_start_failed
-    jmp     .vmlaunch_done;      ; Here if vmlaunch detected a failure.
-
-ALIGNCODE(16) ;; @todo YASM BUG - this alignment is wrong on darwin, it's 1 byte off.
-.vmlaunch_done:
-    RESTORE_STATE_VM32
-    mov     eax, VINF_SUCCESS
-
-.vmstart_end:
-    popf
-    pop     xBP
-    ret
-
-.vmxstart_invalid_vmcs_ptr:
-    RESTORE_STATE_VM32
-    mov     eax, VERR_VMX_INVALID_VMCS_PTR_TO_START_VM
-    jmp     .vmstart_end
-
-.vmxstart_start_failed:
-    RESTORE_STATE_VM32
-    mov     eax, VERR_VMX_UNABLE_TO_START_VM
-    jmp     .vmstart_end
-
-ENDPROC VMXR0StartVM32
-
-
-%ifdef RT_ARCH_AMD64
-;; @def RESTORE_STATE_VM64
-; Macro restoring essential host state and updating guest state
-; for 64-bit host, 64-bit guest for VT-x.
-;
-%macro RESTORE_STATE_VM64 0
-    ; Restore base and limit of the IDTR & GDTR
- %ifndef VMX_SKIP_IDTR
-    lidt    [xSP]
-    add     xSP, xCB * 2
- %endif
- %ifndef VMX_SKIP_GDTR
-    lgdt    [xSP]
-    add     xSP, xCB * 2
- %endif
-
-    push    xDI
- %ifndef VMX_SKIP_TR
-    mov     xDI, [xSP + xCB * 3]        ; pCtx (*3 to skip the saved xDI, TR, LDTR)
- %else
-    mov     xDI, [xSP + xCB * 2]        ; pCtx (*2 to skip the saved xDI, LDTR)
- %endif
-
-    mov     qword [xDI + CPUMCTX.eax], rax
-    mov     qword [xDI + CPUMCTX.ebx], rbx
-    mov     qword [xDI + CPUMCTX.ecx], rcx
-    mov     qword [xDI + CPUMCTX.edx], rdx
-    mov     qword [xDI + CPUMCTX.esi], rsi
-    mov     qword [xDI + CPUMCTX.ebp], rbp
-    mov     qword [xDI + CPUMCTX.r8],  r8
-    mov     qword [xDI + CPUMCTX.r9],  r9
-    mov     qword [xDI + CPUMCTX.r10], r10
-    mov     qword [xDI + CPUMCTX.r11], r11
-    mov     qword [xDI + CPUMCTX.r12], r12
-    mov     qword [xDI + CPUMCTX.r13], r13
-    mov     qword [xDI + CPUMCTX.r14], r14
-    mov     qword [xDI + CPUMCTX.r15], r15
-    mov     rax, cr2
-    mov     qword [xDI + CPUMCTX.cr2], rax
-
-    pop     xAX                                 ; The guest rdi we pushed above
-    mov     qword [xDI + CPUMCTX.edi], rax
-
- %ifndef VMX_SKIP_TR
-    ; Restore TSS selector; must mark it as not busy before using ltr (!)
-    ; ASSUME that this is supposed to be 'BUSY'. (saves 20-30 ticks on the T42p).
-    ; @todo get rid of sgdt
-    pop     xBX         ; Saved TR
-    sub     xSP, xCB * 2
-    sgdt    [xSP]
-    mov     xAX, xBX
-    and     eax, X86_SEL_MASK_OFF_RPL           ; Mask away TI and RPL bits leaving only the descriptor offset.
-    add     xAX, [xSP + 2]                      ; eax <- GDTR.address + descriptor offset.
-    and     dword [xAX + 4], ~RT_BIT(9)         ; Clear the busy flag in TSS desc (bits 0-7=base, bit 9=busy bit).
-    ltr     bx
-    add     xSP, xCB * 2
- %endif
-
-    pop     xAX         ; Saved LDTR
-    cmp     eax, 0
-    je      %%skip_ldt_write64
-    lldt    ax
-
-%%skip_ldt_write64:
-    pop     xSI         ; pCtx (needed in rsi by the macros below)
-
- %ifdef VMX_USE_CACHED_VMCS_ACCESSES
-    pop     xDX         ; Saved pCache
-
-    ; Note! If we get here as a result of invalid VMCS pointer, all the following
-    ; vmread's will fail (only eflags.cf=1 will be set) but that shouldn't cause any
-    ; trouble only just less efficient.
-    mov     ecx, [xDX + VMCSCACHE.Read.cValidEntries]
-    cmp     ecx, 0      ; Can't happen
-    je      %%no_cached_read64
-    jmp     %%cached_read64
-
-ALIGN(16)
-%%cached_read64:
-    dec     xCX
-    mov     eax, [xDX + VMCSCACHE.Read.aField + xCX * 4]
-    vmread  [xDX + VMCSCACHE.Read.aFieldVal + xCX * 8], xAX
-    cmp     xCX, 0
-    jnz     %%cached_read64
-%%no_cached_read64:
- %endif
-
-    ; Restore segment registers.
-    MYPOPSEGS xAX, ax
-
-    ; Restore the host XCR0 if necessary.
-    pop     xCX
-    test    ecx, ecx
-    jnz     %%xcr0_after_skip
-    pop     xAX
-    pop     xDX
-    xsetbv                              ; ecx is already zero.
-%%xcr0_after_skip:
-
-    ; Restore general purpose registers.
-    MYPOPAD
-%endmacro
-
+%macro hmR0VmxStartVmTemplate 4
 
 ;;
 ; Prepares for and executes VMLAUNCH/VMRESUME (64 bits guest mode)
 ;
 ; @returns VBox status code
-; @param    fResume    msc:rcx, gcc:rdi     Whether to use vmlauch/vmresume.
-; @param    pCtx       msc:rdx, gcc:rsi     Pointer to the guest-CPU context.
-; @param    pCache     msc:r8,  gcc:rdx     Pointer to the VMCS cache.
-; @param    pVM        msc:r9,  gcc:rcx     The cross context VM structure.
-; @param    pVCpu      msc:[ebp+30], gcc:r8 The cross context virtual CPU structure of the calling EMT.
+; @param    pVmcsInfo  msc:rcx, gcc:rdi       Pointer to the VMCS info (for cached host RIP and RSP).
+; @param    pVCpu      msc:rdx, gcc:rsi       The cross context virtual CPU structure of the calling EMT.
+; @param    fResume    msc:r8l, gcc:dl        Whether to use vmlauch/vmresume.
 ;
-ALIGNCODE(16)
-BEGINPROC VMXR0StartVM64
-    push    xBP
-    mov     xBP, xSP
+ALIGNCODE(64)
+BEGINPROC RT_CONCAT(hmR0VmxStartVm,%1)
+ %ifdef VBOX_WITH_KERNEL_USING_XMM
+  %if %4 = 0
+        ;
+        ; The non-saving variant will currently check the two SSE preconditions and pick
+        ; the right variant to continue with.  Later we can see if we can't manage to
+        ; move these decisions into hmR0VmxUpdateStartVmFunction().
+        ;
+   %ifdef ASM_CALL64_MSC
+        test    byte  [rdx + VMCPU.cpum.GstCtx + CPUMCTX.fUsedFpuGuest], 1
+   %else
+        test    byte  [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fUsedFpuGuest], 1
+   %endif
+        jz      .save_xmm_no_need
+   %ifdef ASM_CALL64_MSC
+        cmp     dword [rdx + VMCPU.cpum.GstCtx + CPUMCTX.fXStateMask], 0
+   %else
+        cmp     dword [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fXStateMask], 0
+   %endif
+        je      RT_CONCAT3(hmR0VmxStartVm,%1,_SseManual)
+        jmp     RT_CONCAT3(hmR0VmxStartVm,%1,_SseXSave)
+.save_xmm_no_need:
+  %endif
+ %endif
+        push    xBP
+        SEH64_PUSH_xBP
+        mov     xBP, xSP
+        SEH64_SET_FRAME_xBP 0
+        pushf
+        cli
 
-    pushf
-    cli
+ %define frm_fRFlags         -008h
+ %define frm_pGstCtx         -010h              ; Where we stash guest CPU context for use after the vmrun.
+ %define frm_uHostXcr0       -020h              ; 128-bit
+ %define frm_saved_gdtr      -02ah              ; 16+64:  Only used when VMX_SKIP_GDTR isn't defined
+ %define frm_saved_tr        -02ch              ; 16-bit: Only used when VMX_SKIP_TR isn't defined
+ %define frm_MDS_seg         -030h              ; 16-bit: Temporary storage for the MDS flushing.
+ %define frm_saved_idtr      -03ah              ; 16+64:  Only used when VMX_SKIP_IDTR isn't defined
+ %define frm_saved_ldtr      -03ch              ; 16-bit: always saved.
+ %define frm_rcError         -040h              ; 32-bit: Error status code (not used in the success path)
+ %define frm_guest_rcx       -048h              ; Temporary storage slot for guest RCX.
+ %if %4 = 0
+  %assign cbFrame             048h
+ %else
+  %define frm_saved_xmm6     -050h
+  %define frm_saved_xmm7     -060h
+  %define frm_saved_xmm8     -070h
+  %define frm_saved_xmm9     -080h
+  %define frm_saved_xmm10    -090h
+  %define frm_saved_xmm11    -0a0h
+  %define frm_saved_xmm12    -0b0h
+  %define frm_saved_xmm13    -0c0h
+  %define frm_saved_xmm14    -0d0h
+  %define frm_saved_xmm15    -0e0h
+  %define frm_saved_mxcsr    -0f0h
+  %assign cbFrame             0f0h
+ %endif
+ %assign cbBaseFrame         cbFrame
+        sub     rsp, cbFrame - 8h
+        SEH64_ALLOCATE_STACK cbFrame
 
-    ; Save all general purpose host registers.
-    MYPUSHAD
+        ; Save all general purpose host registers.
+        PUSH_CALLEE_PRESERVED_REGISTERS
+        ;PUSH_RELEVANT_SEGMENT_REGISTERS xAX, ax - currently broken
+        SEH64_END_PROLOGUE
 
-    ; First we have to save some final CPU context registers.
-    lea     r10, [.vmlaunch64_done wrt rip]
-    mov     rax, VMX_VMCS_HOST_RIP      ; Return address (too difficult to continue after VMLAUNCH?).
-    vmwrite rax, r10
-    ; Note: assumes success!
+        ;
+        ; Unify the input parameter registers: r9=pVmcsInfo, rsi=pVCpu, bl=fResume, rdi=&pVCpu->cpum.GstCtx;
+        ;
+ %ifdef ASM_CALL64_GCC
+        mov     r9,  rdi                ; pVmcsInfo
+        mov     ebx, edx                ; fResume
+ %else
+        mov     r9,  rcx                ; pVmcsInfo
+        mov     rsi, rdx                ; pVCpu
+        mov     ebx, r8d                ; fResume
+ %endif
+        lea     rdi, [rsi + VMCPU.cpum.GstCtx]
+        mov     [rbp + frm_pGstCtx], rdi
 
-    ;
-    ; Unify the input parameter registers.
-    ;
-%ifdef ASM_CALL64_GCC
-    ; fResume already in rdi
-    ; pCtx    already in rsi
-    mov     rbx, rdx        ; pCache
-%else
-    mov     rdi, rcx        ; fResume
-    mov     rsi, rdx        ; pCtx
-    mov     rbx, r8         ; pCache
-%endif
+ %ifdef VBOX_STRICT
+        ;
+        ; Verify template preconditions / parameters to ensure HMSVM.cpp didn't miss some state change.
+        ;
+        cmp     byte [rsi + GVMCPU.hmr0 + HMR0PERVCPU.fLoadSaveGuestXcr0], %2
+        mov     eax, VERR_VMX_STARTVM_PRECOND_0
+        jne     NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).precond_failure_return)
 
-    ;
-    ; Save the host XCR0 and load the guest one if necessary.
-    ; Note! Trashes rdx and rcx.
-    ;
-%ifdef ASM_CALL64_MSC
-    mov     rax, [xBP + 30h]            ; pVCpu
-%else
-    mov     rax, r8                     ; pVCpu
-%endif
-    test    byte [xAX + VMCPU.hm + HMCPU.fLoadSaveGuestXcr0], 1
-    jz      .xcr0_before_skip
+        mov     eax, [rsi + GVMCPU.hmr0 + HMR0PERVCPU.fWorldSwitcher]
+        and     eax, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT
+        cmp     eax, %3
+        mov     eax, VERR_VMX_STARTVM_PRECOND_1
+        jne     NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).precond_failure_return)
 
-    xor     ecx, ecx
-    xgetbv                              ; Save the host one on the stack.
-    push    xDX
-    push    xAX
+  %ifdef VBOX_WITH_KERNEL_USING_XMM
+        mov     eax, VERR_VMX_STARTVM_PRECOND_2
+        test    byte  [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fUsedFpuGuest], 1
+   %if   %4 = 0
+        jnz     NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).precond_failure_return)
+   %else
+        jz      NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).precond_failure_return)
 
-    mov     eax, [xSI + CPUMCTX.aXcr]   ; Load the guest one.
-    mov     edx, [xSI + CPUMCTX.aXcr + 4]
-    xor     ecx, ecx                    ; paranoia
-    xsetbv
+        mov     eax, VERR_VMX_STARTVM_PRECOND_3
+        cmp     dword [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fXStateMask], 0
+    %if   %4 = 1
+        jne     NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).precond_failure_return)
+    %elif %4 = 2
+        je      NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).precond_failure_return)
+    %else
+      %error Invalid template parameter 4.
+    %endif
+   %endif
+  %endif
+ %endif ; VBOX_STRICT
 
-    push    0                           ; Indicate that we must restore XCR0 (popped into ecx, thus 0).
-    jmp     .xcr0_before_done
+ %if %4 != 0
+        ; Save the non-volatile SSE host register state.
+        movdqa  [rbp + frm_saved_xmm6 ], xmm6
+        movdqa  [rbp + frm_saved_xmm7 ], xmm7
+        movdqa  [rbp + frm_saved_xmm8 ], xmm8
+        movdqa  [rbp + frm_saved_xmm9 ], xmm9
+        movdqa  [rbp + frm_saved_xmm10], xmm10
+        movdqa  [rbp + frm_saved_xmm11], xmm11
+        movdqa  [rbp + frm_saved_xmm12], xmm12
+        movdqa  [rbp + frm_saved_xmm13], xmm13
+        movdqa  [rbp + frm_saved_xmm14], xmm14
+        movdqa  [rbp + frm_saved_xmm15], xmm15
+        stmxcsr [rbp + frm_saved_mxcsr]
 
-.xcr0_before_skip:
-    push    3fh                         ; indicate that we need not.
-.xcr0_before_done:
+        ; Load the guest state related to the above non-volatile and volatile SSE registers. Trashes rcx, eax and edx.
+        lea     rcx, [rdi + CPUMCTX.XState]
+  %if %4 = 1 ; manual
+        movdqa  xmm0,  [rcx + XMM_OFF_IN_X86FXSTATE + 000h]
+        movdqa  xmm1,  [rcx + XMM_OFF_IN_X86FXSTATE + 010h]
+        movdqa  xmm2,  [rcx + XMM_OFF_IN_X86FXSTATE + 020h]
+        movdqa  xmm3,  [rcx + XMM_OFF_IN_X86FXSTATE + 030h]
+        movdqa  xmm4,  [rcx + XMM_OFF_IN_X86FXSTATE + 040h]
+        movdqa  xmm5,  [rcx + XMM_OFF_IN_X86FXSTATE + 050h]
+        movdqa  xmm6,  [rcx + XMM_OFF_IN_X86FXSTATE + 060h]
+        movdqa  xmm7,  [rcx + XMM_OFF_IN_X86FXSTATE + 070h]
+        movdqa  xmm8,  [rcx + XMM_OFF_IN_X86FXSTATE + 080h]
+        movdqa  xmm9,  [rcx + XMM_OFF_IN_X86FXSTATE + 090h]
+        movdqa  xmm10, [rcx + XMM_OFF_IN_X86FXSTATE + 0a0h]
+        movdqa  xmm11, [rcx + XMM_OFF_IN_X86FXSTATE + 0b0h]
+        movdqa  xmm12, [rcx + XMM_OFF_IN_X86FXSTATE + 0c0h]
+        movdqa  xmm13, [rcx + XMM_OFF_IN_X86FXSTATE + 0d0h]
+        movdqa  xmm14, [rcx + XMM_OFF_IN_X86FXSTATE + 0e0h]
+        movdqa  xmm15, [rcx + XMM_OFF_IN_X86FXSTATE + 0f0h]
+        ldmxcsr        [rcx + X86FXSTATE.MXCSR]
+  %elif %4 = 2 ; use xrstor/xsave
+        mov     eax, [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fXStateMask]
+        and     eax, CPUM_VOLATILE_XSAVE_GUEST_COMPONENTS
+        xor     edx, edx
+        xrstor  [rcx]
+  %else
+   %error invalid template parameter 4
+  %endif
+ %endif
 
-    ;
-    ; Save segment registers.
-    ; Note! Trashes rdx & rcx, so we moved it here (amd64 case).
-    ;
-    MYPUSHSEGS xAX, ax
+ %if %2 != 0
+        ; Save the host XCR0 and load the guest one if necessary.
+        ; Note! Trashes rax, rdx and rcx.
+        xor     ecx, ecx
+        xgetbv                              ; save the host one on the stack
+        mov     [rbp + frm_uHostXcr0], eax
+        mov     [rbp + frm_uHostXcr0 + 4], edx
 
-%ifdef VMX_USE_CACHED_VMCS_ACCESSES
-    mov     ecx, [xBX + VMCSCACHE.Write.cValidEntries]
-    cmp     ecx, 0
-    je      .no_cached_writes
-    mov     edx, ecx
-    mov     ecx, 0
-    jmp     .cached_write
+        mov     eax, [rdi + CPUMCTX.aXcr]   ; load the guest one
+        mov     edx, [rdi + CPUMCTX.aXcr + 4]
+        xor     ecx, ecx                    ; paranoia; indicate that we must restore XCR0 (popped into ecx, thus 0)
+        xsetbv
+ %endif
 
-ALIGN(16)
-.cached_write:
-    mov     eax, [xBX + VMCSCACHE.Write.aField + xCX * 4]
-    vmwrite xAX, [xBX + VMCSCACHE.Write.aFieldVal + xCX * 8]
-    inc     xCX
-    cmp     xCX, xDX
-    jl     .cached_write
+        ; Save host LDTR.
+        sldt    word [rbp + frm_saved_ldtr]
 
-    mov     dword [xBX + VMCSCACHE.Write.cValidEntries], 0
-.no_cached_writes:
+ %ifndef VMX_SKIP_TR
+        ; The host TR limit is reset to 0x67; save & restore it manually.
+        str     word [rbp + frm_saved_tr]
+ %endif
 
-    ; Save the pCache pointer.
-    push    xBX
-%endif
+ %ifndef VMX_SKIP_GDTR
+        ; VT-x only saves the base of the GDTR & IDTR and resets the limit to 0xffff; we must restore the limit correctly!
+        sgdt    [rbp + frm_saved_gdtr]
+ %endif
+ %ifndef VMX_SKIP_IDTR
+        sidt    [rbp + frm_saved_idtr]
+ %endif
 
-    ; Save the pCtx pointer.
-    push    xSI
-
-    ; Save host LDTR.
-    xor     eax, eax
-    sldt    ax
-    push    xAX
-
-%ifndef VMX_SKIP_TR
-    ; The host TR limit is reset to 0x67; save & restore it manually.
-    str     eax
-    push    xAX
-%endif
-
-%ifndef VMX_SKIP_GDTR
-    ; VT-x only saves the base of the GDTR & IDTR and resets the limit to 0xffff; we must restore the limit correctly!
-    sub     xSP, xCB * 2
-    sgdt    [xSP]
-%endif
-%ifndef VMX_SKIP_IDTR
-    sub     xSP, xCB * 2
-    sidt    [xSP]
-%endif
-
-    ; Load CR2 if necessary (may be expensive as writing CR2 is a synchronizing instruction).
-    mov     rbx, qword [xSI + CPUMCTX.cr2]
-    mov     rdx, cr2
-    cmp     rbx, rdx
-    je      .skip_cr2_write
-    mov     cr2, rbx
-
+        ; Load CR2 if necessary (expensive as writing CR2 is a synchronizing instruction - (bird: still expensive on 10980xe)).
+        mov     rcx, qword [rdi + CPUMCTX.cr2]
+        mov     rdx, cr2
+        cmp     rcx, rdx
+        je      .skip_cr2_write
+        mov     cr2, rcx
 .skip_cr2_write:
-    mov     eax, VMX_VMCS_HOST_RSP
-    vmwrite xAX, xSP
-    ; Note: assumes success!
-    ; Don't mess with ESP anymore!!!
 
-    ; Load guest general purpose registers.
-    mov     rax, qword [xSI + CPUMCTX.eax]
-    mov     rbx, qword [xSI + CPUMCTX.ebx]
-    mov     rcx, qword [xSI + CPUMCTX.ecx]
-    mov     rdx, qword [xSI + CPUMCTX.edx]
-    mov     rbp, qword [xSI + CPUMCTX.ebp]
-    mov     r8,  qword [xSI + CPUMCTX.r8]
-    mov     r9,  qword [xSI + CPUMCTX.r9]
-    mov     r10, qword [xSI + CPUMCTX.r10]
-    mov     r11, qword [xSI + CPUMCTX.r11]
-    mov     r12, qword [xSI + CPUMCTX.r12]
-    mov     r13, qword [xSI + CPUMCTX.r13]
-    mov     r14, qword [xSI + CPUMCTX.r14]
-    mov     r15, qword [xSI + CPUMCTX.r15]
+        ; Set the vmlaunch/vmresume "return" host RIP and RSP values if they've changed (unlikly).
+        ; The vmwrite isn't quite for free (on an 10980xe at least), thus we check if anything changed
+        ; before writing here.
+        lea     rcx, [NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1)) wrt rip]
+        cmp     rcx, [r9 + VMXVMCSINFO.uHostRip]
+        jne     .write_host_rip
+.wrote_host_rip:
+        cmp     rsp, [r9 + VMXVMCSINFO.uHostRsp]
+        jne     .write_host_rsp
+.wrote_host_rsp:
 
-    ; Resume or start VM?
-    cmp     xDI, 0                  ; fResume
+        ;
+        ; Fight spectre and similar. Trashes rax, rcx, and rdx.
+        ;
+ %if %3 & (HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY)  ; The eax:edx value is the same for the first two.
+        AssertCompile(MSR_IA32_PRED_CMD_F_IBPB == MSR_IA32_FLUSH_CMD_F_L1D)
+        mov     eax, MSR_IA32_PRED_CMD_F_IBPB
+        xor     edx, edx
+ %endif
+ %if %3 & HM_WSF_IBPB_ENTRY             ; Indirect branch barrier.
+        mov     ecx, MSR_IA32_PRED_CMD
+        wrmsr
+ %endif
+ %if %3 & HM_WSF_L1D_ENTRY              ; Level 1 data cache flush.
+        mov     ecx, MSR_IA32_FLUSH_CMD
+        wrmsr
+ %elif %3 & HM_WSF_MDS_ENTRY            ; MDS flushing is included in L1D_FLUSH
+        mov     word [rbp + frm_MDS_seg], ds
+        verw    word [rbp + frm_MDS_seg]
+ %endif
 
-    ; Load guest rdi & rsi.
-    mov     rdi, qword [xSI + CPUMCTX.edi]
-    mov     rsi, qword [xSI + CPUMCTX.esi]
+        ; Resume or start VM?
+        cmp     bl, 0                   ; fResume
 
-    je      .vmlaunch64_launch
+        ; Load guest general purpose registers.
+        mov     rax, qword [rdi + CPUMCTX.eax]
+        mov     rbx, qword [rdi + CPUMCTX.ebx]
+        mov     rcx, qword [rdi + CPUMCTX.ecx]
+        mov     rdx, qword [rdi + CPUMCTX.edx]
+        mov     rbp, qword [rdi + CPUMCTX.ebp]
+        mov     rsi, qword [rdi + CPUMCTX.esi]
+        mov     r8,  qword [rdi + CPUMCTX.r8]
+        mov     r9,  qword [rdi + CPUMCTX.r9]
+        mov     r10, qword [rdi + CPUMCTX.r10]
+        mov     r11, qword [rdi + CPUMCTX.r11]
+        mov     r12, qword [rdi + CPUMCTX.r12]
+        mov     r13, qword [rdi + CPUMCTX.r13]
+        mov     r14, qword [rdi + CPUMCTX.r14]
+        mov     r15, qword [rdi + CPUMCTX.r15]
+        mov     rdi, qword [rdi + CPUMCTX.edi]
 
-    vmresume
-    jc      near .vmxstart64_invalid_vmcs_ptr
-    jz      near .vmxstart64_start_failed
-    jmp     .vmlaunch64_done;      ; Here if vmresume detected a failure.
+        je      .vmlaunch64_launch
+
+        vmresume
+        jc      NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).vmxstart64_invalid_vmcs_ptr)
+        jz      NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).vmxstart64_start_failed)
+        jmp     NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1)) ; here if vmresume detected a failure
 
 .vmlaunch64_launch:
-    vmlaunch
-    jc      near .vmxstart64_invalid_vmcs_ptr
-    jz      near .vmxstart64_start_failed
-    jmp     .vmlaunch64_done;      ; Here if vmlaunch detected a failure.
+        vmlaunch
+        jc      NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).vmxstart64_invalid_vmcs_ptr)
+        jz      NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).vmxstart64_start_failed)
+        jmp     NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1)) ; here if vmlaunch detected a failure
 
-ALIGNCODE(16)
-.vmlaunch64_done:
-    RESTORE_STATE_VM64
-    mov     eax, VINF_SUCCESS
+
+; Put these two outside the normal code path as they should rarely change.
+ALIGNCODE(8)
+.write_host_rip:
+ %ifdef VBOX_WITH_STATISTICS
+        inc     qword [rsi + VMCPU.hm + HMCPU.StatVmxWriteHostRip]
+ %endif
+        mov     [r9 + VMXVMCSINFO.uHostRip], rcx
+        mov     eax, VMX_VMCS_HOST_RIP                      ;; @todo It is only strictly necessary to write VMX_VMCS_HOST_RIP when
+        vmwrite rax, rcx                                    ;;       the VMXVMCSINFO::pfnStartVM function changes (eventually
+ %ifdef VBOX_STRICT                                         ;;       take the Windows/SSE stuff into account then)...
+        jna     NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).vmwrite_failed)
+ %endif
+        jmp     .wrote_host_rip
+
+ALIGNCODE(8)
+.write_host_rsp:
+ %ifdef VBOX_WITH_STATISTICS
+        inc     qword [rsi + VMCPU.hm + HMCPU.StatVmxWriteHostRsp]
+ %endif
+        mov     [r9 + VMXVMCSINFO.uHostRsp], rsp
+        mov     eax, VMX_VMCS_HOST_RSP
+        vmwrite rax, rsp
+ %ifdef VBOX_STRICT
+        jna     NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1).vmwrite_failed)
+ %endif
+        jmp     .wrote_host_rsp
+
+ALIGNCODE(64)
+GLOBALNAME RT_CONCAT(hmR0VmxStartVmHostRIP,%1)
+        RESTORE_STATE_VMX 0, %2, %3, %4
+        mov     eax, VINF_SUCCESS
 
 .vmstart64_end:
-    popf
-    pop     xBP
-    ret
+ %if %4 != 0
+        mov     r11d, eax               ; save the return code.
 
+        ; Save the guest SSE state related to non-volatile and volatile SSE registers.
+        lea     rcx, [r8 + CPUMCTX.XState]
+  %if %4 = 1 ; manual
+        stmxcsr [rcx + X86FXSTATE.MXCSR]
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 000h], xmm0
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 010h], xmm1
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 020h], xmm2
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 030h], xmm3
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 040h], xmm4
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 050h], xmm5
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 060h], xmm6
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 070h], xmm7
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 080h], xmm8
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 090h], xmm9
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0a0h], xmm10
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0b0h], xmm11
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0c0h], xmm12
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0d0h], xmm13
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0e0h], xmm14
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0f0h], xmm15
+  %elif %4 = 2 ; use xrstor/xsave
+        mov     eax, [r8 + CPUMCTX.fXStateMask]
+        and     eax, CPUM_VOLATILE_XSAVE_GUEST_COMPONENTS
+        xor     edx, edx
+        xsave   [rcx]
+  %else
+   %error invalid template parameter 4
+  %endif
+
+        ; Restore the host non-volatile SSE register state.
+        ldmxcsr [rbp + frm_saved_mxcsr]
+        movdqa  xmm6,  [rbp + frm_saved_xmm6 ]
+        movdqa  xmm7,  [rbp + frm_saved_xmm7 ]
+        movdqa  xmm8,  [rbp + frm_saved_xmm8 ]
+        movdqa  xmm9,  [rbp + frm_saved_xmm9 ]
+        movdqa  xmm10, [rbp + frm_saved_xmm10]
+        movdqa  xmm11, [rbp + frm_saved_xmm11]
+        movdqa  xmm12, [rbp + frm_saved_xmm12]
+        movdqa  xmm13, [rbp + frm_saved_xmm13]
+        movdqa  xmm14, [rbp + frm_saved_xmm14]
+        movdqa  xmm15, [rbp + frm_saved_xmm15]
+
+        mov     eax, r11d
+ %endif  ; %4 != 0
+
+        lea     rsp, [rbp + frm_fRFlags]
+        popf
+        leave
+        ret
+
+        ;
+        ; Error returns.
+        ;
+ %ifdef VBOX_STRICT
+.vmwrite_failed:
+        mov     dword [rsp + cbFrame + frm_rcError], VERR_VMX_INVALID_VMCS_FIELD
+        jz      .return_after_vmwrite_error
+        mov     dword [rsp + cbFrame + frm_rcError], VERR_VMX_INVALID_VMCS_PTR
+        jmp     .return_after_vmwrite_error
+ %endif
 .vmxstart64_invalid_vmcs_ptr:
-    RESTORE_STATE_VM64
-    mov     eax, VERR_VMX_INVALID_VMCS_PTR_TO_START_VM
-    jmp     .vmstart64_end
-
+        mov     dword [rsp + cbFrame + frm_rcError], VERR_VMX_INVALID_VMCS_PTR_TO_START_VM
+        jmp     .vmstart64_error_return
 .vmxstart64_start_failed:
-    RESTORE_STATE_VM64
-    mov     eax, VERR_VMX_UNABLE_TO_START_VM
-    jmp     .vmstart64_end
-ENDPROC VMXR0StartVM64
-%endif ; RT_ARCH_AMD64
+        mov     dword [rsp + cbFrame + frm_rcError], VERR_VMX_UNABLE_TO_START_VM
+.vmstart64_error_return:
+        RESTORE_STATE_VMX 1, %2, %3, %4
+        mov     eax, [rbp + frm_rcError]
+        jmp     .vmstart64_end
+
+ %ifdef VBOX_STRICT
+        ; Precondition checks failed.
+.precond_failure_return:
+        POP_CALLEE_PRESERVED_REGISTERS
+  %if cbFrame != cbBaseFrame
+   %error Bad frame size value: cbFrame, expected cbBaseFrame
+  %endif
+        jmp     .vmstart64_end
+ %endif
+
+ %undef frm_fRFlags
+ %undef frm_pGstCtx
+ %undef frm_uHostXcr0
+ %undef frm_saved_gdtr
+ %undef frm_saved_tr
+ %undef frm_fNoRestoreXcr0
+ %undef frm_saved_idtr
+ %undef frm_saved_ldtr
+ %undef frm_rcError
+ %undef frm_guest_rax
+ %undef cbFrame
+ENDPROC RT_CONCAT(hmR0VmxStartVm,%1)
+ %ifdef ASM_FORMAT_ELF
+size NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1))  NAME(RT_CONCAT(hmR0VmxStartVm,%1) %+ _EndProc) - NAME(RT_CONCAT(hmR0VmxStartVmHostRIP,%1))
+ %endif
+
+
+%endmacro ; hmR0VmxStartVmTemplate
+
+%macro hmR0VmxStartVmSseTemplate 3
+hmR0VmxStartVmTemplate _SansXcr0_SansIbpbEntry_SansL1dEntry_SansMdsEntry_SansIbpbExit %+ %2, 0, 0                 | 0                | 0                | 0               , %1
+hmR0VmxStartVmTemplate _WithXcr0_SansIbpbEntry_SansL1dEntry_SansMdsEntry_SansIbpbExit %+ %2, 1, 0                 | 0                | 0                | 0               , %1
+hmR0VmxStartVmTemplate _SansXcr0_WithIbpbEntry_SansL1dEntry_SansMdsEntry_SansIbpbExit %+ %2, 0, HM_WSF_IBPB_ENTRY | 0                | 0                | 0               , %1
+hmR0VmxStartVmTemplate _WithXcr0_WithIbpbEntry_SansL1dEntry_SansMdsEntry_SansIbpbExit %+ %2, 1, HM_WSF_IBPB_ENTRY | 0                | 0                | 0               , %1
+hmR0VmxStartVmTemplate _SansXcr0_SansIbpbEntry_WithL1dEntry_SansMdsEntry_SansIbpbExit %+ %2, 0, 0                 | HM_WSF_L1D_ENTRY | 0                | 0               , %1
+hmR0VmxStartVmTemplate _WithXcr0_SansIbpbEntry_WithL1dEntry_SansMdsEntry_SansIbpbExit %+ %2, 1, 0                 | HM_WSF_L1D_ENTRY | 0                | 0               , %1
+hmR0VmxStartVmTemplate _SansXcr0_WithIbpbEntry_WithL1dEntry_SansMdsEntry_SansIbpbExit %+ %2, 0, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | 0                | 0               , %1
+hmR0VmxStartVmTemplate _WithXcr0_WithIbpbEntry_WithL1dEntry_SansMdsEntry_SansIbpbExit %+ %2, 1, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | 0                | 0               , %1
+hmR0VmxStartVmTemplate _SansXcr0_SansIbpbEntry_SansL1dEntry_WithMdsEntry_SansIbpbExit %+ %2, 0, 0                 | 0                | HM_WSF_MDS_ENTRY | 0               , %1
+hmR0VmxStartVmTemplate _WithXcr0_SansIbpbEntry_SansL1dEntry_WithMdsEntry_SansIbpbExit %+ %2, 1, 0                 | 0                | HM_WSF_MDS_ENTRY | 0               , %1
+hmR0VmxStartVmTemplate _SansXcr0_WithIbpbEntry_SansL1dEntry_WithMdsEntry_SansIbpbExit %+ %2, 0, HM_WSF_IBPB_ENTRY | 0                | HM_WSF_MDS_ENTRY | 0               , %1
+hmR0VmxStartVmTemplate _WithXcr0_WithIbpbEntry_SansL1dEntry_WithMdsEntry_SansIbpbExit %+ %2, 1, HM_WSF_IBPB_ENTRY | 0                | HM_WSF_MDS_ENTRY | 0               , %1
+hmR0VmxStartVmTemplate _SansXcr0_SansIbpbEntry_WithL1dEntry_WithMdsEntry_SansIbpbExit %+ %2, 0, 0                 | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | 0               , %1
+hmR0VmxStartVmTemplate _WithXcr0_SansIbpbEntry_WithL1dEntry_WithMdsEntry_SansIbpbExit %+ %2, 1, 0                 | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | 0               , %1
+hmR0VmxStartVmTemplate _SansXcr0_WithIbpbEntry_WithL1dEntry_WithMdsEntry_SansIbpbExit %+ %2, 0, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | 0               , %1
+hmR0VmxStartVmTemplate _WithXcr0_WithIbpbEntry_WithL1dEntry_WithMdsEntry_SansIbpbExit %+ %2, 1, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | 0               , %1
+hmR0VmxStartVmTemplate _SansXcr0_SansIbpbEntry_SansL1dEntry_SansMdsEntry_WithIbpbExit %+ %2, 0, 0                 | 0                | 0                | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _WithXcr0_SansIbpbEntry_SansL1dEntry_SansMdsEntry_WithIbpbExit %+ %2, 1, 0                 | 0                | 0                | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _SansXcr0_WithIbpbEntry_SansL1dEntry_SansMdsEntry_WithIbpbExit %+ %2, 0, HM_WSF_IBPB_ENTRY | 0                | 0                | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _WithXcr0_WithIbpbEntry_SansL1dEntry_SansMdsEntry_WithIbpbExit %+ %2, 1, HM_WSF_IBPB_ENTRY | 0                | 0                | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _SansXcr0_SansIbpbEntry_WithL1dEntry_SansMdsEntry_WithIbpbExit %+ %2, 0, 0                 | HM_WSF_L1D_ENTRY | 0                | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _WithXcr0_SansIbpbEntry_WithL1dEntry_SansMdsEntry_WithIbpbExit %+ %2, 1, 0                 | HM_WSF_L1D_ENTRY | 0                | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _SansXcr0_WithIbpbEntry_WithL1dEntry_SansMdsEntry_WithIbpbExit %+ %2, 0, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | 0                | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _WithXcr0_WithIbpbEntry_WithL1dEntry_SansMdsEntry_WithIbpbExit %+ %2, 1, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | 0                | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _SansXcr0_SansIbpbEntry_SansL1dEntry_WithMdsEntry_WithIbpbExit %+ %2, 0, 0                 | 0                | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _WithXcr0_SansIbpbEntry_SansL1dEntry_WithMdsEntry_WithIbpbExit %+ %2, 1, 0                 | 0                | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _SansXcr0_WithIbpbEntry_SansL1dEntry_WithMdsEntry_WithIbpbExit %+ %2, 0, HM_WSF_IBPB_ENTRY | 0                | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _WithXcr0_WithIbpbEntry_SansL1dEntry_WithMdsEntry_WithIbpbExit %+ %2, 1, HM_WSF_IBPB_ENTRY | 0                | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _SansXcr0_SansIbpbEntry_WithL1dEntry_WithMdsEntry_WithIbpbExit %+ %2, 0, 0                 | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _WithXcr0_SansIbpbEntry_WithL1dEntry_WithMdsEntry_WithIbpbExit %+ %2, 1, 0                 | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _SansXcr0_WithIbpbEntry_WithL1dEntry_WithMdsEntry_WithIbpbExit %+ %2, 0, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT, %1
+hmR0VmxStartVmTemplate _WithXcr0_WithIbpbEntry_WithL1dEntry_WithMdsEntry_WithIbpbExit %+ %2, 1, HM_WSF_IBPB_ENTRY | HM_WSF_L1D_ENTRY | HM_WSF_MDS_ENTRY | HM_WSF_IBPB_EXIT, %1
+%endmacro
+
+hmR0VmxStartVmSseTemplate 0,,RT_NOTHING
+%ifdef VBOX_WITH_KERNEL_USING_XMM
+hmR0VmxStartVmSseTemplate 1,_SseManual,RT_NOTHING
+hmR0VmxStartVmSseTemplate 2,_SseXSave,RT_NOTHING
+%endif
 
 
 ;;
-; Prepares for and executes VMRUN (32 bits guests)
+; hmR0SvmVmRun template
 ;
-; @returns  VBox status code
-; @param    HCPhysVMCB      Physical address of host VMCB.
-; @param    HCPhysVMCB      Physical address of guest VMCB.
-; @param    pCtx            Pointer to the guest CPU-context.
-; @param    pVM             msc:r9, gcc:rcx     The cross context VM structure.
-; @param    pVCpu           msc:[rsp+28],gcc:r8 The cross context virtual CPU structure of the calling EMT.
+; @param    1   The suffix of the variation.
+; @param    2   fLoadSaveGuestXcr0 value
+; @param    3   The HM_WSF_IBPB_ENTRY + HM_WSF_IBPB_EXIT value.
+; @param    4   The SSE saving/restoring: 0 to do nothing, 1 to do it manually, 2 to use xsave/xrstor.
+;               Drivers shouldn't use AVX registers without saving+loading:
+;                   https://msdn.microsoft.com/en-us/library/windows/hardware/ff545910%28v=vs.85%29.aspx?f=255&MSPPError=-2147217396
+;               However the compiler docs have different idea:
+;                   https://msdn.microsoft.com/en-us/library/9z1stfyw.aspx
+;               We'll go with the former for now.
 ;
-ALIGNCODE(16)
-BEGINPROC SVMR0VMRun
-%ifdef RT_ARCH_AMD64 ; fake a cdecl stack frame
- %ifdef ASM_CALL64_GCC
-    push    r8
-    push    rcx
-    push    rdx
-    push    rsi
-    push    rdi
- %else
-    mov     rax, [rsp + 28h]
-    push    rax                         ; pVCpu
-    push    r9                          ; pVM
-    push    r8                          ; pCtx
-    push    rdx                         ; HCPHYSGuestVMCB
-    push    rcx                         ; HCPhysHostVMCB
- %endif
-    push    0
-%endif
-    push    xBP
-    mov     xBP, xSP
-    pushf
+%macro hmR0SvmVmRunTemplate 4
 
-    ;
-    ; Save all general purpose host registers.
-    ;
-    MYPUSHAD
-
-    ;
-    ; Load pCtx into xSI.
-    ;
-    mov     xSI, [xBP + xCB * 2 + RTHCPHYS_CB * 2]  ; pCtx
-
-    ;
-    ; Save the host XCR0 and load the guest one if necessary.
-    ;
-    mov     xAX, [xBP + xCB * 2 + RTHCPHYS_CB * 2 + xCB * 2] ; pVCpu
-    test    byte [xAX + VMCPU.hm + HMCPU.fLoadSaveGuestXcr0], 1
-    jz      .xcr0_before_skip
-
-    xor     ecx, ecx
-    xgetbv                              ; Save the host one on the stack.
-    push    xDX
-    push    xAX
-
-    mov     xSI, [xBP + xCB * 2 + RTHCPHYS_CB * 2]  ; pCtx
-    mov     eax, [xSI + CPUMCTX.aXcr]   ; Load the guest one.
-    mov     edx, [xSI + CPUMCTX.aXcr + 4]
-    xor     ecx, ecx                    ; paranoia
-    xsetbv
-
-    push    0                           ; Indicate that we must restore XCR0 (popped into ecx, thus 0).
-    jmp     .xcr0_before_done
-
-.xcr0_before_skip:
-    push    3fh                         ; indicate that we need not.
-.xcr0_before_done:
-
-    ;
-    ; Save guest CPU-context pointer for simplifying saving of the GPRs afterwards.
-    ;
-    push    xSI
-
-    ; Save host fs, gs, sysenter msr etc.
-    mov     xAX, [xBP + xCB * 2]                    ; pVMCBHostPhys (64 bits physical address; x86: take low dword only)
-    push    xAX                                     ; save for the vmload after vmrun
-    vmsave
-
-    ; Setup eax for VMLOAD.
-    mov     xAX, [xBP + xCB * 2 + RTHCPHYS_CB]      ; pVMCBPhys (64 bits physical address; take low dword only)
-
-    ; Load guest general purpose registers.
-    ; eax is loaded from the VMCB by VMRUN.
-    mov     ebx, [xSI + CPUMCTX.ebx]
-    mov     ecx, [xSI + CPUMCTX.ecx]
-    mov     edx, [xSI + CPUMCTX.edx]
-    mov     edi, [xSI + CPUMCTX.edi]
-    mov     ebp, [xSI + CPUMCTX.ebp]
-    mov     esi, [xSI + CPUMCTX.esi]
-
-    ; Clear the global interrupt flag & execute sti to make sure external interrupts cause a world switch.
-    clgi
-    sti
-
-    ; Load guest fs, gs, sysenter msr etc.
-    vmload
-    ; Run the VM.
-    vmrun
-
-    ; eax is in the VMCB already; we can use it here.
-
-    ; Save guest fs, gs, sysenter msr etc.
-    vmsave
-
-    ; Load host fs, gs, sysenter msr etc.
-    pop     xAX                     ; Pushed above
-    vmload
-
-    ; Set the global interrupt flag again, but execute cli to make sure IF=0.
-    cli
-    stgi
-
-    ;
-    ; Pop the context pointer (pushed above) and save the guest GPRs (sans RSP and RAX).
-    ;
-    pop     xAX
-
-    mov     [ss:xAX + CPUMCTX.ebx], ebx
-    mov     [ss:xAX + CPUMCTX.ecx], ecx
-    mov     [ss:xAX + CPUMCTX.edx], edx
-    mov     [ss:xAX + CPUMCTX.esi], esi
-    mov     [ss:xAX + CPUMCTX.edi], edi
-    mov     [ss:xAX + CPUMCTX.ebp], ebp
-
-    ;
-    ; Restore the host xcr0 if necessary.
-    ;
-    pop     xCX
-    test    ecx, ecx
-    jnz     .xcr0_after_skip
-    pop     xAX
-    pop     xDX
-    xsetbv                              ; ecx is already zero.
-.xcr0_after_skip:
-
-    ;
-    ; Restore host general purpose registers.
-    ;
-    MYPOPAD
-
-    mov     eax, VINF_SUCCESS
-
-    popf
-    pop     xBP
-%ifdef RT_ARCH_AMD64
-    add     xSP, 6*xCB
-%endif
-    ret
-ENDPROC SVMR0VMRun
-
-
-%ifdef RT_ARCH_AMD64
 ;;
-; Prepares for and executes VMRUN (64 bits guests)
+; Prepares for and executes VMRUN (32-bit and 64-bit guests).
 ;
 ; @returns  VBox status code
-; @param    HCPhysVMCB      Physical address of host VMCB.
-; @param    HCPhysVMCB      Physical address of guest VMCB.
-; @param    pCtx            Pointer to the guest-CPU context.
-; @param    pVM             msc:r9, gcc:rcx     The cross context VM structure.
-; @param    pVCpu           msc:[rsp+28],gcc:r8 The cross context virtual CPU structure of the calling EMT.
+; @param    pVM             msc:rcx,gcc:rdi     The cross context VM structure (unused).
+; @param    pVCpu           msc:rdx,gcc:rsi     The cross context virtual CPU structure of the calling EMT.
+; @param    HCPhysVmcb      msc:r8, gcc:rdx     Physical address of guest VMCB.
 ;
-ALIGNCODE(16)
-BEGINPROC SVMR0VMRun64
-    ; Fake a cdecl stack frame
- %ifdef ASM_CALL64_GCC
-    push    r8
-    push    rcx
-    push    rdx
-    push    rsi
-    push    rdi
- %else
-    mov     rax, [rsp + 28h]
-    push    rax                         ; rbp + 30h pVCpu
-    push    r9                          ; rbp + 28h pVM
-    push    r8                          ; rbp + 20h pCtx
-    push    rdx                         ; rbp + 18h HCPHYSGuestVMCB
-    push    rcx                         ; rbp + 10h HCPhysHostVMCB
+ALIGNCODE(64) ; This + immediate optimizations causes serious trouble for yasm and the SEH frames: prologue -28 bytes, must be <256
+              ; So the SEH64_XXX stuff is currently not operational.
+BEGINPROC RT_CONCAT(hmR0SvmVmRun,%1)
+ %ifdef VBOX_WITH_KERNEL_USING_XMM
+  %if %4 = 0
+        ;
+        ; The non-saving variant will currently check the two SSE preconditions and pick
+        ; the right variant to continue with.  Later we can see if we can't manage to
+        ; move these decisions into hmR0SvmUpdateVmRunFunction().
+        ;
+   %ifdef ASM_CALL64_MSC
+        test    byte  [rdx + VMCPU.cpum.GstCtx + CPUMCTX.fUsedFpuGuest], 1
+   %else
+        test    byte  [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fUsedFpuGuest], 1
+   %endif
+        jz      .save_xmm_no_need
+   %ifdef ASM_CALL64_MSC
+        cmp     dword [rdx + VMCPU.cpum.GstCtx + CPUMCTX.fXStateMask], 0
+   %else
+        cmp     dword [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fXStateMask], 0
+   %endif
+        je      RT_CONCAT3(hmR0SvmVmRun,%1,_SseManual)
+        jmp     RT_CONCAT3(hmR0SvmVmRun,%1,_SseXSave)
+.save_xmm_no_need:
+  %endif
  %endif
-    push    0                           ; rbp + 08h "fake ret addr"
-    push    rbp                         ; rbp + 00h
-    mov     rbp, rsp
-    pushf
+        push    rbp
+        SEH64_PUSH_xBP
+        mov     rbp, rsp
+        SEH64_SET_FRAME_xBP 0
+        pushf
+  %assign cbFrame            30h
+ %if %4 != 0
+  %assign cbFrame            cbFrame + 16 * 11  ; Reserve space for 10x 128-bit XMM registers and MXCSR (32-bit)
+ %endif
+ %assign cbBaseFrame         cbFrame
+        sub     rsp, cbFrame - 8h               ; We subtract 8 bytes for the above pushf
+        SEH64_ALLOCATE_STACK cbFrame            ; And we have CALLEE_PRESERVED_REGISTER_COUNT following it.
 
-    ; Manual save and restore:
-    ;  - General purpose registers except RIP, RSP, RAX
-    ;
-    ; Trashed:
-    ;  - CR2 (we don't care)
-    ;  - LDTR (reset to 0)
-    ;  - DRx (presumably not changed at all)
-    ;  - DR7 (reset to 0x400)
-    ;
+ %define frm_fRFlags         -008h
+ %define frm_uHostXcr0       -018h              ; 128-bit
+ ;%define frm_fNoRestoreXcr0  -020h              ; Non-zero if we should skip XCR0 restoring.
+ %define frm_pGstCtx         -028h              ; Where we stash guest CPU context for use after the vmrun.
+ %define frm_HCPhysVmcbHost  -030h              ; Where we stash HCPhysVmcbHost for the vmload after vmrun.
+ %if %4 != 0
+  %define frm_saved_xmm6     -040h
+  %define frm_saved_xmm7     -050h
+  %define frm_saved_xmm8     -060h
+  %define frm_saved_xmm9     -070h
+  %define frm_saved_xmm10    -080h
+  %define frm_saved_xmm11    -090h
+  %define frm_saved_xmm12    -0a0h
+  %define frm_saved_xmm13    -0b0h
+  %define frm_saved_xmm14    -0c0h
+  %define frm_saved_xmm15    -0d0h
+  %define frm_saved_mxcsr    -0e0h
+ %endif
 
-    ;
-    ; Save all general purpose host registers.
-    ;
-    MYPUSHAD
+        ; Manual save and restore:
+        ;  - General purpose registers except RIP, RSP, RAX
+        ;
+        ; Trashed:
+        ;  - CR2 (we don't care)
+        ;  - LDTR (reset to 0)
+        ;  - DRx (presumably not changed at all)
+        ;  - DR7 (reset to 0x400)
 
-    ;
-    ; Load pCtx into xSI.
-    ;
-    mov     xSI, [rbp + xCB * 2 + RTHCPHYS_CB * 2]
+        ; Save all general purpose host registers.
+        PUSH_CALLEE_PRESERVED_REGISTERS
+        SEH64_END_PROLOGUE
+ %if cbFrame != (cbBaseFrame + 8 * CALLEE_PRESERVED_REGISTER_COUNT)
+  %error Bad cbFrame value
+ %endif
 
-    ;
-    ; Save the host XCR0 and load the guest one if necessary.
-    ;
-    mov     rax, [xBP + 30h]            ; pVCpu
-    test    byte [xAX + VMCPU.hm + HMCPU.fLoadSaveGuestXcr0], 1
-    jz      .xcr0_before_skip
+        ; Shuffle parameter registers so that r8=HCPhysVmcb and rsi=pVCpu.  (rdx & rcx will soon be trashed.)
+ %ifdef ASM_CALL64_GCC
+        mov     r8, rdx                         ; Put HCPhysVmcb in r8 like on MSC as rdx is trashed below.
+ %else
+        mov     rsi, rdx                        ; Put pVCpu in rsi like on GCC as rdx is trashed below.
+        ;mov     rdi, rcx                        ; Put pVM in rdi like on GCC as rcx is trashed below.
+ %endif
 
-    xor     ecx, ecx
-    xgetbv                              ; Save the host one on the stack.
-    push    xDX
-    push    xAX
+ %ifdef VBOX_STRICT
+        ;
+        ; Verify template preconditions / parameters to ensure HMSVM.cpp didn't miss some state change.
+        ;
+        cmp     byte [rsi + GVMCPU.hmr0 + HMR0PERVCPU.fLoadSaveGuestXcr0], %2
+        mov     eax, VERR_SVM_VMRUN_PRECOND_0
+        jne     .failure_return
 
-    mov     xSI, [xBP + xCB * 2 + RTHCPHYS_CB * 2]  ; pCtx
-    mov     eax, [xSI + CPUMCTX.aXcr]   ; Load the guest one.
-    mov     edx, [xSI + CPUMCTX.aXcr + 4]
-    xor     ecx, ecx                    ; paranoia
-    xsetbv
+        mov     eax, [rsi + GVMCPU.hmr0 + HMR0PERVCPU.fWorldSwitcher]
+        and     eax, HM_WSF_IBPB_ENTRY | HM_WSF_IBPB_EXIT
+        cmp     eax, %3
+        mov     eax, VERR_SVM_VMRUN_PRECOND_1
+        jne     .failure_return
 
-    push    0                           ; Indicate that we must restore XCR0 (popped into ecx, thus 0).
-    jmp     .xcr0_before_done
+  %ifdef VBOX_WITH_KERNEL_USING_XMM
+        mov     eax, VERR_SVM_VMRUN_PRECOND_2
+        test    byte  [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fUsedFpuGuest], 1
+   %if   %4 = 0
+        jnz     .failure_return
+   %else
+        jz      .failure_return
 
-.xcr0_before_skip:
-    push    3fh                         ; indicate that we need not.
-.xcr0_before_done:
+        mov     eax, VERR_SVM_VMRUN_PRECOND_3
+        cmp     dword [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fXStateMask], 0
+    %if   %4 = 1
+        jne     .failure_return
+    %elif %4 = 2
+        je      .failure_return
+    %else
+      %error Invalid template parameter 4.
+    %endif
+   %endif
+  %endif
+ %endif ; VBOX_STRICT
 
-    ;
-    ; Save guest CPU-context pointer for simplifying saving of the GPRs afterwards.
-    ;
-    push    rsi
+ %if %4 != 0
+        ; Save the non-volatile SSE host register state.
+        movdqa  [rbp + frm_saved_xmm6 ], xmm6
+        movdqa  [rbp + frm_saved_xmm7 ], xmm7
+        movdqa  [rbp + frm_saved_xmm8 ], xmm8
+        movdqa  [rbp + frm_saved_xmm9 ], xmm9
+        movdqa  [rbp + frm_saved_xmm10], xmm10
+        movdqa  [rbp + frm_saved_xmm11], xmm11
+        movdqa  [rbp + frm_saved_xmm12], xmm12
+        movdqa  [rbp + frm_saved_xmm13], xmm13
+        movdqa  [rbp + frm_saved_xmm14], xmm14
+        movdqa  [rbp + frm_saved_xmm15], xmm15
+        stmxcsr [rbp + frm_saved_mxcsr]
 
-    ;
-    ; Save host fs, gs, sysenter msr etc.
-    ;
-    mov     rax, [rbp + xCB * 2]                    ; pVMCBHostPhys (64 bits physical address; x86: take low dword only)
-    push    rax                                     ; Save for the vmload after vmrun
-    vmsave
+        ; Load the guest state related to the above non-volatile and volatile SSE registers. Trashes rcx, eax and edx.
+        lea     rcx, [rsi + VMCPU.cpum.GstCtx + CPUMCTX.XState]
+  %if %4 = 1 ; manual
+        movdqa  xmm0,  [rcx + XMM_OFF_IN_X86FXSTATE + 000h]
+        movdqa  xmm1,  [rcx + XMM_OFF_IN_X86FXSTATE + 010h]
+        movdqa  xmm2,  [rcx + XMM_OFF_IN_X86FXSTATE + 020h]
+        movdqa  xmm3,  [rcx + XMM_OFF_IN_X86FXSTATE + 030h]
+        movdqa  xmm4,  [rcx + XMM_OFF_IN_X86FXSTATE + 040h]
+        movdqa  xmm5,  [rcx + XMM_OFF_IN_X86FXSTATE + 050h]
+        movdqa  xmm6,  [rcx + XMM_OFF_IN_X86FXSTATE + 060h]
+        movdqa  xmm7,  [rcx + XMM_OFF_IN_X86FXSTATE + 070h]
+        movdqa  xmm8,  [rcx + XMM_OFF_IN_X86FXSTATE + 080h]
+        movdqa  xmm9,  [rcx + XMM_OFF_IN_X86FXSTATE + 090h]
+        movdqa  xmm10, [rcx + XMM_OFF_IN_X86FXSTATE + 0a0h]
+        movdqa  xmm11, [rcx + XMM_OFF_IN_X86FXSTATE + 0b0h]
+        movdqa  xmm12, [rcx + XMM_OFF_IN_X86FXSTATE + 0c0h]
+        movdqa  xmm13, [rcx + XMM_OFF_IN_X86FXSTATE + 0d0h]
+        movdqa  xmm14, [rcx + XMM_OFF_IN_X86FXSTATE + 0e0h]
+        movdqa  xmm15, [rcx + XMM_OFF_IN_X86FXSTATE + 0f0h]
+        ldmxcsr        [rcx + X86FXSTATE.MXCSR]
+  %elif %4 = 2 ; use xrstor/xsave
+        mov     eax, [rsi + VMCPU.cpum.GstCtx + CPUMCTX.fXStateMask]
+        and     eax, CPUM_VOLATILE_XSAVE_GUEST_COMPONENTS
+        xor     edx, edx
+        xrstor  [rcx]
+  %else
+   %error invalid template parameter 4
+  %endif
+ %endif
 
-    ; Setup eax for VMLOAD.
-    mov     rax, [rbp + xCB * 2 + RTHCPHYS_CB]      ; pVMCBPhys (64 bits physical address; take low dword only)
+ %if %2 != 0
+        ; Save the host XCR0 and load the guest one if necessary.
+        xor     ecx, ecx
+        xgetbv                                  ; save the host XCR0 on the stack
+        mov     [rbp + frm_uHostXcr0 + 8], rdx
+        mov     [rbp + frm_uHostXcr0    ], rax
 
-    ; Load guest general purpose registers.
-    ; rax is loaded from the VMCB by VMRUN.
-    mov     rbx, qword [xSI + CPUMCTX.ebx]
-    mov     rcx, qword [xSI + CPUMCTX.ecx]
-    mov     rdx, qword [xSI + CPUMCTX.edx]
-    mov     rdi, qword [xSI + CPUMCTX.edi]
-    mov     rbp, qword [xSI + CPUMCTX.ebp]
-    mov     r8,  qword [xSI + CPUMCTX.r8]
-    mov     r9,  qword [xSI + CPUMCTX.r9]
-    mov     r10, qword [xSI + CPUMCTX.r10]
-    mov     r11, qword [xSI + CPUMCTX.r11]
-    mov     r12, qword [xSI + CPUMCTX.r12]
-    mov     r13, qword [xSI + CPUMCTX.r13]
-    mov     r14, qword [xSI + CPUMCTX.r14]
-    mov     r15, qword [xSI + CPUMCTX.r15]
-    mov     rsi, qword [xSI + CPUMCTX.esi]
+        mov     eax, [rsi + VMCPU.cpum.GstCtx + CPUMCTX.aXcr] ; load the guest XCR0
+        mov     edx, [rsi + VMCPU.cpum.GstCtx + CPUMCTX.aXcr + 4]
+        xor     ecx, ecx                        ; paranoia
+        xsetbv
+ %endif
 
-    ; Clear the global interrupt flag & execute sti to make sure external interrupts cause a world switch.
-    clgi
-    sti
+        ; Save host fs, gs, sysenter msr etc.
+        mov     rax, [rsi + GVMCPU.hmr0 + HMR0PERVCPU.svm + HMR0CPUSVM.HCPhysVmcbHost]
+        mov     qword [rbp + frm_HCPhysVmcbHost], rax ; save for the vmload after vmrun
+        lea     rsi, [rsi + VMCPU.cpum.GstCtx]
+        mov     qword [rbp + frm_pGstCtx], rsi
+        vmsave
 
-    ; Load guest fs, gs, sysenter msr etc.
-    vmload
-    ; Run the VM.
-    vmrun
+ %if %3 & HM_WSF_IBPB_ENTRY
+        ; Fight spectre (trashes rax, rdx and rcx).
+        mov     ecx, MSR_IA32_PRED_CMD
+        mov     eax, MSR_IA32_PRED_CMD_F_IBPB
+        xor     edx, edx
+        wrmsr
+ %endif
 
-    ; rax is in the VMCB already; we can use it here.
+        ; Setup rax for VMLOAD.
+        mov     rax, r8                         ; HCPhysVmcb (64 bits physical address; take low dword only)
 
-    ; Save guest fs, gs, sysenter msr etc.
-    vmsave
+        ; Load guest general purpose registers (rax is loaded from the VMCB by VMRUN).
+        mov     rbx, qword [rsi + CPUMCTX.ebx]
+        mov     rcx, qword [rsi + CPUMCTX.ecx]
+        mov     rdx, qword [rsi + CPUMCTX.edx]
+        mov     rdi, qword [rsi + CPUMCTX.edi]
+        mov     rbp, qword [rsi + CPUMCTX.ebp]
+        mov     r8,  qword [rsi + CPUMCTX.r8]
+        mov     r9,  qword [rsi + CPUMCTX.r9]
+        mov     r10, qword [rsi + CPUMCTX.r10]
+        mov     r11, qword [rsi + CPUMCTX.r11]
+        mov     r12, qword [rsi + CPUMCTX.r12]
+        mov     r13, qword [rsi + CPUMCTX.r13]
+        mov     r14, qword [rsi + CPUMCTX.r14]
+        mov     r15, qword [rsi + CPUMCTX.r15]
+        mov     rsi, qword [rsi + CPUMCTX.esi]
 
-    ;
-    ; Load host fs, gs, sysenter msr etc.
-    ;
-    pop     rax                     ; pushed above
-    vmload
+        ; Clear the global interrupt flag & execute sti to make sure external interrupts cause a world switch.
+        clgi
+        sti
 
-    ;
-    ; Set the global interrupt flag again, but execute cli to make sure IF=0.
-    ;
-    cli
-    stgi
+        ; Load guest FS, GS, Sysenter MSRs etc.
+        vmload
 
-    ;
-    ; Pop the context pointer (pushed above) and save the guest GPRs (sans RSP and RAX).
-    ;
-    pop     rax
+        ; Run the VM.
+        vmrun
 
-    mov     qword [rax + CPUMCTX.ebx], rbx
-    mov     qword [rax + CPUMCTX.ecx], rcx
-    mov     qword [rax + CPUMCTX.edx], rdx
-    mov     qword [rax + CPUMCTX.esi], rsi
-    mov     qword [rax + CPUMCTX.edi], rdi
-    mov     qword [rax + CPUMCTX.ebp], rbp
-    mov     qword [rax + CPUMCTX.r8],  r8
-    mov     qword [rax + CPUMCTX.r9],  r9
-    mov     qword [rax + CPUMCTX.r10], r10
-    mov     qword [rax + CPUMCTX.r11], r11
-    mov     qword [rax + CPUMCTX.r12], r12
-    mov     qword [rax + CPUMCTX.r13], r13
-    mov     qword [rax + CPUMCTX.r14], r14
-    mov     qword [rax + CPUMCTX.r15], r15
+        ; Save guest fs, gs, sysenter msr etc.
+        vmsave
 
-    ;
-    ; Restore the host xcr0 if necessary.
-    ;
-    pop     xCX
-    test    ecx, ecx
-    jnz     .xcr0_after_skip
-    pop     xAX
-    pop     xDX
-    xsetbv                              ; ecx is already zero.
-.xcr0_after_skip:
+        ; Load host fs, gs, sysenter msr etc.
+        mov     rax, [rsp + cbFrame + frm_HCPhysVmcbHost] ; load HCPhysVmcbHost (rbp is not operational yet, thus rsp)
+        vmload
 
-    ;
-    ; Restore host general purpose registers.
-    ;
-    MYPOPAD
+        ; Set the global interrupt flag again, but execute cli to make sure IF=0.
+        cli
+        stgi
 
-    mov     eax, VINF_SUCCESS
+        ; Pop pVCpu (saved above) and save the guest GPRs (sans RSP and RAX).
+        mov     rax, [rsp + cbFrame + frm_pGstCtx] ; (rbp still not operational)
 
-    popf
-    pop     rbp
-    add     rsp, 6 * xCB
-    ret
-ENDPROC SVMR0VMRun64
-%endif ; RT_ARCH_AMD64
+        mov     qword [rax + CPUMCTX.edx], rdx
+        mov     qword [rax + CPUMCTX.ecx], rcx
+        mov     rcx, rax
+        rdtsc
+        mov     qword [rcx + CPUMCTX.ebp], rbp
+        lea     rbp, [rsp + cbFrame]
+        shl     rdx, 20h
+        or      rax, rdx                ; TSC value in RAX
+        mov     qword [rcx + CPUMCTX.r8],  r8
+        mov     r8, SPECTRE_FILLER      ; SPECTRE filler in R8
+        mov     qword [rcx + CPUMCTX.r9],  r9
+        mov     r9, r8
+        mov     qword [rcx + CPUMCTX.r10], r10
+        mov     r10, r8
+        mov     qword [rcx + GVMCPU.hmr0 + HMR0PERVCPU.uTscExit - VMCPU.cpum.GstCtx], rax
+        mov     qword [rcx + CPUMCTX.r11], r11
+        mov     r11, r8
+        mov     qword [rcx + CPUMCTX.edi], rdi
+ %ifdef ASM_CALL64_MSC
+        mov     rdi, [rbp + frm_saved_rdi]
+ %else
+        mov     rdi, r8
+ %endif
+        mov     qword [rcx + CPUMCTX.esi], rsi
+ %ifdef ASM_CALL64_MSC
+        mov     rsi, [rbp + frm_saved_rsi]
+ %else
+        mov     rsi, r8
+ %endif
+        mov     qword [rcx + CPUMCTX.ebx], rbx
+        mov     rbx, [rbp + frm_saved_rbx]
+        mov     qword [rcx + CPUMCTX.r12], r12
+        mov     r12, [rbp + frm_saved_r12]
+        mov     qword [rcx + CPUMCTX.r13], r13
+        mov     r13, [rbp + frm_saved_r13]
+        mov     qword [rcx + CPUMCTX.r14], r14
+        mov     r14, [rbp + frm_saved_r14]
+        mov     qword [rcx + CPUMCTX.r15], r15
+        mov     r15, [rbp + frm_saved_r15]
+
+ %if %4 != 0
+        ; Set r8 = &pVCpu->cpum.GstCtx; for use below when saving and restoring SSE state.
+        mov     r8, rcx
+ %endif
+
+ %if %3 & HM_WSF_IBPB_EXIT
+        ; Fight spectre (trashes rax, rdx and rcx).
+        mov     ecx, MSR_IA32_PRED_CMD
+        mov     eax, MSR_IA32_PRED_CMD_F_IBPB
+        xor     edx, edx
+        wrmsr
+ %endif
+
+ %if %2 != 0
+        ; Restore the host xcr0.
+        xor     ecx, ecx
+        mov     rdx, [rbp + frm_uHostXcr0 + 8]
+        mov     rax, [rbp + frm_uHostXcr0]
+        xsetbv
+ %endif
+
+ %if %4 != 0
+        ; Save the guest SSE state related to non-volatile and volatile SSE registers.
+        lea     rcx, [r8 + CPUMCTX.XState]
+  %if %4 = 1 ; manual
+        stmxcsr [rcx + X86FXSTATE.MXCSR]
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 000h], xmm0
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 010h], xmm1
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 020h], xmm2
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 030h], xmm3
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 040h], xmm4
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 050h], xmm5
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 060h], xmm6
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 070h], xmm7
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 080h], xmm8
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 090h], xmm9
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0a0h], xmm10
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0b0h], xmm11
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0c0h], xmm12
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0d0h], xmm13
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0e0h], xmm14
+        movdqa  [rcx + XMM_OFF_IN_X86FXSTATE + 0f0h], xmm15
+  %elif %4 = 2 ; use xrstor/xsave
+        mov     eax, [r8 + CPUMCTX.fXStateMask]
+        and     eax, CPUM_VOLATILE_XSAVE_GUEST_COMPONENTS
+        xor     edx, edx
+        xsave   [rcx]
+  %else
+   %error invalid template parameter 4
+  %endif
+
+        ; Restore the host non-volatile SSE register state.
+        ldmxcsr [rbp + frm_saved_mxcsr]
+        movdqa  xmm6,  [rbp + frm_saved_xmm6 ]
+        movdqa  xmm7,  [rbp + frm_saved_xmm7 ]
+        movdqa  xmm8,  [rbp + frm_saved_xmm8 ]
+        movdqa  xmm9,  [rbp + frm_saved_xmm9 ]
+        movdqa  xmm10, [rbp + frm_saved_xmm10]
+        movdqa  xmm11, [rbp + frm_saved_xmm11]
+        movdqa  xmm12, [rbp + frm_saved_xmm12]
+        movdqa  xmm13, [rbp + frm_saved_xmm13]
+        movdqa  xmm14, [rbp + frm_saved_xmm14]
+        movdqa  xmm15, [rbp + frm_saved_xmm15]
+ %endif  ; %4 != 0
+
+        ; Epilogue (assumes we restored volatile registers above when saving the guest GPRs).
+        mov     eax, VINF_SUCCESS
+        add     rsp, cbFrame - 8h
+        popf
+        leave
+        ret
+
+ %ifdef VBOX_STRICT
+        ; Precondition checks failed.
+.failure_return:
+        POP_CALLEE_PRESERVED_REGISTERS
+ %if cbFrame != cbBaseFrame
+  %error Bad frame size value: cbFrame
+ %endif
+        add     rsp, cbFrame - 8h
+        popf
+        leave
+        ret
+ %endif
+
+%undef frm_uHostXcr0
+%undef frm_fNoRestoreXcr0
+%undef frm_pVCpu
+%undef frm_HCPhysVmcbHost
+%undef cbFrame
+ENDPROC RT_CONCAT(hmR0SvmVmRun,%1)
+
+%endmacro ; hmR0SvmVmRunTemplate
+
+;
+; Instantiate the hmR0SvmVmRun various variations.
+;
+hmR0SvmVmRunTemplate _SansXcr0_SansIbpbEntry_SansIbpbExit,           0, 0,                                    0
+hmR0SvmVmRunTemplate _WithXcr0_SansIbpbEntry_SansIbpbExit,           1, 0,                                    0
+hmR0SvmVmRunTemplate _SansXcr0_WithIbpbEntry_SansIbpbExit,           0, HM_WSF_IBPB_ENTRY,                    0
+hmR0SvmVmRunTemplate _WithXcr0_WithIbpbEntry_SansIbpbExit,           1, HM_WSF_IBPB_ENTRY,                    0
+hmR0SvmVmRunTemplate _SansXcr0_SansIbpbEntry_WithIbpbExit,           0, HM_WSF_IBPB_EXIT,                     0
+hmR0SvmVmRunTemplate _WithXcr0_SansIbpbEntry_WithIbpbExit,           1, HM_WSF_IBPB_EXIT,                     0
+hmR0SvmVmRunTemplate _SansXcr0_WithIbpbEntry_WithIbpbExit,           0, HM_WSF_IBPB_ENTRY | HM_WSF_IBPB_EXIT, 0
+hmR0SvmVmRunTemplate _WithXcr0_WithIbpbEntry_WithIbpbExit,           1, HM_WSF_IBPB_ENTRY | HM_WSF_IBPB_EXIT, 0
+%ifdef VBOX_WITH_KERNEL_USING_XMM
+hmR0SvmVmRunTemplate _SansXcr0_SansIbpbEntry_SansIbpbExit_SseManual, 0, 0,                                    1
+hmR0SvmVmRunTemplate _WithXcr0_SansIbpbEntry_SansIbpbExit_SseManual, 1, 0,                                    1
+hmR0SvmVmRunTemplate _SansXcr0_WithIbpbEntry_SansIbpbExit_SseManual, 0, HM_WSF_IBPB_ENTRY,                    1
+hmR0SvmVmRunTemplate _WithXcr0_WithIbpbEntry_SansIbpbExit_SseManual, 1, HM_WSF_IBPB_ENTRY,                    1
+hmR0SvmVmRunTemplate _SansXcr0_SansIbpbEntry_WithIbpbExit_SseManual, 0, HM_WSF_IBPB_EXIT,                     1
+hmR0SvmVmRunTemplate _WithXcr0_SansIbpbEntry_WithIbpbExit_SseManual, 1, HM_WSF_IBPB_EXIT,                     1
+hmR0SvmVmRunTemplate _SansXcr0_WithIbpbEntry_WithIbpbExit_SseManual, 0, HM_WSF_IBPB_ENTRY | HM_WSF_IBPB_EXIT, 1
+hmR0SvmVmRunTemplate _WithXcr0_WithIbpbEntry_WithIbpbExit_SseManual, 1, HM_WSF_IBPB_ENTRY | HM_WSF_IBPB_EXIT, 1
+
+hmR0SvmVmRunTemplate _SansXcr0_SansIbpbEntry_SansIbpbExit_SseXSave,  0, 0,                                    2
+hmR0SvmVmRunTemplate _WithXcr0_SansIbpbEntry_SansIbpbExit_SseXSave,  1, 0,                                    2
+hmR0SvmVmRunTemplate _SansXcr0_WithIbpbEntry_SansIbpbExit_SseXSave,  0, HM_WSF_IBPB_ENTRY,                    2
+hmR0SvmVmRunTemplate _WithXcr0_WithIbpbEntry_SansIbpbExit_SseXSave,  1, HM_WSF_IBPB_ENTRY,                    2
+hmR0SvmVmRunTemplate _SansXcr0_SansIbpbEntry_WithIbpbExit_SseXSave,  0, HM_WSF_IBPB_EXIT,                     2
+hmR0SvmVmRunTemplate _WithXcr0_SansIbpbEntry_WithIbpbExit_SseXSave,  1, HM_WSF_IBPB_EXIT,                     2
+hmR0SvmVmRunTemplate _SansXcr0_WithIbpbEntry_WithIbpbExit_SseXSave,  0, HM_WSF_IBPB_ENTRY | HM_WSF_IBPB_EXIT, 2
+hmR0SvmVmRunTemplate _WithXcr0_WithIbpbEntry_WithIbpbExit_SseXSave,  1, HM_WSF_IBPB_ENTRY | HM_WSF_IBPB_EXIT, 2
+%endif
 

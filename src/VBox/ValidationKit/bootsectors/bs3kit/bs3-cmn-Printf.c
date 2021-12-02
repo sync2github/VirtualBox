@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-Printf.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - Bs3Printf, Bs3PrintfV
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -64,7 +64,7 @@ static BS3_DECL_CALLBACK(size_t) bs3PrintFmtOutput(char ch, void BS3_FAR *pvUser
 
 
 #undef Bs3PrintfV
-BS3_CMN_DEF(size_t, Bs3PrintfV,(const char BS3_FAR *pszFormat, va_list va))
+BS3_CMN_DEF(size_t, Bs3PrintfV,(const char BS3_FAR *pszFormat, va_list BS3_FAR va))
 {
     BS3PRINTBUF Buf;
     Buf.cchBuf = 0;

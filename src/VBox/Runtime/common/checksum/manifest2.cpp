@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: manifest2.cpp 84509 2020-05-25 15:09:24Z vboxsync $ */
 /** @file
  * IPRT - Manifest, the core.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -64,7 +64,8 @@ typedef struct RTMANIFESTATTR
     /** Whether it was visited by the equals operation or not. */
     bool                fVisited;
     /** The normalized property name that StrCore::pszString points at. */
-    char                szName[1];
+    RT_FLEXIBLE_ARRAY_EXTENSION
+    char                szName[RT_FLEXIBLE_ARRAY];
 } RTMANIFESTATTR;
 /** Pointer to a manifest attribute. */
 typedef RTMANIFESTATTR *PRTMANIFESTATTR;
@@ -85,7 +86,7 @@ typedef struct RTMANIFESTENTRY
     /** Whether it was visited by the equals operation or not. */
     bool                fVisited;
     /** The normalized entry name that StrCore::pszString points at. */
-    char                szName[1];
+    char                szName[RT_FLEXIBLE_ARRAY_NESTED];
 } RTMANIFESTENTRY;
 /** Pointer to a manifest entry. */
 typedef RTMANIFESTENTRY *PRTMANIFESTENTRY;
@@ -166,8 +167,8 @@ typedef struct RTMANIFESTEQUALS
 typedef RTMANIFESTEQUALS *PRTMANIFESTEQUALS;
 
 /**
- * Argument package used by rtMainfestQueryAttrWorker to pass its search
- * criteria to rtMainfestQueryAttrEnumCallback and get a result back.
+ * Argument package used by rtManifestQueryAttrWorker to pass its search
+ * criteria to rtManifestQueryAttrEnumCallback and get a result back.
  */
 typedef struct RTMANIFESTQUERYATTRARGS
 {
@@ -176,7 +177,7 @@ typedef struct RTMANIFESTQUERYATTRARGS
     /** What we've found. */
     PRTMANIFESTATTR pAttr;
 } RTMANIFESTQUERYATTRARGS;
-/** Pointer to a rtMainfestQueryAttrEnumCallback argument packet. */
+/** Pointer to a rtManifestQueryAttrEnumCallback argument packet. */
 typedef RTMANIFESTQUERYATTRARGS *PRTMANIFESTQUERYATTRARGS;
 
 
@@ -192,7 +193,7 @@ RTDECL(int) RTManifestCreate(uint32_t fFlags, PRTMANIFEST phManifest)
     AssertReturn(!fFlags, VERR_INVALID_PARAMETER);
     AssertPtr(phManifest);
 
-    RTMANIFESTINT *pThis = (RTMANIFESTINT *)RTMemAlloc(sizeof(*pThis));
+    RTMANIFESTINT *pThis = (RTMANIFESTINT *)RTMemAlloc(RT_UOFFSETOF(RTMANIFESTINT, SelfEntry.szName[1]));
     if (!pThis)
         return VERR_NO_MEMORY;
 
@@ -469,7 +470,7 @@ static DECLCALLBACK(int) rtManifestAttributeCompare(PRTSTRSPACECORE pStr, void *
     /*
      * Compare them.
      */
-    if (strcmp(pAttr1->pszValue, pAttr2->pszValue))
+    if (RTStrICmp(pAttr1->pszValue, pAttr2->pszValue))
     {
         if (*pEquals->pszCurEntry)
             RTStrPrintf(pEquals->pszError, pEquals->cbError,
@@ -553,8 +554,13 @@ static DECLCALLBACK(int) rtManifestEntryCompare(PRTSTRSPACECORE pStr, void *pvUs
     pEntry2 = (PRTMANIFESTENTRY)RTStrSpaceGet(&pEquals->pThis2->Entries, pEntry1->StrCore.pszString);
     if (!pEntry2)
     {
-        RTStrPrintf(pEquals->pszError, pEquals->cbError, "'%s' not found in the 2nd manifest", pEntry1->StrCore.pszString);
-        return VERR_NOT_EQUAL;
+        if (!(pEquals->fFlags & RTMANIFEST_EQUALS_IGN_MISSING_ENTRIES_2ND))
+        {
+            RTStrPrintf(pEquals->pszError, pEquals->cbError, "'%s' not found in the 2nd manifest", pEntry1->StrCore.pszString);
+            return VERR_NOT_EQUAL;
+        }
+        pEntry1->fVisited = true;
+        return VINF_SUCCESS;
     }
 
     Assert(!pEntry1->fVisited);
@@ -589,7 +595,7 @@ RTDECL(int) RTManifestEqualsEx(RTMANIFEST hManifest1, RTMANIFEST hManifest2, con
         AssertPtrReturn(pThis2, VERR_INVALID_HANDLE);
         AssertReturn(pThis2->u32Magic == RTMANIFEST_MAGIC, VERR_INVALID_HANDLE);
     }
-    AssertReturn(!(fFlags & ~(RTMANIFEST_EQUALS_IGN_MISSING_ATTRS)), VERR_INVALID_PARAMETER);
+    AssertReturn(!(fFlags & ~RTMANIFEST_EQUALS_VALID_MASK), VERR_INVALID_PARAMETER);
 
     /*
      * The simple cases.
@@ -697,8 +703,8 @@ static int rtManifestSetAttrWorker(PRTMANIFESTENTRY pEntry, const char *pszAttr,
     }
     else
     {
-        size_t          cbName = strlen(pszAttr) + 1;
-        pAttr = (PRTMANIFESTATTR)RTMemAllocVar(RT_OFFSETOF(RTMANIFESTATTR, szName[cbName]));
+        size_t const cbName = strlen(pszAttr) + 1;
+        pAttr = (PRTMANIFESTATTR)RTMemAllocVar(RT_UOFFSETOF_DYN(RTMANIFESTATTR, szName[cbName]));
         if (!pAttr)
         {
             RTStrFree(pszValueCopy);
@@ -794,7 +800,7 @@ RTDECL(int) RTManifestUnsetAttr(RTMANIFEST hManifest, const char *pszAttr)
  * @param   pStr                The attribute string node.
  * @param   pvUser              The argument package.
  */
-static DECLCALLBACK(int) rtMainfestQueryAttrEnumCallback(PRTSTRSPACECORE pStr, void *pvUser)
+static DECLCALLBACK(int) rtManifestQueryAttrEnumCallback(PRTSTRSPACECORE pStr, void *pvUser)
 {
     PRTMANIFESTATTR             pAttr = (PRTMANIFESTATTR)pStr;
     PRTMANIFESTQUERYATTRARGS    pArgs = (PRTMANIFESTQUERYATTRARGS)pvUser;
@@ -845,7 +851,7 @@ static int rtManifestQueryAttrWorker(PRTMANIFESTENTRY pEntry, const char *pszAtt
         RTMANIFESTQUERYATTRARGS Args;
         Args.fType = fType;
         Args.pAttr = NULL;
-        int rc = RTStrSpaceEnumerate(&pEntry->Attributes, rtMainfestQueryAttrEnumCallback, &Args);
+        int rc = RTStrSpaceEnumerate(&pEntry->Attributes, rtManifestQueryAttrEnumCallback, &Args);
         AssertRCReturn(rc, rc);
         pAttr = Args.pAttr;
         if (!pAttr)
@@ -890,7 +896,7 @@ RTDECL(int) RTManifestQueryAttr(RTMANIFEST hManifest, const char *pszAttr, uint3
  * @param   pStr                The attribute string node.
  * @param   pvUser              Pointer to type flags (uint32_t).
  */
-static DECLCALLBACK(int) rtMainfestQueryAllAttrTypesEnumAttrCallback(PRTSTRSPACECORE pStr, void *pvUser)
+static DECLCALLBACK(int) rtManifestQueryAllAttrTypesEnumAttrCallback(PRTSTRSPACECORE pStr, void *pvUser)
 {
     PRTMANIFESTATTR pAttr   = (PRTMANIFESTATTR)pStr;
     uint32_t       *pfTypes = (uint32_t *)pvUser;
@@ -907,10 +913,10 @@ static DECLCALLBACK(int) rtMainfestQueryAllAttrTypesEnumAttrCallback(PRTSTRSPACE
  * @param   pStr                The attribute string node.
  * @param   pvUser              Pointer to type flags (uint32_t).
  */
-static DECLCALLBACK(int) rtMainfestQueryAllAttrTypesEnumEntryCallback(PRTSTRSPACECORE pStr, void *pvUser)
+static DECLCALLBACK(int) rtManifestQueryAllAttrTypesEnumEntryCallback(PRTSTRSPACECORE pStr, void *pvUser)
 {
     PRTMANIFESTENTRY pEntry = RT_FROM_MEMBER(pStr, RTMANIFESTENTRY, StrCore);
-    return RTStrSpaceEnumerate(&pEntry->Attributes, rtMainfestQueryAllAttrTypesEnumAttrCallback, pvUser);
+    return RTStrSpaceEnumerate(&pEntry->Attributes, rtManifestQueryAllAttrTypesEnumAttrCallback, pvUser);
 }
 
 
@@ -922,9 +928,9 @@ RTDECL(int) RTManifestQueryAllAttrTypes(RTMANIFEST hManifest, bool fEntriesOnly,
     AssertPtr(pfTypes);
 
     *pfTypes = 0;
-    int rc = RTStrSpaceEnumerate(&pThis->Entries, rtMainfestQueryAllAttrTypesEnumEntryCallback, pfTypes);
+    int rc = RTStrSpaceEnumerate(&pThis->Entries, rtManifestQueryAllAttrTypesEnumEntryCallback, pfTypes);
     if (RT_SUCCESS(rc) && fEntriesOnly)
-        rc = rtMainfestQueryAllAttrTypesEnumAttrCallback(&pThis->SelfEntry.StrCore, pfTypes);
+        rc = rtManifestQueryAllAttrTypesEnumAttrCallback(&pThis->SelfEntry.StrCore, pfTypes);
     return VINF_SUCCESS;
 }
 
@@ -1064,7 +1070,7 @@ RTDECL(int) RTManifestEntrySetAttr(RTMANIFEST hManifest, const char *pszEntry, c
     rc = rtManifestGetEntry(pThis, pszEntry, fNeedNormalization, cchEntry, &pEntry);
     if (rc == VERR_NOT_FOUND)
     {
-        pEntry = (PRTMANIFESTENTRY)RTMemAlloc(RT_OFFSETOF(RTMANIFESTENTRY, szName[cchEntry + 1]));
+        pEntry = (PRTMANIFESTENTRY)RTMemAlloc(RT_UOFFSETOF_DYN(RTMANIFESTENTRY, szName[cchEntry + 1]));
         if (!pEntry)
             return VERR_NO_MEMORY;
 
@@ -1190,7 +1196,7 @@ RTDECL(int) RTManifestEntryAdd(RTMANIFEST hManifest, const char *pszEntry)
     rc = rtManifestGetEntry(pThis, pszEntry, fNeedNormalization, cchEntry, &pEntry);
     if (rc == VERR_NOT_FOUND)
     {
-        pEntry = (PRTMANIFESTENTRY)RTMemAlloc(RT_OFFSETOF(RTMANIFESTENTRY, szName[cchEntry + 1]));
+        pEntry = (PRTMANIFESTENTRY)RTMemAlloc(RT_UOFFSETOF_DYN(RTMANIFESTENTRY, szName[cchEntry + 1]));
         if (pEntry)
         {
             pEntry->StrCore.cchString = cchEntry;

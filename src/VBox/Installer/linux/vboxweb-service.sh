@@ -1,8 +1,11 @@
 #!/bin/sh
-#
+# $Id: vboxweb-service.sh 82968 2020-02-04 10:35:17Z vboxsync $
+## @file
 # VirtualBox web service API daemon init script.
 #
-# Copyright (C) 2006-2015 Oracle Corporation
+
+#
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -23,6 +26,7 @@
 # Default-Start:  2 3 4 5
 # Default-Stop:   0 1 6
 # Description:    VirtualBox web service API
+# X-Required-Target-Start: network-online
 ### END INIT INFO
 
 PATH=$PATH:/bin:/sbin:/usr/sbin

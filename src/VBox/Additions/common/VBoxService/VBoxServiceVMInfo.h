@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxServiceVMInfo.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxServiceVMInfo.h - Internal VM info definitions.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxServiceVMInfo_h
-#define ___VBoxServiceVMInfo_h
+#ifndef GA_INCLUDED_SRC_common_VBoxService_VBoxServiceVMInfo_h
+#define GA_INCLUDED_SRC_common_VBoxService_VBoxServiceVMInfo_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 extern int VGSvcUserUpdateF(PVBOXSERVICEVEPROPCACHE pCache, const char *pszUser, const char *pszDomain,
@@ -25,5 +28,5 @@ extern int VGSvcUserUpdateF(PVBOXSERVICEVEPROPCACHE pCache, const char *pszUser,
 
 extern uint32_t g_uVMInfoUserIdleThresholdMS;
 
-#endif
+#endif /* !GA_INCLUDED_SRC_common_VBoxService_VBoxServiceVMInfo_h */
 

@@ -1,4 +1,4 @@
-; $Id$
+; $Id: bootsector2-cpu-hidden-regs-1.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; Bootsector that shows/tests the content of hidden CPU registers.
 ;
@@ -6,7 +6,7 @@
 ;   VBoxManage setextradata bs-cpu-hidden-regs-1 VBoxInternal/Devices/VMMDev/0/Config/TestingEnabled  1
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;

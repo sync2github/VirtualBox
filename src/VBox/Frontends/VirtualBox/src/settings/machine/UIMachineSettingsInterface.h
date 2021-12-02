@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineSettingsInterface.h 86095 2020-09-11 14:28:34Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineSettingsInterface class declaration.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,160 +15,109 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineSettingsInterface_h___
-#define ___UIMachineSettingsInterface_h___
+#ifndef FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsInterface_h
+#define FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsInterface_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UISettingsPage.h"
-#include "UIMachineSettingsInterface.gen.h"
 
 /* Forward declarations: */
+class QCheckBox;
+class QLabel;
 class UIActionPool;
+class UIMenuBarEditorWidget;
+class UIStatusBarEditorWidget;
+class UIVisualStateEditor;
+struct UIDataSettingsMachineInterface;
+typedef UISettingsCache<UIDataSettingsMachineInterface> UISettingsCacheMachineInterface;
 
-/* Machine settings / User Interface page / Data: */
-struct UIDataSettingsMachineInterface
-{
-    /* Constructor: */
-    UIDataSettingsMachineInterface()
-        : m_fStatusBarEnabled(false)
-#ifndef VBOX_WS_MAC
-        , m_fMenuBarEnabled(false)
-#endif /* !VBOX_WS_MAC */
-        , m_restrictionsOfMenuBar(UIExtraDataMetaDefs::MenuType_Invalid)
-        , m_restrictionsOfMenuApplication(UIExtraDataMetaDefs::MenuApplicationActionType_Invalid)
-        , m_restrictionsOfMenuMachine(UIExtraDataMetaDefs::RuntimeMenuMachineActionType_Invalid)
-        , m_restrictionsOfMenuView(UIExtraDataMetaDefs::RuntimeMenuViewActionType_Invalid)
-        , m_restrictionsOfMenuInput(UIExtraDataMetaDefs::RuntimeMenuInputActionType_Invalid)
-        , m_restrictionsOfMenuDevices(UIExtraDataMetaDefs::RuntimeMenuDevicesActionType_Invalid)
-#ifdef VBOX_WITH_DEBUGGER_GUI
-        , m_restrictionsOfMenuDebug(UIExtraDataMetaDefs::RuntimeMenuDebuggerActionType_Invalid)
-#endif /* VBOX_WITH_DEBUGGER_GUI */
-#ifdef VBOX_WS_MAC
-        , m_restrictionsOfMenuWindow(UIExtraDataMetaDefs::MenuWindowActionType_Invalid)
-#endif /* VBOX_WS_MAC */
-        , m_restrictionsOfMenuHelp(UIExtraDataMetaDefs::MenuHelpActionType_Invalid)
-#ifndef VBOX_WS_MAC
-        , m_fShowMiniToolBar(false)
-        , m_fMiniToolBarAtTop(false)
-#endif /* !VBOX_WS_MAC */
-    {}
-
-    /* Functions: */
-    bool equal(const UIDataSettingsMachineInterface &other) const
-    {
-        return    (m_fStatusBarEnabled == other.m_fStatusBarEnabled)
-               && (m_statusBarRestrictions == other.m_statusBarRestrictions)
-               && (m_statusBarOrder == other.m_statusBarOrder)
-#ifndef VBOX_WS_MAC
-               && (m_fMenuBarEnabled == other.m_fMenuBarEnabled)
-#endif /* !VBOX_WS_MAC */
-               && (m_restrictionsOfMenuBar == other.m_restrictionsOfMenuBar)
-               && (m_restrictionsOfMenuApplication == other.m_restrictionsOfMenuApplication)
-               && (m_restrictionsOfMenuMachine == other.m_restrictionsOfMenuMachine)
-               && (m_restrictionsOfMenuView == other.m_restrictionsOfMenuView)
-               && (m_restrictionsOfMenuInput == other.m_restrictionsOfMenuInput)
-               && (m_restrictionsOfMenuDevices == other.m_restrictionsOfMenuDevices)
-#ifdef VBOX_WITH_DEBUGGER_GUI
-               && (m_restrictionsOfMenuDebug == other.m_restrictionsOfMenuDebug)
-#endif /* VBOX_WITH_DEBUGGER_GUI */
-#ifdef VBOX_WS_MAC
-               && (m_restrictionsOfMenuWindow == other.m_restrictionsOfMenuWindow)
-#endif /* VBOX_WS_MAC */
-               && (m_restrictionsOfMenuHelp == other.m_restrictionsOfMenuHelp)
-#ifndef VBOX_WS_MAC
-               && (m_fShowMiniToolBar == other.m_fShowMiniToolBar)
-               && (m_fMiniToolBarAtTop == other.m_fMiniToolBarAtTop)
-#endif /* !VBOX_WS_MAC */
-               ;
-    }
-
-    /* Operators: */
-    bool operator==(const UIDataSettingsMachineInterface &other) const { return equal(other); }
-    bool operator!=(const UIDataSettingsMachineInterface &other) const { return !equal(other); }
-
-    /* Variables: */
-    bool m_fStatusBarEnabled;
-    QList<IndicatorType> m_statusBarRestrictions;
-    QList<IndicatorType> m_statusBarOrder;
-#ifndef VBOX_WS_MAC
-    bool m_fMenuBarEnabled;
-#endif /* !VBOX_WS_MAC */
-    UIExtraDataMetaDefs::MenuType m_restrictionsOfMenuBar;
-    UIExtraDataMetaDefs::MenuApplicationActionType m_restrictionsOfMenuApplication;
-    UIExtraDataMetaDefs::RuntimeMenuMachineActionType m_restrictionsOfMenuMachine;
-    UIExtraDataMetaDefs::RuntimeMenuViewActionType m_restrictionsOfMenuView;
-    UIExtraDataMetaDefs::RuntimeMenuInputActionType m_restrictionsOfMenuInput;
-    UIExtraDataMetaDefs::RuntimeMenuDevicesActionType m_restrictionsOfMenuDevices;
-#ifdef VBOX_WITH_DEBUGGER_GUI
-    UIExtraDataMetaDefs::RuntimeMenuDebuggerActionType m_restrictionsOfMenuDebug;
-#endif /* VBOX_WITH_DEBUGGER_GUI */
-#ifdef VBOX_WS_MAC
-    UIExtraDataMetaDefs::MenuWindowActionType m_restrictionsOfMenuWindow;
-#endif /* VBOX_WS_MAC */
-    UIExtraDataMetaDefs::MenuHelpActionType m_restrictionsOfMenuHelp;
-#ifndef VBOX_WS_MAC
-    bool m_fShowMiniToolBar;
-    bool m_fMiniToolBarAtTop;
-#endif /* !VBOX_WS_MAC */
-};
-typedef UISettingsCache<UIDataSettingsMachineInterface> UICacheSettingsMachineInterface;
-
-/* Machine settings / User Interface page: */
-class UIMachineSettingsInterface : public UISettingsPageMachine,
-                                   public Ui::UIMachineSettingsInterface
+/** Machine settings: User Interface page. */
+class SHARED_LIBRARY_STUFF UIMachineSettingsInterface : public UISettingsPageMachine
 {
     Q_OBJECT;
 
 public:
 
-    /** Constructor, early takes @a strMachineID into account for size-hint calculation. */
-    UIMachineSettingsInterface(const QString strMachineID);
-    /** Destructor. */
+    /** Constructs User Interface settings page. */
+    UIMachineSettingsInterface(const QUuid &uMachineId);
+    /** Destructs User Interface settings page. */
     ~UIMachineSettingsInterface();
 
 protected:
 
-    /* API: Cache stuff: */
-    bool changed() const { return m_cache.wasChanged(); }
+    /** Returns whether the page content was changed. */
+    virtual bool changed() const /* override */;
 
-    /* API: Load data to cache from corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void loadToCacheFrom(QVariant &data);
-    /* API: Load data to corresponding widgets from cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void getFromCache();
+    /** Loads settings from external object(s) packed inside @a data to cache.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void loadToCacheFrom(QVariant &data) /* override */;
+    /** Loads data from cache to corresponding widgets.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void getFromCache() /* override */;
 
-    /* API: Save data from corresponding widgets to cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void putToCache();
-    /* API: Save data from cache to corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void saveFromCacheTo(QVariant &data);
+    /** Saves data from corresponding widgets to cache.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void putToCache() /* override */;
+    /** Saves settings from cache to external object(s) packed inside @a data.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void saveFromCacheTo(QVariant &data) /* overrride */;
 
-    /* Helper: Navigation stuff: */
-    void setOrderAfter(QWidget *pWidget);
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
 
-    /* Helper: Translation stuff: */
-    void retranslateUi();
-
-    /* Helper: Polishing stuff: */
-    void polishPage();
+    /** Performs final page polishing. */
+    virtual void polishPage() /* override */;
 
 private:
 
-    /** Prepare routine. */
+    /** Prepares all. */
     void prepare();
-
-    /** Cleanup routine. */
+    /** Prepares widgets. */
+    void prepareWidgets();
+    /** Prepares connections. */
+    void prepareConnections();
+    /** Cleanups all. */
     void cleanup();
 
-    /* Cache: */
-    UICacheSettingsMachineInterface m_cache;
+    /** Saves existing interface data from the cache. */
+    bool saveInterfaceData();
+    /** Saves existing 'Menu-bar' data from the cache. */
+    bool saveMenuBarData();
+    /** Saves existing 'Status-bar' data from the cache. */
+    bool saveStatusBarData();
+    /** Saves existing 'Mini-toolbar' data from the cache. */
+    bool saveMiniToolbarData();
+    /** Saves existing 'Visual State' data from the cache. */
+    bool saveVisualStateData();
 
     /** Holds the machine ID copy. */
-    const QString m_strMachineID;
+    const QUuid    m_uMachineId;
     /** Holds the action-pool instance. */
-    UIActionPool *m_pActionPool;
+    UIActionPool  *m_pActionPool;
+
+    /** Holds the page data cache instance. */
+    UISettingsCacheMachineInterface *m_pCache;
+
+    /** @name Widgets
+     * @{ */
+        /** Holds the menu-bar editor instance. */
+        UIMenuBarEditorWidget   *m_pEditorMenuBar;
+        /** Holds the visual state label instance. */
+        QLabel                  *m_pLabelVisualState;
+        /** Holds the visual state label instance. */
+        UIVisualStateEditor     *m_pEditorVisualState;
+        /** Holds the mini-toolbar label instance. */
+        QLabel                  *m_pLabelMiniToolBar;
+        /** Holds the 'show mini-toolbar' check-box instance. */
+        QCheckBox               *m_pCheckBoxShowMiniToolBar;
+        /** Holds the 'mini-toolbar alignment' check-box instance. */
+        QCheckBox               *m_pCheckBoxMiniToolBarAlignment;
+        /** Holds the status-bar editor instance. */
+        UIStatusBarEditorWidget *m_pEditorStatusBar;
+    /** @} */
 };
 
-#endif // ___UIMachineSettingsInterface_h___
+#endif /* !FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsInterface_h */

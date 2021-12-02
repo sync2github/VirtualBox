@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,8 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-#ifndef _VDScript_h__
-#define _VDScript_h__
+
+#ifndef VBOX_INCLUDED_SRC_testcase_VDScript_h
+#define VBOX_INCLUDED_SRC_testcase_VDScript_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /** Handle to the scripting context. */
 typedef struct VDSCRIPTCTXINT *VDSCRIPTCTX;
@@ -78,7 +82,7 @@ typedef struct VDSCRIPTARG
 typedef VDSCRIPTARG *PVDSCRIPTARG;
 
 /** Script callback. */
-typedef DECLCALLBACK(int) FNVDSCRIPTCALLBACK(PVDSCRIPTARG paScriptArgs, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNVDSCRIPTCALLBACK,(PVDSCRIPTARG paScriptArgs, void *pvUser));
 /** Pointer to a script callback. */
 typedef FNVDSCRIPTCALLBACK *PFNVDSCRIPTCALLBACK;
 
@@ -122,7 +126,7 @@ typedef const VDSCRIPTCALLBACK *PCVDSCRIPTCALLBACK;
  * @param   pvBuf          Where to store the read bits.
  * @param   cbRead         How much to read.
  */
-typedef DECLCALLBACK(int) FNVDSCRIPTASREAD(void *pvUser, VDSCRIPTARG Address, void *pvBuf, size_t cbRead);
+typedef DECLCALLBACKTYPE(int, FNVDSCRIPTASREAD,(void *pvUser, VDSCRIPTARG Address, void *pvBuf, size_t cbRead));
 /** Pointer to a read callback. */
 typedef FNVDSCRIPTASREAD *PFNVDSCRIPTASREAD;
 
@@ -136,7 +140,7 @@ typedef FNVDSCRIPTASREAD *PFNVDSCRIPTASREAD;
  * @param   pvBuf          Data to write.
  * @param   cbWrite        How much to write.
  */
-typedef DECLCALLBACK(int) FNVDSCRIPTASWRITE(void *pvUser, VDSCRIPTARG Address, const void *pvBuf, size_t cbWrite);
+typedef DECLCALLBACKTYPE(int, FNVDSCRIPTASWRITE,(void *pvUser, VDSCRIPTARG Address, const void *pvBuf, size_t cbWrite));
 /** Pointer to a write callback. */
 typedef FNVDSCRIPTASWRITE *PFNVDSCRIPTASWRITE;
 
@@ -219,4 +223,4 @@ DECLHIDDEN(int) VDScriptCtxAsRegister(VDSCRIPTCTX hScriptCtx, const char *pszTyp
                                       PFNVDSCRIPTASREAD pfnRead, PFNVDSCRIPTASWRITE pfnWrite, void *pvUser,
                                       uint32_t fFlags);
 
-#endif /* _VDScript_h__ */
+#endif /* !VBOX_INCLUDED_SRC_testcase_VDScript_h */

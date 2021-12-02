@@ -1,9 +1,9 @@
 <?xml version='1.0'?>
 <!--
  Solaris SMF service manifest for the VirtualBox Test eXecution Service.
- $Id$
+ $Id: vboxtxs.xml 82972 2020-02-04 11:13:09Z vboxsync $
 
-    Copyright (C) 2010-2015 Oracle Corporation
+    Copyright (C) 2010-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;

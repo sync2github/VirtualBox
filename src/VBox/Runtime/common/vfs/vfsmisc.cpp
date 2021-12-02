@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vfsmisc.cpp 86414 2020-10-02 11:41:26Z vboxsync $ */
 /** @file
  * IPRT - Virtual File System, Misc functions with heavy dependencies.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include <iprt/vfs.h>
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/file.h>
 #include <iprt/handle.h>
 
@@ -60,7 +60,7 @@ RTDECL(int)         RTVfsIoStrmFromStdHandle(RTHANDLESTD enmStdHandle, uint64_t 
      * Open the handle and see what we get back.
      */
     RTHANDLE h;
-    int rc = RTHandleGetStandard(enmStdHandle, &h);
+    int rc = RTHandleGetStandard(enmStdHandle, fLeaveOpen, &h);
     if (RT_SUCCESS(rc))
     {
         switch (h.enmType)

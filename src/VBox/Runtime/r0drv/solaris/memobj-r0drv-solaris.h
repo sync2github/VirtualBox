@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: memobj-r0drv-solaris.h 88215 2021-03-19 18:42:55Z vboxsync $ */
 /** @file
  * IPRT - Ring-0 Memory Objects - Segment driver, Solaris.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___r0drv_solaris_memobj_r0drv_solaris_h
-#define ___r0drv_solaris_memobj_r0drv_solaris_h
+#ifndef IPRT_INCLUDED_SRC_r0drv_solaris_memobj_r0drv_solaris_h
+#define IPRT_INCLUDED_SRC_r0drv_solaris_memobj_r0drv_solaris_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /*******************************************************************************
 *   Header Files                                                               *
@@ -255,7 +257,11 @@ static int rtR0SegVBoxSolAdvise(seg_t *pSeg, caddr_t virtAddr, size_t cb, uint_t
 }
 
 
+#if defined(VBOX_NEW_CRASH_DUMP_FORMAT)
+static void rtR0SegVBoxSolDump(seg_t *pSeg, dump_addpage_f Func)
+#else
 static void rtR0SegVBoxSolDump(seg_t *pSeg)
+#endif
 {
     /* Nothing to do. */
 }
@@ -276,12 +282,6 @@ static int rtR0SegVBoxSolSetPageSize(seg_t *pSeg, caddr_t virtAddr, size_t cb, u
 static int rtR0SegVBoxSolGetMemId(seg_t *pSeg, caddr_t virtAddr, memid_t *pMemId)
 {
     return ENODEV;
-}
-
-
-static lgrp_mem_policy_info_t *rtR0SegVBoxSolGetPolicy(seg_t *pSeg, caddr_t virtAddr)
-{
-    return NULL;
 }
 
 
@@ -314,9 +314,9 @@ static struct seg_ops s_SegVBoxOps =
     rtR0SegVBoxSolPageLock,
     rtR0SegVBoxSolSetPageSize,
     rtR0SegVBoxSolGetMemId,
-    rtR0SegVBoxSolGetPolicy,
+    NULL,                       /* getpolicy() */
     rtR0SegVBoxSolCapable
 };
 
-#endif /* !___r0drv_solaris_memobj_r0drv_solaris_h */
+#endif /* !IPRT_INCLUDED_SRC_r0drv_solaris_memobj_r0drv_solaris_h */
 

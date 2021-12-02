@@ -1,10 +1,10 @@
-; $Id$
+; $Id: strlen.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; IPRT - No-CRT strlen - AMD64 & X86.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,7 @@
 BEGINCODE
 
 ;;
-; @param    psz     gcc: rdi  msc: rcx  x86: [esp+4]
+; @param    psz     gcc: rdi  msc: rcx  x86: [esp+4]  wcall: eax
 RT_NOCRT_BEGINPROC strlen
         cld
 %ifdef RT_ARCH_AMD64
@@ -39,7 +39,11 @@ RT_NOCRT_BEGINPROC strlen
  %endif
 %else
         mov     edx, edi                ; save edi
+ %ifdef ASM_CALL32_WATCOM
+        mov     edi, eax
+ %else
         mov     edi, [esp + 4]
+ %endif
 %endif
 
         ; do the search

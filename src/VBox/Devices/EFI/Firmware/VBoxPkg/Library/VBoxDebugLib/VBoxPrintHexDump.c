@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxPrintHexDump.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxPrintHex.c - Implementation of the VBoxPrintHex() debug logging routine.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -26,12 +26,13 @@
 
 
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include "VBoxDebugLib.h"
 #include "DevEFI.h"
-#include <iprt/ctype.h>
+#include "iprt/asm.h"
+#include "iprt/ctype.h"
 
 
 /**
@@ -79,9 +80,7 @@ size_t VBoxPrintHexDump(const void *pv, size_t cb)
         /* the printable chars */
         cchPrinted += VBoxPrintString("  ");
         for (i = 0; i < 16 && i < cb; i++)
-            cchPrinted += vboxPrintHexDumpChar(pb[i] == ' '
-                                               ? ' '
-                                               : RT_C_IS_GRAPH(pb[i])
+            cchPrinted += vboxPrintHexDumpChar(RT_C_IS_PRINT(pb[i])
                                                ? pb[i]
                                                : '.');
 

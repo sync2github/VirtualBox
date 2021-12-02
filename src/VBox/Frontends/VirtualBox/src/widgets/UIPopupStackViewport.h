@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIPopupStackViewport.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIPopupStackViewport class declaration.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,71 +15,95 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIPopupStackViewport_h__
-#define __UIPopupStackViewport_h__
+#ifndef FEQT_INCLUDED_SRC_widgets_UIPopupStackViewport_h
+#define FEQT_INCLUDED_SRC_widgets_UIPopupStackViewport_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QWidget>
 #include <QMap>
 
+/* GUI includes: */
+#include "UILibraryDefs.h"
+
 /* Forward declaration: */
+class QSize;
+class QString;
 class UIPopupPane;
 
-/* Popup-stack viewport prototype class: */
-class UIPopupStackViewport : public QWidget
+/** QWidget extension providing GUI with popup-stack viewport prototype class. */
+class SHARED_LIBRARY_STUFF UIPopupStackViewport : public QWidget
 {
     Q_OBJECT;
 
 signals:
 
-    /* Notifiers: Layout stuff: */
-    void sigProposePopupPaneWidth(int iWidth);
+    /** Notifies about popup-pane size change. */
+    void sigProposePopupPaneSize(QSize newSize);
+
+    /** Notifies about size-hint change. */
     void sigSizeHintChanged();
 
-    /* Notifiers: Popup-pane stuff: */
-    void sigPopupPaneDone(QString strPopupPaneID, int iResultCode);
-    void sigPopupPaneRemoved(QString strPopupPaneID);
+    /** Asks to close popup-pane with @a strID and @a iResultCode. */
+    void sigPopupPaneDone(QString strID, int iResultCode);
+    /** Notifies about popup-pane with @a strID was removed. */
+    void sigPopupPaneRemoved(QString strID);
+    /** Notifies about popup-panes were removed. */
     void sigPopupPanesRemoved();
 
 public:
 
-    /* Constructor: */
+    /** Constructs popup-stack viewport. */
     UIPopupStackViewport();
 
-    /* API: Popup-pane stuff: */
-    bool exists(const QString &strPopupPaneID) const;
-    void createPopupPane(const QString &strPopupPaneID,
+    /** Returns whether pane with passed @a strID exists. */
+    bool exists(const QString &strID) const;
+    /** Creates pane with passed @a strID, @a strMessage, @a strDetails and @a buttonDescriptions. */
+    void createPopupPane(const QString &strID,
                          const QString &strMessage, const QString &strDetails,
                          const QMap<int, QString> &buttonDescriptions);
-    void updatePopupPane(const QString &strPopupPaneID,
+    /** Updates pane with passed @a strID, @a strMessage and @a strDetails. */
+    void updatePopupPane(const QString &strID,
                          const QString &strMessage, const QString &strDetails);
-    void recallPopupPane(const QString &strPopupPaneID);
+    /** Recalls pane with passed @a strID. */
+    void recallPopupPane(const QString &strID);
 
-    /* API: Layout stuff: */
+    /** Returns minimum size-hint. */
     QSize minimumSizeHint() const { return m_minimumSizeHint; }
+
+public slots:
+
+    /** Handle proposal for @a newSize. */
+    void sltHandleProposalForSize(QSize newSize);
 
 private slots:
 
-    /* Handlers: Layout stuff: */
-    void sltHandleProposalForWidth(int iWidth);
+    /** Adjusts geometry. */
     void sltAdjustGeometry();
 
-    /* Handler: Popup-pane stuff: */
+    /** Handles reuqest to dismiss popup-pane with @a iButtonCode. */
     void sltPopupPaneDone(int iButtonCode);
 
 private:
 
-    /* Helpers: Layout stuff: */
+    /** Updates size-hint. */
     void updateSizeHint();
+    /** Lays the content out. */
     void layoutContent();
 
-    /* Variables: Layout stuff: */
+    /** Holds the layout margin. */
     const int m_iLayoutMargin;
+    /** Holds the layout spacing. */
     const int m_iLayoutSpacing;
+
+    /** Holds the minimum size-hint. */
     QSize m_minimumSizeHint;
 
-    /* Variables: Children stuff: */
+    /** Holds the popup-pane instances. */
     QMap<QString, UIPopupPane*> m_panes;
 };
 
-#endif /* __UIPopupStackViewport_h__ */
+#endif /* !FEQT_INCLUDED_SRC_widgets_UIPopupStackViewport_h */
+

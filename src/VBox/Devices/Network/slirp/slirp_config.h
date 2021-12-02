@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: slirp_config.h 88128 2021-03-15 19:08:28Z vboxsync $ */
 /** @file
  * NAT - compile-time configuration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -210,3 +210,6 @@
 
 /* Define if you have <sys/type32.h> */
 #undef HAVE_SYS_TYPES32_H
+#ifdef RT_OS_SOLARIS
+# define HAVE_SYS_TYPES32_H
+#endif

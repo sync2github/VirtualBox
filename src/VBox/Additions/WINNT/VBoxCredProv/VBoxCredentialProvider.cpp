@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCredentialProvider.cpp 84366 2020-05-19 11:22:40Z vboxsync $ */
 /** @file
  * VBoxCredentialProvider - Main file of the VirtualBox Credential Provider.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -82,9 +82,14 @@ interface VBoxCredProvSensLogon : public ISensLogon
 {
 public:
 
-    VBoxCredProvSensLogon(void) :
-        m_cRefs(1)
+    VBoxCredProvSensLogon(void)
+        : m_cRefs(1)
     {
+    }
+
+    virtual ~VBoxCredProvSensLogon()
+    {
+        /* Make VC++ 19.2 happy. */
     }
 
     STDMETHODIMP QueryInterface(REFIID interfaceID, void **ppvInterface)
@@ -318,8 +323,6 @@ static void VBoxCredentialProviderUnregisterSENS(void)
     try
     {
         VBoxCredProvVerbose(0, "VBoxCredentialProviderUnregisterSENS\n");
-
-        HRESULT hr;
 
         for (int i = 0; i < RT_ELEMENTS(g_aSENSEvents); i++)
         {

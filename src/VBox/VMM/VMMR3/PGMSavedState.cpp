@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PGMSavedState.cpp 92157 2021-10-29 22:03:51Z vboxsync $ */
 /** @file
  * PGM - Page Manager and Monitor, The Saved State Part.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,6 +20,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_PGM
+#define VBOX_WITHOUT_PAGING_BIT_FIELDS /* 64-bit bitfields are just asking for trouble. See @bugref{9841} and others. */
 #include <VBox/vmm/pgm.h>
 #include <VBox/vmm/stam.h>
 #include <VBox/vmm/ssm.h>
@@ -31,7 +32,6 @@
 
 #include <VBox/param.h>
 #include <VBox/err.h>
-#include <VBox/vmm/ftm.h>
 
 #include <iprt/asm.h>
 #include <iprt/assert.h>
@@ -156,18 +156,18 @@ typedef struct
 
 static const SSMFIELD s_aPGMFields[] =
 {
-    SSMFIELD_ENTRY(         PGM, fMappingsFixed),
-    SSMFIELD_ENTRY_GCPTR(   PGM, GCPtrMappingFixed),
-    SSMFIELD_ENTRY(         PGM, cbMappingFixed),
+    SSMFIELD_ENTRY_OLD(          fMappingsFixed, sizeof(bool)),
+    SSMFIELD_ENTRY_OLD_GCPTR(    GCPtrMappingFixed),
+    SSMFIELD_ENTRY_OLD(          cbMappingFixed, sizeof(uint32_t)),
     SSMFIELD_ENTRY(         PGM, cBalloonedPages),
     SSMFIELD_ENTRY_TERM()
 };
 
 static const SSMFIELD s_aPGMFieldsPreBalloon[] =
 {
-    SSMFIELD_ENTRY(         PGM, fMappingsFixed),
-    SSMFIELD_ENTRY_GCPTR(   PGM, GCPtrMappingFixed),
-    SSMFIELD_ENTRY(         PGM, cbMappingFixed),
+    SSMFIELD_ENTRY_OLD(          fMappingsFixed, sizeof(bool)),
+    SSMFIELD_ENTRY_OLD_GCPTR(    GCPtrMappingFixed),
+    SSMFIELD_ENTRY_OLD(          cbMappingFixed, sizeof(uint32_t)),
     SSMFIELD_ENTRY_TERM()
 };
 
@@ -236,7 +236,7 @@ static int pgmR3PrepRomPages(PVM pVM)
     /*
      * Initialize the live save tracking in the ROM page descriptors.
      */
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     for (PPGMROMRANGE pRom = pVM->pgm.s.pRomRangesR3; pRom; pRom = pRom->pNextR3)
     {
         PPGMRAMRANGE    pRamHint = NULL;;
@@ -270,7 +270,7 @@ static int pgmR3PrepRomPages(PVM pVM)
         if (pRom->fFlags & PGMPHYS_ROM_FLAGS_SHADOWED)
             pVM->pgm.s.LiveSave.Rom.cDirtyPages += cPages;
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     return VINF_SUCCESS;
 }
@@ -285,7 +285,7 @@ static int pgmR3PrepRomPages(PVM pVM)
  */
 static int pgmR3SaveRomRanges(PVM pVM, PSSMHANDLE pSSM)
 {
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     uint8_t id = 1;
     for (PPGMROMRANGE pRom = pVM->pgm.s.pRomRangesR3; pRom; pRom = pRom->pNextR3, id++)
     {
@@ -300,7 +300,7 @@ static int pgmR3SaveRomRanges(PVM pVM, PSSMHANDLE pSSM)
         if (RT_FAILURE(rc))
             break;
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return SSMR3PutU8(pSSM, UINT8_MAX);
 }
 
@@ -332,9 +332,15 @@ static int pgmR3LoadRomRanges(PVM pVM, PSSMHANDLE pSSM)
         if (id == UINT8_MAX)
         {
             for (PPGMROMRANGE pRom = pVM->pgm.s.pRomRangesR3; pRom; pRom = pRom->pNextR3)
-                AssertLogRelMsg(pRom->idSavedState != UINT8_MAX,
-                                ("The \"%s\" ROM was not found in the saved state. Probably due to some misconfiguration\n",
-                                 pRom->pszDesc));
+                if (pRom->idSavedState != UINT8_MAX)
+                { /* likely */ }
+                else if (pRom->fFlags & PGMPHYS_ROM_FLAGS_MAYBE_MISSING_FROM_STATE)
+                    LogRel(("PGM: The '%s' ROM was not found in the saved state, but it is marked as maybe-missing, so that's probably okay.\n",
+                            pRom->pszDesc));
+                else
+                    AssertLogRelMsg(pRom->idSavedState != UINT8_MAX,
+                                    ("The '%s' ROM was not found in the saved state. Probably due to some misconfiguration\n",
+                                     pRom->pszDesc));
             return VINF_SUCCESS;        /* the end */
         }
         AssertLogRelReturn(id != 0, VERR_SSM_DATA_UNIT_FORMAT_CHANGED);
@@ -395,7 +401,7 @@ static void pgmR3ScanRomPages(PVM pVM)
     /*
      * The shadow ROMs.
      */
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     for (PPGMROMRANGE pRom = pVM->pgm.s.pRomRangesR3; pRom; pRom = pRom->pNextR3)
     {
         if (pRom->fFlags & PGMPHYS_ROM_FLAGS_SHADOWED)
@@ -420,7 +426,7 @@ static void pgmR3ScanRomPages(PVM pVM)
             }
         }
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 }
 
 
@@ -437,10 +443,7 @@ static void pgmR3ScanRomPages(PVM pVM)
  */
 static int pgmR3SaveRomVirginPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave)
 {
-    if (FTMIsDeltaLoadSaveActive(pVM))
-        return VINF_SUCCESS;    /* nothing to do as nothing has changed here */
-
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     for (PPGMROMRANGE pRom = pVM->pgm.s.pRomRangesR3; pRom; pRom = pRom->pNextR3)
     {
         uint32_t const cPages = pRom->cb >> PAGE_SHIFT;
@@ -469,7 +472,7 @@ static int pgmR3SaveRomVirginPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave)
             }
             else
                 ASMMemZeroPage(abPage);
-            pgmUnlock(pVM);
+            PGM_UNLOCK(pVM);
             AssertLogRelMsgRCReturn(rc, ("rc=%Rrc GCPhys=%RGp\n", rc, GCPhys), rc);
 
             /* Save it. */
@@ -487,7 +490,7 @@ static int pgmR3SaveRomVirginPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave)
                 return rc;
 
             /* Update state. */
-            pgmLock(pVM);
+            PGM_LOCK_VOID(pVM);
             pRom->aPages[iPage].LiveSave.u8Prot = (uint8_t)enmProt;
             if (fLiveSave)
             {
@@ -497,7 +500,7 @@ static int pgmR3SaveRomVirginPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave)
             }
         }
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return VINF_SUCCESS;
 }
 
@@ -515,16 +518,13 @@ static int pgmR3SaveRomVirginPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave)
  */
 static int pgmR3SaveShadowedRomPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, bool fFinalPass)
 {
-    if (FTMIsDeltaLoadSaveActive(pVM))
-        return VINF_SUCCESS;    /* nothing to do as we deal with those pages separately */
-
     /*
      * The Shadowed ROMs.
      *
      * ASSUMES that the ROM ranges are fixed.
      * ASSUMES that all the ROM ranges are mapped.
      */
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     for (PPGMROMRANGE pRom = pVM->pgm.s.pRomRangesR3; pRom; pRom = pRom->pNextR3)
     {
         if (pRom->fFlags & PGMPHYS_ROM_FLAGS_SHADOWED)
@@ -564,7 +564,7 @@ static int pgmR3SaveShadowedRomPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, b
                         pVM->pgm.s.LiveSave.Rom.cDirtyPages--;
                         pVM->pgm.s.LiveSave.cSavedPages++;
                     }
-                    pgmUnlock(pVM);
+                    PGM_UNLOCK(pVM);
                     AssertLogRelMsgRCReturn(rc, ("rc=%Rrc GCPhys=%RGp\n", rc, GCPhys), rc);
 
                     if (iPage - 1U == iPrevPage && iPage > 0)
@@ -581,7 +581,7 @@ static int pgmR3SaveShadowedRomPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, b
                     if (RT_FAILURE(rc))
                         return rc;
 
-                    pgmLock(pVM);
+                    PGM_LOCK_VOID(pVM);
                     iPrevPage = iPage;
                 }
                 /*
@@ -592,7 +592,7 @@ static int pgmR3SaveShadowedRomPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, b
                 {
                     PGMROMPROT enmProt = pRomPage->enmProt;
                     pRomPage->LiveSave.u8Prot = (uint8_t)enmProt;
-                    pgmUnlock(pVM);
+                    PGM_UNLOCK(pVM);
 
                     if (iPage - 1U == iPrevPage && iPage > 0)
                         SSMR3PutU8(pSSM, PGM_STATE_REC_ROM_PROT);
@@ -606,13 +606,13 @@ static int pgmR3SaveShadowedRomPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, b
                     if (RT_FAILURE(rc))
                         return rc;
 
-                    pgmLock(pVM);
+                    PGM_LOCK_VOID(pVM);
                     iPrevPage = iPage;
                 }
             }
         }
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return VINF_SUCCESS;
 }
 
@@ -640,33 +640,31 @@ static int pgmR3PrepMmio2Pages(PVM pVM)
      * Initialize the live save tracking in the MMIO2 ranges.
      * ASSUME nothing changes here.
      */
-    pgmLock(pVM);
-    for (PPGMREGMMIORANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
+    PGM_LOCK_VOID(pVM);
+    for (PPGMREGMMIO2RANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
     {
-        if (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2)
+        uint32_t const  cPages = pRegMmio->RamRange.cb >> PAGE_SHIFT;
+        PGM_UNLOCK(pVM);
+
+        PPGMLIVESAVEMMIO2PAGE paLSPages = (PPGMLIVESAVEMMIO2PAGE)MMR3HeapAllocZ(pVM, MM_TAG_PGM,
+                                                                                sizeof(PGMLIVESAVEMMIO2PAGE) * cPages);
+        if (!paLSPages)
+            return VERR_NO_MEMORY;
+        for (uint32_t iPage = 0; iPage < cPages; iPage++)
         {
-            uint32_t const  cPages = pRegMmio->RamRange.cb >> PAGE_SHIFT;
-            pgmUnlock(pVM);
-
-            PPGMLIVESAVEMMIO2PAGE paLSPages = (PPGMLIVESAVEMMIO2PAGE)MMR3HeapAllocZ(pVM, MM_TAG_PGM, sizeof(PGMLIVESAVEMMIO2PAGE) * cPages);
-            if (!paLSPages)
-                return VERR_NO_MEMORY;
-            for (uint32_t iPage = 0; iPage < cPages; iPage++)
-            {
-                /* Initialize it as a dirty zero page. */
-                paLSPages[iPage].fDirty          = true;
-                paLSPages[iPage].cUnchangedScans = 0;
-                paLSPages[iPage].fZero           = true;
-                paLSPages[iPage].u32CrcH1        = PGM_STATE_CRC32_ZERO_HALF_PAGE;
-                paLSPages[iPage].u32CrcH2        = PGM_STATE_CRC32_ZERO_HALF_PAGE;
-            }
-
-            pgmLock(pVM);
-            pRegMmio->paLSPages = paLSPages;
-            pVM->pgm.s.LiveSave.Mmio2.cDirtyPages += cPages;
+            /* Initialize it as a dirty zero page. */
+            paLSPages[iPage].fDirty          = true;
+            paLSPages[iPage].cUnchangedScans = 0;
+            paLSPages[iPage].fZero           = true;
+            paLSPages[iPage].u32CrcH1        = PGM_STATE_CRC32_ZERO_HALF_PAGE;
+            paLSPages[iPage].u32CrcH2        = PGM_STATE_CRC32_ZERO_HALF_PAGE;
         }
+
+        PGM_LOCK_VOID(pVM);
+        pRegMmio->paLSPages = paLSPages;
+        pVM->pgm.s.LiveSave.Mmio2.cDirtyPages += cPages;
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return VINF_SUCCESS;
 }
 
@@ -680,25 +678,22 @@ static int pgmR3PrepMmio2Pages(PVM pVM)
  */
 static int pgmR3SaveMmio2Ranges(PVM pVM, PSSMHANDLE pSSM)
 {
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     uint8_t id = 1;
-    for (PPGMREGMMIORANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
+    for (PPGMREGMMIO2RANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
     {
-        if (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2)
-        {
-            pRegMmio->idSavedState = id;
-            SSMR3PutU8(pSSM, id);
-            SSMR3PutStrZ(pSSM, pRegMmio->pDevInsR3->pReg->szName);
-            SSMR3PutU32(pSSM, pRegMmio->pDevInsR3->iInstance);
-            SSMR3PutU8(pSSM, pRegMmio->iRegion);
-            SSMR3PutStrZ(pSSM, pRegMmio->RamRange.pszDesc);
-            int rc = SSMR3PutGCPhys(pSSM, pRegMmio->RamRange.cb);
-            if (RT_FAILURE(rc))
-                break;
-            id++;
-        }
+        pRegMmio->idSavedState = id;
+        SSMR3PutU8(pSSM, id);
+        SSMR3PutStrZ(pSSM, pRegMmio->pDevInsR3->pReg->szName);
+        SSMR3PutU32(pSSM, pRegMmio->pDevInsR3->iInstance);
+        SSMR3PutU8(pSSM, pRegMmio->iRegion);
+        SSMR3PutStrZ(pSSM, pRegMmio->RamRange.pszDesc);
+        int rc = SSMR3PutGCPhys(pSSM, pRegMmio->RamRange.cb);
+        if (RT_FAILURE(rc))
+            break;
+        id++;
     }
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return SSMR3PutU8(pSSM, UINT8_MAX);
 }
 
@@ -715,9 +710,8 @@ static int pgmR3LoadMmio2Ranges(PVM pVM, PSSMHANDLE pSSM)
 {
     PGM_LOCK_ASSERT_OWNER(pVM);
 
-    for (PPGMREGMMIORANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
-        if (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2)
-            pRegMmio->idSavedState = UINT8_MAX;
+    for (PPGMREGMMIO2RANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
+        pRegMmio->idSavedState = UINT8_MAX;
 
     for (;;)
     {
@@ -730,10 +724,8 @@ static int pgmR3LoadMmio2Ranges(PVM pVM, PSSMHANDLE pSSM)
             return rc;
         if (id == UINT8_MAX)
         {
-            for (PPGMREGMMIORANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
-                AssertLogRelMsg(   pRegMmio->idSavedState != UINT8_MAX
-                                || !(pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2),
-                                ("%s\n", pRegMmio->RamRange.pszDesc));
+            for (PPGMREGMMIO2RANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
+                AssertLogRelMsg(pRegMmio->idSavedState != UINT8_MAX, ("%s\n", pRegMmio->RamRange.pszDesc));
             return VINF_SUCCESS;        /* the end */
         }
         AssertLogRelReturn(id != 0, VERR_SSM_DATA_UNIT_FORMAT_CHANGED);
@@ -758,13 +750,12 @@ static int pgmR3LoadMmio2Ranges(PVM pVM, PSSMHANDLE pSSM)
         /*
          * Locate a matching MMIO2 range.
          */
-        PPGMREGMMIORANGE pRegMmio;
+        PPGMREGMMIO2RANGE pRegMmio;
         for (pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
         {
             if (    pRegMmio->idSavedState == UINT8_MAX
                 &&  pRegMmio->iRegion == iRegion
                 &&  pRegMmio->pDevInsR3->iInstance == uInstance
-                &&  (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2)
                 &&  !strcmp(pRegMmio->pDevInsR3->pReg->szName, szDevName))
             {
                 pRegMmio->idSavedState = id;
@@ -882,23 +873,22 @@ static void pgmR3ScanMmio2Pages(PVM pVM, uint32_t uPass)
         ||  uPass == SSM_PASS_FINAL)
         return;
 
-    pgmLock(pVM);                       /* paranoia */
-    for (PPGMREGMMIORANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
-        if (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2)
+    PGM_LOCK_VOID(pVM);                 /* paranoia */
+    for (PPGMREGMMIO2RANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
+    {
+        PPGMLIVESAVEMMIO2PAGE paLSPages = pRegMmio->paLSPages;
+        uint32_t              cPages    = pRegMmio->RamRange.cb >> PAGE_SHIFT;
+        PGM_UNLOCK(pVM);
+
+        for (uint32_t iPage = 0; iPage < cPages; iPage++)
         {
-            PPGMLIVESAVEMMIO2PAGE paLSPages = pRegMmio->paLSPages;
-            uint32_t              cPages    = pRegMmio->RamRange.cb >> PAGE_SHIFT;
-            pgmUnlock(pVM);
-
-            for (uint32_t iPage = 0; iPage < cPages; iPage++)
-            {
-                uint8_t const *pbPage = (uint8_t const *)pRegMmio->pvR3 + iPage * PAGE_SIZE;
-                pgmR3ScanMmio2Page(pVM, pbPage, &paLSPages[iPage]);
-            }
-
-            pgmLock(pVM);
+            uint8_t const *pbPage = (uint8_t const *)pRegMmio->pvR3 + iPage * PAGE_SIZE;
+            pgmR3ScanMmio2Page(pVM, pbPage, &paLSPages[iPage]);
         }
-    pgmUnlock(pVM);
+
+        PGM_LOCK_VOID(pVM);
+    }
+    PGM_UNLOCK(pVM);
 
 }
 
@@ -923,55 +913,54 @@ static int pgmR3SaveMmio2Pages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, uint32_
         /*
          * The mop up round.
          */
-        pgmLock(pVM);
-        for (PPGMREGMMIORANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3;
+        PGM_LOCK_VOID(pVM);
+        for (PPGMREGMMIO2RANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3;
              pRegMmio && RT_SUCCESS(rc);
              pRegMmio = pRegMmio->pNextR3)
-            if (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2)
+        {
+            PPGMLIVESAVEMMIO2PAGE paLSPages = pRegMmio->paLSPages;
+            uint8_t const        *pbPage    = (uint8_t const *)pRegMmio->RamRange.pvR3;
+            uint32_t              cPages    = pRegMmio->RamRange.cb >> PAGE_SHIFT;
+            uint32_t              iPageLast = cPages;
+            for (uint32_t iPage = 0; iPage < cPages; iPage++, pbPage += PAGE_SIZE)
             {
-                PPGMLIVESAVEMMIO2PAGE paLSPages = pRegMmio->paLSPages;
-                uint8_t const        *pbPage    = (uint8_t const *)pRegMmio->RamRange.pvR3;
-                uint32_t              cPages    = pRegMmio->RamRange.cb >> PAGE_SHIFT;
-                uint32_t              iPageLast = cPages;
-                for (uint32_t iPage = 0; iPage < cPages; iPage++, pbPage += PAGE_SIZE)
+                uint8_t u8Type;
+                if (!fLiveSave)
+                    u8Type = ASMMemIsZeroPage(pbPage) ? PGM_STATE_REC_MMIO2_ZERO : PGM_STATE_REC_MMIO2_RAW;
+                else
                 {
-                    uint8_t u8Type;
-                    if (!fLiveSave)
-                        u8Type = ASMMemIsZeroPage(pbPage) ? PGM_STATE_REC_MMIO2_ZERO : PGM_STATE_REC_MMIO2_RAW;
-                    else
+                    /* Try figure if it's a clean page, compare the SHA-1 to be really sure. */
+                    if (   !paLSPages[iPage].fDirty
+                        && !pgmR3ScanMmio2Page(pVM, pbPage, &paLSPages[iPage]))
                     {
-                        /* Try figure if it's a clean page, compare the SHA-1 to be really sure. */
-                        if (   !paLSPages[iPage].fDirty
-                            && !pgmR3ScanMmio2Page(pVM, pbPage, &paLSPages[iPage]))
-                        {
-                            if (paLSPages[iPage].fZero)
-                                continue;
+                        if (paLSPages[iPage].fZero)
+                            continue;
 
-                            uint8_t abSha1Hash[RTSHA1_HASH_SIZE];
-                            RTSha1(pbPage, PAGE_SIZE, abSha1Hash);
-                            if (!memcmp(abSha1Hash, paLSPages[iPage].abSha1Saved, sizeof(abSha1Hash)))
-                                continue;
-                        }
-                        u8Type = paLSPages[iPage].fZero ? PGM_STATE_REC_MMIO2_ZERO : PGM_STATE_REC_MMIO2_RAW;
-                        pVM->pgm.s.LiveSave.cSavedPages++;
+                        uint8_t abSha1Hash[RTSHA1_HASH_SIZE];
+                        RTSha1(pbPage, PAGE_SIZE, abSha1Hash);
+                        if (!memcmp(abSha1Hash, paLSPages[iPage].abSha1Saved, sizeof(abSha1Hash)))
+                            continue;
                     }
-
-                    if (iPage != 0 && iPage == iPageLast + 1)
-                        rc = SSMR3PutU8(pSSM, u8Type);
-                    else
-                    {
-                        SSMR3PutU8(pSSM, u8Type | PGM_STATE_REC_FLAG_ADDR);
-                        SSMR3PutU8(pSSM, pRegMmio->idSavedState);
-                        rc = SSMR3PutU32(pSSM, iPage);
-                    }
-                    if (u8Type == PGM_STATE_REC_MMIO2_RAW)
-                        rc = SSMR3PutMem(pSSM, pbPage, PAGE_SIZE);
-                    if (RT_FAILURE(rc))
-                        break;
-                    iPageLast = iPage;
+                    u8Type = paLSPages[iPage].fZero ? PGM_STATE_REC_MMIO2_ZERO : PGM_STATE_REC_MMIO2_RAW;
+                    pVM->pgm.s.LiveSave.cSavedPages++;
                 }
+
+                if (iPage != 0 && iPage == iPageLast + 1)
+                    rc = SSMR3PutU8(pSSM, u8Type);
+                else
+                {
+                    SSMR3PutU8(pSSM, u8Type | PGM_STATE_REC_FLAG_ADDR);
+                    SSMR3PutU8(pSSM, pRegMmio->idSavedState);
+                    rc = SSMR3PutU32(pSSM, iPage);
+                }
+                if (u8Type == PGM_STATE_REC_MMIO2_RAW)
+                    rc = SSMR3PutMem(pSSM, pbPage, PAGE_SIZE);
+                if (RT_FAILURE(rc))
+                    break;
+                iPageLast = iPage;
             }
-        pgmUnlock(pVM);
+        }
+        PGM_UNLOCK(pVM);
     }
     /*
      * Reduce the rate after a little while since the current MMIO2 approach is
@@ -981,64 +970,63 @@ static int pgmR3SaveMmio2Pages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, uint32_
     else if (   uPass <= 10
              || (uPass & 3) == 2)
     {
-        pgmLock(pVM);
-        for (PPGMREGMMIORANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3;
+        PGM_LOCK_VOID(pVM);
+        for (PPGMREGMMIO2RANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3;
              pRegMmio && RT_SUCCESS(rc);
              pRegMmio = pRegMmio->pNextR3)
-            if (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2)
+        {
+            PPGMLIVESAVEMMIO2PAGE paLSPages = pRegMmio->paLSPages;
+            uint8_t const        *pbPage    = (uint8_t const *)pRegMmio->RamRange.pvR3;
+            uint32_t              cPages    = pRegMmio->RamRange.cb >> PAGE_SHIFT;
+            uint32_t              iPageLast = cPages;
+            PGM_UNLOCK(pVM);
+
+            for (uint32_t iPage = 0; iPage < cPages; iPage++, pbPage += PAGE_SIZE)
             {
-                PPGMLIVESAVEMMIO2PAGE paLSPages = pRegMmio->paLSPages;
-                uint8_t const        *pbPage    = (uint8_t const *)pRegMmio->RamRange.pvR3;
-                uint32_t              cPages    = pRegMmio->RamRange.cb >> PAGE_SHIFT;
-                uint32_t              iPageLast = cPages;
-                pgmUnlock(pVM);
+                /* Skip clean pages and pages which hasn't quiesced. */
+                if (!paLSPages[iPage].fDirty)
+                    continue;
+                if (paLSPages[iPage].cUnchangedScans < 3)
+                    continue;
+                if (pgmR3ScanMmio2Page(pVM, pbPage, &paLSPages[iPage]))
+                    continue;
 
-                for (uint32_t iPage = 0; iPage < cPages; iPage++, pbPage += PAGE_SIZE)
+                /* Save it. */
+                bool const fZero = paLSPages[iPage].fZero;
+                uint8_t abPage[PAGE_SIZE];
+                if (!fZero)
                 {
-                    /* Skip clean pages and pages which hasn't quiesced. */
-                    if (!paLSPages[iPage].fDirty)
-                        continue;
-                    if (paLSPages[iPage].cUnchangedScans < 3)
-                        continue;
-                    if (pgmR3ScanMmio2Page(pVM, pbPage, &paLSPages[iPage]))
-                        continue;
-
-                    /* Save it. */
-                    bool const fZero = paLSPages[iPage].fZero;
-                    uint8_t abPage[PAGE_SIZE];
-                    if (!fZero)
-                    {
-                        memcpy(abPage, pbPage, PAGE_SIZE);
-                        RTSha1(abPage, PAGE_SIZE, paLSPages[iPage].abSha1Saved);
-                    }
-
-                    uint8_t u8Type = paLSPages[iPage].fZero ? PGM_STATE_REC_MMIO2_ZERO : PGM_STATE_REC_MMIO2_RAW;
-                    if (iPage != 0 && iPage == iPageLast + 1)
-                        rc = SSMR3PutU8(pSSM, u8Type);
-                    else
-                    {
-                        SSMR3PutU8(pSSM, u8Type | PGM_STATE_REC_FLAG_ADDR);
-                        SSMR3PutU8(pSSM, pRegMmio->idSavedState);
-                        rc = SSMR3PutU32(pSSM, iPage);
-                    }
-                    if (u8Type == PGM_STATE_REC_MMIO2_RAW)
-                        rc = SSMR3PutMem(pSSM, abPage, PAGE_SIZE);
-                    if (RT_FAILURE(rc))
-                        break;
-
-                    /* Housekeeping. */
-                    paLSPages[iPage].fDirty = false;
-                    pVM->pgm.s.LiveSave.Mmio2.cDirtyPages--;
-                    pVM->pgm.s.LiveSave.Mmio2.cReadyPages++;
-                    if (u8Type == PGM_STATE_REC_MMIO2_ZERO)
-                        pVM->pgm.s.LiveSave.Mmio2.cZeroPages++;
-                    pVM->pgm.s.LiveSave.cSavedPages++;
-                    iPageLast = iPage;
+                    memcpy(abPage, pbPage, PAGE_SIZE);
+                    RTSha1(abPage, PAGE_SIZE, paLSPages[iPage].abSha1Saved);
                 }
 
-                pgmLock(pVM);
+                uint8_t u8Type = paLSPages[iPage].fZero ? PGM_STATE_REC_MMIO2_ZERO : PGM_STATE_REC_MMIO2_RAW;
+                if (iPage != 0 && iPage == iPageLast + 1)
+                    rc = SSMR3PutU8(pSSM, u8Type);
+                else
+                {
+                    SSMR3PutU8(pSSM, u8Type | PGM_STATE_REC_FLAG_ADDR);
+                    SSMR3PutU8(pSSM, pRegMmio->idSavedState);
+                    rc = SSMR3PutU32(pSSM, iPage);
+                }
+                if (u8Type == PGM_STATE_REC_MMIO2_RAW)
+                    rc = SSMR3PutMem(pSSM, abPage, PAGE_SIZE);
+                if (RT_FAILURE(rc))
+                    break;
+
+                /* Housekeeping. */
+                paLSPages[iPage].fDirty = false;
+                pVM->pgm.s.LiveSave.Mmio2.cDirtyPages--;
+                pVM->pgm.s.LiveSave.Mmio2.cReadyPages++;
+                if (u8Type == PGM_STATE_REC_MMIO2_ZERO)
+                    pVM->pgm.s.LiveSave.Mmio2.cZeroPages++;
+                pVM->pgm.s.LiveSave.cSavedPages++;
+                iPageLast = iPage;
             }
-        pgmUnlock(pVM);
+
+            PGM_LOCK_VOID(pVM);
+        }
+        PGM_UNLOCK(pVM);
     }
 
     return rc;
@@ -1056,20 +1044,19 @@ static void pgmR3DoneMmio2Pages(PVM pVM)
      * Free the tracking structures for the MMIO2 pages.
      * We do the freeing outside the lock in case the VM is running.
      */
-    pgmLock(pVM);
-    for (PPGMREGMMIORANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
-        if (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2)
+    PGM_LOCK_VOID(pVM);
+    for (PPGMREGMMIO2RANGE pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
+    {
+        void *pvMmio2ToFree = pRegMmio->paLSPages;
+        if (pvMmio2ToFree)
         {
-            void *pvMmio2ToFree = pRegMmio->paLSPages;
-            if (pvMmio2ToFree)
-            {
-                pRegMmio->paLSPages = NULL;
-                pgmUnlock(pVM);
-                MMR3HeapFree(pvMmio2ToFree);
-                pgmLock(pVM);
-            }
+            pRegMmio->paLSPages = NULL;
+            PGM_UNLOCK(pVM);
+            MMR3HeapFree(pvMmio2ToFree);
+            PGM_LOCK_VOID(pVM);
         }
-    pgmUnlock(pVM);
+    }
+    PGM_UNLOCK(pVM);
 }
 
 
@@ -1093,7 +1080,7 @@ static int pgmR3PrepRamPages(PVM pVM)
      *       for cleaning up.
      */
     PPGMRAMRANGE pCur;
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     do
     {
         for (pCur = pVM->pgm.s.pRamRangesXR3; pCur; pCur = pCur->pNextR3)
@@ -1103,16 +1090,16 @@ static int pgmR3PrepRamPages(PVM pVM)
             {
                 uint32_t const  idRamRangesGen = pVM->pgm.s.idRamRangesGen;
                 uint32_t const  cPages = pCur->cb >> PAGE_SHIFT;
-                pgmUnlock(pVM);
+                PGM_UNLOCK(pVM);
                 PPGMLIVESAVERAMPAGE paLSPages = (PPGMLIVESAVERAMPAGE)MMR3HeapAllocZ(pVM, MM_TAG_PGM, cPages * sizeof(PGMLIVESAVERAMPAGE));
                 if (!paLSPages)
                     return VERR_NO_MEMORY;
-                pgmLock(pVM);
+                PGM_LOCK_VOID(pVM);
                 if (pVM->pgm.s.idRamRangesGen != idRamRangesGen)
                 {
-                    pgmUnlock(pVM);
+                    PGM_UNLOCK(pVM);
                     MMR3HeapFree(paLSPages);
-                    pgmLock(pVM);
+                    PGM_LOCK_VOID(pVM);
                     break;              /* try again */
                 }
                 pCur->paLSPages = paLSPages;
@@ -1178,6 +1165,7 @@ static int pgmR3PrepRamPages(PVM pVM)
 
                         default:
                             AssertMsgFailed(("%R[pgmpage]", pPage));
+                            RT_FALL_THRU();
                         case PGMPAGETYPE_MMIO2:
                         case PGMPAGETYPE_MMIO2_ALIAS_MMIO:
                             paLSPages[iPage].fZero   = 0;
@@ -1206,7 +1194,7 @@ static int pgmR3PrepRamPages(PVM pVM)
             }
         }
     } while (pCur);
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     return VINF_SUCCESS;
 }
@@ -1357,7 +1345,7 @@ static void pgmR3ScanRamPages(PVM pVM, bool fFinalPass)
      */
     RTGCPHYS GCPhysCur = 0;
     PPGMRAMRANGE pCur;
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     do
     {
         uint32_t const  idRamRangesGen = pVM->pgm.s.idRamRangesGen;
@@ -1377,7 +1365,7 @@ static void pgmR3ScanRamPages(PVM pVM, bool fFinalPass)
 #ifndef PGMLIVESAVERAMPAGE_WITH_CRC32
                         && (iPage & 0x7ff) == 0x100
 #endif
-                        && PDMR3CritSectYield(&pVM->pgm.s.CritSectX)
+                        && PDMR3CritSectYield(pVM, &pVM->pgm.s.CritSectX)
                         && pVM->pgm.s.idRamRangesGen != idRamRangesGen)
                     {
                         GCPhysCur = pCur->GCPhys + ((RTGCPHYS)iPage << PAGE_SHIFT);
@@ -1547,7 +1535,7 @@ static void pgmR3ScanRamPages(PVM pVM, bool fFinalPass)
             }
         } /* for each range */
     } while (pCur);
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 }
 
 
@@ -1570,9 +1558,8 @@ static int pgmR3SaveRamPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, uint32_t 
     RTGCPHYS GCPhysLast = NIL_RTGCPHYS;
     RTGCPHYS GCPhysCur = 0;
     PPGMRAMRANGE pCur;
-    bool fFTMDeltaSaveActive = FTMIsDeltaLoadSaveActive(pVM);
 
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     do
     {
         uint32_t const  idRamRangesGen = pVM->pgm.s.idRamRangesGen;
@@ -1590,7 +1577,7 @@ static int pgmR3SaveRamPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, uint32_t 
                     /* Do yield first. */
                     if (   uPass != SSM_PASS_FINAL
                         && (iPage & 0x7ff) == 0x100
-                        && PDMR3CritSectYield(&pVM->pgm.s.CritSectX)
+                        && PDMR3CritSectYield(pVM, &pVM->pgm.s.CritSectX)
                         && pVM->pgm.s.idRamRangesGen != idRamRangesGen)
                     {
                         GCPhysCur = pCur->GCPhys + ((RTGCPHYS)iPage << PAGE_SHIFT);
@@ -1667,43 +1654,20 @@ static int pgmR3SaveRamPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, uint32_t 
 #endif
                             pgmPhysReleaseInternalPageMappingLock(pVM, &PgMpLck);
                         }
-                        pgmUnlock(pVM);
+                        PGM_UNLOCK(pVM);
                         AssertLogRelMsgRCReturn(rc, ("rc=%Rrc GCPhys=%RGp\n", rc, GCPhys), rc);
 
                         /* Try save some memory when restoring. */
                         if (!ASMMemIsZeroPage(pvPage))
                         {
-                            if (fFTMDeltaSaveActive)
-                            {
-                                if (    PGM_PAGE_IS_WRITTEN_TO(pCurPage)
-                                    ||  PGM_PAGE_IS_FT_DIRTY(pCurPage))
-                                {
-                                    if (GCPhys == GCPhysLast + PAGE_SIZE)
-                                        SSMR3PutU8(pSSM, PGM_STATE_REC_RAM_RAW);
-                                    else
-                                    {
-                                        SSMR3PutU8(pSSM, PGM_STATE_REC_RAM_RAW | PGM_STATE_REC_FLAG_ADDR);
-                                        SSMR3PutGCPhys(pSSM, GCPhys);
-                                    }
-                                    rc = SSMR3PutMem(pSSM, abPage, PAGE_SIZE);
-                                    PGM_PAGE_CLEAR_WRITTEN_TO(pVM, pCurPage);
-                                    PGM_PAGE_CLEAR_FT_DIRTY(pCurPage);
-                                }
-                                /* else nothing changed, so skip it. */
-                                else
-                                    fSkipped = true;
-                            }
+                            if (GCPhys == GCPhysLast + PAGE_SIZE)
+                                SSMR3PutU8(pSSM, PGM_STATE_REC_RAM_RAW);
                             else
                             {
-                                if (GCPhys == GCPhysLast + PAGE_SIZE)
-                                    SSMR3PutU8(pSSM, PGM_STATE_REC_RAM_RAW);
-                                else
-                                {
-                                    SSMR3PutU8(pSSM, PGM_STATE_REC_RAM_RAW | PGM_STATE_REC_FLAG_ADDR);
-                                    SSMR3PutGCPhys(pSSM, GCPhys);
-                                }
-                                rc = SSMR3PutMem(pSSM, abPage, PAGE_SIZE);
+                                SSMR3PutU8(pSSM, PGM_STATE_REC_RAM_RAW | PGM_STATE_REC_FLAG_ADDR);
+                                SSMR3PutGCPhys(pSSM, GCPhys);
                             }
+                            rc = SSMR3PutMem(pSSM, abPage, PAGE_SIZE);
                         }
                         else
                         {
@@ -1725,7 +1689,7 @@ static int pgmR3SaveRamPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, uint32_t 
                         if (paLSPages)
                             pgmR3StateVerifyCrc32ForRamPage(pVM, pCur, paLSPages, iPage, "save#2");
 #endif
-                        pgmUnlock(pVM);
+                        PGM_UNLOCK(pVM);
 
                         uint8_t u8RecType = fBallooned ? PGM_STATE_REC_RAM_BALLOONED : PGM_STATE_REC_RAM_ZERO;
                         if (GCPhys == GCPhysLast + PAGE_SIZE)
@@ -1739,7 +1703,7 @@ static int pgmR3SaveRamPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, uint32_t 
                     if (RT_FAILURE(rc))
                         return rc;
 
-                    pgmLock(pVM);
+                    PGM_LOCK_VOID(pVM);
                     if (!fSkipped)
                         GCPhysLast = GCPhys;
                     if (paLSPages)
@@ -1766,7 +1730,7 @@ static int pgmR3SaveRamPages(PVM pVM, PSSMHANDLE pSSM, bool fLiveSave, uint32_t 
         } /* for each range */
     } while (pCur);
 
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     return VINF_SUCCESS;
 }
@@ -1790,7 +1754,7 @@ static void pgmR3DoneRamPages(PVM pVM)
     void *pvToFree = NULL;
     PPGMRAMRANGE pCur;
     uint32_t cMonitoredPages = 0;
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     do
     {
         for (pCur = pVM->pgm.s.pRamRangesXR3; pCur; pCur = pCur->pNextR3)
@@ -1800,10 +1764,10 @@ static void pgmR3DoneRamPages(PVM pVM)
                 if (pvToFree)
                 {
                     uint32_t idRamRangesGen = pVM->pgm.s.idRamRangesGen;
-                    pgmUnlock(pVM);
+                    PGM_UNLOCK(pVM);
                     MMR3HeapFree(pvToFree);
                     pvToFree = NULL;
-                    pgmLock(pVM);
+                    PGM_LOCK_VOID(pVM);
                     if (idRamRangesGen != pVM->pgm.s.idRamRangesGen)
                         break;          /* start over again. */
                 }
@@ -1832,7 +1796,7 @@ static void pgmR3DoneRamPages(PVM pVM)
     else
         pVM->pgm.s.cMonitoredPages -= cMonitoredPages;
 
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     MMR3HeapFree(pvToFree);
     pvToFree = NULL;
@@ -1909,9 +1873,9 @@ static DECLCALLBACK(int)  pgmR3LiveVote(PVM pVM, PSSMHANDLE pSSM, uint32_t uPass
     const uint32_t cHistoryEntries = RT_ELEMENTS(pVM->pgm.s.LiveSave.acDirtyPagesHistory);
 
     /* update history. */
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     uint32_t const cWrittenToPages = pVM->pgm.s.cWrittenToPages;
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     uint32_t const cDirtyNow = pVM->pgm.s.LiveSave.Rom.cDirtyPages
                              + pVM->pgm.s.LiveSave.Mmio2.cDirtyPages
                              + pVM->pgm.s.LiveSave.Ram.cDirtyPages
@@ -2013,15 +1977,15 @@ static DECLCALLBACK(int) pgmR3LivePrep(PVM pVM, PSSMHANDLE pSSM)
     /*
      * Indicate that we will be using the write monitoring.
      */
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     /** @todo find a way of mediating this when more users are added. */
     if (pVM->pgm.s.fPhysWriteMonitoringEngaged)
     {
-        pgmUnlock(pVM);
+        PGM_UNLOCK(pVM);
         AssertLogRelFailedReturn(VERR_PGM_WRITE_MONITOR_ENGAGED);
     }
     pVM->pgm.s.fPhysWriteMonitoringEngaged = true;
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     /*
      * Initialize the statistics.
@@ -2060,25 +2024,21 @@ static DECLCALLBACK(int) pgmR3LivePrep(PVM pVM, PSSMHANDLE pSSM)
  */
 static DECLCALLBACK(int) pgmR3SaveExec(PVM pVM, PSSMHANDLE pSSM)
 {
-    int     rc   = VINF_SUCCESS;
-    PPGM    pPGM = &pVM->pgm.s;
+    PPGM pPGM = &pVM->pgm.s;
 
     /*
      * Lock PGM and set the no-more-writes indicator.
      */
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     pVM->pgm.s.fNoMorePhysWrites = true;
 
     /*
      * Save basic data (required / unaffected by relocation).
      */
-    bool const fMappingsFixed  = pVM->pgm.s.fMappingsFixed;
-    pVM->pgm.s.fMappingsFixed |= pVM->pgm.s.fMappingsFixedRestored;
-    SSMR3PutStruct(pSSM, pPGM, &s_aPGMFields[0]);
-    pVM->pgm.s.fMappingsFixed  = fMappingsFixed;
+    int rc = SSMR3PutStructEx(pSSM, pPGM, sizeof(*pPGM), 0 /*fFlags*/, &s_aPGMFields[0], NULL /*pvUser*/);
 
-    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
-        rc = SSMR3PutStruct(pSSM, &pVM->aCpus[idCpu].pgm.s, &s_aPGMCpuFields[0]);
+    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus && RT_SUCCESS(rc); idCpu++)
+        rc = SSMR3PutStruct(pSSM, &pVM->apCpusR3[idCpu]->pgm.s, &s_aPGMCpuFields[0]);
 
     /*
      * Save the (remainder of the) memory.
@@ -2116,7 +2076,7 @@ static DECLCALLBACK(int) pgmR3SaveExec(PVM pVM, PSSMHANDLE pSSM)
         SSMR3PutU8(pSSM, PGM_STATE_REC_END);    /* (Ignore the rc, SSM takes of it.) */
     }
 
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
     return rc;
 }
 
@@ -2139,12 +2099,12 @@ static DECLCALLBACK(int) pgmR3SaveDone(PVM pVM, PSSMHANDLE pSSM)
     /*
      * Clear the live save indicator and disengage write monitoring.
      */
-    pgmLock(pVM);
+    PGM_LOCK_VOID(pVM);
     pVM->pgm.s.LiveSave.fActive = false;
     /** @todo this is blindly assuming that we're the only user of write
      *        monitoring. Fix this when more users are added. */
     pVM->pgm.s.fPhysWriteMonitoringEngaged = false;
-    pgmUnlock(pVM);
+    PGM_UNLOCK(pVM);
 
     NOREF(pSSM);
     return VINF_SUCCESS;
@@ -2197,7 +2157,7 @@ DECLINLINE(bool) pgmR3CompareNewAndOldPageTypes(PPGMPAGE pPage, uint8_t uOldType
         case PGMPAGETYPE_MMIO2_ALIAS_MMIO:      uOldPageType = PGMPAGETYPE_OLD_MMIO2_ALIAS_MMIO; break;
         case PGMPAGETYPE_ROM_SHADOW:            uOldPageType = PGMPAGETYPE_OLD_ROM_SHADOW; break;
         case PGMPAGETYPE_ROM:                   uOldPageType = PGMPAGETYPE_OLD_ROM; break;
-        case PGMPAGETYPE_SPECIAL_ALIAS_MMIO:    /* fall thru */
+        case PGMPAGETYPE_SPECIAL_ALIAS_MMIO:    RT_FALL_THRU();
         case PGMPAGETYPE_MMIO:                  uOldPageType = PGMPAGETYPE_OLD_MMIO; break;
         default:
             AssertFailed();
@@ -2632,7 +2592,7 @@ static int pgmR3LoadMemory(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t
     uint8_t             id       = UINT8_MAX;
     uint32_t            iPage    = UINT32_MAX - 10;
     PPGMROMRANGE        pRom     = NULL;
-    PPGMREGMMIORANGE    pRegMmio = NULL;
+    PPGMREGMMIO2RANGE    pRegMmio = NULL;
 
     /*
      * We batch up pages that should be freed instead of calling GMM for
@@ -2722,6 +2682,9 @@ static int pgmR3LoadMemory(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t
                          * @bugref{6318}). */
                         if (   PGM_PAGE_GET_TYPE(pPage) == PGMPAGETYPE_ROM
                             || PGM_PAGE_GET_TYPE(pPage) == PGMPAGETYPE_ROM_SHADOW
+#ifdef VBOX_WITH_PGM_NEM_MODE
+                            || pVM->pgm.s.fNemMode
+#endif
                             || pVM->pgm.s.fRamPreAlloc)
                         {
                             PGMPAGEMAPLOCK PgMpLck;
@@ -2737,7 +2700,7 @@ static int pgmR3LoadMemory(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t
                         else if (   PGM_PAGE_GET_PDE_TYPE(pPage) != PGM_PAGE_PDE_TYPE_PDE
                                  && PGM_PAGE_GET_PDE_TYPE(pPage) != PGM_PAGE_PDE_TYPE_PDE_DISABLED)
                         {
-                            rc = pgmPhysFreePage(pVM, pReq, &cPendingPages, pPage, GCPhys);
+                            rc = pgmPhysFreePage(pVM, pReq, &cPendingPages, pPage, GCPhys, (PGMPAGETYPE)PGM_PAGE_GET_TYPE(pPage));
                             AssertRCReturn(rc, rc);
                         }
                         /** @todo handle large pages (see @bugref{5545}) */
@@ -2760,7 +2723,7 @@ static int pgmR3LoadMemory(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t
                                                   && PGM_PAGE_GET_PDE_TYPE(pPage) != PGM_PAGE_PDE_TYPE_PDE_DISABLED,
                                                      ("GCPhys=%RGp %R[pgmpage]\n", GCPhys, pPage), VERR_PGM_LOAD_UNEXPECTED_PAGE_TYPE);
 
-                            rc = pgmPhysFreePage(pVM, pReq, &cPendingPages, pPage, GCPhys);
+                            rc = pgmPhysFreePage(pVM, pReq, &cPendingPages, pPage, GCPhys, (PGMPAGETYPE)PGM_PAGE_GET_TYPE(pPage));
                             AssertRCReturn(rc, rc);
                         }
                         Assert(PGM_PAGE_IS_ZERO(pPage));
@@ -2810,8 +2773,7 @@ static int pgmR3LoadMemory(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t
                     || pRegMmio->idSavedState != id)
                 {
                     for (pRegMmio = pVM->pgm.s.pRegMmioRangesR3; pRegMmio; pRegMmio = pRegMmio->pNextR3)
-                        if (   pRegMmio->idSavedState == id
-                            && (pRegMmio->fFlags & PGMREGMMIORANGE_F_MMIO2))
+                        if (pRegMmio->idSavedState == id)
                             break;
                     AssertLogRelMsgReturn(pRegMmio, ("id=%#u iPage=%#x\n", id, iPage), VERR_PGM_SAVED_MMIO2_RANGE_NOT_FOUND);
                 }
@@ -2932,7 +2894,7 @@ static int pgmR3LoadMemory(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t
                             ||  PGM_PAGE_IS_BALLOONED(pRealPage))
                             break;
                         /** @todo implement zero page replacing. */
-                        /* fall thru */
+                        RT_FALL_THRU();
                     case PGM_STATE_REC_ROM_VIRGIN:
                     case PGM_STATE_REC_ROM_SHW_RAW:
                     {
@@ -2994,18 +2956,18 @@ static int pgmR3LoadFinalLocked(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion)
     if (uVersion >= PGM_SAVED_STATE_VERSION_3_0_0)
     {
         if (uVersion > PGM_SAVED_STATE_VERSION_PRE_BALLOON)
-            rc = SSMR3GetStruct(pSSM, pPGM, &s_aPGMFields[0]);
+            rc = SSMR3GetStructEx(pSSM, pPGM, sizeof(*pPGM), 0 /*fFlags*/, &s_aPGMFields[0], NULL /*pvUser*/);
         else
-            rc = SSMR3GetStruct(pSSM, pPGM, &s_aPGMFieldsPreBalloon[0]);
+            rc = SSMR3GetStructEx(pSSM, pPGM, sizeof(*pPGM), 0 /*fFlags*/, &s_aPGMFieldsPreBalloon[0], NULL /*pvUser*/);
 
         AssertLogRelRCReturn(rc, rc);
 
         for (VMCPUID i = 0; i < pVM->cCpus; i++)
         {
             if (uVersion <= PGM_SAVED_STATE_VERSION_PRE_PAE)
-                rc = SSMR3GetStruct(pSSM, &pVM->aCpus[i].pgm.s, &s_aPGMCpuFieldsPrePae[0]);
+                rc = SSMR3GetStruct(pSSM, &pVM->apCpusR3[i]->pgm.s, &s_aPGMCpuFieldsPrePae[0]);
             else
-                rc = SSMR3GetStruct(pSSM, &pVM->aCpus[i].pgm.s, &s_aPGMCpuFields[0]);
+                rc = SSMR3GetStruct(pSSM, &pVM->apCpusR3[i]->pgm.s, &s_aPGMCpuFields[0]);
             AssertLogRelRCReturn(rc, rc);
         }
     }
@@ -3017,35 +2979,34 @@ static int pgmR3LoadFinalLocked(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion)
         rc = SSMR3GetStruct(pSSM, &pgmOld, &s_aPGMFields_Old[0]);
         AssertLogRelRCReturn(rc, rc);
 
-        pPGM->fMappingsFixed    = pgmOld.fMappingsFixed;
-        pPGM->GCPtrMappingFixed = pgmOld.GCPtrMappingFixed;
-        pPGM->cbMappingFixed    = pgmOld.cbMappingFixed;
-
-        pVM->aCpus[0].pgm.s.fA20Enabled   = pgmOld.fA20Enabled;
-        pVM->aCpus[0].pgm.s.GCPhysA20Mask = pgmOld.GCPhysA20Mask;
-        pVM->aCpus[0].pgm.s.enmGuestMode  = pgmOld.enmGuestMode;
+        PVMCPU pVCpu0 = pVM->apCpusR3[0];
+        pVCpu0->pgm.s.fA20Enabled   = pgmOld.fA20Enabled;
+        pVCpu0->pgm.s.GCPhysA20Mask = pgmOld.GCPhysA20Mask;
+        pVCpu0->pgm.s.enmGuestMode  = pgmOld.enmGuestMode;
     }
     else
     {
         AssertRelease(pVM->cCpus == 1);
 
-        SSMR3GetBool(pSSM,      &pPGM->fMappingsFixed);
-        SSMR3GetGCPtr(pSSM,     &pPGM->GCPtrMappingFixed);
-        SSMR3GetU32(pSSM,       &pPGM->cbMappingFixed);
+        SSMR3Skip(pSSM,         sizeof(bool));
+        RTGCPTR GCPtrIgn;
+        SSMR3GetGCPtr(pSSM,     &GCPtrIgn);
+        SSMR3Skip(pSSM,         sizeof(uint32_t));
 
         uint32_t cbRamSizeIgnored;
         rc = SSMR3GetU32(pSSM,  &cbRamSizeIgnored);
         if (RT_FAILURE(rc))
             return rc;
-        SSMR3GetGCPhys(pSSM,    &pVM->aCpus[0].pgm.s.GCPhysA20Mask);
+        PVMCPU pVCpu0 = pVM->apCpusR3[0];
+        SSMR3GetGCPhys(pSSM,    &pVCpu0->pgm.s.GCPhysA20Mask);
 
         uint32_t u32 = 0;
         SSMR3GetUInt(pSSM,      &u32);
-        pVM->aCpus[0].pgm.s.fA20Enabled = !!u32;
-        SSMR3GetUInt(pSSM,      &pVM->aCpus[0].pgm.s.fSyncFlags);
+        pVCpu0->pgm.s.fA20Enabled = !!u32;
+        SSMR3GetUInt(pSSM,      &pVCpu0->pgm.s.fSyncFlags);
         RTUINT uGuestMode;
         SSMR3GetUInt(pSSM,      &uGuestMode);
-        pVM->aCpus[0].pgm.s.enmGuestMode = (PGMMODE)uGuestMode;
+        pVCpu0->pgm.s.enmGuestMode = (PGMMODE)uGuestMode;
 
         /* check separator. */
         SSMR3GetU32(pSSM, &u32Sep);
@@ -3063,7 +3024,7 @@ static int pgmR3LoadFinalLocked(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion)
      */
     for (VMCPUID i = 0; i < pVM->cCpus; i++)
     {
-        PVMCPU pVCpu = &pVM->aCpus[i];
+        PVMCPU pVCpu = pVM->apCpusR3[i];
         pVCpu->pgm.s.GCPhysA20Mask = ~((RTGCPHYS)!pVCpu->pgm.s.fA20Enabled << 20);
         pgmR3RefreshShadowModeAfterA20Change(pVCpu);
     }
@@ -3168,7 +3129,7 @@ static DECLCALLBACK(int) pgmR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, 
      */
     if (uPass != SSM_PASS_FINAL)
     {
-        pgmLock(pVM);
+        PGM_LOCK_VOID(pVM);
         if (uPass != 0)
             rc = pgmR3LoadMemory(pVM, pSSM, uVersion, uPass);
         else
@@ -3185,14 +3146,14 @@ static DECLCALLBACK(int) pgmR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, 
             if (RT_SUCCESS(rc))
                 rc = pgmR3LoadMemory(pVM, pSSM, uVersion, uPass);
         }
-        pgmUnlock(pVM);
+        PGM_UNLOCK(pVM);
     }
     else
     {
-        pgmLock(pVM);
+        PGM_LOCK_VOID(pVM);
         rc = pgmR3LoadFinalLocked(pVM, pSSM, uVersion);
         pVM->pgm.s.LiveSave.fActive = false;
-        pgmUnlock(pVM);
+        PGM_UNLOCK(pVM);
         if (RT_SUCCESS(rc))
         {
             /*
@@ -3200,10 +3161,9 @@ static DECLCALLBACK(int) pgmR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, 
              */
             for (VMCPUID i = 0; i < pVM->cCpus; i++)
             {
-                PVMCPU pVCpu = &pVM->aCpus[i];
+                PVMCPU pVCpu = pVM->apCpusR3[i];
                 VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL);
                 VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3);
-                pVCpu->pgm.s.fSyncFlags |= PGM_SYNC_UPDATE_PAGE_BIT_VIRTUAL;
                 /** @todo For guest PAE, we might get the wrong
                  *        aGCPhysGstPaePDs values now. We should used the
                  *        saved ones... Postponing this since it nothing new
@@ -3214,8 +3174,8 @@ static DECLCALLBACK(int) pgmR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, 
             pgmR3HandlerPhysicalUpdateAll(pVM);
 
             /*
-             * Change the paging mode and restore PGMCPU::GCPhysCR3.
-             * (The latter requires the CPUM state to be restored already.)
+             * Change the paging mode (indirectly restores PGMCPU::GCPhysCR3).
+             * (Requires the CPUM state to be restored already!)
              */
             if (CPUMR3IsStateRestorePending(pVM))
                 return SSMR3SetLoadError(pSSM, VERR_WRONG_ORDER, RT_SRC_POS,
@@ -3223,86 +3183,14 @@ static DECLCALLBACK(int) pgmR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, 
 
             for (VMCPUID i = 0; i < pVM->cCpus; i++)
             {
-                PVMCPU pVCpu = &pVM->aCpus[i];
+                PVMCPU pVCpu = pVM->apCpusR3[i];
 
-                rc = PGMR3ChangeMode(pVM, pVCpu, pVCpu->pgm.s.enmGuestMode);
+                rc = PGMHCChangeMode(pVM, pVCpu, pVCpu->pgm.s.enmGuestMode);
                 AssertLogRelRCReturn(rc, rc);
-
-                /* Update pVM->pgm.s.GCPhysCR3. */
-                Assert(pVCpu->pgm.s.GCPhysCR3 == NIL_RTGCPHYS || FTMIsDeltaLoadSaveActive(pVM));
-                RTGCPHYS GCPhysCR3 = CPUMGetGuestCR3(pVCpu);
-                if (    pVCpu->pgm.s.enmGuestMode == PGMMODE_PAE
-                    ||  pVCpu->pgm.s.enmGuestMode == PGMMODE_PAE_NX
-                    ||  pVCpu->pgm.s.enmGuestMode == PGMMODE_AMD64
-                    ||  pVCpu->pgm.s.enmGuestMode == PGMMODE_AMD64_NX)
-                    GCPhysCR3 = (GCPhysCR3 & X86_CR3_PAE_PAGE_MASK);
-                else
-                    GCPhysCR3 = (GCPhysCR3 & X86_CR3_PAGE_MASK);
-                pVCpu->pgm.s.GCPhysCR3 = GCPhysCR3;
 
                 /* Update the PSE, NX flags and validity masks. */
                 pVCpu->pgm.s.fGst32BitPageSizeExtension = CPUMIsGuestPageSizeExtEnabled(pVCpu);
                 PGMNotifyNxeChanged(pVCpu, CPUMIsGuestNXEnabled(pVCpu));
-            }
-
-            /*
-             * Try re-fixate the guest mappings.
-             */
-            pVM->pgm.s.fMappingsFixedRestored = false;
-            if (   pVM->pgm.s.fMappingsFixed
-                && pgmMapAreMappingsEnabled(pVM))
-            {
-#ifndef PGM_WITHOUT_MAPPINGS
-                RTGCPTR     GCPtrFixed    = pVM->pgm.s.GCPtrMappingFixed;
-                uint32_t    cbFixed       = pVM->pgm.s.cbMappingFixed;
-                pVM->pgm.s.fMappingsFixed = false;
-
-                uint32_t    cbRequired;
-                int rc2 = PGMR3MappingsSize(pVM, &cbRequired); AssertRC(rc2);
-                if (   RT_SUCCESS(rc2)
-                    && cbRequired > cbFixed)
-                    rc2 = VERR_OUT_OF_RANGE;
-                if (RT_SUCCESS(rc2))
-                    rc2 = pgmR3MappingsFixInternal(pVM, GCPtrFixed, cbFixed);
-                if (RT_FAILURE(rc2))
-                {
-                    LogRel(("PGM: Unable to re-fixate the guest mappings at %RGv-%RGv: rc=%Rrc (cbRequired=%#x)\n",
-                            GCPtrFixed, GCPtrFixed + cbFixed, rc2, cbRequired));
-                    pVM->pgm.s.fMappingsFixed         = false;
-                    pVM->pgm.s.fMappingsFixedRestored = true;
-                    pVM->pgm.s.GCPtrMappingFixed      = GCPtrFixed;
-                    pVM->pgm.s.cbMappingFixed         = cbFixed;
-                }
-#else
-                AssertFailed();
-#endif
-            }
-            else
-            {
-                /* We used to set fixed + disabled while we only use disabled now,
-                   so wipe the state to avoid any confusion. */
-                pVM->pgm.s.fMappingsFixed    = false;
-                pVM->pgm.s.GCPtrMappingFixed = NIL_RTGCPTR;
-                pVM->pgm.s.cbMappingFixed    = 0;
-            }
-
-            /*
-             * If we have floating mappings, do a CR3 sync now to make sure the HMA
-             * doesn't conflict with guest code / data and thereby cause trouble
-             * when restoring other components like PATM.
-             */
-            if (pgmMapAreMappingsFloating(pVM))
-            {
-                PVMCPU pVCpu = &pVM->aCpus[0];
-                rc = PGMSyncCR3(pVCpu, CPUMGetGuestCR0(pVCpu), CPUMGetGuestCR3(pVCpu),  CPUMGetGuestCR4(pVCpu), true);
-                if (RT_FAILURE(rc))
-                    return SSMR3SetLoadError(pSSM, VERR_WRONG_ORDER, RT_SRC_POS,
-                                             N_("PGMSyncCR3 failed unexpectedly with rc=%Rrc"), rc);
-
-                /* Make sure to re-sync before executing code. */
-                VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL);
-                VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3);
-                pVCpu->pgm.s.fSyncFlags |= PGM_SYNC_UPDATE_PAGE_BIT_VIRTUAL;
             }
         }
     }

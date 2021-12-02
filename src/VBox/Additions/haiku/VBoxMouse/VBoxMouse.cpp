@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMouse.cpp 92179 2021-11-02 21:44:49Z vboxsync $ */
 /** @file
  * VBoxMouse; input_server add-on - Haiku Guest Additions, implementation.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,7 +20,7 @@
  *
  * VirtualBox Guest Additions for Haiku.
  * Copyright (c) 2011 Mike Smith <mike@scgtrp.net>
- *                    François Revol <revol@free.fr>
+ *                    FranÃ§ois Revol <revol@free.fr>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -59,7 +59,7 @@
 #include <VBoxGuestInternal.h>
 #include <VBox/VMMDev.h>
 #include <VBox/log.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 /* Export as global symbol with C linkage, RTDECL is necessary. */
 RTDECL(BInputServerDevice *)

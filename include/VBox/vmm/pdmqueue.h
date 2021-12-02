@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmqueue_h
-#define ___VBox_vmm_pdmqueue_h
+#ifndef VBOX_INCLUDED_vmm_pdmqueue_h
+#define VBOX_INCLUDED_vmm_pdmqueue_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 
@@ -35,7 +38,12 @@ RT_C_DECLS_BEGIN
  * @{
  */
 
-/** Pointer to a PDM queue. Also called PDM queue handle. */
+/** PDM queue handle. */
+typedef uint64_t PDMQUEUEHANDLE;
+/** NIL PDM queue handle. */
+#define NIL_PDMQUEUEHANDLE      UINT64_MAX
+
+/** Pointer to a PDM queue. */
 typedef struct PDMQUEUE *PPDMQUEUE;
 
 /** Pointer to a PDM queue item core. */
@@ -50,11 +58,6 @@ typedef struct PDMQUEUEITEMCORE
     R3PTRTYPE(PPDMQUEUEITEMCORE)    pNextR3;
     /** Pointer to the next item in the pending list - R0 Pointer. */
     R0PTRTYPE(PPDMQUEUEITEMCORE)    pNextR0;
-    /** Pointer to the next item in the pending list - RC Pointer. */
-    RCPTRTYPE(PPDMQUEUEITEMCORE)    pNextRC;
-#if HC_ARCH_BITS == 64
-    RTRCPTR                         Alignment0;
-#endif
 } PDMQUEUEITEMCORE;
 
 
@@ -69,7 +72,7 @@ typedef struct PDMQUEUEITEMCORE
  *          callback.  No locks will be held, but for now it's safe to assume
  *          that only one EMT will do queue callbacks at any one time.
  */
-typedef DECLCALLBACK(bool) FNPDMQUEUEDEV(PPDMDEVINS pDevIns, PPDMQUEUEITEMCORE pItem);
+typedef DECLCALLBACKTYPE(bool, FNPDMQUEUEDEV,(PPDMDEVINS pDevIns, PPDMQUEUEITEMCORE pItem));
 /** Pointer to a FNPDMQUEUEDEV(). */
 typedef FNPDMQUEUEDEV *PFNPDMQUEUEDEV;
 
@@ -78,12 +81,12 @@ typedef FNPDMQUEUEDEV *PFNPDMQUEUEDEV;
  *
  * @returns Success indicator.
  *          If false the item will not be removed and the flushing will stop.
- * @param   pDevIns     The USB device instance.
+ * @param   pUsbIns     The USB device instance.
  * @param   pItem       The item to consume. Upon return this item will be freed.
  * @remarks No locks will be held, but for now it's safe to assume that only one
  *          EMT will do queue callbacks at any one time.
  */
-typedef DECLCALLBACK(bool) FNPDMQUEUEUSB(PPDMUSBINS pUsbIns, PPDMQUEUEITEMCORE pItem);
+typedef DECLCALLBACKTYPE(bool, FNPDMQUEUEUSB,(PPDMUSBINS pUsbIns, PPDMQUEUEITEMCORE pItem));
 /** Pointer to a FNPDMQUEUEUSB(). */
 typedef FNPDMQUEUEUSB *PFNPDMQUEUEUSB;
 
@@ -97,7 +100,7 @@ typedef FNPDMQUEUEUSB *PFNPDMQUEUEUSB;
  * @remarks No locks will be held, but for now it's safe to assume that only one
  *          EMT will do queue callbacks at any one time.
  */
-typedef DECLCALLBACK(bool) FNPDMQUEUEDRV(PPDMDRVINS pDrvIns, PPDMQUEUEITEMCORE pItem);
+typedef DECLCALLBACKTYPE(bool, FNPDMQUEUEDRV,(PPDMDRVINS pDrvIns, PPDMQUEUEITEMCORE pItem));
 /** Pointer to a FNPDMQUEUEDRV(). */
 typedef FNPDMQUEUEDRV *PFNPDMQUEUEDRV;
 
@@ -111,7 +114,7 @@ typedef FNPDMQUEUEDRV *PFNPDMQUEUEDRV;
  * @remarks No locks will be held, but for now it's safe to assume that only one
  *          EMT will do queue callbacks at any one time.
  */
-typedef DECLCALLBACK(bool) FNPDMQUEUEINT(PVM pVM, PPDMQUEUEITEMCORE pItem);
+typedef DECLCALLBACKTYPE(bool, FNPDMQUEUEINT,(PVM pVM, PPDMQUEUEITEMCORE pItem));
 /** Pointer to a FNPDMQUEUEINT(). */
 typedef FNPDMQUEUEINT *PFNPDMQUEUEINT;
 
@@ -125,7 +128,7 @@ typedef FNPDMQUEUEINT *PFNPDMQUEUEINT;
  * @remarks No locks will be held, but for now it's safe to assume that only one
  *          EMT will do queue callbacks at any one time.
  */
-typedef DECLCALLBACK(bool) FNPDMQUEUEEXT(void *pvUser, PPDMQUEUEITEMCORE pItem);
+typedef DECLCALLBACKTYPE(bool, FNPDMQUEUEEXT,(void *pvUser, PPDMQUEUEITEMCORE pItem));
 /** Pointer to a FNPDMQUEUEEXT(). */
 typedef FNPDMQUEUEEXT *PFNPDMQUEUEEXT;
 
@@ -147,7 +150,6 @@ VMMR3_INT_DECL(void) PDMR3QueueFlushAll(PVM pVM);
 VMMDECL(PPDMQUEUEITEMCORE)    PDMQueueAlloc(PPDMQUEUE pQueue);
 VMMDECL(void)                 PDMQueueInsert(PPDMQUEUE pQueue, PPDMQUEUEITEMCORE pItem);
 VMMDECL(void)                 PDMQueueInsertEx(PPDMQUEUE pQueue, PPDMQUEUEITEMCORE pItem, uint64_t NanoMaxDelay);
-VMMDECL(RCPTRTYPE(PPDMQUEUE)) PDMQueueRCPtr(PPDMQUEUE pQueue);
 VMMDECL(R0PTRTYPE(PPDMQUEUE)) PDMQueueR0Ptr(PPDMQUEUE pQueue);
 VMMDECL(bool)                 PDMQueueFlushIfNecessary(PPDMQUEUE pQueue);
 
@@ -155,5 +157,5 @@ VMMDECL(bool)                 PDMQueueFlushIfNecessary(PPDMQUEUE pQueue);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_pdmqueue_h */
 

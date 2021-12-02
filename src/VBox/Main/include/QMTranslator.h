@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QMTranslator.h 92068 2021-10-26 08:35:27Z vboxsync $ */
 /** @file
  * VirtualBox API translation handling class
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_QMTRANSLATOR
-#define ____H_QMTRANSLATOR
+#ifndef MAIN_INCLUDED_QMTranslator_h
+#define MAIN_INCLUDED_QMTranslator_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 class QMTranslator_Impl;
 
@@ -26,32 +29,41 @@ public:
     QMTranslator();
     virtual ~QMTranslator();
 
-    /* Gets translation from loaded QM file
+    /**
+     * Gets translation from loaded QM file
      *
-     * @param   context   QM context to look for translation
-     * @param   source    Source string in one-byte encoding
-     * @param   disamb    Disambiguationg comment, empty by default
+     * @param   pszContext      QM context to look for translation
+     * @param   pszSource       Source string in one-byte encoding
+     * @param   ppszSafeSource  Where to return pointer to a safe copy of @a
+     *                          pszSource for the purpose of reverse translation.
+     *                          Will be set to NULL if @a pszSource is returned.
+     * @param   pszDisamb       Disambiguationg comment, empty by default
+     * @param   aNum            Plural form indicator.
      *
-     * @returns Pointer to a translation in UTF-8 encoding, empty string on failure */
+     * @returns Pointer to a translation (UTF-8 encoding), source string on failure.
+     */
+    const char *translate(const char *pszContext, const char *pszSource, const char **ppszSafeSource,
+                          const char *pszDisamb = NULL, const size_t aNum = ~(size_t)0) const RT_NOEXCEPT;
 
-    const char *translate(const char *pszContext, const char *pszSource, const char *pszDisamb = "") const throw();
-
-    /* Loads and parses QM file
+    /**
+     * Loads and parses QM file
      *
-     * @param       filename    The name of the file to load
+     * @param   pszFilename The name of the file to load
+     * @param   hStrCache   The string cache to use for storing strings.
      *
-     * @returns VINF_SUCCESS if successful */
-    int load(const char *pszFilename) throw();
+     * @returns VBox status code.
+     */
+    int load(const char *pszFilename, RTSTRCACHE hStrCache) RT_NOEXCEPT;
 
 private:
-        /* QMTranslator implementation.
-         * To separate all the code from the interface */
-    QMTranslator_Impl *_impl;
+    /** QMTranslator implementation.
+     * To separate all the code from the interface */
+    QMTranslator_Impl *m_impl;
 
     /* If copying is required, please define the following operators */
     void operator=(QMTranslator &);
     QMTranslator(const QMTranslator &);
 };
 
-#endif /* !____H_QMTRANSLATOR */
+#endif /* !MAIN_INCLUDED_QMTranslator_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

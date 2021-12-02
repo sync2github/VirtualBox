@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: VirtualBoxErrorInfoImpl.cpp 85237 2020-07-11 16:37:08Z vboxsync $ */
 /** @file
- *
  * VirtualBoxErrorInfo COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +15,8 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN
 #include "VirtualBoxErrorInfoImpl.h"
-#include "Logging.h"
 
 #include <VBox/com/ErrorInfo.h>
 
@@ -86,7 +85,7 @@ STDMETHODIMP VirtualBoxErrorInfo::COMGETTER(ResultCode)(LONG *aResultCode)
 {
     CheckComArgOutPointerValid(aResultCode);
 
-    *aResultCode = m_resultCode;
+    *aResultCode = (LONG)m_resultCode;
     return S_OK;
 }
 
@@ -251,7 +250,7 @@ NS_IMETHODIMP VirtualBoxErrorInfo::GetResult(nsresult *aResult)
     PRInt32 lrc;
     nsresult rc = COMGETTER(ResultCode)(&lrc);
     if (SUCCEEDED(rc))
-      *aResult = lrc;
+      *aResult = (nsresult)lrc;
     return rc;
 }
 

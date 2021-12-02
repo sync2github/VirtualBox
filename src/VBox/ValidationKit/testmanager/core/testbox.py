@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: testbox.py 84110 2020-04-30 15:04:56Z vboxsync $
 
 """
 Test Manager - TestBox.
@@ -7,7 +7,7 @@ Test Manager - TestBox.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,19 +26,24 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 84110 $"
 
 
 # Standard python imports.
 import copy;
+import sys;
 import unittest;
 
 # Validation Kit imports.
 from testmanager.core               import db;
 from testmanager.core.base          import ModelDataBase, ModelDataBaseTestCase, ModelLogicBase, TMInFligthCollision, \
                                            TMInvalidData, TMTooManyRows, TMRowNotFound, \
-                                           ChangeLogEntry, AttributeChangeEntry;
+                                           ChangeLogEntry, AttributeChangeEntry, AttributeChangeEntryPre;
 from testmanager.core.useraccount   import UserAccountLogic;
+
+# Python 3 hacks:
+if sys.version_info[0] >= 3:
+    xrange = range; # pylint: disable=redefined-builtin,invalid-name
 
 
 class TestBoxInSchedGroupData(ModelDataBase):
@@ -53,7 +58,7 @@ class TestBoxInSchedGroupData(ModelDataBase):
     ksParam_uidAuthor           = 'TestBoxInSchedGroup_uidAuthor';
     ksParam_iSchedPriority      = 'TestBoxInSchedGroup_iSchedPriority';
 
-    kasAllowNullAttributes      = [ 'idTestBox', 'tsEffective', 'tsExpire', 'uidAuthor', ]
+    kasAllowNullAttributes      = [ 'tsEffective', 'tsExpire', 'uidAuthor', ]
 
     kiMin_iSchedPriority        = 0;
     kiMax_iSchedPriority        = 32;
@@ -93,7 +98,7 @@ class TestBoxInSchedGroupDataEx(TestBoxInSchedGroupData):
 
     def __init__(self):
         TestBoxInSchedGroupData.__init__(self);
-        self.oSchedGroup        = None; # type: SchedGroupData
+        self.oSchedGroup        = None  # type: SchedGroupData
 
     def initFromDbRowEx(self, aoRow, oDb, tsNow = None, sPeriodBack = None):
         """
@@ -104,9 +109,46 @@ class TestBoxInSchedGroupDataEx(TestBoxInSchedGroupData):
         self.oSchedGroup        = SchedGroupData().initFromDbWithId(oDb, self.idSchedGroup, tsNow, sPeriodBack);
         return self;
 
+class TestBoxDataForSchedGroup(TestBoxInSchedGroupData):
+    """
+    Extended version of TestBoxInSchedGroupData that adds the testbox data (if available).
+    Used by TestBoxLogic.fetchForSchedGroup
+    """
 
-# pylint: disable=C0103
-class TestBoxData(ModelDataBase):  # pylint: disable=R0902
+    def __init__(self):
+        TestBoxInSchedGroupData.__init__(self);
+        self.oTestBox           = None  # type: TestBoxData
+
+    def initFromDbRow(self, aoRow):
+        """
+        The row is: TestBoxesInSchedGroups.*, TestBoxesWithStrings.*
+        """
+        TestBoxInSchedGroupData.initFromDbRow(self, aoRow);
+        if aoRow[self.kcDbColumns]:
+            self.oTestBox = TestBoxData().initFromDbRow(aoRow[self.kcDbColumns:]);
+        else:
+            self.oTestBox = None;
+        return self;
+
+    def getDataAttributes(self):
+        asAttributes = TestBoxInSchedGroupData.getDataAttributes(self);
+        asAttributes.remove('oTestBox');
+        return asAttributes;
+
+    def _validateAndConvertWorker(self, asAllowNullAttributes, oDb, enmValidateFor = ModelDataBase.ksValidateFor_Other):
+        dErrors = TestBoxInSchedGroupData._validateAndConvertWorker(self, asAllowNullAttributes, oDb, enmValidateFor);
+        if self.ksParam_idTestBox not in dErrors:
+            self.oTestBox = TestBoxData();
+            try:
+                self.oTestBox.initFromDbWithId(oDb, self.idTestBox);
+            except Exception as oXcpt:
+                self.oTestBox = TestBoxData()
+                dErrors[self.ksParam_idTestBox] = str(oXcpt);
+        return dErrors;
+
+
+# pylint: disable=invalid-name
+class TestBoxData(ModelDataBase):  # pylint: disable=too-many-instance-attributes
     """
     TestBox Data.
     """
@@ -338,35 +380,55 @@ class TestBoxData(ModelDataBase):  # pylint: disable=R0902
             dErrors[self.ksParam_ipLom] = 'Light-out-management IP is mandatory and a LOM is selected.'
         return dErrors;
 
-    def formatPythonVersion(self):
-        """
-        Unbuttons the version number and formats it as a version string.
-        """
-        if self.iPythonHexVersion is None:
+    @staticmethod
+    def formatPythonVersionEx(iPythonHexVersion):
+        """ Unbuttons the version number and formats it as a version string. """
+        if iPythonHexVersion is None:
             return 'N/A';
         return 'v%d.%d.%d.%d' \
-            % (  self.iPythonHexVersion >> 24,
-                (self.iPythonHexVersion >> 16) & 0xff,
-                (self.iPythonHexVersion >>  8) & 0xff,
-                 self.iPythonHexVersion        & 0xff);
+            % (  iPythonHexVersion >> 24,
+                (iPythonHexVersion >> 16) & 0xff,
+                (iPythonHexVersion >>  8) & 0xff,
+                 iPythonHexVersion        & 0xff);
+
+    def formatPythonVersion(self):
+        """ Unbuttons the version number and formats it as a version string. """
+        return self.formatPythonVersionEx(self.iPythonHexVersion);
+
+
+    @staticmethod
+    def getCpuFamilyEx(lCpuRevision):
+        """ Returns the CPU family for a x86 or amd64 testboxes."""
+        if lCpuRevision is None:
+            return 0;
+        return (lCpuRevision >> 24 & 0xff);
 
     def getCpuFamily(self):
         """ Returns the CPU family for a x86 or amd64 testboxes."""
-        if self.lCpuRevision is None:
+        return self.getCpuFamilyEx(self.lCpuRevision);
+
+    @staticmethod
+    def getCpuModelEx(lCpuRevision):
+        """ Returns the CPU model for a x86 or amd64 testboxes."""
+        if lCpuRevision is None:
             return 0;
-        return (self.lCpuRevision >> 24 & 0xff);
+        return (lCpuRevision >> 8 & 0xffff);
 
     def getCpuModel(self):
         """ Returns the CPU model for a x86 or amd64 testboxes."""
-        if self.lCpuRevision is None:
+        return self.getCpuModelEx(self.lCpuRevision);
+
+    @staticmethod
+    def getCpuSteppingEx(lCpuRevision):
+        """ Returns the CPU stepping for a x86 or amd64 testboxes."""
+        if lCpuRevision is None:
             return 0;
-        return (self.lCpuRevision >> 8 & 0xffff);
+        return (lCpuRevision & 0xff);
 
     def getCpuStepping(self):
         """ Returns the CPU stepping for a x86 or amd64 testboxes."""
-        if self.lCpuRevision is None:
-            return 0;
-        return (self.lCpuRevision & 0xff);
+        return self.getCpuSteppingEx(self.lCpuRevision);
+
 
     # The following is a translation of the g_aenmIntelFamily06 array in CPUMR3CpuId.cpp:
     kdIntelFamily06 = {
@@ -435,21 +497,22 @@ class TestBoxData(ModelDataBase):  # pylint: disable=R0902
         0x07: 'NB_Gallatin',
     };
 
-    def queryCpuMicroarch(self):
+    @staticmethod
+    def queryCpuMicroarchEx(lCpuRevision, sCpuVendor):
         """ Try guess the microarch name for the cpu.  Returns None if we cannot. """
-        if self.lCpuRevision is None or self.sCpuVendor is None:
+        if lCpuRevision is None or sCpuVendor is None:
             return None;
-        uFam = self.getCpuFamily();
-        uMod = self.getCpuModel();
-        if self.sCpuVendor == 'GenuineIntel':
+        uFam = TestBoxData.getCpuFamilyEx(lCpuRevision);
+        uMod = TestBoxData.getCpuModelEx(lCpuRevision);
+        if sCpuVendor == 'GenuineIntel':
             if uFam == 6:
-                return self.kdIntelFamily06.get(uMod, None);
+                return TestBoxData.kdIntelFamily06.get(uMod, None);
             if uFam == 15:
-                return self.kdIntelFamily15.get(uMod, None);
-        elif self.sCpuVendor == 'AuthenticAMD':
+                return TestBoxData.kdIntelFamily15.get(uMod, None);
+        elif sCpuVendor == 'AuthenticAMD':
             if uFam == 0xf:
                 if uMod < 0x10:                             return 'K8_130nm';
-                if uMod >= 0x60 and uMod < 0x80:            return 'K8_65nm';
+                if 0x60 <= uMod < 0x80:                     return 'K8_65nm';
                 if uMod >= 0x40:                            return 'K8_90nm_AMDV';
                 if uMod in [0x21, 0x23, 0x2b, 0x37, 0x3f]:  return 'K8_90nm_DualCore';
                 return 'AMD_K8_90nm';
@@ -463,7 +526,7 @@ class TestBoxData(ModelDataBase):  # pylint: disable=R0902
                 return None;
             if uFam == 0x16:
                 return 'Jaguar';
-        elif self.sCpuVendor == 'CentaurHauls':
+        elif sCpuVendor == 'CentaurHauls':
             if uFam == 0x05:
                 if uMod == 0x01: return 'Centaur_C6';
                 if uMod == 0x04: return 'Centaur_C6';
@@ -472,21 +535,36 @@ class TestBoxData(ModelDataBase):  # pylint: disable=R0902
             if uFam == 0x06:
                 if uMod == 0x05: return 'VIA_C3_M2';
                 if uMod == 0x06: return 'VIA_C3_C5A';
-                if uMod == 0x07: return 'VIA_C3_C5B' if self.getCpuStepping() < 8 else 'VIA_C3_C5C';
+                if uMod == 0x07: return 'VIA_C3_C5B' if TestBoxData.getCpuSteppingEx(lCpuRevision) < 8 else 'VIA_C3_C5C';
                 if uMod == 0x08: return 'VIA_C3_C5N';
-                if uMod == 0x09: return 'VIA_C3_C5XL' if self.getCpuStepping() < 8 else 'VIA_C3_C5P';
+                if uMod == 0x09: return 'VIA_C3_C5XL' if TestBoxData.getCpuSteppingEx(lCpuRevision) < 8 else 'VIA_C3_C5P';
                 if uMod == 0x0a: return 'VIA_C7_C5J';
                 if uMod == 0x0f: return 'VIA_Isaiah';
+        elif sCpuVendor == '  Shanghai  ':
+            if uFam == 0x07:
+                if uMod == 0x0b: return 'Shanghai_KX-5000';
         return None;
+
+    def queryCpuMicroarch(self):
+        """ Try guess the microarch name for the cpu.  Returns None if we cannot. """
+        return self.queryCpuMicroarchEx(self.lCpuRevision, self.sCpuVendor);
+
+    @staticmethod
+    def getPrettyCpuVersionEx(lCpuRevision, sCpuVendor):
+        """ Pretty formatting of the family/model/stepping with microarch optimizations. """
+        if lCpuRevision is None or sCpuVendor is None:
+            return u'<none>';
+        sMarch = TestBoxData.queryCpuMicroarchEx(lCpuRevision, sCpuVendor);
+        if sMarch is not None:
+            return '%s %02x:%x' \
+                 % (sMarch, TestBoxData.getCpuModelEx(lCpuRevision), TestBoxData.getCpuSteppingEx(lCpuRevision));
+        return 'fam%02X m%02X s%02X' \
+             % ( TestBoxData.getCpuFamilyEx(lCpuRevision), TestBoxData.getCpuModelEx(lCpuRevision),
+                 TestBoxData.getCpuSteppingEx(lCpuRevision));
 
     def getPrettyCpuVersion(self):
         """ Pretty formatting of the family/model/stepping with microarch optimizations. """
-        if self.lCpuRevision is None or self.sCpuVendor is None:
-            return u'<none>';
-        sMarch = self.queryCpuMicroarch();
-        if sMarch is not None:
-            return '%s m%02X s%02X' % (sMarch, self.getCpuModel(), self.getCpuStepping());
-        return 'fam%02X m%02X s%02X' % (self.getCpuFamily(), self.getCpuModel(), self.getCpuStepping());
+        return self.getPrettyCpuVersionEx(self.lCpuRevision, self.sCpuVendor);
 
     def getArchBitString(self):
         """ Returns 32-bit, 64-bit, <none>, or sCpuArch. """
@@ -505,6 +583,7 @@ class TestBoxData(ModelDataBase):  # pylint: disable=R0902
         if self.sCpuVendor == 'GenuineIntel':     return 'Intel';
         if self.sCpuVendor == 'AuthenticAMD':     return 'AMD';
         if self.sCpuVendor == 'CentaurHauls':     return 'VIA';
+        if self.sCpuVendor == '  Shanghai  ':     return 'Shanghai';
         return self.sCpuVendor;
 
 
@@ -524,7 +603,7 @@ class TestBoxDataEx(TestBoxData):
 
     def __init__(self):
         TestBoxData.__init__(self);
-        self.aoInSchedGroups        = [];   # type: list[TestBoxInSchedGroupData]
+        self.aoInSchedGroups        = []    # type: list[TestBoxInSchedGroupData]
 
     def _initExtraMembersFromDb(self, oDb, tsNow = None, sPeriodBack = None):
         """
@@ -591,7 +670,7 @@ class TestBoxDataEx(TestBoxData):
                 aoNewValues.append(oMember);
         return aoNewValues;
 
-    def _validateAndConvertAttribute(self, sAttr, sParam, oValue, aoNilValues, fAllowNull, oDb): # pylint: disable=R0914
+    def _validateAndConvertAttribute(self, sAttr, sParam, oValue, aoNilValues, fAllowNull, oDb): # pylint: disable=too-many-locals
         """
         Validate special arrays and requirement expressions.
 
@@ -606,16 +685,26 @@ class TestBoxDataEx(TestBoxData):
         # Note! We'll be returning an error dictionary instead of an string here.
         dErrors = {};
 
+        # HACK ALERT! idTestBox might not have been validated and converted yet, but we need detect
+        #             adding so we can ignore idTestBox being NIL when validating group memberships.
+        ## @todo make base.py pass us the ksValidateFor_Xxxx value.
+        fIsAdding = bool(self.idTestBox in [ None, -1, '-1', 'None', '' ])
+
         for iInGrp, oInSchedGroup in enumerate(self.aoInSchedGroups):
             oInSchedGroup = copy.copy(oInSchedGroup);
             oInSchedGroup.idTestBox = self.idTestBox;
-            dCurErrors = oInSchedGroup.validateAndConvert(oDb, ModelDataBase.ksValidateFor_Other);
-            if len(dCurErrors) == 0:
+            if fIsAdding:
+                dCurErrors = oInSchedGroup.validateAndConvertEx(['idTestBox',] + oInSchedGroup.kasAllowNullAttributes,
+                                                                oDb, ModelDataBase.ksValidateFor_Add);
+            else:
+                dCurErrors = oInSchedGroup.validateAndConvert(oDb, ModelDataBase.ksValidateFor_Other);
+            if not dCurErrors:
                 pass; ## @todo figure out the ID?
             else:
                 asErrors = [];
                 for sKey in dCurErrors:
-                    asErrors.append('%s: %s' % (sKey[len('TestBoxInSchedGroup_'):], dCurErrors[sKey]));
+                    asErrors.append('%s: %s' % (sKey[len('TestBoxInSchedGroup_'):],
+                                                dCurErrors[sKey] + ('{%s}' % self.idTestBox)))
                 dErrors[iInGrp] = '<br>\n'.join(asErrors)
             aoNewValues.append(oInSchedGroup);
 
@@ -629,7 +718,7 @@ class TestBoxDataEx(TestBoxData):
                     else:                   dErrors[iInGrp2]  = sMsg;
                     break;
 
-        return (aoNewValues, dErrors if len(dErrors) > 0 else None);
+        return (aoNewValues, dErrors if dErrors else None);
 
 
 class TestBoxLogic(ModelLogicBase):
@@ -637,6 +726,60 @@ class TestBoxLogic(ModelLogicBase):
     TestBox logic.
     """
 
+    kiSortColumn_sName              =  1;
+    kiSortColumn_sOs                =  2;
+    kiSortColumn_sOsVersion         =  3;
+    kiSortColumn_sCpuVendor         =  4;
+    kiSortColumn_sCpuArch           =  5;
+    kiSortColumn_lCpuRevision       =  6;
+    kiSortColumn_cCpus              =  7;
+    kiSortColumn_cMbMemory          =  8;
+    kiSortColumn_cMbScratch         =  9;
+    kiSortColumn_fCpuNestedPaging   = 10;
+    kiSortColumn_iTestBoxScriptRev  = 11;
+    kiSortColumn_iPythonHexVersion  = 12;
+    kiSortColumn_enmPendingCmd      = 13;
+    kiSortColumn_fEnabled           = 14;
+    kiSortColumn_enmState           = 15;
+    kiSortColumn_tsUpdated          = 16;
+    kcMaxSortColumns                = 17;
+    kdSortColumnMap                 = {
+        0:                               'TestBoxesWithStrings.sName',
+        kiSortColumn_sName:              "regexp_replace(TestBoxesWithStrings.sName,'[0-9]*', '', 'g'), " \
+                            "RIGHT(CONCAT(regexp_replace(TestBoxesWithStrings.sName,'[^0-9]*','', 'g'),'0'),8)::int",
+        -kiSortColumn_sName:             "regexp_replace(TestBoxesWithStrings.sName,'[0-9]*', '', 'g') DESC, " \
+                            "RIGHT(CONCAT(regexp_replace(TestBoxesWithStrings.sName,'[^0-9]*','', 'g'),'0'),8)::int DESC",
+        kiSortColumn_sOs:                'TestBoxesWithStrings.sOs',
+        -kiSortColumn_sOs:               'TestBoxesWithStrings.sOs DESC',
+        kiSortColumn_sOsVersion:         'TestBoxesWithStrings.sOsVersion',
+        -kiSortColumn_sOsVersion:        'TestBoxesWithStrings.sOsVersion DESC',
+        kiSortColumn_sCpuVendor:         'TestBoxesWithStrings.sCpuVendor',
+        -kiSortColumn_sCpuVendor:        'TestBoxesWithStrings.sCpuVendor DESC',
+        kiSortColumn_sCpuArch:           'TestBoxesWithStrings.sCpuArch',
+        -kiSortColumn_sCpuArch:          'TestBoxesWithStrings.sCpuArch DESC',
+        kiSortColumn_lCpuRevision:       'TestBoxesWithStrings.lCpuRevision',
+        -kiSortColumn_lCpuRevision:      'TestBoxesWithStrings.lCpuRevision DESC',
+        kiSortColumn_cCpus:              'TestBoxesWithStrings.cCpus',
+        -kiSortColumn_cCpus:             'TestBoxesWithStrings.cCpus DESC',
+        kiSortColumn_cMbMemory:          'TestBoxesWithStrings.cMbMemory',
+        -kiSortColumn_cMbMemory:         'TestBoxesWithStrings.cMbMemory DESC',
+        kiSortColumn_cMbScratch:         'TestBoxesWithStrings.cMbScratch',
+        -kiSortColumn_cMbScratch:        'TestBoxesWithStrings.cMbScratch DESC',
+        kiSortColumn_fCpuNestedPaging:   'TestBoxesWithStrings.fCpuNestedPaging',
+        -kiSortColumn_fCpuNestedPaging:  'TestBoxesWithStrings.fCpuNestedPaging DESC',
+        kiSortColumn_iTestBoxScriptRev:  'TestBoxesWithStrings.iTestBoxScriptRev',
+        -kiSortColumn_iTestBoxScriptRev: 'TestBoxesWithStrings.iTestBoxScriptRev DESC',
+        kiSortColumn_iPythonHexVersion:  'TestBoxesWithStrings.iPythonHexVersion',
+        -kiSortColumn_iPythonHexVersion: 'TestBoxesWithStrings.iPythonHexVersion DESC',
+        kiSortColumn_enmPendingCmd:      'TestBoxesWithStrings.enmPendingCmd',
+        -kiSortColumn_enmPendingCmd:     'TestBoxesWithStrings.enmPendingCmd DESC',
+        kiSortColumn_fEnabled:           'TestBoxesWithStrings.fEnabled',
+        -kiSortColumn_fEnabled:          'TestBoxesWithStrings.fEnabled DESC',
+        kiSortColumn_enmState:           'TestBoxStatuses.enmState',
+        -kiSortColumn_enmState:          'TestBoxStatuses.enmState DESC',
+        kiSortColumn_tsUpdated:          'TestBoxStatuses.tsUpdated',
+        -kiSortColumn_tsUpdated:         'TestBoxStatuses.tsUpdated DESC',
+    };
 
     def __init__(self, oDb):
         ModelLogicBase.__init__(self, oDb);
@@ -660,7 +803,7 @@ class TestBoxLogic(ModelLogicBase):
         oData.initFromDbRow(self._oDb.fetchOne());
         return oData;
 
-    def fetchForListing(self, iStart, cMaxRows, tsNow):
+    def fetchForListing(self, iStart, cMaxRows, tsNow, aiSortColumns = None):
         """
         Fetches testboxes for listing.
 
@@ -676,9 +819,12 @@ class TestBoxLogic(ModelLogicBase):
             def __init__(self):
                 TestBoxDataEx.__init__(self);
                 self.tsCurrent = None;  # CURRENT_TIMESTAMP
-                self.oStatus   = None;  # type: TestBoxStatusData
+                self.oStatus   = None   # type: TestBoxStatusData
 
         from testmanager.core.testboxstatus import TestBoxStatusData;
+
+        if not aiSortColumns:
+            aiSortColumns = [self.kiSortColumn_sName,];
 
         if tsNow is None:
             self._oDb.execute('SELECT   TestBoxesWithStrings.*,\n'
@@ -687,7 +833,7 @@ class TestBoxLogic(ModelLogicBase):
                               '         LEFT OUTER JOIN TestBoxStatuses\n'
                               '                      ON TestBoxStatuses.idTestBox = TestBoxesWithStrings.idTestBox\n'
                               'WHERE    TestBoxesWithStrings.tsExpire = \'infinity\'::TIMESTAMP\n'
-                              'ORDER BY TestBoxesWithStrings.sName\n'
+                              'ORDER BY ' + (', '.join([self.kdSortColumnMap[i] for i in aiSortColumns])) + '\n'
                               'LIMIT %s OFFSET %s\n'
                               , (cMaxRows, iStart,));
         else:
@@ -698,7 +844,7 @@ class TestBoxLogic(ModelLogicBase):
                               '                      ON TestBoxStatuses.idTestBox = TestBoxesWithStrings.idTestBox\n'
                               'WHERE    tsExpire     > %s\n'
                               '     AND tsEffective <= %s\n'
-                              'ORDER BY TestBoxesWithStrings.sName\n'
+                              'ORDER BY ' + (', '.join([self.kdSortColumnMap[i] for i in aiSortColumns])) + '\n'
                               'LIMIT %s OFFSET %s\n'
                               , ( tsNow, tsNow, cMaxRows, iStart,));
 
@@ -711,7 +857,50 @@ class TestBoxLogic(ModelLogicBase):
             aoRows.append(oTestBox);
         return aoRows;
 
-    def fetchForChangeLog(self, idTestBox, iStart, cMaxRows, tsNow): # pylint: disable=R0914
+    def fetchForSchedGroup(self, idSchedGroup, tsNow, aiSortColumns = None):
+        """
+        Fetches testboxes for listing.
+
+        Returns an array (list) of TestBoxDataForSchedGroup items, empty list if none.
+
+        Raises exception on error.
+        """
+        if not aiSortColumns:
+            aiSortColumns = [self.kiSortColumn_sName,];
+        asSortColumns = [self.kdSortColumnMap[i] for i in aiSortColumns];
+        asSortColumns.append('TestBoxesInSchedGroups.idTestBox');
+
+        if tsNow is None:
+            self._oDb.execute('''
+SELECT  TestBoxesInSchedGroups.*,
+        TestBoxesWithStrings.*
+FROM    TestBoxesInSchedGroups
+        LEFT OUTER JOIN TestBoxesWithStrings
+                     ON TestBoxesWithStrings.idTestBox = TestBoxesInSchedGroups.idTestBox
+                    AND TestBoxesWithStrings.tsExpire  = 'infinity'::TIMESTAMP
+WHERE   TestBoxesInSchedGroups.idSchedGroup = %s
+    AND TestBoxesInSchedGroups.tsExpire     = 'infinity'::TIMESTAMP
+ORDER BY ''' + ', '.join(asSortColumns), (idSchedGroup, ));
+        else:
+            self._oDb.execute('''
+SELECT  TestBoxesInSchedGroups.*,
+        TestBoxesWithStrings.*
+FROM    TestBoxesInSchedGroups
+        LEFT OUTER JOIN TestBoxesWithStrings
+                     ON TestBoxesWithStrings.idTestBox    = TestBoxesInSchedGroups.idTestBox
+                    AND TestBoxesWithStrings.tsExpire     > %s
+                    AND TestBoxesWithStrings.tsEffective <= %s
+WHERE   TestBoxesInSchedGroups.idSchedGroup = %s
+    AND TestBoxesInSchedGroups.tsExpire     > %s
+    AND TestBoxesInSchedGroups.tsEffective <= %s
+ORDER BY ''' + ', '.join(asSortColumns), (tsNow, tsNow, idSchedGroup, tsNow, tsNow, ));
+
+        aoRows = [];
+        for aoOne in self._oDb.fetchAll():
+            aoRows.append(TestBoxDataForSchedGroup().initFromDbRow(aoOne));
+        return aoRows;
+
+    def fetchForChangeLog(self, idTestBox, iStart, cMaxRows, tsNow): # pylint: disable=too-many-locals
         """
         Fetches change log entries for a testbox.
 
@@ -748,11 +937,14 @@ class TestBoxLogic(ModelLogicBase):
                     oOldAttr = getattr(oOld, sAttr);
                     oNewAttr = getattr(oNew, sAttr);
                     if oOldAttr != oNewAttr:
-                        aoChanges.append(AttributeChangeEntry(sAttr, oNewAttr, oOldAttr, str(oNewAttr), str(oOldAttr)));
+                        if sAttr == 'sReport':
+                            aoChanges.append(AttributeChangeEntryPre(sAttr, oNewAttr, oOldAttr, str(oNewAttr), str(oOldAttr)));
+                        else:
+                            aoChanges.append(AttributeChangeEntry(sAttr, oNewAttr, oOldAttr, str(oNewAttr), str(oOldAttr)));
             aoEntries.append(ChangeLogEntry(oNew.uidAuthor, None, oNew.tsEffective, oNew.tsExpire, oNew, oOld, aoChanges));
 
         # If we're at the end of the log, add the initial entry.
-        if len(aoRows) <= cMaxRows and len(aoRows) > 0:
+        if len(aoRows) <= cMaxRows and aoRows:
             oNew = aoRows[-1];
             aoEntries.append(ChangeLogEntry(oNew.uidAuthor, None, oNew.tsEffective, oNew.tsExpire, oNew, None, []));
 
@@ -768,10 +960,10 @@ class TestBoxLogic(ModelLogicBase):
         Raises exception on invalid input.
         """
         dDataErrors = oData.validateAndConvert(self._oDb, enmValidateFor);
-        if len(dDataErrors) > 0:
+        if dDataErrors:
             raise TMInvalidData('TestBoxLogic.addEntry: %s' % (dDataErrors,));
         if isinstance(oData, TestBoxDataEx):
-            if len(oData.aoInSchedGroups):
+            if oData.aoInSchedGroups:
                 sSchedGrps = ', '.join('(%s)' % oCur.idSchedGroup for oCur in oData.aoInSchedGroups);
                 self._oDb.execute('SELECT   SchedGroupIDs.idSchedGroup\n'
                                   'FROM     (VALUES ' + sSchedGrps + ' ) AS SchedGroupIDs(idSchedGroup)\n'
@@ -780,7 +972,7 @@ class TestBoxLogic(ModelLogicBase):
                                   '                         AND SchedGroups.tsExpire = \'infinity\'::TIMESTAMP\n'
                                   'WHERE    SchedGroups.idSchedGroup IS NULL\n');
                 aaoRows = self._oDb.fetchAll();
-                if len(aaoRows) > 0:
+                if aaoRows:
                     raise TMInvalidData('TestBoxLogic.addEntry missing scheduling groups: %s'
                                         % (', '.join(str(aoRow[0]) for aoRow in aaoRows),));
         return None;
@@ -910,7 +1102,7 @@ class TestBoxLogic(ModelLogicBase):
         return True;
 
 
-    def updateOnSignOn(self, idTestBox, idGenTestBox, sTestBoxAddr, sOs, sOsVersion, # pylint: disable=R0913,R0914
+    def updateOnSignOn(self, idTestBox, idGenTestBox, sTestBoxAddr, sOs, sOsVersion, # pylint: disable=too-many-arguments,too-many-locals
                        sCpuVendor, sCpuArch, sCpuName, lCpuRevision, cCpus, fCpuHwVirt, fCpuNestedPaging, fCpu64BitGuest,
                        fChipsetIoMmu, fRawMode, cMbMemory, cMbScratch, sReport, iTestBoxScriptRev, iPythonHexVersion):
         """
@@ -960,7 +1152,8 @@ class TestBoxLogic(ModelLogicBase):
         """
         self._oDb.execute('SELECT   *\n'
                           'FROM     TestBoxesWithStrings\n'
-                          'WHERE    tsExpire=\'infinity\'::timestamp;')
+                          'WHERE    tsExpire=\'infinity\'::timestamp\n'
+                          'ORDER BY sName')
 
         aaoRows = self._oDb.fetchAll()
         aoRet = []
@@ -991,7 +1184,7 @@ class TestBoxLogic(ModelLogicBase):
             if self._oDb.getRowCount() == 0:
                 # Maybe it was deleted, try get the last entry.
                 self._oDb.execute('SELECT   TestBoxesWithStrings.*\n'
-                                  'FROM     TestBoxes\n'
+                                  'FROM     TestBoxesWithStrings\n'
                                   'WHERE    idTestBox = %s\n'
                                   'ORDER BY tsExpire DESC\n'
                                   'LIMIT 1\n'
@@ -1050,8 +1243,6 @@ class TestBoxLogic(ModelLogicBase):
                             uidAuthor = uidAuthor, fCommit = fCommit, sComment = sComment);
         except TMInFligthCollision:
             return False;
-        except:
-            raise;
         return True;
 
 
@@ -1074,7 +1265,7 @@ class TestBoxLogic(ModelLogicBase):
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class TestBoxDataTestCase(ModelDataBaseTestCase):
     def setUp(self):
         self.aoSamples = [TestBoxData(),];

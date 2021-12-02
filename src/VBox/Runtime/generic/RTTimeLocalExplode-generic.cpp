@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTTimeLocalExplode-generic.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Time, generic RTTimeLocalExplode.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,11 +34,14 @@
 
 RTDECL(PRTTIME) RTTimeLocalExplode(PRTTIME pTime, PCRTTIMESPEC pTimeSpec)
 {
-    pTime = RTTimeExplode(pTime, pTimeSpec);
+    RTTIMESPEC LocalTime = *pTimeSpec;
+    int64_t cNsUtcOffset = RTTimeLocalDeltaNano(); /**< @todo this is obviously wrong. Need RTTimeLocalDeltaNanoFor(pTimeSpec); */
+    RTTimeSpecAddNano(&LocalTime, cNsUtcOffset);
+    pTime = RTTimeExplode(pTime, &LocalTime);
     if (pTime)
     {
         pTime->fFlags = (pTime->fFlags & ~RTTIME_FLAGS_TYPE_MASK) | RTTIME_FLAGS_TYPE_LOCAL;
-        pTime->offZone = RTTimeLocalDeltaNano() / (UINT64_C(1000000000)*3600); /** @todo this is obviously wrong. Need RTTimeLocalDeltaNanoFor(pTimeSpec); */
+        pTime->offUTC = cNsUtcOffset / RT_NS_1MIN;
     }
     return pTime;
 }

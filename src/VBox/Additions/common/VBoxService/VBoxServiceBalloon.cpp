@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxServiceBalloon.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxService - Memory Ballooning.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -49,11 +49,13 @@
 #include <iprt/system.h>
 #include <iprt/thread.h>
 #include <iprt/time.h>
+#include <VBox/err.h>
 #include <VBox/VBoxGuestLib.h>
 #include "VBoxServiceInternal.h"
 #include "VBoxServiceUtils.h"
 
 #ifdef RT_OS_LINUX
+# include <iprt/param.h>
 # include <sys/mman.h>
 # ifndef MADV_DONTFORK
 #  define MADV_DONTFORK 10

@@ -1,14 +1,8 @@
 /** @file
   The implementation of iSCSI protocol based on RFC3720.
 
-Copyright (c) 2004 - 2014, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2004 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -138,7 +132,11 @@ IScsiConnLogin (
   //
   // Start the timer, and wait Timeout seconds to establish the TCP connection.
   //
-  Status = gBS->SetTimer (Conn->TimeoutEvent, TimerRelative, Timeout * TICKS_PER_MS);
+  Status = gBS->SetTimer (
+                  Conn->TimeoutEvent,
+                  TimerRelative,
+                  MultU64x32 (Timeout, TICKS_PER_MS)
+                  );
   if (EFI_ERROR (Status)) {
     return Status;
   }
@@ -250,6 +248,23 @@ IScsiCreateConnection (
   Conn->MaxRecvDataSegmentLength  = DEFAULT_MAX_RECV_DATA_SEG_LEN;
   Conn->HeaderDigest              = IScsiDigestNone;
   Conn->DataDigest                = IScsiDigestNone;
+
+  if (NvData->DnsMode) {
+    //
+    // perform dns process if target address expressed by domain name.
+    //
+    if (!Conn->Ipv6Flag) {
+      Status = IScsiDns4 (Private->Image, Private->Controller, NvData);
+    } else {
+      Status = IScsiDns6 (Private->Image, Private->Controller, NvData);
+    }
+
+    if (EFI_ERROR(Status)) {
+      DEBUG ((EFI_D_ERROR, "The configuration of Target address or DNS server address is invalid!\n"));
+      FreePool (Conn);
+      return NULL;
+    }
+  }
 
   if (!Conn->Ipv6Flag) {
     Tcp4IoConfig = &TcpIoConfig.Tcp4IoConfigData;
@@ -423,14 +438,14 @@ IScsiSessionLogin (
   VOID              *Tcp;
   EFI_GUID          *ProtocolGuid;
   UINT8             RetryCount;
-  BOOLEAN           MediaPresent;
+  EFI_STATUS        MediaStatus;
 
   //
   // Check media status before session login.
   //
-  MediaPresent = TRUE;
-  NetLibDetectMedia (Session->Private->Controller, &MediaPresent);
-  if (!MediaPresent) {
+  MediaStatus = EFI_SUCCESS;
+  NetLibDetectMediaWaitTimeout (Session->Private->Controller, ISCSI_CHECK_MEDIA_LOGIN_WAITING_TIME, &MediaStatus);
+  if (MediaStatus != EFI_SUCCESS) {
     return EFI_NO_MEDIA;
   }
 
@@ -453,7 +468,7 @@ IScsiSessionLogin (
     IScsiAttatchConnection (Session, Conn);
 
     //
-    // Login througth the newly created connection.
+    // Login through the newly created connection.
     //
     Status = IScsiConnLogin (Conn, Session->ConfigData->SessionConfigData.ConnectTimeout);
     if (EFI_ERROR (Status)) {
@@ -731,7 +746,10 @@ IScsiPrepareLoginReq (
   }
 
   LoginReq = (ISCSI_LOGIN_REQUEST *) NetbufAllocSpace (Nbuf, sizeof (ISCSI_LOGIN_REQUEST), NET_BUF_TAIL);
-  ASSERT (LoginReq != NULL);
+  if (LoginReq == NULL) {
+    NetbufFree (Nbuf);
+    return NULL;
+  }
   ZeroMem (LoginReq, sizeof (ISCSI_LOGIN_REQUEST));
 
   //
@@ -747,7 +765,7 @@ IScsiPrepareLoginReq (
   LoginReq->CmdSN             = HTONL (Session->CmdSN);
 
   //
-  // For the first Login Request on a coonection this is ExpStatSN for the
+  // For the first Login Request on a connection this is ExpStatSN for the
   // old connection, and this field is only valid if the Login Request restarts
   // a connection.
   // For subsequent Login Requests it is used to acknowledge the Login Responses
@@ -779,7 +797,7 @@ IScsiPrepareLoginReq (
 
   case ISCSI_LOGIN_OPERATIONAL_NEGOTIATION:
     //
-    // Only negotiate the paramter once.
+    // Only negotiate the parameter once.
     //
     if (!Conn->ParamNegotiated) {
       IScsiFillOpParams (Conn, Nbuf);
@@ -923,7 +941,7 @@ IScsiProcessLoginRsp (
     // A Login Response with the C bit set to 1 MUST have the T bit set to 0.
     // The CSG in the Login Response MUST be the same with the I-end of this connection.
     // The T bit can't be 1 if the last Login Response sent by the initiator doesn't
-    // initiate the transistion.
+    // initiate the transition.
     // The NSG MUST be the same with the I-end of this connection if Transit is required.
     // The ISID in the Login Response MUST be the same with this session.
     //
@@ -1062,12 +1080,13 @@ IScsiUpdateTargetAddress (
   IN     UINT32                Len
   )
 {
-  LIST_ENTRY      *KeyValueList;
-  CHAR8           *TargetAddress;
-  CHAR8           *IpStr;
-  EFI_STATUS      Status;
-  UINTN           Number;
-  UINT8           IpMode;
+  LIST_ENTRY                   *KeyValueList;
+  CHAR8                        *TargetAddress;
+  CHAR8                        *IpStr;
+  EFI_STATUS                   Status;
+  UINTN                        Number;
+  UINT8                        IpMode;
+  ISCSI_SESSION_CONFIG_NVDATA  *NvData;
 
   KeyValueList = IScsiBuildKeyValueList (Data, Len);
   if (KeyValueList == NULL) {
@@ -1075,6 +1094,7 @@ IScsiUpdateTargetAddress (
   }
 
   Status = EFI_NOT_FOUND;
+  NvData = &Session->ConfigData->SessionConfigData;
 
   while (TRUE) {
     TargetAddress = IScsiGetValueByKeyFromList (KeyValueList, ISCSI_KEY_TARGET_ADDRESS);
@@ -1082,27 +1102,63 @@ IScsiUpdateTargetAddress (
       break;
     }
 
-    if (!NET_IS_DIGIT (TargetAddress[0])) {
+    //
+    // RFC 3720 defines format of the TargetAddress=domainname[:port][,portal-group-tag]
+    // The domainname can be specified as either a DNS host name, adotted-decimal IPv4 address,
+    // or a bracketed IPv6 address as specified in [RFC2732].
+    //
+    if (NET_IS_DIGIT (TargetAddress[0])) {
       //
-      // The domainname of the target may be presented in three formats: a DNS host name,
-      // a dotted-decimal IPv4 address, or a bracketed IPv6 address. Only accept dotted
-      // IPv4 address.
+      // The domainname of the target is presented in a dotted-decimal IPv4 address format.
       //
-      continue;
+      IpStr = TargetAddress;
+
+      while ((*TargetAddress != '\0') && (*TargetAddress != ':') && (*TargetAddress != ',')) {
+        //
+        // NULL, ':', or ',' ends the IPv4 string.
+        //
+        TargetAddress++;
+      }
+    } else if (*TargetAddress == ISCSI_REDIRECT_ADDR_START_DELIMITER){
+      //
+      // The domainname of the target is presented in a bracketed IPv6 address format.
+      //
+      TargetAddress ++;
+      IpStr = TargetAddress;
+      while ((*TargetAddress != '\0') && (*TargetAddress != ISCSI_REDIRECT_ADDR_END_DELIMITER)) {
+        //
+        // ']' ends the IPv6 string.
+        //
+        TargetAddress++;
+      }
+
+      if (*TargetAddress != ISCSI_REDIRECT_ADDR_END_DELIMITER) {
+        continue;
+      }
+
+      *TargetAddress = '\0';
+      TargetAddress ++;
+
+    } else {
+      //
+      // The domainname of the target is presented in the format of a DNS host name.
+      //
+      IpStr = TargetAddress;
+
+      while ((*TargetAddress != '\0') && (*TargetAddress != ':') && (*TargetAddress != ',')) {
+        TargetAddress++;
+      }
+      NvData->DnsMode = TRUE;
     }
 
-    IpStr = TargetAddress;
-
-    while ((*TargetAddress != 0) && (*TargetAddress != ':') && (*TargetAddress != ',')) {
-      //
-      // NULL, ':', or ',' ends the IPv4 string.
-      //
-      TargetAddress++;
-    }
+    //
+    // Save the original user setting which specifies the proxy/virtual iSCSI target.
+    //
+    NvData->OriginalTargetPort = NvData->TargetPort;
 
     if (*TargetAddress == ',') {
       //
-      // Comma and the portal group tag MUST be ommitted if the TargetAddress is sent
+      // Comma and the portal group tag MUST be omitted if the TargetAddress is sent
       // as the result of a redirection.
       //
       continue;
@@ -1115,33 +1171,51 @@ IScsiUpdateTargetAddress (
       if (Number > 0xFFFF) {
         continue;
       } else {
-        Session->ConfigData->SessionConfigData.TargetPort = (UINT16) Number;
+        NvData->TargetPort = (UINT16) Number;
       }
     } else {
       //
-      // The string only contains the IPv4 address. Use the well-known port.
+      // The string only contains the Target address. Use the well-known port.
       //
-      Session->ConfigData->SessionConfigData.TargetPort = ISCSI_WELL_KNOWN_PORT;
+      NvData->TargetPort = ISCSI_WELL_KNOWN_PORT;
     }
+
+    //
+    // Save the original user setting which specifies the proxy/virtual iSCSI target.
+    //
+    CopyMem (&NvData->OriginalTargetIp, &NvData->TargetIp, sizeof (EFI_IP_ADDRESS));
+
     //
     // Update the target IP address.
     //
-    if (Session->ConfigData->SessionConfigData.IpMode < IP_MODE_AUTOCONFIG) {
-      IpMode = Session->ConfigData->SessionConfigData.IpMode;
+    if (NvData->IpMode < IP_MODE_AUTOCONFIG) {
+      IpMode = NvData->IpMode;
     } else {
       IpMode = Session->ConfigData->AutoConfigureMode;
     }
 
-    Status = IScsiAsciiStrToIp (
-               IpStr,
-               IpMode,
-               &Session->ConfigData->SessionConfigData.TargetIp
-               );
-
-    if (EFI_ERROR (Status)) {
-      continue;
+    if (NvData->DnsMode) {
+      //
+      // Target address is expressed as URL format, just save it and
+      // do DNS resolution when creating a TCP connection.
+      //
+      if (AsciiStrSize (IpStr) > sizeof (Session->ConfigData->SessionConfigData.TargetUrl)){
+        return EFI_INVALID_PARAMETER;
+      }
+      CopyMem (&Session->ConfigData->SessionConfigData.TargetUrl, IpStr, AsciiStrSize (IpStr));
     } else {
-      break;
+      Status = IScsiAsciiStrToIp (
+                 IpStr,
+                 IpMode,
+                 &Session->ConfigData->SessionConfigData.TargetIp
+                 );
+
+      if (EFI_ERROR (Status)) {
+        continue;
+      } else {
+        NvData->RedirectFlag = TRUE;
+        break;
+      }
     }
   }
 
@@ -1245,7 +1319,10 @@ IScsiReceivePdu (
   }
 
   Header = NetbufAllocSpace (PduHdr, Len, NET_BUF_TAIL);
-  ASSERT (Header != NULL);
+  if (Header == NULL) {
+    Status = EFI_OUT_OF_RESOURCES;
+    goto ON_EXIT;
+  }
   InsertTailList (NbufList, &PduHdr->List);
 
   //
@@ -1394,7 +1471,7 @@ ON_EXIT:
 
   @param[in, out]  Conn          The connection in iSCSI login.
 
-  @retval EFI_SUCCESS          The parmeter check is passed and negotiation is finished.
+  @retval EFI_SUCCESS          The parameter check is passed and negotiation is finished.
   @retval EFI_PROTOCOL_ERROR   Some kind of iSCSI protocol error occurred.
   @retval EFI_OUT_OF_RESOURCES Failed to allocate memory.
 
@@ -1469,7 +1546,7 @@ IScsiCheckOpParams (
     goto ON_ERROR;
   }
   //
-  // ErrorRecoveryLevel: result fuction is Minimum.
+  // ErrorRecoveryLevel: result function is Minimum.
   //
   Value = IScsiGetValueByKeyFromList (KeyValueList, ISCSI_KEY_ERROR_RECOVERY_LEVEL);
   if (Value == NULL) {
@@ -1513,7 +1590,7 @@ IScsiCheckOpParams (
     Conn->MaxRecvDataSegmentLength = (UINT32) IScsiNetNtoi (Value);
   }
   //
-  // MaxBurstLength: result funtion is Mininum.
+  // MaxBurstLength: result function is Minimum.
   //
   Value = IScsiGetValueByKeyFromList (KeyValueList, ISCSI_KEY_MAX_BURST_LENGTH);
   if (Value == NULL) {
@@ -2014,39 +2091,6 @@ IScsiDelTcb (
 
 
 /**
-  Find the task control block by the initator task tag.
-
-  @param[in]  TcbList         The tcb list.
-  @param[in]  InitiatorTaskTag The initiator task tag.
-
-  @return The task control block found.
-  @retval NULL The task control block cannot be found.
-
-**/
-ISCSI_TCB *
-IScsiFindTcbByITT (
-  IN LIST_ENTRY      *TcbList,
-  IN UINT32          InitiatorTaskTag
-  )
-{
-  ISCSI_TCB       *Tcb;
-  LIST_ENTRY      *Entry;
-
-  Tcb = NULL;
-
-  NET_LIST_FOR_EACH (Entry, TcbList) {
-    Tcb = NET_LIST_USER_STRUCT (Entry, ISCSI_TCB, Link);
-
-    if (Tcb->InitiatorTaskTag == InitiatorTaskTag) {
-      break;
-    }
-  }
-
-  return Tcb;
-}
-
-
-/**
   Create a data segment, pad it, and calculate the CRC if needed.
 
   @param[in]  Data       The data to fill into the data segment.
@@ -2093,7 +2137,7 @@ IScsiNewDataSegment (
 
   @param[in]  Packet The EXT SCSI PASS THRU request packet containing the SCSI command.
   @param[in]  Lun    The LUN.
-  @param[in]  Tcb    The tcb assocated with this SCSI command.
+  @param[in]  Tcb    The tcb associated with this SCSI command.
 
   @return The  created iSCSI SCSI command PDU.
   @retval NULL Other errors as indicated.
@@ -2205,7 +2249,7 @@ IScsiNewScsiCmdPdu (
 
   if (Session->ImmediateData && (Packet->OutTransferLength != 0)) {
     //
-    // Send immediate data in this SCSI Command PDU. The length of the immeidate
+    // Send immediate data in this SCSI Command PDU. The length of the immediate
     // data is the minimum of FirstBurstLength, the data length to be xfered, and
     // the MaxRecvdataSegmentLength on this connection.
     //
@@ -2316,7 +2360,10 @@ IScsiNewDataOutPdu (
   InsertTailList (NbufList, &PduHdr->List);
 
   DataOutHdr  = (ISCSI_SCSI_DATA_OUT *) NetbufAllocSpace (PduHdr, sizeof (ISCSI_SCSI_DATA_OUT), NET_BUF_TAIL);
-  ASSERT (DataOutHdr != NULL);
+  if (DataOutHdr == NULL) {
+    IScsiFreeNbufList (NbufList);
+    return NULL;
+  }
   XferContext = &Tcb->XferContext;
 
   ZeroMem (DataOutHdr, sizeof (ISCSI_SCSI_DATA_OUT));
@@ -2447,7 +2494,7 @@ ON_EXIT:
   @param[in]  Lun             The LUN the data will be sent to.
   @param[in]  Tcb             The task control block.
 
-  @retval EFI_SUCCES           The data is sent out to the LUN.
+  @retval EFI_SUCCESS          The data is sent out to the LUN.
   @retval EFI_OUT_OF_RESOURCES Failed to allocate memory.
   @retval Others               Other errors as indicated.
 
@@ -2500,9 +2547,9 @@ IScsiSendDataOutPduSequence (
   @param[in]        Tcb      The task control block.
   @param[in, out]   Packet   The EXT SCSI PASS THRU request packet.
 
-  @retval EFI_SUCCES           The check on the Data IN PDU is passed and some update
+  @retval EFI_SUCCESS          The check on the Data IN PDU is passed and some update
                                actions are taken.
-  @retval EFI_PROTOCOL_ERROR   Some kind of iSCSI protocol errror occurred.
+  @retval EFI_PROTOCOL_ERROR   Some kind of iSCSI protocol error occurred.
   @retval EFI_BAD_BUFFER_SIZEE The buffer was not the proper size for the request.
   @retval Others               Other errors as indicated.
 
@@ -2592,8 +2639,8 @@ IScsiOnDataInRcvd (
   @param[in]       Lun       The Lun.
   @param[in, out]  Packet    The EXT SCSI PASS THRU request packet.
 
-  @retval EFI_SUCCES         The R2T PDU is valid and the solicited data is sent out.
-  @retval EFI_PROTOCOL_ERROR Some kind of iSCSI protocol errror occurred.
+  @retval EFI_SUCCESS        The R2T PDU is valid and the solicited data is sent out.
+  @retval EFI_PROTOCOL_ERROR Some kind of iSCSI protocol error occurred.
   @retval Others             Other errors as indicated.
 
 **/
@@ -2660,8 +2707,8 @@ IScsiOnR2TRcvd (
   @param[in]       Tcb      The task control block.
   @param[in, out]  Packet   The EXT SCSI PASS THRU request packet.
 
-  @retval EFI_SUCCES         The Response PDU is processed.
-  @retval EFI_PROTOCOL_ERROR Some kind of iSCSI protocol errror occurred.
+  @retval EFI_SUCCESS        The Response PDU is processed.
+  @retval EFI_PROTOCOL_ERROR Some kind of iSCSI protocol error occurred.
   @retval EFI_BAD_BUFFER_SIZEE The buffer was not the proper size for the request.
   @retval Others             Other errors as indicated.
 
@@ -2768,9 +2815,9 @@ IScsiOnScsiRspRcvd (
   @param[in]  Pdu            The NOP In PDU received.
   @param[in]  Tcb            The task control block.
 
-  @retval EFI_SUCCES         The NOP In PDU is processed and the related sequence
+  @retval EFI_SUCCESS        The NOP In PDU is processed and the related sequence
                              numbers are updated.
-  @retval EFI_PROTOCOL_ERROR Some kind of iSCSI protocol errror occurred.
+  @retval EFI_PROTOCOL_ERROR Some kind of iSCSI protocol error occurred.
 
 **/
 EFI_STATUS
@@ -2817,7 +2864,7 @@ IScsiOnNopInRcvd (
   @param[in, out]  Packet    The request packet containing IO request, SCSI command
                              buffer and buffers to read/write.
 
-  @retval EFI_SUCCES           The SCSI command is executed and the result is updated to
+  @retval EFI_SUCCESS          The SCSI command is executed and the result is updated to
                                the Packet.
   @retval EFI_DEVICE_ERROR     Session state was not as required.
   @retval EFI_OUT_OF_RESOURCES Failed to allocate memory.

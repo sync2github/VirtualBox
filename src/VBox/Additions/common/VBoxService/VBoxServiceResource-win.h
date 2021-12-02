@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxServiceResource-win.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxService - Guest Additions Service, resource IDs.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,5 +15,13 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#ifndef GA_INCLUDED_SRC_common_VBoxService_VBoxServiceResource_win_h
+#define GA_INCLUDED_SRC_common_VBoxService_VBoxServiceResource_win_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
 #define IDI_VIRTUALBOX 101
+
+#endif /* !GA_INCLUDED_SRC_common_VBoxService_VBoxServiceResource_win_h */
 

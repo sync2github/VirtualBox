@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # Sub-Makefile for the VirtualBox Guest/Host part
 #
 
 #
-# Copyright (C) 2008-2016 Oracle Corporation
+# Copyright (C) 2008-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -19,20 +19,16 @@ SUB_DEPTH = ../../..
 include $(KBUILD_PATH)/subheader.kmk
 
 # Include sub-makefile(s).
-ifdef VBOX_WITH_CROGL
- include $(PATH_SUB_CURRENT)/OpenGL/Makefile.kmk
-endif
-
 ifdef VBOX_WITH_HGSMI
  include $(PATH_SUB_CURRENT)/HGSMI/Makefile.kmk
 endif
 
-ifdef VBOX_WITH_HGCM
- include $(PATH_SUB_CURRENT)/SharedClipboard/Makefile.kmk
-endif
-
 ifdef VBOX_WITH_DRAG_AND_DROP
  include $(PATH_SUB_CURRENT)/DragAndDrop/Makefile.kmk
+endif
+
+ifdef VBOX_WITH_HGCM
+ include $(PATH_SUB_CURRENT)/SharedClipboard/Makefile.kmk
 endif
 
 include $(FILE_KBUILD_SUB_FOOTER)

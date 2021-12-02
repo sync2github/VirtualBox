@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxHeadless.cpp 92067 2021-10-26 08:27:22Z vboxsync $ */
 /** @file
  * VBoxHeadless - The VirtualBox Headless frontend for running VMs on servers.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,15 +35,17 @@ using namespace com;
 #include <iprt/buildconfig.h>
 #include <iprt/ctype.h>
 #include <iprt/initterm.h>
+#include <iprt/message.h>
+#include <iprt/semaphore.h>
 #include <iprt/path.h>
 #include <iprt/stream.h>
 #include <iprt/ldr.h>
 #include <iprt/getopt.h>
 #include <iprt/env.h>
 #include <VBox/err.h>
-#include <VBox/VBoxVideo.h>
+#include <VBoxVideo.h>
 
-#ifdef VBOX_WITH_VPX
+#ifdef VBOX_WITH_RECORDING
 # include <cstdlib>
 # include <cerrno>
 # include <iprt/process.h>
@@ -55,10 +57,12 @@ using namespace com;
 # include <sys/mman.h>
 #endif
 
-//#define VBOX_WITH_SAVESTATE_ON_SIGNAL
-#ifdef VBOX_WITH_SAVESTATE_ON_SIGNAL
+#if !defined(RT_OS_WINDOWS)
 #include <signal.h>
+static void HandleSignal(int sig);
 #endif
+
+#include "PasswordInput.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -73,6 +77,10 @@ using namespace com;
 /* global weak references (for event handlers) */
 static IConsole *gConsole = NULL;
 static NativeEventQueue *gEventQ = NULL;
+
+/* keep this handy for messages */
+static com::Utf8Str g_strVMName;
+static com::Utf8Str g_strVMUUID;
 
 /* flag whether frontend should terminate */
 static volatile bool g_fTerminateFE = false;
@@ -386,64 +394,15 @@ typedef ListenerImpl<ConsoleEventListener> ConsoleEventListenerImpl;
 VBOX_LISTENER_DECLARE(VirtualBoxClientEventListenerImpl)
 VBOX_LISTENER_DECLARE(ConsoleEventListenerImpl)
 
-#ifdef VBOX_WITH_SAVESTATE_ON_SIGNAL
-static void SaveState(int sig)
+#if !defined(RT_OS_WINDOWS)
+static void
+HandleSignal(int sig)
 {
-    ComPtr <IProgress> progress = NULL;
-
-/** @todo Deal with nested signals, multithreaded signal dispatching (esp. on windows),
- * and multiple signals (both SIGINT and SIGTERM in some order).
- * Consider processing the signal request asynchronously since there are lots of things
- * which aren't safe (like RTPrintf and printf IIRC) in a signal context. */
-
-    RTPrintf("Signal received, saving state.\n");
-
-    HRESULT rc = gConsole->SaveState(progress.asOutParam());
-    if (FAILED(rc))
-    {
-        RTPrintf("Error saving state! rc = 0x%x\n", rc);
-        return;
-    }
-    Assert(progress);
-    LONG cPercent = 0;
-
-    RTPrintf("0%%");
-    RTStrmFlush(g_pStdOut);
-    for (;;)
-    {
-        BOOL fCompleted = false;
-        rc = progress->COMGETTER(Completed)(&fCompleted);
-        if (FAILED(rc) || fCompleted)
-            break;
-        ULONG cPercentNow;
-        rc = progress->COMGETTER(Percent)(&cPercentNow);
-        if (FAILED(rc))
-            break;
-        if ((cPercentNow / 10) != (cPercent / 10))
-        {
-            cPercent = cPercentNow;
-            RTPrintf("...%d%%", cPercentNow);
-            RTStrmFlush(g_pStdOut);
-        }
-
-        /* wait */
-        rc = progress->WaitForCompletion(100);
-    }
-
-    HRESULT lrc;
-    rc = progress->COMGETTER(ResultCode)(&lrc);
-    if (FAILED(rc))
-        lrc = ~0;
-    if (!lrc)
-    {
-        RTPrintf(" -- Saved the state successfully.\n");
-        RTThreadYield();
-    }
-    else
-        RTPrintf("-- Error saving state, lrc=%d (%#x)\n", lrc, lrc);
-
+    RT_NOREF(sig);
+    LogRel(("VBoxHeadless: received singal %d\n", sig));
+    g_fTerminateFE = true;
 }
-#endif /* VBOX_WITH_SAVESTATE_ON_SIGNAL */
+#endif /* !RT_OS_WINDOWS */
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -463,28 +422,28 @@ static void show_usage()
              "   --settingspwfile <file>           Specify a file containing the\n"
              "                                       settings password\n"
              "   -start-paused, --start-paused     Start the VM in paused state\n"
-#ifdef VBOX_WITH_VPX
-             "   -c, -capture, --capture           Record the VM screen output to a file\n"
-             "   -w, --width                       Frame width when recording\n"
-             "   -h, --height                      Frame height when recording\n"
-             "   -r, --bitrate                     Recording bit rate when recording\n"
+#ifdef VBOX_WITH_RECORDING
+             "   -c, -record, --record             Record the VM screen output to a file\n"
+             "   -w, --videowidth                  Video frame width when recording\n"
+             "   -h, --videoheight                 Video frame height when recording\n"
+             "   -r, --videobitrate                Recording bit rate when recording\n"
              "   -f, --filename                    File name when recording. The codec used\n"
-             "                                       will be chosen based on file extension\n"
+             "                                     will be chosen based on file extension\n"
 #endif
              "\n");
 }
 
-#ifdef VBOX_WITH_VPX
+#ifdef VBOX_WITH_RECORDING
 /**
  * Parse the environment for variables which can influence the VIDEOREC settings.
  * purely for backwards compatibility.
  * @param pulFrameWidth may be updated with a desired frame width
  * @param pulFrameHeight may be updated with a desired frame height
  * @param pulBitRate may be updated with a desired bit rate
- * @param ppszFileName may be updated with a desired file name
+ * @param ppszFilename may be updated with a desired file name
  */
-static void parse_environ(unsigned long *pulFrameWidth, unsigned long *pulFrameHeight,
-                          unsigned long *pulBitRate, const char **ppszFileName)
+static void parse_environ(uint32_t *pulFrameWidth, uint32_t *pulFrameHeight,
+                          uint32_t *pulBitRate, const char **ppszFilename)
 {
     const char *pszEnvTemp;
 /** @todo r=bird: This isn't up to scratch. The life time of an RTEnvGet
@@ -493,121 +452,340 @@ static void parse_environ(unsigned long *pulFrameWidth, unsigned long *pulFrameH
  *        documented code page issues.
  *
  *        Use RTEnvGetEx instead! */
-    if ((pszEnvTemp = RTEnvGet("VBOX_CAPTUREWIDTH")) != 0)
+    if ((pszEnvTemp = RTEnvGet("VBOX_RECORDWIDTH")) != 0)
     {
         errno = 0;
         unsigned long ulFrameWidth = strtoul(pszEnvTemp, 0, 10);
         if (errno != 0)
-            LogError("VBoxHeadless: ERROR: invalid VBOX_CAPTUREWIDTH environment variable", 0);
+            LogError("VBoxHeadless: ERROR: invalid VBOX_RECORDWIDTH environment variable", 0);
         else
             *pulFrameWidth = ulFrameWidth;
     }
-    if ((pszEnvTemp = RTEnvGet("VBOX_CAPTUREHEIGHT")) != 0)
+    if ((pszEnvTemp = RTEnvGet("VBOX_RECORDHEIGHT")) != 0)
     {
         errno = 0;
         unsigned long ulFrameHeight = strtoul(pszEnvTemp, 0, 10);
         if (errno != 0)
-            LogError("VBoxHeadless: ERROR: invalid VBOX_CAPTUREHEIGHT environment variable", 0);
+            LogError("VBoxHeadless: ERROR: invalid VBOX_RECORDHEIGHT environment variable", 0);
         else
             *pulFrameHeight = ulFrameHeight;
     }
-    if ((pszEnvTemp = RTEnvGet("VBOX_CAPTUREBITRATE")) != 0)
+    if ((pszEnvTemp = RTEnvGet("VBOX_RECORDBITRATE")) != 0)
     {
         errno = 0;
         unsigned long ulBitRate = strtoul(pszEnvTemp, 0, 10);
         if (errno != 0)
-            LogError("VBoxHeadless: ERROR: invalid VBOX_CAPTUREBITRATE environment variable", 0);
+            LogError("VBoxHeadless: ERROR: invalid VBOX_RECORDBITRATE environment variable", 0);
         else
             *pulBitRate = ulBitRate;
     }
-    if ((pszEnvTemp = RTEnvGet("VBOX_CAPTUREFILE")) != 0)
-        *ppszFileName = pszEnvTemp;
+    if ((pszEnvTemp = RTEnvGet("VBOX_RECORDFILE")) != 0)
+        *ppszFilename = pszEnvTemp;
 }
-#endif /* VBOX_WITH_VPX defined */
+#endif /* VBOX_WITH_RECORDING defined */
 
-static RTEXITCODE readPasswordFile(const char *pszFilename, com::Utf8Str *pPasswd)
+
+#ifdef RT_OS_WINDOWS
+
+#define MAIN_WND_CLASS L"VirtualBox Headless Interface"
+
+HINSTANCE g_hInstance = NULL;
+HWND g_hWindow = NULL;
+RTSEMEVENT g_hCanQuit;
+
+static DECLCALLBACK(int) windowsMessageMonitor(RTTHREAD ThreadSelf, void *pvUser);
+static int createWindow();
+static LRESULT CALLBACK WinMainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static void destroyWindow();
+
+
+static DECLCALLBACK(int)
+windowsMessageMonitor(RTTHREAD ThreadSelf, void *pvUser)
 {
-    size_t cbFile;
-    char szPasswd[512];
-    int vrc = VINF_SUCCESS;
-    RTEXITCODE rcExit = RTEXITCODE_SUCCESS;
-    bool fStdIn = !strcmp(pszFilename, "stdin");
-    PRTSTREAM pStrm;
-    if (!fStdIn)
-        vrc = RTStrmOpen(pszFilename, "r", &pStrm);
-    else
-        pStrm = g_pStdIn;
-    if (RT_SUCCESS(vrc))
+    RT_NOREF(ThreadSelf, pvUser);
+    int rc;
+
+    rc = createWindow();
+    if (RT_FAILURE(rc))
+        return rc;
+
+    RTSemEventCreate(&g_hCanQuit);
+
+    MSG msg;
+    BOOL b;
+    while ((b = ::GetMessage(&msg, 0, 0, 0)) > 0)
     {
-        vrc = RTStrmReadEx(pStrm, szPasswd, sizeof(szPasswd)-1, &cbFile);
-        if (RT_SUCCESS(vrc))
-        {
-            if (cbFile >= sizeof(szPasswd)-1)
+        ::TranslateMessage(&msg);
+        ::DispatchMessage(&msg);
+    }
+
+    if (b < 0)
+        LogRel(("VBoxHeadless: GetMessage failed\n"));
+
+    destroyWindow();
+    return VINF_SUCCESS;
+}
+
+
+static int
+createWindow()
+{
+    /* program instance handle */
+    g_hInstance = (HINSTANCE)::GetModuleHandle(NULL);
+    if (g_hInstance == NULL)
+    {
+        LogRel(("VBoxHeadless: failed to obtain module handle\n"));
+        return VERR_GENERAL_FAILURE;
+    }
+
+    /* window class */
+    WNDCLASS wc;
+    RT_ZERO(wc);
+
+    wc.style = CS_NOCLOSE;
+    wc.lpfnWndProc = WinMainWndProc;
+    wc.hInstance = g_hInstance;
+    wc.hbrBackground = (HBRUSH)(COLOR_BACKGROUND + 1);
+    wc.lpszClassName = MAIN_WND_CLASS;
+
+    ATOM atomWindowClass = ::RegisterClass(&wc);
+    if (atomWindowClass == 0)
+    {
+        LogRel(("VBoxHeadless: failed to register window class\n"));
+        return VERR_GENERAL_FAILURE;
+    }
+
+    /* secret window, secret garden */
+    g_hWindow = ::CreateWindowEx(0, MAIN_WND_CLASS, MAIN_WND_CLASS, 0,
+                                 0, 0, 1, 1, NULL, NULL, g_hInstance, NULL);
+    if (g_hWindow == NULL)
+    {
+        LogRel(("VBoxHeadless: failed to create window\n"));
+        return VERR_GENERAL_FAILURE;
+    }
+
+    return VINF_SUCCESS;
+}
+
+
+static void
+destroyWindow()
+{
+    if (g_hWindow == NULL)
+        return;
+
+    ::DestroyWindow(g_hWindow);
+    g_hWindow = NULL;
+
+    if (g_hInstance == NULL)
+        return;
+
+    ::UnregisterClass(MAIN_WND_CLASS, g_hInstance);
+    g_hInstance = NULL;
+}
+
+
+static LRESULT CALLBACK
+WinMainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    int rc;
+
+    LRESULT lResult = 0;
+    switch (msg)
+    {
+        case WM_QUERYENDSESSION:
+            LogRel(("VBoxHeadless: WM_QUERYENDSESSION:%s%s%s%s (0x%08lx)\n",
+                    lParam == 0                  ? " shutdown" : "",
+                    lParam & ENDSESSION_CRITICAL ? " critical" : "",
+                    lParam & ENDSESSION_LOGOFF   ? " logoff"   : "",
+                    lParam & ENDSESSION_CLOSEAPP ? " close"    : "",
+                    (unsigned long)lParam));
+
+            /* do not block windows session termination */
+            lResult = TRUE;
+            break;
+
+        case WM_ENDSESSION:
+            lResult = 0;
+            LogRel(("WM_ENDSESSION:%s%s%s%s%s (%s/0x%08lx)\n",
+                    lParam == 0                  ? " shutdown"  : "",
+                    lParam & ENDSESSION_CRITICAL ? " critical"  : "",
+                    lParam & ENDSESSION_LOGOFF   ? " logoff"    : "",
+                    lParam & ENDSESSION_CLOSEAPP ? " close"     : "",
+                    wParam == FALSE              ? " cancelled" : "",
+                    wParam ? "TRUE" : "FALSE",
+                    (unsigned long)lParam));
+            if (wParam == FALSE)
+                break;
+
+            /* tell the user what we are doing */
+            ::ShutdownBlockReasonCreate(hwnd,
+                com::BstrFmt("%s saving state",
+                             g_strVMName.c_str()).raw());
+
+            /* tell the VM to save state/power off */
+            g_fTerminateFE = true;
+            gEventQ->interruptEventQueueProcessing();
+
+            if (g_hCanQuit != NIL_RTSEMEVENT)
             {
-                RTPrintf("Provided password in file '%s' is too long\n", pszFilename);
-                rcExit = RTEXITCODE_FAILURE;
+                LogRel(("VBoxHeadless: WM_ENDSESSION: waiting for VM termination...\n"));
+
+                rc = RTSemEventWait(g_hCanQuit, RT_INDEFINITE_WAIT);
+                if (RT_SUCCESS(rc))
+                    LogRel(("VBoxHeadless: WM_ENDSESSION: done\n"));
+                else
+                    LogRel(("VBoxHeadless: WM_ENDSESSION: failed to wait for VM termination: %Rrc\n", rc));
             }
             else
             {
-                unsigned i;
-                for (i = 0; i < cbFile && !RT_C_IS_CNTRL(szPasswd[i]); i++)
-                    ;
-                szPasswd[i] = '\0';
-                *pPasswd = szPasswd;
+                LogRel(("VBoxHeadless: WM_ENDSESSION: cannot wait for VM termination\n"));
             }
+            break;
+
+        default:
+            lResult = ::DefWindowProc(hwnd, msg, wParam, lParam);
+            break;
+    }
+    return lResult;
+}
+
+
+static const char * const ctrl_event_names[] = {
+    "CTRL_C_EVENT",
+    "CTRL_BREAK_EVENT",
+    "CTRL_CLOSE_EVENT",
+    /* reserved, not used */
+    "<console control event 3>",
+    "<console control event 4>",
+    /* not sent to processes that load gdi32.dll or user32.dll */
+    "CTRL_LOGOFF_EVENT",
+    "CTRL_SHUTDOWN_EVENT",
+};
+
+
+BOOL WINAPI
+ConsoleCtrlHandler(DWORD dwCtrlType) RT_NOTHROW_DEF
+{
+    const char *signame;
+    char namebuf[48];
+    int rc;
+
+    if (dwCtrlType < RT_ELEMENTS(ctrl_event_names))
+        signame = ctrl_event_names[dwCtrlType];
+    else
+    {
+        /* should not happen, but be prepared */
+        RTStrPrintf(namebuf, sizeof(namebuf),
+                    "<console control event %lu>", (unsigned long)dwCtrlType);
+        signame = namebuf;
+    }
+    LogRel(("VBoxHeadless: got %s\n", signame));
+    RTMsgInfo("Got %s\n", signame);
+    RTMsgInfo("");
+
+    /* tell the VM to save state/power off */
+    g_fTerminateFE = true;
+    gEventQ->interruptEventQueueProcessing();
+
+    /*
+     * We don't need to wait for Ctrl-C / Ctrl-Break, but we must wait
+     * for Close, or we will be killed before the VM is saved.
+     */
+    if (g_hCanQuit != NIL_RTSEMEVENT)
+    {
+        LogRel(("VBoxHeadless: waiting for VM termination...\n"));
+
+        rc = RTSemEventWait(g_hCanQuit, RT_INDEFINITE_WAIT);
+        if (RT_FAILURE(rc))
+            LogRel(("VBoxHeadless: Failed to wait for VM termination: %Rrc\n", rc));
+    }
+
+    /* tell the system we handled it */
+    LogRel(("VBoxHeadless: ConsoleCtrlHandler: return\n"));
+    return TRUE;
+}
+#endif /* RT_OS_WINDOWS */
+
+
+/*
+ * Simplified version of showProgress() borrowed from VBoxManage.
+ * Note that machine power up/down operations are not cancelable, so
+ * we don't bother checking for signals.
+ */
+HRESULT
+showProgress(const ComPtr<IProgress> &progress)
+{
+    BOOL fCompleted = FALSE;
+    ULONG ulLastPercent = 0;
+    ULONG ulCurrentPercent = 0;
+    HRESULT hrc;
+
+    com::Bstr bstrDescription;
+    hrc = progress->COMGETTER(Description(bstrDescription.asOutParam()));
+    if (FAILED(hrc))
+    {
+        RTStrmPrintf(g_pStdErr, "Failed to get progress description: %Rhrc\n", hrc);
+        return hrc;
+    }
+
+    RTStrmPrintf(g_pStdErr, "%ls: ", bstrDescription.raw());
+    RTStrmFlush(g_pStdErr);
+
+    hrc = progress->COMGETTER(Completed(&fCompleted));
+    while (SUCCEEDED(hrc))
+    {
+        progress->COMGETTER(Percent(&ulCurrentPercent));
+
+        /* did we cross a 10% mark? */
+        if (ulCurrentPercent / 10  >  ulLastPercent / 10)
+        {
+            /* make sure to also print out missed steps */
+            for (ULONG curVal = (ulLastPercent / 10) * 10 + 10; curVal <= (ulCurrentPercent / 10) * 10; curVal += 10)
+            {
+                if (curVal < 100)
+                {
+                    RTStrmPrintf(g_pStdErr, "%u%%...", curVal);
+                    RTStrmFlush(g_pStdErr);
+                }
+            }
+            ulLastPercent = (ulCurrentPercent / 10) * 10;
         }
+
+        if (fCompleted)
+            break;
+
+        gEventQ->processEventQueue(500);
+        hrc = progress->COMGETTER(Completed(&fCompleted));
+    }
+
+    /* complete the line. */
+    LONG iRc = E_FAIL;
+    hrc = progress->COMGETTER(ResultCode)(&iRc);
+    if (SUCCEEDED(hrc))
+    {
+        if (SUCCEEDED(iRc))
+            RTStrmPrintf(g_pStdErr, "100%%\n");
+#if 0
+        else if (g_fCanceled)
+            RTStrmPrintf(g_pStdErr, "CANCELED\n");
+#endif
         else
         {
-            RTPrintf("Cannot read password from file '%s': %Rrc\n", pszFilename, vrc);
-            rcExit = RTEXITCODE_FAILURE;
+            RTStrmPrintf(g_pStdErr, "\n");
+            RTStrmPrintf(g_pStdErr, "Operation failed: %Rhrc\n", iRc);
         }
-        if (!fStdIn)
-            RTStrmClose(pStrm);
+        hrc = iRc;
     }
     else
     {
-        RTPrintf("Cannot open password file '%s' (%Rrc)\n", pszFilename, vrc);
-        rcExit = RTEXITCODE_FAILURE;
+        RTStrmPrintf(g_pStdErr, "\n");
+        RTStrmPrintf(g_pStdErr, "Failed to obtain operation result: %Rhrc\n", hrc);
     }
-
-    return rcExit;
+    RTStrmFlush(g_pStdErr);
+    return hrc;
 }
 
-static RTEXITCODE settingsPasswordFile(ComPtr<IVirtualBox> virtualBox, const char *pszFilename)
-{
-    com::Utf8Str passwd;
-    RTEXITCODE rcExit = readPasswordFile(pszFilename, &passwd);
-    if (rcExit == RTEXITCODE_SUCCESS)
-    {
-        int rc;
-        CHECK_ERROR(virtualBox, SetSettingsSecret(com::Bstr(passwd).raw()));
-        if (FAILED(rc))
-            rcExit = RTEXITCODE_FAILURE;
-    }
-
-    return rcExit;
-}
-
-
-#ifdef RT_OS_DARWIN
-/**
- * Mac OS X: Really ugly hack to bypass a set-uid check in AppKit.
- *
- * This will modify the issetugid() function to always return zero.  This must
- * be done _before_ AppKit is initialized, otherwise it will refuse to play ball
- * with us as it distrusts set-uid processes since Snow Leopard.  We, however,
- * have carefully dropped all root privileges at this point and there should be
- * no reason for any security concern here.
- */
-static void hideSetUidRootFromAppKit()
-{
-    /* Find issetguid() and make it always return 0 by modifying the code: */
-    void *pvAddr = dlsym(RTLD_DEFAULT, "issetugid");
-    int rc = mprotect((void *)((uintptr_t)pvAddr & ~(uintptr_t)0xfff), 0x2000, PROT_WRITE | PROT_READ | PROT_EXEC);
-    if (!rc)
-        ASMAtomicWriteU32((volatile uint32_t *)pvAddr, 0xccc3c031); /* xor eax, eax; ret; int3 */
-}
-#endif /* RT_OS_DARWIN */
 
 /**
  *  Entry point.
@@ -625,14 +803,14 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
     unsigned fPATM  = ~0U;
     unsigned fCSAM  = ~0U;
     unsigned fPaused = 0;
-#ifdef VBOX_WITH_VPX
-    bool fVideoRec = 0;
-    unsigned long ulFrameWidth = 800;
-    unsigned long ulFrameHeight = 600;
-    unsigned long ulBitRate = 300000; /** @todo r=bird: The COM type ULONG isn't unsigned long, it's 32-bit unsigned int. */
-    char szMpegFile[RTPATH_MAX];
-    const char *pszFileNameParam = "VBox-%d.vob";
-#endif /* VBOX_WITH_VPX */
+#ifdef VBOX_WITH_RECORDING
+    bool fRecordEnabled = false;
+    uint32_t ulRecordVideoWidth = 800;
+    uint32_t ulRecordVideoHeight = 600;
+    uint32_t ulRecordVideoRate = 300000;
+    char szRecordFilename[RTPATH_MAX];
+    const char *pszRecordFilenameTemplate = "VBox-%d.webm"; /* .webm container by default. */
+#endif /* VBOX_WITH_RECORDING */
 #ifdef RT_OS_WINDOWS
     ATL::CComModule _Module; /* Required internally by ATL (constructor records instance in global variable). */
 #endif
@@ -642,9 +820,9 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
              "(C) 2008-" VBOX_C_YEAR " " VBOX_VENDOR "\n"
              "All rights reserved.\n\n");
 
-#ifdef VBOX_WITH_VPX
+#ifdef VBOX_WITH_RECORDING
     /* Parse the environment */
-    parse_environ(&ulFrameWidth, &ulFrameHeight, &ulBitRate, &pszFileNameParam);
+    parse_environ(&ulRecordVideoWidth, &ulRecordVideoHeight, &ulRecordVideoRate, &pszRecordFilenameTemplate);
 #endif
 
     enum eHeadlessOptions
@@ -695,14 +873,14 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
         { "--nocsam", OPT_NO_CSAM, 0 },
         { "--settingspw", OPT_SETTINGSPW, RTGETOPT_REQ_STRING },
         { "--settingspwfile", OPT_SETTINGSPW_FILE, RTGETOPT_REQ_STRING },
-#ifdef VBOX_WITH_VPX
-        { "-capture", 'c', 0 },
-        { "--capture", 'c', 0 },
-        { "--width", 'w', RTGETOPT_REQ_UINT32 },
-        { "--height", 'h', RTGETOPT_REQ_UINT32 }, /* great choice of short option! */
-        { "--bitrate", 'r', RTGETOPT_REQ_UINT32 },
+#ifdef VBOX_WITH_RECORDING
+        { "-record", 'c', 0 },
+        { "--record", 'c', 0 },
+        { "--videowidth", 'w', RTGETOPT_REQ_UINT32 },
+        { "--videoheight", 'h', RTGETOPT_REQ_UINT32 }, /* great choice of short option! */
+        { "--videorate", 'r', RTGETOPT_REQ_UINT32 },
         { "--filename", 'f', RTGETOPT_REQ_STRING },
-#endif /* VBOX_WITH_VPX defined */
+#endif /* VBOX_WITH_RECORDING defined */
         { "-comment", OPT_COMMENT, RTGETOPT_REQ_STRING },
         { "--comment", OPT_COMMENT, RTGETOPT_REQ_STRING },
         { "-start-paused", OPT_PAUSED, 0 },
@@ -710,10 +888,6 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
     };
 
     const char *pcszNameOrUUID = NULL;
-
-#ifdef RT_OS_DARWIN
-    hideSetUidRootFromAppKit();
-#endif
 
     // parse the command line
     int ch;
@@ -779,25 +953,25 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
             case OPT_PAUSED:
                 fPaused = true;
                 break;
-#ifdef VBOX_WITH_VPX
+#ifdef VBOX_WITH_RECORDING
             case 'c':
-                fVideoRec = true;
+                fRecordEnabled = true;
                 break;
             case 'w':
-                ulFrameWidth = ValueUnion.u32;
+                ulRecordVideoWidth = ValueUnion.u32;
                 break;
             case 'r':
-                ulBitRate = ValueUnion.u32;
+                ulRecordVideoRate = ValueUnion.u32;
                 break;
             case 'f':
-                pszFileNameParam = ValueUnion.psz;
+                pszRecordFilenameTemplate = ValueUnion.psz;
                 break;
-#endif /* VBOX_WITH_VPX defined */
+#endif /* VBOX_WITH_RECORDING defined */
             case 'h':
-#ifdef VBOX_WITH_VPX
+#ifdef VBOX_WITH_RECORDING
                 if ((GetState.pDef->fFlags & RTGETOPT_REQ_MASK) != RTGETOPT_REQ_NOTHING)
                 {
-                    ulFrameHeight = ValueUnion.u32;
+                    ulRecordVideoHeight = ValueUnion.u32;
                     break;
                 }
 #endif
@@ -816,37 +990,37 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
         }
     }
 
-#ifdef VBOX_WITH_VPX
-    if (ulFrameWidth < 512 || ulFrameWidth > 2048 || ulFrameWidth % 2)
+#ifdef VBOX_WITH_RECORDING
+    if (ulRecordVideoWidth < 512 || ulRecordVideoWidth > 2048 || ulRecordVideoWidth % 2)
     {
-        LogError("VBoxHeadless: ERROR: please specify an even frame width between 512 and 2048", 0);
+        LogError("VBoxHeadless: ERROR: please specify an even video frame width between 512 and 2048", 0);
         return 1;
     }
-    if (ulFrameHeight < 384 || ulFrameHeight > 1536 || ulFrameHeight % 2)
+    if (ulRecordVideoHeight < 384 || ulRecordVideoHeight > 1536 || ulRecordVideoHeight % 2)
     {
-        LogError("VBoxHeadless: ERROR: please specify an even frame height between 384 and 1536", 0);
+        LogError("VBoxHeadless: ERROR: please specify an even video frame height between 384 and 1536", 0);
         return 1;
     }
-    if (ulBitRate < 300000 || ulBitRate > 1000000)
+    if (ulRecordVideoRate < 300000 || ulRecordVideoRate > 1000000)
     {
-        LogError("VBoxHeadless: ERROR: please specify an even bitrate between 300000 and 1000000", 0);
+        LogError("VBoxHeadless: ERROR: please specify an even video bitrate between 300000 and 1000000", 0);
         return 1;
     }
     /* Make sure we only have %d or %u (or none) in the file name specified */
-    char *pcPercent = (char*)strchr(pszFileNameParam, '%');
+    char *pcPercent = (char*)strchr(pszRecordFilenameTemplate, '%');
     if (pcPercent != 0 && *(pcPercent + 1) != 'd' && *(pcPercent + 1) != 'u')
     {
-        LogError("VBoxHeadless: ERROR: Only %%d and %%u are allowed in the capture file name.", -1);
+        LogError("VBoxHeadless: ERROR: Only %%d and %%u are allowed in the recording file name.", -1);
         return 1;
     }
     /* And no more than one % in the name */
     if (pcPercent != 0 && strchr(pcPercent + 1, '%') != 0)
     {
-        LogError("VBoxHeadless: ERROR: Only one format modifier is allowed in the capture file name.", -1);
+        LogError("VBoxHeadless: ERROR: Only one format modifier is allowed in the recording file name.", -1);
         return 1;
     }
-    RTStrPrintf(&szMpegFile[0], RTPATH_MAX, pszFileNameParam, RTProcSelf());
-#endif /* defined VBOX_WITH_VPX */
+    RTStrPrintf(&szRecordFilename[0], RTPATH_MAX, pszRecordFilenameTemplate, RTProcSelf());
+#endif /* defined VBOX_WITH_RECORDING */
 
     if (!pcszNameOrUUID)
     {
@@ -855,6 +1029,7 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
     }
 
     HRESULT rc;
+    int irc;
 
     rc = com::Initialize();
 #ifdef VBOX_WITH_XPCOM
@@ -932,14 +1107,23 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
             LogError("Invalid machine name or UUID!\n", rc);
             break;
         }
-        Bstr id;
-        m->COMGETTER(Id)(id.asOutParam());
+
+        Bstr bstrVMId;
+        rc = m->COMGETTER(Id)(bstrVMId.asOutParam());
         AssertComRC(rc);
         if (FAILED(rc))
             break;
+        g_strVMUUID = bstrVMId;
+
+        Bstr bstrVMName;
+        rc = m->COMGETTER(Name)(bstrVMName.asOutParam());
+        AssertComRC(rc);
+        if (FAILED(rc))
+            break;
+        g_strVMName = bstrVMName;
 
         Log(("VBoxHeadless: Opening a session with machine (id={%s})...\n",
-              Utf8Str(id).c_str()));
+             g_strVMUUID.c_str()));
 
         // set session name
         CHECK_ERROR_BREAK(session, COMSETTER(Name)(Bstr("headless").raw()));
@@ -957,16 +1141,27 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
         ComPtr<IDisplay> display;
         CHECK_ERROR_BREAK(console, COMGETTER(Display)(display.asOutParam()));
 
-#ifdef VBOX_WITH_VPX
-        if (fVideoRec)
+#ifdef VBOX_WITH_RECORDING
+        if (fRecordEnabled)
         {
-            CHECK_ERROR_BREAK(machine, COMSETTER(VideoCaptureFile)(Bstr(szMpegFile).raw()));
-            CHECK_ERROR_BREAK(machine, COMSETTER(VideoCaptureWidth)(ulFrameWidth));
-            CHECK_ERROR_BREAK(machine, COMSETTER(VideoCaptureHeight)(ulFrameHeight));
-            CHECK_ERROR_BREAK(machine, COMSETTER(VideoCaptureRate)(ulBitRate));
-            CHECK_ERROR_BREAK(machine, COMSETTER(VideoCaptureEnabled)(TRUE));
+            ComPtr<IRecordingSettings> recordingSettings;
+            CHECK_ERROR_BREAK(machine, COMGETTER(RecordingSettings)(recordingSettings.asOutParam()));
+            CHECK_ERROR_BREAK(recordingSettings, COMSETTER(Enabled)(TRUE));
+
+            SafeIfaceArray <IRecordingScreenSettings> saRecordScreenScreens;
+            CHECK_ERROR_BREAK(recordingSettings, COMGETTER(Screens)(ComSafeArrayAsOutParam(saRecordScreenScreens)));
+
+            /* Note: For now all screens have the same configuration. */
+            for (size_t i = 0; i < saRecordScreenScreens.size(); ++i)
+            {
+                CHECK_ERROR_BREAK(saRecordScreenScreens[i], COMSETTER(Enabled)(TRUE));
+                CHECK_ERROR_BREAK(saRecordScreenScreens[i], COMSETTER(Filename)(Bstr(szRecordFilename).raw()));
+                CHECK_ERROR_BREAK(saRecordScreenScreens[i], COMSETTER(VideoWidth)(ulRecordVideoWidth));
+                CHECK_ERROR_BREAK(saRecordScreenScreens[i], COMSETTER(VideoHeight)(ulRecordVideoHeight));
+                CHECK_ERROR_BREAK(saRecordScreenScreens[i], COMSETTER(VideoRate)(ulRecordVideoRate));
+            }
         }
-#endif /* defined(VBOX_WITH_VPX) */
+#endif /* defined(VBOX_WITH_RECORDING) */
 
         /* get the machine debugger (isn't necessarily available) */
         ComPtr <IMachineDebugger> machineDebugger;
@@ -1153,75 +1348,109 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
 
         Log(("VBoxHeadless: Powering up the machine...\n"));
 
+
+        /**
+         * @todo We should probably install handlers earlier so that
+         * we can undo any temporary settings we do above in case of
+         * an early signal and use RAII to ensure proper cleanup.
+         */
+#if !defined(RT_OS_WINDOWS)
+        signal(SIGPIPE, SIG_IGN);
+        signal(SIGTTOU, SIG_IGN);
+
+        struct sigaction sa;
+        RT_ZERO(sa);
+        sa.sa_handler = HandleSignal;
+        sigaction(SIGHUP,  &sa, NULL);
+        sigaction(SIGINT,  &sa, NULL);
+        sigaction(SIGTERM, &sa, NULL);
+        sigaction(SIGUSR1, &sa, NULL);
+        /* Don't touch SIGUSR2 as IPRT could be using it for RTThreadPoke(). */
+
+#else /* RT_OS_WINDOWS */
+        /*
+         * Register windows console signal handler to react to Ctrl-C,
+         * Ctrl-Break, Close, non-interactive session termination.
+         */
+        ::SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+#endif
+
+
         ComPtr <IProgress> progress;
         if (!fPaused)
             CHECK_ERROR_BREAK(console, PowerUp(progress.asOutParam()));
         else
             CHECK_ERROR_BREAK(console, PowerUpPaused(progress.asOutParam()));
 
-        /*
-         * Wait for the result because there can be errors.
-         *
-         * It's vital to process events while waiting (teleportation deadlocks),
-         * so we'll poll for the completion instead of waiting on it.
-         */
-        for (;;)
+        rc = showProgress(progress);
+        if (FAILED(rc))
         {
-            BOOL fCompleted;
-            rc = progress->COMGETTER(Completed)(&fCompleted);
-            if (FAILED(rc) || fCompleted)
-                break;
-
-            /* Process pending events, then wait for new ones. Note, this
-             * processes NULL events signalling event loop termination. */
-            gEventQ->processEventQueue(0);
-            if (!g_fTerminateFE)
-                gEventQ->processEventQueue(500);
+            com::ProgressErrorInfo info(progress);
+            if (info.isBasicAvailable())
+            {
+                RTPrintf("Error: failed to start machine. Error message: %ls\n", info.getText().raw());
+            }
+            else
+            {
+                RTPrintf("Error: failed to start machine. No error message available!\n");
+            }
+            break;
         }
 
-        if (SUCCEEDED(progress->WaitForCompletion(-1)))
+#ifdef RT_OS_WINDOWS
+        /*
+         * Spawn windows message pump to monitor session events.
+         */
+        RTTHREAD hThrMsg;
+        irc = RTThreadCreate(&hThrMsg,
+                            windowsMessageMonitor, NULL,
+                            0, /* :cbStack */
+                            RTTHREADTYPE_MSG_PUMP, 0,
+                            "MSG");
+        if (RT_FAILURE(irc))    /* not fatal */
+            LogRel(("VBoxHeadless: failed to start windows message monitor: %Rrc\n", irc));
+#endif /* RT_OS_WINDOWS */
+
+
+        /*
+         * Pump vbox events forever
+         */
+        LogRel(("VBoxHeadless: starting event loop\n"));
+        for (;;)
         {
-            /* Figure out if the operation completed with a failed status
-             * and print the error message. Terminate immediately, and let
-             * the cleanup code take care of potentially pending events. */
-            LONG progressRc;
-            progress->COMGETTER(ResultCode)(&progressRc);
-            rc = progressRc;
-            if (FAILED(rc))
+            irc = gEventQ->processEventQueue(RT_INDEFINITE_WAIT);
+
+            /*
+             * interruptEventQueueProcessing from another thread is
+             * reported as VERR_INTERRUPTED, so check the flag first.
+             */
+            if (g_fTerminateFE)
             {
-                com::ProgressErrorInfo info(progress);
-                if (info.isBasicAvailable())
-                {
-                    RTPrintf("Error: failed to start machine. Error message: %ls\n", info.getText().raw());
-                }
-                else
-                {
-                    RTPrintf("Error: failed to start machine. No error message available!\n");
-                }
+                LogRel(("VBoxHeadless: processEventQueue: %Rrc, termination requested\n", irc));
+                break;
+            }
+
+            if (RT_FAILURE(irc))
+            {
+                LogRel(("VBoxHeadless: processEventQueue: %Rrc\n", irc));
+                RTMsgError("event loop: %Rrc", irc);
                 break;
             }
         }
 
-#ifdef VBOX_WITH_SAVESTATE_ON_SIGNAL
-        signal(SIGINT, SaveState);
-        signal(SIGTERM, SaveState);
-#endif
-
-        Log(("VBoxHeadless: Waiting for PowerDown...\n"));
-
-        while (   !g_fTerminateFE
-               && RT_SUCCESS(gEventQ->processEventQueue(RT_INDEFINITE_WAIT)))
-            /* nothing */ ;
-
         Log(("VBoxHeadless: event loop has terminated...\n"));
 
-#ifdef VBOX_WITH_VPX
-        if (fVideoRec)
+#ifdef VBOX_WITH_RECORDING
+        if (fRecordEnabled)
         {
             if (!machine.isNull())
-                machine->COMSETTER(VideoCaptureEnabled)(FALSE);
+            {
+                ComPtr<IRecordingSettings> recordingSettings;
+                CHECK_ERROR_BREAK(machine, COMGETTER(RecordingSettings)(recordingSettings.asOutParam()));
+                CHECK_ERROR_BREAK(recordingSettings, COMSETTER(Enabled)(FALSE));
+            }
         }
-#endif /* defined(VBOX_WITH_VPX) */
+#endif /* VBOX_WITH_RECORDING */
 
         /* we don't have to disable VRDE here because we don't save the settings of the VM */
     }
@@ -1232,7 +1461,17 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
      */
     MachineState_T machineState = MachineState_Aborted;
     if (!machine.isNull())
-        machine->COMGETTER(State)(&machineState);
+    {
+        rc = machine->COMGETTER(State)(&machineState);
+        if (SUCCEEDED(rc))
+            Log(("machine state = %RU32\n", machineState));
+        else
+            Log(("IMachine::getState: %Rhrc\n", rc));
+    }
+    else
+    {
+        Log(("machine == NULL\n"));
+    }
 
     /*
      * Turn off the VM if it's running
@@ -1247,22 +1486,21 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
     do
     {
         consoleListener->getWrapped()->ignorePowerOffEvents(true);
+
         ComPtr<IProgress> pProgress;
-        CHECK_ERROR_BREAK(gConsole, PowerDown(pProgress.asOutParam()));
-        CHECK_ERROR_BREAK(pProgress, WaitForCompletion(-1));
-        BOOL completed;
-        CHECK_ERROR_BREAK(pProgress, COMGETTER(Completed)(&completed));
-        ASSERT(completed);
-        LONG hrc;
-        CHECK_ERROR_BREAK(pProgress, COMGETTER(ResultCode)(&hrc));
-        if (FAILED(hrc))
+        if (!machine.isNull())
+            CHECK_ERROR_BREAK(machine, SaveState(pProgress.asOutParam()));
+        else
+            CHECK_ERROR_BREAK(gConsole, PowerDown(pProgress.asOutParam()));
+
+        rc = showProgress(pProgress);
+        if (FAILED(rc))
         {
-            RTPrintf("VBoxHeadless: ERROR: Failed to power down VM!");
             com::ErrorInfo info;
             if (!info.isFullAvailable() && !info.isBasicAvailable())
-                com::GluePrintRCMessage(hrc);
+                com::GluePrintRCMessage(rc);
             else
-                GluePrintErrorInfo(info);
+                com::GluePrintErrorInfo(info);
             break;
         }
     } while (0);
@@ -1318,8 +1556,21 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
 
     com::Shutdown();
 
-    LogFlow(("VBoxHeadless FINISHED.\n"));
+#ifdef RT_OS_WINDOWS
+    /* tell the session monitor it can ack WM_ENDSESSION */
+    if (g_hCanQuit != NIL_RTSEMEVENT)
+    {
+        RTSemEventSignal(g_hCanQuit);
+    }
 
+    /* tell the session monitor to quit */
+    if (g_hWindow != NULL)
+    {
+        ::PostMessage(g_hWindow, WM_QUIT, 0, 0);
+    }
+#endif
+
+    LogRel(("VBoxHeadless: exiting\n"));
     return FAILED(rc) ? 1 : 0;
 }
 

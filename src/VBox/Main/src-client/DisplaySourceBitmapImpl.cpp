@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: DisplaySourceBitmapImpl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * Bitmap of a guest screen implementation.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +15,10 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_DISPLAYSOURCEBITMAP
+#include "LoggingNew.h"
+
 #include "DisplayImpl.h"
-#include "Logging.h"
 
 /*
  * DisplaySourceBitmap implementation.

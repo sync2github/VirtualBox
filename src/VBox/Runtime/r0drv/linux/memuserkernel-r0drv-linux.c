@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: memuserkernel-r0drv-linux.c 85703 2020-08-11 18:54:01Z vboxsync $ */
 /** @file
  * IPRT - User & Kernel Memory, Ring-0 Driver, Linux.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include "internal/iprt.h"
 
 #include <iprt/mem.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 
 RTR0DECL(int) RTR0MemUserCopyFrom(void *pvDst, RTR3PTR R3PtrSrc, size_t cb)
@@ -66,7 +66,11 @@ RT_EXPORT_SYMBOL(RTR0MemUserCopyTo);
 RTR0DECL(bool) RTR0MemUserIsValidAddr(RTR3PTR R3Ptr)
 {
     IPRT_LINUX_SAVE_EFL_AC();
+#if RTLNX_VER_MIN(5,0,0) || RTLNX_RHEL_MIN(8,1)
+    bool fRc = access_ok((void *)R3Ptr, 1);
+#else
     bool fRc = access_ok(VERIFY_READ, (void *)R3Ptr, 1);
+#endif
     IPRT_LINUX_RESTORE_EFL_AC();
     return fRc;
 }
@@ -82,7 +86,11 @@ RTR0DECL(bool) RTR0MemKernelIsValidAddr(void *pv)
     return (uintptr_t)pv >= PAGE_OFFSET;
 #else
 # error "PORT ME"
+#if RTLNX_VER_MIN(5,0,0) || RTLNX_RHEL_MIN(8,1)
+    return !access_ok(pv, 1);
+#else
     return !access_ok(VERIFY_READ, pv, 1);
+#endif
 #endif
 }
 RT_EXPORT_SYMBOL(RTR0MemKernelIsValidAddr);
@@ -104,7 +112,7 @@ RT_EXPORT_SYMBOL(RTR0MemAreKrnlAndUsrDifferent);
  */
 static int rtR0MemKernelCopyLnxWorker(void *pvDst, void const *pvSrc, size_t cb)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 55)
+#if RTLNX_VER_MIN(2,5,55)
 /* _ASM_EXTABLE was introduced in 2.6.25 from what I can tell. Using #ifndef
    here since it has to be a macro and you never know what someone might have
    backported to an earlier kernel release. */
@@ -136,7 +144,8 @@ static int rtR0MemKernelCopyLnxWorker(void *pvDst, void const *pvSrc, size_t cb)
                           "2:\n\t"
                           ".section .fixup,\"ax\"\n"
                           "3:\n\t"
-                          "movl %4, %0\n"
+                          "movl %4, %0\n\t"
+                          "jmp 2b\n\t"
                           ".previous\n"
                           _ASM_EXTABLE(1b, 3b)
                           : "=r" (rc),

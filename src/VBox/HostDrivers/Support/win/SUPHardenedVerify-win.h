@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPHardenedVerify-win.h 86610 2020-10-16 14:34:15Z vboxsync $ */
 /** @file
  * VirtualBox Support Library/Driver - Hardened Verification, Windows.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___win_SUPHardenedVerify_win_h
-#define ___win_SUPHardenedVerify_win_h
+#ifndef VBOX_INCLUDED_SRC_Support_win_SUPHardenedVerify_win_h
+#define VBOX_INCLUDED_SRC_Support_win_SUPHardenedVerify_win_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 #include <iprt/crypto/x509.h>
@@ -51,6 +54,7 @@ typedef enum SUPHARDNTVPKIND
     SUPHARDNTVPKIND_VERIFY_ONLY = 1,
     SUPHARDNTVPKIND_CHILD_PURIFICATION,
     SUPHARDNTVPKIND_SELF_PURIFICATION,
+    SUPHARDNTVPKIND_SELF_PURIFICATION_LIMITED,
     SUPHARDNTVPKIND_32BIT_HACK = 0x7fffffff
 } SUPHARDNTVPKIND;
 /** @name SUPHARDNTVP_F_XXX - Flags for supHardenedWinVerifyProcess
@@ -71,8 +75,8 @@ typedef enum SUPHARDNTVPKIND
  */
 #define SUPHARDNTVP_F_EXEC_ALLOC_REPLACE_WITH_RW        RT_BIT_32(0)
 /** @} */
-DECLHIDDEN(int)     supHardenedWinVerifyProcess(HANDLE hProcess, HANDLE hThread, SUPHARDNTVPKIND enmKind, uint32_t fFlags,
-                                                uint32_t *pcFixes, PRTERRINFO pErrInfo);
+DECLHIDDEN(int)     supHardenedWinVerifyProcess(HANDLE hProcess, HANDLE hThread, SUPHARDNTVPKIND enmKind,
+                                                uint32_t fFlags, uint32_t *pcFixes, PRTERRINFO pErrInfo);
 DECLHIDDEN(int)     supHardNtVpThread(HANDLE hProcess, HANDLE hThread, PRTERRINFO pErrInfo);
 DECLHIDDEN(int)     supHardNtVpDebugger(HANDLE hProcess, PRTERRINFO pErrInfo);
 
@@ -80,7 +84,7 @@ DECLHIDDEN(bool)    supHardViUtf16PathIsEqualEx(PCRTUTF16 pawcLeft, size_t cwcLe
 DECLHIDDEN(bool)    supHardViUniStrPathStartsWithUniStr(UNICODE_STRING const *pUniStrLeft,
                                                         UNICODE_STRING const *pUniStrRight, bool fCheckSlash);
 DECLHIDDEN(bool)    supHardViUtf16PathStartsWithEx(PCRTUTF16 pwszLeft, uint32_t cwcLeft,
-                                                PCRTUTF16 pwszRight, uint32_t cwcRight, bool fCheckSlash);
+                                                   PCRTUTF16 pwszRight, uint32_t cwcRight, bool fCheckSlash);
 DECLHIDDEN(bool)    supHardViIsAppPatchDir(PCRTUTF16 pwszPath, uint32_t cwcName);
 
 
@@ -93,17 +97,25 @@ typedef struct SUPHNTVIRDR
     RTLDRREADER Core;
     /** The file handle. */
     HANDLE      hFile;
-    /** Handle to event sempahore in case we're force to deal with asynchronous
-     * I/O. */
+    /** Handle to event sempahore in case we're force to deal with asynchronous I/O. */
     HANDLE      hEvent;
     /** Current file offset. */
     RTFOFF      off;
     /** The file size. */
-    RTFOFF      cbFile;
+    uint64_t    cbFile;
     /** Flags for the verification callback, SUPHNTVI_F_XXX. */
     uint32_t    fFlags;
-    /** The executable timstamp in second since unix epoch. */
-    uint64_t    uTimestamp;
+    /** Number of signatures that verified okay. */
+    uint16_t    cOkaySignatures;
+    /** Number of signatures that couldn't be successfully verified (time stamp
+     * issues, no certificate path, etc) but weren't fatal. */
+    uint16_t    cNokSignatures;
+    /** Total number of signatures. */
+    uint16_t    cTotalSignatures;
+    /** The current signature (for passing to supHardNtViCertVerifyCallback). */
+    uint16_t    iCurSignature;
+    /** The last non-fatal signature failure. */
+    int         rcLastSignatureFailure;
     /** Log name. */
     char        szFilename[1];
 } SUPHNTVIRDR;
@@ -113,8 +125,8 @@ DECLHIDDEN(int)  supHardNtViRdrCreate(HANDLE hFile, PCRTUTF16 pwszName, uint32_t
 DECLHIDDEN(bool) supHardenedWinIsWinVerifyTrustCallable(void);
 DECLHIDDEN(int)  supHardenedWinVerifyImageTrust(HANDLE hFile, PCRTUTF16 pwszName, uint32_t fFlags, int rc,
                                                 bool *pfWinVerifyTrust, PRTERRINFO pErrInfo);
-DECLHIDDEN(int)  supHardenedWinVerifyImageByHandle(HANDLE hFile, PCRTUTF16 pwszName, uint32_t fFlags, bool fAvoidWinVerifyTrust,
-                                                   bool *pfWinVerifyTrust, PRTERRINFO pErrInfo);
+DECLHIDDEN(int)  supHardenedWinVerifyImageByHandle(HANDLE hFile, PCRTUTF16 pwszName, uint32_t fFlags,
+                                                   bool fAvoidWinVerifyTrust, bool *pfWinVerifyTrust, PRTERRINFO pErrInfo);
 DECLHIDDEN(int)  supHardenedWinVerifyImageByHandleNoName(HANDLE hFile, uint32_t fFlags, PRTERRINFO pErrInfo);
 DECLHIDDEN(int)  supHardenedWinVerifyImageByLdrMod(RTLDRMOD hLdrMod, PCRTUTF16 pwszName, PSUPHNTVIRDR pNtViRdr,
                                                    bool fAvoidWinVerifyTrust, bool *pfWinVerifyTrust, PRTERRINFO pErrInfo);
@@ -137,6 +149,9 @@ DECLHIDDEN(int)  supHardenedWinVerifyImageByLdrMod(RTLDRMOD hLdrMod, PCRTUTF16 p
 /** Raw-mode context image, always 32-bit. */
 #  define SUPHNTVI_F_RC_IMAGE                       RT_BIT(31)
 /** @} */
+
+/* Array in SUPHardenedVerifyImage-win.cpp */
+extern const RTSTRTUPLE g_aSupNtViBlacklistedDlls[];
 
 /**
  * Loader cache entry.
@@ -161,7 +176,7 @@ typedef struct SUPHNTLDRCACHEENTRY
     uint8_t            *pbBits;
     /** Set if verified. */
     bool                fVerified;
-    /** Whether we've got valid cacheable image bit.s */
+    /** Whether we've got valid cacheable image bits. */
     bool                fValidBits;
     /** The image base address. */
     uintptr_t           uImageBase;
@@ -206,7 +221,8 @@ extern SUPSYSROOTDIRBUF g_SupLibHardenedAppBinNtPath;
 
 #   ifdef IN_RING0
 /** Pointer to NtQueryVirtualMemory. */
-typedef NTSTATUS (NTAPI *PFNNTQUERYVIRTUALMEMORY)(HANDLE, void const *, MEMORY_INFORMATION_CLASS, PVOID, SIZE_T, PSIZE_T);
+typedef DECLCALLBACKPTR_EX(NTSTATUS, NTAPI, PFNNTQUERYVIRTUALMEMORY,(HANDLE, void const *, MEMORY_INFORMATION_CLASS,
+                                                                     PVOID, SIZE_T, PSIZE_T));
 extern PFNNTQUERYVIRTUALMEMORY g_pfnNtQueryVirtualMemory;
 #   endif
 
@@ -273,5 +289,5 @@ extern uint32_t         g_uNtVerCombined;
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Support_win_SUPHardenedVerify_win_h */
 

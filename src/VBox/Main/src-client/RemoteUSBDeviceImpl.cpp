@@ -1,13 +1,10 @@
-/* $Id$ */
-
+/* $Id: RemoteUSBDeviceImpl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
- * VirtualBox IHostUSBDevice COM interface implementation
- * for remote (VRDP) USB devices
+ * VirtualBox IHostUSBDevice COM interface implementation for remote (VRDP) USB devices.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -18,17 +15,20 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_HOSTUSBDEVICE
+#include "LoggingNew.h"
+
 #include "RemoteUSBDeviceImpl.h"
 
 #include "AutoCaller.h"
-#include "Logging.h"
 
 #include <iprt/cpp/utils.h>
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 #include <VBox/RemoteDesktop/VRDE.h>
 #include <VBox/vrdpusb.h>
+
 
 // constructor / destructor
 /////////////////////////////////////////////////////////////////////////////
@@ -77,6 +77,10 @@ HRESULT RemoteUSBDevice::init(uint32_t u32ClientId, VRDEUSBDEVICEDESC *pDevDesc,
     unconst(mData.address)      = id;
     unconst(mData.backend)      = "vrdp";
 
+    char port[16];
+    RTStrPrintf(port, sizeof(port), "%u", pDevDesc->idPort);
+    unconst(mData.portPath)     = port;
+
     unconst(mData.port)         = pDevDesc->idPort;
     unconst(mData.version)      = (uint16_t)(pDevDesc->bcdUSB >> 8);
     if (fDescExt)
@@ -88,29 +92,24 @@ HRESULT RemoteUSBDevice::init(uint32_t u32ClientId, VRDEUSBDEVICEDESC *pDevDesc,
             case VRDE_USBDEVICESPEED_UNKNOWN:
             case VRDE_USBDEVICESPEED_LOW:
             case VRDE_USBDEVICESPEED_FULL:
-                unconst(mData.portVersion) = 1;
                 unconst(mData.speed) = USBConnectionSpeed_Full;
                 break;
 
             case VRDE_USBDEVICESPEED_HIGH:
             case VRDE_USBDEVICESPEED_VARIABLE:
-                unconst(mData.portVersion) = 2;
                 unconst(mData.speed) = USBConnectionSpeed_High;
                 break;
 
             case VRDE_USBDEVICESPEED_SUPERSPEED:
-                unconst(mData.portVersion) = 3;
                 unconst(mData.speed) = USBConnectionSpeed_Super;
                 break;
         }
     }
     else
     {
-        unconst(mData.portVersion)  = mData.version;
-        unconst(mData.speed) = mData.version == 3
-                             ? (USBConnectionSpeed_T)USBConnectionSpeed_Super
-                             : mData.version == 2 ? (USBConnectionSpeed_T)USBConnectionSpeed_High
-                                                  : (USBConnectionSpeed_T)USBConnectionSpeed_Full;
+        unconst(mData.speed) = mData.version == 3 ? USBConnectionSpeed_Super
+                             : mData.version == 2 ? USBConnectionSpeed_High
+                             :                      USBConnectionSpeed_Full;
     }
 
     mData.state                  = USBDeviceState_Available;
@@ -154,8 +153,8 @@ void RemoteUSBDevice::uninit()
     unconst(mData.backend).setNull();
 
     unconst(mData.port) = 0;
+    unconst(mData.portPath).setNull();
     unconst(mData.version) = 1;
-    unconst(mData.portVersion) = 1;
 
     unconst(mData.dirty) = FALSE;
 
@@ -237,18 +236,18 @@ HRESULT RemoteUSBDevice::getPort(USHORT *aPort)
     return S_OK;
 }
 
-HRESULT RemoteUSBDevice::getVersion(USHORT *aVersion)
+HRESULT RemoteUSBDevice::getPortPath(com::Utf8Str &aPortPath)
 {
     /* this is const, no need to lock */
-    *aVersion = mData.version;
+    aPortPath = mData.portPath;
 
     return S_OK;
 }
 
-HRESULT RemoteUSBDevice::getPortVersion(USHORT *aPortVersion)
+HRESULT RemoteUSBDevice::getVersion(USHORT *aVersion)
 {
     /* this is const, no need to lock */
-    *aPortVersion = mData.portVersion;
+    *aVersion = mData.version;
 
     return S_OK;
 }

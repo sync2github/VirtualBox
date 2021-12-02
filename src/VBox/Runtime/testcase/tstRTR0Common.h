@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTR0Common.h 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT R0 Testcase - Common header.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___testcase_tstRTR0Common_h
-#define ___testcase_tstRTR0Common_h
+#ifndef IPRT_INCLUDED_SRC_testcase_tstRTR0Common_h
+#define IPRT_INCLUDED_SRC_testcase_tstRTR0Common_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/stdarg.h>
 #include <iprt/string.h>
@@ -53,7 +55,7 @@ static uint32_t volatile g_cErrors;
 #define RTR0TESTR0_SRV_REQ_PROLOG_RET(pReqHdr) \
     do \
     { \
-        if (!VALID_PTR(pReqHdr)) \
+        if (!RT_VALID_PTR(pReqHdr)) \
             return VERR_INVALID_PARAMETER; \
         \
         PRTTSTR0REQ pReq    = (PRTTSTR0REQ)(pReqHdr); \
@@ -301,5 +303,5 @@ bool RTR0TestR0HaveErrors(void)
     return ASMAtomicUoReadU32(&g_cErrors) > 0;
 }
 
-#endif
+#endif /* !IPRT_INCLUDED_SRC_testcase_tstRTR0Common_h */
 

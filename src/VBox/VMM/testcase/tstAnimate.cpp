@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstAnimate.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox Animation Testcase / Tool.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,9 +25,6 @@
 #include <VBox/vmm/cfgm.h>
 #include <VBox/vmm/em.h>
 #include <VBox/vmm/pgm.h>
-#ifdef VBOX_WITH_REM
-# include <VBox/vmm/rem.h>
-#endif
 #include <VBox/vmm/ssm.h>
 #include <VBox/vmm/dbgf.h>
 #include <VBox/err.h>
@@ -54,7 +51,7 @@
 static volatile bool g_fSignaled = false;
 
 
-static void SigInterrupt(int iSignal)
+static void SigInterrupt(int iSignal) RT_NOTHROW_DEF
 {
     NOREF(iSignal);
     signal(SIGINT, SigInterrupt);
@@ -62,7 +59,7 @@ static void SigInterrupt(int iSignal)
     RTPrintf("caught SIGINT\n");
 }
 
-typedef DECLCALLBACK(int) FNSETGUESTGPR(PVM, uint32_t);
+typedef DECLCALLBACKTYPE(int, FNSETGUESTGPR,(PVM, uint32_t));
 typedef FNSETGUESTGPR *PFNSETGUESTGPR;
 static int scriptGPReg(PVM pVM, char *pszVar, char *pszValue, void *pvUser)
 {
@@ -74,7 +71,7 @@ static int scriptGPReg(PVM pVM, char *pszVar, char *pszValue, void *pvUser)
     return ((PFNSETGUESTGPR)(uintptr_t)pvUser)(pVM, u32);
 }
 
-typedef DECLCALLBACK(int) FNSETGUESTSEL(PVM, uint16_t);
+typedef DECLCALLBACKTYPE(int, FNSETGUESTSEL,(PVM, uint16_t));
 typedef FNSETGUESTSEL *PFNSETGUESTSEL;
 static int scriptSelReg(PVM pVM, char *pszVar, char *pszValue, void *pvUser)
 {
@@ -86,7 +83,7 @@ static int scriptSelReg(PVM pVM, char *pszVar, char *pszValue, void *pvUser)
     return ((PFNSETGUESTSEL)(uintptr_t)pvUser)(pVM, u16);
 }
 
-typedef DECLCALLBACK(int) FNSETGUESTSYS(PVM, uint32_t);
+typedef DECLCALLBACKTYPE(int, FNSETGUESTSYS,(PVM, uint32_t));
 typedef FNSETGUESTSYS *PFNSETGUESTSYS;
 static int scriptSysReg(PVM pVM, char *pszVar, char *pszValue, void *pvUser)
 {
@@ -99,7 +96,7 @@ static int scriptSysReg(PVM pVM, char *pszVar, char *pszValue, void *pvUser)
 }
 
 
-typedef DECLCALLBACK(int) FNSETGUESTDTR(PVM, uint32_t, uint16_t);
+typedef DECLCALLBACKTYPE(int, FNSETGUESTDTR,(PVM, uint32_t, uint16_t));
 typedef FNSETGUESTDTR *PFNSETGUESTDTR;
 static int scriptDtrReg(PVM pVM, char *pszVar, char *pszValue, void *pvUser)
 {
@@ -196,7 +193,7 @@ static DECLCALLBACK(int) scriptRun(PVM pVM, RTFILE File)
 {
     RTPrintf("info: running script...\n");
     uint64_t cb;
-    int rc = RTFileGetSize(File, &cb);
+    int rc = RTFileQuerySize(File, &cb);
     if (RT_SUCCESS(rc))
     {
         if (cb == 0)
@@ -412,8 +409,6 @@ static DECLCALLBACK(int) cfgmR3CreateDefault(PUVM pUVM, PVM pVM, void *pvUser)
     UPDATERC();
     rc = CFGMR3InsertNode(pInst,    "Config", &pCfg);
     UPDATERC();
-    rc = CFGMR3InsertInteger(pCfg,  "RamSize",              cbMem);
-    UPDATERC();
     rc = CFGMR3InsertString(pCfg,   "BootDevice0",          "IDE");
     UPDATERC();
     rc = CFGMR3InsertString(pCfg,   "BootDevice1",          "NONE");
@@ -446,7 +441,6 @@ static DECLCALLBACK(int) cfgmR3CreateDefault(PUVM pUVM, PVM pVM, void *pvUser)
     rc = CFGMR3InsertNode(pDev,     "0", &pInst);                               UPDATERC();
     rc = CFGMR3InsertInteger(pInst, "Trusted", 1);              /* boolean */   UPDATERC();
     rc = CFGMR3InsertNode(pInst,    "Config", &pCfg);                           UPDATERC();
-    rc = CFGMR3InsertInteger(pCfg,  "RamSize",              cbMem);             UPDATERC();
     rc = CFGMR3InsertInteger(pCfg,  "IOAPIC", fIOAPIC);                         UPDATERC();
     rc = CFGMR3InsertInteger(pInst, "PCIDeviceNo",          7);                 UPDATERC();
     rc = CFGMR3InsertInteger(pInst, "PCIFunctionNo",        0);                 UPDATERC();
@@ -806,7 +800,7 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
     {
         if (FileRawMem != NIL_RTFILE)
         {
-            rc = RTFileGetSize(FileRawMem, &cbMem);
+            rc = RTFileQuerySize(FileRawMem, &cbMem);
             AssertReleaseRC(rc);
             cbMem -= offRawMem;
             cbMem &= ~(PAGE_SIZE - 1);
@@ -875,11 +869,7 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
                      */
                     RTPrintf("info: powering on the VM...\n");
                     RTLogGroupSettings(NULL, "+REM_DISAS.e.l.f");
-#ifdef VBOX_WITH_REM
-                    rc = REMR3DisasEnableStepping(pVM, true);
-#else
-                    rc = VERR_NOT_IMPLEMENTED; /** @todo need some EM single-step indicator */
-#endif
+                    rc = VERR_NOT_IMPLEMENTED; /** @todo need some EM single-step indicator (was REMR3DisasEnableStepping) */
                     if (RT_SUCCESS(rc))
                     {
                         rc = EMR3SetExecutionPolicy(pUVM, EMEXECPOLICY_RECOMPILE_RING0, true); AssertReleaseRC(rc);

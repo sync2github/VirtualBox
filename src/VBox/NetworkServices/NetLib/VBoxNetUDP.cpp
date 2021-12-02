@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetUDP.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxNetUDP - IntNet UDP Client Routines.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -174,7 +174,7 @@ void *VBoxNetUDPMatch(PINTNETBUF pBuf, unsigned uDstPort, PCRTMAC pDstMac, uint3
     /*
      * We've got a match!
      */
-    *pcb = pUdpHdr->uh_ulen - sizeof(*pUdpHdr);
+    *pcb = RT_N2H_U16(pUdpHdr->uh_ulen) - sizeof(*pUdpHdr);
     return (void *)(pUdpHdr + 1);
 }
 

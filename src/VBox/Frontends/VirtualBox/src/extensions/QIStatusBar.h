@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIStatusBar.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Qt extensions: QIStatusBar class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,32 +15,37 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __QIStatusBar_h__
-#define __QIStatusBar_h__
+#ifndef FEQT_INCLUDED_SRC_extensions_QIStatusBar_h
+#define FEQT_INCLUDED_SRC_extensions_QIStatusBar_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/* Qt includes */
+/* Qt includes: */
 #include <QStatusBar>
 
-/**
- *  The QIStatusBar class is a replacement of QStatusBar with disabling
- *  drawing of sunken borders around every widget on the status bar.
- */
-class QIStatusBar : public QStatusBar
+/* GUI includes: */
+#include "UILibraryDefs.h"
+
+/** QStatusBar extension with advanced functionality. */
+class SHARED_LIBRARY_STUFF QIStatusBar : public QStatusBar
 {
     Q_OBJECT;
 
 public:
 
-    QIStatusBar (QWidget *aParent = 0);
+    /** Constructs status-bar passing @a pParent to the base-class. */
+    QIStatusBar(QWidget *pParent = 0);
 
 protected slots:
 
-    void rememberLastMessage (const QString &aMsg) { mMessage = aMsg; }
+    /** Remembers the last status @a strMessage. */
+    void sltRememberLastMessage(const QString &strMessage) { m_strMessage = strMessage; }
 
 protected:
 
-    QString mMessage;
+    /** Holds the last status message. */
+    QString m_strMessage;
 };
 
-#endif // __QIStatusBar_h__
-
+#endif /* !FEQT_INCLUDED_SRC_extensions_QIStatusBar_h */

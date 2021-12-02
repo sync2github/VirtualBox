@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: DrvHostParallel.cpp 91897 2021-10-20 13:42:39Z vboxsync $ */
 /** @file
  * VirtualBox Host Parallel Port Driver.
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -153,7 +153,7 @@ typedef enum DRVHOSTPARALLELR0OP
 } DRVHOSTPARALLELR0OP;
 
 /** Converts a pointer to DRVHOSTPARALLEL::IHostDeviceConnector to a PDRHOSTPARALLEL. */
-#define PDMIHOSTPARALLELCONNECTOR_2_DRVHOSTPARALLEL(pInterface) ( (PDRVHOSTPARALLEL)((uintptr_t)pInterface - RT_OFFSETOF(DRVHOSTPARALLEL, CTX_SUFF(IHostParallelConnector))) )
+#define PDMIHOSTPARALLELCONNECTOR_2_DRVHOSTPARALLEL(pInterface) ( (PDRVHOSTPARALLEL)((uintptr_t)pInterface - RT_UOFFSETOF(DRVHOSTPARALLEL, CTX_SUFF(IHostParallelConnector))) )
 
 
 /*********************************************************************************************************************************
@@ -900,7 +900,7 @@ static DECLCALLBACK(void) drvHostParallelDestruct(PPDMDRVINS pDrvIns)
 
     if (pThis->pszDevicePath)
     {
-        MMR3HeapFree(pThis->pszDevicePath);
+        PDMDrvHlpMMHeapFree(pDrvIns, pThis->pszDevicePath);
         pThis->pszDevicePath = NULL;
     }
 #endif /* !VBOX_WITH_WIN_PARPORT_SUP */
@@ -915,8 +915,9 @@ static DECLCALLBACK(int) drvHostParallelConstruct(PPDMDRVINS pDrvIns, PCFGMNODE 
 {
     RT_NOREF(fFlags);
     PDMDRV_CHECK_VERSIONS_RETURN(pDrvIns);
+    PDRVHOSTPARALLEL    pThis = PDMINS_2_DATA(pDrvIns, PDRVHOSTPARALLEL);
+    PCPDMDRVHLPR3       pHlp  = pDrvIns->pHlpR3;
     LogFlowFunc(("iInstance=%d\n", pDrvIns->iInstance));
-    PDRVHOSTPARALLEL pThis = PDMINS_2_DATA(pDrvIns, PDRVHOSTPARALLEL);
 
 
     /*
@@ -948,15 +949,13 @@ static DECLCALLBACK(int) drvHostParallelConstruct(PPDMDRVINS pDrvIns, PCFGMNODE 
     /*
      * Validate the config.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "DevicePath\0"))
-        return PDMDRV_SET_ERROR(pDrvIns, VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES,
-                                N_("Unknown host parallel configuration option, only supports DevicePath"));
+    PDMDRV_VALIDATE_CONFIG_RETURN(pDrvIns, "DevicePath", "");
 
     /*
      * Query configuration.
      */
     /* Device */
-    int rc = CFGMR3QueryStringAlloc(pCfg, "DevicePath", &pThis->pszDevicePath);
+    int rc = pHlp->pfnCFGMQueryStringAlloc(pCfg, "DevicePath", &pThis->pszDevicePath);
     if (RT_FAILURE(rc))
     {
         AssertMsgFailed(("Configuration error: query for \"DevicePath\" string returned %Rra.\n", rc));

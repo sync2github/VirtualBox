@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GuestImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,14 +15,18 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_GUESTIMPL
-#define ____H_GUESTIMPL
+#ifndef MAIN_INCLUDED_GuestImpl_h
+#define MAIN_INCLUDED_GuestImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "GuestWrap.h"
 #include "VirtualBoxBase.h"
 #include <iprt/list.h>
 #include <iprt/time.h>
 #include <VBox/ostypes.h>
+#include <VBox/param.h>
 #include <VBox/vmm/stam.h>
 
 #include "AdditionsFacilityImpl.h"
@@ -58,7 +62,7 @@ class ATL_NO_VTABLE Guest :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR (Guest)
+    DECLARE_COMMON_CLASS_METHODS (Guest)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -82,33 +86,46 @@ public:
     /** @name Public internal methods.
      * @{ */
     void i_enableVMMStatistics(BOOL aEnable) { mCollectVMMStats = aEnable; };
-    void i_setAdditionsInfo(com::Utf8Str aInterfaceVersion, VBOXOSTYPE aOsType);
+    void i_setAdditionsInfo(const com::Utf8Str &aInterfaceVersion, VBOXOSTYPE aOsType);
     void i_setAdditionsInfo2(uint32_t a_uFullVersion, const char *a_pszName, uint32_t a_uRevision, uint32_t a_fFeatures);
     bool i_facilityIsActive(VBoxGuestFacilityType enmFacility);
-    void i_facilityUpdate(VBoxGuestFacilityType a_enmFacility, VBoxGuestFacilityStatus a_enmStatus,
+    bool i_facilityUpdate(VBoxGuestFacilityType a_enmFacility, VBoxGuestFacilityStatus a_enmStatus,
                           uint32_t a_fFlags, PCRTTIMESPEC a_pTimeSpecTS);
     ComObjPtr<Console> i_getConsole(void) { return mParent; }
     void i_setAdditionsStatus(VBoxGuestFacilityType a_enmFacility, VBoxGuestFacilityStatus a_enmStatus,
                               uint32_t a_fFlags, PCRTTIMESPEC a_pTimeSpecTS);
-    void i_onUserStateChange(Bstr aUser, Bstr aDomain, VBoxGuestUserState enmState, const uint8_t *puDetails, uint32_t cbDetails);
+    void i_onUserStateChanged(const Utf8Str &aUser, const Utf8Str &aDomain, VBoxGuestUserState enmState,
+                              const uint8_t *puDetails, uint32_t cbDetails);
     void i_setSupportedFeatures(uint32_t aCaps);
     HRESULT i_setStatistic(ULONG aCpuId, GUESTSTATTYPE enmType, ULONG aVal);
     BOOL i_isPageFusionEnabled();
     void i_setCpuCount(uint32_t aCpus) { mCpus = aCpus; }
-    static HRESULT i_setErrorStatic(HRESULT aResultCode, const Utf8Str &aText)
+    static HRESULT i_setErrorStatic(HRESULT aResultCode, const char *aText, ...)
     {
-        return setErrorInternal(aResultCode, getStaticClassIID(), getStaticComponentName(), aText, false, true);
+        va_list va;
+        va_start(va, aText);
+        HRESULT hrc = setErrorInternalV(aResultCode, getStaticClassIID(), getStaticComponentName(), aText, va, false, true);
+        va_end(va);
+        return hrc;
     }
     uint32_t    i_getAdditionsRevision(void) { return mData.mAdditionsRevision; }
     uint32_t    i_getAdditionsVersion(void) { return mData.mAdditionsVersionFull; }
-    VBOXOSTYPE  i_getGuestOSType(void) { return mData.mOSType; }
+    VBOXOSTYPE  i_getGuestOSType(void) const { return mData.mOSType; }
+    /** Checks if the guest OS type is part of the windows NT family.  */
+    bool        i_isGuestInWindowsNtFamily(void) const
+    {
+        return mData.mOSType < VBOXOSTYPE_OS2 && mData.mOSType >= VBOXOSTYPE_WinNT;
+    }
 #ifdef VBOX_WITH_GUEST_CONTROL
     int         i_dispatchToSession(PVBOXGUESTCTRLHOSTCBCTX pCtxCb, PVBOXGUESTCTRLHOSTCALLBACK pSvcCb);
-    int         i_sessionRemove(GuestSession *pSession);
+    int         i_sessionRemove(uint32_t uSessionID);
     int         i_sessionCreate(const GuestSessionStartupInfo &ssInfo, const GuestCredentials &guestCreds,
                                 ComObjPtr<GuestSession> &pGuestSession);
     inline bool i_sessionExists(uint32_t uSessionID);
-
+    /** Returns the VBOX_GUESTCTRL_GF_0_XXX mask reported by the guest. */
+    uint64_t    i_getGuestControlFeatures0() const { return mData.mfGuestFeatures0; }
+    /** Returns the VBOX_GUESTCTRL_GF_1_XXX mask reported by the guest. */
+    uint64_t    i_getGuestControlFeatures1() const { return mData.mfGuestFeatures1; }
 #endif
     /** @}  */
 
@@ -160,6 +177,7 @@ private:
 
      HRESULT findSession(const com::Utf8Str &aSessionName,
                          std::vector<ComPtr<IGuestSession> > &aSessions);
+     HRESULT shutdown(const std::vector<GuestShutdownFlag_T> &aFlags);
      HRESULT updateGuestAdditions(const com::Utf8Str &aSource,
                                   const std::vector<com::Utf8Str> &aArguments,
                                   const std::vector<AdditionsUpdateFlag_T> &aFlags,
@@ -188,6 +206,9 @@ private:
     {
         Data() : mOSType(VBOXOSTYPE_Unknown),  mAdditionsRunLevel(AdditionsRunLevelType_None)
             , mAdditionsVersionFull(0), mAdditionsRevision(0), mAdditionsFeatures(0)
+#ifdef VBOX_WITH_GUEST_CONTROL
+            , mfGuestFeatures0(0), mfGuestFeatures1(0)
+#endif
         { }
 
         VBOXOSTYPE                  mOSType;        /**@< For internal used. VBOXOSTYPE_Unknown if not reported. */
@@ -201,12 +222,15 @@ private:
         Utf8Str                     mInterfaceVersion;
 #ifdef VBOX_WITH_GUEST_CONTROL
         GuestSessions               mGuestSessions;
-        uint32_t                    mNextSessionID;
+        /** Guest control features (reported by the guest), VBOX_GUESTCTRL_GF_0_XXX. */
+        uint64_t                    mfGuestFeatures0;
+        /** Guest control features (reported by the guest), VBOX_GUESTCTRL_GF_1_XXX. */
+        uint64_t                    mfGuestFeatures1;
 #endif
     } mData;
 
     ULONG                           mMemoryBalloonSize;
-    ULONG                           mStatUpdateInterval;
+    ULONG                           mStatUpdateInterval; /**< In seconds. */
     uint64_t                        mNetStatRx;
     uint64_t                        mNetStatTx;
     uint64_t                        mNetStatLastTs;
@@ -244,5 +268,5 @@ private:
 };
 #define GUEST_MAGIC 0xCEED2006u /** @todo r=andy Not very well defined!? */
 
-#endif // ____H_GUESTIMPL
+#endif /* !MAIN_INCLUDED_GuestImpl_h */
 

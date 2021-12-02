@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vfsiosmisc.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Virtual File System, Misc I/O Stream Operations.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -169,6 +169,7 @@ RTDECL(int) RTVfsIoStrmReadAll(RTVFSIOSTREAM hVfsIos, void **ppvBuf, size_t *pcb
 
                 void *pvNew = RTMemRealloc(pvBuf, cbAllocated);
                 AssertBreakStmt(pvNew, rc = VERR_NO_MEMORY);
+                pvBuf = pvNew;
 
                 cbToRead = cbAllocated - off - READ_ALL_HEADER_SIZE - 1;
             }

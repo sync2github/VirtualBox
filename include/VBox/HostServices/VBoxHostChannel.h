@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,11 +24,14 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_HostService_VBoxHostChannel_h
-#define ___VBox_HostService_VBoxHostChannel_h
+#ifndef VBOX_INCLUDED_HostServices_VBoxHostChannel_h
+#define VBOX_INCLUDED_HostServices_VBoxHostChannel_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-#include <VBox/VMMDev.h>
-#include <VBox/VBoxGuest2.h>
+#include <VBox/VMMDevCoreTypes.h>
+#include <VBox/VBoxGuestCoreTypes.h>
 #include <VBox/hgcmsvc.h>
 
 /*
@@ -77,7 +80,7 @@ typedef struct VBOXHOSTCHANNELEVENTRECV
 
 typedef struct VBoxHostChannelAttach
 {
-    VBoxGuestHGCMCallInfo hdr;
+    VBGLIOCHGCMCALL hdr;
     HGCMFunctionParameter name;   /* IN linear ptr: Channel name utf8 nul terminated. */
     HGCMFunctionParameter flags;  /* IN uint32_t: Channel specific flags. */
     HGCMFunctionParameter handle; /* OUT uint32_t: The channel handle. */
@@ -85,20 +88,20 @@ typedef struct VBoxHostChannelAttach
 
 typedef struct VBoxHostChannelDetach
 {
-    VBoxGuestHGCMCallInfo hdr;
+    VBGLIOCHGCMCALL hdr;
     HGCMFunctionParameter handle; /* IN uint32_t: The channel handle. */
 } VBoxHostChannelDetach;
 
 typedef struct VBoxHostChannelSend
 {
-    VBoxGuestHGCMCallInfo hdr;
+    VBGLIOCHGCMCALL hdr;
     HGCMFunctionParameter handle; /* IN uint32_t: The channel handle. */
     HGCMFunctionParameter data;   /* IN linear pointer: Data to be sent. */
 } VBoxHostChannelSend;
 
 typedef struct VBoxHostChannelRecv
 {
-    VBoxGuestHGCMCallInfo hdr;
+    VBGLIOCHGCMCALL hdr;
     HGCMFunctionParameter handle;        /* IN uint32_t: The channel handle. */
     HGCMFunctionParameter data;          /* OUT linear pointer: Buffer for data to be received. */
     HGCMFunctionParameter sizeReceived;  /* OUT uint32_t: Bytes received. */
@@ -107,7 +110,7 @@ typedef struct VBoxHostChannelRecv
 
 typedef struct VBoxHostChannelControl
 {
-    VBoxGuestHGCMCallInfo hdr;
+    VBGLIOCHGCMCALL hdr;
     HGCMFunctionParameter handle; /* IN uint32_t: The channel handle. */
     HGCMFunctionParameter code;   /* IN uint32_t: The channel specific control code. */
     HGCMFunctionParameter parm;   /* IN linear pointer: Parameters of the function. */
@@ -117,7 +120,7 @@ typedef struct VBoxHostChannelControl
 
 typedef struct VBoxHostChannelEventWait
 {
-    VBoxGuestHGCMCallInfo hdr;
+    VBGLIOCHGCMCALL hdr;
     HGCMFunctionParameter handle;       /* OUT uint32_t: The channel which generated the event. */
     HGCMFunctionParameter id;           /* OUT uint32_t: The event VBOX_HOST_CHANNEL_EVENT_*. */
     HGCMFunctionParameter parm;         /* OUT linear pointer: Parameters of the event. */
@@ -126,12 +129,12 @@ typedef struct VBoxHostChannelEventWait
 
 typedef struct VBoxHostChannelEventCancel
 {
-    VBoxGuestHGCMCallInfo hdr;
+    VBGLIOCHGCMCALL hdr;
 } VBoxHostChannelEventCancel;
 
 typedef struct VBoxHostChannelQuery
 {
-    VBoxGuestHGCMCallInfo hdr;
+    VBGLIOCHGCMCALL hdr;
     HGCMFunctionParameter name;   /* IN linear ptr: Channel name utf8 nul terminated. */
     HGCMFunctionParameter code;   /* IN uint32_t: The control code. */
     HGCMFunctionParameter parm;   /* IN linear pointer: Parameters of the function. */
@@ -213,4 +216,4 @@ typedef struct VBOXHOSTCHANNELINTERFACE
 
 #pragma pack()
 
-#endif
+#endif /* !VBOX_INCLUDED_HostServices_VBoxHostChannel_h */

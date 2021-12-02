@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: the-solaris-kernel.h 88215 2021-03-19 18:42:55Z vboxsync $ */
 /** @file
  * IPRT - Include all necessary headers for the Solaris kernel.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___the_solaris_kernel_h
-#define ___the_solaris_kernel_h
+#ifndef IPRT_INCLUDED_SRC_r0drv_solaris_the_solaris_kernel_h
+#define IPRT_INCLUDED_SRC_r0drv_solaris_the_solaris_kernel_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <sys/kmem.h>
 #include <sys/types.h>
@@ -199,6 +202,24 @@ typedef RTR0FNSOLTHREADCTX *PRTR0FNSOLTHREADCTX;
 extern RTR0FNSOLTHREADCTX       g_rtSolThreadCtx;
 extern bool                     g_frtSolOldThreadCtx;
 
+/*
+ * Workaround for older Solaris versions which called map_addr()/choose_addr()/
+ * map_addr_proc() with an 'alignment' argument that was removed in Solaris
+ * 11.4.
+ */
+typedef struct RTR0FNSOLMAPADDR
+{
+    union
+    {
+        void *(*pfnSol_map_addr)          (caddr_t *, size_t, offset_t, uint_t);
+        void *(*pfnSol_map_addr_old)      (caddr_t *, size_t, offset_t, int, uint_t);
+    } u;
+} RTR0FNSOLMAPADDR;
+typedef RTR0FNSOLMAPADDR *PRTR0FNSOLMAPADDR;
+
+extern RTR0FNSOLMAPADDR         g_rtSolMapAddr;
+extern bool                     g_frtSolOldMapAddr;
+
 /* Solaris globals. */
 extern uintptr_t                kernelbase;
 
@@ -209,5 +230,5 @@ extern uintptr_t                kernelbase;
 
 RT_C_DECLS_END
 
-#endif /* ___the_solaris_kernel_h */
+#endif /* !IPRT_INCLUDED_SRC_r0drv_solaris_the_solaris_kernel_h */
 

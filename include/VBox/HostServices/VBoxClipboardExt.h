@@ -1,10 +1,9 @@
 /** @file
- * Shared Clipboard:
- * Common header for the service extension.
+ * Shared Clipboard - Common header for the service extension.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,28 +23,34 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_HostService_VBoxClipboardExt_h
-#define ___VBox_HostService_VBoxClipboardExt_h
+#ifndef VBOX_INCLUDED_HostServices_VBoxClipboardExt_h
+#define VBOX_INCLUDED_HostServices_VBoxClipboardExt_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+# include <VBox/GuestHost/SharedClipboard-transfers.h>
+#endif
 
-#define VBOX_CLIPBOARD_EXT_FN_SET_CALLBACK    (0)
-#define VBOX_CLIPBOARD_EXT_FN_FORMAT_ANNOUNCE (1)
-#define VBOX_CLIPBOARD_EXT_FN_DATA_READ       (2)
-#define VBOX_CLIPBOARD_EXT_FN_DATA_WRITE      (3)
+#define VBOX_CLIPBOARD_EXT_FN_SET_CALLBACK         (0)
+#define VBOX_CLIPBOARD_EXT_FN_FORMAT_ANNOUNCE      (1)
+#define VBOX_CLIPBOARD_EXT_FN_DATA_READ            (2)
+#define VBOX_CLIPBOARD_EXT_FN_DATA_WRITE           (3)
 
-typedef DECLCALLBACK(int) VRDPCLIPBOARDEXTCALLBACK (uint32_t u32Function, uint32_t u32Format, void *pvData, uint32_t cbData);
-typedef VRDPCLIPBOARDEXTCALLBACK *PFNVRDPCLIPBOARDEXTCALLBACK;
+typedef DECLCALLBACKTYPE(int, FNVRDPCLIPBOARDEXTCALLBACK,(uint32_t u32Function, uint32_t u32Format, void *pvData, uint32_t cbData));
+typedef FNVRDPCLIPBOARDEXTCALLBACK *PFNVRDPCLIPBOARDEXTCALLBACK;
 
-typedef struct _VBOXCLIPBOARDEXTPARMS
+typedef struct _SHCLEXTPARMS
 {
-    uint32_t   u32Format;
+    uint32_t                        uFormat;
     union
     {
-        void                        *pvData;
+        void                       *pvData;
         PFNVRDPCLIPBOARDEXTCALLBACK pfnCallback;
     } u;
     uint32_t   cbData;
-} VBOXCLIPBOARDEXTPARMS;
+} SHCLEXTPARMS;
 
-#endif
+#endif /* !VBOX_INCLUDED_HostServices_VBoxClipboardExt_h */

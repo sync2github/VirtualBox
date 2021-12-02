@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: memcmp.cpp 85075 2020-07-06 17:17:30Z vboxsync $ */
 /** @file
  * IPRT - CRT Strings, memcmp().
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -53,7 +53,7 @@ int __cdecl memcmp(const void *pvDst, const void *pvSrc, size_t cb)
 int memcmp(const void *pvDst, const void *pvSrc, size_t cb)
 #endif
 {
-    register union
+    union
     {
         uint8_t const  *pu8;
         uint32_t const *pu32;
@@ -63,11 +63,11 @@ int memcmp(const void *pvDst, const void *pvSrc, size_t cb)
     uSrc.pv = pvSrc;
 
     /* 32-bit word compare. */
-    register size_t c = cb >> 2;
+    size_t c = cb >> 2;
     while (c-- > 0)
     {
         /* ASSUMES int is at least 32-bit! */
-        register int32_t iDiff = *uDst.pu32++ - *uSrc.pu32++;
+        int32_t iDiff = *uDst.pu32++ - *uSrc.pu32++;
         if (iDiff)
             return iDiff;
     }
@@ -76,7 +76,7 @@ int memcmp(const void *pvDst, const void *pvSrc, size_t cb)
     c = cb & 3;
     while (c-- > 0)
     {
-        register int8_t iDiff = *uDst.pu8++ - *uSrc.pu8++;
+        int8_t iDiff = *uDst.pu8++ - *uSrc.pu8++;
         if (iDiff)
             return iDiff;
     }

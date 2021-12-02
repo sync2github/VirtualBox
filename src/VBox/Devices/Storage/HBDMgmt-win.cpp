@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HBDMgmt-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox storage devices: Host block device management API.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -450,7 +450,7 @@ DECLHIDDEN(int) HBDMgrClaimBlockDevice(HBDMGR hHbdMgr, const char *pszFilename)
                     for (unsigned i = 0; i < cVolumes; i++)
                         LogFlowFunc(("Volume %u: %ls\n", i, papwszVolumes[i]));
 #endif
-                    pDev = (PHBDMGRDEV)RTMemAllocZ(RT_OFFSETOF(HBDMGRDEV, ahVolumes[cVolumes]));
+                    pDev = (PHBDMGRDEV)RTMemAllocZ(RT_UOFFSETOF_DYN(HBDMGRDEV, ahVolumes[cVolumes]));
                     if (pDev)
                     {
                         pDev->cVolumes = 0;

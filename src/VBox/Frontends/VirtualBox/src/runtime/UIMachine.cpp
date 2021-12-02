@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachine.cpp 91121 2021-09-06 12:32:06Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachine class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,43 +15,38 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* GUI includes: */
-# include "VBoxGlobal.h"
-# include "UIExtraDataManager.h"
-# include "UIMachine.h"
-# include "UISession.h"
-# include "UIActionPoolRuntime.h"
-# include "UIMachineLogic.h"
-# include "UIMachineWindow.h"
-# include "UIMessageCenter.h"
+#include "UICommon.h"
+#include "UIExtraDataManager.h"
+#include "UIMachine.h"
+#include "UISession.h"
+#include "UIActionPoolRuntime.h"
+#include "UIMachineLogic.h"
+#include "UIMachineWindow.h"
+#include "UIMessageCenter.h"
 
 /* COM includes: */
-# include "CMachine.h"
-# include "CSession.h"
-# include "CConsole.h"
-# include "CSnapshot.h"
-# include "CProgress.h"
+#include "CMachine.h"
+#include "CSession.h"
+#include "CConsole.h"
+#include "CSnapshot.h"
+#include "CProgress.h"
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
-/* static */
-UIMachine* UIMachine::m_spInstance = 0;
 
 /* static */
-bool UIMachine::startMachine(const QString &strID)
+UIMachine *UIMachine::m_spInstance = 0;
+
+/* static */
+bool UIMachine::startMachine(const QUuid &uID)
 {
     /* Make sure machine is not created: */
     AssertReturn(!m_spInstance, false);
 
     /* Restore current snapshot if requested: */
-    if (vboxGlobal().shouldRestoreCurrentSnapshot())
+    if (uiCommon().shouldRestoreCurrentSnapshot())
     {
         /* Create temporary session: */
-        CSession session = vboxGlobal().openSession(strID, KLockType_VM);
+        CSession session = uiCommon().openSession(uID, KLockType_VM);
         if (session.isNull())
             return false;
 
@@ -74,18 +69,18 @@ bool UIMachine::startMachine(const QString &strID)
         session.UnlockMachine();
 
         /* Clear snapshot-restoring request: */
-        vboxGlobal().setShouldRestoreCurrentSnapshot(false);
+        uiCommon().setShouldRestoreCurrentSnapshot(false);
     }
 
     /* For separate process we should launch VM before UI: */
-    if (vboxGlobal().isSeparateProcess())
+    if (uiCommon().isSeparateProcess())
     {
         /* Get corresponding machine: */
-        CMachine machine = vboxGlobal().virtualBox().FindMachine(vboxGlobal().managedVMUuid());
-        AssertMsgReturn(!machine.isNull(), ("VBoxGlobal::managedVMUuid() should have filter that case before!\n"), false);
+        CMachine machine = uiCommon().virtualBox().FindMachine(uiCommon().managedVMUuid().toString());
+        AssertMsgReturn(!machine.isNull(), ("UICommon::managedVMUuid() should have filter that case before!\n"), false);
 
         /* Try to launch corresponding machine: */
-        if (!vboxGlobal().launchMachine(machine, VBoxGlobal::LaunchMode_Separate))
+        if (!UICommon::launchMachine(machine, UICommon::LaunchMode_Separate))
             return false;
     }
 
@@ -131,14 +126,36 @@ void UIMachine::destroy()
 
 QWidget* UIMachine::activeWindow() const
 {
-    if (machineLogic() &&  machineLogic()->activeMachineWindow())
-        return machineLogic()->activeMachineWindow();
-    return 0;
+    return   machineLogic() && machineLogic()->activeMachineWindow()
+           ? machineLogic()->activeMachineWindow()
+           : 0;
 }
 
 void UIMachine::asyncChangeVisualState(UIVisualStateType visualState)
 {
     emit sigRequestAsyncVisualStateChange(visualState);
+}
+
+void UIMachine::setRequestedVisualState(UIVisualStateType visualStateType)
+{
+    /* Remember requested visual state: */
+    m_enmRequestedVisualState = visualStateType;
+
+    /* Save only if it's different from Invalid and from current one: */
+    if (   m_enmRequestedVisualState != UIVisualStateType_Invalid
+        && gEDataManager->requestedVisualState(uiCommon().managedVMUuid()) != m_enmRequestedVisualState)
+        gEDataManager->setRequestedVisualState(m_enmRequestedVisualState, uiCommon().managedVMUuid());
+}
+
+UIVisualStateType UIMachine::requestedVisualState() const
+{
+    return m_enmRequestedVisualState;
+}
+
+void UIMachine::closeRuntimeUI()
+{
+    /* Quit application: */
+    QApplication::quit();
 }
 
 void UIMachine::sltChangeVisualState(UIVisualStateType visualState)
@@ -164,6 +181,9 @@ void UIMachine::sltChangeVisualState(UIVisualStateType visualState)
 
         /* Remember new visual state: */
         m_visualState = visualState;
+
+        /* Save requested visual state: */
+        gEDataManager->setRequestedVisualState(m_visualState, uiCommon().managedVMUuid());
     }
     else
     {
@@ -188,6 +208,7 @@ UIMachine::UIMachine()
     , m_allowedVisualStates(UIVisualStateType_Invalid)
     , m_initialVisualState(UIVisualStateType_Normal)
     , m_visualState(UIVisualStateType_Invalid)
+    , m_enmRequestedVisualState(UIVisualStateType_Invalid)
     , m_pMachineLogic(0)
 {
     m_spInstance = this;
@@ -204,9 +225,12 @@ bool UIMachine::prepare()
     if (!prepareSession())
         return false;
 
-    /* Cache medium data early if necessary: */
-    if (vboxGlobal().agressiveCaching())
-        vboxGlobal().startMediumEnumeration();
+    /* Cache media data early if necessary: */
+    if (uiCommon().agressiveCaching())
+    {
+        AssertReturn(m_pSession, false);
+        uiCommon().enumerateMedia(m_pSession->machineMedia());
+    }
 
     /* Prepare machine-logic: */
     prepareMachineLogic();
@@ -233,27 +257,25 @@ void UIMachine::prepareMachineLogic()
 {
     /* Prepare async visual state type change handler: */
     qRegisterMetaType<UIVisualStateType>();
-    connect(this, SIGNAL(sigRequestAsyncVisualStateChange(UIVisualStateType)),
-            this, SLOT(sltChangeVisualState(UIVisualStateType)),
+    connect(this, &UIMachine::sigRequestAsyncVisualStateChange,
+            this, &UIMachine::sltChangeVisualState,
             Qt::QueuedConnection);
 
     /* Load restricted visual states: */
-    UIVisualStateType restrictedVisualStates = gEDataManager->restrictedVisualStates(vboxGlobal().managedVMUuid());
+    UIVisualStateType restrictedVisualStates = gEDataManager->restrictedVisualStates(uiCommon().managedVMUuid());
     /* Acquire allowed visual states: */
     m_allowedVisualStates = static_cast<UIVisualStateType>(UIVisualStateType_All ^ restrictedVisualStates);
 
-    /* Load requested visual state: */
-    UIVisualStateType requestedVisualState = gEDataManager->requestedVisualState(vboxGlobal().managedVMUuid());
+    /* Load requested visual state, it can override initial one: */
+    m_enmRequestedVisualState = gEDataManager->requestedVisualState(uiCommon().managedVMUuid());
     /* Check if requested visual state is allowed: */
-    if (isVisualStateAllowed(requestedVisualState))
+    if (isVisualStateAllowed(m_enmRequestedVisualState))
     {
-        switch (requestedVisualState)
+        switch (m_enmRequestedVisualState)
         {
-            /* Direct transition to scale/fullscreen mode allowed: */
+            /* Direct transition allowed to scale/fullscreen modes only: */
             case UIVisualStateType_Scale:      m_initialVisualState = UIVisualStateType_Scale; break;
             case UIVisualStateType_Fullscreen: m_initialVisualState = UIVisualStateType_Fullscreen; break;
-            /* While to seamless is not, so we have to make request to do transition later: */
-            case UIVisualStateType_Seamless:   uisession()->setRequestedVisualState(UIVisualStateType_Seamless); break;
             default: break;
         }
     }
@@ -264,19 +286,6 @@ void UIMachine::prepareMachineLogic()
 
 void UIMachine::cleanupMachineLogic()
 {
-    /* Session UI can have requested visual state: */
-    if (uisession())
-    {
-        /* Get requested visual state: */
-        UIVisualStateType requestedVisualState = uisession()->requestedVisualState();
-        /* Or current visual state if requested is invalid: */
-        if (requestedVisualState == UIVisualStateType_Invalid)
-            requestedVisualState = m_visualState;
-
-        /* Save requested visual state: */
-        gEDataManager->setRequestedVisualState(requestedVisualState, vboxGlobal().managedVMUuid());
-    }
-
     /* Destroy machine-logic if exists: */
     if (m_pMachineLogic)
     {
@@ -303,13 +312,9 @@ void UIMachine::cleanup()
 
     /* Cleanup session UI: */
     cleanupSession();
-
-    /* Quit application: */
-    QApplication::quit();
 }
 
 void UIMachine::enterInitialVisualState()
 {
     sltChangeVisualState(m_initialVisualState);
 }
-

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTDvm.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - IPRT Disk Volume Management (DVM)
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,49 +34,15 @@
 #include <iprt/test.h>
 #include <iprt/file.h>
 #include <iprt/string.h>
+#include <iprt/vfs.h>
 
 
 /*********************************************************************************************************************************
 *   Structures and Typedefs                                                                                                      *
 *********************************************************************************************************************************/
-/**
- * Disk structure.
- */
-typedef struct TSTRTDVMDISK
-{
-    /** Flag whether this disk uses the image file or a volume. */
-    bool            fUseImage;
-    /** Data dependent on the flag. */
-    union
-    {
-        /** File handle of the image. */
-        RTFILE      hImage;
-        /** Handle of the volume. */
-        RTDVMVOLUME hVol;
-    };
-} TSTRTDVMDISK, *PTSTRTDVMDISK;
 
 
-
-static DECLCALLBACK(int) dvmDiskRead(void *pvUser, uint64_t off, void *pvBuf, size_t cbRead)
-{
-    PTSTRTDVMDISK pDisk = (PTSTRTDVMDISK)pvUser;
-
-    if (pDisk->fUseImage)
-        return RTFileReadAt(pDisk->hImage, off, pvBuf, cbRead, NULL);
-    return RTDvmVolumeRead(pDisk->hVol, off, pvBuf, cbRead);
-}
-
-static DECLCALLBACK(int) dvmDiskWrite(void *pvUser, uint64_t off, const void *pvBuf, size_t cbWrite)
-{
-    PTSTRTDVMDISK pDisk = (PTSTRTDVMDISK)pvUser;
-
-    if (pDisk->fUseImage)
-        return RTFileWriteAt(pDisk->hImage, off, pvBuf, cbWrite, NULL);
-    return RTDvmVolumeWrite(pDisk->hVol, off, pvBuf, cbWrite);
-}
-
-static int tstRTDvmVolume(RTTEST hTest, PTSTRTDVMDISK pDisk, uint64_t cb, unsigned cNesting)
+static int tstRTDvmVolume(RTTEST hTest, RTVFSFILE hVfsDisk, unsigned cNesting)
 {
     char szPrefix[100];
     int rc = VINF_SUCCESS;
@@ -91,7 +57,7 @@ static int tstRTDvmVolume(RTTEST hTest, PTSTRTDVMDISK pDisk, uint64_t cb, unsign
 
     RTTestSubF(hTest, "Create DVM");
     RTDVM hVolMgr;
-    rc = RTDvmCreate(&hVolMgr, dvmDiskRead, dvmDiskWrite, cb, 512, 0, pDisk);
+    rc = RTDvmCreate(&hVolMgr, hVfsDisk, 512, 0 /*fFlags*/);
     if (RT_FAILURE(rc))
     {
         RTTestIFailed("RTDvmCreate -> %Rrc", rc);
@@ -104,12 +70,16 @@ static int tstRTDvmVolume(RTTEST hTest, PTSTRTDVMDISK pDisk, uint64_t cb, unsign
         && rc != VERR_NOT_SUPPORTED)
     {
         RTTestIFailed("RTDvmOpen -> %Rrc", rc);
+        RTDvmRelease(hVolMgr);
         return RTTestSummaryAndDestroy(hTest);
     }
     if (rc == VERR_NOT_SUPPORTED)
+    {
+        RTDvmRelease(hVolMgr);
         return VINF_SUCCESS;
+    }
 
-    RTTestIPrintf(RTTESTLVL_ALWAYS, "%s Successfully opened map with format: %s.\n", szPrefix, RTDvmMapGetFormat(hVolMgr));
+    RTTestIPrintf(RTTESTLVL_ALWAYS, "%s Successfully opened map with format: %s.\n", szPrefix, RTDvmMapGetFormatName(hVolMgr));
 
     /* Dump all volumes. */
     RTTestSubF(hTest, "Dump volumes");
@@ -127,9 +97,10 @@ static int tstRTDvmVolume(RTTEST hTest, PTSTRTDVMDISK pDisk, uint64_t cb, unsign
         RTTestIPrintf(RTTESTLVL_ALWAYS, "%s Volume %u:\n", szPrefix, cVolume);
         RTTestIPrintf(RTTESTLVL_ALWAYS, "%s Volume type  %s\n", szPrefix, RTDvmVolumeTypeGetDescr(enmVolType));
         RTTestIPrintf(RTTESTLVL_ALWAYS, "%s Volume size  %llu\n", szPrefix, RTDvmVolumeGetSize(hVol));
-        RTTestIPrintf(RTTESTLVL_ALWAYS, "%s Volume flags %s %s\n\n", szPrefix,
+        RTTestIPrintf(RTTESTLVL_ALWAYS, "%s Volume flags %s %s %s\n", szPrefix,
                       fVolFlags & DVMVOLUME_FLAGS_BOOTABLE ? "Bootable" : "",
-                      fVolFlags & DVMVOLUME_FLAGS_ACTIVE ? "Active" : "");
+                      fVolFlags & DVMVOLUME_FLAGS_ACTIVE ? "Active" : "",
+                      fVolFlags & DVMVOLUME_F_CONTIGUOUS ? "Contiguous" : "");
 
         rc = RTDvmVolumeQueryName(hVol, &pszVolName);
         if (RT_SUCCESS(rc))
@@ -142,14 +113,31 @@ static int tstRTDvmVolume(RTTEST hTest, PTSTRTDVMDISK pDisk, uint64_t cb, unsign
         else
             rc = VINF_SUCCESS;
 
+        if (fVolFlags & DVMVOLUME_F_CONTIGUOUS)
+        {
+            uint64_t offStart, offEnd;
+            rc = RTDvmVolumeQueryRange(hVol, &offStart, &offEnd);
+            if (RT_SUCCESS(rc))
+                RTTestIPrintf(RTTESTLVL_ALWAYS, "%s Volume range %llu:%llu\n", szPrefix, offStart, offEnd);
+            else
+                RTTestIFailed("RTDvmVolumeQueryRange -> %Rrc", rc);
+        }
+
+        RTTestIPrintf(RTTESTLVL_ALWAYS, "\n");
+
         /*
          * Query all volumes which might be inside this.
          * (think of MBR partitions with a bsdlabel inside)
          */
-        TSTRTDVMDISK Disk;
-        Disk.fUseImage = false;
-        Disk.hVol      = hVol;
-        rc = tstRTDvmVolume(hTest, &Disk, RTDvmVolumeGetSize(hVol), cNesting + 1);
+        RTVFSFILE hVfsVol;
+        rc = RTDvmVolumeCreateVfsFile(hVol, RTFILE_O_OPEN | RTFILE_O_DENY_NONE | RTFILE_O_READWRITE, &hVfsVol);
+        if (RT_SUCCESS(rc))
+        {
+            rc = tstRTDvmVolume(hTest, hVfsVol, cNesting + 1);
+            RTVfsFileRelease(hVfsVol);
+        }
+        else
+            RTTestIFailed("RTDvmVolumeCreateVfsFile -> %Rrc", rc);
 
         RTDVMVOLUME hVolNext;
         rc = RTDvmMapQueryNextVolume(hVolMgr, hVol, &hVolNext);
@@ -171,6 +159,7 @@ static int tstRTDvmVolume(RTTEST hTest, PTSTRTDVMDISK pDisk, uint64_t cb, unsign
     return rc;
 }
 
+
 int main(int argc, char **argv)
 {
     /*
@@ -191,31 +180,28 @@ int main(int argc, char **argv)
         return RTTestSkipAndDestroy(hTest, "Missing required arguments\n");
     }
 
-    /* Open image. */
-    RTFILE hFile;
-    uint64_t cb = 0;
-    rc = RTFileOpen(&hFile, argv[1], RTFILE_O_OPEN | RTFILE_O_DENY_NONE | RTFILE_O_READWRITE);
+    RTVFSFILE hVfsDisk;
+    rc = RTVfsFileOpenNormal(argv[1], RTFILE_O_OPEN | RTFILE_O_DENY_NONE | RTFILE_O_READWRITE, &hVfsDisk);
     if (RT_FAILURE(rc))
     {
-        RTTestIFailed("RTFileOpen -> %Rrc", rc);
+        RTTestIFailed("RTVfsFileOpenNormal -> %Rrc", rc);
         return RTTestSummaryAndDestroy(hTest);
     }
 
-    rc = RTFileGetSize(hFile, &cb);
+    uint64_t cb = 0;
+    rc = RTVfsFileQuerySize(hVfsDisk, &cb);
     if (   RT_FAILURE(rc)
         || cb % 512 != 0) /* Assume 512 byte sector size. */
     {
-        RTTestIFailed("RTFileGetSize -> %Rrc", rc);
+        RTTestIFailed("RTVfsFileQuerySize -> %Rrc", rc);
         return RTTestSummaryAndDestroy(hTest);
     }
 
-    TSTRTDVMDISK Disk;
-
-    Disk.fUseImage = true;
-    Disk.hImage    = hFile;
-    rc = tstRTDvmVolume(hTest, &Disk, cb, 0);
+    rc = tstRTDvmVolume(hTest, hVfsDisk, 0);
 
     RTTESTI_CHECK(rc == VINF_SUCCESS);
+
+    RTVfsFileRelease(hVfsDisk);
 
     /*
      * Summary

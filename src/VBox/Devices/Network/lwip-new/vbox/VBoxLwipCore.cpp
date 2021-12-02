@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxLwipCore.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox Lwip Core Initiatetor/Finilizer.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 #define LOG_GROUP LOG_GROUP_DRV_NAT
 #include <iprt/cpp/lock.h>
 #include <iprt/timer.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 
 extern "C" {
@@ -45,7 +45,8 @@ extern "C" {
 #include "lwip/tcpip.h"
 }
 
-typedef struct {
+typedef struct LWIPCOREUSERCALLBACK
+{
     PFNRT1 pfn;
     void *pvUser;
 } LWIPCOREUSERCALLBACK, *PLWIPCOREUSERCALLBACK;
@@ -63,9 +64,9 @@ static LWIPCORE g_LwipCore;
 
 
 /**
- * @note: this function executes on TCPIP thread.
+ * @note this function executes on TCPIP thread.
  */
-static void lwipCoreUserCallback(void *pvArg)
+static void lwipCoreUserCallback(void *pvArg) RT_NOTHROW_DEF
 {
     LogFlowFunc(("ENTER: pvArg:%p\n", pvArg));
 
@@ -80,9 +81,9 @@ static void lwipCoreUserCallback(void *pvArg)
 
 
 /**
- * @note: this function executes on TCPIP thread.
+ * @note this function executes on TCPIP thread.
  */
-static void lwipCoreInitDone(void *pvArg)
+static void lwipCoreInitDone(void *pvArg) RT_NOTHROW_DEF
 {
     LogFlowFunc(("ENTER: pvArg:%p\n", pvArg));
 
@@ -94,9 +95,9 @@ static void lwipCoreInitDone(void *pvArg)
 
 
 /**
- * @note: this function executes on TCPIP thread.
+ * @note this function executes on TCPIP thread.
  */
-static void lwipCoreFiniDone(void *pvArg)
+static void lwipCoreFiniDone(void *pvArg) RT_NOTHROW_DEF
 {
     LogFlowFunc(("ENTER: pvArg:%p\n", pvArg));
 
@@ -132,7 +133,7 @@ int vboxLwipCoreInitialize(PFNRT1 pfnCallback, void *pvCallbackArg)
             lwipRc = sys_sem_new(&g_LwipCore.LwipTcpIpSem, 0);
             if (lwipRc != ERR_OK)
             {
-                LogFlow(("%s: sys_sem_new error %d\n", __FUNCTION__, lwipRc));
+                LogFlowFunc(("sys_sem_new error %d\n", lwipRc));
                 goto done;
             }
 
@@ -143,7 +144,7 @@ int vboxLwipCoreInitialize(PFNRT1 pfnCallback, void *pvCallbackArg)
             lwipRc = tcpip_callback(lwipCoreUserCallback, &callback);
             if (lwipRc != ERR_OK)
             {
-                LogFlow(("%s: tcpip_callback error %d\n", __FUNCTION__, lwipRc));
+                LogFlowFunc(("tcpip_callback error %d\n", lwipRc));
                 goto done;
             }
         }
@@ -190,24 +191,25 @@ void vboxLwipCoreFinalize(PFNRT1 pfnCallback, void *pvCallbackArg)
              * is tcpip_msg::sem, but it seems to be unused and may be
              * gone in future versions of lwip.
              */
-            struct tcpip_msg msg;
-            msg.type = TCPIP_MSG_CALLBACK_TERMINATE;
-            msg.msg.cb.function = lwipCoreFiniDone;
-            msg.msg.cb.ctx = &callback;
-
-            lwipRc = tcpip_callbackmsg((struct tcpip_callback_msg *)&msg);
-            if (lwipRc != ERR_OK)
+            struct tcpip_msg *msg = (struct tcpip_msg *)memp_malloc(MEMP_TCPIP_MSG_API);
+            if (msg)
             {
-                LogFlow(("%s: tcpip_callback_msg error %d\n", __FUNCTION__, lwipRc));
+                msg->type = TCPIP_MSG_CALLBACK_TERMINATE;
+                msg->msg.cb.function = lwipCoreFiniDone;
+                msg->msg.cb.ctx = &callback;
+
+                lwipRc = tcpip_callbackmsg((struct tcpip_callback_msg *)msg);
+                if (lwipRc != ERR_OK)
+                    LogFlowFunc(("tcpip_callback_msg error %d\n", lwipRc));
             }
+            else
+                LogFlowFunc(("memp_malloc no memory\n"));
         }
         else
         {
             lwipRc = tcpip_callback(lwipCoreUserCallback, &callback);
             if (lwipRc != ERR_OK)
-            {
-                LogFlow(("%s: tcpip_callback error %d\n", __FUNCTION__, lwipRc));
-            }
+                LogFlowFunc(("tcpip_callback error %d\n", lwipRc));
         }
 
         if (lwipRc == ERR_OK)

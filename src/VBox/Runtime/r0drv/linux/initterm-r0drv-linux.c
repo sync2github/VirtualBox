@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: initterm-r0drv-linux.c 85698 2020-08-11 17:05:29Z vboxsync $ */
 /** @file
  * IPRT - Initialization & Termination, R0 Driver, Linux.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 *********************************************************************************************************************************/
 #include "the-linux-kernel.h"
 #include "internal/iprt.h"
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/assert.h>
 #include "internal/initterm.h"
 
@@ -39,18 +39,11 @@
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
 /** The IPRT work queue. */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 41)
+#if RTLNX_VER_MIN(2,5,41)
 static struct workqueue_struct *g_prtR0LnxWorkQueue;
 #else
 static DECLARE_TASK_QUEUE(g_rtR0LnxWorkQueue);
 #endif
-
-
-/*********************************************************************************************************************************
-*   Internal Functions                                                                                                           *
-*********************************************************************************************************************************/
-/* in alloc-r0drv0-linux.c */
-DECLHIDDEN(void) rtR0MemExecCleanup(void);
 
 
 /**
@@ -64,11 +57,11 @@ DECLHIDDEN(void) rtR0LnxWorkqueuePush(RTR0LNXWORKQUEUEITEM *pWork, void (*pfnWor
 {
     IPRT_LINUX_SAVE_EFL_AC();
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 41)
-# if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 20)
+#if RTLNX_VER_MIN(2,5,41)
+# if RTLNX_VER_MIN(2,6,20)
     INIT_WORK(pWork, pfnWorker);
 # else
-    INIT_WORK(pWork, pfnWorker, pWork);
+    INIT_WORK(pWork, (void (*)(void *))pfnWorker, pWork);
 # endif
     queue_work(g_prtR0LnxWorkQueue, pWork);
 #else
@@ -90,7 +83,7 @@ DECLHIDDEN(void) rtR0LnxWorkqueueFlush(void)
 {
     IPRT_LINUX_SAVE_EFL_AC();
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 41)
+#if RTLNX_VER_MIN(2,5,41)
     flush_workqueue(g_prtR0LnxWorkQueue);
 #else
     run_task_queue(&g_rtR0LnxWorkQueue);
@@ -105,8 +98,8 @@ DECLHIDDEN(int) rtR0InitNative(void)
     int rc = VINF_SUCCESS;
     IPRT_LINUX_SAVE_EFL_AC();
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 41)
- #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 13)
+#if RTLNX_VER_MIN(2,5,41)
+ #if RTLNX_VER_MIN(2,6,13)
     g_prtR0LnxWorkQueue = create_workqueue("iprt-VBoxWQueue");
  #else
     g_prtR0LnxWorkQueue = create_workqueue("iprt-VBoxQ");
@@ -125,7 +118,7 @@ DECLHIDDEN(void) rtR0TermNative(void)
     IPRT_LINUX_SAVE_EFL_AC();
 
     rtR0LnxWorkqueueFlush();
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 41)
+#if RTLNX_VER_MIN(2,5,41)
     destroy_workqueue(g_prtR0LnxWorkQueue);
     g_prtR0LnxWorkQueue = NULL;
 #endif

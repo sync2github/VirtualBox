@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: dbgmodcodeview.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * IPRT - Debug Module Reader For Microsoft CodeView and COFF.
  *
@@ -19,7 +19,7 @@
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -52,6 +52,7 @@
 #include <iprt/assert.h>
 #include <iprt/err.h>
 #include <iprt/file.h>
+#include <iprt/latin1.h>
 #include <iprt/log.h>
 #include <iprt/mem.h>
 #include <iprt/param.h>
@@ -186,8 +187,8 @@ typedef RTDBGMODCV *PCRTDBGMODCV;
  * @param   cbSubSect       The size of the subsection data.
  * @param   pDirEnt         The directory entry.
  */
-typedef DECLCALLBACK(int) FNDBGMODCVSUBSECTCALLBACK(PRTDBGMODCV pThis, void const *pvSubSect, size_t cbSubSect,
-                                                    PCRTCVDIRENT32 pDirEnt);
+typedef DECLCALLBACKTYPE(int, FNDBGMODCVSUBSECTCALLBACK,(PRTDBGMODCV pThis, void const *pvSubSect, size_t cbSubSect,
+                                                         PCRTCVDIRENT32 pDirEnt));
 /** Pointer to a subsection callback. */
 typedef FNDBGMODCVSUBSECTCALLBACK *PFNDBGMODCVSUBSECTCALLBACK;
 
@@ -576,7 +577,7 @@ DECLINLINE(int) rtDbgModCvAdjustSegAndOffset(PRTDBGMODCV pThis, uint32_t *piSeg,
  * @param   pchName             The symbol name (not necessarily terminated).
  * @param   cchName             The symbol name length.
  * @param   fFlags              Flags reserved for future exploits, MBZ.
- * @param   cbSym               Symbol size, 0 if not avaiable.
+ * @param   cbSym               Symbol size, 0 if not available.
  */
 static int rtDbgModCvAddSymbol(PRTDBGMODCV pThis, uint32_t iSeg, uint64_t off, const char *pchName,
                                uint32_t cchName, uint32_t fFlags, uint32_t cbSym)
@@ -591,7 +592,7 @@ static int rtDbgModCvAddSymbol(PRTDBGMODCV pThis, uint32_t iSeg, uint64_t off, c
         rc = rtDbgModCvAdjustSegAndOffset(pThis, &iSeg, &off);
         if (RT_SUCCESS(rc))
         {
-            rc = RTDbgModSymbolAdd(pThis->hCnt, pszName, iSeg, off, cbSym, 0 /*fFlags*/, NULL);
+            rc = RTDbgModSymbolAdd(pThis->hCnt, pszName, iSeg, off, cbSym, RTDBGSYMBOLADD_F_ADJUST_SIZES_ON_CONFLICT, NULL);
 
             /* Simple duplicate symbol mangling, just to get more details. */
             if (rc == VERR_DBG_DUPLICATE_SYMBOL && cchName < _2K)
@@ -608,6 +609,9 @@ static int rtDbgModCvAddSymbol(PRTDBGMODCV pThis, uint32_t iSeg, uint64_t off, c
                 }
 
             }
+            else if (rc == VERR_DBG_ADDRESS_CONFLICT && cbSym)
+                rc = RTDbgModSymbolAdd(pThis->hCnt, pszName, iSeg, off, cbSym,
+                                       RTDBGSYMBOLADD_F_REPLACE_SAME_ADDR | RTDBGSYMBOLADD_F_ADJUST_SIZES_ON_CONFLICT, NULL);
 
             Log(("Symbol: %04x:%08x %.*s [%Rrc]\n", iSeg, off, cchName, pchName, rc));
             if (rc == VERR_DBG_ADDRESS_CONFLICT || rc == VERR_DBG_DUPLICATE_SYMBOL)
@@ -1226,7 +1230,7 @@ rtDbgModCvSs_SrcModule(PRTDBGMODCV pThis, void const *pvSubSect, size_t cbSubSec
                                 ("cbSubSect=%#x (- %#x) aoffSrcFiles[%u]=%#x\n",
                                  cbSubSect, RT_UOFFSETOF(RTCVSRCFILE, aoffSrcLines), i, offSrcFile));
         PCRTCVSRCFILE   pSrcFile    = (PCRTCVSRCFILE)((uint8_t const *)pvSubSect + offSrcFile);
-        size_t         cbSrcFileHdr = RT_UOFFSETOF(RTCVSRCFILE, aoffSrcLines[pSrcFile->cSegs])
+        size_t         cbSrcFileHdr = RT_UOFFSETOF_DYN(RTCVSRCFILE, aoffSrcLines[pSrcFile->cSegs])
                                     + sizeof(RTCVSRCRANGE) * pSrcFile->cSegs
                                     + sizeof(uint8_t);
         RTDBGMODCV_CHECK_RET_BF(cbSubSect >= offSrcFile + cbSrcFileHdr && cbSubSect > cbSrcFileHdr,
@@ -1250,7 +1254,7 @@ rtDbgModCvSs_SrcModule(PRTDBGMODCV pThis, void const *pvSubSect, size_t cbSubSec
                                     ("cbSubSect=%#x (- %#x) aoffSrcFiles[%u]=%#x\n",
                                      cbSubSect, RT_UOFFSETOF(RTCVSRCLINE, aoffLines), iSeg, offSrcLine));
             PCRTCVSRCLINE   pSrcLine    = (PCRTCVSRCLINE)((uint8_t const *)pvSubSect + offSrcLine);
-            size_t          cbSrcLine   = RT_UOFFSETOF(RTCVSRCLINE, aoffLines[pSrcLine->cPairs])
+            size_t          cbSrcLine   = RT_UOFFSETOF_DYN(RTCVSRCLINE, aoffLines[pSrcLine->cPairs])
                                         + pSrcLine->cPairs * sizeof(uint16_t);
             RTDBGMODCV_CHECK_RET_BF(cbSubSect >= offSrcLine + cbSrcLine,
                                     ("cbSubSect=%#x aoffSrcFiles[%u]=%#x cbSrcLine=%#x\n",
@@ -1746,6 +1750,10 @@ static int rtDbgModCvLoadDirectory(PRTDBGMODCV pThis)
     {
         /*
          * 32-bit type (reading too much for NB04 is no problem).
+         *
+         * Note! The watcom linker (v1.9) seems to overwrite the directory
+         *       header and more under some conditions.  So, if this code fails
+         *       you might be so lucky as to have reproduce that issue...
          */
         RTCVDIRHDR32EX DirHdr;
         rc = rtDbgModCvReadAt(pThis, pThis->offDir, &DirHdr, sizeof(DirHdr));
@@ -1754,25 +1762,25 @@ static int rtDbgModCvLoadDirectory(PRTDBGMODCV pThis)
             if (   DirHdr.Core.cbHdr != sizeof(DirHdr.Core)
                 && DirHdr.Core.cbHdr != sizeof(DirHdr))
             {
-                Log(("Unexpected CV directory size: %#x\n", DirHdr.Core.cbHdr));
+                Log(("Unexpected CV directory size: %#x [wlink screwup?]\n", DirHdr.Core.cbHdr));
                 rc = VERR_CV_BAD_FORMAT;
             }
             if (   DirHdr.Core.cbHdr == sizeof(DirHdr)
                 && (   DirHdr.offNextDir != 0
                     || DirHdr.fFlags     != 0) )
             {
-                Log(("Extended CV directory headers fields are not zero: fFlags=%#x offNextDir=%#x\n",
+                Log(("Extended CV directory headers fields are not zero: fFlags=%#x offNextDir=%#x [wlink screwup?]\n",
                      DirHdr.fFlags, DirHdr.offNextDir));
                 rc = VERR_CV_BAD_FORMAT;
             }
             if (DirHdr.Core.cbEntry != sizeof(RTCVDIRENT32))
             {
-                Log(("Unexpected CV directory entry size: %#x (expected %#x)\n", DirHdr.Core.cbEntry, sizeof(RTCVDIRENT32)));
+                Log(("Unexpected CV directory entry size: %#x (expected %#x) [wlink screwup?]\n", DirHdr.Core.cbEntry, sizeof(RTCVDIRENT32)));
                 rc = VERR_CV_BAD_FORMAT;
             }
             if (DirHdr.Core.cEntries < 2 || DirHdr.Core.cEntries >= _512K)
             {
-                Log(("CV directory count is out of considered valid range: %#x\n", DirHdr.Core.cEntries));
+                Log(("CV directory count is out of considered valid range: %#x [wlink screwup?]\n", DirHdr.Core.cEntries));
                 rc = VERR_CV_BAD_FORMAT;
             }
             if (RT_SUCCESS(rc))
@@ -2406,6 +2414,14 @@ static int rtDbgModCvLoadCoffInfo(PRTDBGMODCV pThis)
  */
 
 
+/** @interface_method_impl{RTDBGMODVTDBG,pfnUnwindFrame} */
+static DECLCALLBACK(int) rtDbgModCv_UnwindFrame(PRTDBGMODINT pMod, RTDBGSEGIDX iSeg, RTUINTPTR off, PRTDBGUNWINDSTATE pState)
+{
+    RT_NOREF(pMod, iSeg, off, pState);
+    return VERR_DBG_NO_UNWIND_INFO;
+}
+
+
 /** @interface_method_impl{RTDBGMODVTDBG,pfnLineByAddr} */
 static DECLCALLBACK(int) rtDbgModCv_LineByAddr(PRTDBGMODINT pMod, RTDBGSEGIDX iSeg, RTUINTPTR off,
                                                   PRTINTPTR poffDisp, PRTDBGLINE pLineInfo)
@@ -2870,7 +2886,7 @@ static int rtDbgModCvProbeCommon(PRTDBGMODINT pDbgMod, PRTCVHDR pCvHdr, RTCVFILE
            the area defined by the debug info we got from the loader. */
         if (pCvHdr->off < cb && pCvHdr->off >= sizeof(*pCvHdr))
         {
-            Log(("RTDbgModCv: Found %c%c%c%c at %#RTfoff - size %#x, directory at %#x. file type %d\n",
+            Log(("RTDbgModCv: Found %c%c%c%c at %#x - size %#x, directory at %#x. file type %d\n",
                  RT_BYTE1(pCvHdr->u32Magic), RT_BYTE2(pCvHdr->u32Magic), RT_BYTE3(pCvHdr->u32Magic), RT_BYTE4(pCvHdr->u32Magic),
                  off, cb, pCvHdr->off, enmFileType));
 
@@ -3163,6 +3179,8 @@ DECL_HIDDEN_CONST(RTDBGMODVTDBG) const g_rtDbgModVtDbgCodeView =
     /*.pfnLineCount = */        rtDbgModCv_LineCount,
     /*.pfnLineByOrdinal = */    rtDbgModCv_LineByOrdinal,
     /*.pfnLineByAddr = */       rtDbgModCv_LineByAddr,
+
+    /*.pfnUnwindFrame = */      rtDbgModCv_UnwindFrame,
 
     /*.u32EndMagic = */         RTDBGMODVTDBG_MAGIC
 };

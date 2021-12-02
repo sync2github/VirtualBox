@@ -1,11 +1,11 @@
 #!/bin/sh
-# $Id$
+# $Id: preremove.sh 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # VirtualBox preremove script for Solaris Guest Additions.
 #
 
 #
-# Copyright (C) 2008-2013 Oracle Corporation
+# Copyright (C) 2008-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -63,10 +63,6 @@ fi
 # Try and restore xorg.conf!
 echo "Restoring X.Org..."
 /opt/VirtualBoxAdditions/x11restore.pl
-
-# Revert set-up of our OpenGL library.
-rm -f /lib/opengl/ogl_select/vbox_vendor_select
-/lib/svc/method/ogl-select start
 
 
 echo "Done."

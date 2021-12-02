@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GMM.cpp 92248 2021-11-06 15:21:57Z vboxsync $ */
 /** @file
  * GMM - Global Memory Manager, ring-3 request wrappers.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,7 +22,7 @@
 #define LOG_GROUP LOG_GROUP_GMM
 #include <VBox/vmm/gmm.h>
 #include <VBox/vmm/vmm.h>
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 #include <VBox/sup.h>
 #include <VBox/err.h>
 #include <VBox/param.h>
@@ -77,7 +77,7 @@ GMMR3DECL(int)  GMMR3UpdateReservation(PVM pVM, uint64_t cBasePages, uint32_t cS
  */
 GMMR3DECL(int) GMMR3AllocatePagesPrepare(PVM pVM, PGMMALLOCATEPAGESREQ *ppReq, uint32_t cPages, GMMACCOUNT enmAccount)
 {
-    uint32_t cb = RT_OFFSETOF(GMMALLOCATEPAGESREQ, aPages[cPages]);
+    uint32_t cb = RT_UOFFSETOF_DYN(GMMALLOCATEPAGESREQ, aPages[cPages]);
     PGMMALLOCATEPAGESREQ pReq = (PGMMALLOCATEPAGESREQ)RTMemTmpAllocZ(cb);
     if (!pReq)
         return VERR_NO_TMP_MEMORY;
@@ -103,38 +103,17 @@ GMMR3DECL(int) GMMR3AllocatePagesPrepare(PVM pVM, PGMMALLOCATEPAGESREQ *ppReq, u
  */
 GMMR3DECL(int) GMMR3AllocatePagesPerform(PVM pVM, PGMMALLOCATEPAGESREQ pReq)
 {
-    for (unsigned i = 0; ; i++)
+    int rc = VMMR3CallR0(pVM, VMMR0_DO_GMM_ALLOCATE_PAGES, 0, &pReq->Hdr);
+    if (RT_SUCCESS(rc))
     {
-        int rc = VMMR3CallR0(pVM, VMMR0_DO_GMM_ALLOCATE_PAGES, 0, &pReq->Hdr);
-        if (RT_SUCCESS(rc))
-        {
 #ifdef LOG_ENABLED
-            for (uint32_t iPage = 0; iPage < pReq->cPages; iPage++)
-                Log3(("GMMR3AllocatePagesPerform: idPage=%#x HCPhys=%RHp\n",
-                      pReq->aPages[iPage].idPage, pReq->aPages[iPage].HCPhysGCPhys));
+        for (uint32_t iPage = 0; iPage < pReq->cPages; iPage++)
+            Log3(("GMMR3AllocatePagesPerform: idPage=%#x HCPhys=%RHp\n",
+                  pReq->aPages[iPage].idPage, pReq->aPages[iPage].HCPhysGCPhys));
 #endif
-            return rc;
-        }
-        if (rc != VERR_GMM_SEED_ME)
-            return VMSetError(pVM, rc, RT_SRC_POS,
-                              N_("GMMR0AllocatePages failed to allocate %u pages"),
-                              pReq->cPages);
-        Assert(i < pReq->cPages);
-
-        /*
-         * Seed another chunk.
-         */
-        void *pvChunk;
-        rc = SUPR3PageAlloc(GMM_CHUNK_SIZE >> PAGE_SHIFT, &pvChunk);
-        if (RT_FAILURE(rc))
-            return VMSetError(pVM, rc, RT_SRC_POS,
-                              N_("Out of memory (SUPR3PageAlloc) seeding a %u pages allocation request"),
-                              pReq->cPages);
-
-        rc = VMMR3CallR0(pVM, VMMR0_DO_GMM_SEED_CHUNK, (uintptr_t)pvChunk, NULL);
-        if (RT_FAILURE(rc))
-            return VMSetError(pVM, rc, RT_SRC_POS, N_("GMM seeding failed"));
+        return rc;
     }
+    return VMSetError(pVM, rc, RT_SRC_POS, N_("GMMR0AllocatePages failed to allocate %u pages"), pReq->cPages);
 }
 
 
@@ -159,7 +138,7 @@ GMMR3DECL(void) GMMR3AllocatePagesCleanup(PGMMALLOCATEPAGESREQ pReq)
  */
 GMMR3DECL(int) GMMR3FreePagesPrepare(PVM pVM, PGMMFREEPAGESREQ *ppReq, uint32_t cPages, GMMACCOUNT enmAccount)
 {
-    uint32_t cb = RT_OFFSETOF(GMMFREEPAGESREQ, aPages[cPages]);
+    uint32_t cb = RT_UOFFSETOF_DYN(GMMFREEPAGESREQ, aPages[cPages]);
     PGMMFREEPAGESREQ pReq = (PGMMFREEPAGESREQ)RTMemTmpAllocZ(cb);
     if (!pReq)
         return VERR_NO_TMP_MEMORY;
@@ -188,7 +167,7 @@ GMMR3DECL(int) GMMR3FreePagesPrepare(PVM pVM, PGMMFREEPAGESREQ *ppReq, uint32_t 
 GMMR3DECL(void) GMMR3FreePagesRePrep(PVM pVM, PGMMFREEPAGESREQ pReq, uint32_t cPages, GMMACCOUNT enmAccount)
 {
     Assert(pReq->Hdr.u32Magic == SUPVMMR0REQHDR_MAGIC);
-    pReq->Hdr.cbReq     = RT_OFFSETOF(GMMFREEPAGESREQ, aPages[cPages]);
+    pReq->Hdr.cbReq     = RT_UOFFSETOF_DYN(GMMFREEPAGESREQ, aPages[cPages]);
     pReq->enmAccount    = enmAccount;
     pReq->cPages        = cPages;
     NOREF(pVM);
@@ -215,7 +194,7 @@ GMMR3DECL(int) GMMR3FreePagesPerform(PVM pVM, PGMMFREEPAGESREQ pReq, uint32_t cA
         if (!cActualPages)
             return VINF_SUCCESS;
         pReq->cPages = cActualPages;
-        pReq->Hdr.cbReq = RT_OFFSETOF(GMMFREEPAGESREQ, aPages[cActualPages]);
+        pReq->Hdr.cbReq = RT_UOFFSETOF_DYN(GMMFREEPAGESREQ, aPages[cActualPages]);
     }
 
     /*
@@ -251,7 +230,7 @@ GMMR3DECL(void) GMMR3FreePagesCleanup(PGMMFREEPAGESREQ pReq)
  */
 GMMR3DECL(void) GMMR3FreeAllocatedPages(PVM pVM, GMMALLOCATEPAGESREQ const *pAllocReq)
 {
-    uint32_t cb = RT_OFFSETOF(GMMFREEPAGESREQ, aPages[pAllocReq->cPages]);
+    uint32_t cb = RT_UOFFSETOF_DYN(GMMFREEPAGESREQ, aPages[pAllocReq->cPages]);
     PGMMFREEPAGESREQ pReq = (PGMMFREEPAGESREQ)RTMemTmpAllocZ(cb);
     AssertLogRelReturnVoid(pReq);
 
@@ -307,7 +286,7 @@ GMMR3DECL(int)  GMMR3QueryHypervisorMemoryStats(PVM pVM, uint64_t *pcTotalAllocP
     *puTotalBalloonSize  = 0;
 
     /* Must be callable from any thread, so can't use VMMR3CallR0. */
-    int rc = SUPR3CallVMMR0Ex(pVM->pVMR0, NIL_VMCPUID, VMMR0_DO_GMM_QUERY_HYPERVISOR_MEM_STATS, 0, &Req.Hdr);
+    int rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), NIL_VMCPUID, VMMR0_DO_GMM_QUERY_HYPERVISOR_MEM_STATS, 0, &Req.Hdr);
     if (rc == VINF_SUCCESS)
     {
         *pcTotalAllocPages   = Req.cAllocPages;
@@ -378,21 +357,12 @@ GMMR3DECL(int)  GMMR3FreeLargePage(PVM pVM,  uint32_t idPage)
 
 
 /**
- * @see GMMR0SeedChunk
- */
-GMMR3DECL(int)  GMMR3SeedChunk(PVM pVM, RTR3PTR pvR3)
-{
-    return VMMR3CallR0(pVM, VMMR0_DO_GMM_SEED_CHUNK, (uintptr_t)pvR3, NULL);
-}
-
-
-/**
  * @see GMMR0RegisterSharedModule
  */
 GMMR3DECL(int) GMMR3RegisterSharedModule(PVM pVM, PGMMREGISTERSHAREDMODULEREQ pReq)
 {
     pReq->Hdr.u32Magic  = SUPVMMR0REQHDR_MAGIC;
-    pReq->Hdr.cbReq     = RT_OFFSETOF(GMMREGISTERSHAREDMODULEREQ, aRegions[pReq->cRegions]);
+    pReq->Hdr.cbReq     = RT_UOFFSETOF_DYN(GMMREGISTERSHAREDMODULEREQ, aRegions[pReq->cRegions]);
     int rc = VMMR3CallR0(pVM, VMMR0_DO_GMM_REGISTER_SHARED_MODULE, 0, &pReq->Hdr);
     if (rc == VINF_SUCCESS)
         rc = pReq->rc;
@@ -442,7 +412,7 @@ GMMR3DECL(bool) GMMR3IsDuplicatePage(PVM pVM, uint32_t idPage)
     Req.fDuplicate   = false;
 
     /* Must be callable from any thread, so can't use VMMR3CallR0. */
-    int rc = SUPR3CallVMMR0Ex(pVM->pVMR0, NIL_VMCPUID, VMMR0_DO_GMM_FIND_DUPLICATE_PAGE, 0, &Req.Hdr);
+    int rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), NIL_VMCPUID, VMMR0_DO_GMM_FIND_DUPLICATE_PAGE, 0, &Req.Hdr);
     if (rc == VINF_SUCCESS)
         return Req.fDuplicate;
     return false;

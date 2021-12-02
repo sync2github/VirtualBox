@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VDIfVfs.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual Disk Image (VDI), I/O interface to IPRT VFS I/O stream glue.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -160,25 +160,6 @@ static DECLCALLBACK(int) vdIfVfsIos_Flush(void *pvThis)
 
 
 /**
- * @interface_method_impl{RTVFSIOSTREAMOPS,pfnPollOne}
- */
-static DECLCALLBACK(int) vdIfVfsIos_PollOne(void *pvThis, uint32_t fEvents, RTMSINTERVAL cMillies, bool fIntr,
-                                            uint32_t *pfRetEvents)
-{
-    NOREF(pvThis);
-    int rc;
-    if (fEvents != RTPOLL_EVT_ERROR)
-    {
-        *pfRetEvents = fEvents & ~RTPOLL_EVT_ERROR;
-        rc = VINF_SUCCESS;
-    }
-    else
-        rc = RTVfsUtilDummyPollOne(fEvents, cMillies, fIntr, pfRetEvents);
-    return rc;
-}
-
-
-/**
  * @interface_method_impl{RTVFSIOSTREAMOPS,pfnTell}
  */
 static DECLCALLBACK(int) vdIfVfsIos_Tell(void *pvThis, PRTFOFF poffActual)
@@ -207,7 +188,7 @@ DECL_HIDDEN_CONST(const RTVFSIOSTREAMOPS) g_vdIfVfsIosOps =
     vdIfVfsIos_Read,
     vdIfVfsIos_Write,
     vdIfVfsIos_Flush,
-    vdIfVfsIos_PollOne,
+    NULL /*PollOne*/,
     vdIfVfsIos_Tell,
     NULL /*Skip*/,
     NULL /*ZeroFill*/,
@@ -365,7 +346,7 @@ DECL_HIDDEN_CONST(const RTVFSFILEOPS) g_vdIfVfsFileOps =
         vdIfVfsIos_Read,
         vdIfVfsIos_Write,
         vdIfVfsIos_Flush,
-        vdIfVfsIos_PollOne,
+        NULL /*PollOne*/,
         vdIfVfsIos_Tell,
         NULL /*Skip*/,
         NULL /*ZeroFill*/,
@@ -375,7 +356,7 @@ DECL_HIDDEN_CONST(const RTVFSFILEOPS) g_vdIfVfsFileOps =
     0,
     { /* ObjSet */
         RTVFSOBJSETOPS_VERSION,
-        RT_OFFSETOF(RTVFSFILEOPS, Stream.Obj) - RT_OFFSETOF(RTVFSFILEOPS, ObjSet),
+        RT_UOFFSETOF(RTVFSFILEOPS, ObjSet) - RT_UOFFSETOF(RTVFSFILEOPS, Stream.Obj),
         vdIfVfsFile_SetMode,
         vdIfVfsFile_SetTimes,
         vdIfVfsFile_SetOwner,
@@ -383,6 +364,8 @@ DECL_HIDDEN_CONST(const RTVFSFILEOPS) g_vdIfVfsFileOps =
     },
     vdIfVfsFile_Seek,
     vdIfVfsFile_QuerySize,
+    NULL /*SetSize*/,
+    NULL /*QueryMaxSize*/,
     RTVFSFILEOPS_VERSION,
 };
 

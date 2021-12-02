@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semmutex-r0drv-nt.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Mutex Semaphores, Ring-0 Driver, NT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -230,7 +230,7 @@ RTDECL(bool) RTSemMutexIsOwned(RTSEMMUTEX hMutexSem)
 #ifdef RT_USE_FAST_MUTEX
     return pThis->Mutex && pThis->Mutex->Owner != NULL;
 #else
-    return KeReadStateMutex(&pThis->Mutex) == 1;
+    return KeReadStateMutex(&pThis->Mutex) == 0;
 #endif
 }
 

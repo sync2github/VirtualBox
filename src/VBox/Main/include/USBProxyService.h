@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBProxyService.h 91312 2021-09-20 11:06:57Z vboxsync $ */
 /** @file
  * VirtualBox USB Proxy Service (base) class.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,9 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-
-#ifndef ____H_USBPROXYSERVICE
-#define ____H_USBPROXYSERVICE
+#ifndef MAIN_INCLUDED_USBProxyService_h
+#define MAIN_INCLUDED_USBProxyService_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/usb.h>
 #include <VBox/usbfilter.h>
@@ -40,9 +42,11 @@ namespace settings
  * Base class for the USB Proxy service.
  */
 class USBProxyService
-    : public VirtualBoxTranslatable
+    : public Lockable
 {
 public:
+    DECLARE_TRANSLATE_METHODS(USBProxyService)
+
     USBProxyService(Host *aHost);
     virtual HRESULT init(void);
     virtual ~USBProxyService();
@@ -105,7 +109,7 @@ protected:
 
     HRESULT createUSBDeviceSource(const com::Utf8Str &aBackend, const com::Utf8Str &aId,
                                   const com::Utf8Str &aAddress, const std::vector<com::Utf8Str> &aPropertyNames,
-                                  const std::vector<com::Utf8Str> &aPropertyValues);
+                                  const std::vector<com::Utf8Str> &aPropertyValues, bool fLoadingSettings);
 
 private:
 
@@ -129,5 +133,5 @@ private:
     int                 mLastError;
 };
 
-#endif /* !____H_USBPROXYSERVICE */
+#endif /* !MAIN_INCLUDED_USBProxyService_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

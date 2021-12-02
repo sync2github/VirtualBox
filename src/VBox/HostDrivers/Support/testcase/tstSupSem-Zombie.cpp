@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstSupSem-Zombie.cpp 86397 2020-10-01 18:58:48Z vboxsync $ */
 /** @file
  * Support Library Testcase - Ring-3 Semaphore interface - Zombie bugs.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 
 #include <VBox/param.h>
 #include <iprt/env.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/initterm.h>
 #include <iprt/process.h>
 #include <iprt/stream.h>
@@ -55,7 +55,7 @@ static DECLCALLBACK(int) tstSupSemSRETimed(RTTHREAD hSelf, void *pvUser)
     SUPSEMEVENT hEvent = (SUPSEMEVENT)pvUser;
     RTThreadUserSignal(hSelf);
     int rc = SUPSemEventWaitNoResume(g_pSession, hEvent, 120*1000);
-    AssertReleaseMsgFailed(("%Rrc\n", rc));
+    AssertReleaseMsg(rc == VERR_INTERRUPTED, ("%Rrc\n", rc));
     return rc;
 }
 
@@ -65,7 +65,7 @@ static DECLCALLBACK(int) tstSupSemMRETimed(RTTHREAD hSelf, void *pvUser)
     SUPSEMEVENTMULTI hEventMulti = (SUPSEMEVENTMULTI)pvUser;
     RTThreadUserSignal(hSelf);
     int rc = SUPSemEventMultiWaitNoResume(g_pSession, hEventMulti, 120*1000);
-    AssertReleaseMsgFailed(("%Rrc\n", rc));
+    AssertReleaseMsg(rc == VERR_INTERRUPTED, ("%Rrc\n", rc));
     return rc;
 }
 
@@ -75,7 +75,7 @@ static DECLCALLBACK(int) tstSupSemSREInf(RTTHREAD hSelf, void *pvUser)
     SUPSEMEVENT hEvent = (SUPSEMEVENT)pvUser;
     RTThreadUserSignal(hSelf);
     int rc = SUPSemEventWaitNoResume(g_pSession, hEvent, RT_INDEFINITE_WAIT);
-    AssertReleaseMsgFailed(("%Rrc\n", rc));
+    AssertReleaseMsg(rc == VERR_INTERRUPTED, ("%Rrc\n", rc));
     return rc;
 }
 
@@ -85,7 +85,7 @@ static DECLCALLBACK(int) tstSupSemMREInf(RTTHREAD hSelf, void *pvUser)
     SUPSEMEVENTMULTI hEventMulti = (SUPSEMEVENTMULTI)pvUser;
     RTThreadUserSignal(hSelf);
     int rc = SUPSemEventMultiWaitNoResume(g_pSession, hEventMulti, RT_INDEFINITE_WAIT);
-    AssertReleaseMsgFailed(("%Rrc\n", rc));
+    AssertReleaseMsg(rc == VERR_INTERRUPTED, ("%Rrc\n", rc));
     return rc;
 }
 

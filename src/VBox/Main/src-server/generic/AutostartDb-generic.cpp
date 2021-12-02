@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: AutostartDb-generic.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Main - Autostart implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -71,7 +71,7 @@ int AutostartDb::autostartModifyDb(bool fAutostart, bool fAddVM)
                  * a number of the amount of VMs with autostart configured, so they
                  * should be really really small. Anything else is bogus.
                  */
-                rc = RTFileGetSize(hAutostartFile, &cbFile);
+                rc = RTFileQuerySize(hAutostartFile, &cbFile);
                 if (   RT_SUCCESS(rc)
                     && cbFile <= 16)
                 {
@@ -189,7 +189,7 @@ int AutostartDb::addAutostartVM(const char *pszVMId)
     RTCritSectEnter(&this->CritSect);
     rc = autostartModifyDb(true /* fAutostart */, true /* fAddVM */);
     RTCritSectLeave(&this->CritSect);
-#elif defined(RT_OS_DARWIN) || defined(RT_OS_SOLARIS)
+#elif defined(RT_OS_DARWIN) || defined(RT_OS_SOLARIS) || defined(RT_OS_WINDOWS)
     NOREF(pszVMId); /* Not needed */
     rc = VINF_SUCCESS;
 #else
@@ -209,7 +209,7 @@ int AutostartDb::removeAutostartVM(const char *pszVMId)
     RTCritSectEnter(&this->CritSect);
     rc = autostartModifyDb(true /* fAutostart */, false /* fAddVM */);
     RTCritSectLeave(&this->CritSect);
-#elif defined(RT_OS_DARWIN) || defined(RT_OS_SOLARIS)
+#elif defined(RT_OS_DARWIN) || defined(RT_OS_SOLARIS) || defined(RT_OS_WINDOWS)
     NOREF(pszVMId); /* Not needed */
     rc = VINF_SUCCESS;
 #else
@@ -229,7 +229,7 @@ int AutostartDb::addAutostopVM(const char *pszVMId)
     RTCritSectEnter(&this->CritSect);
     rc = autostartModifyDb(false /* fAutostart */, true /* fAddVM */);
     RTCritSectLeave(&this->CritSect);
-#elif defined(RT_OS_DARWIN)
+#elif defined(RT_OS_DARWIN) || defined(RT_OS_WINDOWS)
     NOREF(pszVMId); /* Not needed */
     rc = VINF_SUCCESS;
 #else
@@ -249,7 +249,7 @@ int AutostartDb::removeAutostopVM(const char *pszVMId)
     RTCritSectEnter(&this->CritSect);
     rc = autostartModifyDb(false /* fAutostart */, false /* fAddVM */);
     RTCritSectLeave(&this->CritSect);
-#elif defined(RT_OS_DARWIN)
+#elif defined(RT_OS_DARWIN) || defined (RT_OS_WINDOWS)
     NOREF(pszVMId); /* Not needed */
     rc = VINF_SUCCESS;
 #else

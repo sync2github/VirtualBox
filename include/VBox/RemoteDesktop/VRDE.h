@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_RemoteDesktop_VRDE_h
-#define ___VBox_RemoteDesktop_VRDE_h
+#ifndef VBOX_INCLUDED_RemoteDesktop_VRDE_h
+#define VBOX_INCLUDED_RemoteDesktop_VRDE_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -1139,6 +1142,7 @@ typedef struct _VRDEENTRYPOINTS_3
 #define VRDE_QP_VIDEO_CHANNEL_QUALITY (6)
 #define VRDE_QP_VIDEO_CHANNEL_SUNFLSH (7)
 #define VRDE_QP_FEATURE           (8) /* VRDEFEATURE structure. Generic interface to query named VRDE properties. */
+#define VRDE_QP_UNIX_SOCKET_PATH  (9) /* Path to a UNIX Socket for incoming connections */
 
 #define VRDE_SP_BASE 0x1000
 #define VRDE_SP_NETWORK_BIND_PORT (VRDE_SP_BASE + 1) /* 32 bit. The port number actually used by the server.
@@ -1565,14 +1569,14 @@ typedef VRDECALLBACKS_3 VRDECALLBACKS_4;
  * @return IPRT status code.
  */
 DECLEXPORT(int) VRDECreateServer (const VRDEINTERFACEHDR *pCallbacks,
-                                    void *pvCallback,
-                                    VRDEINTERFACEHDR **ppEntryPoints,
-                                    HVRDESERVER *phServer);
+                                  void *pvCallback,
+                                  VRDEINTERFACEHDR **ppEntryPoints,
+                                  HVRDESERVER *phServer);
 
-typedef DECLCALLBACK(int) FNVRDECREATESERVER (const VRDEINTERFACEHDR *pCallbacks,
-                                              void *pvCallback,
-                                              VRDEINTERFACEHDR **ppEntryPoints,
-                                              HVRDESERVER *phServer);
+typedef DECLCALLBACKTYPE(int, FNVRDECREATESERVER,(const VRDEINTERFACEHDR *pCallbacks,
+                                                  void *pvCallback,
+                                                  VRDEINTERFACEHDR **ppEntryPoints,
+                                                  HVRDESERVER *phServer));
 typedef FNVRDECREATESERVER *PFNVRDECREATESERVER;
 
 /**
@@ -1591,11 +1595,11 @@ typedef FNVRDECREATESERVER *PFNVRDECREATESERVER;
  */
 DECLEXPORT(const char * const *) VRDESupportedProperties (void);
 
-typedef DECLCALLBACK(const char * const *) FNVRDESUPPORTEDPROPERTIES (void);
+typedef DECLCALLBACKTYPE(const char * const *, FNVRDESUPPORTEDPROPERTIES,(void));
 typedef FNVRDESUPPORTEDPROPERTIES *PFNVRDESUPPORTEDPROPERTIES;
 
 RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_RemoteDesktop_VRDE_h */

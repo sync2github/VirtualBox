@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: OpenHashTable.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * OpenHashTable, Haiku Guest Additions.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * Distributed under the terms of the MIT License.
  */
 
-#ifndef _KERNEL_UTIL_OPEN_HASH_TABLE_H
-#define _KERNEL_UTIL_OPEN_HASH_TABLE_H
+#ifndef GA_INCLUDED_SRC_haiku_SharedFolders_OpenHashTable_h
+#define GA_INCLUDED_SRC_haiku_SharedFolders_OpenHashTable_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #include <OS.h>
@@ -498,5 +501,5 @@ protected:
     ValueType**        fTable;
 };
 
-#endif    // _KERNEL_UTIL_OPEN_HASH_TABLE_H
+#endif /* !GA_INCLUDED_SRC_haiku_SharedFolders_OpenHashTable_h */
 

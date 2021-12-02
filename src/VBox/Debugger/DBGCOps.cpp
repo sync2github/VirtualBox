@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGCOps.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DBGC - Debugger Console, Operators.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -225,8 +225,8 @@ static int dbgcOpHelperGetNumber(PDBGC pDbgc, PCDBGCVAR pArg, uint64_t *pu64Ret)
             int rc = dbgcSymbolGet(pDbgc, Var.u.pszString, DBGCVAR_TYPE_NUMBER, &Var);
             if (RT_FAILURE(rc))
                 return rc;
-            /* fall thru */
         }
+        RT_FALL_THRU();
         case DBGCVAR_TYPE_STRING:
         default:
             return VERR_DBGC_PARSE_INCORRECT_ARG_TYPE;
@@ -467,6 +467,14 @@ DECLCALLBACK(int) dbgcOpRegister(PDBGC pDbgc, PCDBGCVAR pArg, DBGCVARCAT enmCat,
 
             case DBGFREGVALTYPE_U128:
                 DBGCVAR_INIT_NUMBER(pResult, Value.u128.s.Lo);
+                return VINF_SUCCESS;
+
+            case DBGFREGVALTYPE_U256:
+                DBGCVAR_INIT_NUMBER(pResult, Value.u256.QWords.qw0);
+                return VINF_SUCCESS;
+
+            case DBGFREGVALTYPE_U512:
+                DBGCVAR_INIT_NUMBER(pResult, Value.u512.QWords.qw0);
                 return VINF_SUCCESS;
 
             case DBGFREGVALTYPE_R80:
@@ -806,6 +814,7 @@ static DECLCALLBACK(int) dbgcOpAdd(PDBGC pDbgc, PCDBGCVAR pArg1, PCDBGCVAR pArg2
                     rc = dbgcSymbolGet(pDbgc, pArg2->u.pszString, DBGCVAR_TYPE_NUMBER, &Var);
                     if (RT_FAILURE(rc))
                         return rc;
+                    RT_FALL_THRU();
                 case DBGCVAR_TYPE_NUMBER:
                     pResult->u.u64Number += pArg2->u.u64Number;
                     break;
@@ -1025,6 +1034,7 @@ static DECLCALLBACK(int) dbgcOpSub(PDBGC pDbgc, PCDBGCVAR pArg1, PCDBGCVAR pArg2
                     rc = dbgcSymbolGet(pDbgc, pArg2->u.pszString, DBGCVAR_TYPE_NUMBER, &Var);
                     if (RT_FAILURE(rc))
                         return rc;
+                    RT_FALL_THRU();
                 case DBGCVAR_TYPE_NUMBER:
                     pResult->u.u64Number -= pArg2->u.u64Number;
                     break;

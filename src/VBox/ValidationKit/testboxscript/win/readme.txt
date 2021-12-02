@@ -1,14 +1,17 @@
-$Id$
+$Id: readme.txt 72214 2018-05-15 09:31:45Z vboxsync $
 
 
 Preparations:
 
-1. Install Python 2.7.x from python.org to C:\Python27.  Matching bit count as
-   the host windows version.
+0. Make sure the computer name (what hostname prints) is the same as the DNS 
+   returns (sans domain) for the host IP.
+
+1. Install Python 2.7.x from python.org to C:\Python27 or Python 3.y.x to 
+   C:\Python3%y%,  where y >= 5.  Matching bit count as the host windows version.
 
 2. Install the win32 extension for python.
 
-3. Append C:\Python27 to the system PATH (tail).
+3. Append C:\Python27 or C:\Python3%y% to the system PATH (tail).
 
 4. Disable UAC.
 
@@ -36,7 +39,7 @@ Preparations:
    passing the password as an argument to "NET USE" (don't ask why!).
 
 6b. While in the group policy editor, make sure that  "Computer Configuration"
-   -> "Windows Settings" -> "Security Settings" -> "Local Policies"
+   -> "Windows Settings" -> "Security Settings" [ -> "Local Policies" ]
    -> "Account Policy" -> "Password must meet complexity requirements" is
    disabled so the vbox account can be created later one.
 
@@ -93,7 +96,9 @@ Preparations:
    If it already exists (typical on W10), just OR 0xff into the existing value.
 
 8. Install firefox or chrome, download the latest testboxscript*.zip from
-   the build box.
+   the build box. If the testbox is very short on disk space, i.e. less than
+   15GB free disk space after installing Windows Updates, install ImDisk 2.0.9
+   or later from e.g. http://www.ltr-data.se/opencode.html/
 
 9. Create a user named "vbox" with password "password".  Must be an
    Administrator user!
@@ -106,34 +111,46 @@ Preparations:
         for /L %i in (6000,1,6100) do netsh firewall add portopening TCP %i "VRDP %i"
         for /L %i in (5000,1,5032) do netsh firewall add portopening TCP %i "NetPerf %i TCP"
         for /L %i in (5000,1,5032) do netsh firewall add portopening UDP %i "NetPerf %i UDP"
+        netsh firewall set icmpsetting type=ALL
 
-20. Setup time server to "wei01-time.de.oracle.com" and update date/time.
+11b. Set a hostname which the test script can resolve to the host's IP address.
 
-21. Activate windows. "https://linserv.de.oracle.com/vbox/wiki/MSDN Volume License Keys"
+12. Setup time server to "wei01-time.de.oracle.com" and update date/time.
 
-22. Disable loading CONIME. Set "HKEY_CURRENT_USER\Console\LoadConIme" to 0.
+13. Activate windows. "https://linserv.de.oracle.com/vbox/wiki/MSDN Volume License Keys"
 
-23. Windows 2012 R2: If you experience mouse pointer problems connecting with rdesktop,
+14. Windows 2012 R2: If you experience mouse pointer problems connecting with rdesktop,
     open the mouse pointer settings and disable mouse pointer shadow.
 
-The install:
+15. Enable RDP access by opening "System Properties" and selecting "Allow
+    remote connections to this computer" in the "Remote" tab.  Ensure that
+    "Allow connections only from computers running Remote Desktop with Network
+    Level Authentication" is not checked or rdesktop can't access it.
 
-23. Unzip (/ copy) the content of the testboxscript-*.zip to C:\testboxscript.
+    W10: Make old rdesktop connect:
+         \HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp\SecurityLayer
+         Change DWORD Hex '2' -> '1'
 
-24. Copy C:\testboxscript\testboxscript\win\autoexec-testbox.cmd to C:\.
+15b. While you're in "System Properties", in the "Hardware" tab, button
+    "Driver Signing" tell it to ignore logo testing requirements.
 
-25. Create a shortcut to C:\autoexec-testbox.cmd and drag it into
+    W10: Doesn't exist any more.
+
+The install (as user vbox):
+
+16. Disable loading CONIME. Set "HKEY_CURRENT_USER\Console\LoadConIme" to 0.
+
+17. Unzip (/ copy) the content of the testboxscript-*.zip to C:\testboxscript.
+
+18. Copy C:\testboxscript\testboxscript\win\autoexec-testbox.cmd to C:\.
+
+19. Create a shortcut to C:\autoexec-testbox.cmd and drag it into
     "Start" -> "All Programs" -> "Startup".
 
     W10: Find startup folder by hitting Win+R and entering "shell:startup".
 
-26. If this is an Intel box and the CPU is capable of Nested Paging, edit C:\autoexec-testbox.cmd
+20. If this is an Intel box and the CPU is capable of Nested Paging, edit C:\autoexec-testbox.cmd
     and append '--nested-paging'
-
-27. Enable RDP access by opening "System Properties" and selecting "Allow
-    remote connections to this computer" in the "Remote" tab.  Ensure that
-    "Allow connections only from computers running Remote Desktop with Network
-    Level Authentication" is not checked or rdesktop can't access it.
 
 
 That's currently it.

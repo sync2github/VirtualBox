@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: avl_Get.cpp.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * kAVLGet - get routine for AVL trees.
  */
 
 /*
- * Copyright (C) 1999-2012 knut st. osmundsen (bird-src-spam@anduin.net)
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,7 +37,7 @@
  */
 KAVL_DECL(PKAVLNODECORE) KAVL_FN(Get)(PPKAVLNODECORE ppTree, KAVLKEY Key)
 {
-    register PKAVLNODECORE  pNode = KAVL_GET_POINTER_NULL(ppTree);
+    PKAVLNODECORE  pNode = KAVL_GET_POINTER_NULL(ppTree);
 
     if (pNode)
     {

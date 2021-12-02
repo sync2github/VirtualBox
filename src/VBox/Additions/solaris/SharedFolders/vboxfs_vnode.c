@@ -1,10 +1,11 @@
+/* $Id: vboxfs_vnode.c 88215 2021-03-19 18:42:55Z vboxsync $ */
 /** @file
  * VirtualBox File System for Solaris Guests, vnode implementation.
  * Portions contributed by: Ronald.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -85,13 +86,15 @@
 #include <vm/seg_kpm.h>
 #include <vm/pvn.h>
 #if !defined(VBOX_VFS_SOLARIS_10U6)
-#include <sys/vfs_opreg.h>
+# include <sys/vfs_opreg.h>
 #endif
 #include <sys/pathname.h>
 #include <sys/dirent.h>
 #include <sys/fs_subr.h>
 #include <sys/time.h>
 #include <sys/cmn_err.h>
+#undef u /* /usr/include/sys/user.h:249:1 is where this is defined to (curproc->p_user). very cool. */
+
 #include "vboxfs_prov.h"
 #include "vboxfs_vnode.h"
 #include "vboxfs_vfs.h"
@@ -1763,14 +1766,20 @@ sffs_map(
 #if defined(VBOX_VFS_SOLARIS_10U6)
 	if ((flags & MAP_FIXED) == 0)
 	{
-		map_addr(addrp, len, off, 1, flags);
+        if (g_fVBoxVFS_SolOldAddrMap)
+            g_VBoxVFS_SolAddrMap.MapAddr.pfnSol_map_addr_old(addrp, len, off, 1, flags);
+        else
+            g_VBoxVFS_SolAddrMap.MapAddr.pfnSol_map_addr(addrp, len, off, flags);
 		if (*addrp == NULL)
 			error = ENOMEM;
 	}
 	else
 		as_unmap(asp, *addrp, len);	/* User specified address, remove any previous mappings */
 #else
-	error = choose_addr(asp, addrp, len, off, ADDR_VACALIGN, flags);
+    if (g_fVBoxVFS_SolOldAddrMap)
+	    error = g_VBoxVFS_SolAddrMap.ChooseAddr.pfnSol_choose_addr_old(asp, addrp, len, off, 1, flags);
+    else
+	    error = g_VBoxVFS_SolAddrMap.ChooseAddr.pfnSol_choose_addr(asp, addrp, len, off, flags);
 #endif
 
 	if (error)

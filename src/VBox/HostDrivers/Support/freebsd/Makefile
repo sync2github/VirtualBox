@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile 91789 2021-10-17 18:16:11Z vboxsync $
 ## @file
 # Makefile for the VirtualBox FreeBSD Host Driver.
 #
 
 #
-# Copyright (C) 2006-2015 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -58,7 +58,8 @@ SRCS += \
 .PATH:	${.CURDIR}/common/err
 SRCS += \
 	RTErrConvertFromErrno.c \
-	RTErrConvertToErrno.c
+	RTErrConvertToErrno.c \
+	errinfo.c
 
 .PATH:	${.CURDIR}/common/log
 SRCS += \
@@ -67,7 +68,8 @@ SRCS += \
 	logrel.c \
 	logrelellipsis.c \
 	logcom.c \
-	logformat.c
+	logformat.c \
+	RTLogCreateEx.c
 
 .PATH:	${.CURDIR}/common/misc
 SRCS += \
@@ -87,15 +89,22 @@ SRCS += \
 
 .PATH:	${.CURDIR}/common/string
 SRCS += \
+	RTStrCat.c \
 	RTStrNCmp.c \
 	RTStrNLen.c \
 	RTStrCopy.c \
 	RTStrCopyEx.c \
 	RTStrCopyP.c \
+	RTStrEnd.c \
 	strformat.c \
+	RTStrFormat.c \
+	strformatnum.c \
 	strformatrt.c \
 	strformattype.c \
 	strprintf.c \
+	strprintf-ellipsis.c \
+	strprintf2.c \
+	strprintf2-ellipsis.c \
 	strtonum.c \
 	memchr.c \
 	stringalloc.c
@@ -141,6 +150,7 @@ SRCS += \
 	RTSemEventMultiWait-2-ex-generic.c \
 	RTSemEventMultiWaitNoResume-2-ex-generic.c \
 	RTTimerCreate-generic.c \
+	rtStrFormatKernelAddress-generic.c \
 	errvars-generic.c \
 	mppresent-generic.c \
 	timer-generic.c

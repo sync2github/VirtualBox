@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: CPUMRZ.cpp 87361 2021-01-21 21:13:55Z vboxsync $ */
 /** @file
  * CPUM - Raw-mode and ring-0 context.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,7 +22,8 @@
 #define LOG_GROUP LOG_GROUP_CPUM
 #include <VBox/vmm/cpum.h>
 #include "CPUMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
+
 #include <VBox/err.h>
 #include <VBox/log.h>
 #include <VBox/vmm/hm.h>
@@ -42,47 +43,25 @@
  *
  * @param   pVCpu       The cross context virtual CPU structure.
  */
-VMMRZ_INT_DECL(void)    CPUMRZFpuStatePrepareHostCpuForUse(PVMCPU pVCpu)
+VMMRZ_INT_DECL(void)    CPUMRZFpuStatePrepareHostCpuForUse(PVMCPUCC pVCpu)
 {
     pVCpu->cpum.s.fChanged |= CPUM_CHANGED_FPU_REM;
     switch (pVCpu->cpum.s.fUseFlags & (CPUM_USED_FPU_GUEST | CPUM_USED_FPU_HOST))
     {
         case 0:
-#ifdef IN_RC
-            cpumRZSaveHostFPUState(&pVCpu->cpum.s);
-            VMCPU_FF_SET(pVCpu, VMCPU_FF_CPUM);     /* Must recalc CR0 before executing more code! */
-#else
             if (cpumRZSaveHostFPUState(&pVCpu->cpum.s) == VINF_CPUM_HOST_CR0_MODIFIED)
                 HMR0NotifyCpumModifiedHostCr0(pVCpu);
-#endif
             Log6(("CPUMRZFpuStatePrepareHostCpuForUse: #0 - %#x\n", ASMGetCR0()));
             break;
 
         case CPUM_USED_FPU_HOST:
-#ifdef IN_RC
-            VMCPU_FF_SET(pVCpu, VMCPU_FF_CPUM);     /* (should be set already) */
-#elif defined(IN_RING0) && ARCH_BITS == 32 && defined(VBOX_WITH_64_BITS_GUESTS)
-            if (pVCpu->cpum.s.fUseFlags | CPUM_SYNC_FPU_STATE)
-            {
-                pVCpu->cpum.s.fUseFlags &= ~CPUM_SYNC_FPU_STATE;
-                HMR0NotifyCpumUnloadedGuestFpuState(pVCpu);
-            }
-#endif
             Log6(("CPUMRZFpuStatePrepareHostCpuForUse: #1 - %#x\n", ASMGetCR0()));
             break;
 
         case CPUM_USED_FPU_GUEST | CPUM_USED_FPU_HOST:
-#if defined(IN_RING0) && ARCH_BITS == 32 && defined(VBOX_WITH_64_BITS_GUESTS)
-            Assert(!(pVCpu->cpum.s.fUseFlags & CPUM_SYNC_FPU_STATE));
-            if (CPUMIsGuestInLongModeEx(&pVCpu->cpum.s.Guest))
-                HMR0SaveFPUState(pVCpu->CTX_SUFF(pVM), pVCpu, &pVCpu->cpum.s.Guest);
-            else
-#endif
-                cpumRZSaveGuestFpuState(&pVCpu->cpum.s, true /*fLeaveFpuAccessible*/);
+            cpumRZSaveGuestFpuState(&pVCpu->cpum.s, true /*fLeaveFpuAccessible*/);
 #ifdef IN_RING0
             HMR0NotifyCpumUnloadedGuestFpuState(pVCpu);
-#else
-            VMCPU_FF_SET(pVCpu, VMCPU_FF_CPUM);     /* Must recalc CR0 before executing more code! */
 #endif
             Log6(("CPUMRZFpuStatePrepareHostCpuForUse: #2 - %#x\n", ASMGetCR0()));
             break;
@@ -102,7 +81,7 @@ VMMRZ_INT_DECL(void)    CPUMRZFpuStatePrepareHostCpuForUse(PVMCPU pVCpu)
  *
  * @param   pVCpu       The cross context virtual CPU structure.
  */
-VMMRZ_INT_DECL(void)    CPUMRZFpuStateActualizeForChange(PVMCPU pVCpu)
+VMMRZ_INT_DECL(void)    CPUMRZFpuStateActualizeForChange(PVMCPUCC pVCpu)
 {
     CPUMRZFpuStatePrepareHostCpuForUse(pVCpu);
 }
@@ -115,49 +94,55 @@ VMMRZ_INT_DECL(void)    CPUMRZFpuStateActualizeForChange(PVMCPU pVCpu)
  *
  * @param   pVCpu       The cross context virtual CPU structure.
  */
-VMMRZ_INT_DECL(void)    CPUMRZFpuStateActualizeForRead(PVMCPU pVCpu)
+VMMRZ_INT_DECL(void)    CPUMRZFpuStateActualizeForRead(PVMCPUCC pVCpu)
 {
     if (pVCpu->cpum.s.fUseFlags & CPUM_USED_FPU_GUEST)
     {
-#if defined(IN_RING0) && ARCH_BITS == 32 && defined(VBOX_WITH_64_BITS_GUESTS)
-        Assert(!(pVCpu->cpum.s.fUseFlags & CPUM_SYNC_FPU_STATE));
-        if (CPUMIsGuestInLongModeEx(&pVCpu->cpum.s.Guest))
-            HMR0SaveFPUState(pVCpu->CTX_SUFF(pVM), pVCpu, &pVCpu->cpum.s.Guest);
-        else
-#endif
-            cpumRZSaveGuestFpuState(&pVCpu->cpum.s, false /*fLeaveFpuAccessible*/);
+        Assert(pVCpu->cpum.s.Guest.fUsedFpuGuest);
+        cpumRZSaveGuestFpuState(&pVCpu->cpum.s, false /*fLeaveFpuAccessible*/);
         pVCpu->cpum.s.fUseFlags |= CPUM_USED_FPU_GUEST;
+        pVCpu->cpum.s.Guest.fUsedFpuGuest = true;
         Log7(("CPUMRZFpuStateActualizeForRead\n"));
     }
 }
 
 
 /**
- * Makes sure the XMM0..XMM15 state in CPUMCPU::Guest is up to date.
+ * Makes sure the XMM0..XMM15 and MXCSR state in CPUMCPU::Guest is up to date.
  *
  * This will not cause CPUM_USED_FPU_GUEST to change.
  *
  * @param   pVCpu       The cross context virtual CPU structure.
  */
-VMMRZ_INT_DECL(void)    CPUMRZFpuStateActualizeSseForRead(PVMCPU pVCpu)
+VMMRZ_INT_DECL(void)    CPUMRZFpuStateActualizeSseForRead(PVMCPUCC pVCpu)
 {
 #if defined(VBOX_WITH_KERNEL_USING_XMM) && HC_ARCH_BITS == 64
     NOREF(pVCpu);
 #else
     if (pVCpu->cpum.s.fUseFlags & CPUM_USED_FPU_GUEST)
     {
-# if defined(IN_RING0) && ARCH_BITS == 32 && defined(VBOX_WITH_64_BITS_GUESTS)
-        if (CPUMIsGuestInLongModeEx(&pVCpu->cpum.s.Guest))
-        {
-            Assert(!(pVCpu->cpum.s.fUseFlags & CPUM_SYNC_FPU_STATE));
-            HMR0SaveFPUState(pVCpu->CTX_SUFF(pVM), pVCpu, &pVCpu->cpum.s.Guest);
-            pVCpu->cpum.s.fUseFlags |= CPUM_USED_FPU_GUEST;
-        }
-        else
-# endif
-            cpumRZSaveGuestSseRegisters(&pVCpu->cpum.s);
+        Assert(pVCpu->cpum.s.Guest.fUsedFpuGuest);
+        cpumRZSaveGuestSseRegisters(&pVCpu->cpum.s);
         Log7(("CPUMRZFpuStateActualizeSseForRead\n"));
     }
 #endif
+}
+
+
+/**
+ * Makes sure the YMM0..YMM15 and MXCSR state in CPUMCPU::Guest is up to date.
+ *
+ * This will not cause CPUM_USED_FPU_GUEST to change.
+ *
+ * @param   pVCpu       The cross context virtual CPU structure.
+ */
+VMMRZ_INT_DECL(void)    CPUMRZFpuStateActualizeAvxForRead(PVMCPUCC pVCpu)
+{
+    if (pVCpu->cpum.s.fUseFlags & CPUM_USED_FPU_GUEST)
+    {
+        Assert(pVCpu->cpum.s.Guest.fUsedFpuGuest);
+        cpumRZSaveGuestAvxRegisters(&pVCpu->cpum.s);
+        Log7(("CPUMRZFpuStateActualizeAvxForRead\n"));
+    }
 }
 

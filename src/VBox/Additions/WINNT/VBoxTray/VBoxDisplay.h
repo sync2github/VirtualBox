@@ -1,10 +1,10 @@
-/* $Id: $ */
+/* $Id: VBoxDisplay.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxSeamless - Display notifications
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __VBOXSERVICEDISPLAY__H
-#define __VBOXSERVICEDISPLAY__H
+#ifndef GA_INCLUDED_SRC_WINNT_VBoxTray_VBoxDisplay_h
+#define GA_INCLUDED_SRC_WINNT_VBoxTray_VBoxDisplay_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 DWORD VBoxDisplayGetCount();
 DWORD VBoxDisplayGetConfig(const DWORD NumDevices, DWORD *pDevPrimaryNum, DWORD *pNumDevices, DISPLAY_DEVICE *paDisplayDevices, DEVMODE *paDeviceModes);
@@ -32,4 +35,4 @@ static bool isVBoxDisplayDriverActive(void);
  * so it is moved to VBoxDisplay.cpp */
 #endif
 
-#endif /* __VBOXSERVICEDISPLAY__H */
+#endif /* !GA_INCLUDED_SRC_WINNT_VBoxTray_VBoxDisplay_h */

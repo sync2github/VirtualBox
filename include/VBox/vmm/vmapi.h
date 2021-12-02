@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_vmapi_h
-#define ___VBox_vmm_vmapi_h
+#ifndef VBOX_INCLUDED_vmm_vmapi_h
+#define VBOX_INCLUDED_vmm_vmapi_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <VBox/vmm/stam.h>
@@ -38,55 +41,19 @@ RT_C_DECLS_BEGIN
  * @ingroup grp_vm
  * @{ */
 
-/** @def VM_RC_ADDR
- * Converts a current context address of data within the VM structure to the equivalent
- * raw-mode address.
- *
- * @returns raw-mode virtual address.
- * @param   pVM     The cross context VM structure.
- * @param   pvInVM  CC Pointer within the VM.
- */
-#ifdef IN_RING3
-# define VM_RC_ADDR(pVM, pvInVM)        ( (RTRCPTR)((RTRCUINTPTR)pVM->pVMRC + (uint32_t)((uintptr_t)(pvInVM) - (uintptr_t)pVM->pVMR3)) )
-#elif defined(IN_RING0)
-# define VM_RC_ADDR(pVM, pvInVM)        ( (RTRCPTR)((RTRCUINTPTR)pVM->pVMRC + (uint32_t)((uintptr_t)(pvInVM) - (uintptr_t)pVM->pVMR0)) )
-#else
-# define VM_RC_ADDR(pVM, pvInVM)        ( (RTRCPTR)(pvInVM) )
-#endif
-
-/** @def VM_R3_ADDR
- * Converts a current context address of data within the VM structure to the equivalent
- * ring-3 host address.
- *
- * @returns host virtual address.
- * @param   pVM     The cross context VM structure.
- * @param   pvInVM  CC pointer within the VM.
- */
-#ifdef IN_RC
-# define VM_R3_ADDR(pVM, pvInVM)       ( (RTR3PTR)((RTR3UINTPTR)pVM->pVMR3 + (uint32_t)((uintptr_t)(pvInVM) - (uintptr_t)pVM->pVMRC)) )
-#elif defined(IN_RING0)
-# define VM_R3_ADDR(pVM, pvInVM)       ( (RTR3PTR)((RTR3UINTPTR)pVM->pVMR3 + (uint32_t)((uintptr_t)(pvInVM) - (uintptr_t)pVM->pVMR0)) )
-#else
-# define VM_R3_ADDR(pVM, pvInVM)       ( (RTR3PTR)(pvInVM) )
-#endif
-
-
-/** @def VM_R0_ADDR
- * Converts a current context address of data within the VM structure to the equivalent
- * ring-0 host address.
- *
- * @returns host virtual address.
- * @param   pVM     The cross context VM structure.
- * @param   pvInVM  CC pointer within the VM.
- */
-#ifdef IN_RC
-# define VM_R0_ADDR(pVM, pvInVM)       ( (RTR0PTR)((RTR0UINTPTR)pVM->pVMR0 + (uint32_t)((uintptr_t)(pvInVM) - (uintptr_t)pVM->pVMRC)) )
-#elif defined(IN_RING3)
-# define VM_R0_ADDR(pVM, pvInVM)       ( (RTR0PTR)((RTR0UINTPTR)pVM->pVMR0 + (uint32_t)((uintptr_t)(pvInVM) - (uintptr_t)pVM->pVMR3)) )
-#else
-# define VM_R0_ADDR(pVM, pvInVM)       ( (RTR0PTR)(pvInVM) )
-#endif
-
+/** @name VM_EXEC_ENGINE_XXX - VM::bMainExecutionEngine values.
+ * @sa EMR3QueryMainExecutionEngine, VM_IS_RAW_MODE_ENABLED,  VM_IS_HM_ENABLED,
+ *     VM_IS_HM_OR_NEM_ENABLED, VM_IS_NEM_ENABLED,  VM_SET_MAIN_EXECUTION_ENGINE
+ * @{ */
+/** Has not yet been set. */
+#define VM_EXEC_ENGINE_NOT_SET              UINT8_C(0)
+/** Raw-mode. */
+#define VM_EXEC_ENGINE_RAW_MODE             UINT8_C(1)
+/** Hardware assisted virtualization thru HM. */
+#define VM_EXEC_ENGINE_HW_VIRT              UINT8_C(2)
+/** Hardware assisted virtualization thru native API (NEM). */
+#define VM_EXEC_ENGINE_NATIVE_API           UINT8_C(3)
+/** @} */
 
 
 /**
@@ -96,16 +63,19 @@ RT_C_DECLS_BEGIN
  *                          occurred before successfully creating a VM.
  * @param   pvUser          The user argument.
  * @param   rc              VBox status code.
- * @param   RT_SRC_POS_DECL The source position arguments. See RT_SRC_POS and RT_SRC_POS_ARGS.
+ * @param   SRC_POS         The source position arguments. See RT_SRC_POS and RT_SRC_POS_ARGS.
  * @param   pszFormat       Error message format string.
  * @param   args            Error message arguments.
  */
-typedef DECLCALLBACK(void) FNVMATERROR(PUVM pUVM, void *pvUser, int rc, RT_SRC_POS_DECL, const char *pszError, va_list args);
+typedef DECLCALLBACKTYPE(void, FNVMATERROR,(PUVM pUVM, void *pvUser, int rc, RT_SRC_POS_DECL,
+                                            const char *pszFormat, va_list args));
 /** Pointer to a VM error callback. */
 typedef FNVMATERROR *PFNVMATERROR;
 
-VMMDECL(int)    VMSetError(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(6, 7);
-VMMDECL(int)    VMSetErrorV(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, va_list args) RT_IPRT_FORMAT_ATTR(6, 7);
+#ifdef IN_RING3
+VMMDECL(int)    VMSetError(PVMCC pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(6, 7);
+VMMDECL(int)    VMSetErrorV(PVMCC pVM, int rc, RT_SRC_POS_DECL, const char *pszFormat, va_list args) RT_IPRT_FORMAT_ATTR(6, 7);
+#endif
 
 /** @def VM_SET_ERROR
  * Macro for setting a simple VM error message.
@@ -150,15 +120,17 @@ VMMDECL(int)    VMSetErrorV(PVM pVM, int rc, RT_SRC_POS_DECL, const char *pszFor
  * @param   pszFormat       Error message format string.
  * @param   va              Error message arguments.
  */
-typedef DECLCALLBACK(void) FNVMATRUNTIMEERROR(PUVM pUVM, void *pvUser, uint32_t fFlags, const char *pszErrorId,
-                                              const char *pszFormat, va_list va) RT_IPRT_FORMAT_ATTR(5, 0);
+typedef DECLCALLBACKTYPE(void, FNVMATRUNTIMEERROR,(PUVM pUVM, void *pvUser, uint32_t fFlags, const char *pszErrorId,
+                                                   const char *pszFormat, va_list va)) RT_IPRT_FORMAT_ATTR(5, 0);
 /** Pointer to a VM runtime error callback. */
 typedef FNVMATRUNTIMEERROR *PFNVMATRUNTIMEERROR;
 
-VMMDECL(int) VMSetRuntimeError(PVM pVM, uint32_t fFlags, const char *pszErrorId,
+#ifdef IN_RING3
+VMMDECL(int) VMSetRuntimeError(PVMCC pVM, uint32_t fFlags, const char *pszErrorId,
                                const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(4, 5);
-VMMDECL(int) VMSetRuntimeErrorV(PVM pVM, uint32_t fFlags, const char *pszErrorId,
+VMMDECL(int) VMSetRuntimeErrorV(PVMCC pVM, uint32_t fFlags, const char *pszErrorId,
                                 const char *pszFormat, va_list args) RT_IPRT_FORMAT_ATTR(4, 0);
+#endif
 
 /** @name VMSetRuntimeError fFlags
  * When no flags are given the VM will continue running and it's up to the front
@@ -190,11 +162,15 @@ VMMDECL(int) VMSetRuntimeErrorV(PVM pVM, uint32_t fFlags, const char *pszErrorId
  * @param   enmOldState The old state.
  * @param   pvUser      The user argument.
  */
-typedef DECLCALLBACK(void) FNVMATSTATE(PUVM pUVM, VMSTATE enmState, VMSTATE enmOldState, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNVMATSTATE,(PUVM pUVM, VMSTATE enmState, VMSTATE enmOldState, void *pvUser));
 /** Pointer to a VM state callback. */
 typedef FNVMATSTATE *PFNVMATSTATE;
 
-VMMDECL(const char *) VMGetStateName(VMSTATE enmState);
+VMMDECL(const char *)   VMGetStateName(VMSTATE enmState);
+
+VMMDECL(uint32_t)       VMGetResetCount(PVMCC pVM);
+VMMDECL(uint32_t)       VMGetSoftResetCount(PVMCC pVM);
+VMMDECL(uint32_t)       VMGetHardResetCount(PVMCC pVM);
 
 
 /**
@@ -298,8 +274,6 @@ typedef struct VMREQ
 /** Pointer to a VM request packet. */
 typedef VMREQ *PVMREQ;
 
-/** @} */
-
 
 #ifndef IN_RC
 /** @defgroup grp_vmm_apis_hc  VM Host Context API
@@ -312,7 +286,6 @@ typedef VMREQ *PVMREQ;
 
 #ifdef IN_RING3
 /** @defgroup grp_vmm_apis_r3  VM Host Context Ring 3 API
- * This interface is a _draft_!
  * @ingroup grp_vm
  * @{ */
 
@@ -328,9 +301,7 @@ typedef enum VMINITCOMPLETED
     /** The hardware accelerated virtualization init is completed.
      * Used to make decisision depending on HM* bits being completely
      * initialized. */
-    VMINITCOMPLETED_HM,
-    /** The RC init is completed. */
-    VMINITCOMPLETED_RC
+    VMINITCOMPLETED_HM
 } VMINITCOMPLETED;
 
 
@@ -396,7 +367,7 @@ typedef enum VMSUSPENDREASON
  * @param   uPercent    Completion percentage (0-100).
  * @param   pvUser      User specified argument.
  */
-typedef DECLCALLBACK(int) FNVMPROGRESS(PUVM pUVM, unsigned uPercent, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNVMPROGRESS,(PUVM pUVM, unsigned uPercent, void *pvUser));
 /** Pointer to a FNVMPROGRESS function. */
 typedef FNVMPROGRESS *PFNVMPROGRESS;
 
@@ -414,12 +385,10 @@ VMMR3DECL(int)          VMR3Reset(PUVM pUVM);
 VMMR3_INT_DECL(VBOXSTRICTRC) VMR3ResetFF(PVM pVM);
 VMMR3_INT_DECL(VBOXSTRICTRC) VMR3ResetTripleFault(PVM pVM);
 VMMR3DECL(int)          VMR3Save(PUVM pUVM, const char *pszFilename, bool fContinueAfterwards, PFNVMPROGRESS pfnProgress, void *pvUser, bool *pfSuspended);
-VMMR3_INT_DECL(int)     VMR3SaveFT(PUVM pUVM, PCSSMSTRMOPS pStreamOps, void *pvStreamOpsUser, bool *pfSuspended, bool fSkipStateChanges);
 VMMR3DECL(int)          VMR3Teleport(PUVM pUVM, uint32_t cMsDowntime, PCSSMSTRMOPS pStreamOps, void *pvStreamOpsUser, PFNVMPROGRESS pfnProgress, void *pvProgressUser, bool *pfSuspended);
 VMMR3DECL(int)          VMR3LoadFromFile(PUVM pUVM, const char *pszFilename, PFNVMPROGRESS pfnProgress, void *pvUser);
 VMMR3DECL(int)          VMR3LoadFromStream(PUVM pUVM, PCSSMSTRMOPS pStreamOps, void *pvStreamOpsUser,
                                            PFNVMPROGRESS pfnProgress, void *pvProgressUser);
-VMMR3_INT_DECL(int)     VMR3LoadFromStreamFT(PUVM pUVM, PCSSMSTRMOPS pStreamOps, void *pvStreamOpsUser);
 
 VMMR3DECL(int)          VMR3PowerOff(PUVM pUVM);
 VMMR3DECL(int)          VMR3Destroy(PUVM pUVM);
@@ -484,10 +453,12 @@ VMMR3_INT_DECL(int)         VMR3AsyncPdmNotificationWaitU(PUVMCPU pUVCpu);
 VMMR3_INT_DECL(void)        VMR3AsyncPdmNotificationWakeupU(PUVM pUVM);
 VMMR3_INT_DECL(RTCPUID)     VMR3GetVMCPUId(PVM pVM);
 VMMR3_INT_DECL(bool)        VMR3IsLongModeAllowed(PVM pVM);
+VMMR3_INT_DECL(RTTHREAD)    VMR3GetThreadHandle(PUVMCPU pUVCpu);
 VMMR3DECL(RTTHREAD)         VMR3GetVMCPUThread(PUVM pUVM);
 VMMR3DECL(RTNATIVETHREAD)   VMR3GetVMCPUNativeThread(PVM pVM);
 VMMR3DECL(RTNATIVETHREAD)   VMR3GetVMCPUNativeThreadU(PUVM pUVM);
 VMMR3DECL(int)              VMR3GetCpuCoreAndPackageIdFromCpuId(PUVM pUVM, VMCPUID idCpu, uint32_t *pidCpuCore, uint32_t *pidCpuPackage);
+VMMR3_INT_DECL(uint32_t)    VMR3GetActiveEmts(PUVM pUVM);
 VMMR3DECL(int)              VMR3HotUnplugCpu(PUVM pUVM, VMCPUID idCpu);
 VMMR3DECL(int)              VMR3HotPlugCpu(PUVM pUVM, VMCPUID idCpu);
 VMMR3DECL(int)              VMR3SetCpuExecutionCap(PUVM pUVM, uint32_t uCpuExecutionCap);
@@ -495,18 +466,9 @@ VMMR3DECL(int)              VMR3SetPowerOffInsteadOfReset(PUVM pUVM, bool fPower
 /** @} */
 #endif /* IN_RING3 */
 
-
-#ifdef IN_RC
-/** @defgroup grp_vmm_apis_gc  VM Guest Context APIs
- * @ingroup grp_vm
- * @{ */
-
-/** @} */
-#endif
-
 RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_vmapi_h */
 

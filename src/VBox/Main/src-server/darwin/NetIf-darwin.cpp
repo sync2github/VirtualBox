@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: NetIf-darwin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Main - NetIfList, Darwin implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,6 +20,8 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_MAIN_HOST
+
 /*
  * Deal with conflicts first.
  * PVM - BSD mess, that FreeBSD has correct a long time ago.
@@ -29,9 +31,7 @@
 #include <sys/param.h>
 #undef PVM
 
-#define LOG_GROUP LOG_GROUP_MAIN
-
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/alloc.h>
 
 #include <string.h>
@@ -51,7 +51,7 @@
 #include "HostNetworkInterfaceImpl.h"
 #include "netif.h"
 #include "iokit.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #if 0
 int NetIfList(std::list <ComObjPtr<HostNetworkInterface> > &list)
@@ -341,7 +341,7 @@ int NetIfList(std::list <ComObjPtr<HostNetworkInterface> > &list)
                 cbNameLen = strlen(pNIC->szName) + 1;
                 break;
             }
-        PNETIFINFO pNew = (PNETIFINFO)RTMemAllocZ(RT_OFFSETOF(NETIFINFO, szName[cbNameLen]));
+        PNETIFINFO pNew = (PNETIFINFO)RTMemAllocZ(RT_UOFFSETOF_DYN(NETIFINFO, szName[cbNameLen]));
         if (!pNew)
         {
             rc = VERR_NO_MEMORY;
@@ -360,6 +360,7 @@ int NetIfList(std::list <ComObjPtr<HostNetworkInterface> > &list)
         {
             memcpy(pNew->szName, pNIC->szName, cbNameLen);
             pNew->Uuid = pNIC->Uuid;
+            pNew->fWireless = pNIC->fWireless;
         }
         else
         {
@@ -539,8 +540,9 @@ int NetIfGetConfigByName(PNETIFINFO pInfo)
  * @param   pcszIfName  Interface name.
  * @param   puMbits     Where to store the link speed.
  */
-int NetIfGetLinkSpeed(const char * /*pcszIfName*/, uint32_t * /*puMbits*/)
+int NetIfGetLinkSpeed(const char *pcszIfName, uint32_t *puMbits)
 {
+    RT_NOREF(pcszIfName, puMbits);
     return VERR_NOT_IMPLEMENTED;
 }
 #endif

@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: vbsfmount.c 87463 2021-01-28 15:38:55Z vboxsync $ */
 /** @file
  * vbsfmount - Commonly used code to mount shared folders on Linux-based
  *             systems.  Currently used by mount.vboxsf and VBoxService.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,80 +16,88 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#include "vbsfmount.h"
 
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE
+# define _GNU_SOURCE
 #endif
+#include <assert.h>
 #include <ctype.h>
 #include <mntent.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/mount.h>
 
+#include "vbsfmount.h"
+
 
 /** @todo Use defines for return values! */
-int vbsfmount_complete(const char *host_name, const char *mount_point,
-                       unsigned long flags, struct vbsf_mount_opts *opts)
+int vbsfmount_complete(const char *pszSharedFolder, const char *pszMountPoint,
+                       unsigned long fFlags, const char *pszOpts)
 {
-    FILE *f, *m;
-    char *buf;
-    size_t size;
-    struct mntent e;
-    int rc = 0;
-
-    m = open_memstream(&buf, &size);
-    if (!m)
-        return 1; /* Could not update mount table (failed to create memstream). */
-
-    if (opts->uid)
-        fprintf(m, "uid=%d,", opts->uid);
-    if (opts->gid)
-        fprintf(m, "gid=%d,", opts->gid);
-    if (opts->ttl)
-        fprintf(m, "ttl=%d,", opts->ttl);
-    if (*opts->nls_name)
-        fprintf(m, "iocharset=%s,", opts->nls_name);
-    if (flags & MS_NOSUID)
-        fprintf(m, "%s,", MNTOPT_NOSUID);
-    if (flags & MS_RDONLY)
-        fprintf(m, "%s,", MNTOPT_RO);
-    else
-        fprintf(m, "%s,", MNTOPT_RW);
-
-    fclose(m);
-
-    if (size > 0)
-        buf[size - 1] = 0;
-    else
-        buf = "defaults";
-
-    f = setmntent(MOUNTED, "a+");
-    if (!f)
+    /*
+     * Combine pszOpts and fFlags.
+     */
+    int          rc;
+    size_t const cchFlags = (fFlags & MS_NOSUID ? strlen(MNTOPT_NOSUID) + 1 : 0)
+                          + (fFlags & MS_RDONLY ? strlen(MNTOPT_RO) : strlen(MNTOPT_RW));
+    size_t const cchOpts  = pszOpts ? 1 + strlen(pszOpts) : 0;
+    char        *pszBuf   = (char *)malloc(cchFlags + cchOpts + 8);
+    if (pszBuf)
     {
-        rc = 2; /* Could not open mount table for update. */
+        char         *psz = pszBuf;
+        FILE         *pMTab;
+
+        strcpy(psz, fFlags & MS_RDONLY ? MNTOPT_RO : MNTOPT_RW);
+        psz += strlen(psz);
+
+        if (fFlags & MS_NOSUID)
+        {
+            *psz++ = ',';
+            strcpy(psz, MNTOPT_NOSUID);
+            psz += strlen(psz);
+        }
+
+        if (cchOpts)
+        {
+            *psz++ = ',';
+            strcpy(psz, pszOpts);
+        }
+
+        assert(strlen(pszBuf) <= cchFlags + cchOpts);
+
+        /*
+         * Open the mtab and update it:
+         */
+        pMTab = setmntent(MOUNTED, "a+");
+        if (pMTab)
+        {
+            struct mntent Entry;
+            Entry.mnt_fsname = (char*)pszSharedFolder;
+            Entry.mnt_dir = (char *)pszMountPoint;
+            Entry.mnt_type = "vboxsf";
+            Entry.mnt_opts = pszBuf;
+            Entry.mnt_freq = 0;
+            Entry.mnt_passno = 0;
+
+            if (!addmntent(pMTab, &Entry))
+                rc = 0; /* success. */
+            else
+                rc = 3;  /* Could not add an entry to the mount table. */
+
+            endmntent(pMTab);
+        }
+        else
+            rc = 2; /* Could not open mount table for update. */
+
+        free(pszBuf);
     }
     else
-    {
-        e.mnt_fsname = (char*)host_name;
-        e.mnt_dir = (char*)mount_point;
-        e.mnt_type = "vboxsf";
-        e.mnt_opts = buf;
-        e.mnt_freq = 0;
-        e.mnt_passno = 0;
-
-        if (addmntent(f, &e))
-            rc = 3;  /* Could not add an entry to the mount table. */
-
-        endmntent(f);
-    }
-
-    if (size > 0)
-    {
-        memset(buf, 0, size);
-        free(buf);
-    }
-
+        rc = 1; /* allocation error */
     return rc;
 }
+

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UsbCardReader.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * UsbCardReader - Driver Interface to USB Smart Card Reader emulation.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,12 +20,15 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_USB_CARDREADER
+#include "LoggingNew.h"
+
 #include "UsbCardReader.h"
 #include "ConsoleImpl.h"
 #include "ConsoleVRDPServer.h"
 
-#include <VBox/vmm/pdm.h>
+#include <VBox/vmm/pdmdrv.h>
 #include <VBox/vmm/pdmcardreaderinfs.h>
+#include <VBox/err.h>
 
 #include <iprt/req.h>
 
@@ -591,7 +594,7 @@ static DECLCALLBACK(int) drvCardReaderThreadCmd(PPDMDRVINS pDrvIns, PPDMTHREAD p
     return rc;
 }
 
-static int drvCardReaderWakeupFunc(PUSBCARDREADER pThis)
+static DECLCALLBACK(int) drvCardReaderWakeupFunc(PUSBCARDREADER pThis)
 {
     NOREF(pThis);
     /* Returning a VINF_* will cause RTReqQueueProcess return. */

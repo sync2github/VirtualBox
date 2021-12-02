@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstLdr-2.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Testcase for parts of RTLdr*, manual inspection.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,7 @@
 #include <iprt/assert.h>
 #include <iprt/initterm.h>
 #include <VBox/dis.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/string.h>
 
 
@@ -93,11 +93,14 @@ static DECLCALLBACK(int) testGetImport(RTLDRMOD hLdrMod, const char *pszModule, 
  */
 static int testLdrOne(const char *pszFilename)
 {
+    RTERRINFOSTATIC ErrInfo;
     RTLDRMOD hLdrMod;
-    int rc = RTLdrOpen(pszFilename, 0, RTLDRARCH_WHATEVER, &hLdrMod);
+    int rc = RTLdrOpenEx(pszFilename, 0, RTLDRARCH_WHATEVER, &hLdrMod, RTErrInfoInitStatic(&ErrInfo));
     if (RT_FAILURE(rc))
     {
         RTPrintf("tstLdr: Failed to open '%s', rc=%Rrc. aborting test.\n", pszFilename, rc);
+        if (ErrInfo.szMsg[0])
+            RTPrintf("tstLdr: %s\n", ErrInfo.szMsg);
         Assert(hLdrMod == NIL_RTLDRMOD);
         return 1;
     }

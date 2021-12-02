@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QITreeWidget.h 90350 2021-07-27 07:26:13Z vboxsync $ */
 /** @file
- * VBox Qt GUI - Qt extensions: QITreeWidget class implementation.
+ * VBox Qt GUI - Qt extensions: QITreeWidget class declaration.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,19 +15,40 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___QITreeWidget_h___
-#define ___QITreeWidget_h___
+#ifndef FEQT_INCLUDED_SRC_extensions_QITreeWidget_h
+#define FEQT_INCLUDED_SRC_extensions_QITreeWidget_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 
+/* GUI includes: */
+#include "UILibraryDefs.h"
+
 /* Forward declarations: */
 class QITreeWidget;
 
+/** A functor base to be passed to QITabWidget::filterItems(..).
+  * Overload operator()(..) to filter out tree items. */
+class SHARED_LIBRARY_STUFF QITreeWidgetItemFilter
+{
+public:
+
+    /** Destructs item filter. */
+    virtual ~QITreeWidgetItemFilter() { /* Make VC++ 19.2 happy. */ }
+
+    /** Returns whether item can pass the filter. */
+    virtual bool operator()(QTreeWidgetItem*) const
+    {
+        return true;
+    }
+};
 
 /** QTreeWidgetItem subclass extending standard functionality. */
-class QITreeWidgetItem : public QObject, public QTreeWidgetItem
+class SHARED_LIBRARY_STUFF QITreeWidgetItem : public QObject, public QTreeWidgetItem
 {
     Q_OBJECT;
 
@@ -68,7 +89,7 @@ public:
 
 
 /** QTreeWidget subclass extending standard functionality. */
-class QITreeWidget : public QTreeWidget
+class SHARED_LIBRARY_STUFF QITreeWidget : public QTreeWidget
 {
     Q_OBJECT;
 
@@ -91,6 +112,11 @@ public:
     int childCount() const;
     /** Returns the child item with @a iIndex. */
     QITreeWidgetItem *childItem(int iIndex) const;
+    /** Returns a model-index of @a pItem specified. */
+    QModelIndex itemIndex(QTreeWidgetItem *pItem);
+    /** Recurses thru the subtree with a root @a pParent and returns a list of tree-items filtered by @a filter.
+      * When @a pParent is null then QTreeWidget::invisibleRootItem() is used as the root item. */
+    QList<QTreeWidgetItem*> filterItems(const QITreeWidgetItemFilter &filter, QTreeWidgetItem *pParent = 0);
 
 protected:
 
@@ -98,7 +124,14 @@ protected:
     void paintEvent(QPaintEvent *pEvent);
     /** Handles resize @a pEvent. */
     void resizeEvent(QResizeEvent *pEvent);
+
+private:
+
+    /** Recurses thru the subtree with a root @a pParent and appends a
+      * list of tree-items filtered by @a filter to @a filteredItemList. */
+    void filterItemsInternal(const QITreeWidgetItemFilter &filter, QTreeWidgetItem *pParent,
+                             QList<QTreeWidgetItem*> &filteredItemList);
 };
 
-#endif /* !___QITreeWidget_h___ */
 
+#endif /* !FEQT_INCLUDED_SRC_extensions_QITreeWidget_h */

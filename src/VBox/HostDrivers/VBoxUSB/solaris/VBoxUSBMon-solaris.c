@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxUSBMon-solaris.c 90871 2021-08-25 11:28:21Z vboxsync $ */
 /** @file
  * VirtualBox USB Monitor Driver, Solaris Hosts.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,12 +37,13 @@
 #include <VBox/types.h>
 #include <VBox/version.h>
 #include <iprt/assert.h>
-#include <iprt/string.h>
+#include <iprt/err.h>
 #include <iprt/initterm.h>
-#include <iprt/process.h>
 #include <iprt/mem.h>
-#include <iprt/semaphore.h>
+#include <iprt/process.h>
 #include <iprt/path.h>
+#include <iprt/semaphore.h>
+#include <iprt/string.h>
 
 #define USBDRV_MAJOR_VER    2
 #define USBDRV_MINOR_VER    0
@@ -302,9 +303,8 @@ static int VBoxUSBMonSolarisAttach(dev_info_t *pDip, ddi_attach_cmd_t enmCmd)
             }
 
             g_pDip = pDip;
-            int instance = ddi_get_instance(pDip);
-            int rc = ddi_create_priv_minor_node(pDip, DEVICE_NAME, S_IFCHR, instance, DDI_PSEUDO, 0,
-                                                        "none", "none", 0660);
+            int rc = ddi_create_priv_minor_node(pDip, DEVICE_NAME, S_IFCHR, 0 /* instance */, DDI_PSEUDO, 0 /* flags */,
+                                                "none", "none", 0660);
             if (rc == DDI_SUCCESS)
             {
                 rc = usb_register_dev_driver(g_pDip, VBoxUSBMonSolarisElectDriver);
@@ -400,12 +400,19 @@ static int VBoxUSBMonSolarisGetInfo(dev_info_t *pDip, ddi_info_cmd_t enmCmd, voi
     switch (enmCmd)
     {
         case DDI_INFO_DEVT2DEVINFO:
+        {
             *ppvResult = (void *)g_pDip;
+            if (!*ppvResult)
+                rc = DDI_FAILURE;
             break;
+        }
 
         case DDI_INFO_DEVT2INSTANCE:
-            *ppvResult = (void *)(uintptr_t)ddi_get_instance(g_pDip);
+        {
+            /* There can only be a single-instance of this driver and thus its instance number is 0. */
+            *ppvResult = (void *)0;
             break;
+        }
 
         default:
             rc = DDI_FAILURE;
@@ -576,7 +583,7 @@ static int VBoxUSBMonSolarisIOCtl(dev_t Dev, int Cmd, intptr_t pArg, int Mode, c
         return EFAULT;
     }
     if (RT_UNLIKELY(   ReqWrap.cbData != 0
-                    && !VALID_PTR(pvBuf)))
+                    && !RT_VALID_PTR(pvBuf)))
     {
         RTMemTmpFree(pvBuf);
         LogRel((DEVICE_NAME ": VBoxUSBMonSolarisIOCtl: pvBuf Invalid pointer %p\n", pvBuf));
@@ -656,13 +663,13 @@ static int vboxUSBMonSolarisProcessIOCtl(int iFunction, void *pvState, void *pvD
 
 #define CHECKRET_MIN_SIZE(mnemonic, cbMin) \
     do { \
-        if (cbData < (cbMin)) \
+        if (RT_UNLIKELY(cbData < (cbMin))) \
         { \
             LogRel(("vboxUSBSolarisProcessIOCtl: " mnemonic ": cbData=%#zx (%zu) min is %#zx (%zu)\n", \
                  cbData, cbData, (size_t)(cbMin), (size_t)(cbMin))); \
             return VERR_BUFFER_OVERFLOW; \
         } \
-        if ((cbMin) != 0 && !VALID_PTR(pvData)) \
+        if (RT_UNLIKELY((cbMin) != 0 && !RT_VALID_PTR(pvData))) \
         { \
             LogRel(("vboxUSBSolarisProcessIOCtl: " mnemonic ": Invalid pointer %p\n", pvData)); \
             return VERR_INVALID_POINTER; \

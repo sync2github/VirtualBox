@@ -61,6 +61,7 @@
 # include <stdio.h>
 
 # include <iprt/alloca.h>
+# include <iprt/err.h>
 # include <iprt/getopt.h>
 # include <iprt/initterm.h>
 # include <iprt/path.h>
@@ -516,7 +517,7 @@ etcsystem_prune(void)
 	    O_WRONLY | O_CREAT | O_EXCL, sbuf.st_mode)) == -1)
 		fatal("failed to create %s", tmpname);
 
-	if (write(fd, buf, strlen(buf)) < strlen(buf)) {
+	if (write(fd, buf, strlen(buf)) < (ssize_t/*vbox*/)strlen(buf)) {
 		(void) unlink(tmpname);
 		fatal("failed to write to %s", tmpname);
 	}
@@ -913,6 +914,30 @@ setopthandler(const dtrace_setoptdata_t *data, void *arg)
 #define	BUFDUMPHDR(hdr) \
 	(void) printf("%s: %s%s\n", g_pname, hdr, strlen(hdr) > 0 ? ":" : "");
 
+#ifdef VBOX /* The orignal upsets VC++ 14.1 with variable 'c' shadowing variable in the function.
+             * This version is faster and does not try to print '\0' as that doesn't look like it's intentional */
+#define	BUFDUMPSTR(ptr, field) do { \
+	const char *pszField = (ptr)->field; \
+	if (pszField) { \
+		const char *pszStart = pszField; \
+		char ch; \
+		printf("%s: %20s => \"", g_pname, #field); \
+		while ((ch = *pszField) != '\0') { \
+			if (ch != '\n')  \
+				pszField++; \
+			else { \
+				printf("%*.*s\\n", (int)(pszField - pszStart), \
+				       (int)(pszField - pszStart), pszStart); \
+				pszStart = ++pszField; \
+			} \
+		} \
+		printf("%*.*s\"", (int)(pszField - pszStart), \
+		       (int)(pszField - pszStart), pszStart); \
+	} else {  \
+		printf("%s: %20s => <NULL>\n", g_pname, #field); \
+	} \
+} while (0)
+#else
 #define	BUFDUMPSTR(ptr, field) \
 	(void) printf("%s: %20s => ", g_pname, #field);	\
 	if ((ptr)->field != NULL) {			\
@@ -930,6 +955,7 @@ setopthandler(const dtrace_setoptdata_t *data, void *arg)
 	} else {					\
 		(void) printf("<NULL>\n");		\
 	}
+#endif
 
 #define	BUFDUMPASSTR(ptr, field, str) \
 	(void) printf("%s: %20s => %s\n", g_pname, #field, str);
@@ -1911,7 +1937,9 @@ main(int argc, char *argv[])
 		}
 
 		if (g_ofile == NULL) {
+#ifndef VBOX
 			char *p;
+#endif
 
 			if (g_cmdc > 1) {
 				(void) fprintf(stderr, "%s: -h requires an "

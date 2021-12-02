@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: assert.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Internal RTAssert header
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_assert_h
-#define ___internal_assert_h
+#ifndef IPRT_INCLUDED_INTERNAL_assert_h
+#define IPRT_INCLUDED_INTERNAL_assert_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -59,5 +62,5 @@ DECLHIDDEN(void) rtR0AssertNativeMsg2V(bool fInitial, const char *pszFormat, va_
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_assert_h */
 

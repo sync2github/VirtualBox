@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: localipc-posix.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Local IPC Server & Client, Posix.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -36,6 +36,7 @@
 #include <iprt/assert.h>
 #include <iprt/ctype.h>
 #include <iprt/critsect.h>
+#include <iprt/err.h>
 #include <iprt/mem.h>
 #include <iprt/log.h>
 #include <iprt/poll.h>
@@ -176,7 +177,7 @@ static int rtLocalIpcPosixConstructName(struct sockaddr_un *pAddr, uint8_t *pcbA
 #ifdef RT_OS_OS2 /* Size must be exactly right on OS/2. */
             *pcbAddr = sizeof(*pAddr);
 #else
-            *pcbAddr = RT_OFFSETOF(struct sockaddr_un, sun_path) + (uint8_t)cbFull;
+            *pcbAddr = RT_UOFFSETOF(struct sockaddr_un, sun_path) + (uint8_t)cbFull;
 #endif
 #ifdef HAVE_SUN_LEN_MEMBER
             pAddr->sun_len     = *pcbAddr;
@@ -527,8 +528,9 @@ RTDECL(int) RTLocalIpcSessionConnect(PRTLOCALIPCSESSION phSession, const char *p
                             return VINF_SUCCESS;
                         }
                     }
-                    RTCritSectDelete(&pThis->CritSect);
+                    RTSocketRelease(pThis->hSocket);
                 }
+                RTCritSectDelete(&pThis->CritSect);
             }
             RTMemFree(pThis);
         }

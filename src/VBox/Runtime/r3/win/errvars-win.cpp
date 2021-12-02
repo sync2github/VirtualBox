@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: errvars-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Save and Restore Error Variables, Windows Ring-3.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,11 +31,12 @@
 #include <iprt/win/winsock2.h>
 #include <errno.h>
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include "internal/iprt.h"
 
 #include <iprt/assert.h>
 #include "internal/magics.h"
+#include "internal-r3-win.h"
 
 
 
@@ -43,7 +44,7 @@ RTDECL(PRTERRVARS) RTErrVarsSave(PRTERRVARS pVars)
 {
     pVars->ai32Vars[0] = RTERRVARS_MAGIC;
     pVars->ai32Vars[1] = GetLastError();
-    pVars->ai32Vars[2] = WSAGetLastError();
+    pVars->ai32Vars[2] = g_pfnWSAGetLastError ? g_pfnWSAGetLastError() : WSANOTINITIALISED;
     pVars->ai32Vars[3] = errno;
     return pVars;
 }
@@ -53,8 +54,9 @@ RTDECL(void) RTErrVarsRestore(PCRTERRVARS pVars)
 {
     AssertReturnVoid(pVars->ai32Vars[0] == RTERRVARS_MAGIC);
     errno = pVars->ai32Vars[3];
-    if (pVars->ai32Vars[2] != WSANOTINITIALISED) /* just an idea... */
-        WSASetLastError(pVars->ai32Vars[2]);
+    if (   pVars->ai32Vars[2] != WSANOTINITIALISED
+        && g_pfnWSASetLastError)
+        g_pfnWSASetLastError(pVars->ai32Vars[2]);
     SetLastError(pVars->ai32Vars[1]);
 }
 
@@ -77,7 +79,7 @@ RTDECL(bool) RTErrVarsHaveChanged(PCRTERRVARS pVars)
 
     return pVars->ai32Vars[0] != RTERRVARS_MAGIC
         || (uint32_t)pVars->ai32Vars[1] != GetLastError()
-        || pVars->ai32Vars[2] != WSAGetLastError()
+        || pVars->ai32Vars[2] != (g_pfnWSAGetLastError ? g_pfnWSAGetLastError() : WSANOTINITIALISED)
         || pVars->ai32Vars[3] != errno;
 }
 

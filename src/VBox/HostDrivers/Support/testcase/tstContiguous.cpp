@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstContiguous.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * SUP Testcase - Contiguous Memory Interface (ring-3).
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -72,8 +72,16 @@ int main(int argc, char **argv)
                     apv[i] = SUPR3ContAlloc(1 + (i % 11), NULL, &HCPhys);
                     if (!apv[i])
                     {
-                        RTPrintf("tstContiguous: i=%d: failed to allocate %d pages\n", i, 1 + (i % 11));
-                        rcRet++;
+                        RTPrintf("tstContiguous: i=%d: failed to allocate %d pages", i, 1 + (i % 11));
+#if defined(RT_ARCH_X86) && defined(RT_OS_LINUX)
+                        /* With 32-bit address spaces it's sometimes difficult
+                         * to find bigger chunks of contiguous memory */
+                        if (i % 11 > 7)
+                            RTPrintf(" => ignoring (32-bit host)");
+                        else
+#endif
+                            rcRet++;
+                        RTPrintf("\n");
                     }
                 }
                 for (unsigned i = 0; i < RT_ELEMENTS(apv); i++)

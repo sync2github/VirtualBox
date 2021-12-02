@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxSysTables.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxSysTables.c - VirtualBox system tables
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,9 +25,9 @@
  */
 
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -47,9 +47,10 @@
 #include "DevEFI.h"
 #include "iprt/asm.h"
 
-/*******************************************************************************
-*   Internal Functions                                                         *
-*******************************************************************************/
+
+/*********************************************************************************************************************************
+*   Internal Functions                                                                                                           *
+*********************************************************************************************************************************/
 
 
 EFI_STATUS EFIAPI
@@ -71,9 +72,9 @@ FindSMBIOSPtr (
   UINTN                           Address;
 
   //
-  // First Search 0x0f0000 - 0x0fffff for SMBIOS Ptr
+  // First Search 0x0e0000 - 0x0fffff for SMBIOS Ptr
   //
-  for (Address = 0xf0000; Address < 0xfffff; Address += 0x10) {
+  for (Address = 0xe0000; Address < 0xfffff; Address += 0x10) {
     if (*(UINT32 *)(Address) == SMBIOS_PTR) {
       return (VOID *)Address;
     }
@@ -117,7 +118,7 @@ ConvertAndInstallTable(EFI_GUID* Guid, VOID* Ptr)
     EFI_STATUS  rc = EFI_SUCCESS;
 
     rc = ConvertSystemTable(Guid, &Ptr);
-    ASSERT_EFI_ERROR (rc);
+    //ASSERT_EFI_ERROR (rc);
 
     rc = gBS->InstallConfigurationTable(Guid, Ptr);
     ASSERT_EFI_ERROR (rc);
@@ -146,7 +147,10 @@ DxeInitializeVBoxSysTables(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     DEBUG((DEBUG_INFO, "SMBIOS=%p\n", Ptr));
     ASSERT(Ptr != NULL);
     if (Ptr)
+    {
         rc = ConvertAndInstallTable(&gEfiSmbiosTableGuid, Ptr);
+        ASSERT_EFI_ERROR (rc);
+    }
 
     Ptr = FindMPSPtr();
     DEBUG((DEBUG_INFO, "MPS=%p\n", Ptr));

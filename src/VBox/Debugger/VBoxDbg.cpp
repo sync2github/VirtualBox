@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDbg.cpp 90520 2021-08-04 21:37:54Z vboxsync $ */
 /** @file
  * VBox Debugger GUI.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,8 +27,7 @@
 # include <VirtualBox_XPCOM.h>
 #endif /* !RT_OS_WINDOWS */
 #include <VBox/dbggui.h>
-#include <VBox/vmm/vm.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/assert.h>
 #include <iprt/alloc.h>
 
@@ -206,12 +205,14 @@ DBGDECL(void) DBGGuiAdjustRelativePos(PDBGGUI pGui, int x, int y, unsigned cx, u
  *
  * @returns VBox status code.
  * @param   pGui        The instance returned by DBGGuiCreate().
+ * @param   pszFilter   Filter pattern.
+ * @param   pszExpand   Expand pattern.
  */
-DBGDECL(int) DBGGuiShowStatistics(PDBGGUI pGui)
+DBGDECL(int) DBGGuiShowStatistics(PDBGGUI pGui, const char *pszFilter, const char *pszExpand)
 {
     AssertReturn(pGui, VERR_INVALID_PARAMETER);
     AssertMsgReturn(pGui->u32Magic == DBGGUI_MAGIC, ("u32Magic=%#x\n", pGui->u32Magic), VERR_INVALID_PARAMETER);
-    return pGui->pVBoxDbgGui->showStatistics();
+    return pGui->pVBoxDbgGui->showStatistics(pszFilter, pszExpand);
 }
 
 

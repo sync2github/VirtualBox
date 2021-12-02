@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFR3Trace.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, Tracing.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -127,7 +127,6 @@ static int dbgfR3TraceEnable(PVM pVM, uint32_t cbEntry, uint32_t cEntries)
 
     pVM->hTraceBufR3 = hTraceBuf;
     pVM->hTraceBufR0 = MMHyperCCToR0(pVM, hTraceBuf);
-    pVM->hTraceBufRC = MMHyperCCToRC(pVM, hTraceBuf);
     return VINF_SUCCESS;
 }
 
@@ -145,7 +144,6 @@ int dbgfR3TraceInit(PVM pVM)
      */
     Assert(NIL_RTTRACEBUF == (RTTRACEBUF)NULL);
     pVM->hTraceBufR3 = NIL_RTTRACEBUF;
-    pVM->hTraceBufRC = NIL_RTRCPTR;
     pVM->hTraceBufR0 = NIL_RTR0PTR;
 
     /*
@@ -217,8 +215,7 @@ void dbgfR3TraceTerm(PVM pVM)
  */
 void dbgfR3TraceRelocate(PVM pVM)
 {
-    if (pVM->hTraceBufR3 != NIL_RTTRACEBUF)
-        pVM->hTraceBufRC = MMHyperCCToRC(pVM, pVM->hTraceBufR3);
+    RT_NOREF(pVM);
 }
 
 
@@ -306,10 +303,10 @@ VMMDECL(int) DBGFR3TraceConfig(PVM pVM, const char *pszConfig)
                     uint32_t iCpu = pVM->cCpus;
                     if (!fNo)
                         while (iCpu-- > 0)
-                            pVM->aCpus[iCpu].fTraceGroups = UINT32_MAX;
+                            pVM->apCpusR3[iCpu]->fTraceGroups = UINT32_MAX;
                     else
                         while (iCpu-- > 0)
-                            pVM->aCpus[iCpu].fTraceGroups = 0;
+                            pVM->apCpusR3[iCpu]->fTraceGroups = 0;
                     PDMR3TracingConfig(pVM, NULL, 0, !fNo, uPass > 0);
                 }
             }
@@ -328,10 +325,10 @@ VMMDECL(int) DBGFR3TraceConfig(PVM pVM, const char *pszConfig)
                             uint32_t iCpu = pVM->cCpus;
                             if (!fNo)
                                 while (iCpu-- > 0)
-                                    pVM->aCpus[iCpu].fTraceGroups |= g_aVmmTpGroups[i].fMask;
+                                    pVM->apCpusR3[iCpu]->fTraceGroups |= g_aVmmTpGroups[i].fMask;
                             else
                                 while (iCpu-- > 0)
-                                    pVM->aCpus[iCpu].fTraceGroups &= ~g_aVmmTpGroups[i].fMask;
+                                    pVM->apCpusR3[iCpu]->fTraceGroups &= ~g_aVmmTpGroups[i].fMask;
                         }
                         break;
                     }
@@ -376,7 +373,7 @@ VMMDECL(int) DBGFR3TraceQueryConfig(PVM pVM, char *pszConfig, size_t cbConfig)
         return VERR_DBGF_NO_TRACE_BUFFER;
 
     int             rc           = VINF_SUCCESS;
-    uint32_t const  fTraceGroups = pVM->aCpus[0].fTraceGroups;
+    uint32_t const  fTraceGroups = pVM->apCpusR3[0]->fTraceGroups;
     if (   fTraceGroups == UINT32_MAX
         && PDMR3TracingAreAll(pVM, true /*fEnabled*/))
         rc = RTStrCopy(pszConfig, cbConfig, "all");
@@ -438,7 +435,7 @@ static DECLCALLBACK(void) dbgfR3TraceInfo(PVM pVM, PCDBGFINFOHLP pHlp, const cha
 {
     RTTRACEBUF hTraceBuf = pVM->hTraceBufR3;
     if (hTraceBuf == NIL_RTTRACEBUF)
-        pHlp->pfnPrintf(pHlp, "Tracing is disable\n");
+        pHlp->pfnPrintf(pHlp, "Tracing is disabled\n");
     else
     {
         pHlp->pfnPrintf(pHlp, "Trace buffer %p - %u entries of %u bytes\n",

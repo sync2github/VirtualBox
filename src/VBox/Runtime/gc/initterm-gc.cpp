@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: initterm-gc.cpp 85127 2020-07-08 23:42:18Z vboxsync $ */
 /** @file
  * IPRT - Init Raw-mode Context.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,7 @@
 #include <iprt/initterm.h>
 #include <iprt/time.h>
 #include <iprt/log.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/string.h>
 #include "internal/time.h"
 
@@ -45,17 +45,7 @@
 /**
  * Program start nanosecond TS.
  */
-uint64_t    g_u64ProgramStartNanoTS;
-
-/**
- * Program start microsecond TS.
- */
-uint64_t    g_u64ProgramStartMicroTS;
-
-/**
- * Program start millisecond TS.
- */
-uint64_t    g_u64ProgramStartMilliTS;
+DECL_HIDDEN_DATA(uint64_t) g_u64ProgramStartNanoTS;
 
 
 /**
@@ -71,8 +61,6 @@ RTRCDECL(int) RTRCInit(uint64_t u64ProgramStartNanoTS)
      * Init the program start TSes.
      */
     g_u64ProgramStartNanoTS = u64ProgramStartNanoTS;
-    g_u64ProgramStartMicroTS = u64ProgramStartNanoTS / 1000;
-    g_u64ProgramStartMilliTS = u64ProgramStartNanoTS / 1000000;
 
     LogFlow(("RTGCInit: returns VINF_SUCCESS\n"));
     return VINF_SUCCESS;

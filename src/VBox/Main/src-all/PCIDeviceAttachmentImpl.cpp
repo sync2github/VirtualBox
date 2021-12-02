@@ -1,12 +1,10 @@
-/* $Id$ */
-
+/* $Id: PCIDeviceAttachmentImpl.cpp 85245 2020-07-11 23:07:43Z vboxsync $ */
 /** @file
- *
  * PCI attachment information implmentation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,10 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_PCIDEVICEATTACHMENT
 #include "PCIDeviceAttachmentImpl.h"
 #include "AutoCaller.h"
 #include "Global.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/settings.h>
 
@@ -29,11 +28,12 @@ struct PCIDeviceAttachment::Data
     Data(const Utf8Str &aDevName,
          LONG          aHostAddress,
          LONG          aGuestAddress,
-         BOOL          afPhysical)
-        : HostAddress(aHostAddress), GuestAddress(aGuestAddress),
-          fPhysical(afPhysical)
+         BOOL          afPhysical) :
+        DevName(aDevName),
+        HostAddress(aHostAddress),
+        GuestAddress(aGuestAddress),
+        fPhysical(afPhysical)
     {
-        DevName = aDevName;
     }
 
     Utf8Str          DevName;
@@ -81,18 +81,29 @@ HRESULT PCIDeviceAttachment::init(IMachine      *aParent,
     return S_OK;
 }
 
+HRESULT PCIDeviceAttachment::initCopy(IMachine *aParent, PCIDeviceAttachment *aThat)
+{
+    LogFlowThisFunc(("aParent=%p, aThat=%p\n", aParent, aThat));
+
+    ComAssertRet(aParent && aThat, E_INVALIDARG);
+
+    return init(aParent, aThat->m->DevName, aThat->m->HostAddress, aThat->m->GuestAddress, aThat->m->fPhysical);
+}
+
 HRESULT PCIDeviceAttachment::i_loadSettings(IMachine *aParent,
                                             const settings::HostPCIDeviceAttachment &hpda)
 {
-    return init(aParent, hpda.strDeviceName, hpda.uHostAddress, hpda.uGuestAddress, TRUE);
+    /** @todo r=bird: Inconsistent signed/unsigned crap. */
+    return init(aParent, hpda.strDeviceName, (LONG)hpda.uHostAddress, (LONG)hpda.uGuestAddress, TRUE);
 }
 
 
 HRESULT PCIDeviceAttachment::i_saveSettings(settings::HostPCIDeviceAttachment &data)
 {
     Assert(m);
-    data.uHostAddress = m->HostAddress;
-    data.uGuestAddress = m->GuestAddress;
+    /** @todo r=bird: Inconsistent signed/unsigned crap. */
+    data.uHostAddress  = (uint32_t)m->HostAddress;
+    data.uGuestAddress = (uint32_t)m->GuestAddress;
     data.strDeviceName = m->DevName;
 
     return S_OK;

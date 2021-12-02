@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstPin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * SUP Testcase - Memory locking interface (ring 3).
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 *********************************************************************************************************************************/
 #include <VBox/sup.h>
 #include <VBox/param.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/initterm.h>
 #include <iprt/stream.h>
 #include <iprt/thread.h>

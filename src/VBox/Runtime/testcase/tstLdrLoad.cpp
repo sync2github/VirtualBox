@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstLdrLoad.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - Native Loader.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,7 +28,7 @@
 #include <iprt/ldr.h>
 #include <iprt/stream.h>
 #include <iprt/initterm.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 int main(int argc, char **argv)
 {
@@ -49,7 +49,7 @@ int main(int argc, char **argv)
      */
     for (int i = 1; i < argc; i++)
     {
-        RTLDRMOD hLdrMod = (RTLDRMOD)0xbaadffaa;
+        RTLDRMOD hLdrMod = (RTLDRMOD)(uintptr_t)0xbaadffaa;
         int rc = RTLdrLoad(argv[i], &hLdrMod);
         if (RT_SUCCESS(rc))
         {

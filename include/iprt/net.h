@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_net_h
-#define ___iprt_net_h
+#ifndef IPRT_INCLUDED_net_h
+#define IPRT_INCLUDED_net_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -103,6 +106,45 @@ RTDECL(int) RTNetStrToIPv4AddrEx(const char *pcszAddr, PRTNETADDRIPV4 pAddr, cha
 RTDECL(int) RTNetStrToIPv4Addr(const char *pcszAddr, PRTNETADDRIPV4 pAddr);
 
 /**
+ * Parses dotted-decimal IPv4 CIDR notation into RTNETADDRIPV4
+ * representation and prefix length.  Missing prefix specification is
+ * treated as exact address specification (prefix length 32).  Leading
+ * and trailing whitespace is ignored.
+ *
+ * @returns VINF_SUCCESS on success, VERR_INVALID_PARAMETER on
+ *          failure.
+ *
+ * @param   pcszAddr        The value to convert.
+ * @param   pAddr           Where to store the address.
+ * @param   piPrefix        Where to store the prefix length;
+ */
+RTDECL(int) RTNetStrToIPv4Cidr(const char *pcszAddr, PRTNETADDRIPV4 pAddr, int *piPrefix);
+
+/**
+ * Verifies that RTNETADDRIPV4 is a valid contiguous netmask and
+ * computes its prefix length.
+ *
+ * @returns VINF_SUCCESS on success, VERR_INVALID_PARAMETER on
+ *          failure.
+ *
+ * @param   pMask           The netmask to verify and convert.
+ * @param   piPrefix        Where to store the prefix length. (Optional)
+ */
+RTDECL(int) RTNetMaskToPrefixIPv4(PCRTNETADDRIPV4 pMask, int *piPrefix);
+
+/**
+ * Computes netmask corresponding to the prefix length.
+ *
+ * @returns VINF_SUCCESS on success, VERR_INVALID_PARAMETER on
+ *          failure.
+ *
+ * @param   iPrefix         The prefix to convert.
+ * @param   pMask           Where to store the netmask.
+ */
+RTDECL(int) RTNetPrefixToMaskIPv4(int iPrefix, PRTNETADDRIPV4 pMask);
+
+
+/**
  * IPv6 address.
  */
 typedef RTUINT128U RTNETADDRIPV6;
@@ -155,6 +197,49 @@ RTDECL(int) RTNetStrToIPv6AddrEx(const char *pcszAddr, PRTNETADDRIPV6 pAddr, cha
  * @param   pAddr           Where to store the result.
  */
 RTDECL(int) RTNetStrToIPv6Addr(const char *pcszAddr, PRTNETADDRIPV6 pAddr, char **ppszZone);
+
+/**
+ * Verifies that RTNETADDRIPV6 is a valid contiguous netmask and
+ * computes its prefix length.
+ *
+ * @returns VINF_SUCCESS on success, VERR_INVALID_PARAMETER on
+ *          failure.
+ *
+ * @param   pMask           The netmask to verify and convert.
+ * @param   piPrefix        Where to store the prefix length. (Optional)
+ */
+RTDECL(int) RTNetMaskToPrefixIPv6(PCRTNETADDRIPV6 pMask, int *piPrefix);
+
+/**
+ * Computes netmask corresponding to the prefix length.
+ *
+ * @returns VINF_SUCCESS on success, VERR_INVALID_PARAMETER on
+ *          failure.
+ *
+ * @param   iPrefix         The prefix to convert.
+ * @param   pMask           Where to store the netmask.
+ */
+RTDECL(int) RTNetPrefixToMaskIPv6(int iPrefix, PRTNETADDRIPV6 pMask);
+
+/**
+ * Parses IPv6 prefix notation into RTNETADDRIPV6 representation and
+ * prefix length.  Missing prefix specification is treated as exact
+ * address specification (prefix length 128).  Leading and trailing
+ * whitespace is ignored.
+ *
+ * "CIDR" in the name is a misnomer as IPv6 doesn't have network
+ * classes, but is parallel to the IPv4 name (and naming things is
+ * hard).
+ *
+ * @returns VINF_SUCCESS on success, VERR_INVALID_PARAMETER on
+ *          failure.
+ *
+ * @param   pcszAddr        The value to convert.
+ * @param   pAddr           Where to store the address.
+ * @param   piPrefix        Where to store the prefix length;
+ */
+RTDECL(int) RTNetStrToIPv6Cidr(const char *pcszAddr, PRTNETADDRIPV6 pAddr, int *piPrefix);
+
 
 /**
  * IPX address.
@@ -590,6 +675,13 @@ typedef RTNETDHCPOPT const *PCRTNETDHCPOPT;
 #define RTNET_DHCP_OPT_END                  255
 /** @} */
 
+/** @name DHCP Option overload flags (option 52)
+ * @{ */
+#define RTNET_DHCP_OPTION_OVERLOAD_FILE     1
+#define RTNET_DHCP_OPTION_OVERLOAD_SNAME    2
+#define RTNET_DHCP_OPTION_OVERLOAD_MASK     3
+/** @} */
+
 /** @name DHCP Message Types (option 53)
  * @{ */
 #define RTNET_DHCP_MT_DISCOVER      1
@@ -958,5 +1050,5 @@ typedef RTNETARPIPV4 const *PCRTNETARPIPV4;
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_net_h */
 

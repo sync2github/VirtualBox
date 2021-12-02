@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: PCIDeviceAttachmentImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 
 /** @file
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_PCIDEVICEATTACHMENTIMPL
-#define ____H_PCIDEVICEATTACHMENTIMPL
+#ifndef MAIN_INCLUDED_PCIDeviceAttachmentImpl_h
+#define MAIN_INCLUDED_PCIDeviceAttachmentImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "PCIDeviceAttachmentWrap.h"
 
@@ -32,15 +35,15 @@ class ATL_NO_VTABLE PCIDeviceAttachment :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(PCIDeviceAttachment)
+    DECLARE_COMMON_CLASS_METHODS(PCIDeviceAttachment)
 
     // public initializer/uninitializer for internal purposes only
     HRESULT init(IMachine *    aParent,
-                 const Utf8Str &aName,
+                 const Utf8Str &aDevName,
                  LONG          aHostAddess,
                  LONG          aGuestAddress,
                  BOOL          fPhysical);
-
+    HRESULT initCopy(IMachine *aParent, PCIDeviceAttachment *aThat);
     void uninit();
 
     // settings
@@ -63,4 +66,4 @@ private:
     Data*  m;
 };
 
-#endif // ____H_PCIDEVICEATTACHMENTIMPL
+#endif /* !MAIN_INCLUDED_PCIDeviceAttachmentImpl_h */

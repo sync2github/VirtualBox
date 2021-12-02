@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTErrConvertFromDarwin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Convert Darwin Mach returns codes to iprt status codes.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,7 @@
 #include <IOKit/IOReturn.h>
 
 #include <iprt/err.h>
+#include <iprt/log.h>
 #include <iprt/assert.h>
 
 
@@ -115,14 +116,14 @@ RTDECL(int) RTErrConvertFromDarwin(int iNativeCode)
          */
         default:
             if (    (unsigned)iNativeCode >= 0x80000000U
-                &&  (unsigned)iNativeCode >= 0x8000FFFFU)
+                &&  (unsigned)iNativeCode <= 0x8000FFFFU)
                 return RTErrConvertFromDarwinCOM(iNativeCode);
             break;
 #endif /* IN_RING3 */
     }
 
     /* unknown error. */
-    AssertMsgFailed(("Unhandled error %#x\n", iNativeCode));
+    AssertLogRelMsgFailed(("Unhandled error %#x\n", iNativeCode));
     return VERR_UNRESOLVED_ERROR;
 }
 

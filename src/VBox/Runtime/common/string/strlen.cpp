@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: strlen.cpp 85075 2020-07-06 17:17:30Z vboxsync $ */
 /** @file
  * IPRT - CRT Strings, strlen().
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -47,7 +47,7 @@ size_t strlen(const char *pszString)
 size_t strlen(const char *pszString)
 #endif
 {
-    register const char *psz = pszString;
+    const char *psz = pszString;
     while (*psz)
         psz++;
     return psz - pszString;

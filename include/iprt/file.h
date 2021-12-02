@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_file_h
-#define ___iprt_file_h
+#ifndef IPRT_INCLUDED_file_h
+#define IPRT_INCLUDED_file_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -90,9 +93,9 @@ RTDECL(bool) RTFileExists(const char *pszPath);
  * @param   pszPath         The path to the file.
  * @param   pcbFile         Where to return the file size (bytes).
  *
- * @sa      RTFileGetSize, RTPathQueryInfoEx.
+ * @sa      RTFileQuerySize, RTPathQueryInfoEx.
  */
-RTDECL(int) RTFileQuerySize(const char *pszPath, uint64_t *pcbFile);
+RTDECL(int) RTFileQuerySizeByPath(const char *pszPath, uint64_t *pcbFile);
 
 
 /** @name Open flags
@@ -114,7 +117,9 @@ RTDECL(int) RTFileQuerySize(const char *pszPath, uint64_t *pcbFile);
 /** Open file in APPEND mode, so all writes to the file handle will
  * append data at the end of the file.
  * @remarks It is ignored if write access is not requested, that is
- *          RTFILE_O_WRITE is not set. */
+ *          RTFILE_O_WRITE is not set.
+ * @note    Behaviour of functions differ between hosts: See RTFileWriteAt, as
+ *          well as ticketref:19003 (RTFileSetSize). */
 #define RTFILE_O_APPEND                 UINT32_C(0x00000004)
                                      /* UINT32_C(0x00000008) is unused atm. */
 
@@ -136,7 +141,7 @@ RTDECL(int) RTFileQuerySize(const char *pszPath, uint64_t *pcbFile);
 /** Sharing mode mask. */
 #define RTFILE_O_DENY_MASK              UINT32_C(0x000000f0)
 
-/** Action: Open an existing file (the default action). */
+/** Action: Open an existing file. */
 #define RTFILE_O_OPEN                   UINT32_C(0x00000700)
 /** Action: Create a new file or open an existing one. */
 #define RTFILE_O_OPEN_CREATE            UINT32_C(0x00000100)
@@ -239,6 +244,32 @@ RTDECL(int) RTFileQuerySize(const char *pszPath, uint64_t *pcbFile);
 /** @} */
 
 
+/** Action taken by RTFileOpenEx. */
+typedef enum RTFILEACTION
+{
+    /** Invalid zero value.   */
+    RTFILEACTION_INVALID = 0,
+    /** Existing file was opened (returned by RTFILE_O_OPEN and
+     * RTFILE_O_OPEN_CREATE). */
+    RTFILEACTION_OPENED,
+    /** New file was created (returned by RTFILE_O_CREATE and
+     * RTFILE_O_OPEN_CREATE). */
+    RTFILEACTION_CREATED,
+    /** Existing file was replaced (returned by RTFILE_O_CREATE_REPLACE). */
+    RTFILEACTION_REPLACED,
+    /** Existing file was truncated (returned if RTFILE_O_TRUNCATE take effect). */
+    RTFILEACTION_TRUNCATED,
+    /** The file already exists (returned by RTFILE_O_CREATE on failure). */
+    RTFILEACTION_ALREADY_EXISTS,
+    /** End of valid values. */
+    RTFILEACTION_END,
+    /** Type size hack.   */
+    RTFILEACTION_32BIT_HACK = 0x7fffffff
+} RTFILEACTION;
+/** Pointer to action taken value (RTFileOpenEx).    */
+typedef RTFILEACTION *PRTFILEACTION;
+
+
 #ifdef IN_RING3
 /**
  * Force the use of open flags for all files opened after the setting is
@@ -288,6 +319,21 @@ RTDECL(int)  RTFileOpenF(PRTFILE pFile, uint64_t fOpen, const char *pszFilenameF
  * @param   va              Arguments to the format string.
  */
 RTDECL(int)  RTFileOpenV(PRTFILE pFile, uint64_t fOpen, const char *pszFilenameFmt, va_list va) RT_IPRT_FORMAT_ATTR(3, 0);
+
+/**
+ * Open a file, extended version.
+ *
+ * @returns iprt status code.
+ * @param   pszFilename     Path to the file which is to be opened. (UTF-8)
+ * @param   fOpen           Open flags, i.e a combination of the RTFILE_O_* defines.
+ *                          The ACCESS, ACTION and DENY flags are mandatory!
+ * @param   phFile          Where to store the handle to the opened file.
+ * @param   penmActionTaken Where to return an indicator of which action was
+ *                          taken.  This is optional and it is recommended to
+ *                          pass NULL when not strictly needed as it adds
+ *                          complexity (slower) on posix systems.
+ */
+RTDECL(int)  RTFileOpenEx(const char *pszFilename, uint64_t fOpen, PRTFILE phFile, PRTFILEACTION penmActionTaken);
 
 /**
  * Open the bit bucket (aka /dev/null or nul).
@@ -366,36 +412,58 @@ RTDECL(int)  RTFileSeek(RTFILE File, int64_t offSeek, unsigned uMethod, uint64_t
  * @param   File        Handle to the file.
  * @param   pvBuf       Where to put the bytes we read.
  * @param   cbToRead    How much to read.
- * @param   *pcbRead    How much we actually read .
+ * @param   pcbRead     How much we actually read .
  *                      If NULL an error will be returned for a partial read.
  */
 RTDECL(int)  RTFileRead(RTFILE File, void *pvBuf, size_t cbToRead, size_t *pcbRead);
 
 /**
  * Read bytes from a file at a given offset.
- * This function may modify the file position.
  *
  * @returns iprt status code.
  * @param   File        Handle to the file.
  * @param   off         Where to read.
  * @param   pvBuf       Where to put the bytes we read.
  * @param   cbToRead    How much to read.
- * @param   *pcbRead    How much we actually read .
+ * @param   pcbRead     How much we actually read .
  *                      If NULL an error will be returned for a partial read.
+ *
+ * @note    OS/2 requires separate seek and write calls.
+ *
+ * @note    Whether the file position is modified or not is host specific.
  */
 RTDECL(int)  RTFileReadAt(RTFILE File, RTFOFF off, void *pvBuf, size_t cbToRead, size_t *pcbRead);
 
 /**
  * Read bytes from a file at a given offset into a S/G buffer.
- * This function may modify the file position.
+ *
+ * @returns iprt status code.
+ * @param   hFile       Handle to the file.
+ * @param   pSgBuf      Pointer to the S/G buffer to read into.
+ * @param   cbToRead    How much to read.
+ * @param   pcbRead     How much we actually read .
+ *                      If NULL an error will be returned for a partial read.
+ *
+ * @note    It is not possible to guarantee atomicity on all platforms, so
+ *          caller must take care wrt concurrent access to @a hFile.
+ */
+RTDECL(int)  RTFileSgRead(RTFILE hFile, PRTSGBUF pSgBuf, size_t cbToRead, size_t *pcbRead);
+
+/**
+ * Read bytes from a file at a given offset into a S/G buffer.
  *
  * @returns iprt status code.
  * @param   hFile       Handle to the file.
  * @param   off         Where to read.
  * @param   pSgBuf      Pointer to the S/G buffer to read into.
  * @param   cbToRead    How much to read.
- * @param   *pcbRead    How much we actually read .
+ * @param   pcbRead     How much we actually read .
  *                      If NULL an error will be returned for a partial read.
+ *
+ * @note    Whether the file position is modified or not is host specific.
+ *
+ * @note    It is not possible to guarantee atomicity on all platforms, so
+ *          caller must take care wrt concurrent access to @a hFile.
  */
 RTDECL(int)  RTFileSgReadAt(RTFILE hFile, RTFOFF off, PRTSGBUF pSgBuf, size_t cbToRead, size_t *pcbRead);
 
@@ -406,36 +474,66 @@ RTDECL(int)  RTFileSgReadAt(RTFILE hFile, RTFOFF off, PRTSGBUF pSgBuf, size_t cb
  * @param   File        Handle to the file.
  * @param   pvBuf       What to write.
  * @param   cbToWrite   How much to write.
- * @param   *pcbWritten How much we actually wrote.
+ * @param   pcbWritten  How much we actually wrote.
  *                      If NULL an error will be returned for a partial write.
  */
 RTDECL(int)  RTFileWrite(RTFILE File, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten);
 
 /**
  * Write bytes to a file at a given offset.
- * This function may modify the file position.
  *
  * @returns iprt status code.
- * @param   File        Handle to the file.
+ * @param   hFile       Handle to the file.
  * @param   off         Where to write.
  * @param   pvBuf       What to write.
  * @param   cbToWrite   How much to write.
- * @param   *pcbWritten How much we actually wrote.
+ * @param   pcbWritten  How much we actually wrote.
  *                      If NULL an error will be returned for a partial write.
+ *
+ * @note    OS/2 requires separate seek and write calls.
+ *
+ * @note    Whether the file position is modified or not is host specific.
+ *
+ * @note    Whether @a off is used when @a hFile was opened with RTFILE_O_APPEND
+ *          is also host specific.  Currently Linux is the the only one
+ *          documented to ignore @a off.
  */
-RTDECL(int)  RTFileWriteAt(RTFILE File, RTFOFF off, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten);
+RTDECL(int)  RTFileWriteAt(RTFILE hFile, RTFOFF off, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten);
+
+/**
+ * Write bytes from a S/G buffer to a file.
+ *
+ * @returns iprt status code.
+ * @param   hFile       Handle to the file.
+ * @param   pSgBuf      What to write.
+ * @param   cbToWrite   How much to write.
+ * @param   pcbWritten  How much we actually wrote.
+ *                      If NULL an error will be returned for a partial write.
+ *
+ * @note    It is not possible to guarantee atomicity on all platforms, so
+ *          caller must take care wrt concurrent access to @a hFile.
+ */
+RTDECL(int)  RTFileSgWrite(RTFILE hFile, PRTSGBUF pSgBuf, size_t cbToWrite, size_t *pcbWritten);
 
 /**
  * Write bytes from a S/G buffer to a file at a given offset.
- * This function may modify the file position.
  *
  * @returns iprt status code.
  * @param   hFile       Handle to the file.
  * @param   off         Where to write.
  * @param   pSgBuf      What to write.
  * @param   cbToWrite   How much to write.
- * @param   *pcbWritten How much we actually wrote.
+ * @param   pcbWritten  How much we actually wrote.
  *                      If NULL an error will be returned for a partial write.
+ *
+ * @note    It is not possible to guarantee atomicity on all platforms, so
+ *          caller must take care wrt concurrent access to @a hFile.
+ *
+ * @note    Whether the file position is modified or not is host specific.
+ *
+ * @note    Whether @a off is used when @a hFile was opened with RTFILE_O_APPEND
+ *          is also host specific.  Currently Linux is the the only one
+ *          documented to ignore @a off.
  */
 RTDECL(int)  RTFileSgWriteAt(RTFILE hFile, RTFOFF off, PRTSGBUF pSgBuf, size_t cbToWrite, size_t *pcbWritten);
 
@@ -463,7 +561,7 @@ RTDECL(int)  RTFileSetSize(RTFILE File, uint64_t cbSize);
  * @param   File        Handle to the file.
  * @param   pcbSize     Where to store the filesize.
  */
-RTDECL(int)  RTFileGetSize(RTFILE File, uint64_t *pcbSize);
+RTDECL(int)  RTFileQuerySize(RTFILE File, uint64_t *pcbSize);
 
 /**
  * Determine the maximum file size.
@@ -471,7 +569,7 @@ RTDECL(int)  RTFileGetSize(RTFILE File, uint64_t *pcbSize);
  * @returns The max size of the file.
  *          -1 on failure, the file position is undefined.
  * @param   File        Handle to the file.
- * @see     RTFileGetMaxSizeEx.
+ * @see     RTFileQueryMaxSizeEx.
  */
 RTDECL(RTFOFF) RTFileGetMaxSize(RTFILE File);
 
@@ -483,16 +581,20 @@ RTDECL(RTFOFF) RTFileGetMaxSize(RTFILE File);
  * @param   pcbMax      Where to store the max file size.
  * @see     RTFileGetMaxSize.
  */
-RTDECL(int) RTFileGetMaxSizeEx(RTFILE File, PRTFOFF pcbMax);
+RTDECL(int) RTFileQueryMaxSizeEx(RTFILE File, PRTFOFF pcbMax);
 
 /**
- * Determine the maximum file size depending on the file system the file is stored on.
+ * Queries the sector size (/ logical block size) for a disk or similar.
  *
- * @returns The max size of the file.
- *          -1 on failure.
- * @param   File        Handle to the file.
+ * @returns IPRT status code.
+ * @retval  VERR_INVALID_FUNCTION if not a disk/similar.  Could also be returned
+ *          if not really implemented.
+ * @param   hFile       Handle to the disk.  This must typically be a device
+ *                      rather than a file or directory, though this may vary
+ *                      from OS to OS.
+ * @param   pcbSector   Where to store the sector size.
  */
-RTDECL(RTFOFF) RTFileGetMaxSize(RTFILE File);
+RTDECL(int) RTFileQuerySectorSize(RTFILE hFile, uint32_t *pcbSector);
 
 /**
  * Gets the current file position.
@@ -578,6 +680,114 @@ RTDECL(int) RTFileCopyEx(const char *pszSrc, const char *pszDst, uint32_t fFlags
  */
 RTDECL(int) RTFileCopyByHandlesEx(RTFILE FileSrc, RTFILE FileDst, PFNRTPROGRESS pfnProgress, void *pvUser);
 
+/**
+ * Copies a part of a file to another one.
+ *
+ * @returns IPRT status code.
+ * @retval  VERR_EOF if @a pcbCopied is NULL and the end-of-file is reached
+ *          before @a cbToCopy bytes have been copied.
+ *
+ * @param   hFileSrc    Handle to the source file.  Must be readable.
+ * @param   offSrc      The source file offset.
+ * @param   hFileDst    Handle to the destination file.  Must be writable and
+ *                      RTFILE_O_APPEND must be be in effect.
+ * @param   offDst      The destination file offset.
+ * @param   cbToCopy    How many bytes to copy.
+ * @param   fFlags      Reserved for the future, must be zero.
+ * @param   pcbCopied   Where to return the exact number of bytes copied.
+ *                      Optional.
+ *
+ * @note    The file positions of @a hFileSrc and @a hFileDst are undefined
+ *          upon return of this function.
+ *
+ * @sa      RTFileCopyPartEx.
+ */
+RTDECL(int) RTFileCopyPart(RTFILE hFileSrc, RTFOFF offSrc, RTFILE hFileDst, RTFOFF offDst, uint64_t cbToCopy,
+                           uint32_t fFlags, uint64_t *pcbCopied);
+
+
+/** Copy buffer state for RTFileCopyPartEx.
+ * @note The fields are considered internal!
+ */
+typedef struct RTFILECOPYPARTBUFSTATE
+{
+    /** Magic value (RTFILECOPYPARTBUFSTATE_MAGIC).
+     * @internal */
+    uint32_t    uMagic;
+    /** Allocation type (internal).
+     * @internal */
+    int32_t     iAllocType;
+    /** Buffer pointer.
+     * @internal */
+    uint8_t    *pbBuf;
+    /** Buffer size.
+     * @internal */
+    size_t      cbBuf;
+    /** Reserved.
+     * @internal */
+    void       *papReserved[3];
+} RTFILECOPYPARTBUFSTATE;
+/** Pointer to copy buffer state for RTFileCopyPartEx(). */
+typedef RTFILECOPYPARTBUFSTATE *PRTFILECOPYPARTBUFSTATE;
+/** Magic value for the RTFileCopyPartEx() buffer state structure (Stephen John Fry). */
+#define RTFILECOPYPARTBUFSTATE_MAGIC   UINT32_C(0x19570857)
+
+/**
+ * Prepares buffer state for one or more RTFileCopyPartEx() calls.
+ *
+ * Caller must call RTFileCopyPartCleanup() after the final RTFileCopyPartEx()
+ * call.
+ *
+ * @returns IPRT status code.
+ * @param   pBufState   The buffer state to prepare.
+ * @param   cbToCopy    The number of bytes we typically to copy in one
+ *                      RTFileCopyPartEx call.
+ */
+RTDECL(int) RTFileCopyPartPrep(PRTFILECOPYPARTBUFSTATE pBufState, uint64_t cbToCopy);
+
+/**
+ * Cleans up after RTFileCopyPartPrep() once the final RTFileCopyPartEx()
+ * call has been made.
+ *
+ * @param   pBufState   The buffer state to clean up.
+ */
+RTDECL(void) RTFileCopyPartCleanup(PRTFILECOPYPARTBUFSTATE pBufState);
+
+/**
+ * Copies a part of a file to another one, extended version.
+ *
+ * @returns IPRT status code.
+ * @retval  VERR_EOF if @a pcbCopied is NULL and the end-of-file is reached
+ *          before @a cbToCopy bytes have been copied.
+ *
+ * @param   hFileSrc    Handle to the source file.  Must be readable.
+ * @param   offSrc      The source file offset.
+ * @param   hFileDst    Handle to the destination file.  Must be writable and
+ *                      RTFILE_O_APPEND must be be in effect.
+ * @param   offDst      The destination file offset.
+ * @param   cbToCopy    How many bytes to copy.
+ * @param   fFlags      Reserved for the future, must be zero.
+ * @param   pBufState   Copy buffer state prepared by RTFileCopyPartPrep().
+ * @param   pcbCopied   Where to return the exact number of bytes copied.
+ *                      Optional.
+ *
+ * @note    The file positions of @a hFileSrc and @a hFileDst are undefined
+ *          upon return of this function.
+ *
+ * @sa      RTFileCopyPart.
+ */
+RTDECL(int) RTFileCopyPartEx(RTFILE hFileSrc, RTFOFF offSrc, RTFILE hFileDst, RTFOFF offDst, uint64_t cbToCopy,
+                             uint32_t fFlags, PRTFILECOPYPARTBUFSTATE pBufState, uint64_t *pcbCopied);
+
+/**
+ * Copy file attributes from @a hFileSrc to @a hFileDst.
+ *
+ * @returns IPRT status code.
+ * @param   hFileSrc    Handle to the source file.
+ * @param   hFileDst    Handle to the destination file.
+ * @param   fFlags      Reserved, pass zero.
+ */
+RTDECL(int) RTFileCopyAttributes(RTFILE hFileSrc, RTFILE hFileDst, uint32_t fFlags);
 
 /**
  * Compares two file given the paths to both files.
@@ -693,31 +903,37 @@ RTDECL(int) RTFileModeToFlags(const char *pszMode, uint64_t *pfMode);
  * to IPRT compatible flags, which then can be used with RTFileOpen* APIs.
  *
  * Access modes:
- *      "r"  - Opens a file for reading.
- *      "r+" - Opens a file for reading and writing.
- *      "w"  - Opens a file for writing.
- *      "w+" - Opens a file for writing and reading.
+ *      - "r":  Opens a file for reading.
+ *      - "r+": Opens a file for reading and writing.
+ *      - "w":  Opens a file for writing.
+ *      - "w+": Opens a file for writing and reading.
  *
  * Disposition modes:
- *      "ca" - Creates a new file, always. Overwrites an existing file.
- *      "ce" - Creates a new file if it does not exist. Fail if exist.
- *      "oa" - Opens an existing file and places the file pointer at
- *             the end of the file, if opened with write access.
- *             Create the file if it does not exist.
- *      "oc" - Opens an existing file or create it if it does not exist.
- *      "oe" - Opens an existing file or fail if it does not exist.
- *      "ot" - Opens and truncate an existing file or fail if it does not exist.
+ *      - "oe", "open": Opens an existing file or fail if it does not exist.
+ *      - "oc", "open-create": Opens an existing file or create it if it does
+ *        not exist.
+ *      - "oa", "open-append": Opens an existing file and places the file
+ *        pointer at the end of the file, if opened with write access. Create
+ *        the file if it does not exist.
+ *      - "ot", "open-truncate": Opens and truncate an existing file or fail if
+ *        it does not exist.
+ *      - "ce", "create": Creates a new file if it does not exist. Fail if
+ *        exist.
+ *      - "ca", "create-replace": Creates a new file, always. Overwrites an
+ *        existing file.
  *
- * @note    Sharing modes are not implemented yet, so RTFILE_O_DENY_NONE will
- *          always be used.
+ * Sharing mode:
+ *      - "nr":     Deny read.
+ *      - "nw":     Deny write.
+ *      - "nrw":    Deny both read and write.
+ *      - "d":      Allow delete.
+ *      - "", NULL: Deny none, except delete.
  *
  * @return  IPRT status code.
- * @param   pszAccess               Access mode string to convert.
- * @param   pszDisposition          Disposition mode string to convert.
- * @param   pszSharing              Sharing mode string to convert.  Not
- *                                  implemented yet - completely ignored!
- * @param   pfMode                  Where to store the converted mode flags
- *                                  on success.
+ * @param   pszAccess       Access mode string to convert.
+ * @param   pszDisposition  Disposition mode string to convert.
+ * @param   pszSharing      Sharing mode string to convert.
+ * @param   pfMode          Where to store the converted mode flags on success.
  */
 RTDECL(int) RTFileModeToFlagsEx(const char *pszAccess, const char *pszDisposition, const char *pszSharing, uint64_t *pfMode);
 
@@ -771,6 +987,7 @@ RTDECL(int) RTFileCreateTemp(char *pszTemplate, RTFMODE fMode);
  * could manipulate; however the exact criteria will be specified on a
  * platform-by-platform basis as platform support is added.
  * @see RTPathIsSecure for the current list of criteria.
+ *
  * @returns iprt status code.
  * @returns VERR_NOT_SUPPORTED if the interface can not be supported on the
  *                             current platform at this time.
@@ -1124,22 +1341,13 @@ RTDECL(void) RTFileReadAllFree(void *pvFile, size_t cbFile);
 #define RTFILE_RDALL_O_DENY_ALL             RTFILE_O_DENY_ALL
 #define RTFILE_RDALL_O_DENY_NOT_DELETE      RTFILE_O_DENY_NOT_DELETE
 #define RTFILE_RDALL_O_DENY_MASK            RTFILE_O_DENY_MASK
+/** Fail with VERR_OUT_OF_RANGE if the file size exceeds the specified maximum
+ * size.  The default behavior is to cap the size at cbMax. */
+#define RTFILE_RDALL_F_FAIL_ON_MAX_SIZE     RT_BIT_32(30)
+/** Add a trailing zero byte to facilitate reading text files. */
+#define RTFILE_RDALL_F_TRAILING_ZERO_BYTE   RT_BIT_32(31)
 /** Mask of valid flags. */
-#define RTFILE_RDALL_VALID_MASK             RTFILE_RDALL_O_DENY_MASK
-/** @} */
-
-/** @name RTFileSetAllocationSize flags
- * @{ */
-/** Default flags. */
-#define RTFILE_ALLOC_SIZE_F_DEFAULT         0
-/** Do not change the size of the file if the given size is
- * bigger than the current file size. Useful to preallocate
- * blocks beyond the current size for appending data in an efficient
- * manner. Might not be supported on all hosts and will return
- * VERR_NOT_SUPPORTED in that case. */
-#define RTFILE_ALLOC_SIZE_F_KEEP_SIZE       RT_BIT(0)
-/** Mask of valid flags. */
-#define RTFILE_ALLOC_SIZE_F_VALID           (RTFILE_ALLOC_SIZE_F_KEEP_SIZE)
+#define RTFILE_RDALL_VALID_MASK             (RTFILE_RDALL_O_DENY_MASK | UINT32_C(0xc0000000))
 /** @} */
 
 /**
@@ -1147,14 +1355,30 @@ RTDECL(void) RTFileReadAllFree(void *pvFile, size_t cbFile);
  * are allocated on the underlying medium.
  *
  * @returns IPRT status code.
- * @retval  VERR_NOT_SUPPORTED if either this operation is not supported on the current host
- *                             in an efficient manner or the given combination of flags is
- *                             not supported.
+ * @retval  VERR_NOT_SUPPORTED if either this operation is not supported on the
+ *          current host in an efficient manner or the given combination of
+ *          flags is not supported.
  * @param   hFile           The handle to the file.
  * @param   cbSize          The new size of the file to allocate.
  * @param   fFlags          Combination of RTFILE_ALLOC_SIZE_F_*
  */
 RTDECL(int) RTFileSetAllocationSize(RTFILE hFile, uint64_t cbSize, uint32_t fFlags);
+
+/** @name RTFILE_ALLOC_SIZE_F_XXX - RTFileSetAllocationSize flags
+ * @{ */
+/** Default flags. */
+#define RTFILE_ALLOC_SIZE_F_DEFAULT         0
+/** Do not change the size of the file if the given size is bigger than the
+ * current file size.
+ *
+ * Useful to preallocate blocks beyond the current size for appending data in an
+ * efficient manner. Might not be supported on all hosts and will return
+ * VERR_NOT_SUPPORTED in that case. */
+#define RTFILE_ALLOC_SIZE_F_KEEP_SIZE       RT_BIT(0)
+/** Mask of valid flags. */
+#define RTFILE_ALLOC_SIZE_F_VALID           (RTFILE_ALLOC_SIZE_F_KEEP_SIZE)
+/** @} */
+
 
 #ifdef IN_RING3
 
@@ -1540,5 +1764,5 @@ RTDECL(int) RTFileAioCtxWakeup(RTFILEAIOCTX hAioCtx);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_file_h */
 

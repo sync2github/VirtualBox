@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_heap_h
-#define ___iprt_heap_h
+#ifndef IPRT_INCLUDED_heap_h
+#define IPRT_INCLUDED_heap_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -180,7 +183,7 @@ RTDECL(size_t) RTHeapSimpleGetFreeSize(RTHEAPSIMPLE Heap);
  * @param   pszFormat   IPRT format string.
  * @param   ...         Format arguments.
  */
-typedef DECLCALLBACK(void) FNRTHEAPSIMPLEPRINTF(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
+typedef DECLCALLBACKTYPE(void, FNRTHEAPSIMPLEPRINTF,(const char *pszFormat, ...)) RT_IPRT_FORMAT_ATTR(1, 2);
 /** Pointer to a FNRTHEAPSIMPLEPRINTF function. */
 typedef FNRTHEAPSIMPLEPRINTF *PFNRTHEAPSIMPLEPRINTF;
 
@@ -335,7 +338,7 @@ RTDECL(size_t) RTHeapOffsetGetFreeSize(RTHEAPOFFSET hHeap);
  * @param   pszFormat   IPRT format string.
  * @param   ...         Format arguments.
  */
-typedef DECLCALLBACK(void) FNRTHEAPOFFSETPRINTF(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
+typedef DECLCALLBACKTYPE(void, FNRTHEAPOFFSETPRINTF,(const char *pszFormat, ...)) RT_IPRT_FORMAT_ATTR(1, 2);
 /** Pointer to a FNRTHEAPOFFSETPRINTF function. */
 typedef FNRTHEAPOFFSETPRINTF *PFNRTHEAPOFFSETPRINTF;
 
@@ -352,5 +355,5 @@ RTDECL(void) RTHeapOffsetDump(RTHEAPOFFSET hHeap, PFNRTHEAPOFFSETPRINTF pfnPrint
 /** @}  */
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_heap_h */
 

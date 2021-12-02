@@ -1,11 +1,11 @@
-/** $Id$ */
+/** $Id: VDIoBackendMem.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  *
  * VBox HDD container test utility, async I/O memory backend
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-#ifndef __VDIoBackendMem_h__
-#define __VDIoBackendMem_h__
+
+#ifndef VBOX_INCLUDED_SRC_testcase_VDIoBackendMem_h
+#define VBOX_INCLUDED_SRC_testcase_VDIoBackendMem_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/sg.h>
 
@@ -34,7 +38,7 @@ typedef PVDIOBACKENDMEM *PPVDIOBACKENDMEM;
  * @param   pvUser    Opaque user data.
  * @param   rcReq     Completion code for the request.
  */
-typedef DECLCALLBACK(int) FNVDIOCOMPLETE(void *pvUser, int rcReq);
+typedef DECLCALLBACKTYPE(int, FNVDIOCOMPLETE,(void *pvUser, int rcReq));
 /** Pointer to a completion handler. */
 typedef FNVDIOCOMPLETE *PFNVDIOCOMPLETE;
 
@@ -75,4 +79,4 @@ int VDIoBackendMemTransfer(PVDIOBACKENDMEM pIoBackend, PVDMEMDISK pMemDisk,
                            VDIOTXDIR enmTxDir, uint64_t off, size_t cbTransfer,
                            PRTSGBUF pSgBuf, PFNVDIOCOMPLETE pfnComplete, void *pvUser);
 
-#endif /* __VDIoBackendMem_h__ */
+#endif /* !VBOX_INCLUDED_SRC_testcase_VDIoBackendMem_h */

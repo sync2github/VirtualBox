@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: symlink-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Symbolic Links, Windows.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -40,6 +40,7 @@
 #include <iprt/path.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
+#include <iprt/utf16.h>
 #include "internal/path.h"
 
 
@@ -151,11 +152,11 @@ RTDECL(int) RTSymlinkCreate(const char *pszSymlink, const char *pszTarget, RTSYM
      * Convert the paths.
      */
     PRTUTF16 pwszNativeSymlink;
-    int rc = RTStrToUtf16(pszSymlink, &pwszNativeSymlink);
+    int rc = RTPathWinFromUtf8(&pwszNativeSymlink, pszSymlink, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         PRTUTF16 pwszNativeTarget;
-        rc = RTStrToUtf16(pszTarget, &pwszNativeTarget);
+        rc = RTPathWinFromUtf8(&pwszNativeTarget, pszTarget, 0 /*fFlags*/);
         if (RT_SUCCESS(rc))
         {
             /* The link target path must use backslashes to work reliably. */
@@ -218,9 +219,9 @@ RTDECL(int) RTSymlinkCreate(const char *pszSymlink, const char *pszTarget, RTSYM
             else
                 rc = RTErrConvertFromWin32(GetLastError());
 
-            RTUtf16Free(pwszNativeTarget);
+            RTPathWinFree(pwszNativeTarget);
         }
-        RTUtf16Free(pwszNativeSymlink);
+        RTPathWinFree(pwszNativeSymlink);
     }
 
     LogFlow(("RTSymlinkCreate(%p={%s}, %p={%s}, %d, %#x): returns %Rrc\n", pszSymlink, pszSymlink, pszTarget, pszTarget, enmType, fCreate, rc));
@@ -236,7 +237,7 @@ RTDECL(int) RTSymlinkDelete(const char *pszSymlink, uint32_t fDelete)
      * Convert the path.
      */
     PRTUTF16 pwszNativeSymlink;
-    int rc = RTStrToUtf16(pszSymlink, &pwszNativeSymlink);
+    int rc = RTPathWinFromUtf8(&pwszNativeSymlink, pszSymlink, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         /*
@@ -265,7 +266,7 @@ RTDECL(int) RTSymlinkDelete(const char *pszSymlink, uint32_t fDelete)
         }
         else
             rc = RTErrConvertFromWin32(GetLastError());
-        RTUtf16Free(pwszNativeSymlink);
+        RTPathWinFree(pwszNativeSymlink);
     }
 
     LogFlow(("RTSymlinkDelete(%p={%s}, %#x): returns %Rrc\n", pszSymlink, pszSymlink, fDelete, rc));
@@ -293,7 +294,7 @@ RTDECL(int) RTSymlinkReadA(const char *pszSymlink, char **ppszTarget)
 {
     AssertPtr(ppszTarget);
     PRTUTF16 pwszNativeSymlink;
-    int rc = RTStrToUtf16(pszSymlink, &pwszNativeSymlink);
+    int rc = RTPathWinFromUtf8(&pwszNativeSymlink, pszSymlink, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         HANDLE hSymlink = CreateFileW(pwszNativeSymlink,
@@ -344,7 +345,7 @@ RTDECL(int) RTSymlinkReadA(const char *pszSymlink, char **ppszTarget)
         }
         else
             rc = RTErrConvertFromWin32(GetLastError());
-        RTUtf16Free(pwszNativeSymlink);
+        RTPathWinFree(pwszNativeSymlink);
     }
 
     if (RT_SUCCESS(rc))

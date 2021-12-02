@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: Intel_Pentium_N3530_2_16GHz.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * CPU database entry "Intel Pentium N3530 2.16GHz".
  * Generated at 2016-04-29T13:34:27Z by VBoxCpuReport v5.0.51r106929 on win.amd64.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOX_CPUDB_Intel_Pentium_N3530_2_16GHz
-#define VBOX_CPUDB_Intel_Pentium_N3530_2_16GHz
+#ifndef VBOX_CPUDB_Intel_Pentium_N3530_2_16GHz_h
+#define VBOX_CPUDB_Intel_Pentium_N3530_2_16GHz_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #ifndef CPUM_DB_STANDALONE
@@ -166,7 +169,7 @@ static CPUMMSRRANGE const g_aMsrRanges_Intel_Pentium_N3530_2_16GHz[] =
     MFX(0x000003fc, "I7_MSR_CORE_C3_RESIDENCY", IntelI7CoreCnResidencyN, ReadOnly, 0x3, 0, UINT64_MAX), /* value=0x80000000`0000ad5b */
     MFX(0x000003fd, "I7_MSR_CORE_C6_RESIDENCY", IntelI7CoreCnResidencyN, ReadOnly, 0x6, 0, UINT64_MAX), /* value=0x5`51eddedc */
     RFN(0x00000400, 0x00000417, "IA32_MCi_CTL_STATUS_ADDR_MISC", Ia32McCtlStatusAddrMiscN, Ia32McCtlStatusAddrMiscN),
-    MFX(0x00000480, "IA32_VMX_BASIC", Ia32VmxBase, ReadOnly, UINT64_C(0xda040000000002), 0, 0), /* value=0xda0400`00000002 */
+    MFX(0x00000480, "IA32_VMX_BASIC", Ia32VmxBasic, ReadOnly, UINT64_C(0xda040000000002), 0, 0), /* value=0xda0400`00000002 */
     MFX(0x00000481, "IA32_VMX_PINBASED_CTLS", Ia32VmxPinbasedCtls, ReadOnly, UINT64_C(0x7f00000016), 0, 0), /* value=0x7f`00000016 */
     MFX(0x00000482, "IA32_VMX_PROCBASED_CTLS", Ia32VmxProcbasedCtls, ReadOnly, UINT64_C(0xfff9fffe0401e172), 0, 0), /* value=0xfff9fffe`0401e172 */
     MFX(0x00000483, "IA32_VMX_EXIT_CTLS", Ia32VmxExitCtls, ReadOnly, UINT64_C(0x7fffff00036dff), 0, 0), /* value=0x7fffff`00036dff */
@@ -248,6 +251,7 @@ static CPUMDBENTRY const g_Entry_Intel_Pentium_N3530_2_16GHz =
     /*.uScalableBusFreq = */ CPUM_SBUSFREQ_267MHZ,
     /*.fFlags           = */ 0,
     /*.cMaxPhysAddrWidth= */ 36,
+    /*.fMxCsrMask       = */ 0xffff,
     /*.paCpuIdLeaves    = */ NULL_ALONE(g_aCpuIdLeaves_Intel_Pentium_N3530_2_16GHz),
     /*.cCpuIdLeaves     = */ ZERO_ALONE(RT_ELEMENTS(g_aCpuIdLeaves_Intel_Pentium_N3530_2_16GHz)),
     /*.enmUnknownCpuId  = */ CPUMUNKNOWNCPUID_LAST_STD_LEAF_WITH_ECX,
@@ -257,5 +261,5 @@ static CPUMDBENTRY const g_Entry_Intel_Pentium_N3530_2_16GHz =
     /*.paMsrRanges      = */ NULL_ALONE(g_aMsrRanges_Intel_Pentium_N3530_2_16GHz),
 };
 
-#endif /* !VBOX_DB_Intel_Pentium_N3530_2_16GHz */
+#endif /* !VBOX_CPUDB_Intel_Pentium_N3530_2_16GHz_h */
 

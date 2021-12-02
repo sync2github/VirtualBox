@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: poll.cpp 83544 2020-04-03 21:20:33Z vboxsync $ */
 /** @file
  * IPRT - Polling I/O Handles, Windows+Posix Implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -42,6 +42,9 @@
 # include <limits.h>
 # include <errno.h>
 # include <sys/poll.h>
+# if defined(RT_OS_SOLARIS)
+#  include <sys/socket.h>
+# endif
 #endif
 
 #include <iprt/poll.h>
@@ -152,18 +155,20 @@ static int rtPollNoResumeWorker(RTPOLLSETINTERNAL *pThis, uint64_t MsStart, RTMS
 {
     int rc;
 
-    if (RT_UNLIKELY(pThis->cHandles == 0 && cMillies == RT_INDEFINITE_WAIT))
-        return VERR_DEADLOCK;
-
     /*
      * Check for special case, RTThreadSleep...
      */
     uint32_t const  cHandles = pThis->cHandles;
     if (cHandles == 0)
     {
-        rc = RTThreadSleep(cMillies);
-        if (RT_SUCCESS(rc))
-            rc = VERR_TIMEOUT;
+        if (RT_LIKELY(cMillies != RT_INDEFINITE_WAIT))
+        {
+            rc = RTThreadSleep(cMillies);
+            if (RT_SUCCESS(rc))
+                rc = VERR_TIMEOUT;
+        }
+        else
+            rc = VERR_DEADLOCK;
         return rc;
     }
 
@@ -416,7 +421,23 @@ static int rtPollNoResumeWorker(RTPOLLSETINTERNAL *pThis, uint64_t MsStart, RTMS
 # endif
                                                    )
                    )
-                *pfEvents |= RTPOLL_EVT_ERROR;
+                    *pfEvents |= RTPOLL_EVT_ERROR;
+
+# if defined(RT_OS_SOLARIS)
+                /* Solaris does not return POLLHUP for sockets, just POLLIN.  Check if a
+                   POLLIN should also have RTPOLL_EVT_ERROR set or not, so we present a
+                   behaviour more in line with linux and BSDs.  Note that this will not
+                   help is only RTPOLL_EVT_ERROR was requested, that will require
+                   extending this hack quite a bit further (restart poll):  */
+                if (   *pfEvents == RTPOLL_EVT_READ
+                    && pThis->paHandles[i].enmType == RTHANDLETYPE_SOCKET)
+                {
+                    uint8_t abBuf[64];
+                    ssize_t rcRecv = recv(pThis->paPollFds[i].fd, abBuf, sizeof(abBuf), MSG_PEEK | MSG_DONTWAIT);
+                    if (rcRecv == 0)
+                        *pfEvents |= RTPOLL_EVT_ERROR;
+                }
+# endif
             }
             if (pid)
                 *pid = pThis->paHandles[i].id;
@@ -838,7 +859,11 @@ RTDECL(int) RTPollSetAdd(RTPOLLSET hPollSet, PCRTHANDLE pHandle, uint32_t fEvent
             if (fEvents & RTPOLL_EVT_WRITE)
                 pThis->paPollFds[i].events |= POLLOUT;
             if (fEvents & RTPOLL_EVT_ERROR)
+# ifdef RT_OS_DARWIN
+                pThis->paPollFds[i].events |= POLLERR | POLLHUP;
+# else
                 pThis->paPollFds[i].events |= POLLERR;
+# endif
 #endif
             pThis->paHandles[i].enmType     = pHandle->enmType;
             pThis->paHandles[i].u           = uh;
@@ -848,8 +873,8 @@ RTDECL(int) RTPollSetAdd(RTPOLLSET hPollSet, PCRTHANDLE pHandle, uint32_t fEvent
 
             if (iPrev != UINT32_MAX)
             {
-                Assert(pThis->paHandles[i].fFinalEntry);
-                pThis->paHandles[i].fFinalEntry = false;
+                Assert(pThis->paHandles[iPrev].fFinalEntry);
+                pThis->paHandles[iPrev].fFinalEntry = false;
             }
 
             /*

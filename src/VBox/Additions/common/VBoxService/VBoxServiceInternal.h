@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxServiceInternal.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxService - Guest Additions Services.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxServiceInternal_h
-#define ___VBoxServiceInternal_h
+#ifndef GA_INCLUDED_SRC_common_VBoxService_VBoxServiceInternal_h
+#define GA_INCLUDED_SRC_common_VBoxService_VBoxServiceInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <stdio.h>
 #ifdef RT_OS_WINDOWS
@@ -26,6 +29,8 @@
 
 #include <iprt/list.h>
 #include <iprt/critsect.h>
+#include <iprt/path.h> /* RTPATH_MAX */
+#include <iprt/stdarg.h>
 
 #include <VBox/VBoxGuestLib.h>
 #include <VBox/HostServices/GuestControlSvc.h>
@@ -48,7 +53,7 @@ typedef struct
      * Called before parsing arguments.
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnPreInit)(void);
+    DECLCALLBACKMEMBER(int, pfnPreInit,(void));
 
     /**
      * Tries to parse the given command line option.
@@ -60,13 +65,13 @@ typedef struct
      * @param   argv        The argument vector.
      * @param   pi          The argument vector index. Update if any value(s) are eaten.
      */
-    DECLCALLBACKMEMBER(int, pfnOption)(const char **ppszShort, int argc, char **argv, int *pi);
+    DECLCALLBACKMEMBER(int, pfnOption,(const char **ppszShort, int argc, char **argv, int *pi));
 
     /**
      * Called before parsing arguments.
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnInit)(void);
+    DECLCALLBACKMEMBER(int, pfnInit,(void));
 
     /** Called from the worker thread.
      *
@@ -75,19 +80,19 @@ typedef struct
      * @param   pfShutdown      Pointer to a per service termination flag to check
      *                          before and after blocking.
      */
-    DECLCALLBACKMEMBER(int, pfnWorker)(bool volatile *pfShutdown);
+    DECLCALLBACKMEMBER(int, pfnWorker,(bool volatile *pfShutdown));
 
     /**
      * Stops a service.
      */
-    DECLCALLBACKMEMBER(void, pfnStop)(void);
+    DECLCALLBACKMEMBER(void, pfnStop,(void));
 
     /**
      * Does termination cleanups.
      *
      * @remarks This may be called even if pfnInit hasn't been called!
      */
-    DECLCALLBACKMEMBER(void, pfnTerm)(void);
+    DECLCALLBACKMEMBER(void, pfnTerm,(void));
 } VBOXSERVICE;
 /** Pointer to a VBOXSERVICE. */
 typedef VBOXSERVICE *PVBOXSERVICE;
@@ -161,7 +166,9 @@ extern unsigned     g_cVerbosity;
 extern char         g_szLogFile[RTPATH_MAX + 128];
 extern uint32_t     g_DefaultInterval;
 extern VBOXSERVICE  g_TimeSync;
+#ifdef VBOX_WITH_VBOXSERVICE_CLIPBOARD
 extern VBOXSERVICE  g_Clipboard;
+#endif
 extern VBOXSERVICE  g_Control;
 extern VBOXSERVICE  g_VMInfo;
 extern VBOXSERVICE  g_CpuHotPlug;
@@ -179,10 +186,11 @@ extern VBOXSERVICE  g_AutoMount;
 extern RTCRITSECT   g_csLog; /* For guest process stdout dumping. */
 #endif
 
-extern RTEXITCODE               VGSvcSyntax(const char *pszFormat, ...);
-extern RTEXITCODE               VGSvcError(const char *pszFormat, ...);
-extern void                     VGSvcVerbose(unsigned iLevel, const char *pszFormat, ...);
+extern RTEXITCODE               VGSvcSyntax(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
+extern RTEXITCODE               VGSvcError(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
+extern void                     VGSvcVerbose(unsigned iLevel, const char *pszFormat, ...)  RT_IPRT_FORMAT_ATTR(2, 3);
 extern int                      VGSvcLogCreate(const char *pszLogFile);
+extern void                     VGSvcLogV(const char *pszFormat, va_list va) RT_IPRT_FORMAT_ATTR(1, 0);
 extern void                     VGSvcLogDestroy(void);
 extern int                      VGSvcArgUInt32(int argc, char **argv, const char *psz, int *pi, uint32_t *pu32,
                                                uint32_t u32Min, uint32_t u32Max);
@@ -193,17 +201,43 @@ extern int                      VGSvcStopServices(void);
 extern void                     VGSvcMainWait(void);
 extern int                      VGSvcReportStatus(VBoxGuestFacilityStatus enmStatus);
 #ifdef RT_OS_WINDOWS
+extern void                     VGSvcWinResolveApis(void);
 extern RTEXITCODE               VGSvcWinInstall(void);
 extern RTEXITCODE               VGSvcWinUninstall(void);
 extern RTEXITCODE               VGSvcWinEnterCtrlDispatcher(void);
 extern void                     VGSvcWinSetStopPendingStatus(uint32_t uCheckPoint);
+# ifdef TH32CS_SNAPHEAPLIST
+extern decltype(CreateToolhelp32Snapshot)      *g_pfnCreateToolhelp32Snapshot;
+extern decltype(Process32First)                *g_pfnProcess32First;
+extern decltype(Process32Next)                 *g_pfnProcess32Next;
+extern decltype(Module32First)                 *g_pfnModule32First;
+extern decltype(Module32Next)                  *g_pfnModule32Next;
+# endif
+extern decltype(GetSystemTimeAdjustment)       *g_pfnGetSystemTimeAdjustment;
+extern decltype(SetSystemTimeAdjustment)       *g_pfnSetSystemTimeAdjustment;
+# ifdef IPRT_INCLUDED_nt_nt_h
+extern decltype(ZwQuerySystemInformation)      *g_pfnZwQuerySystemInformation;
+# endif
+extern ULONG (WINAPI *g_pfnGetAdaptersInfo)(struct _IP_ADAPTER_INFO *, PULONG);
+#ifdef WINSOCK_VERSION
+extern decltype(WSAStartup)                    *g_pfnWSAStartup;
+extern decltype(WSACleanup)                    *g_pfnWSACleanup;
+extern decltype(WSASocketA)                    *g_pfnWSASocketA;
+extern decltype(WSAIoctl)                      *g_pfnWSAIoctl;
+extern decltype(WSAGetLastError)               *g_pfnWSAGetLastError;
+extern decltype(closesocket)                   *g_pfnclosesocket;
+extern decltype(inet_ntoa)                     *g_pfninet_ntoa;
+# endif /* WINSOCK_VERSION */
+
+#ifdef SE_INTERACTIVE_LOGON_NAME
+extern decltype(LsaNtStatusToWinError)         *g_pfnLsaNtStatusToWinError;
 #endif
 
-#ifdef RT_OS_WINDOWS
 # ifdef VBOX_WITH_GUEST_PROPS
 extern int                      VGSvcVMInfoWinWriteUsers(PVBOXSERVICEVEPROPCACHE pCache, char **ppszUserList, uint32_t *pcUsersInList);
 extern int                      VGSvcVMInfoWinGetComponentVersions(uint32_t uClientID);
 # endif /* VBOX_WITH_GUEST_PROPS */
+
 #endif /* RT_OS_WINDOWS */
 
 #ifdef VBOX_WITH_VBOXSERVICE_MANAGEMENT
@@ -216,5 +250,5 @@ extern int                      VGSvcVMInfoSignal(void);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !GA_INCLUDED_SRC_common_VBoxService_VBoxServiceInternal_h */
 

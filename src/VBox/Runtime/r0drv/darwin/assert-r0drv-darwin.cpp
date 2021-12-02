@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: assert-r0drv-darwin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT -  Assertion Workers, Ring-0 Drivers, Darwin.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -43,6 +43,10 @@
 DECLHIDDEN(void) rtR0AssertNativeMsg1(const char *pszExpr, unsigned uLine, const char *pszFile, const char *pszFunction)
 {
     IPRT_DARWIN_SAVE_EFL_AC();
+    kprintf("\r\n!!Assertion Failed!!\r\n"
+            "Expression: %s\r\n"
+            "Location  : %s(%u) %s\r\n",
+            pszExpr, pszFile, uLine, pszFunction);
     printf("\r\n!!Assertion Failed!!\r\n"
            "Expression: %s\r\n"
            "Location  : %s(%u) %s\r\n",
@@ -58,6 +62,7 @@ DECLHIDDEN(void) rtR0AssertNativeMsg2V(bool fInitial, const char *pszFormat, va_
 
     RTStrPrintfV(szMsg, sizeof(szMsg) - 1, pszFormat, va);
     szMsg[sizeof(szMsg) - 1] = '\0';
+    kprintf("%s", szMsg);
     printf("%s", szMsg);
 
     NOREF(fInitial);

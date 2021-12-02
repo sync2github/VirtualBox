@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ApplianceImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,15 +15,18 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_APPLIANCEIMPL
-#define ____H_APPLIANCEIMPL
+#ifndef MAIN_INCLUDED_ApplianceImpl_h
+#define MAIN_INCLUDED_ApplianceImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* VBox includes */
 #include "VirtualSystemDescriptionWrap.h"
 #include "ApplianceWrap.h"
 #include "MediumFormatImpl.h"
 
-/* Todo: This file needs massive cleanup. Split IAppliance in a public and
+/** @todo This file needs massive cleanup. Split IAppliance in a public and
  * private classes. */
 #include <iprt/tar.h>
 #include "ovfreader.h"
@@ -38,8 +41,6 @@ struct LocationInfo;
 typedef struct VDINTERFACE   *PVDINTERFACE;
 typedef struct VDINTERFACEIO *PVDINTERFACEIO;
 typedef struct SHASTORAGE    *PSHASTORAGE;
-
-typedef enum applianceIOName { applianceIOTar, applianceIOFile, applianceIOSha } APPLIANCEIONAME;
 
 namespace ovf
 {
@@ -66,7 +67,7 @@ class ATL_NO_VTABLE Appliance :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(Appliance)
+    DECLARE_COMMON_CLASS_METHODS(Appliance)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -77,10 +78,13 @@ public:
 
     /* public methods only for internal purposes */
 
-    static HRESULT i_setErrorStatic(HRESULT aResultCode,
-                                    const Utf8Str &aText)
+    static HRESULT i_setErrorStatic(HRESULT aResultCode, const char *aText, ...)
     {
-        return setErrorInternal(aResultCode, getStaticClassIID(), getStaticComponentName(), aText, false, true);
+        va_list va;
+        va_start(va, aText);
+        HRESULT hrc = setErrorInternalV(aResultCode, getStaticClassIID(), getStaticComponentName(), aText, va, false, true);
+        va_end(va);
+        return hrc;
     }
 
     /* private instance data */
@@ -109,50 +113,59 @@ private:
     HRESULT getMediumIdsForPasswordId(const com::Utf8Str &aPasswordId, std::vector<com::Guid> &aIdentifiers);
     HRESULT addPasswords(const std::vector<com::Utf8Str> &aIdentifiers,
                          const std::vector<com::Utf8Str> &aPasswords);
-
+    HRESULT createVirtualSystemDescriptions(ULONG aRequested, ULONG *aCreated);
     /** weak VirtualBox parent */
     VirtualBox* const mVirtualBox;
 
     struct ImportStack;
     class TaskOVF;
+    class TaskOPC;
+    class TaskCloud;
+
     struct Data;            // opaque, defined in ApplianceImpl.cpp
     Data *m;
 
-    enum SetUpProgressMode { ImportFile, ImportS3, WriteFile, WriteS3 };
+    enum SetUpProgressMode { ImportFile, ImportS3, WriteFile, WriteS3, ExportCloud, ImportCloud };
 
+    enum ApplianceState { ApplianceIdle, ApplianceImporting, ApplianceExporting };
+    void i_setApplianceState(const ApplianceState &state);
     /** @name General stuff
      * @{
      */
     bool i_isApplianceIdle();
-    HRESULT i_searchUniqueVMName(Utf8Str& aName) const;
-    HRESULT i_searchUniqueDiskImageFilePath(Utf8Str& aName) const;
+    HRESULT i_searchUniqueVMName(Utf8Str &aName) const;
+    HRESULT i_ensureUniqueImageFilePath(const Utf8Str &aMachineFolder,
+                                        DeviceType_T aDeviceType,
+                                        Utf8Str &aName) const;
     HRESULT i_setUpProgress(ComObjPtr<Progress> &pProgress,
                             const Utf8Str &strDescription,
                             SetUpProgressMode mode);
-    void i_waitForAsyncProgress(ComObjPtr<Progress> &pProgressThis, ComPtr<IProgress> &pProgressAsync);
     void i_addWarning(const char* aWarning, ...);
     void i_disksWeight();
     void i_parseBucket(Utf8Str &aPath, Utf8Str &aBucket);
 
     static void i_importOrExportThreadTask(TaskOVF *pTask);
+    static void i_exportOPCThreadTask(TaskOPC *pTask);
+    static void i_importOrExportCloudThreadTask(TaskCloud *pTask);
 
-    HRESULT i_initSetOfSupportedStandardsURI();
+    HRESULT i_initBackendNames();
 
     Utf8Str i_typeOfVirtualDiskFormatFromURI(Utf8Str type) const;
 
+#if 0 /* unused */
     std::set<Utf8Str> i_URIFromTypeOfVirtualDiskFormat(Utf8Str type);
-
-    HRESULT i_initApplianceIONameMap();
-
-    Utf8Str i_applianceIOName(APPLIANCEIONAME type) const;
+#endif
 
     HRESULT i_findMediumFormatFromDiskImage(const ovf::DiskImage &di, ComObjPtr<MediumFormat>& mf);
+
+    RTVFSIOSTREAM i_manifestSetupDigestCalculationForGivenIoStream(RTVFSIOSTREAM hVfsIos, const char *pszManifestEntry,
+                                                                   bool fRead = true);
     /** @}  */
 
     /** @name Read stuff
      * @{
      */
-    void    i_readImpl(const LocationInfo &aLocInfo, ComObjPtr<Progress> &aProgress);
+    HRESULT i_readImpl(const LocationInfo &aLocInfo, ComObjPtr<Progress> &aProgress);
 
     HRESULT i_readFS(TaskOVF *pTask);
     HRESULT i_readFSOVF(TaskOVF *pTask);
@@ -161,10 +174,22 @@ private:
     HRESULT i_readManifestFile(TaskOVF *pTask, RTVFSIOSTREAM hIosMf, const char *pszSubFileNm);
     HRESULT i_readSignatureFile(TaskOVF *pTask, RTVFSIOSTREAM hIosCert, const char *pszSubFileNm);
     HRESULT i_readTailProcessing(TaskOVF *pTask);
+    HRESULT i_readTailProcessingGetManifestData(void **ppvData, size_t *pcbData);
+    HRESULT i_readTailProcessingSignedData(PRTERRINFOSTATIC pErrInfo);
+    HRESULT i_readTailProcessingVerifySelfSignedOvfCert(TaskOVF *pTask, RTCRSTORE hTrustedCerts, PRTERRINFOSTATIC pErrInfo);
+    HRESULT i_readTailProcessingVerifyIssuedOvfCert(TaskOVF *pTask, RTCRSTORE hTrustedStore, PRTERRINFOSTATIC pErrInfo);
+    HRESULT i_readTailProcessingVerifyContentInfoCerts(void const *pvData, size_t cbData,
+                                                       RTCRSTORE hTrustedStore, PRTERRINFOSTATIC pErrInfo);
+    HRESULT i_readTailProcessingVerifyAnalyzeSignerInfo(void const *pvData, size_t cbData, RTCRSTORE hTrustedStore,
+                                                        uint32_t iSigner, PRTTIMESPEC pNow, int vrc,
+                                                        PRTERRINFOSTATIC pErrInfo, PRTCRSTORE phTrustedStore2);
+    HRESULT i_readTailProcessingVerifyContentInfoFailOne(const char *pszSignature, int vrc, PRTERRINFOSTATIC pErrInfo);
+
+    HRESULT i_gettingCloudData(TaskCloud *pTask);
     /** @}  */
 
     /** @name Import stuff
-     * @}
+     * @{
      */
     HRESULT i_importImpl(const LocationInfo &aLocInfo, ComObjPtr<Progress> &aProgress);
 
@@ -177,18 +202,18 @@ private:
 
     void i_convertDiskAttachmentValues(const ovf::HardDiskController &hdc,
                                        uint32_t ulAddressOnParent,
-                                       Utf8Str &controllerType,
+                                       Utf8Str &controllerName,
                                        int32_t &lControllerPort,
                                        int32_t &lDevice);
 
     void i_importOneDiskImage(const ovf::DiskImage &di,
-                              Utf8Str *strTargetPath,
-                              ComObjPtr<Medium> &pTargetHD,
+                              const Utf8Str &strDstPath,
+                              ComObjPtr<Medium> &pTargetMedium,
                               ImportStack &stack);
 
     void i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                                 ComObjPtr<VirtualSystemDescription> &vsdescThis,
-                                ComPtr<IMachine> &pNewMachine,
+                                ComPtr<IMachine> &pNewMachineRet,
                                 ImportStack &stack);
     void i_importVBoxMachine(ComObjPtr<VirtualSystemDescription> &vsdescThis,
                              ComPtr<IMachine> &pNewMachine,
@@ -197,7 +222,6 @@ private:
 
     HRESULT i_preCheckImageAvailability(ImportStack &stack);
     bool    i_importEnsureOvaLookAhead(ImportStack &stack);
-    RTVFSIOSTREAM i_importSetupDigestCalculationForGivenIoStream(RTVFSIOSTREAM hVfsIos, const char *pszManifestEntry);
     RTVFSIOSTREAM i_importOpenSourceFile(ImportStack &stack, Utf8Str const &rstrSrcPath, const char *pszManifestEntry);
     HRESULT i_importCreateAndWriteDestinationFile(Utf8Str const &rstrDstPath,
                                                   RTVFSIOSTREAM hVfsIosSrc, Utf8Str const &rstrSrcLogNm);
@@ -206,17 +230,23 @@ private:
                              const char *pszManifestEntry);
     void    i_importDecompressFile(ImportStack &stack, Utf8Str const &rstrSrcPath, Utf8Str const &rstrDstPath,
                                    const char *pszManifestEntry);
+    HRESULT i_importCloudImpl(TaskCloud *pTask);
     /** @} */
 
     /** @name Write stuff
      * @{
      */
     HRESULT i_writeImpl(ovf::OVFVersion_T aFormat, const LocationInfo &aLocInfo, ComObjPtr<Progress> &aProgress);
+    HRESULT i_writeOPCImpl(ovf::OVFVersion_T aFormat, const LocationInfo &aLocInfo, ComObjPtr<Progress> &aProgress);
+    HRESULT i_writeCloudImpl(const LocationInfo &aLocInfo, ComObjPtr<Progress> &aProgress);
 
     HRESULT i_writeFS(TaskOVF *pTask);
     HRESULT i_writeFSOVF(TaskOVF *pTask, AutoWriteLockBase& writeLock);
     HRESULT i_writeFSOVA(TaskOVF *pTask, AutoWriteLockBase& writeLock);
-    HRESULT i_writeFSImpl(TaskOVF *pTask, AutoWriteLockBase& writeLock, PVDINTERFACEIO pCallbacks, PSHASTORAGE pStorage);
+    HRESULT i_writeFSOPC(TaskOPC *pTask);
+    HRESULT i_exportCloudImpl(TaskCloud *pTask);
+    HRESULT i_writeFSImpl(TaskOVF *pTask, AutoWriteLockBase &writeLock, RTVFSFSSTREAM hVfsFssDst);
+    HRESULT i_writeBufferToFile(RTVFSFSSTREAM hVfsFssDst, const char *pszFilename, const void *pvContent, size_t cbContent);
 
     struct XMLStack;
 
@@ -261,7 +291,7 @@ class ATL_NO_VTABLE VirtualSystemDescription :
 
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(VirtualSystemDescription)
+    DECLARE_COMMON_CLASS_METHODS(VirtualSystemDescription)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -278,7 +308,7 @@ public:
                     const Utf8Str &strExtraConfig = "");
 
     std::list<VirtualSystemDescriptionEntry*> i_findByType(VirtualSystemDescriptionType_T aType);
-    const VirtualSystemDescriptionEntry* i_findControllerFromID(uint32_t id);
+    const VirtualSystemDescriptionEntry* i_findControllerFromID(const Utf8Str &id);
 
     void i_importVBoxMachineXML(const xml::ElementNode &elmMachine);
     const settings::MachineConfigFile* i_getMachineConfig() const;
@@ -310,6 +340,7 @@ private:
     HRESULT addDescription(VirtualSystemDescriptionType_T aType,
                            const com::Utf8Str &aVBoxValue,
                            const com::Utf8Str &aExtraConfigValue);
+    HRESULT removeDescriptionByType(VirtualSystemDescriptionType_T aType);
     void i_removeByType(VirtualSystemDescriptionType_T aType);
 
     struct Data;
@@ -318,5 +349,5 @@ private:
     friend class Machine;
 };
 
-#endif // !____H_APPLIANCEIMPL
+#endif /* !MAIN_INCLUDED_ApplianceImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-fpustate-1-template.c 83329 2020-03-19 13:08:23Z vboxsync $ */
 /** @file
  * BS3Kit - bs3-fpustate-1, C code template.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -101,9 +101,11 @@ BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_Restore)(X86FXSTATE const BS3_FAR *pFxS
 BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_Save)(X86FXSTATE BS3_FAR *pFxState);
 
 BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_FNStEnv)(void BS3_FAR *pvMmioReg);
-BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_MovDQU_Read)(void BS3_FAR *pvMmioReg);
+BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_MovDQU_Read)(void BS3_FAR *pvMmioReg, void BS3_FAR *pvResult);
 BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_MovDQU_Write)(void BS3_FAR *pvMmioReg);
-BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_FMul)(void BS3_FAR *pvMmioReg);
+BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_MovUPS_Read)(void BS3_FAR *pvMmioReg, void BS3_FAR *pvResult);
+BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_MovUPS_Write)(void BS3_FAR *pvMmioReg);
+BS3_DECL_NEAR(void) TMPL_NM(bs3FpuState1_FMul)(void BS3_FAR *pvMmioReg, void BS3_FAR *pvNoResult);
 
 
 /**
@@ -128,8 +130,12 @@ BS3_DECL_FAR(uint8_t) TMPL_NM(bs3FpuState1_Corruption)(uint8_t bMode)
     uint32_t            uStartTick;
     bool                fMmioReadback;
     bool                fReadBackError = false;
+    bool                fReadError = false;
     BS3PTRUNION         MmioReg;
-
+    BS3CPUVENDOR const  enmCpuVendor = Bs3GetCpuVendor();
+    bool const          fFastFxSaveRestore = RT_BOOL(ASMCpuId_EDX(0x80000001) & X86_CPUID_AMD_FEATURE_EDX_FFXSR);
+    //bool const          fFdpXcptOnly = (ASMCpuIdEx_EBX(7, 0) & X86_CPUID_STEXT_FEATURE_EBX_FDP_EXCPTN_ONLY)
+    //                                && ASMCpuId_EAX(0) >= 7;
 
 # undef  CHECK_STATE
 # define CHECK_STATE(a_Instr) \
@@ -254,29 +260,53 @@ BS3_DECL_FAR(uint8_t) TMPL_NM(bs3FpuState1_Corruption)(uint8_t bMode)
             } while (0)
 
 # undef  CHECK_READBACK_READ_RUN
-# define CHECK_READBACK_READ_RUN(a_Instr, a_Worker, a_Type) \
+#define CHECK_READBACK_READ_RUN(a_Instr, a_Worker, a_Type) \
             do { \
                 off = (unsigned)(iLoop & (VMMDEV_TESTING_READBACK_SIZE / 2 - 1)); \
                 if (off + sizeof(a_Type) > VMMDEV_TESTING_READBACK_SIZE) \
                     off = VMMDEV_TESTING_READBACK_SIZE - sizeof(a_Type); \
-                a_Worker((a_Type *)&MmioReg.pb[off]); \
+                a_Worker((a_Type *)&MmioReg.pb[off], (a_Type *)&abReadback[0]); \
                 TMPL_NM(bs3FpuState1_Save)(pChecking); \
             } while (0)
 # undef  CHECK_READBACK_READ
 # define CHECK_READBACK_READ(a_Instr, a_Worker, a_Type) \
-            CHECK_READBACK_READ_RUN(a_Instr, a_Worker, a_Type); \
-            CHECK_STATE(a_Instr)
-
+            do { \
+                Bs3MemSet(&abReadback[0], 0xcc, sizeof(abReadback)); \
+                CHECK_READBACK_READ_RUN(a_Instr, a_Worker, a_Type); \
+                CHECK_STATE(a_Instr); \
+                if (!fReadError || iLoop == 0) \
+                { \
+                    Bs3MemZero(&abCompare[0], sizeof(abCompare)); \
+                    Bs3MemCpy(&abCompare[0], &MmioReg.pb[off], sizeof(a_Type)); \
+                    if (Bs3MemCmp(abReadback, abCompare, sizeof(a_Type)) != 0) \
+                    { \
+                        Bs3TestFailedF("Read result check for " #a_Instr " in loop #%RU32:\n%.*Rhxs expected:\n%.*Rhxs\n", \
+                                       iLoop, sizeof(a_Type), abReadback, sizeof(a_Type), abCompare); \
+                        fReadError = true; \
+                    } \
+                } \
+            } while (0)
 
         /* The tests. */
         CHECK_READBACK_WRITE_Z(SIDT,     ASMGetIDTR,                         RTIDTR);
         CHECK_READBACK_WRITE_Z(FNSTENV,  TMPL_NM(bs3FpuState1_FNStEnv),      X86FSTENV32P); /** @todo x86.h is missing types */
         CHECK_READBACK_WRITE(  MOVDQU,   TMPL_NM(bs3FpuState1_MovDQU_Write), X86XMMREG);
         CHECK_READBACK_READ(   MOVDQU,   TMPL_NM(bs3FpuState1_MovDQU_Read),  X86XMMREG);
+        CHECK_READBACK_WRITE(  MOVUPS,   TMPL_NM(bs3FpuState1_MovUPS_Write), X86XMMREG);
+        CHECK_READBACK_READ(   MOVUPS,   TMPL_NM(bs3FpuState1_MovUPS_Read),  X86XMMREG);
 
         /* Using the FPU is a little complicated, but we really need to check these things. */
         CHECK_READBACK_READ_RUN(FMUL,    TMPL_NM(bs3FpuState1_FMul),         uint64_t);
-        pExpected->FOP    = 0x7dc;
+        if (enmCpuVendor == BS3CPUVENDOR_INTEL)
+# if BS3_MODE_IS_16BIT_CODE(TMPL_MODE)
+            pExpected->FOP    = 0x040f; // skylake 6700k
+# else
+            pExpected->FOP    = 0x040b; // skylake 6700k
+# endif
+        else if (enmCpuVendor == BS3CPUVENDOR_AMD && fFastFxSaveRestore)
+            pExpected->FOP    = 0x0000; // Zen2 (3990x)
+        else
+            pExpected->FOP    = 0x07dc; // dunno where we got this.
 # if ARCH_BITS == 64
         pExpected->FPUDP  = (uint32_t) (uintptr_t)&MmioReg.pb[off];
         pExpected->DS     = (uint16_t)((uintptr_t)&MmioReg.pb[off] >> 32);
@@ -286,6 +316,8 @@ BS3_DECL_FAR(uint8_t) TMPL_NM(bs3FpuState1_Corruption)(uint8_t bMode)
 # else
         pExpected->FPUDP  = BS3_FP_OFF(&MmioReg.pb[off]);
 # endif
+        if (enmCpuVendor == BS3CPUVENDOR_AMD && fFastFxSaveRestore)
+            pExpected->FPUDP = 0; // Zen2 (3990x)
         CHECK_STATE(FMUL);
 
         /* check for timeout every now an then. */

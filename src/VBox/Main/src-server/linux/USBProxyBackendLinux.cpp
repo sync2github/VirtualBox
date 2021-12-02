@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBProxyBackendLinux.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox USB Proxy Service, Linux Specialization.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,13 +19,14 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_MAIN_USBPROXYBACKEND
 #include "USBProxyService.h"
 #include "USBGetDevices.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/usb.h>
 #include <VBox/usblib.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 #include <iprt/string.h>
 #include <iprt/alloc.h>
@@ -34,7 +35,7 @@
 #include <iprt/dir.h>
 #include <iprt/env.h>
 #include <iprt/file.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/param.h>
 #include <iprt/path.h>
@@ -79,9 +80,10 @@ USBProxyBackendLinux::~USBProxyBackendLinux()
  *
  * @returns VBox status code.
  */
-int USBProxyBackendLinux::init(USBProxyService *pUsbProxyService, const com::Utf8Str &strId, const com::Utf8Str &strAddress)
+int USBProxyBackendLinux::init(USBProxyService *pUsbProxyService, const com::Utf8Str &strId,
+                              const com::Utf8Str &strAddress, bool fLoadingSettings)
 {
-    USBProxyBackend::init(pUsbProxyService, strId, strAddress);
+    USBProxyBackend::init(pUsbProxyService, strId, strAddress, fLoadingSettings);
 
     unconst(m_strBackend) = Utf8Str("host");
 

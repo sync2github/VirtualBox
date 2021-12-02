@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTFileSetAllocationSize-posix.cpp 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT - RTFileSetAllocationSize, linux implementation.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,7 +33,7 @@
 #include "internal/iprt.h"
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -58,7 +58,7 @@ RTDECL(int) RTFileSetAllocationSize(RTFILE hFile, uint64_t cbSize, uint32_t fFla
 
     int rc = VINF_SUCCESS;
     PFNPOSIXFALLOCATE pfnPosixFAllocate = (PFNPOSIXFALLOCATE)(uintptr_t)dlsym(RTLD_DEFAULT, "posix_fallocate");
-    if (VALID_PTR(pfnPosixFAllocate))
+    if (RT_VALID_PTR(pfnPosixFAllocate))
     {
         int rcPosix = pfnPosixFAllocate(RTFileToNative(hFile), 0, cbSize);
         if (rcPosix != 0)

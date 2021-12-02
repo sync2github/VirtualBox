@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semevent-r0drv-nt.cpp 90488 2021-08-03 09:17:59Z vboxsync $ */
 /** @file
  * IPRT -  Single Release Event Semaphores, Ring-0 Driver, NT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -180,7 +180,7 @@ DECLINLINE(int) rtR0SemEventNtWait(PRTSEMEVENTINTERNAL pThis, uint32_t fFlags, u
     /*
      * Convert the timeout to a relative one because KeWaitForSingleObject
      * takes system time instead of interrupt time as input for absolute
-     * timeout specifications.  So, we're best of by giving it relative time.
+     * timeout specifications.  So, we're best off by giving it relative time.
      *
      * Lazy bird converts uTimeout to relative nanoseconds and then to Nt time.
      */
@@ -273,5 +273,11 @@ RTDECL(int)  RTSemEventWaitExDebug(RTSEMEVENT hEventSem, uint32_t fFlags, uint64
 RTDECL(uint32_t) RTSemEventGetResolution(void)
 {
     return RTTimerGetSystemGranularity();
+}
+
+
+RTR0DECL(bool) RTSemEventIsSignalSafe(void)
+{
+    return KeGetCurrentIrql() <= DISPATCH_LEVEL;
 }
 

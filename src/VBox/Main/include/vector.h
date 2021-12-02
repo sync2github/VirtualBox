@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: vector.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * STL-inspired vector implementation in C
  * @note  functions in this file are inline to prevent warnings about
@@ -13,7 +13,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,18 +24,22 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef MAIN_VECTOR_H
-# define MAIN_VECTOR_H
+#ifndef MAIN_INCLUDED_vector_h
+#define MAIN_INCLUDED_vector_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
 
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <stdlib.h>
 
-/*******************************************************************************
-*   Helper macros and definitions                                              *
-*******************************************************************************/
+
+/*********************************************************************************************************************************
+*   Helper macros and definitions                                                                                                *
+*********************************************************************************************************************************/
 
 /** The unit by which the vector capacity is increased */
 #define VECTOR_ALLOC_UNIT 16
@@ -216,9 +220,10 @@ DECLINLINE(int) vecPushBackPtr(VECTOR_PTR *pvec, unsigned uTypeHash,
     return VINF_SUCCESS;
 }
 
-/*******************************************************************************
-*   Public interface macros                                                    *
-*******************************************************************************/
+
+/*********************************************************************************************************************************
+*   Public interface macros                                                                                                      *
+*********************************************************************************************************************************/
 
 /**
  * Initialise a vector structure.  Always succeeds.
@@ -329,16 +334,20 @@ DECLINLINE(int) vecPushBackPtr(VECTOR_PTR *pvec, unsigned uTypeHash,
 #define VEC_SIZE_PTR VEC_SIZE_OBJ
 
 /**
+ * Iterates over a vector.
+ *
  * Iterates over the vector elements from first to last and execute the
  * following instruction or block on each iteration with @a pIterator set to
  * point to the current element (that is, a pointer to the pointer element for
  * a vector-of-pointers).  Use in the same way as a "for" statement.
- * @param pvec       pointer to the vector to be iterated over
- * @param type       the type of the vector, must match the type specified at
- *                   vector initialisation (including whitespace etc)
+ *
+ * @param pvec       Pointer to the vector to be iterated over.
+ * @param type       The type of the vector, must match the type specified at
+ *                   vector initialisation (including whitespace etc).
+ * @param pIterator  A pointer to @a type which will be set to point to the
+ *                   current vector element on each iteration.
+ *
  * @todo  can we assert the correctness of the type in some way?
- * @param pIterator  a pointer to @a type which will be set to point to the
- *                   current vector element on each iteration
  */
 #define VEC_FOR_EACH(pvec, type, pIterator) \
     for (pIterator = (type *) (pvec)->mpvaElements; \
@@ -346,4 +355,4 @@ DECLINLINE(int) vecPushBackPtr(VECTOR_PTR *pvec, unsigned uTypeHash,
          && pIterator < (type *) (pvec)->mpvaElements + (pvec)->mcElements; \
          ++pIterator)
 
-#endif /* MAIN_VECTOR_H */
+#endif /* !MAIN_INCLUDED_vector_h */

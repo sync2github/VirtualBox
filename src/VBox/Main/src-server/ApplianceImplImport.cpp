@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ApplianceImplImport.cpp 91720 2021-10-14 11:59:23Z vboxsync $ */
 /** @file
  * IAppliance and IVirtualSystem COM class implementations.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,10 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_APPLIANCE
 #include <iprt/alloca.h>
 #include <iprt/path.h>
+#include <iprt/cpp/path.h>
 #include <iprt/dir.h>
 #include <iprt/file.h>
 #include <iprt/s3.h>
@@ -29,6 +31,7 @@
 #include <iprt/crypto/pkix.h>
 #include <iprt/crypto/store.h>
 #include <iprt/crypto/x509.h>
+#include <iprt/rand.h>
 
 #include <VBox/vd.h>
 #include <VBox/com/array.h>
@@ -44,10 +47,11 @@
 #include "HostImpl.h"
 
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include "ApplianceImplPrivate.h"
 #include "CertificateImpl.h"
+#include "ovfreader.h"
 
 #include <VBox/param.h>
 #include <VBox/version.h>
@@ -67,7 +71,8 @@ using namespace std;
  * Public method implementation. This opens the OVF with ovfreader.cpp.
  * Thread implementation is in Appliance::readImpl().
  *
- * @param aFile
+ * @param aFile     File to read the appliance from.
+ * @param aProgress Progress object.
  * @return
  */
 HRESULT Appliance::read(const com::Utf8Str &aFile,
@@ -84,26 +89,32 @@ HRESULT Appliance::read(const com::Utf8Str &aFile,
         m->pReader = NULL;
     }
 
-    // see if we can handle this file; for now we insist it has an ovf/ova extension
-    if (   !aFile.endsWith(".ovf", Utf8Str::CaseInsensitive)
-        && !aFile.endsWith(".ova", Utf8Str::CaseInsensitive))
-        return setError(VBOX_E_FILE_ERROR, tr("Appliance file must have .ovf or .ova extension"));
-
-    ComObjPtr<Progress> progress;
+    /* Parse all necessary info out of the URI (please not how stupid utterly wasteful
+       this status & allocation error throwing is): */
     try
     {
-        /* Parse all necessary info out of the URI */
-        i_parseURI(aFile, m->locInfo);
-        i_readImpl(m->locInfo, progress);
+        i_parseURI(aFile, m->locInfo); /* may trhow rc. */
     }
     catch (HRESULT aRC)
     {
         return aRC;
     }
+    catch (std::bad_alloc &)
+    {
+        return E_OUTOFMEMORY;
+    }
 
-    /* Return progress to the caller */
-    progress.queryInterfaceTo(aProgress.asOutParam());
-    return S_OK;
+    // see if we can handle this file; for now we insist it has an ovf/ova extension
+    if (   m->locInfo.storageType == VFSType_File
+        && !aFile.endsWith(".ovf", Utf8Str::CaseInsensitive)
+        && !aFile.endsWith(".ova", Utf8Str::CaseInsensitive))
+        return setError(VBOX_E_FILE_ERROR, tr("Appliance file must have .ovf or .ova extension"));
+
+    ComObjPtr<Progress> progress;
+    HRESULT hrc = i_readImpl(m->locInfo, progress);
+    if (SUCCEEDED(hrc))
+        progress.queryInterfaceTo(aProgress.asOutParam());
+    return hrc;
 }
 
 /**
@@ -127,14 +138,14 @@ HRESULT Appliance::interpret()
     /* Clear any previous virtual system descriptions */
     m->virtualSystemDescriptions.clear();
 
-    if (!m->pReader)
+    if (m->locInfo.storageType == VFSType_File && !m->pReader)
         return setError(E_FAIL,
                         tr("Cannot interpret appliance without reading it first (call read() before interpret())"));
 
     // Change the appliance state so we can safely leave the lock while doing time-consuming
-    // disk imports; also the below method calls do all kinds of locking which conflicts with
+    // medium imports; also the below method calls do all kinds of locking which conflicts with
     // the appliance object lock
-    m->state = Data::ApplianceImporting;
+    m->state = ApplianceImporting;
     alock.release();
 
     /* Try/catch so we can clean up on error */
@@ -197,16 +208,46 @@ HRESULT Appliance::interpret()
                                  vsysThis.strName,
                                  nameVBox);
 
+            /* VM Primary Group */
+            Utf8Str strPrimaryGroup;
+            if (   vsysThis.pelmVBoxMachine
+                && pNewDesc->m->pConfig->machineUserData.llGroups.size())
+                strPrimaryGroup = pNewDesc->m->pConfig->machineUserData.llGroups.front();
+            if (strPrimaryGroup.isEmpty())
+                strPrimaryGroup = "/";
+            pNewDesc->i_addEntry(VirtualSystemDescriptionType_PrimaryGroup,
+                                 "",
+                                 "" /* no direct OVF correspondence */,
+                                 strPrimaryGroup);
+
             /* Based on the VM name, create a target machine path. */
-            Bstr bstrMachineFilename;
+            Bstr bstrSettingsFilename;
             rc = mVirtualBox->ComposeMachineFilename(Bstr(nameVBox).raw(),
-                                                     NULL /* aGroup */,
+                                                     Bstr(strPrimaryGroup).raw(),
                                                      NULL /* aCreateFlags */,
                                                      NULL /* aBaseFolder */,
-                                                     bstrMachineFilename.asOutParam());
+                                                     bstrSettingsFilename.asOutParam());
             if (FAILED(rc)) throw rc;
-            /* Determine the machine folder from that */
-            Utf8Str strMachineFolder = Utf8Str(bstrMachineFilename).stripFilename();
+            Utf8Str strMachineFolder(bstrSettingsFilename);
+            strMachineFolder.stripFilename();
+
+#if 1
+            /* The import logic should work exactly the same whether the
+             * following 2 items are present or not, but of course it may have
+             * an influence on the exact presentation of the import settings
+             * of an API client. */
+            Utf8Str strSettingsFilename(bstrSettingsFilename);
+            pNewDesc->i_addEntry(VirtualSystemDescriptionType_SettingsFile,
+                                 "",
+                                 "" /* no direct OVF correspondence */,
+                                 strSettingsFilename);
+            Utf8Str strBaseFolder;
+            mVirtualBox->i_getDefaultMachineFolder(strBaseFolder);
+            pNewDesc->i_addEntry(VirtualSystemDescriptionType_BaseFolder,
+                                 "",
+                                 "" /* no direct OVF correspondence */,
+                                 strBaseFolder);
+#endif
 
             /* VM Product */
             if (!vsysThis.strProduct.isEmpty())
@@ -257,10 +298,10 @@ HRESULT Appliance::interpret()
                                      vsysThis.strLicenseText,
                                      vsysThis.strLicenseText);
 
-            /* Now that we know the OS type, get our internal defaults based on that. */
+            /* Now that we know the OS type, get our internal defaults based on
+             * that, if it is known (otherwise pGuestOSType will be NULL). */
             ComPtr<IGuestOSType> pGuestOSType;
-            rc = mVirtualBox->GetGuestOSType(Bstr(strOsTypeVBox).raw(), pGuestOSType.asOutParam());
-            if (FAILED(rc)) throw rc;
+            mVirtualBox->GetGuestOSType(Bstr(strOsTypeVBox).raw(), pGuestOSType.asOutParam());
 
             /* CPU count */
             ULONG cpuCountVBox;
@@ -309,8 +350,13 @@ HRESULT Appliance::interpret()
             {
                 /* If the RAM of the OVF is zero, use our predefined values */
                 ULONG memSizeVBox2;
-                rc = pGuestOSType->COMGETTER(RecommendedRAM)(&memSizeVBox2);
-                if (FAILED(rc)) throw rc;
+                if (!pGuestOSType.isNull())
+                {
+                    rc = pGuestOSType->COMGETTER(RecommendedRAM)(&memSizeVBox2);
+                    if (FAILED(rc)) throw rc;
+                }
+                else
+                    memSizeVBox2 = 1024;
                 /* VBox stores that in MByte */
                 ullMemSizeVBox = (uint64_t)memSizeVBox2;
             }
@@ -361,7 +407,7 @@ HRESULT Appliance::interpret()
                 /* Check for the constrains */
                 if (llNetworkAdapters.size() > maxNetworkAdapters)
                     i_addWarning(tr("The virtual system \"%s\" claims support for %zu network adapters, but VirtualBox "
-                                    "has support for max %u network adapter only."),
+                                    "has support for max %u network adapter only.","", llNetworkAdapters.size()),
                                     vsysThis.strName.c_str(), llNetworkAdapters.size(), maxNetworkAdapters);
                 /* Iterate through all network adapters. */
                 settings::NetworkAdaptersList::const_iterator it1;
@@ -391,13 +437,24 @@ HRESULT Appliance::interpret()
                 /* Check for the constrains */
                 if (cEthernetAdapters > maxNetworkAdapters)
                     i_addWarning(tr("The virtual system \"%s\" claims support for %zu network adapters, but VirtualBox "
-                                    "has support for max %u network adapter only."),
+                                    "has support for max %u network adapter only.", "", cEthernetAdapters),
                                     vsysThis.strName.c_str(), cEthernetAdapters, maxNetworkAdapters);
 
                 /* Get the default network adapter type for the selected guest OS */
                 NetworkAdapterType_T defaultAdapterVBox = NetworkAdapterType_Am79C970A;
-                rc = pGuestOSType->COMGETTER(AdapterType)(&defaultAdapterVBox);
-                if (FAILED(rc)) throw rc;
+                if (!pGuestOSType.isNull())
+                {
+                    rc = pGuestOSType->COMGETTER(AdapterType)(&defaultAdapterVBox);
+                    if (FAILED(rc)) throw rc;
+                }
+                else
+                {
+#ifdef VBOX_WITH_E1000
+                    defaultAdapterVBox = NetworkAdapterType_I82540EM;
+#else
+                    defaultAdapterVBox = NetworkAdapterType_Am79C973A;
+#endif
+                }
 
                 ovf::EthernetAdaptersList::const_iterator itEA;
                 /* Iterate through all abstract networks. Ignore network cards
@@ -453,6 +510,10 @@ HRESULT Appliance::interpret()
                             nwAdapterVBox = NetworkAdapterType_I82545EM;
                     }
 #endif /* VBOX_WITH_E1000 */
+                    else if (   !ea.strAdapterType.compare("VirtioNet", Utf8Str::CaseInsensitive)
+                             || !ea.strAdapterType.compare("virtio-net", Utf8Str::CaseInsensitive)
+                             || !ea.strAdapterType.compare("3", Utf8Str::CaseInsensitive))
+                        nwAdapterVBox = NetworkAdapterType_Virtio;
 
                     pNewDesc->i_addEntry(VirtualSystemDescriptionType_NetworkAdapter,
                                          "",      // ref
@@ -501,18 +562,19 @@ HRESULT Appliance::interpret()
             if (fDVD)
                 pNewDesc->i_addEntry(VirtualSystemDescriptionType_CDROM, "", "", "");
 
-            /* Hard disk Controller */
+            /* Storage Controller */
             uint16_t cIDEused = 0;
             uint16_t cSATAused = 0; NOREF(cSATAused);
             uint16_t cSCSIused = 0; NOREF(cSCSIused);
+            uint16_t cVIRTIOSCSIused = 0; NOREF(cVIRTIOSCSIused);
+
             ovf::ControllersMap::const_iterator hdcIt;
-            /* Iterate through all hard disk controllers */
+            /* Iterate through all storage controllers */
             for (hdcIt = vsysThis.mapControllers.begin();
                  hdcIt != vsysThis.mapControllers.end();
                  ++hdcIt)
             {
                 const ovf::HardDiskController &hdc = hdcIt->second;
-                Utf8Str strControllerID = Utf8StrFmt("%RI32", (uint32_t)hdc.idController);
 
                 switch (hdc.system)
                 {
@@ -528,9 +590,9 @@ HRESULT Appliance::interpret()
                             else if (!hdc.strControllerType.compare("ICH6", Utf8Str::CaseInsensitive))
                                 strType = "ICH6";
                             pNewDesc->i_addEntry(VirtualSystemDescriptionType_HardDiskControllerIDE,
-                                                 strControllerID,         // strRef
-                                                 hdc.strControllerType,   // aOvfValue
-                                                 strType);                // aVBoxValue
+                                                 hdc.strIdController,       // strRef
+                                                 hdc.strControllerType,     // aOvfValue
+                                                 strType);                  // aVBoxValue
                         }
                         else
                             /* Warn only once */
@@ -549,7 +611,7 @@ HRESULT Appliance::interpret()
                             /// @todo figure out the SATA types
                             /* We only support a plain AHCI controller, so use them always */
                             pNewDesc->i_addEntry(VirtualSystemDescriptionType_HardDiskControllerSATA,
-                                                 strControllerID,
+                                                 hdc.strIdController,
                                                  hdc.strControllerType,
                                                  "AHCI");
                         }
@@ -580,7 +642,7 @@ HRESULT Appliance::interpret()
                             else if (!hdc.strControllerType.compare("BusLogic", Utf8Str::CaseInsensitive))
                                 hdcController = "BusLogic";
                             pNewDesc->i_addEntry(vsdet,
-                                                 strControllerID,
+                                                 hdc.strIdController,
                                                  hdc.strControllerType,
                                                  hdcController);
                         }
@@ -590,23 +652,45 @@ HRESULT Appliance::interpret()
                                             "supports only one SCSI controller."),
                                             vsysThis.strName.c_str(),
                                             hdc.strControllerType.c_str(),
-                                            strControllerID.c_str());
+                                            hdc.strIdController.c_str());
                         ++cSCSIused;
                     break;
+
+                    case ovf::HardDiskController::VIRTIOSCSI:
+                        /* Check for the constrains */
+                        if (cVIRTIOSCSIused < 1)
+                        {
+                            pNewDesc->i_addEntry(VirtualSystemDescriptionType_HardDiskControllerVirtioSCSI,
+                                                 hdc.strIdController,
+                                                 hdc.strControllerType,
+                                                 "VirtioSCSI");
+                        }
+                        else
+                        {
+                            /* Warn only once */
+                            if (cVIRTIOSCSIused == 1)
+                                i_addWarning(tr("The virtual system \"%s\" requests support for more than one "
+                                                "VirtioSCSI controller, but VirtualBox has support for only one"),
+                                                vsysThis.strName.c_str());
+
+                        }
+                        ++cVIRTIOSCSIused;
+                    break;
+
                 }
             }
 
-            /* Hard disks */
+            /* Storage devices (hard disks/DVDs/...) */
             if (vsysThis.mapVirtualDisks.size() > 0)
             {
                 ovf::VirtualDisksMap::const_iterator itVD;
-                /* Iterate through all hard disks ()*/
+                /* Iterate through all storage devices */
                 for (itVD = vsysThis.mapVirtualDisks.begin();
                      itVD != vsysThis.mapVirtualDisks.end();
                      ++itVD)
                 {
                     const ovf::VirtualDisk &hd = itVD->second;
-                    /* Get the associated disk image */
+                    /* Get the associated image */
                     ovf::DiskImage di;
                     std::map<RTCString, ovf::DiskImage>::iterator foundDisk;
 
@@ -619,10 +703,9 @@ HRESULT Appliance::interpret()
                     }
 
                     /*
-                     * Figure out from URI which format the image of disk has.
-                     * URI must have inside section <Disk>                   .
-                     * But there aren't strong requirements about correspondence one URI for one disk virtual format.
-                     * So possibly, we aren't able to recognize some URIs.
+                     * Figure out from URI which format the image has.
+                     * There is no strict mapping of image URI to image format.
+                     * It's possible we aren't able to recognize some URIs.
                      */
 
                     ComObjPtr<MediumFormat> mediumFormat;
@@ -641,92 +724,56 @@ HRESULT Appliance::interpret()
                     //  - figure out if there is a url specifier for vhd already
                     //  - we need a url specifier for the vdi format
 
+                    Utf8Str strFilename = di.strHref;
+                    DeviceType_T devType = DeviceType_Null;
                     if (vdf.compare("VMDK", Utf8Str::CaseInsensitive) == 0)
                     {
                         /* If the href is empty use the VM name as filename */
-                        Utf8Str strFilename = di.strHref;
                         if (!strFilename.length())
                             strFilename = Utf8StrFmt("%s.vmdk", hd.strDiskId.c_str());
-
-                        Utf8Str strTargetPath = Utf8Str(strMachineFolder);
-                        strTargetPath.append(RTPATH_DELIMITER).append(di.strHref);
-                        /*
-                         * Remove last extension from the file name if the file is compressed
-                        */
-                        if (di.strCompression.compare("gzip", Utf8Str::CaseInsensitive)==0)
-                        {
-                            strTargetPath.stripSuffix();
-                        }
-
-                        i_searchUniqueDiskImageFilePath(strTargetPath);
-
-                        /* find the description for the hard disk controller
-                         * that has the same ID as hd.idController */
-                        const VirtualSystemDescriptionEntry *pController;
-                        if (!(pController = pNewDesc->i_findControllerFromID(hd.idController)))
-                            throw setError(E_FAIL,
-                                           tr("Cannot find hard disk controller with OVF instance ID %RI32 "
-                                              "to which disk \"%s\" should be attached"),
-                                           hd.idController,
-                                           di.strHref.c_str());
-
-                        /* controller to attach to, and the bus within that controller */
-                        Utf8StrFmt strExtraConfig("controller=%RI16;channel=%RI16",
-                                                  pController->ulIndex,
-                                                  hd.ulAddressOnParent);
-                        pNewDesc->i_addEntry(VirtualSystemDescriptionType_HardDiskImage,
-                                             hd.strDiskId,
-                                             di.strHref,
-                                             strTargetPath,
-                                             di.ulSuggestedSizeMB,
-                                             strExtraConfig);
+                        devType = DeviceType_HardDisk;
                     }
                     else if (vdf.compare("RAW", Utf8Str::CaseInsensitive) == 0)
                     {
                         /* If the href is empty use the VM name as filename */
-                        Utf8Str strFilename = di.strHref;
                         if (!strFilename.length())
                             strFilename = Utf8StrFmt("%s.iso", hd.strDiskId.c_str());
-
-                        Utf8Str strTargetPath = Utf8Str(strMachineFolder)
-                            .append(RTPATH_DELIMITER)
-                            .append(di.strHref);
-                        /*
-                         * Remove last extension from the file name if the file is compressed
-                        */
-                        if (di.strCompression.compare("gzip", Utf8Str::CaseInsensitive)==0)
-                        {
-                            strTargetPath.stripSuffix();
-                        }
-
-                        i_searchUniqueDiskImageFilePath(strTargetPath);
-
-                        /* find the description for the hard disk controller
-                         * that has the same ID as hd.idController */
-                        const VirtualSystemDescriptionEntry *pController;
-                        if (!(pController = pNewDesc->i_findControllerFromID(hd.idController)))
-                            throw setError(E_FAIL,
-                                           tr("Cannot find disk controller with OVF instance ID %RI32 "
-                                              "to which disk \"%s\" should be attached"),
-                                           hd.idController,
-                                           di.strHref.c_str());
-
-                        /* controller to attach to, and the bus within that controller */
-                        Utf8StrFmt strExtraConfig("controller=%RI16;channel=%RI16",
-                                                  pController->ulIndex,
-                                                  hd.ulAddressOnParent);
-                        pNewDesc->i_addEntry(VirtualSystemDescriptionType_HardDiskImage,
-                                             hd.strDiskId,
-                                             di.strHref,
-                                             strTargetPath,
-                                             di.ulSuggestedSizeMB,
-                                             strExtraConfig);
+                        devType = DeviceType_DVD;
                     }
                     else
                         throw setError(VBOX_E_FILE_ERROR,
                                        tr("Unsupported format for virtual disk image %s in OVF: \"%s\""),
                                           di.strHref.c_str(),
                                           di.strFormat.c_str());
+
+                    /*
+                     * Remove last extension from the file name if the file is compressed
+                     */
+                    if (di.strCompression.compare("gzip", Utf8Str::CaseInsensitive)==0)
+                        strFilename.stripSuffix();
+
+                    i_ensureUniqueImageFilePath(strMachineFolder, devType, strFilename); /** @todo check the return code! */
+
+                    /* find the description for the storage controller
+                     * that has the same ID as hd.strIdController */
+                    const VirtualSystemDescriptionEntry *pController;
+                    if (!(pController = pNewDesc->i_findControllerFromID(hd.strIdController)))
+                        throw setError(E_FAIL,
+                                       tr("Cannot find storage controller with OVF instance ID \"%s\" "
+                                          "to which medium \"%s\" should be attached"),
+                                       hd.strIdController.c_str(),
+                                       di.strHref.c_str());
+
+                    /* controller to attach to, and the bus within that controller */
+                    Utf8StrFmt strExtraConfig("controller=%RI16;channel=%RI16",
+                                              pController->ulIndex,
+                                              hd.ulAddressOnParent);
+                    pNewDesc->i_addEntry(VirtualSystemDescriptionType_HardDiskImage,
+                                         hd.strDiskId,
+                                         di.strHref,
+                                         strFilename,
+                                         di.ulSuggestedSizeMB,
+                                         strExtraConfig);
                 }
             }
 
@@ -742,7 +789,7 @@ HRESULT Appliance::interpret()
 
     // reset the appliance state
     alock.acquire();
-    m->state = Data::ApplianceIdle;
+    m->state = ApplianceIdle;
 
     return rc;
 }
@@ -751,7 +798,8 @@ HRESULT Appliance::interpret()
  * Public method implementation. This creates one or more new machines according to the
  * VirtualSystemScription instances created by Appliance::Interpret().
  * Thread implementation is in Appliance::i_importImpl().
- * @param aProgress
+ * @param aOptions  Import options.
+ * @param aProgress Progress object.
  * @return
  */
 HRESULT Appliance::importMachines(const std::vector<ImportOptions_T> &aOptions,
@@ -761,10 +809,15 @@ HRESULT Appliance::importMachines(const std::vector<ImportOptions_T> &aOptions,
 
     if (aOptions.size())
     {
-        m->optListImport.setCapacity(aOptions.size());
-        for (size_t i = 0; i < aOptions.size(); ++i)
+        try
         {
-            m->optListImport.insert(i, aOptions[i]);
+            m->optListImport.setCapacity(aOptions.size());
+            for (size_t i = 0; i < aOptions.size(); ++i)
+                m->optListImport.insert(i, aOptions[i]);
+        }
+        catch (std::bad_alloc &)
+        {
+            return E_OUTOFMEMORY;
         }
     }
 
@@ -776,26 +829,17 @@ HRESULT Appliance::importMachines(const std::vector<ImportOptions_T> &aOptions,
     if (!i_isApplianceIdle())
         return E_ACCESSDENIED;
 
-    if (!m->pReader)
+    //check for the local import only. For import from the Cloud m->pReader is always NULL.
+    if (m->locInfo.storageType == VFSType_File && !m->pReader)
         return setError(E_FAIL,
                         tr("Cannot import machines without reading it first (call read() before i_importMachines())"));
 
     ComObjPtr<Progress> progress;
-    HRESULT rc = S_OK;
-    try
-    {
-        rc = i_importImpl(m->locInfo, progress);
-    }
-    catch (HRESULT aRC)
-    {
-        rc = aRC;
-    }
-
-    if (SUCCEEDED(rc))
-        /* Return progress to the caller */
+    HRESULT hrc = i_importImpl(m->locInfo, progress);
+    if (SUCCEEDED(hrc))
         progress.queryInterfaceTo(aProgress.asOutParam());
 
-    return rc;
+    return hrc;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -853,44 +897,9 @@ HRESULT Appliance::i_preCheckImageAvailability(ImportStack &stack)
 }
 
 /**
- * Setup automatic I/O stream digest calculation, adding it to hOurManifest.
- *
- * @returns Passthru I/O stream, of @a hVfsIos if no digest calc needed.
- * @param   hVfsIos             The stream to wrap. Always consumed.
- * @param   pszManifestEntry    The manifest entry.
- * @throws  Nothing.
- */
-RTVFSIOSTREAM Appliance::i_importSetupDigestCalculationForGivenIoStream(RTVFSIOSTREAM hVfsIos, const char *pszManifestEntry)
-{
-    int vrc;
-    Assert(!RTManifestPtIosIsInstanceOf(hVfsIos));
-
-    if (m->fDigestTypes == 0)
-        return hVfsIos;
-
-    /* Create the manifest if necessary. */
-    if (m->hOurManifest == NIL_RTMANIFEST)
-    {
-        vrc = RTManifestCreate(0 /*fFlags*/, &m->hOurManifest);
-        AssertRCReturnStmt(vrc, RTVfsIoStrmRelease(hVfsIos), NIL_RTVFSIOSTREAM);
-    }
-
-    /* Setup the stream. */
-    RTVFSIOSTREAM hVfsIosPt;
-    vrc = RTManifestEntryAddPassthruIoStream(m->hOurManifest, hVfsIos, pszManifestEntry, m->fDigestTypes,
-                                             true /*fReadOrWrite*/, &hVfsIosPt);
-
-    RTVfsIoStrmRelease(hVfsIos);        /* always consumed! */
-    if (RT_SUCCESS(vrc))
-        return hVfsIosPt;
-
-    setErrorVrc(vrc, "RTManifestEntryAddPassthruIoStream failed with rc=%Rrc", vrc);
-    return NIL_RTVFSIOSTREAM;
-}
-
-/**
  * Opens a source file (for reading obviously).
  *
+ * @param   stack
  * @param   rstrSrcPath         The source file to open.
  * @param   pszManifestEntry    The manifest entry of the source file.  This is
  *                              used when constructing our manifest using a pass
@@ -930,7 +939,7 @@ RTVFSIOSTREAM Appliance::i_importOpenSourceFile(ImportStack &stack, Utf8Str cons
     /*
      * Digest calculation filtering.
      */
-    hVfsIosSrc = i_importSetupDigestCalculationForGivenIoStream(hVfsIosSrc, pszManifestEntry);
+    hVfsIosSrc = i_manifestSetupDigestCalculationForGivenIoStream(hVfsIosSrc, pszManifestEntry);
     if (hVfsIosSrc == NIL_RTVFSIOSTREAM)
         throw E_FAIL;
 
@@ -992,6 +1001,9 @@ HRESULT Appliance::i_importCreateAndWriteDestinationFile(Utf8Str const &rstrDstP
 
 /**
  *
+ * @param   stack               Import stack.
+ * @param   rstrSrcPath         Source path.
+ * @param   rstrDstPath         Destination path.
  * @param   pszManifestEntry    The manifest entry of the source file.  This is
  *                              used when constructing our manifest using a pass
  *                              thru.
@@ -1040,6 +1052,9 @@ void Appliance::i_importCopyFile(ImportStack &stack, Utf8Str const &rstrSrcPath,
 
 /**
  *
+ * @param   stack
+ * @param   rstrSrcPath
+ * @param   rstrDstPath
  * @param   pszManifestEntry    The manifest entry of the source file.  This is
  *                              used when constructing our manifest using a pass
  *                              thru.
@@ -1120,48 +1135,1125 @@ void Appliance::i_importDecompressFile(ImportStack &stack, Utf8Str const &rstrSr
  * 2) in a second worker thread; in that case, Appliance::ImportMachines() called Appliance::i_importImpl(), which
  *    called Appliance::readFSOVA(), which called Appliance::i_importImpl(), which then called this again.
  *
+ * @returns COM status with error info set.
  * @param   aLocInfo    The OVF location.
  * @param   aProgress   Where to return the progress object.
- * @throws  COM error codes will be thrown.
  */
-void Appliance::i_readImpl(const LocationInfo &aLocInfo, ComObjPtr<Progress> &aProgress)
+HRESULT Appliance::i_readImpl(const LocationInfo &aLocInfo, ComObjPtr<Progress> &aProgress)
 {
-    BstrFmt bstrDesc = BstrFmt(tr("Reading appliance '%s'"),
-                               aLocInfo.strPath.c_str());
-    HRESULT rc;
-    /* Create the progress object */
+    /*
+     * Create the progress object.
+     */
+    HRESULT hrc;
     aProgress.createObject();
-    if (aLocInfo.storageType == VFSType_File)
-        /* 1 operation only */
-        rc = aProgress->init(mVirtualBox, static_cast<IAppliance*>(this),
-                             bstrDesc.raw(),
-                             TRUE /* aCancelable */);
-    else
-        /* 4/5 is downloading, 1/5 is reading */
-        rc = aProgress->init(mVirtualBox, static_cast<IAppliance*>(this),
-                             bstrDesc.raw(),
-                             TRUE /* aCancelable */,
-                             2, // ULONG cOperations,
-                             5, // ULONG ulTotalOperationsWeight,
-                             BstrFmt(tr("Download appliance '%s'"),
-                                     aLocInfo.strPath.c_str()).raw(), // CBSTR bstrFirstOperationDescription,
-                             4); // ULONG ulFirstOperationWeight,
-    if (FAILED(rc)) throw rc;
-
-    /* Initialize our worker task */
-    TaskOVF *task = NULL;
     try
     {
-        task = new TaskOVF(this, TaskOVF::Read, aLocInfo, aProgress);
+        if (aLocInfo.storageType == VFSType_Cloud)
+        {
+            /* 1 operation only */
+            hrc = aProgress->init(mVirtualBox, static_cast<IAppliance*>(this),
+                                  Utf8Str(tr("Getting cloud instance information")), TRUE /* aCancelable */);
+
+            /* Create an empty ovf::OVFReader for manual filling it.
+             * It's not a normal usage case, but we try to re-use some OVF stuff to friend
+             * the cloud import with OVF import.
+             * In the standard case the ovf::OVFReader is created in the Appliance::i_readOVFFile().
+             * We need the existing m->pReader for Appliance::i_importCloudImpl() where we re-use OVF logic. */
+            m->pReader = new ovf::OVFReader();
+        }
+        else
+        {
+            Utf8StrFmt strDesc(tr("Reading appliance '%s'"), aLocInfo.strPath.c_str());
+            if (aLocInfo.storageType == VFSType_File)
+                /* 1 operation only */
+                hrc = aProgress->init(mVirtualBox, static_cast<IAppliance*>(this), strDesc, TRUE /* aCancelable */);
+            else
+                /* 4/5 is downloading, 1/5 is reading */
+                hrc = aProgress->init(mVirtualBox, static_cast<IAppliance*>(this), strDesc, TRUE /* aCancelable */,
+                                      2, // ULONG cOperations,
+                                      5, // ULONG ulTotalOperationsWeight,
+                                      Utf8StrFmt(tr("Download appliance '%s'"),
+                                                 aLocInfo.strPath.c_str()), // CBSTR bstrFirstOperationDescription,
+                                      4); // ULONG ulFirstOperationWeight,
+        }
     }
-    catch (...)
+    catch (std::bad_alloc &) /* Utf8Str/Utf8StrFmt */
     {
-        throw setError(VBOX_E_OBJECT_NOT_FOUND,
-                       tr("Could not create TaskOVF object for reading the OVF from disk"));
+        return E_OUTOFMEMORY;
+    }
+    if (FAILED(hrc))
+        return hrc;
+
+    /*
+     * Initialize the worker task.
+     */
+    ThreadTask *pTask;
+    try
+    {
+        if (aLocInfo.storageType == VFSType_Cloud)
+            pTask = new TaskCloud(this, TaskCloud::ReadData, aLocInfo, aProgress);
+        else
+            pTask = new TaskOVF(this, TaskOVF::Read, aLocInfo, aProgress);
+    }
+    catch (std::bad_alloc &)
+    {
+        return E_OUTOFMEMORY;
     }
 
-    rc = task->createThread();
-    if (FAILED(rc)) throw rc;
+    /*
+     * Kick off the worker thread.
+     */
+    hrc = pTask->createThread();
+    pTask = NULL; /* Note! createThread has consumed the task.*/
+    if (SUCCEEDED(hrc))
+        return hrc;
+    return setError(hrc, tr("Failed to create thread for reading appliance data"));
+}
+
+HRESULT Appliance::i_gettingCloudData(TaskCloud *pTask)
+{
+    LogFlowFuncEnter();
+    LogFlowFunc(("Appliance %p\n", this));
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    AutoWriteLock appLock(this COMMA_LOCKVAL_SRC_POS);
+
+    HRESULT hrc = S_OK;
+
+    try
+    {
+        Utf8Str strBasename(pTask->locInfo.strPath);
+        RTCList<RTCString, RTCString *> parts = strBasename.split("/");
+        if (parts.size() != 2)//profile + instance id
+            return setErrorVrc(VERR_MISMATCH,
+                               tr("%s: The profile name or instance id are absent or contain unsupported characters: %s"),
+                               __FUNCTION__, strBasename.c_str());
+
+        //Get information about the passed cloud instance
+        ComPtr<ICloudProviderManager> cpm;
+        hrc = mVirtualBox->COMGETTER(CloudProviderManager)(cpm.asOutParam());
+        if (FAILED(hrc))
+            return setError(VBOX_E_OBJECT_NOT_FOUND, tr("%s: Cloud provider manager object wasn't found (%Rhrc)"), __FUNCTION__, hrc);
+
+        Utf8Str strProviderName = pTask->locInfo.strProvider;
+        ComPtr<ICloudProvider> cloudProvider;
+        ComPtr<ICloudProfile> cloudProfile;
+        hrc = cpm->GetProviderByShortName(Bstr(strProviderName.c_str()).raw(), cloudProvider.asOutParam());
+
+        if (FAILED(hrc))
+            return setError(VBOX_E_OBJECT_NOT_FOUND, tr("%s: Cloud provider object wasn't found (%Rhrc)"), __FUNCTION__, hrc);
+
+        Utf8Str profileName(parts.at(0));//profile
+        if (profileName.isEmpty())
+            return setError(VBOX_E_OBJECT_NOT_FOUND, tr("%s: Cloud user profile name wasn't found (%Rhrc)"), __FUNCTION__, hrc);
+
+        hrc = cloudProvider->GetProfileByName(Bstr(parts.at(0)).raw(), cloudProfile.asOutParam());
+        if (FAILED(hrc))
+            return setError(VBOX_E_OBJECT_NOT_FOUND, tr("%s: Cloud profile object wasn't found (%Rhrc)"), __FUNCTION__, hrc);
+
+        ComObjPtr<ICloudClient> cloudClient;
+        hrc = cloudProfile->CreateCloudClient(cloudClient.asOutParam());
+        if (FAILED(hrc))
+            return setError(VBOX_E_OBJECT_NOT_FOUND, tr("%s: Cloud client object wasn't found (%Rhrc)"), __FUNCTION__, hrc);
+
+        m->virtualSystemDescriptions.clear();//clear all for assurance before creating new
+        std::vector<ComPtr<IVirtualSystemDescription> > vsdArray;
+        ULONG requestedVSDnums = 1;
+        ULONG newVSDnums = 0;
+        hrc = createVirtualSystemDescriptions(requestedVSDnums, &newVSDnums);
+        if (FAILED(hrc)) throw hrc;
+        if (requestedVSDnums != newVSDnums)
+            throw setErrorVrc(VERR_MISMATCH, tr("%s: Requested (%d) and created (%d) numbers of VSD are differ ."),
+                              __FUNCTION__, requestedVSDnums, newVSDnums);
+
+        hrc = getVirtualSystemDescriptions(vsdArray);
+        if (FAILED(hrc)) throw hrc;
+        ComPtr<IVirtualSystemDescription> instanceDescription = vsdArray[0];
+
+        LogRel(("%s: calling CloudClient::GetInstanceInfo()\n", __FUNCTION__));
+
+        ComPtr<IProgress> pProgress;
+        hrc = cloudClient->GetInstanceInfo(Bstr(parts.at(1)).raw(), instanceDescription, pProgress.asOutParam());
+        if (FAILED(hrc)) throw hrc;
+        hrc = pTask->pProgress->WaitForOtherProgressCompletion(pProgress, 60000);//timeout 1 min = 60000 millisec
+        if (FAILED(hrc)) throw hrc;
+
+        // set cloud profile
+        instanceDescription->AddDescription(VirtualSystemDescriptionType_CloudProfileName, Bstr(profileName).raw(),  NULL);
+
+        Utf8StrFmt strSetting("VM with id %s imported from the cloud provider %s",
+                              parts.at(1).c_str(), strProviderName.c_str());
+        // set description
+        instanceDescription->AddDescription(VirtualSystemDescriptionType_Description, Bstr(strSetting).raw(), NULL);
+    }
+    catch (HRESULT arc)
+    {
+        LogFlowFunc(("arc=%Rhrc\n", arc));
+        hrc = arc;
+    }
+
+    LogFlowFunc(("rc=%Rhrc\n", hrc));
+    LogFlowFuncLeave();
+
+    return hrc;
+}
+
+void Appliance::i_setApplianceState(const ApplianceState &state)
+{
+    AutoWriteLock writeLock(this COMMA_LOCKVAL_SRC_POS);
+    m->state = state;
+    writeLock.release();
+}
+
+/**
+ * Actual worker code for import from the Cloud
+ *
+ * @param pTask
+ * @return
+ */
+HRESULT Appliance::i_importCloudImpl(TaskCloud *pTask)
+{
+    LogFlowFuncEnter();
+    LogFlowFunc(("Appliance %p\n", this));
+
+    int vrc = VINF_SUCCESS;
+    /** @todo r=klaus This should be a MultiResult, because this can cause
+     * multiple errors and warnings which should be relevant for the caller.
+     * Needs some work, because there might be errors which need to be
+     * excluded if they happen in error recovery code paths. */
+    HRESULT hrc = S_OK;
+    bool fKeepDownloadedObject = false;//in the future should be passed from the caller
+
+    /* Clear the list of imported machines, if any */
+    m->llGuidsMachinesCreated.clear();
+
+    ComPtr<ICloudProviderManager> cpm;
+    hrc = mVirtualBox->COMGETTER(CloudProviderManager)(cpm.asOutParam());
+    if (FAILED(hrc))
+        return setErrorVrc(VERR_COM_OBJECT_NOT_FOUND, tr("%s: Cloud provider manager object wasn't found"), __FUNCTION__);
+
+    Utf8Str strProviderName = pTask->locInfo.strProvider;
+    ComPtr<ICloudProvider> cloudProvider;
+    ComPtr<ICloudProfile> cloudProfile;
+    hrc = cpm->GetProviderByShortName(Bstr(strProviderName.c_str()).raw(), cloudProvider.asOutParam());
+
+    if (FAILED(hrc))
+        return setErrorVrc(VERR_COM_OBJECT_NOT_FOUND, tr("%s: Cloud provider object wasn't found"), __FUNCTION__);
+
+    /* Get the actual VSD, only one VSD object can be there for now so just call the function front() */
+    ComPtr<IVirtualSystemDescription> vsd = m->virtualSystemDescriptions.front();
+
+    Utf8Str vsdData;
+    com::SafeArray<VirtualSystemDescriptionType_T> retTypes;
+    com::SafeArray<BSTR> aRefs;
+    com::SafeArray<BSTR> aOvfValues;
+    com::SafeArray<BSTR> aVBoxValues;
+    com::SafeArray<BSTR> aExtraConfigValues;
+
+/*
+ * local #define  for better reading the code
+ * uses only the previously locally declared variable names
+ * set hrc as the result of operation
+ */
+#define GET_VSD_DESCRIPTION_BY_TYPE(aParamType) \
+    retTypes.setNull(); \
+    aRefs.setNull(); \
+    aOvfValues.setNull(); \
+    aVBoxValues.setNull(); \
+    aExtraConfigValues.setNull(); \
+    vsd->GetDescriptionByType(aParamType, \
+        ComSafeArrayAsOutParam(retTypes), \
+        ComSafeArrayAsOutParam(aRefs), \
+        ComSafeArrayAsOutParam(aOvfValues), \
+        ComSafeArrayAsOutParam(aVBoxValues), \
+        ComSafeArrayAsOutParam(aExtraConfigValues)); \
+
+
+    GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_CloudProfileName)
+    if (aVBoxValues.size() == 0)
+        return setErrorVrc(VERR_NOT_FOUND, tr("%s: Cloud user profile name wasn't found"), __FUNCTION__);
+
+    Utf8Str profileName(aVBoxValues[0]);
+    if (profileName.isEmpty())
+        return setErrorVrc(VERR_INVALID_STATE, tr("%s: Cloud user profile name is empty"), __FUNCTION__);
+
+    hrc = cloudProvider->GetProfileByName(aVBoxValues[0], cloudProfile.asOutParam());
+    if (FAILED(hrc))
+        return setErrorVrc(VERR_COM_OBJECT_NOT_FOUND, tr("%s: Cloud profile object wasn't found"), __FUNCTION__);
+
+    ComObjPtr<ICloudClient> cloudClient;
+    hrc = cloudProfile->CreateCloudClient(cloudClient.asOutParam());
+    if (FAILED(hrc))
+        return setErrorVrc(VERR_COM_OBJECT_NOT_FOUND, tr("%s: Cloud client object wasn't found"), __FUNCTION__);
+
+    ComPtr<IProgress> pProgress;
+    hrc = pTask->pProgress.queryInterfaceTo(pProgress.asOutParam());
+    if (FAILED(hrc))
+        return hrc;
+
+    Utf8Str strOsType;
+    ComPtr<IGuestOSType> pGuestOSType;
+    {
+        VBOXOSTYPE guestOsType = VBOXOSTYPE_Unknown;
+        GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_OS)//aVBoxValues is set in this #define
+        if (aVBoxValues.size() != 0)
+        {
+            strOsType = aVBoxValues[0];
+            /* Check the OS type */
+            uint32_t const idxOSType = Global::getOSTypeIndexFromId(strOsType.c_str());
+            guestOsType = idxOSType < Global::cOSTypes ? Global::sOSTypes[idxOSType].osType : VBOXOSTYPE_Unknown;
+
+            /* Case when some invalid OS type or garbage was passed. Set to VBOXOSTYPE_Unknown. */
+            if (idxOSType > Global::cOSTypes)
+            {
+                strOsType = Global::OSTypeId(guestOsType);
+                vsd->RemoveDescriptionByType(VirtualSystemDescriptionType_OS);
+                vsd->AddDescription(VirtualSystemDescriptionType_OS,
+                                    Bstr(strOsType).raw(),
+                                    NULL);
+            }
+        }
+        /* Case when no OS type was passed. Set to VBOXOSTYPE_Unknown. */
+        else
+        {
+            strOsType = Global::OSTypeId(guestOsType);
+            vsd->AddDescription(VirtualSystemDescriptionType_OS,
+                                Bstr(strOsType).raw(),
+                                NULL);
+        }
+
+        LogRel(("%s: OS type is %s\n", __FUNCTION__, strOsType.c_str()));
+
+        /* We can get some default settings from GuestOSType when it's needed */
+        hrc = mVirtualBox->GetGuestOSType(Bstr(strOsType).raw(), pGuestOSType.asOutParam());
+        if (FAILED(hrc))
+            return hrc;
+    }
+
+    /* Should be defined here because it's used later, at least when ComposeMachineFilename() is called */
+    Utf8Str strVMName("VM_exported_from_cloud");
+
+    if (m->virtualSystemDescriptions.size() == 1)
+    {
+        do
+        {
+            ComPtr<IVirtualBox> VBox(mVirtualBox);
+
+            {
+                GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_Name)//aVBoxValues is set in this #define
+                if (aVBoxValues.size() != 0)//paranoia but anyway...
+                    strVMName = aVBoxValues[0];
+                LogRel(("%s: VM name is %s\n", __FUNCTION__, strVMName.c_str()));
+            }
+
+//          i_searchUniqueVMName(strVMName);//internally calls setError() in the case of absent the registered VM with such name
+
+            ComPtr<IMachine> machine;
+            hrc = mVirtualBox->FindMachine(Bstr(strVMName.c_str()).raw(), machine.asOutParam());
+            if (SUCCEEDED(hrc))
+            {
+                /* what to do? create a new name from the old one with some suffix? */
+                uint64_t uRndSuff = RTRandU64();
+                vrc = strVMName.appendPrintfNoThrow("__%RU64", uRndSuff);
+                AssertRCBreakStmt(vrc, hrc = E_OUTOFMEMORY);
+
+                vsd->RemoveDescriptionByType(VirtualSystemDescriptionType_Name);
+                vsd->AddDescription(VirtualSystemDescriptionType_Name,
+                                    Bstr(strVMName).raw(),
+                                    NULL);
+                /* No check again because it would be weird if a VM with such unique name exists */
+            }
+
+            /* Check the target path. If the path exists and folder isn't empty return an error */
+            {
+                Bstr bstrSettingsFilename;
+                /* Based on the VM name, create a target machine path. */
+                hrc = mVirtualBox->ComposeMachineFilename(Bstr(strVMName).raw(),
+                                                          Bstr("/").raw(),
+                                                          NULL /* aCreateFlags */,
+                                                          NULL /* aBaseFolder */,
+                                                          bstrSettingsFilename.asOutParam());
+                if (FAILED(hrc))
+                    break;
+
+                Utf8Str strMachineFolder(bstrSettingsFilename);
+                strMachineFolder.stripFilename();
+
+                RTFSOBJINFO dirInfo;
+                vrc = RTPathQueryInfo(strMachineFolder.c_str(), &dirInfo, RTFSOBJATTRADD_NOTHING);
+                if (RT_SUCCESS(vrc))
+                {
+                    size_t counter = 0;
+                    RTDIR hDir;
+                    vrc = RTDirOpen(&hDir, strMachineFolder.c_str());
+                    if (RT_SUCCESS(vrc))
+                    {
+                        RTDIRENTRY DirEntry;
+                        while (RT_SUCCESS(RTDirRead(hDir, &DirEntry, NULL)))
+                        {
+                            if (RTDirEntryIsStdDotLink(&DirEntry))
+                                continue;
+                            ++counter;
+                        }
+
+                        if ( hDir != NULL)
+                            vrc = RTDirClose(hDir);
+                    }
+                    else
+                        return setErrorVrc(vrc, tr("Can't open folder %s"), strMachineFolder.c_str());
+
+                    if (counter > 0)
+                    {
+                        return setErrorVrc(VERR_ALREADY_EXISTS, tr("The target folder %s has already contained some"
+                                          " files (%d items). Clear the folder from the files or choose another folder"),
+                                          strMachineFolder.c_str(), counter);
+                    }
+                }
+            }
+
+            Utf8Str strInsId;
+            GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_CloudInstanceId)//aVBoxValues is set in this #define
+            if (aVBoxValues.size() == 0)
+                return setErrorVrc(VERR_NOT_FOUND, "%s: Cloud Instance Id wasn't found", __FUNCTION__);
+
+            strInsId = aVBoxValues[0];
+
+            LogRel(("%s: calling CloudClient::ImportInstance\n", __FUNCTION__));
+
+            /* Here it's strongly supposed that cloud import produces ONE object on the disk.
+             * Because it much easier to manage one object in any case.
+             * In the case when cloud import creates several object on the disk all of them
+             * must be combined together into one object by cloud client.
+             * The most simple way is to create a TAR archive. */
+            hrc = cloudClient->ImportInstance(m->virtualSystemDescriptions.front(),
+                                              pProgress);
+            if (FAILED(hrc))
+            {
+                LogRel(("%s: Cloud import (cloud phase) failed. "
+                        "Used cloud instance is \'%s\'\n", __FUNCTION__, strInsId.c_str()));
+                hrc = setError(hrc, tr("%s: Cloud import (cloud phase) failed. "
+                               "Used cloud instance is \'%s\'\n"), __FUNCTION__, strInsId.c_str());
+                break;
+            }
+
+        } while (0);
+    }
+    else
+    {
+        hrc = setErrorVrc(VERR_NOT_SUPPORTED, tr("Import from Cloud isn't supported for more than one VM instance."));
+        return hrc;
+    }
+
+
+    /* In any case we delete the cloud leavings which may exist after the first phase (cloud phase).
+     * Should they be deleted in the OCICloudClient::importInstance()?
+     * Because deleting them here is not easy as it in the importInstance(). */
+    {
+        ErrorInfoKeeper eik;    /* save the error info */
+        HRESULT const hrcSaved = hrc;
+
+        GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_CloudInstanceId)//aVBoxValues is set in this #define
+        if (aVBoxValues.size() == 0)
+            hrc = setErrorVrc(VERR_NOT_FOUND, tr("%s: Cloud cleanup action - the instance wasn't found"), __FUNCTION__);
+        else
+        {
+            vsdData = aVBoxValues[0];
+
+            /** @todo
+             *  future function which will eliminate the temporary objects created during the first phase.
+             *  hrc = cloud.EliminateImportLeavings(aVBoxValues[0], pProgress); */
+/*
+            if (FAILED(hrc))
+            {
+                hrc = setError(hrc, tr("Some leavings may exist in the Cloud."));
+                LogRel(("%s: Cleanup action - the leavings in the %s after import the "
+                        "instance %s may not have been deleted\n",
+                        __FUNCTION__, strProviderName.c_str(), vsdData.c_str()));
+            }
+            else
+                LogRel(("%s: Cleanup action - the leavings in the %s after import the "
+                        "instance %s have been deleted\n",
+                        __FUNCTION__, strProviderName.c_str(), vsdData.c_str()));
+*/
+        }
+
+        /* Because during the cleanup phase the hrc may have the good result
+         * Thus we restore the original error in the case when the cleanup phase was successful
+         * Otherwise we return not the original error but the last error in the cleanup phase */
+        /** @todo r=bird: do this conditionally perhaps?
+         * if (FAILED(hrcSaved))
+         *     hrc = hrcSaved;
+         * else
+         *     eik.forget();
+         */
+        hrc = hrcSaved;
+    }
+
+    if (FAILED(hrc))
+    {
+        const char *pszGeneralRollBackErrorMessage = tr("Rollback action for Import Cloud operation failed. "
+                                                        "Some leavings may exist on the local disk or in the Cloud.");
+        /*
+         * Roll-back actions.
+         * we finish here if:
+         * 1. Getting the object from the Cloud has been failed.
+         * 2. Something is wrong with getting data from ComPtr<IVirtualSystemDescription> vsd.
+         * 3. More than 1 VirtualSystemDescription is presented in the list m->virtualSystemDescriptions.
+         * Maximum what we have there are:
+         * 1. The downloaded object, so just check the presence and delete it if one exists
+         */
+
+        { /** @todo r=bird: Pointless {}. */
+            if (!fKeepDownloadedObject)
+            {
+                ErrorInfoKeeper eik;    /* save the error info */
+                HRESULT const hrcSaved = hrc;
+
+                /* small explanation here, the image here points out to the whole downloaded object (not to the image only)
+                 * filled during the first cloud import stage (in the ICloudClient::importInstance()) */
+                GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_HardDiskImage)//aVBoxValues is set in this #define
+                if (aVBoxValues.size() == 0)
+                    hrc = setErrorVrc(VERR_NOT_FOUND, pszGeneralRollBackErrorMessage);
+                else
+                {
+                    vsdData = aVBoxValues[0];
+                    //try to delete the downloaded object
+                    bool fExist = RTPathExists(vsdData.c_str());
+                    if (fExist)
+                    {
+                        vrc = RTFileDelete(vsdData.c_str());
+                        if (RT_FAILURE(vrc))
+                        {
+                            hrc = setErrorVrc(vrc, pszGeneralRollBackErrorMessage);
+                            LogRel(("%s: Rollback action - the object %s hasn't been deleted\n", __FUNCTION__, vsdData.c_str()));
+                        }
+                        else
+                            LogRel(("%s: Rollback action - the object %s has been deleted\n", __FUNCTION__, vsdData.c_str()));
+                    }
+                }
+
+                /* Because during the rollback phase the hrc may have the good result
+                 * Thus we restore the original error in the case when the rollback phase was successful
+                 * Otherwise we return not the original error but the last error in the rollback phase */
+                hrc = hrcSaved;
+            }
+        }
+    }
+    else
+    {
+        Utf8Str strMachineFolder;
+        Utf8Str strAbsSrcPath;
+        Utf8Str strGroup("/");//default VM group
+        Utf8Str strTargetFormat("VMDK");//default image format
+        Bstr bstrSettingsFilename;
+        SystemProperties *pSysProps = NULL;
+        RTCList<Utf8Str> extraCreatedFiles;/* All extra created files, it's used during cleanup */
+
+        /* Put all VFS* declaration here because they are needed to be release by the corresponding
+           RTVfs***Release functions in the case of exception */
+        RTVFSOBJ     hVfsObj = NIL_RTVFSOBJ;
+        RTVFSFSSTREAM hVfsFssObject = NIL_RTVFSFSSTREAM;
+        RTVFSIOSTREAM hVfsIosCurr = NIL_RTVFSIOSTREAM;
+
+        try
+        {
+            /* Small explanation here, the image here points out to the whole downloaded object (not to the image only)
+             * filled during the first cloud import stage (in the ICloudClient::importInstance()) */
+            GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_HardDiskImage)//aVBoxValues is set in this #define
+            if (aVBoxValues.size() == 0)
+                throw setErrorVrc(VERR_NOT_FOUND, "%s: The description of the downloaded object wasn't found", __FUNCTION__);
+
+            strAbsSrcPath = aVBoxValues[0];
+
+            /* Based on the VM name, create a target machine path. */
+            hrc = mVirtualBox->ComposeMachineFilename(Bstr(strVMName).raw(),
+                                                      Bstr(strGroup).raw(),
+                                                      NULL /* aCreateFlags */,
+                                                      NULL /* aBaseFolder */,
+                                                      bstrSettingsFilename.asOutParam());
+            if (FAILED(hrc)) throw hrc;
+
+            strMachineFolder = bstrSettingsFilename;
+            strMachineFolder.stripFilename();
+
+            /* Get the system properties. */
+            pSysProps = mVirtualBox->i_getSystemProperties();
+            if (pSysProps == NULL)
+                throw VBOX_E_OBJECT_NOT_FOUND;
+
+            ComObjPtr<MediumFormat> trgFormat;
+            trgFormat = pSysProps->i_mediumFormatFromExtension(strTargetFormat);
+            if (trgFormat.isNull())
+                throw VBOX_E_OBJECT_NOT_FOUND;
+
+            /* Continue and create new VM using data from VSD and downloaded object.
+             * The downloaded images should be converted to VDI/VMDK if they have another format */
+            Utf8Str strInstId("default cloud instance id");
+            {
+                GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_CloudInstanceId)//aVBoxValues is set in this #define
+                if (aVBoxValues.size() != 0)//paranoia but anyway...
+                    strInstId = aVBoxValues[0];
+                LogRel(("%s: Importing cloud instance %s\n", __FUNCTION__, strInstId.c_str()));
+            }
+
+            /* Processing the downloaded object (prepare for the local import) */
+            RTVFSIOSTREAM hVfsIosSrc;
+            vrc = RTVfsIoStrmOpenNormal(strAbsSrcPath.c_str(), RTFILE_O_OPEN | RTFILE_O_READ | RTFILE_O_DENY_NONE, &hVfsIosSrc);
+            if (RT_FAILURE(vrc))
+                throw setErrorVrc(vrc, tr("Error opening '%s' for reading (%Rrc)\n"), strAbsSrcPath.c_str(), vrc);
+
+            vrc = RTZipTarFsStreamFromIoStream(hVfsIosSrc, 0 /*fFlags*/, &hVfsFssObject);
+            RTVfsIoStrmRelease(hVfsIosSrc);
+            if (RT_FAILURE(vrc))
+                throw setErrorVrc(vrc, tr("Error reading the downloaded file '%s' (%Rrc)"), strAbsSrcPath.c_str(), vrc);
+
+            /* Create a new virtual system and work directly on the list copy. */
+            m->pReader->m_llVirtualSystems.push_back(ovf::VirtualSystem());
+            ovf::VirtualSystem &vsys = m->pReader->m_llVirtualSystems.back();
+
+            /* Try to re-use some OVF stuff here */
+            {
+                vsys.strName = strVMName;
+                uint32_t cpus = 1;
+                {
+                    GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_CPU)//aVBoxValues is set in this #define
+                    if (aVBoxValues.size() != 0)
+                    {
+                        vsdData = aVBoxValues[0];
+                        cpus = vsdData.toUInt32();
+                    }
+                    vsys.cCPUs = (uint16_t)cpus;
+                    LogRel(("%s: Number of CPUs is %s\n", __FUNCTION__, vsdData.c_str()));
+                }
+
+                ULONG memory;//Mb
+                pGuestOSType->COMGETTER(RecommendedRAM)(&memory);
+                {
+                    GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_Memory)//aVBoxValues is set in this #define
+                    if (aVBoxValues.size() != 0)
+                    {
+                        vsdData = aVBoxValues[0];
+                        if (memory > vsdData.toUInt32())
+                            memory = vsdData.toUInt32();
+                    }
+                    vsys.ullMemorySize = memory;
+                    LogRel(("%s: Size of RAM is %d MB\n", __FUNCTION__, vsys.ullMemorySize));
+                }
+
+                {
+                    GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_Description)//aVBoxValues is set in this #define
+                    if (aVBoxValues.size() != 0)
+                    {
+                        vsdData = aVBoxValues[0];
+                        vsys.strDescription = vsdData;
+                    }
+                    LogRel(("%s: VM description \'%s\'\n", __FUNCTION__, vsdData.c_str()));
+                }
+
+                {
+                    GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_OS)//aVBoxValues is set in this #define
+                    if (aVBoxValues.size() != 0)
+                        strOsType = aVBoxValues[0];
+                    vsys.strTypeVBox = strOsType;
+                    LogRel(("%s: OS type is %s\n", __FUNCTION__, strOsType.c_str()));
+                }
+
+                ovf::EthernetAdapter ea;
+                {
+                    GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_NetworkAdapter)//aVBoxValues is set in this #define
+                    if (aVBoxValues.size() != 0)
+                    {
+                        ea.strAdapterType = (Utf8Str)(aVBoxValues[0]);
+                        ea.strNetworkName = "NAT";//default
+                        vsys.llEthernetAdapters.push_back(ea);
+                        LogRel(("%s: Network adapter type is %s\n", __FUNCTION__, ea.strAdapterType.c_str()));
+                    }
+                    else
+                    {
+                        NetworkAdapterType_T defaultAdapterType = NetworkAdapterType_Am79C970A;
+                        pGuestOSType->COMGETTER(AdapterType)(&defaultAdapterType);
+                        Utf8StrFmt dat("%RU32", (uint32_t)defaultAdapterType);
+                        vsd->AddDescription(VirtualSystemDescriptionType_NetworkAdapter,
+                                            Bstr(dat).raw(),
+                                            Bstr(Utf8Str("NAT")).raw());
+                    }
+                }
+
+                ovf::HardDiskController hdc;
+                {
+                    //It's thought that SATA is supported by any OS types
+                    hdc.system = ovf::HardDiskController::SATA;
+                    hdc.strIdController = "0";
+
+                    GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_HardDiskControllerSATA)//aVBoxValues is set in this #define
+                    if (aVBoxValues.size() != 0)
+                        hdc.strControllerType = (Utf8Str)(aVBoxValues[0]);
+                    else
+                        hdc.strControllerType = "AHCI";
+
+                    LogRel(("%s: Hard disk controller type is %s\n", __FUNCTION__, hdc.strControllerType.c_str()));
+                    vsys.mapControllers[hdc.strIdController] = hdc;
+
+                    if (aVBoxValues.size() == 0)
+                    {
+                        /* we should do it here because it'll be used later in the OVF logic (inside i_importMachines()) */
+                        vsd->AddDescription(VirtualSystemDescriptionType_HardDiskControllerSATA,
+                                            Bstr(hdc.strControllerType).raw(),
+                                            NULL);
+                    }
+                }
+
+                {
+                    GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_SoundCard)//aVBoxValues is set in this #define
+                    if (aVBoxValues.size() != 0)
+                        vsys.strSoundCardType  = (Utf8Str)(aVBoxValues[0]);
+                    else
+                    {
+                        AudioControllerType_T defaultAudioController;
+                        pGuestOSType->COMGETTER(RecommendedAudioController)(&defaultAudioController);
+                        vsys.strSoundCardType = Utf8StrFmt("%RU32", (uint32_t)defaultAudioController);//"ensoniq1371";//"AC97";
+                        vsd->AddDescription(VirtualSystemDescriptionType_SoundCard,
+                                            Bstr(vsys.strSoundCardType).raw(),
+                                            NULL);
+                    }
+
+                    LogRel(("%s: Sound card is %s\n", __FUNCTION__, vsys.strSoundCardType.c_str()));
+                }
+
+                vsys.fHasFloppyDrive = false;
+                vsys.fHasCdromDrive = false;
+                vsys.fHasUsbController = true;
+            }
+
+            unsigned currImageObjectNum = 0;
+            hrc = S_OK;
+            do
+            {
+                char *pszName = NULL;
+                RTVFSOBJTYPE enmType;
+                vrc = RTVfsFsStrmNext(hVfsFssObject, &pszName, &enmType, &hVfsObj);
+                if (RT_FAILURE(vrc))
+                {
+                    if (vrc != VERR_EOF)
+                    {
+                        hrc = setErrorVrc(vrc, tr("%s: Error reading '%s' (%Rrc)"), __FUNCTION__, strAbsSrcPath.c_str(), vrc);
+                        throw hrc;
+                    }
+                    break;
+                }
+
+                /* We only care about entries that are files. Get the I/O stream handle for them. */
+                if (   enmType  == RTVFSOBJTYPE_IO_STREAM
+                    || enmType  == RTVFSOBJTYPE_FILE)
+                {
+                    /* Find the suffix and check if this is a possibly interesting file. */
+                    char *pszSuffix = RTStrToLower(strrchr(pszName, '.'));
+
+                    /* Get the I/O stream. */
+                    hVfsIosCurr = RTVfsObjToIoStream(hVfsObj);
+                    Assert(hVfsIosCurr != NIL_RTVFSIOSTREAM);
+
+                    /* Get the source medium format */
+                    ComObjPtr<MediumFormat> srcFormat;
+                    srcFormat = pSysProps->i_mediumFormatFromExtension(pszSuffix + 1);
+
+                    /* unknown image format so just extract a file without any processing */
+                    if (srcFormat == NULL)
+                    {
+                        /* Read the file into a memory buffer */
+                        void  *pvBuffered;
+                        size_t cbBuffered;
+                        RTVFSFILE hVfsDstFile = NIL_RTVFSFILE;
+                        try
+                        {
+                            vrc = RTVfsIoStrmReadAll(hVfsIosCurr, &pvBuffered, &cbBuffered);
+                            RTVfsIoStrmRelease(hVfsIosCurr);
+                            hVfsIosCurr = NIL_RTVFSIOSTREAM;
+                            if (RT_FAILURE(vrc))
+                                throw  setErrorVrc(vrc, tr("Could not read the file '%s' (%Rrc)"), strAbsSrcPath.c_str(), vrc);
+
+                            Utf8StrFmt strAbsDstPath("%s%s%s", strMachineFolder.c_str(), RTPATH_SLASH_STR, pszName);
+
+                            /* Simple logic - just try to get dir info, in case of absent try to create one.
+                               No deep errors analysis */
+                            RTFSOBJINFO dirInfo;
+                            vrc = RTPathQueryInfo(strMachineFolder.c_str(), &dirInfo, RTFSOBJATTRADD_NOTHING);
+                            if (RT_FAILURE(vrc))
+                            {
+                                if (vrc == VERR_FILE_NOT_FOUND || vrc == VERR_PATH_NOT_FOUND)
+                                {
+                                    vrc = RTDirCreateFullPath(strMachineFolder.c_str(), 0755);
+                                    if (RT_FAILURE(vrc))
+                                        throw  setErrorVrc(vrc, tr("Could not create the directory '%s' (%Rrc)"),
+                                                           strMachineFolder.c_str(), vrc);
+                                }
+                                else
+                                    throw  setErrorVrc(vrc, tr("Error during getting info about the directory '%s' (%Rrc)"),
+                                                       strMachineFolder.c_str(), vrc);
+                            }
+
+                            /* Write the file on the disk */
+                            vrc = RTVfsFileOpenNormal(strAbsDstPath.c_str(),
+                                                      RTFILE_O_WRITE | RTFILE_O_DENY_ALL | RTFILE_O_CREATE,
+                                                      &hVfsDstFile);
+                            if (RT_FAILURE(vrc))
+                                throw  setErrorVrc(vrc, tr("Could not create the file '%s' (%Rrc)"), strAbsDstPath.c_str(), vrc);
+
+                            size_t cbWritten;
+                            vrc = RTVfsFileWrite(hVfsDstFile, pvBuffered, cbBuffered, &cbWritten);
+                            if (RT_FAILURE(vrc))
+                                throw  setErrorVrc(vrc, tr("Could not write into the file '%s' (%Rrc)"), strAbsDstPath.c_str(), vrc);
+
+                            /* Remember this file */
+                            extraCreatedFiles.append(strAbsDstPath);
+                        }
+                        catch (HRESULT aRc)
+                        {
+                            hrc = aRc;
+                            LogRel(("%s: Processing the downloaded object was failed. The exception (%Rhrc)\n",
+                                    __FUNCTION__, hrc));
+                        }
+                        catch (int aRc)
+                        {
+                            hrc = setErrorVrc(aRc);
+                            LogRel(("%s: Processing the downloaded object was failed. The exception (%Rrc/%Rhrc)\n",
+                                    __FUNCTION__, aRc, hrc));
+                        }
+                        catch (...)
+                        {
+                            hrc = setErrorVrc(VERR_UNEXPECTED_EXCEPTION);
+                            LogRel(("%s: Processing the downloaded object was failed. The exception (VERR_UNEXPECTED_EXCEPTION/%Rhrc)\n",
+                                    __FUNCTION__, hrc));
+                        }
+                    }
+                    else
+                    {
+                        /* Just skip the rest images if they exist. Only the first image is used as the base image. */
+                        if (currImageObjectNum >= 1)
+                            continue;
+
+                        /* Image format is supported by VBox so extract the file and try to convert
+                         * one to the default format (which is VMDK for now) */
+                        Utf8Str z(bstrSettingsFilename);
+                        Utf8StrFmt strAbsDstPath("%s_%d.%s",
+                                     z.stripSuffix().c_str(),
+                                     currImageObjectNum,
+                                     strTargetFormat.c_str());
+
+                        hrc = mVirtualBox->i_findHardDiskByLocation(strAbsDstPath, false, NULL);
+                        if (SUCCEEDED(hrc))
+                            throw setErrorVrc(VERR_ALREADY_EXISTS, tr("The hard disk '%s' already exists."), strAbsDstPath.c_str());
+
+                        /* Create an IMedium object. */
+                        ComObjPtr<Medium> pTargetMedium;
+                        pTargetMedium.createObject();
+                        hrc = pTargetMedium->init(mVirtualBox,
+                                                 strTargetFormat,
+                                                 strAbsDstPath,
+                                                 Guid::Empty /* media registry: none yet */,
+                                                 DeviceType_HardDisk);
+                        if (FAILED(hrc))
+                            throw hrc;
+
+                        pTask->pProgress->SetNextOperation(BstrFmt(tr("Importing virtual disk image '%s'"), pszName).raw(),
+                                                           200);
+                        ComObjPtr<Medium> nullParent;
+                        ComPtr<IProgress> pProgressImport;
+                        ComObjPtr<Progress> pProgressImportTmp;
+                        hrc = pProgressImportTmp.createObject();
+                        if (FAILED(hrc))
+                            throw hrc;
+
+                        hrc = pProgressImportTmp->init(mVirtualBox,
+                                                       static_cast<IAppliance*>(this),
+                                                       Utf8StrFmt(tr("Importing medium '%s'"), pszName),
+                                                       TRUE);
+                        if (FAILED(hrc))
+                            throw hrc;
+
+                        pProgressImportTmp.queryInterfaceTo(pProgressImport.asOutParam());
+
+                        hrc = pTargetMedium->i_importFile(pszName,
+                                                          srcFormat,
+                                                          MediumVariant_Standard,
+                                                          hVfsIosCurr,
+                                                          nullParent,
+                                                          pProgressImportTmp,
+                                                          true /* aNotify */);
+                        RTVfsIoStrmRelease(hVfsIosCurr);
+                        hVfsIosCurr = NIL_RTVFSIOSTREAM;
+                        /* Now wait for the background import operation to complete;
+                         * this throws HRESULTs on error. */
+                        hrc = pTask->pProgress->WaitForOtherProgressCompletion(pProgressImport, 0 /* indefinite wait */);
+
+                        /* Try to re-use some OVF stuff here */
+                        if (SUCCEEDED(hrc))
+                        {
+                            /* Small trick here.
+                             * We add new item into the actual VSD after successful conversion.
+                             * There is no need to delete any previous records describing the images in the VSD
+                             * because later in the code the search of the images in the VSD will use such records
+                             * with the actual image id (d.strDiskId = pTargetMedium->i_getId().toString()) which is
+                             * used as a key for m->pReader->m_mapDisks, vsys.mapVirtualDisks.
+                             * So all 3 objects are tied via the image id.
+                             * In the OVF case we already have all such records in the VSD after reading OVF
+                             * description file (read() and interpret() functions).*/
+                            ovf::DiskImage d;
+                            d.strDiskId = pTargetMedium->i_getId().toString();
+                            d.strHref = pTargetMedium->i_getLocationFull();
+                            d.strFormat = pTargetMedium->i_getFormat();
+                            d.iSize = (int64_t)pTargetMedium->i_getSize();
+                            d.ulSuggestedSizeMB = (uint32_t)(d.iSize/_1M);
+
+                            m->pReader->m_mapDisks[d.strDiskId] = d;
+
+                            ComObjPtr<VirtualSystemDescription> vsdescThis = m->virtualSystemDescriptions.front();
+
+                            /* It's needed here to use the internal function i_addEntry() instead of the API function
+                             * addDescription() because we should pass the d.strDiskId for the proper handling this
+                             * disk later in the i_importMachineGeneric():
+                             * - find the line like this "if (vsdeHD->strRef == diCurrent.strDiskId)".
+                             *  if those code can be eliminated then addDescription() will be used. */
+                            vsdescThis->i_addEntry(VirtualSystemDescriptionType_HardDiskImage,
+                                                   d.strDiskId,
+                                                   d.strHref,
+                                                   d.strHref,
+                                                   d.ulSuggestedSizeMB);
+
+                            ovf::VirtualDisk vd;
+                            vd.strIdController = vsys.mapControllers[0].strIdController;
+                            vd.ulAddressOnParent = 0;
+                            vd.strDiskId = d.strDiskId;
+                            vsys.mapVirtualDisks[vd.strDiskId] = vd;
+
+                            ++currImageObjectNum;
+                        }
+                    }
+
+                    RTVfsIoStrmRelease(hVfsIosCurr);
+                    hVfsIosCurr = NIL_RTVFSIOSTREAM;
+                }
+
+                RTVfsObjRelease(hVfsObj);
+                hVfsObj = NIL_RTVFSOBJ;
+
+                RTStrFree(pszName);
+
+            } while (SUCCEEDED(hrc));
+
+            RTVfsFsStrmRelease(hVfsFssObject);
+            hVfsFssObject = NIL_RTVFSFSSTREAM;
+
+            if (SUCCEEDED(hrc))
+            {
+                pTask->pProgress->SetNextOperation(BstrFmt(tr("Creating new VM '%s'"), strVMName.c_str()).raw(), 50);
+                /* Create the import stack to comply OVF logic.
+                 * Before we filled some other data structures which are needed by OVF logic too.*/
+                ImportStack stack(pTask->locInfo, m->pReader->m_mapDisks, pTask->pProgress, NIL_RTVFSFSSTREAM);
+                i_importMachines(stack);
+            }
+
+        }
+        catch (HRESULT aRc)
+        {
+            hrc = aRc;
+            LogRel(("%s: Cloud import (local phase) failed. The exception (%Rhrc)\n",
+                    __FUNCTION__, hrc));
+        }
+        catch (int aRc)
+        {
+            hrc = setErrorVrc(aRc);
+            LogRel(("%s: Cloud import (local phase) failed. The exception (%Rrc/%Rhrc)\n",
+                    __FUNCTION__, aRc, hrc));
+        }
+        catch (...)
+        {
+            hrc = setErrorVrc(VERR_UNRESOLVED_ERROR);
+            LogRel(("%s: Cloud import (local phase) failed. The exception (VERR_UNRESOLVED_ERROR/%Rhrc)\n",
+                    __FUNCTION__, hrc));
+        }
+
+        LogRel(("%s: Cloud import (local phase) final result (%Rrc).\n", __FUNCTION__, hrc));
+
+        /* Try to free VFS stuff because some of them might not be released due to the exception */
+        if (hVfsIosCurr != NIL_RTVFSIOSTREAM)
+            RTVfsIoStrmRelease(hVfsIosCurr);
+        if (hVfsObj != NIL_RTVFSOBJ)
+            RTVfsObjRelease(hVfsObj);
+        if (hVfsFssObject != NIL_RTVFSFSSTREAM)
+            RTVfsFsStrmRelease(hVfsFssObject);
+
+        /* Small explanation here.
+         * After adding extracted files into the actual VSD the returned list will contain not only the
+         * record about the downloaded object but also the records about the extracted files from this object.
+         * It's needed to go through this list to find the record about the downloaded object.
+         * But it was the first record added into the list, so aVBoxValues[0] should be correct here.
+         */
+        GET_VSD_DESCRIPTION_BY_TYPE(VirtualSystemDescriptionType_HardDiskImage)//aVBoxValues is set in this #define
+        if (!fKeepDownloadedObject)
+        {
+            if (aVBoxValues.size() != 0)
+            {
+                vsdData = aVBoxValues[0];
+                //try to delete the downloaded object
+                bool fExist = RTPathExists(vsdData.c_str());
+                if (fExist)
+                {
+                    vrc = RTFileDelete(vsdData.c_str());
+                    if (RT_FAILURE(vrc))
+                        LogRel(("%s: Cleanup action - the downloaded object %s hasn't been deleted\n", __FUNCTION__, vsdData.c_str()));
+                    else
+                        LogRel(("%s: Cleanup action - the downloaded object %s has been deleted\n", __FUNCTION__, vsdData.c_str()));
+                }
+            }
+        }
+
+        if (FAILED(hrc))
+        {
+            /* What to do here?
+             * For now:
+             *  - check the registration of created VM and delete one.
+             *  - check the list of imported images, detach them and next delete if they have still registered in the VBox.
+             *  - check some other leavings and delete them if they exist.
+             */
+
+            /* It's not needed to call "pTask->pProgress->SetNextOperation(BstrFmt("The cleanup phase").raw(), 50)" here
+             * because, WaitForOtherProgressCompletion() calls the SetNextOperation() iternally.
+             * At least, it's strange that the operation description is set to the previous value. */
+
+            ComPtr<IMachine> pMachine;
+            Utf8Str machineNameOrId = strVMName;
+
+            /* m->llGuidsMachinesCreated is filled in the i_importMachineGeneric()/i_importVBoxMachine()
+             * after successful registration of new VM */
+            if (!m->llGuidsMachinesCreated.empty())
+                machineNameOrId = m->llGuidsMachinesCreated.front().toString();
+
+            hrc = mVirtualBox->FindMachine(Bstr(machineNameOrId).raw(), pMachine.asOutParam());
+
+            if (SUCCEEDED(hrc))
+            {
+                LogRel(("%s: Cleanup action - the VM with the name(or id) %s was found\n", __FUNCTION__, machineNameOrId.c_str()));
+                SafeIfaceArray<IMedium> aMedia;
+                hrc = pMachine->Unregister(CleanupMode_DetachAllReturnHardDisksOnly, ComSafeArrayAsOutParam(aMedia));
+                if (SUCCEEDED(hrc))
+                {
+                    LogRel(("%s: Cleanup action - the VM %s has been unregistered\n", __FUNCTION__, machineNameOrId.c_str()));
+                    ComPtr<IProgress> pProgress1;
+                    hrc = pMachine->DeleteConfig(ComSafeArrayAsInParam(aMedia), pProgress1.asOutParam());
+                    pTask->pProgress->WaitForOtherProgressCompletion(pProgress1, 0 /* indefinite wait */);
+
+                    LogRel(("%s: Cleanup action - the VM config file and the attached images have been deleted\n",
+                            __FUNCTION__));
+                }
+            }
+            else
+            {
+                /* Re-check the items in the array with the images names (paths).
+                 * if the import fails before creation VM, then VM won't be found
+                 * -> VM can't be unregistered and the images can't be deleted.
+                 * The rest items in the array aVBoxValues are the images which might
+                 * have still been registered in the VBox.
+                 * So go through the array and detach-unregister-delete those images */
+
+                /* have to get write lock as the whole find/update sequence must be done
+                 * in one critical section, otherwise there are races which can lead to
+                 * multiple Medium objects with the same content */
+
+                AutoWriteLock treeLock(mVirtualBox->i_getMediaTreeLockHandle() COMMA_LOCKVAL_SRC_POS);
+
+                for (size_t i = 1; i < aVBoxValues.size(); ++i)
+                {
+                    vsdData = aVBoxValues[i];
+                    ComObjPtr<Medium> poHardDisk;
+                    hrc = mVirtualBox->i_findHardDiskByLocation(vsdData, false, &poHardDisk);
+                    if (SUCCEEDED(hrc))
+                    {
+                        hrc = mVirtualBox->i_unregisterMedium((Medium*)(poHardDisk));
+                        if (SUCCEEDED(hrc))
+                        {
+                            ComPtr<IProgress> pProgress1;
+                            hrc = poHardDisk->DeleteStorage(pProgress1.asOutParam());
+                            pTask->pProgress->WaitForOtherProgressCompletion(pProgress1, 0 /* indefinite wait */);
+                        }
+                        if (SUCCEEDED(hrc))
+                            LogRel(("%s: Cleanup action - the image %s has been deleted\n", __FUNCTION__, vsdData.c_str()));
+                    }
+                    else if (hrc == VBOX_E_OBJECT_NOT_FOUND)
+                    {
+                        LogRel(("%s: Cleanup action - the image %s wasn't found. Nothing to delete.\n", __FUNCTION__, vsdData.c_str()));
+                        hrc = S_OK;
+                    }
+
+                }
+            }
+
+            /* Deletion of all additional files which were created during unpacking the downloaded object */
+            for (size_t i = 0; i < extraCreatedFiles.size(); ++i)
+            {
+                vrc = RTFileDelete(extraCreatedFiles.at(i).c_str());
+                if (RT_FAILURE(vrc))
+                    hrc = setErrorBoth(VBOX_E_IPRT_ERROR, vrc);
+                else
+                    LogRel(("%s: Cleanup action - file %s has been deleted\n", __FUNCTION__, extraCreatedFiles.at(i).c_str()));
+            }
+
+            /* Deletion of the other files in the VM folder and the folder itself */
+            {
+                RTDIR   hDir;
+                vrc = RTDirOpen(&hDir, strMachineFolder.c_str());
+                if (RT_SUCCESS(vrc))
+                {
+                    for (;;)
+                    {
+                        RTDIRENTRYEX Entry;
+                        vrc = RTDirReadEx(hDir, &Entry, NULL /*pcbDirEntry*/, RTFSOBJATTRADD_NOTHING, RTPATH_F_ON_LINK);
+                        if (RT_FAILURE(vrc))
+                        {
+                            AssertLogRelMsg(vrc == VERR_NO_MORE_FILES, ("%Rrc\n", vrc));
+                            break;
+                        }
+                        if (RTFS_IS_FILE(Entry.Info.Attr.fMode))
+                        {
+                            vrc = RTFileDelete(Entry.szName);
+                            if (RT_FAILURE(vrc))
+                                hrc = setErrorBoth(VBOX_E_IPRT_ERROR, vrc);
+                            else
+                                LogRel(("%s: Cleanup action - file %s has been deleted\n", __FUNCTION__, Entry.szName));
+                        }
+                    }
+                    RTDirClose(hDir);
+                }
+
+                vrc = RTDirRemove(strMachineFolder.c_str());
+                if (RT_FAILURE(vrc))
+                    hrc = setErrorBoth(VBOX_E_IPRT_ERROR, vrc);
+            }
+
+            if (FAILED(hrc))
+                LogRel(("%s: Cleanup action - some leavings still may exist in the folder %s\n",
+                        __FUNCTION__, strMachineFolder.c_str()));
+        }
+        else
+        {
+            /* See explanation in the Appliance::i_importImpl() where Progress was setup */
+            ULONG operationCount;
+            ULONG currOperation;
+            pTask->pProgress->COMGETTER(OperationCount)(&operationCount);
+            pTask->pProgress->COMGETTER(Operation)(&currOperation);
+            while (++currOperation < operationCount)
+            {
+                pTask->pProgress->SetNextOperation(BstrFmt("Skipping the cleanup phase. All right.").raw(), 1);
+                LogRel(("%s: Skipping the cleanup step %d\n", __FUNCTION__, currOperation));
+            }
+        }
+    }
+
+    LogFlowFunc(("rc=%Rhrc\n", hrc));
+    LogFlowFuncLeave();
+    return hrc;
 }
 
 /**
@@ -1205,7 +2297,7 @@ HRESULT Appliance::i_readFSOVF(TaskOVF *pTask)
      * Allocate a buffer for filenames and prep it for suffix appending.
      */
     char *pszNameBuf = (char *)alloca(pTask->locInfo.strPath.length() + 16);
-    AssertReturn(pszNameBuf, VERR_NO_TMP_MEMORY);
+    AssertReturn(pszNameBuf, E_OUTOFMEMORY);
     memcpy(pszNameBuf, pTask->locInfo.strPath.c_str(), pTask->locInfo.strPath.length() + 1);
     RTPathStripSuffix(pszNameBuf);
     size_t const cchBaseName = strlen(pszNameBuf);
@@ -1435,7 +2527,7 @@ HRESULT Appliance::i_readOVFFile(TaskOVF *pTask, RTVFSIOSTREAM hVfsIosOvf, const
     /*
      * Set up digest calculation.
      */
-    hVfsIosOvf = i_importSetupDigestCalculationForGivenIoStream(hVfsIosOvf, pszManifestEntry);
+    hVfsIosOvf = i_manifestSetupDigestCalculationForGivenIoStream(hVfsIosOvf, pszManifestEntry);
     if (hVfsIosOvf == NIL_RTVFSIOSTREAM)
         return VBOX_E_FILE_ERROR;
 
@@ -1522,8 +2614,8 @@ HRESULT Appliance::i_readManifestFile(TaskOVF *pTask, RTVFSIOSTREAM hVfsIosMf, c
     vrc = RTManifestReadStandardEx(m->hTheirManifest, hVfsIos, szErr, sizeof(szErr));
     RTVfsIoStrmRelease(hVfsIos);
     if (RT_FAILURE(vrc))
-        throw setErrorVrc(vrc, tr("Failed to parse manifest file '%s' for '%s' (%Rrc): %s"),
-                          pszSubFileNm, pTask->locInfo.strPath.c_str(), vrc, szErr);
+        return setErrorVrc(vrc, tr("Failed to parse manifest file '%s' for '%s' (%Rrc): %s"),
+                           pszSubFileNm, pTask->locInfo.strPath.c_str(), vrc, szErr);
 
     /*
      * Check which digest files are used.
@@ -1533,7 +2625,6 @@ HRESULT Appliance::i_readManifestFile(TaskOVF *pTask, RTVFSIOSTREAM hVfsIosMf, c
     AssertRCReturn(vrc, Global::vboxStatusCodeToCOM(vrc));
     m->fDeterminedDigestTypes = true;
 
-    m->fSha256 = RT_BOOL(m->fDigestTypes & RTMANIFEST_ATTR_SHA256); /** @todo retire this member */
     return S_OK;
 }
 
@@ -1561,7 +2652,7 @@ HRESULT Appliance::i_readSignatureFile(TaskOVF *pTask, RTVFSIOSTREAM hVfsIosCert
     {
         const char *pszSuffix = strrchr(pszSubFileNm, '.');
         AssertReturn(pszSuffix, E_FAIL);
-        strManifestName = Utf8Str(pszSubFileNm, pszSuffix - pszSubFileNm);
+        strManifestName = Utf8Str(pszSubFileNm, (size_t)(pszSuffix - pszSubFileNm));
         strManifestName.append(".mf");
     }
     catch (...)
@@ -1584,7 +2675,7 @@ HRESULT Appliance::i_readSignatureFile(TaskOVF *pTask, RTVFSIOSTREAM hVfsIosCert
 
     /*
      * Parse the signing certificate. Unlike the manifest parser we use below,
-     * this API ignores parse of the file that aren't relevant.
+     * this API ignores parts of the file that aren't relevant.
      */
     RTERRINFOSTATIC StaticErrInfo;
     vrc = RTCrX509Certificate_ReadFromBuffer(&m->SignerCert, pvSignature, cbSignature,
@@ -1613,6 +2704,7 @@ HRESULT Appliance::i_readSignatureFile(TaskOVF *pTask, RTVFSIOSTREAM hVfsIosCert
                                    pTask->locInfo.strPath.c_str(), pszSubFileNm));
             pszSplit = (char *)pvSignature + cbSignature;
         }
+        char const chSaved = *pszSplit;
         *pszSplit = '\0';
 
         /*
@@ -1625,7 +2717,7 @@ HRESULT Appliance::i_readSignatureFile(TaskOVF *pTask, RTVFSIOSTREAM hVfsIosCert
         if (RT_SUCCESS(vrc))
         {
             RTVFSIOSTREAM hVfsIosTmp;
-            vrc = RTVfsIoStrmFromBuffer(RTFILE_O_READ, pvSignature, pszSplit - (char *)pvSignature, &hVfsIosTmp);
+            vrc = RTVfsIoStrmFromBuffer(RTFILE_O_READ, pvSignature, (size_t)(pszSplit - (char *)pvSignature), &hVfsIosTmp);
             if (RT_SUCCESS(vrc))
             {
                 vrc = RTManifestReadStandardEx(hSignedDigestManifest, hVfsIosTmp, StaticErrInfo.szMsg, sizeof(StaticErrInfo.szMsg));
@@ -1690,6 +2782,22 @@ HRESULT Appliance::i_readSignatureFile(TaskOVF *pTask, RTVFSIOSTREAM hVfsIosCert
         }
         else
             hrc = E_OUTOFMEMORY;
+
+        /*
+         * Look for the additional for PKCS#7/CMS signature we produce when we sign stuff.
+         */
+        if (SUCCEEDED(hrc))
+        {
+            *pszSplit = chSaved;
+            vrc = RTCrPkcs7_ReadFromBuffer(&m->ContentInfo, pvSignature, cbSignature, RTCRPKCS7_READ_F_PEM_ONLY,
+                                           &g_RTAsn1DefaultAllocator, NULL /*pfCmsLabeled*/,
+                                           RTErrInfoInitStatic(&StaticErrInfo), pszSubFileNm);
+            if (RT_SUCCESS(vrc))
+                m->fContentInfoLoaded = true;
+            else if (vrc != VERR_NOT_FOUND)
+                hrc = setErrorVrc(vrc, tr("Error reading the PKCS#7/CMS signature from '%s' for '%s' (%Rrc): %s"),
+                                  pszSubFileNm, pTask->locInfo.strPath.c_str(), vrc, StaticErrInfo.Core.pszMsg);
+        }
     }
     else if (vrc == VERR_NOT_FOUND || vrc == VERR_EOF)
         hrc = setErrorBoth(E_FAIL, vrc, tr("Malformed .cert-file for '%s': Signer's certificate not found (%Rrc)"),
@@ -1716,9 +2824,17 @@ HRESULT Appliance::i_readTailProcessing(TaskOVF *pTask)
     /*
      * Parse and validate the signature file.
      *
-     * The signature file has two parts, manifest part and a PEM encoded
-     * certificate.  The former contains an entry for the manifest file with a
-     * digest that is encrypted with the certificate in the latter part.
+     * The signature file nominally has two parts, manifest part and a PEM
+     * encoded certificate.  The former contains an entry for the manifest file
+     * with a digest that is encrypted with the certificate in the latter part.
+     *
+     * When an appliance is signed by VirtualBox, a PKCS#7/CMS signedData part
+     * is added by default, supplying more info than the bits mandated by the
+     * OVF specs.  We will validate both the signedData and the standard OVF
+     * signature.  Another requirement is that the first signedData signer
+     * uses the same certificate as the regular OVF signature, allowing us to
+     * only do path building for the signedData with the additional info it
+     * ships with.
      */
     if (m->pbSignedDigest)
     {
@@ -1747,11 +2863,9 @@ HRESULT Appliance::i_readTailProcessing(TaskOVF *pTask)
                 /* Compare the signed digest with the one we just calculated.  (This
                    API will do the verification twice, once using IPRT's own crypto
                    and once using OpenSSL.  Both must OK it for success.) */
-                vrc = RTCrPkixPubKeyVerifySignedDigest(&m->SignerCert.TbsCertificate.SubjectPublicKeyInfo.Algorithm.Algorithm,
-                                                       &m->SignerCert.TbsCertificate.SubjectPublicKeyInfo.Algorithm.Parameters,
-                                                       &m->SignerCert.TbsCertificate.SubjectPublicKeyInfo.SubjectPublicKey,
-                                                       m->pbSignedDigest, m->cbSignedDigest, hDigest,
-                                                       RTErrInfoInitStatic(&StaticErrInfo));
+                vrc = RTCrPkixPubKeyVerifySignedDigestByCertPubKeyInfo(&m->SignerCert.TbsCertificate.SubjectPublicKeyInfo,
+                                                                       m->pbSignedDigest, m->cbSignedDigest, hDigest,
+                                                                       RTErrInfoInitStatic(&StaticErrInfo));
                 if (RT_SUCCESS(vrc))
                 {
                     m->fSignatureValid = true;
@@ -1771,9 +2885,17 @@ HRESULT Appliance::i_readTailProcessing(TaskOVF *pTask)
             hrc = setErrorVrc(vrc, tr("RTCrDigestCreateByType failed: %Rrc"), vrc);
 
         /*
+         * If we have a PKCS#7/CMS signature, validate it and check that the
+         * certificate matches the first signerInfo entry.
+         */
+        HRESULT hrc2 = i_readTailProcessingSignedData(&StaticErrInfo);
+        if (FAILED(hrc2) && SUCCEEDED(hrc))
+            hrc = hrc2;
+
+        /*
          * Validate the certificate.
          *
-         * We don't fail here on if we cannot validate the certificate, we postpone
+         * We don't fail here if we cannot validate the certificate, we postpone
          * that till the import stage, so that we can allow the user to ignore it.
          *
          * The certificate validity time is deliberately left as warnings as the
@@ -1804,147 +2926,42 @@ HRESULT Appliance::i_readTailProcessing(TaskOVF *pTask)
         Assert(m->strCertError.isEmpty());
         Assert(m->fCertificateIsSelfSigned == RTCrX509Certificate_IsSelfSigned(&m->SignerCert));
 
-        HRESULT hrc2 = S_OK;
-        if (m->fCertificateIsSelfSigned)
+        /* We'll always needs the trusted cert store. */
+        hrc2 = S_OK;
+        RTCRSTORE hTrustedCerts;
+        vrc = RTCrStoreCreateSnapshotOfUserAndSystemTrustedCAsAndCerts(&hTrustedCerts, RTErrInfoInitStatic(&StaticErrInfo));
+        if (RT_SUCCESS(vrc))
         {
-            /*
-             * It's a self signed certificate.  We assume the frontend will
-             * present this fact to the user and give a choice whether this
-             * is acceptible.  But, first make sure it makes internal sense.
-             */
-            m->fCertificateMissingPath = true; /** @todo need to check if the certificate is trusted by the system! */
-            vrc = RTCrX509Certificate_VerifySignatureSelfSigned(&m->SignerCert, RTErrInfoInitStatic(&StaticErrInfo));
-            if (RT_SUCCESS(vrc))
+            /* If we don't have a PKCS7/CMS signature or if it uses a different
+               certificate, we try our best to validate the OVF certificate. */
+            if (!m->fContentInfoOkay || !m->fContentInfoSameCert)
             {
-                m->fCertificateValid = true;
-
-                /* Check whether the certificate is currently valid, just warn if not. */
-                RTTIMESPEC Now;
-                if (RTCrX509Validity_IsValidAtTimeSpec(&m->SignerCert.TbsCertificate.Validity, RTTimeNow(&Now)))
-                {
-                    m->fCertificateValidTime = true;
-                    i_addWarning(tr("A self signed certificate was used to sign '%s'"), pTask->locInfo.strPath.c_str());
-                }
+                if (m->fCertificateIsSelfSigned)
+                    hrc2 = i_readTailProcessingVerifySelfSignedOvfCert(pTask, hTrustedCerts, &StaticErrInfo);
                 else
-                    i_addWarning(tr("Self signed certificate used to sign '%s' is not currently valid"),
-                                 pTask->locInfo.strPath.c_str());
+                    hrc2 = i_readTailProcessingVerifyIssuedOvfCert(pTask, hTrustedCerts, &StaticErrInfo);
+            }
 
-                /* Just warn if it's not a CA. Self-signed certificates are
-                   hardly trustworthy to start with without the user's consent. */
-                if (   !m->SignerCert.TbsCertificate.T3.pBasicConstraints
-                    || !m->SignerCert.TbsCertificate.T3.pBasicConstraints->CA.fValue)
-                    i_addWarning(tr("Self signed certificate used to sign '%s' is not marked as certificate authority (CA)"),
-                                 pTask->locInfo.strPath.c_str());
-            }
-            else
+            /* If there is a PKCS7/CMS signature, we always verify its certificates. */
+            if (m->fContentInfoOkay)
             {
-                try { m->strCertError = Utf8StrFmt(tr("Verification of the self signed certificate failed (%Rrc, %s)"),
-                                                   vrc, StaticErrInfo.Core.pszMsg); }
-                catch (...) { AssertFailed(); }
-                i_addWarning(tr("Verification of the self signed certificate used to sign '%s' failed (%Rrc): %s"),
-                             pTask->locInfo.strPath.c_str(), vrc, StaticErrInfo.Core.pszMsg);
+                void  *pvData = NULL;
+                size_t cbData = 0;
+                HRESULT hrc3 = i_readTailProcessingGetManifestData(&pvData, &cbData);
+                if (SUCCEEDED(hrc3))
+                {
+                    hrc3 = i_readTailProcessingVerifyContentInfoCerts(pvData, cbData, hTrustedCerts, &StaticErrInfo);
+                    RTMemTmpFree(pvData);
+                }
+                if (FAILED(hrc3) && SUCCEEDED(hrc2))
+                    hrc2 = hrc3;
             }
+            RTCrStoreRelease(hTrustedCerts);
         }
         else
-        {
-            /*
-             * The certificate is not self-signed.  Use the system certificate
-             * stores to try build a path that validates successfully.
-             */
-            RTCRX509CERTPATHS hCertPaths;
-            vrc = RTCrX509CertPathsCreate(&hCertPaths, &m->SignerCert);
-            if (RT_SUCCESS(vrc))
-            {
-                /* Get trusted certificates from the system and add them to the path finding mission. */
-                RTCRSTORE hTrustedCerts;
-                vrc = RTCrStoreCreateSnapshotOfUserAndSystemTrustedCAsAndCerts(&hTrustedCerts,
-                                                                               RTErrInfoInitStatic(&StaticErrInfo));
-                if (RT_SUCCESS(vrc))
-                {
-                    vrc = RTCrX509CertPathsSetTrustedStore(hCertPaths, hTrustedCerts);
-                    if (RT_FAILURE(vrc))
-                        hrc2 = setError(E_FAIL, tr("RTCrX509CertPathsSetTrustedStore failed (%Rrc)"), vrc);
-                    RTCrStoreRelease(hTrustedCerts);
-                }
-                else
-                    hrc2 = setError(E_FAIL,
-                                    tr("Failed to query trusted CAs and Certificates from the system and for the current user (%Rrc, %s)"),
-                                    vrc, StaticErrInfo.Core.pszMsg);
-
-                /* Add untrusted intermediate certificates. */
-                if (RT_SUCCESS(vrc))
-                {
-                    /// @todo RTCrX509CertPathsSetUntrustedStore(hCertPaths, hAdditionalCerts);
-                    /// By scanning for additional certificates in the .cert file?  It would be
-                    /// convenient to be able to supply intermediate certificates for the user,
-                    /// right?  Or would that be unacceptable as it may weaken security?
-                    ///
-                    /// Anyway, we should look for intermediate certificates on the system, at
-                    /// least.
-                }
-                if (RT_SUCCESS(vrc))
-                {
-                    /*
-                     * Do the building and verification of certificate paths.
-                     */
-                    vrc = RTCrX509CertPathsBuild(hCertPaths, RTErrInfoInitStatic(&StaticErrInfo));
-                    if (RT_SUCCESS(vrc))
-                    {
-                        vrc = RTCrX509CertPathsValidateAll(hCertPaths, NULL, RTErrInfoInitStatic(&StaticErrInfo));
-                        if (RT_SUCCESS(vrc))
-                        {
-                            /*
-                             * Mark the certificate as good.
-                             */
-                            /** @todo check the certificate purpose? If so, share with self-signed. */
-                            m->fCertificateValid = true;
-                            m->fCertificateMissingPath = false;
-
-                            /*
-                             * We add a warning if the certificate path isn't valid at the current
-                             * time.  Since the time is only considered during path validation and we
-                             * can repeat the validation process (but not building), it's easy to check.
-                             */
-                            RTTIMESPEC Now;
-                            vrc = RTCrX509CertPathsSetValidTimeSpec(hCertPaths, RTTimeNow(&Now));
-                            if (RT_SUCCESS(vrc))
-                            {
-                                vrc = RTCrX509CertPathsValidateAll(hCertPaths, NULL, RTErrInfoInitStatic(&StaticErrInfo));
-                                if (RT_SUCCESS(vrc))
-                                    m->fCertificateValidTime = true;
-                                else
-                                    i_addWarning(tr("The certificate used to sign '%s' (or a certificate in the path) is not currently valid (%Rrc)"),
-                                                 pTask->locInfo.strPath.c_str(), vrc);
-                            }
-                            else
-                                hrc2 = setErrorVrc(vrc, "RTCrX509CertPathsSetValidTimeSpec failed: %Rrc", vrc);
-                        }
-                        else if (vrc == VERR_CR_X509_CPV_NO_TRUSTED_PATHS)
-                        {
-                            m->fCertificateValid = true;
-                            i_addWarning(tr("No trusted certificate paths"));
-
-                            /* Add another warning if the pathless certificate is not valid at present. */
-                            RTTIMESPEC Now;
-                            if (RTCrX509Validity_IsValidAtTimeSpec(&m->SignerCert.TbsCertificate.Validity, RTTimeNow(&Now)))
-                                m->fCertificateValidTime = true;
-                            else
-                                i_addWarning(tr("The certificate used to sign '%s' is not currently valid"),
-                                             pTask->locInfo.strPath.c_str());
-                        }
-                        else
-                            hrc2 = setError(E_FAIL, tr("Certificate path validation failed (%Rrc, %s)"),
-                                            vrc, StaticErrInfo.Core.pszMsg);
-                    }
-                    else
-                        hrc2 = setError(E_FAIL, tr("Certificate path building failed (%Rrc, %s)"),
-                                        vrc, StaticErrInfo.Core.pszMsg);
-                }
-                RTCrX509CertPathsRelease(hCertPaths);
-            }
-            else
-                hrc2 = setErrorVrc(vrc, tr("RTCrX509CertPathsCreate failed: %Rrc"), vrc);
-        }
+            hrc2 = setErrorBoth(E_FAIL, vrc,
+                                tr("Failed to query trusted CAs and Certificates from the system and for the current user (%Rrc%RTeim)"),
+                                vrc, &StaticErrInfo.Core);
 
         /* Merge statuses from signature and certificate validation, prefering the signature one. */
         if (SUCCEEDED(hrc) && FAILED(hrc2))
@@ -1956,6 +2973,7 @@ HRESULT Appliance::i_readTailProcessing(TaskOVF *pTask)
     /** @todo provide details about the signatory, signature, etc.  */
     if (m->fSignerCertLoaded)
     {
+        /** @todo PKCS7/CMS certs too */
         m->ptrCertificateInfo.createObject();
         m->ptrCertificateInfo->initCertificate(&m->SignerCert,
                                                m->fCertificateValid && !m->fCertificateMissingPath,
@@ -1967,6 +2985,505 @@ HRESULT Appliance::i_readTailProcessing(TaskOVF *pTask)
      */
 
     NOREF(pTask);
+    return S_OK;
+}
+
+/**
+ * Reads hMemFileTheirManifest into a memory buffer so it can be passed to
+ * RTCrPkcs7VerifySignedDataWithExternalData.
+ *
+ * Use RTMemTmpFree to free the memory.
+ */
+HRESULT Appliance::i_readTailProcessingGetManifestData(void **ppvData, size_t *pcbData)
+{
+    uint64_t cbData;
+    int vrc = RTVfsFileQuerySize(m->hMemFileTheirManifest, &cbData);
+    AssertRCReturn(vrc, setErrorVrc(vrc, "RTVfsFileQuerySize"));
+
+    void *pvData = RTMemTmpAllocZ((size_t)cbData);
+    AssertPtrReturn(pvData, E_OUTOFMEMORY);
+
+    vrc = RTVfsFileReadAt(m->hMemFileTheirManifest, 0, pvData, (size_t)cbData, NULL);
+    AssertRCReturnStmt(vrc, RTMemTmpFree(pvData), setErrorVrc(vrc, "RTVfsFileReadAt"));
+
+    *pcbData = (size_t)cbData;
+    *ppvData = pvData;
+    return S_OK;
+}
+
+/**
+ * Worker for i_readTailProcessing that validates the signedData.
+ *
+ * If we have a PKCS#7/CMS signature:
+ *      - validate it
+ *      - check that the OVF certificate matches the first signerInfo entry
+ *      - verify the signature, but leave the certificate path validation for
+ *        later.
+ *
+ * @param   pErrInfo    Static error info buffer (not for returning, just for
+ *                      avoiding wasting stack).
+ * @returns COM status.
+ * @throws  Nothing!
+ */
+HRESULT Appliance::i_readTailProcessingSignedData(PRTERRINFOSTATIC pErrInfo)
+{
+    m->fContentInfoOkay           = false;
+    m->fContentInfoSameCert       = false;
+    m->fContentInfoValidSignature = false;
+
+    if (!m->fContentInfoLoaded)
+        return S_OK;
+
+    /*
+     * Validate it.
+     */
+    HRESULT hrc = S_OK;
+    PCRTCRPKCS7SIGNEDDATA pSignedData = m->ContentInfo.u.pSignedData;
+    if (!RTCrPkcs7ContentInfo_IsSignedData(&m->ContentInfo))
+        i_addWarning(tr("Invalid PKCS#7/CMS type: %s, expected %s (signedData)"),
+                     m->ContentInfo.ContentType.szObjId, RTCRPKCS7SIGNEDDATA_OID);
+    else if (RTAsn1ObjId_CompareWithString(&pSignedData->ContentInfo.ContentType, RTCR_PKCS7_DATA_OID) != 0)
+        i_addWarning(tr("Invalid PKCS#7/CMS inner type: %s, expected %s (data)"),
+                     pSignedData->ContentInfo.ContentType.szObjId, RTCR_PKCS7_DATA_OID);
+    else if (RTAsn1OctetString_IsPresent(&pSignedData->ContentInfo.Content))
+        i_addWarning(tr("Invalid PKCS#7/CMS data: embedded (%u bytes), expected external","",
+                        pSignedData->ContentInfo.Content.Asn1Core.cb),
+                     pSignedData->ContentInfo.Content.Asn1Core.cb);
+    else if (pSignedData->SignerInfos.cItems == 0)
+        i_addWarning(tr("Invalid PKCS#7/CMS: No signers"));
+    else
+    {
+        m->fContentInfoOkay = true;
+
+        /*
+         * Same certificate as the OVF signature?
+         */
+        PCRTCRPKCS7SIGNERINFO pSignerInfo = pSignedData->SignerInfos.papItems[0];
+        if (   RTCrX509Name_Compare(&pSignerInfo->IssuerAndSerialNumber.Name, &m->SignerCert.TbsCertificate.Issuer) == 0
+            && RTAsn1Integer_Compare(&pSignerInfo->IssuerAndSerialNumber.SerialNumber,
+                                     &m->SignerCert.TbsCertificate.SerialNumber) == 0)
+            m->fContentInfoSameCert = true;
+        else
+            i_addWarning(tr("Invalid PKCS#7/CMS: Using a different certificate"));
+
+        /*
+         * Then perform a validation of the signatures, but first without
+         * validating the certificate trust paths yet.
+         */
+        RTCRSTORE hTrustedCerts = NIL_RTCRSTORE;
+        int vrc = RTCrStoreCreateInMem(&hTrustedCerts, 1);
+        AssertRCReturn(vrc, setErrorVrc(vrc, tr("RTCrStoreCreateInMem failed: %Rrc"), vrc));
+
+        vrc = RTCrStoreCertAddX509(hTrustedCerts, 0, &m->SignerCert, RTErrInfoInitStatic(pErrInfo));
+        if (RT_SUCCESS(vrc))
+        {
+            void  *pvData = NULL;
+            size_t cbData = 0;
+            hrc = i_readTailProcessingGetManifestData(&pvData, &cbData);
+            if (SUCCEEDED(hrc))
+            {
+                RTTIMESPEC Now;
+                vrc = RTCrPkcs7VerifySignedDataWithExternalData(&m->ContentInfo, RTCRPKCS7VERIFY_SD_F_TRUST_ALL_CERTS,
+                                                                NIL_RTCRSTORE /*hAdditionalCerts*/, hTrustedCerts,
+                                                                RTTimeNow(&Now), NULL /*pfnVerifyCert*/, NULL /*pvUser*/,
+                                                                pvData, cbData, RTErrInfoInitStatic(pErrInfo));
+                if (RT_SUCCESS(vrc))
+                    m->fContentInfoValidSignature = true;
+                else
+                    i_addWarning(tr("Failed to validate PKCS#7/CMS signature: %Rrc%RTeim"), vrc, &pErrInfo->Core);
+                RTMemTmpFree(pvData);
+            }
+        }
+        else
+            hrc = setErrorVrc(vrc, tr("RTCrStoreCertAddX509 failed: %Rrc%RTeim"), vrc, &pErrInfo->Core);
+        RTCrStoreRelease(hTrustedCerts);
+    }
+
+    return hrc;
+}
+
+
+/**
+ * Worker for i_readTailProcessing that verifies a self signed certificate when
+ * no PKCS\#7/CMS signature using the same certificate is present.
+ */
+HRESULT Appliance::i_readTailProcessingVerifySelfSignedOvfCert(TaskOVF *pTask, RTCRSTORE hTrustedStore, PRTERRINFOSTATIC pErrInfo)
+{
+    /*
+     * It's a self signed certificate.  We assume the frontend will
+     * present this fact to the user and give a choice whether this
+     * is acceptable.  But, first make sure it makes internal sense.
+     */
+    m->fCertificateMissingPath = true;
+    PCRTCRCERTCTX pCertCtx = RTCrStoreCertByIssuerAndSerialNo(hTrustedStore, &m->SignerCert.TbsCertificate.Issuer,
+                                                              &m->SignerCert.TbsCertificate.SerialNumber);
+    if (pCertCtx)
+    {
+        if (pCertCtx->pCert && RTCrX509Certificate_Compare(pCertCtx->pCert, &m->SignerCert) == 0)
+            m->fCertificateMissingPath = true;
+        RTCrCertCtxRelease(pCertCtx);
+    }
+
+    int vrc = RTCrX509Certificate_VerifySignatureSelfSigned(&m->SignerCert, RTErrInfoInitStatic(pErrInfo));
+    if (RT_SUCCESS(vrc))
+    {
+        m->fCertificateValid = true;
+
+        /* Check whether the certificate is currently valid, just warn if not. */
+        RTTIMESPEC Now;
+        m->fCertificateValidTime = RTCrX509Validity_IsValidAtTimeSpec(&m->SignerCert.TbsCertificate.Validity, RTTimeNow(&Now));
+        if (m->fCertificateValidTime)
+        {
+            m->fCertificateValidTime = true;
+            i_addWarning(tr("A self signed certificate was used to sign '%s'"), pTask->locInfo.strPath.c_str());
+        }
+        else
+            i_addWarning(tr("Self signed certificate used to sign '%s' is not currently valid"),
+                         pTask->locInfo.strPath.c_str());
+    }
+    else
+    {
+        m->strCertError.printfNoThrow(tr("Verification of the self signed certificate failed (%Rrc%#RTeim)"),
+                                      vrc, &pErrInfo->Core);
+        i_addWarning(tr("Verification of the self signed certificate used to sign '%s' failed (%Rrc)%RTeim"),
+                     pTask->locInfo.strPath.c_str(), vrc, &pErrInfo->Core);
+    }
+
+    /* Just warn if it's not a CA. Self-signed certificates are
+       hardly trustworthy to start with without the user's consent. */
+    if (   !m->SignerCert.TbsCertificate.T3.pBasicConstraints
+        || !m->SignerCert.TbsCertificate.T3.pBasicConstraints->CA.fValue)
+        i_addWarning(tr("Self signed certificate used to sign '%s' is not marked as certificate authority (CA)"),
+                     pTask->locInfo.strPath.c_str());
+
+    return S_OK;
+}
+
+/**
+ * Worker for i_readTailProcessing that verfies a non-self-issued OVF
+ * certificate when no PKCS\#7/CMS signature using the same certificate is
+ * present.
+ */
+HRESULT Appliance::i_readTailProcessingVerifyIssuedOvfCert(TaskOVF *pTask, RTCRSTORE hTrustedStore, PRTERRINFOSTATIC pErrInfo)
+{
+    /*
+     * The certificate is not self-signed.  Use the system certificate
+     * stores to try build a path that validates successfully.
+     */
+    HRESULT hrc = S_OK;
+    RTCRX509CERTPATHS hCertPaths;
+    int vrc = RTCrX509CertPathsCreate(&hCertPaths, &m->SignerCert);
+    if (RT_SUCCESS(vrc))
+    {
+        /* Get trusted certificates from the system and add them to the path finding mission. */
+        vrc = RTCrX509CertPathsSetTrustedStore(hCertPaths, hTrustedStore);
+        if (RT_FAILURE(vrc))
+            hrc = setErrorBoth(E_FAIL, vrc, tr("RTCrX509CertPathsSetTrustedStore failed (%Rrc)"), vrc);
+
+        /* Add untrusted intermediate certificates. */
+        if (RT_SUCCESS(vrc))
+        {
+            /// @todo RTCrX509CertPathsSetUntrustedStore(hCertPaths, hAdditionalCerts);
+            /// We should look for intermediate certificates on the system, at least.
+        }
+        if (RT_SUCCESS(vrc))
+        {
+            /*
+             * Do the building and verification of certificate paths.
+             */
+            vrc = RTCrX509CertPathsBuild(hCertPaths, RTErrInfoInitStatic(pErrInfo));
+            if (RT_SUCCESS(vrc))
+            {
+                vrc = RTCrX509CertPathsValidateAll(hCertPaths, NULL, RTErrInfoInitStatic(pErrInfo));
+                if (RT_SUCCESS(vrc))
+                {
+                    /*
+                     * Mark the certificate as good.
+                     */
+                    /** @todo check the certificate purpose? If so, share with self-signed. */
+                    m->fCertificateValid = true;
+                    m->fCertificateMissingPath = false;
+
+                    /*
+                     * We add a warning if the certificate path isn't valid at the current
+                     * time.  Since the time is only considered during path validation and we
+                     * can repeat the validation process (but not building), it's easy to check.
+                     */
+                    RTTIMESPEC Now;
+                    vrc = RTCrX509CertPathsSetValidTimeSpec(hCertPaths, RTTimeNow(&Now));
+                    if (RT_SUCCESS(vrc))
+                    {
+                        vrc = RTCrX509CertPathsValidateAll(hCertPaths, NULL, RTErrInfoInitStatic(pErrInfo));
+                        if (RT_SUCCESS(vrc))
+                            m->fCertificateValidTime = true;
+                        else
+                            i_addWarning(tr("The certificate used to sign '%s' (or a certificate in the path) is not currently valid (%Rrc)"),
+                                         pTask->locInfo.strPath.c_str(), vrc);
+                    }
+                    else
+                        hrc = setErrorVrc(vrc, tr("RTCrX509CertPathsSetValidTimeSpec failed: %Rrc"), vrc);
+                }
+                else if (vrc == VERR_CR_X509_CPV_NO_TRUSTED_PATHS)
+                {
+                    m->fCertificateValid = true;
+                    i_addWarning(tr("No trusted certificate paths"));
+
+                    /* Add another warning if the pathless certificate is not valid at present. */
+                    RTTIMESPEC Now;
+                    if (RTCrX509Validity_IsValidAtTimeSpec(&m->SignerCert.TbsCertificate.Validity, RTTimeNow(&Now)))
+                        m->fCertificateValidTime = true;
+                    else
+                        i_addWarning(tr("The certificate used to sign '%s' is not currently valid"),
+                                     pTask->locInfo.strPath.c_str());
+                }
+                else
+                    hrc = setErrorBoth(E_FAIL, vrc, tr("Certificate path validation failed (%Rrc%RTeim)"), vrc, &pErrInfo->Core);
+            }
+            else
+                hrc = setErrorBoth(E_FAIL, vrc, tr("Certificate path building failed (%Rrc%RTeim)"), vrc, &pErrInfo->Core);
+        }
+        RTCrX509CertPathsRelease(hCertPaths);
+    }
+    else
+        hrc = setErrorVrc(vrc, tr("RTCrX509CertPathsCreate failed: %Rrc"), vrc);
+    return hrc;
+}
+
+/**
+ * Helper for i_readTailProcessingVerifySignerInfo that reports a verfication
+ * failure.
+ *
+ * @returns S_OK
+ */
+HRESULT Appliance::i_readTailProcessingVerifyContentInfoFailOne(const char *pszSignature, int vrc, PRTERRINFOSTATIC pErrInfo)
+{
+    i_addWarning(tr("%s verification failed: %Rrc%RTeim"), pszSignature, vrc, &pErrInfo->Core);
+    if (m->strCertError.isEmpty())
+        m->strCertError.printfNoThrow(tr("%s verification failed: %Rrc%RTeim"), pszSignature, vrc, &pErrInfo->Core);
+    return S_OK;
+}
+
+/**
+ * Worker for i_readTailProcessingVerifyContentInfoCerts that analyzes why the
+ * standard verification of a signer info entry failed (@a vrc & @a pErrInfo).
+ *
+ * There are a couple of things we might want try to investigate deeper here:
+ *      1. Untrusted signing certificate, often self-signed.
+ *      2. Untrusted timstamp signing certificate.
+ *      3. Certificate not valid at the current time and there isn't a
+ *         timestamp counter signature.
+ *
+ * That said, it is difficult to get an accurate fix and report on the
+ * issues here since there are a number of error sources, so just try identify
+ * the more typical cases.
+ *
+ * @note Caller cleans up *phTrustedStore2 if not NIL.
+ */
+HRESULT Appliance::i_readTailProcessingVerifyAnalyzeSignerInfo(void const *pvData, size_t cbData, RTCRSTORE hTrustedStore,
+                                                               uint32_t iSigner, PRTTIMESPEC pNow, int vrc,
+                                                               PRTERRINFOSTATIC pErrInfo, PRTCRSTORE phTrustedStore2)
+{
+    PRTCRPKCS7SIGNEDDATA const pSignedData = m->ContentInfo.u.pSignedData;
+    PRTCRPKCS7SIGNERINFO const pSigner     = pSignedData->SignerInfos.papItems[iSigner];
+
+    /*
+     * Error/warning message prefix:
+     */
+    const char *pszSignature;
+    if (iSigner == 0 && m->fContentInfoSameCert)
+        pszSignature = tr("OVF & PKCS#7/CMS signature");
+    else
+        pszSignature = tr("PKCS#7/CMS signature");
+    char szSignatureBuf[64];
+    if (pSignedData->SignerInfos.cItems > 1)
+    {
+        RTStrPrintf(szSignatureBuf, sizeof(szSignatureBuf), "%s #%u", pszSignature, iSigner + 1);
+        pszSignature = szSignatureBuf;
+    }
+
+    /*
+     * Don't try handle weird stuff:
+     */
+    /** @todo Are there more statuses we can deal with here? */
+    if (   vrc != VERR_CR_X509_CPV_NOT_VALID_AT_TIME
+        && vrc != VERR_CR_X509_NO_TRUST_ANCHOR)
+        return i_readTailProcessingVerifyContentInfoFailOne(pszSignature, vrc, pErrInfo);
+
+    /*
+     * Find the signing certificate.
+     * We require the certificate to be included in the signed data here.
+     */
+    PCRTCRX509CERTIFICATE pSigningCert;
+    pSigningCert = RTCrPkcs7SetOfCerts_FindX509ByIssuerAndSerialNumber(&pSignedData->Certificates,
+                                                                       &pSigner->IssuerAndSerialNumber.Name,
+                                                                       &pSigner->IssuerAndSerialNumber.SerialNumber);
+    if (!pSigningCert)
+    {
+        i_addWarning(tr("PKCS#7/CMS signature #%u does not include the signing certificate"), iSigner + 1);
+        if (m->strCertError.isEmpty())
+            m->strCertError.printfNoThrow(tr("PKCS#7/CMS signature #%u does not include the signing certificate"), iSigner + 1);
+        return S_OK;
+    }
+
+    PCRTCRCERTCTX const pCertCtxTrusted = RTCrStoreCertByIssuerAndSerialNo(hTrustedStore, &pSigner->IssuerAndSerialNumber.Name,
+                                                                           &pSigner->IssuerAndSerialNumber.SerialNumber);
+    bool const          fSelfSigned     = RTCrX509Certificate_IsSelfSigned(pSigningCert);
+
+    /*
+     * Add warning about untrusted self-signed certificate:
+     */
+    if (fSelfSigned && !pCertCtxTrusted)
+        i_addWarning(tr("%s: Untrusted self-signed certificate"), pszSignature);
+
+    /*
+     * Start by eliminating signing time issues (2 + 3) first as primary problem.
+     * Keep the error info and status for later failures.
+     */
+    char szTime[RTTIME_STR_LEN];
+    RTTIMESPEC Now2 = *pNow;
+    vrc = RTCrPkcs7VerifySignedDataWithExternalData(&m->ContentInfo, RTCRPKCS7VERIFY_SD_F_USE_SIGNING_TIME_UNVERIFIED
+                                                    | RTCRPKCS7VERIFY_SD_F_UPDATE_VALIDATION_TIME
+                                                    | RTCRPKCS7VERIFY_SD_F_SIGNER_INDEX(iSigner)
+                                                    | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS, NIL_RTCRSTORE,
+                                                    hTrustedStore, &Now2, NULL, NULL,
+                                                    pvData, cbData, RTErrInfoInitStatic(pErrInfo));
+    if (RT_SUCCESS(vrc))
+    {
+        /* Okay, is it an untrusted time signing certificate or just signing time in general? */
+        RTTIMESPEC Now3 = *pNow;
+        vrc = RTCrPkcs7VerifySignedDataWithExternalData(&m->ContentInfo, RTCRPKCS7VERIFY_SD_F_USE_SIGNING_TIME_UNVERIFIED
+                                                        | RTCRPKCS7VERIFY_SD_F_COUNTER_SIGNATURE_SIGNING_TIME_ONLY
+                                                        | RTCRPKCS7VERIFY_SD_F_UPDATE_VALIDATION_TIME
+                                                        | RTCRPKCS7VERIFY_SD_F_SIGNER_INDEX(iSigner)
+                                                        | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS, NIL_RTCRSTORE,
+                                                        hTrustedStore, &Now3, NULL, NULL, pvData, cbData, NULL);
+        if (RT_SUCCESS(vrc))
+            i_addWarning(tr("%s: Untrusted timestamp (%s)"), pszSignature, RTTimeSpecToString(&Now3, szTime, sizeof(szTime)));
+        else
+            i_addWarning(tr("%s: Not valid at current time, but validates fine for untrusted signing time (%s)"),
+                         pszSignature, RTTimeSpecToString(&Now2, szTime, sizeof(szTime)));
+        return S_OK;
+    }
+
+    /* If we've got a trusted signing certificate (unlikely, but whatever), we can stop already.
+       If we haven't got a self-signed certificate, stop too as messaging becomes complicated otherwise. */
+    if (pCertCtxTrusted || !fSelfSigned)
+        return i_readTailProcessingVerifyContentInfoFailOne(pszSignature, vrc, pErrInfo);
+
+    int const vrcErrInfo = vrc;
+
+    /*
+     * Create a new trust store that includes the signing certificate
+     * to see what that changes.
+     */
+    vrc = RTCrStoreCreateInMemEx(phTrustedStore2, 1, hTrustedStore);
+    AssertRCReturn(vrc, setErrorVrc(vrc, "RTCrStoreCreateInMemEx"));
+    vrc = RTCrStoreCertAddX509(*phTrustedStore2, 0, (PRTCRX509CERTIFICATE)pSigningCert, NULL);
+    AssertRCReturn(vrc, setErrorVrc(vrc, "RTCrStoreCertAddX509/%u", iSigner));
+
+    vrc = RTCrPkcs7VerifySignedDataWithExternalData(&m->ContentInfo,
+                                                    RTCRPKCS7VERIFY_SD_F_COUNTER_SIGNATURE_SIGNING_TIME_ONLY
+                                                    | RTCRPKCS7VERIFY_SD_F_SIGNER_INDEX(iSigner)
+                                                    | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS, NIL_RTCRSTORE,
+                                                    *phTrustedStore2, pNow, NULL, NULL, pvData, cbData, NULL);
+    if (RT_SUCCESS(vrc))
+    {
+        if (!fSelfSigned)
+            i_readTailProcessingVerifyContentInfoFailOne(pszSignature, vrcErrInfo, pErrInfo);
+        return S_OK;
+    }
+
+    /*
+     * Time problems too?  Repeat what we did above, but with the modified trust store.
+     */
+    Now2 = *pNow;
+    vrc = RTCrPkcs7VerifySignedDataWithExternalData(&m->ContentInfo, RTCRPKCS7VERIFY_SD_F_USE_SIGNING_TIME_UNVERIFIED
+                                                    | RTCRPKCS7VERIFY_SD_F_UPDATE_VALIDATION_TIME
+                                                    | RTCRPKCS7VERIFY_SD_F_SIGNER_INDEX(iSigner)
+                                                    | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS, NIL_RTCRSTORE,
+                                                    *phTrustedStore2, pNow, NULL, NULL, pvData, cbData, NULL);
+    if (RT_SUCCESS(vrc))
+    {
+        /* Okay, is it an untrusted time signing certificate or just signing time in general? */
+        RTTIMESPEC Now3 = *pNow;
+        vrc = RTCrPkcs7VerifySignedDataWithExternalData(&m->ContentInfo, RTCRPKCS7VERIFY_SD_F_USE_SIGNING_TIME_UNVERIFIED
+                                                        | RTCRPKCS7VERIFY_SD_F_COUNTER_SIGNATURE_SIGNING_TIME_ONLY
+                                                        | RTCRPKCS7VERIFY_SD_F_UPDATE_VALIDATION_TIME
+                                                        | RTCRPKCS7VERIFY_SD_F_SIGNER_INDEX(iSigner)
+                                                        | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS, NIL_RTCRSTORE,
+                                                        *phTrustedStore2, &Now3, NULL, NULL, pvData, cbData, NULL);
+        if (RT_SUCCESS(vrc))
+            i_addWarning(tr("%s: Untrusted timestamp (%s)"), pszSignature, RTTimeSpecToString(&Now3, szTime, sizeof(szTime)));
+        else
+            i_addWarning(tr("%s: Not valid at current time, but validates fine for untrusted signing time (%s)"),
+                         pszSignature, RTTimeSpecToString(&Now2, szTime, sizeof(szTime)));
+    }
+    else
+        i_readTailProcessingVerifyContentInfoFailOne(pszSignature, vrcErrInfo, pErrInfo);
+
+    return S_OK;
+}
+
+/**
+ * Verify the signing certificates used to sign the PKCS\#7/CMS signature.
+ *
+ * ASSUMES that we've previously verified the PKCS\#7/CMS stuff in
+ * trust-all-certs-without-question mode and it's just the certificate
+ * validation that can fail now.
+ */
+HRESULT Appliance::i_readTailProcessingVerifyContentInfoCerts(void const *pvData, size_t cbData,
+                                                              RTCRSTORE hTrustedStore, PRTERRINFOSTATIC pErrInfo)
+{
+    /*
+     * Just do a run and see what happens (note we've already verified
+     * the data signatures, which just leaves certificates and paths).
+     */
+    RTTIMESPEC Now;
+    int vrc = RTCrPkcs7VerifySignedDataWithExternalData(&m->ContentInfo,
+                                                          RTCRPKCS7VERIFY_SD_F_COUNTER_SIGNATURE_SIGNING_TIME_ONLY
+                                                        | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS,
+                                                        NIL_RTCRSTORE /*hAdditionalCerts*/, hTrustedStore,
+                                                        RTTimeNow(&Now), NULL /*pfnVerifyCert*/, NULL /*pvUser*/,
+                                                        pvData, cbData, RTErrInfoInitStatic(pErrInfo));
+    if (RT_SUCCESS(vrc))
+        m->fContentInfoVerifiedOkay = true;
+    else
+    {
+        /*
+         * Deal with each of the signatures separately to try figure out
+         * more exactly what's going wrong.
+         */
+        uint32_t             cVerifiedOkay = 0;
+        PRTCRPKCS7SIGNEDDATA pSignedData   = m->ContentInfo.u.pSignedData;
+        for (uint32_t iSigner = 0; iSigner < pSignedData->SignerInfos.cItems; iSigner++)
+        {
+            vrc = RTCrPkcs7VerifySignedDataWithExternalData(&m->ContentInfo,
+                                                            RTCRPKCS7VERIFY_SD_F_COUNTER_SIGNATURE_SIGNING_TIME_ONLY
+                                                            | RTCRPKCS7VERIFY_SD_F_SIGNER_INDEX(iSigner)
+                                                            | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS,
+                                                            NIL_RTCRSTORE /*hAdditionalCerts*/, hTrustedStore,
+                                                            &Now, NULL /*pfnVerifyCert*/, NULL /*pvUser*/,
+                                                            pvData, cbData, RTErrInfoInitStatic(pErrInfo));
+            if (RT_SUCCESS(vrc))
+                cVerifiedOkay++;
+            else
+            {
+                RTCRSTORE hTrustedStore2 = NIL_RTCRSTORE;
+                HRESULT hrc = i_readTailProcessingVerifyAnalyzeSignerInfo(pvData, cbData, hTrustedStore, iSigner, &Now,
+                                                                          vrc, pErrInfo, &hTrustedStore2);
+                RTCrStoreRelease(hTrustedStore2);
+                if (FAILED(hrc))
+                    return hrc;
+            }
+        }
+
+        if (   pSignedData->SignerInfos.cItems > 1
+            && pSignedData->SignerInfos.cItems != cVerifiedOkay)
+            i_addWarning(tr("%u out of %u PKCS#7/CMS signatures verfified okay", "",
+                            pSignedData->SignerInfos.cItems),
+                         cVerifiedOkay, pSignedData->SignerInfos.cItems);
+    }
+
     return S_OK;
 }
 
@@ -1987,43 +3504,109 @@ HRESULT Appliance::i_readTailProcessing(TaskOVF *pTask)
  *
  * 1) from the public Appliance::ImportMachines().
  *
- * @param aLocInfo
- * @param aProgress
+ * @param locInfo
+ * @param progress
  * @return
  */
 HRESULT Appliance::i_importImpl(const LocationInfo &locInfo,
                                 ComObjPtr<Progress> &progress)
 {
-    HRESULT rc = S_OK;
-
-    SetUpProgressMode mode;
-    if (locInfo.storageType == VFSType_File)
-        mode = ImportFile;
-    else
-        mode = ImportS3;
-
-    rc = i_setUpProgress(progress,
-                         BstrFmt(tr("Importing appliance '%s'"), locInfo.strPath.c_str()),
-                         mode);
-    if (FAILED(rc)) throw rc;
+    HRESULT rc;
 
     /* Initialize our worker task */
-    TaskOVF* task = NULL;
-    try
+    ThreadTask *pTask;
+    if (locInfo.storageType != VFSType_Cloud)
     {
-        task = new TaskOVF(this, TaskOVF::Import, locInfo, progress);
+        rc = i_setUpProgress(progress, Utf8StrFmt(tr("Importing appliance '%s'"), locInfo.strPath.c_str()),
+                             locInfo.storageType == VFSType_File ? ImportFile : ImportS3);
+        if (FAILED(rc))
+            return setError(rc, tr("Failed to create task for importing appliance into VirtualBox"));
+        try
+        {
+            pTask = new TaskOVF(this, TaskOVF::Import, locInfo, progress);
+        }
+        catch (std::bad_alloc &)
+        {
+            return E_OUTOFMEMORY;
+        }
     }
-    catch(...)
+    else
     {
-        delete task;
-        throw rc = setError(VBOX_E_OBJECT_NOT_FOUND,
-                            tr("Could not create TaskOVF object for importing OVF data into VirtualBox"));
+        if (locInfo.strProvider.equals("OCI"))
+        {
+            /*
+             * 1. Create a custom image from the instance:
+             *    - 2 operations (starting and waiting)
+             * 2. Import the custom image into the Object Storage (OCI format - TAR file with QCOW2 image and JSON file):
+             *    - 2 operations (starting and waiting)
+             * 3. Download the object from the Object Storage:
+             *    - 1 operation (starting and downloadind is one operation)
+             * 4. Open the object, extract an image and convert one to VDI:
+             *    - 1 operation (extracting and conversion are piped) because only 1 base bootable image is imported for now
+             * 5. Create VM with user settings and attach the converted image to VM:
+             *    - 1 operation.
+             * 6. Cleanup phase.
+             *    - 1 to N operations.
+             *    The number of the correct Progress operations are much tricky here.
+             *    Whether Machine::deleteConfig() is called or Medium::deleteStorage() is called in the loop.
+             *    Both require a new Progress object. To work with these functions the original Progress object uses
+             *    the function Progress::waitForOtherProgressCompletion().
+             *
+             * Some speculation here...
+             * Total: 2+2+1(cloud) + 1+1(local) + 1+1+1(cleanup) = 10 operations
+             * or
+             * Total: 2+2+1(cloud) + 1+1(local) + 1(cleanup) = 8 operations
+             * if VM wasn't created we would have only 1 registered image for cleanup.
+             *
+             * Weight "#define"s for the Cloud operations are located in the file OCICloudClient.h.
+             * Weight of cloud import operations (1-3 items from above):
+             * Total = 750 = 25+75(start and wait)+25+375(start and wait)+250(download)
+             *
+             * Weight of local import operations (4-5 items from above):
+             * Total = 150 = 100 (extract and convert) + 50 (create VM, attach disks)
+             *
+             * Weight of local cleanup operations (6 item from above):
+             * Some speculation here...
+             * Total = 3 = 1 (1 image) + 1 (1 setting file)+ 1 (1 prev setting file) - quick operations
+             * or
+             * Total = 1 (1 image) if VM wasn't created we would have only 1 registered image for now.
+             */
+            try
+            {
+                rc = progress.createObject();
+                if (SUCCEEDED(rc))
+                    rc = progress->init(mVirtualBox, static_cast<IAppliance *>(this),
+                                        Utf8Str(tr("Importing VM from Cloud...")),
+                                        TRUE /* aCancelable */,
+                                        10, // ULONG cOperations,
+                                        1000, // ULONG ulTotalOperationsWeight,
+                                        Utf8Str(tr("Start import VM from the Cloud...")), // aFirstOperationDescription
+                                        25); // ULONG ulFirstOperationWeight
+                if (SUCCEEDED(rc))
+                    pTask = new TaskCloud(this, TaskCloud::Import, locInfo, progress);
+                else
+                    pTask = NULL; /* shut up vcc */
+            }
+            catch (std::bad_alloc &)
+            {
+                return E_OUTOFMEMORY;
+            }
+            if (FAILED(rc))
+                return setError(rc, tr("Failed to create task for importing appliance into VirtualBox"));
+        }
+        else
+            return setError(E_NOTIMPL, tr("Only \"OCI\" cloud provider is supported for now. \"%s\" isn't supported."),
+                            locInfo.strProvider.c_str());
     }
 
-    rc = task->createThread();
-    if (FAILED(rc)) throw rc;
-
-    return rc;
+    /*
+     * Start the task thread.
+     */
+    rc = pTask->createThread();
+    pTask = NULL;
+    if (SUCCEEDED(rc))
+        return rc;
+    return setError(rc, tr("Failed to start thread for importing appliance into VirtualBox"));
 }
 
 /**
@@ -2052,14 +3635,14 @@ HRESULT Appliance::i_importFS(TaskOVF *pTask)
     LogFlowFunc(("Appliance %p\n", this));
 
     /* Change the appliance state so we can safely leave the lock while doing
-     * time-consuming disk imports; also the below method calls do all kinds of
+     * time-consuming image imports; also the below method calls do all kinds of
      * locking which conflicts with the appliance object lock. */
     AutoWriteLock writeLock(this COMMA_LOCKVAL_SRC_POS);
     /* Check if the appliance is currently busy. */
     if (!i_isApplianceIdle())
         return E_ACCESSDENIED;
     /* Set the internal state to importing. */
-    m->state = Data::ApplianceImporting;
+    m->state = ApplianceImporting;
 
     HRESULT rc = S_OK;
 
@@ -2073,7 +3656,7 @@ HRESULT Appliance::i_importFS(TaskOVF *pTask)
     if (FAILED(rc))
     {
         /* With _whatever_ error we've had, do a complete roll-back of
-         * machines and disks we've created */
+         * machines and images we've created */
         writeLock.release();
         ErrorInfoKeeper eik;
         for (list<Guid>::iterator itID = m->llGuidsMachinesCreated.begin();
@@ -2097,7 +3680,7 @@ HRESULT Appliance::i_importFS(TaskOVF *pTask)
     }
 
     /* Reset the state so others can call methods again */
-    m->state = Data::ApplianceIdle;
+    m->state = ApplianceIdle;
 
     LogFlowFunc(("rc=%Rhrc\n", rc));
     LogFlowFuncLeave();
@@ -2174,6 +3757,13 @@ HRESULT Appliance::i_importDoIt(TaskOVF *pTask, AutoWriteLockBase &rWriteLock, R
 
             /* We should've processed all the files now, so compare. */
             hrc = i_verifyManifestFile(stack);
+
+            /* If everything was successful so far check if some extension
+             * pack wants to do file sanity checking. */
+            if (SUCCEEDED(hrc))
+            {
+                /** @todo */;
+            }
         }
         catch (HRESULT hrcXcpt)
         {
@@ -2252,7 +3842,7 @@ HRESULT Appliance::i_verifyManifestFile(ImportStack &stack)
                 vrc = RTManifestEntrySetAttr(m->hTheirManifest, m->strOvfManifestEntry.c_str(),
                                              NULL /*pszAttr*/, szDigest, fType);
             if (RT_FAILURE(vrc))
-                return setError(VBOX_E_IPRT_ERROR, tr("Error fudging missing OVF digest in manifest: %Rrc"), vrc);
+                return setErrorBoth(VBOX_E_IPRT_ERROR, vrc, tr("Error fudging missing OVF digest in manifest: %Rrc"), vrc);
         }
 
         /*
@@ -2267,7 +3857,9 @@ HRESULT Appliance::i_verifyManifestFile(ImportStack &stack)
          */
         char szErr[256];
         vrc = RTManifestEqualsEx(m->hTheirManifest, m->hOurManifest, NULL /*papszIgnoreEntries*/,
-                                 NULL /*papszIgnoreAttrs*/, RTMANIFEST_EQUALS_IGN_MISSING_ATTRS, szErr, sizeof(szErr));
+                                 NULL /*papszIgnoreAttrs*/,
+                                 RTMANIFEST_EQUALS_IGN_MISSING_ATTRS | RTMANIFEST_EQUALS_IGN_MISSING_ENTRIES_2ND,
+                                 szErr, sizeof(szErr));
         if (RT_SUCCESS(vrc))
             hrc = S_OK;
         else
@@ -2285,7 +3877,7 @@ HRESULT Appliance::i_verifyManifestFile(ImportStack &stack)
  *
  * @param hdc in: the HardDiskController structure to attach to.
  * @param ulAddressOnParent in: the AddressOnParent parameter from OVF.
- * @param controllerName out: the name of the hard disk controller to attach to (e.g. "IDE").
+ * @param controllerName out: the name of the storage controller to attach to (e.g. "IDE").
  * @param lControllerPort out: the channel (controller port) of the controller to attach to.
  * @param lDevice out: the device number to attach to.
  */
@@ -2315,66 +3907,72 @@ void Appliance::i_convertDiskAttachmentValues(const ovf::HardDiskController &hdc
                     if (!hdc.fPrimary)
                     {
                         // secondary master
-                        lControllerPort = (long)1;
-                        lDevice = (long)0;
+                        lControllerPort = 1;
+                        lDevice         = 0;
                     }
                     else // primary master
                     {
-                        lControllerPort = (long)0;
-                        lDevice = (long)0;
+                        lControllerPort = 0;
+                        lDevice         = 0;
                     }
-                break;
+                    break;
 
                 case 1: // slave
                     if (!hdc.fPrimary)
                     {
                         // secondary slave
-                        lControllerPort = (long)1;
-                        lDevice = (long)1;
+                        lControllerPort = 1;
+                        lDevice         = 1;
                     }
                     else // primary slave
                     {
-                        lControllerPort = (long)0;
-                        lDevice = (long)1;
+                        lControllerPort = 0;
+                        lDevice         = 1;
                     }
-                break;
+                    break;
 
                 // used by older VBox exports
                 case 2:     // interpret this as secondary master
-                    lControllerPort = (long)1;
-                    lDevice = (long)0;
-                break;
+                    lControllerPort = 1;
+                    lDevice         = 0;
+                    break;
 
                 // used by older VBox exports
                 case 3:     // interpret this as secondary slave
-                    lControllerPort = (long)1;
-                    lDevice = (long)1;
-                break;
+                    lControllerPort = 1;
+                    lDevice         = 1;
+                    break;
 
                 default:
                     throw setError(VBOX_E_NOT_SUPPORTED,
-                                   tr("Invalid channel %RI16 specified; IDE controllers support only 0, 1 or 2"),
+                                   tr("Invalid channel %RU32 specified; IDE controllers support only 0, 1 or 2"),
                                    ulAddressOnParent);
-                break;
+                    break;
             }
-        break;
+            break;
 
         case ovf::HardDiskController::SATA:
-            controllerName = "SATA";
-            lControllerPort = (long)ulAddressOnParent;
-            lDevice = (long)0;
-        break;
+            controllerName  = "SATA";
+            lControllerPort = (int32_t)ulAddressOnParent;
+            lDevice         = 0;
+            break;
 
         case ovf::HardDiskController::SCSI:
         {
-            if(hdc.strControllerType.compare("lsilogicsas")==0)
+            if (hdc.strControllerType.compare("lsilogicsas")==0)
                 controllerName = "SAS";
             else
                 controllerName = "SCSI";
-            lControllerPort = (long)ulAddressOnParent;
-            lDevice = (long)0;
+            lControllerPort = (int32_t)ulAddressOnParent;
+            lDevice         = 0;
+            break;
         }
-        break;
+
+        case ovf::HardDiskController::VIRTIOSCSI:
+            controllerName  = "VirtioSCSI";
+            lControllerPort = (int32_t)ulAddressOnParent;
+            lDevice         = 0;
+            break;
 
         default: break;
     }
@@ -2383,7 +3981,7 @@ void Appliance::i_convertDiskAttachmentValues(const ovf::HardDiskController &hdc
 }
 
 /**
- * Imports one disk image.
+ * Imports one image.
  *
  * This is common code shared between
  *  --  i_importMachineGeneric() for the OVF case; in that case the information comes from
@@ -2394,30 +3992,29 @@ void Appliance::i_convertDiskAttachmentValues(const ovf::HardDiskController &hdc
  * Both ways of describing machines use the OVF disk references section, so in both cases
  * the caller needs to pass in the ovf::DiskImage structure from ovfreader.cpp.
  *
- * As a result, in both cases, if di.strHref is empty, we create a new disk as per the OVF
+ * As a result, in both cases, if di.strHref is empty, we create a new image as per the OVF
  * spec, even though this cannot really happen in the vbox:Machine case since such data
  * would never have been exported.
  *
- * This advances stack.pProgress by one operation with the disk's weight.
+ * This advances stack.pProgress by one operation with the image's weight.
  *
- * @param di ovfreader.cpp structure describing the disk image from the OVF that is to be imported
- * @param strTargetPath Where to create the target image.
- * @param pTargetHD out: The newly created target disk. This also gets pushed on stack.llHardDisksCreated for cleanup.
+ * @param di ovfreader.cpp structure describing the image from the OVF that is to be imported
+ * @param strDstPath Where to create the target image.
+ * @param pTargetMedium out: The newly created target medium. This also gets pushed on stack.llHardDisksCreated for cleanup.
  * @param stack
+ *
+ * @throws HRESULT
  */
 void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
-                                     Utf8Str *pStrDstPath,
-                                     ComObjPtr<Medium> &pTargetHD,
+                                     const Utf8Str &strDstPath,
+                                     ComObjPtr<Medium> &pTargetMedium,
                                      ImportStack &stack)
 {
-    ComObjPtr<Progress> pProgress;
-    pProgress.createObject();
-    HRESULT rc = pProgress->init(mVirtualBox,
-                                 static_cast<IAppliance*>(this),
-                                 BstrFmt(tr("Creating medium '%s'"),
-                                 pStrDstPath->c_str()).raw(),
-                                 TRUE);
-    if (FAILED(rc)) throw rc;
+    HRESULT rc;
+
+    Utf8Str strAbsDstPath;
+    int vrc = RTPathAbsExCxx(strAbsDstPath, stack.strMachineFolder, strDstPath);
+    AssertRCStmt(vrc, throw Global::vboxStatusCodeToCOM(vrc));
 
     /* Get the system properties. */
     SystemProperties *pSysProps = mVirtualBox->i_getSystemProperties();
@@ -2436,14 +4033,18 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
         strSrcFilePath.append(strSourceOVF);
     }
 
-    /* First of all check if the path is an UUID. If so, the user like to
-     * import the disk into an existing path. This is useful for iSCSI for
-     * example. */
+    /* First of all check if the original (non-absolute) destination path is
+     * a valid medium UUID. If so, the user wants to import the image into
+     * an existing path. This is useful for iSCSI for example. */
+    /** @todo r=klaus the code structure after this point is totally wrong,
+     * full of unnecessary code duplication and other issues. 4.2 still had
+     * the right structure for importing into existing medium objects, which
+     * the current code can't possibly handle. */
     RTUUID uuid;
-    int vrc = RTUuidFromStr(&uuid, pStrDstPath->c_str());
+    vrc = RTUuidFromStr(&uuid, strDstPath.c_str());
     if (vrc == VINF_SUCCESS)
     {
-        rc = mVirtualBox->i_findHardDiskById(Guid(uuid), true, &pTargetHD);
+        rc = mVirtualBox->i_findHardDiskById(Guid(uuid), true, &pTargetMedium);
         if (FAILED(rc)) throw rc;
     }
     else
@@ -2451,7 +4052,7 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
         RTVFSIOSTREAM hVfsIosSrc = NIL_RTVFSIOSTREAM;
 
         /* check read file to GZIP compression */
-        bool const fGzipped = di.strCompression.compare("gzip",Utf8Str::CaseInsensitive) == 0;
+        bool const fGzipped = di.strCompression.compare("gzip", Utf8Str::CaseInsensitive) == 0;
         Utf8Str strDeleteTemp;
         try
         {
@@ -2460,7 +4061,7 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
             Bstr bstrFormatName;
             ULONG lCabs = 0;
 
-            char *pszSuff = RTPathSuffix(pStrDstPath->c_str());
+            char *pszSuff = RTPathSuffix(strAbsDstPath.c_str());
             if (pszSuff != NULL)
             {
                 /*
@@ -2490,9 +4091,9 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
                     /* change the target extension */
                     strTrgFormat = "vdi";
                     trgFormat = pSysProps->i_mediumFormatFromExtension(strTrgFormat);
-                    *pStrDstPath = pStrDstPath->stripSuffix();
-                    *pStrDstPath = pStrDstPath->append(".");
-                    *pStrDstPath = pStrDstPath->append(strTrgFormat.c_str());
+                    strAbsDstPath.stripSuffix();
+                    strAbsDstPath.append(".");
+                    strAbsDstPath.append(strTrgFormat.c_str());
                 }
 
                 /* Check the capabilities. We need create capabilities. */
@@ -2510,17 +4111,14 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
                     && !(lCabs & MediumFormatCapabilities_CreateDynamic) )
                     throw setError(VBOX_E_NOT_SUPPORTED,
                                    tr("Could not find a valid medium format for the target disk '%s'"),
-                                   pStrDstPath->c_str());
+                                   strAbsDstPath.c_str());
             }
             else
             {
                 throw setError(VBOX_E_FILE_ERROR,
                                tr("The target disk '%s' has no extension "),
-                               pStrDstPath->c_str(), VERR_INVALID_NAME);
+                               strAbsDstPath.c_str(), VERR_INVALID_NAME);
             }
-
-            /* Create an IMedium object. */
-            pTargetHD.createObject();
 
             /*CD/DVD case*/
             if (strTrgFormat.compare("RAW", Utf8Str::CaseInsensitive) == 0)
@@ -2528,9 +4126,21 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
                 try
                 {
                     if (fGzipped)
-                        i_importDecompressFile(stack, strSrcFilePath, *pStrDstPath, strSourceOVF.c_str());
+                        i_importDecompressFile(stack, strSrcFilePath, strAbsDstPath, strSourceOVF.c_str());
                     else
-                        i_importCopyFile(stack, strSrcFilePath, *pStrDstPath, strSourceOVF.c_str());
+                        i_importCopyFile(stack, strSrcFilePath, strAbsDstPath, strSourceOVF.c_str());
+
+                    ComPtr<IMedium> pTmp;
+                    rc = mVirtualBox->OpenMedium(Bstr(strAbsDstPath).raw(),
+                                                 DeviceType_DVD,
+                                                 AccessMode_ReadWrite,
+                                                 false,
+                                                 pTmp.asOutParam());
+                    if (FAILED(rc))
+                        throw rc;
+
+                    IMedium *iM = pTmp;
+                    pTargetMedium = static_cast<Medium*>(iM);
                 }
                 catch (HRESULT /*arc*/)
                 {
@@ -2545,36 +4155,33 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
             }
             else/* HDD case*/
             {
-                rc = pTargetHD->init(mVirtualBox,
-                                     strTrgFormat,
-                                     *pStrDstPath,
-                                     Guid::Empty /* media registry: none yet */,
-                                     DeviceType_HardDisk);
+                /* Create an IMedium object. */
+                pTargetMedium.createObject();
+
+                rc = pTargetMedium->init(mVirtualBox,
+                                         strTrgFormat,
+                                         strAbsDstPath,
+                                         Guid::Empty /* media registry: none yet */,
+                                         DeviceType_HardDisk);
                 if (FAILED(rc)) throw rc;
 
-                /* Now create an empty hard disk. */
-                rc = mVirtualBox->CreateMedium(Bstr(strTrgFormat).raw(),
-                                               Bstr(*pStrDstPath).raw(),
-                                               AccessMode_ReadWrite, DeviceType_HardDisk,
-                                               ComPtr<IMedium>(pTargetHD).asOutParam());
-                if (FAILED(rc)) throw rc;
-
+                ComPtr<IProgress> pProgressImport;
                 /* If strHref is empty we have to create a new file. */
                 if (strSourceOVF.isEmpty())
                 {
                     com::SafeArray<MediumVariant_T>  mediumVariant;
                     mediumVariant.push_back(MediumVariant_Standard);
 
-                    /* Kick of the creation of a dynamic growing disk image with the given capacity. */
-                    rc = pTargetHD->CreateBaseStorage(di.iCapacity / _1M,
-                                                      ComSafeArrayAsInParam(mediumVariant),
-                                                      ComPtr<IProgress>(pProgress).asOutParam());
+                    /* Kick off the creation of a dynamic growing disk image with the given capacity. */
+                    rc = pTargetMedium->CreateBaseStorage(di.iCapacity / _1M,
+                                                          ComSafeArrayAsInParam(mediumVariant),
+                                                          pProgressImport.asOutParam());
                     if (FAILED(rc)) throw rc;
 
                     /* Advance to the next operation. */
                     /* operation's weight, as set up with the IProgress originally */
                     stack.pProgress->SetNextOperation(BstrFmt(tr("Creating disk image '%s'"),
-                                                      pStrDstPath->c_str()).raw(),
+                                                      strAbsDstPath.c_str()).raw(),
                                                       di.ulSuggestedSizeMB);
                 }
                 else
@@ -2593,7 +4200,7 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
                     /* If gzipped, decompress the GZIP file and save a new file in the target path */
                     if (fGzipped)
                     {
-                        Utf8Str strTargetFilePath(*pStrDstPath);
+                        Utf8Str strTargetFilePath(strAbsDstPath);
                         strTargetFilePath.stripFilename();
                         strTargetFilePath.append(RTPATH_SLASH_STR);
                         strTargetFilePath.append("temp_");
@@ -2627,12 +4234,25 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
 
                     /* Start the source image cloning operation. */
                     ComObjPtr<Medium> nullParent;
-                    rc = pTargetHD->i_importFile(strSrcFilePath.c_str(),
-                                                 srcFormat,
-                                                 MediumVariant_Standard,
-                                                 hVfsIosReadAhead,
-                                                 nullParent,
-                                                 pProgress);
+                    ComObjPtr<Progress> pProgressImportTmp;
+                    rc = pProgressImportTmp.createObject();
+                    if (FAILED(rc)) throw rc;
+                    rc = pProgressImportTmp->init(mVirtualBox,
+                                                  static_cast<IAppliance*>(this),
+                                                  Utf8StrFmt(tr("Importing medium '%s'"),
+                                                             strAbsDstPath.c_str()),
+                                                  TRUE);
+                    if (FAILED(rc)) throw rc;
+                    pProgressImportTmp.queryInterfaceTo(pProgressImport.asOutParam());
+                    /* pProgressImportTmp is in parameter for Medium::i_importFile,
+                     * which is somewhat unusual and might be changed later. */
+                    rc = pTargetMedium->i_importFile(strSrcFilePath.c_str(),
+                                                     srcFormat,
+                                                     MediumVariant_Standard,
+                                                     hVfsIosReadAhead,
+                                                     nullParent,
+                                                     pProgressImportTmp,
+                                                     true /* aNotify */);
                     RTVfsIoStrmRelease(hVfsIosReadAhead);
                     hVfsIosSrc = NIL_RTVFSIOSTREAM;
                     if (FAILED(rc))
@@ -2645,10 +4265,15 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
                                                       di.ulSuggestedSizeMB);
                 }
 
-                /* Now wait for the background disk operation to complete; this throws
+                /* Now wait for the background import operation to complete; this throws
                  * HRESULTs on error. */
-                ComPtr<IProgress> pp(pProgress);
-                i_waitForAsyncProgress(stack.pProgress, pp);
+                stack.pProgress->WaitForOtherProgressCompletion(pProgressImport, 0 /* indefinite wait */);
+
+                /* The creating/importing has placed the medium in the global
+                 * media registry since the VM isn't created yet. Remove it
+                 * again to let it added to the right registry when the VM
+                 * has been created below. */
+                pTargetMedium->i_removeRegistry(mVirtualBox->i_getGlobalRegistryId());
             }
         }
         catch (...)
@@ -2683,14 +4308,16 @@ void Appliance::i_importOneDiskImage(const ovf::DiskImage &di,
  * up any leftovers from this function. For this, the given ImportStack instance has received information
  * about what needs cleaning up (to support rollback).
  *
- * @param vsysThis OVF virtual system (machine) to import.
- * @param vsdescThis  Matching virtual system description (machine) to import.
- * @param pNewMachine out: Newly created machine.
- * @param stack Cleanup stack for when this throws.
+ * @param       vsysThis        OVF virtual system (machine) to import.
+ * @param       vsdescThis      Matching virtual system description (machine) to import.
+ * @param[out]  pNewMachineRet  Newly created machine.
+ * @param       stack           Cleanup stack for when this throws.
+ *
+ * @throws HRESULT
  */
 void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                                        ComObjPtr<VirtualSystemDescription> &vsdescThis,
-                                       ComPtr<IMachine> &pNewMachine,
+                                       ComPtr<IMachine> &pNewMachineRet,
                                        ImportStack &stack)
 {
     LogFlowFuncEnter();
@@ -2703,14 +4330,18 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
     if (FAILED(rc)) throw rc;
 
     /* Create the machine */
-    SafeArray<BSTR> groups; /* no groups */
-    rc = mVirtualBox->CreateMachine(NULL, /* machine name: use default */
+    SafeArray<BSTR> groups; /* no groups, or maybe one group... */
+    if (!stack.strPrimaryGroup.isEmpty() && stack.strPrimaryGroup != "/")
+        Bstr(stack.strPrimaryGroup).detachTo(groups.appendedRaw());
+    ComPtr<IMachine> pNewMachine;
+    rc = mVirtualBox->CreateMachine(Bstr(stack.strSettingsFilename).raw(),
                                     Bstr(stack.strNameVBox).raw(),
                                     ComSafeArrayAsInParam(groups),
                                     Bstr(stack.strOsTypeVBox).raw(),
                                     NULL, /* aCreateFlags */
                                     pNewMachine.asOutParam());
     if (FAILED(rc)) throw rc;
+    pNewMachineRet = pNewMachine;
 
     // set the description
     if (!stack.strDescription.isEmpty())
@@ -2740,7 +4371,10 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
     if (FAILED(rc)) throw rc;
 
     /* Set the VRAM */
-    rc = pNewMachine->COMSETTER(VRAMSize)(vramVBox);
+    ComPtr<IGraphicsAdapter> pGraphicsAdapter;
+    rc = pNewMachine->COMGETTER(GraphicsAdapter)(pGraphicsAdapter.asOutParam());
+    if (FAILED(rc)) throw rc;
+    rc = pGraphicsAdapter->COMSETTER(VRAMSize)(vramVBox);
     if (FAILED(rc)) throw rc;
 
     // I/O APIC: Generic OVF has no setting for this. Enable it if we
@@ -2763,6 +4397,22 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
         if (FAILED(rc)) throw rc;
 
         rc = pBIOSSettings->COMSETTER(IOAPICEnabled)(TRUE);
+        if (FAILED(rc)) throw rc;
+    }
+
+    if (stack.strFirmwareType.isNotEmpty())
+    {
+        FirmwareType_T firmwareType = FirmwareType_BIOS;
+        if (stack.strFirmwareType.contains("EFI"))
+        {
+            if (stack.strFirmwareType.contains("32"))
+                firmwareType = FirmwareType_EFI32;
+            if (stack.strFirmwareType.contains("64"))
+                firmwareType = FirmwareType_EFI64;
+            else
+                firmwareType = FirmwareType_EFI;
+        }
+        rc = pNewMachine->COMSETTER(FirmwareType)(firmwareType);
         if (FAILED(rc)) throw rc;
     }
 
@@ -2805,7 +4455,7 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
     else if (vsdeNW.size() > maxNetworkAdapters)
         throw setError(VBOX_E_FILE_ERROR,
                        tr("Too many network adapters: OVF requests %d network adapters, "
-                          "but VirtualBox only supports %d"),
+                          "but VirtualBox only supports %d", "", vsdeNW.size()),
                        vsdeNW.size(), maxNetworkAdapters);
     else
     {
@@ -2933,7 +4583,7 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
         }
     }
 
-    // IDE Hard disk controller
+    // Storage controller IDE
     std::list<VirtualSystemDescriptionEntry*> vsdeHDCIDE =
         vsdescThis->i_findByType(VirtualSystemDescriptionType_HardDiskControllerIDE);
     /*
@@ -2966,7 +4616,7 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
         if (FAILED(rc)) throw rc;
     }
 
-    /* Hard disk controller SATA */
+    /* Storage controller SATA */
     std::list<VirtualSystemDescriptionEntry*> vsdeHDCSATA =
         vsdescThis->i_findByType(VirtualSystemDescriptionType_HardDiskControllerSATA);
     if (vsdeHDCSATA.size() > 1)
@@ -2989,7 +4639,7 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                            hdcVBox.c_str());
     }
 
-    /* Hard disk controller SCSI */
+    /* Storage controller SCSI */
     std::list<VirtualSystemDescriptionEntry*> vsdeHDCSCSI =
         vsdescThis->i_findByType(VirtualSystemDescriptionType_HardDiskControllerSCSI);
     if (vsdeHDCSCSI.size() > 1)
@@ -3024,7 +4674,7 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
         if (FAILED(rc)) throw rc;
     }
 
-    /* Hard disk controller SAS */
+    /* Storage controller SAS */
     std::list<VirtualSystemDescriptionEntry*> vsdeHDCSAS =
         vsdescThis->i_findByType(VirtualSystemDescriptionType_HardDiskControllerSAS);
     if (vsdeHDCSAS.size() > 1)
@@ -3041,7 +4691,35 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
         if (FAILED(rc)) throw rc;
     }
 
-    /* Now its time to register the machine before we add any hard disks */
+
+    /* Storage controller VirtioSCSI */
+    std::list<VirtualSystemDescriptionEntry*> vsdeHDCVirtioSCSI =
+        vsdescThis->i_findByType(VirtualSystemDescriptionType_HardDiskControllerVirtioSCSI);
+    if (vsdeHDCVirtioSCSI.size() > 1)
+        throw setError(VBOX_E_FILE_ERROR,
+                       tr("Too many VirtioSCSI controllers in OVF; import facility only supports one"));
+    if (!vsdeHDCVirtioSCSI.empty())
+    {
+        ComPtr<IStorageController> pController;
+        Utf8Str strName("VirtioSCSI");
+        const Utf8Str &hdcVBox = vsdeHDCVirtioSCSI.front()->strVBoxCurrent;
+        if (hdcVBox == "VirtioSCSI")
+        {
+            rc = pNewMachine->AddStorageController(Bstr(strName).raw(),
+                                                   StorageBus_VirtioSCSI,
+                                                   pController.asOutParam());
+            if (FAILED(rc)) throw rc;
+
+            rc = pController->COMSETTER(ControllerType)(StorageControllerType_VirtioSCSI);
+            if (FAILED(rc)) throw rc;
+        }
+        else
+            throw setError(VBOX_E_FILE_ERROR,
+                           tr("Invalid VirtioSCSI controller type \"%s\""),
+                           hdcVBox.c_str());
+    }
+
+    /* Now its time to register the machine before we add any storage devices */
     rc = mVirtualBox->RegisterMachine(pNewMachine);
     if (FAILED(rc)) throw rc;
 
@@ -3111,7 +4789,7 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
             rc = sMachine->SaveSettings();
             if (FAILED(rc)) throw rc;
 
-            // only now that we're done with all disks, close the session
+            // only now that we're done with all storage devices, close the session
             rc = stack.pSession->UnlockMachine();
             if (FAILED(rc)) throw rc;
             stack.fSessionOpen = false;
@@ -3126,11 +4804,11 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
             if (info.isFullAvailable())
                 throw setError(aRC, Utf8Str(info.getText()).c_str());
             else
-                throw setError(aRC, "Unknown error during OVF import");
+                throw setError(aRC, tr("Unknown error during OVF import"));
         }
     }
 
-    // create the hard disks & connect them to the appropriate controllers
+    // create the storage devices & connect them to the appropriate controllers
     std::list<VirtualSystemDescriptionEntry*> avsdeHDs = vsdescThis->i_findByType(VirtualSystemDescriptionType_HardDiskImage);
     if (!avsdeHDs.empty())
     {
@@ -3176,8 +4854,8 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                 ovf::DiskImage diCurrent = oit->second;
 
                 Log(("diCurrent.strDiskId=%s diCurrent.strHref=%s\n", diCurrent.strDiskId.c_str(), diCurrent.strHref.c_str()));
-                /* Iterate over all given disk images of the virtual system
-                 * disks description. We need to find the target disk path,
+                /* Iterate over all given images of the virtual system
+                 * description. We need to find the target image path,
                  * which could be changed by the user. */
                 VirtualSystemDescriptionEntry *vsdeTargetHD = NULL;
                 for (list<VirtualSystemDescriptionEntry*>::const_iterator itHD = avsdeHDs.begin();
@@ -3193,7 +4871,7 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                 }
                 if (!vsdeTargetHD)
                 {
-                    /* possible case if a disk image belongs to other virtual system (OVF package with multiple VMs inside) */
+                    /* possible case if an image belongs to other virtual system (OVF package with multiple VMs inside) */
                     Log1Warning(("OVA/OVF import: Disk image %s was missed during import of VM %s\n",
                                  oit->first.c_str(), vmNameEntry->strOvf.c_str()));
                     NOREF(vmNameEntry);
@@ -3201,8 +4879,8 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                     continue;
                 }
 
-                //diCurrent.strDiskId contains the disk identifier (e.g. "vmdisk1"), which should exist
-                //in the virtual system's disks map under that ID and also in the global images map
+                //diCurrent.strDiskId contains the image identifier (e.g. "vmdisk1"), which should exist
+                //in the virtual system's images map under that ID and also in the global images map
                 ovf::VirtualDisksMap::const_iterator itVDisk = vsysThis.mapVirtualDisks.find(diCurrent.strDiskId);
                 if (itVDisk == vsysThis.mapVirtualDisks.end())
                     throw setError(E_FAIL,
@@ -3219,7 +4897,7 @@ void Appliance::i_importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                     std::set<RTCString>::const_iterator h = disksResolvedNames.find(diCurrent.strHref);
                     if (h != disksResolvedNames.end())
                     {
-                        /* Yes, disk name was found, we can skip it*/
+                        /* Yes, image name was found, we can skip it*/
                         ++oit;
                         continue;
                     }
@@ -3230,9 +4908,9 @@ l_skipped:
                         /* current opened file isn't the same as passed one */
                         if (RTStrICmp(diCurrent.strHref.c_str(), stack.pszOvaLookAheadName) != 0)
                         {
-                            /* availableImage contains the disk file reference (e.g. "disk1.vmdk"), which should
+                            /* availableImage contains the image file reference (e.g. "disk1.vmdk"), which should
                              * exist in the global images map.
-                             * And find the disk from the OVF's disk list */
+                             * And find the image from the OVF's disk list */
                             ovf::DiskImagesMap::const_iterator itDiskImage;
                             for (itDiskImage = stack.mapDisks.begin();
                                  itDiskImage != stack.mapDisks.end();
@@ -3247,12 +4925,12 @@ l_skipped:
                                 goto l_skipped;
                             }
 
-                            /* replace with a new found disk image */
+                            /* replace with a new found image */
                             diCurrent = *(&itDiskImage->second);
 
                             /*
-                             * Again iterate over all given disk images of the virtual system
-                             * disks description using the found disk image
+                             * Again iterate over all given images of the virtual system
+                             * description using the found image
                              */
                             for (list<VirtualSystemDescriptionEntry*>::const_iterator itHD = avsdeHDs.begin();
                                  itHD != avsdeHDs.end();
@@ -3294,32 +4972,46 @@ l_skipped:
                 }
                 else
                 {
-                    /* just continue with normal files*/
+                    /* just continue with normal files */
                     ++oit;
                 }
 
-                /* very important to store disk name for the next checks */
+                /* very important to store image name for the next checks */
                 disksResolvedNames.insert(diCurrent.strHref);
 ////// end of duplicated code.
                 const ovf::VirtualDisk &ovfVdisk = itVDisk->second;
 
-                ComObjPtr<Medium> pTargetHD;
+                ComObjPtr<Medium> pTargetMedium;
+                if (stack.locInfo.storageType == VFSType_Cloud)
+                {
+                    /* We have already all disks prepared (converted and registered in the VBox)
+                     * and in the correct place (VM machine folder).
+                     * so what is needed is to get the disk uuid from VirtualDisk::strDiskId
+                     * and find the Medium object with this uuid.
+                     * next just attach the Medium object to new VM.
+                     * VirtualDisk::strDiskId is filled in the */
 
-                Utf8Str savedVBoxCurrent = vsdeTargetHD->strVBoxCurrent;
+                    Guid id(ovfVdisk.strDiskId);
+                    rc = mVirtualBox->i_findHardDiskById(id, false, &pTargetMedium);
+                    if (FAILED(rc))
+                        throw rc;
+                }
+                else
+                {
+                    i_importOneDiskImage(diCurrent,
+                                         vsdeTargetHD->strVBoxCurrent,
+                                         pTargetMedium,
+                                         stack);
+                }
 
-                i_importOneDiskImage(diCurrent,
-                                     &vsdeTargetHD->strVBoxCurrent,
-                                     pTargetHD,
-                                     stack);
-
-                // now use the new uuid to attach the disk image to our new machine
+                // now use the new uuid to attach the medium to our new machine
                 ComPtr<IMachine> sMachine;
                 rc = stack.pSession->COMGETTER(Machine)(sMachine.asOutParam());
                 if (FAILED(rc))
                     throw rc;
 
                 // find the hard disk controller to which we should attach
-                ovf::HardDiskController hdc = (*vsysThis.mapControllers.find(ovfVdisk.idController)).second;
+                ovf::HardDiskController hdc = (*vsysThis.mapControllers.find(ovfVdisk.strIdController)).second;
 
                 // this is for rollback later
                 MyHardDiskAttachment mhda;
@@ -3332,61 +5024,26 @@ l_skipped:
                                               mhda.lDevice);
 
                 Log(("Attaching disk %s to port %d on device %d\n",
-                vsdeTargetHD->strVBoxCurrent.c_str(), mhda.lControllerPort, mhda.lDevice));
+                     vsdeTargetHD->strVBoxCurrent.c_str(), mhda.lControllerPort, mhda.lDevice));
 
-                ComObjPtr<MediumFormat> mediumFormat;
-                rc = i_findMediumFormatFromDiskImage(diCurrent, mediumFormat);
+                DeviceType_T devType = DeviceType_Null;
+                rc = pTargetMedium->COMGETTER(DeviceType)(&devType);
                 if (FAILED(rc))
                     throw rc;
 
-                Bstr bstrFormatName;
-                rc = mediumFormat->COMGETTER(Name)(bstrFormatName.asOutParam());
+                rc = sMachine->AttachDevice(Bstr(mhda.controllerName).raw(),// name
+                                            mhda.lControllerPort,     // long controllerPort
+                                            mhda.lDevice,             // long device
+                                            devType,                  // DeviceType_T type
+                                            pTargetMedium);
                 if (FAILED(rc))
                     throw rc;
-
-                Utf8Str vdf = Utf8Str(bstrFormatName);
-
-                if (vdf.compare("RAW", Utf8Str::CaseInsensitive) == 0)
-                {
-                    ComPtr<IMedium> dvdImage(pTargetHD);
-
-                    rc = mVirtualBox->OpenMedium(Bstr(vsdeTargetHD->strVBoxCurrent).raw(),
-                                                 DeviceType_DVD,
-                                                 AccessMode_ReadWrite,
-                                                 false,
-                                                 dvdImage.asOutParam());
-
-                    if (FAILED(rc))
-                        throw rc;
-
-                    rc = sMachine->AttachDevice(Bstr(mhda.controllerName).raw(),// name
-                                                mhda.lControllerPort,     // long controllerPort
-                                                mhda.lDevice,             // long device
-                                                DeviceType_DVD,           // DeviceType_T type
-                                                dvdImage);
-                    if (FAILED(rc))
-                        throw rc;
-                }
-                else
-                {
-                    rc = sMachine->AttachDevice(Bstr(mhda.controllerName).raw(),// name
-                                                mhda.lControllerPort,     // long controllerPort
-                                                mhda.lDevice,             // long device
-                                                DeviceType_HardDisk,      // DeviceType_T type
-                                                pTargetHD);
-
-                    if (FAILED(rc))
-                        throw rc;
-                }
 
                 stack.llHardDiskAttachments.push_back(mhda);
 
                 rc = sMachine->SaveSettings();
                 if (FAILED(rc))
                     throw rc;
-
-                /* restore */
-                vsdeTargetHD->strVBoxCurrent = savedVBoxCurrent;
 
                 ++cImportedDisks;
 
@@ -3416,7 +5073,7 @@ l_skipped:
             if (info.isFullAvailable())
                 throw setError(aRC, Utf8Str(info.getText()).c_str());
             else
-                throw setError(aRC, "Unknown error during OVF import");
+                throw setError(aRC, tr("Unknown error during OVF import"));
         }
     }
     LogFlowFuncLeave();
@@ -3447,9 +5104,9 @@ l_skipped:
  *
  *  4)  Create the VirtualBox machine with the modfified machine config.
  *
- * @param config
- * @param pNewMachine
- * @param stack
+ * @param   vsdescThis
+ * @param   pReturnNewMachine
+ * @param   stack
  */
 void Appliance::i_importVBoxMachine(ComObjPtr<VirtualSystemDescription> &vsdescThis,
                                     ComPtr<IMachine> &pReturnNewMachine,
@@ -3469,6 +5126,19 @@ void Appliance::i_importVBoxMachine(ComObjPtr<VirtualSystemDescription> &vsdescT
 
     /* OS Type */
     config.machineUserData.strOsType = stack.strOsTypeVBox;
+    /* Groups */
+    if (stack.strPrimaryGroup.isEmpty() || stack.strPrimaryGroup == "/")
+    {
+        config.machineUserData.llGroups.clear();
+        config.machineUserData.llGroups.push_back("/");
+    }
+    else
+    {
+        /* Replace the primary group if there is one, otherwise add it. */
+        if (config.machineUserData.llGroups.size())
+            config.machineUserData.llGroups.pop_front();
+        config.machineUserData.llGroups.push_front(stack.strPrimaryGroup);
+    }
     /* Description */
     config.machineUserData.strDescription = stack.strDescription;
     /* CPU count & extented attributes */
@@ -3493,20 +5163,21 @@ void Appliance::i_importVBoxMachine(ComObjPtr<VirtualSystemDescription> &vsdescT
     {
         /** @todo r=klaus add support for arbitrary USB controller types, this can't handle
          *  multiple controllers due to its design anyway */
-        /* usually the OHCI controller is enabled already, need to check */
+        /* Usually the OHCI controller is enabled already, need to check. But
+         * do this only if there is no xHCI controller. */
         bool fOHCIEnabled = false;
+        bool fXHCIEnabled = false;
         settings::USBControllerList &llUSBControllers = config.hardwareMachine.usbSettings.llUSBControllers;
         settings::USBControllerList::iterator it;
         for (it = llUSBControllers.begin(); it != llUSBControllers.end(); ++it)
         {
             if (it->enmType == USBControllerType_OHCI)
-            {
                 fOHCIEnabled = true;
-                break;
-            }
+            if (it->enmType == USBControllerType_XHCI)
+                fXHCIEnabled = true;
         }
 
-        if (!fOHCIEnabled)
+        if (!fXHCIEnabled && !fOHCIEnabled)
         {
             settings::USBController ctrl;
             ctrl.strName = "OHCI";
@@ -3557,7 +5228,7 @@ void Appliance::i_importVBoxMachine(ComObjPtr<VirtualSystemDescription> &vsdescT
             if (   vsdeNW->strExtraConfigCurrent.startsWith("slot=", Utf8Str::CaseInsensitive)
                 && vsdeNW->strExtraConfigCurrent.length() > 6)
             {
-                uint32_t iSlot = vsdeNW->strExtraConfigCurrent.substr(5, 1).toUInt32();
+                uint32_t iSlot = vsdeNW->strExtraConfigCurrent.substr(5).toUInt32();
                 /* Iterate through all network adapters in the machine config. */
                 for (it1 = llNetworkAdapters.begin();
                      it1 != llNetworkAdapters.end();
@@ -3748,6 +5419,7 @@ l_skipped:
                      * Again iterate over all given disk images of the virtual system
                      * disks description using the found disk image
                      */
+                    vsdeTargetHD = NULL;
                     for (list<VirtualSystemDescriptionEntry*>::const_iterator itHD = avsdeHDs.begin();
                          itHD != avsdeHDs.end();
                          ++itHD)
@@ -3805,25 +5477,6 @@ l_skipped:
         {
             settings::StorageController &sc = *sit;
 
-            // find the OVF virtual system description entry for this storage controller
-/** @todo
- * r=bird: What on earh this is switch supposed to do?  (I've added the default:break;, so don't
- * get confused by it.)  Kind of looks like it's supposed to do something error handling related
- * in the default case...
- */
-            switch (sc.storageBus)
-            {
-                case StorageBus_SATA:
-                    break;
-                case StorageBus_SCSI:
-                    break;
-                case StorageBus_IDE:
-                    break;
-                case StorageBus_SAS:
-                    break;
-                default: break; /* Shut up MSC. */
-            }
-
             // for each medium attachment to this controller...
             for (settings::AttachedDevicesList::iterator dit = sc.llAttachedDevices.begin();
                  dit != sc.llAttachedDevices.end();
@@ -3861,55 +5514,17 @@ l_skipped:
                 /*
                  * step 3: import disk
                  */
-                Utf8Str savedVBoxCurrent = vsdeTargetHD->strVBoxCurrent;
-                ComObjPtr<Medium> pTargetHD;
-
+                ComObjPtr<Medium> pTargetMedium;
                 i_importOneDiskImage(diCurrent,
-                                     &vsdeTargetHD->strVBoxCurrent,
-                                     pTargetHD,
+                                     vsdeTargetHD->strVBoxCurrent,
+                                     pTargetMedium,
                                      stack);
 
+                // ... and replace the old UUID in the machine config with the one of
+                // the imported disk that was just created
                 Bstr hdId;
-
-                ComObjPtr<MediumFormat> mediumFormat;
-                rc = i_findMediumFormatFromDiskImage(diCurrent, mediumFormat);
-                if (FAILED(rc))
-                    throw rc;
-
-                Bstr bstrFormatName;
-                rc = mediumFormat->COMGETTER(Name)(bstrFormatName.asOutParam());
-                if (FAILED(rc))
-                    throw rc;
-
-                Utf8Str vdf = Utf8Str(bstrFormatName);
-
-                if (vdf.compare("RAW", Utf8Str::CaseInsensitive) == 0)
-                {
-                    ComPtr<IMedium> dvdImage(pTargetHD);
-
-                    rc = mVirtualBox->OpenMedium(Bstr(vsdeTargetHD->strVBoxCurrent).raw(),
-                                                 DeviceType_DVD,
-                                                 AccessMode_ReadWrite,
-                                                 false,
-                                                 dvdImage.asOutParam());
-
-                    if (FAILED(rc)) throw rc;
-
-                    // ... and replace the old UUID in the machine config with the one of
-                    // the imported disk that was just created
-                    rc = dvdImage->COMGETTER(Id)(hdId.asOutParam());
-                    if (FAILED(rc)) throw rc;
-                }
-                else
-                {
-                    // ... and replace the old UUID in the machine config with the one of
-                    // the imported disk that was just created
-                    rc = pTargetHD->COMGETTER(Id)(hdId.asOutParam());
-                    if (FAILED(rc)) throw rc;
-                }
-
-                /* restore */
-                vsdeTargetHD->strVBoxCurrent = savedVBoxCurrent;
+                rc = pTargetMedium->COMGETTER(Id)(hdId.asOutParam());
+                if (FAILED(rc)) throw rc;
 
                 /*
                  * 1. saving original UUID for restoring in case of failure.
@@ -3958,6 +5573,7 @@ l_skipped:
     // instance that we created from the vbox:Machine
     rc = pNewMachine->init(mVirtualBox,
                            stack.strNameVBox,// name from OVF preparations; can be suffixed to avoid duplicates
+                           stack.strSettingsFilename,
                            config);          // the whole machine config
     if (FAILED(rc)) throw rc;
 
@@ -3999,8 +5615,6 @@ void Appliance::i_importMachines(ImportStack &stack)
         const ovf::VirtualSystem &vsysThis = *it;
         ComObjPtr<VirtualSystemDescription> vsdescThis = (*it1);
 
-        ComPtr<IMachine> pNewMachine;
-
         // there are two ways in which we can create a vbox machine from OVF:
         // -- either this OVF was written by vbox 3.2 or later, in which case there is a <vbox:Machine> element
         //    in the <VirtualSystem>; then the VirtualSystemDescription::Data has a settings::MachineConfigFile
@@ -4018,19 +5632,48 @@ void Appliance::i_importMachines(ImportStack &stack)
                            tr("Missing VM name"));
         stack.strNameVBox = vsdeName.front()->strVBoxCurrent;
 
-        // have VirtualBox suggest where the filename would be placed so we can
-        // put the disk images in the same directory
-        Bstr bstrMachineFilename;
-        rc = mVirtualBox->ComposeMachineFilename(Bstr(stack.strNameVBox).raw(),
-                                                 NULL /* aGroup */,
-                                                 NULL /* aCreateFlags */,
-                                                 NULL /* aBaseFolder */,
-                                                 bstrMachineFilename.asOutParam());
-        if (FAILED(rc)) throw rc;
-        // and determine the machine folder from that
-        stack.strMachineFolder = bstrMachineFilename;
+        // Primary group, which is entirely optional.
+        stack.strPrimaryGroup.setNull();
+        std::list<VirtualSystemDescriptionEntry*> vsdePrimaryGroup = vsdescThis->i_findByType(VirtualSystemDescriptionType_PrimaryGroup);
+        if (vsdePrimaryGroup.size() >= 1)
+        {
+            stack.strPrimaryGroup = vsdePrimaryGroup.front()->strVBoxCurrent;
+            if (stack.strPrimaryGroup.isEmpty())
+                stack.strPrimaryGroup = "/";
+        }
+
+        // Draw the right conclusions from the (possibly modified) VM settings
+        // file name and base folder. If the VM settings file name is modified,
+        // it takes precedence, otherwise it is recreated from the base folder
+        // and the primary group.
+        stack.strSettingsFilename.setNull();
+        std::list<VirtualSystemDescriptionEntry*> vsdeSettingsFile = vsdescThis->i_findByType(VirtualSystemDescriptionType_SettingsFile);
+        if (vsdeSettingsFile.size() >= 1)
+        {
+            VirtualSystemDescriptionEntry *vsdeSF1 = vsdeSettingsFile.front();
+            if (vsdeSF1->strVBoxCurrent != vsdeSF1->strVBoxSuggested)
+            stack.strSettingsFilename = vsdeSF1->strVBoxCurrent;
+        }
+        if (stack.strSettingsFilename.isEmpty())
+        {
+            Utf8Str strBaseFolder;
+            std::list<VirtualSystemDescriptionEntry*> vsdeBaseFolder = vsdescThis->i_findByType(VirtualSystemDescriptionType_BaseFolder);
+            if (vsdeBaseFolder.size() >= 1)
+                strBaseFolder = vsdeBaseFolder.front()->strVBoxCurrent;
+            Bstr bstrSettingsFilename;
+            rc = mVirtualBox->ComposeMachineFilename(Bstr(stack.strNameVBox).raw(),
+                                                     Bstr(stack.strPrimaryGroup).raw(),
+                                                     NULL /* aCreateFlags */,
+                                                     Bstr(strBaseFolder).raw(),
+                                                     bstrSettingsFilename.asOutParam());
+            if (FAILED(rc)) throw rc;
+            stack.strSettingsFilename = bstrSettingsFilename;
+        }
+
+        // Determine the machine folder from the settings file.
+        LogFunc(("i=%zu strName=%s strSettingsFilename=%s\n", i, stack.strNameVBox.c_str(), stack.strSettingsFilename.c_str()));
+        stack.strMachineFolder = stack.strSettingsFilename;
         stack.strMachineFolder.stripFilename();
-        LogFunc(("i=%zu strName=%s bstrMachineFilename=%ls\n", i, stack.strNameVBox.c_str(), bstrMachineFilename.raw()));
 
         // guest OS type
         std::list<VirtualSystemDescriptionEntry*> vsdeOS;
@@ -4039,6 +5682,13 @@ void Appliance::i_importMachines(ImportStack &stack)
             throw setError(VBOX_E_FILE_ERROR,
                            tr("Missing guest OS type"));
         stack.strOsTypeVBox = vsdeOS.front()->strVBoxCurrent;
+
+        // Firmware
+        std::list<VirtualSystemDescriptionEntry*> firmware = vsdescThis->i_findByType(VirtualSystemDescriptionType_BootingFirmware);
+        if (firmware.size() != 1)
+            stack.strFirmwareType = "BIOS";//try default BIOS type
+        else
+            stack.strFirmwareType = firmware.front()->strVBoxCurrent;
 
         // CPU count
         std::list<VirtualSystemDescriptionEntry*> vsdeCPU = vsdescThis->i_findByType(VirtualSystemDescriptionType_CPU);
@@ -4081,6 +5731,7 @@ void Appliance::i_importMachines(ImportStack &stack)
             stack.strDescription = vsdeDescription.front()->strVBoxCurrent;
 
         // import vbox:machine or OVF now
+        ComPtr<IMachine> pNewMachine; /** @todo pointless */
         if (vsdescThis->m->pConfig)
             // vbox:Machine config
             i_importVBoxMachine(vsdescThis, pNewMachine, stack);

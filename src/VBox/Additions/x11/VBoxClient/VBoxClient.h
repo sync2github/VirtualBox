@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: VBoxClient.h 86871 2020-11-12 10:15:18Z vboxsync $ */
 /** @file
  *
  * VirtualBox additions user session daemon.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,68 +16,101 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___vboxclient_vboxclient_h
-# define ___vboxclient_vboxclient_h
+#ifndef GA_INCLUDED_SRC_x11_VBoxClient_VBoxClient_h
+#define GA_INCLUDED_SRC_x11_VBoxClient_VBoxClient_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/log.h>
 #include <iprt/cpp/utils.h>
 #include <iprt/string.h>
 
-/** Exit with a fatal error. */
-#define VBClFatalError(format) \
-do { \
-    char *pszMessage = RTStrAPrintf2 format; \
-    LogRel(format); \
-    vbclFatalError(pszMessage); \
-} while(0)
+void VBClLogInfo(const char *pszFormat, ...);
+void VBClLogError(const char *pszFormat, ...);
+void VBClLogFatalError(const char *pszFormat, ...);
+void VBClLogVerbose(unsigned iLevel, const char *pszFormat, ...);
 
-/** Exit with a fatal error. */
-extern DECLNORETURN(void) vbclFatalError(char *pszMessage);
+int VBClLogCreate(const char *pszLogFile);
+void VBClLogDestroy(void);
 
 /** Call clean-up for the current service and exit. */
-extern void VBClCleanUp();
+extern void VBClShutdown(bool fExit = true);
 
-/** A simple interface describing a service.  VBoxClient will run exactly one
- * service per invocation. */
-struct VBCLSERVICE
+/**
+ * A service descriptor.
+ */
+typedef struct
 {
+    /** The short service name. 16 chars maximum (RTTHREAD_NAME_LEN). */
+    const char *pszName;
+    /** The longer service name. */
+    const char *pszDesc;
     /** Get the services default path to pidfile, relative to $HOME */
     /** @todo Should this also have a component relative to the X server number?
      */
-    const char *(*getPidFilePath)(void);
-    /** Special initialisation, if needed.  @a pause and @a resume are
-     * guaranteed not to be called until after this returns. */
-    int (*init)(struct VBCLSERVICE **ppInterface);
-    /** Run the service main loop */
-    int (*run)(struct VBCLSERVICE **ppInterface, bool fDaemonised);
-    /** Clean up any global resources before we shut down hard.  The last calls
-     * to @a pause and @a resume are guaranteed to finish before this is called.
+    const char *pszPidFilePath;
+    /** The usage options stuff for the --help screen. */
+    const char *pszUsage;
+    /** The option descriptions for the --help screen. */
+    const char *pszOptions;
+
+    /**
+     * Tries to parse the given command line option.
+     *
+     * @returns 0 if we parsed, -1 if it didn't and anything else means exit.
+     * @param   ppszShort   If not NULL it points to the short option iterator. a short argument.
+     *                      If NULL examine argv[*pi].
+     * @param   argc        The argument count.
+     * @param   argv        The argument vector.
+     * @param   pi          The argument vector index. Update if any value(s) are eaten.
      */
-    void (*cleanup)(struct VBCLSERVICE **ppInterface);
-};
+    DECLCALLBACKMEMBER(int, pfnOption,(const char **ppszShort, int argc, char **argv, int *pi));
 
-/** Default handler for various struct VBCLSERVICE member functions. */
-DECLINLINE(int) VBClServiceDefaultHandler(struct VBCLSERVICE **pSelf)
-{
-    RT_NOREF1(pSelf);
-    return VINF_SUCCESS;
-}
+    /**
+     * Called before parsing arguments.
+     * @returns VBox status code, or
+     *          VERR_NOT_AVAILABLE if service is supported on this platform in general but not available at the moment.
+     *          VERR_NOT_SUPPORTED if service is not supported on this platform. */
+    DECLCALLBACKMEMBER(int, pfnInit,(void));
 
-/** Default handler for the struct VBCLSERVICE clean-up member function.
- * Usually used because the service is cleaned up automatically when the user
- * process/X11 exits. */
-DECLINLINE(void) VBClServiceDefaultCleanup(struct VBCLSERVICE **ppInterface)
-{
-    NOREF(ppInterface);
-}
+    /** Called from the worker thread.
+     *
+     * @returns VBox status code.
+     * @retval  VINF_SUCCESS if exitting because *pfShutdown was set.
+     * @param   pfShutdown      Pointer to a per service termination flag to check
+     *                          before and after blocking.
+     */
+    DECLCALLBACKMEMBER(int, pfnWorker,(bool volatile *pfShutdown));
 
-extern struct VBCLSERVICE **VBClGetClipboardService();
-extern struct VBCLSERVICE **VBClGetSeamlessService();
-extern struct VBCLSERVICE **VBClGetDisplayService();
-extern struct VBCLSERVICE **VBClGetHostVersionService();
-#ifdef VBOX_WITH_DRAG_AND_DROP
-extern struct VBCLSERVICE **VBClGetDragAndDropService();
-#endif /* VBOX_WITH_DRAG_AND_DROP */
-extern struct VBCLSERVICE **VBClCheck3DService();
+    /**
+     * Asks the service to stop.
+     *
+     * @remarks Will be called from the signal handler.
+     */
+    DECLCALLBACKMEMBER(void, pfnStop,(void));
 
-#endif /* !___vboxclient_vboxclient_h */
+    /**
+     * Does termination cleanups.
+     *
+     * @remarks This will be called even if pfnInit hasn't been called or pfnStop failed!
+     */
+    DECLCALLBACKMEMBER(int, pfnTerm,(void));
+} VBCLSERVICE;
+/** Pointer to a VBCLSERVICE. */
+typedef VBCLSERVICE *PVBCLSERVICE;
+/** Pointer to a const VBCLSERVICE. */
+typedef VBCLSERVICE const *PCVBCLSERVICE;
+
+RT_C_DECLS_BEGIN
+extern VBCLSERVICE g_SvcClipboard;
+extern VBCLSERVICE g_SvcDisplayDRM;
+extern VBCLSERVICE g_SvcDisplaySVGA;
+extern VBCLSERVICE g_SvcDragAndDrop;
+extern VBCLSERVICE g_SvcHostVersion;
+extern VBCLSERVICE g_SvcSeamless;
+
+extern bool        g_fDaemonized;
+RT_C_DECLS_END
+
+#endif /* !GA_INCLUDED_SRC_x11_VBoxClient_VBoxClient_h */

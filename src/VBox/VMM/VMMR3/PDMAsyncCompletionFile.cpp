@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMAsyncCompletionFile.cpp 87766 2021-02-16 14:27:43Z vboxsync $ */
 /** @file
  * PDM Async I/O - Transport data asynchronous in R3 using EMT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -362,7 +362,7 @@ static DECLCALLBACK(void) pdmacFileEpTaskCompleted(PPDMACTASKFILE pTask, void *p
                 if (tsDelay < pEpClassFile->cMilliesNext)
                 {
                     ASMAtomicWriteU64(&pEpClassFile->cMilliesNext, tsDelay);
-                    TMTimerSetMillies(pEpClassFile->pTimer, tsDelay);
+                    TMTimerSetMillies(pVM, pEpClassFile->hTimer, tsDelay);
                 }
 
                 LogRel(("AIOMgr: Delaying request %#p for %u ms\n", pTaskFile, tsDelay));
@@ -538,6 +538,7 @@ static void pdmacFileAioMgrDestroy(PPDMASYNCCOMPLETIONEPCLASSFILE pEpClassFile, 
     /* Free the resources. */
     RTCritSectDelete(&pAioMgr->CritSectBlockingEvent);
     RTSemEventDestroy(pAioMgr->EventSem);
+    RTSemEventDestroy(pAioMgr->EventSemBlock);
     if (pAioMgr->enmMgrType != PDMACEPFILEMGRTYPE_SIMPLE)
         pdmacFileAioMgrNormalDestroy(pAioMgr);
 
@@ -731,8 +732,12 @@ static DECLCALLBACK(int) pdmacEpFileDelayInject(PCDBGCCMD pCmd, PDBGCCMDHLP pCmd
     return VINF_SUCCESS;
 }
 
-static DECLCALLBACK(void) pdmacR3TimerCallback(PVM pVM, PTMTIMER pTimer, void *pvUser)
+/**
+ * @callback_method_impl{FNTMTIMERINT, }
+ */
+static DECLCALLBACK(void) pdmacR3TimerCallback(PVM pVM, TMTIMERHANDLE hTimer, void *pvUser)
 {
+    Assert(hTimer == pEpClassFile->hTimer);
     uint64_t tsCur = RTTimeProgramMilliTS();
     uint64_t cMilliesNext = UINT64_MAX;
     PPDMASYNCCOMPLETIONEPCLASSFILE pEpClassFile = (PPDMASYNCCOMPLETIONEPCLASSFILE)pvUser;
@@ -782,7 +787,7 @@ static DECLCALLBACK(void) pdmacR3TimerCallback(PVM pVM, PTMTIMER pTimer, void *p
     if (cMilliesNext < pEpClassFile->cMilliesNext)
     {
         ASMAtomicWriteU64(&pEpClassFile->cMilliesNext, cMilliesNext);
-        TMTimerSetMillies(pEpClassFile->pTimer, cMilliesNext);
+        TMTimerSetMillies(pVM, hTimer, cMilliesNext);
     }
 }
 
@@ -864,11 +869,12 @@ static DECLCALLBACK(int) pdmacFileInitialize(PPDMASYNCCOMPLETIONEPCLASS pClassGl
         AssertRC(rc);
     }
 
-#ifdef PDM_ASYNC_COMPLETION_FILE_WITH_DELAY
-    rc = TMR3TimerCreateInternal(pEpClassFile->Core.pVM, TMCLOCK_REAL, pdmacR3TimerCallback, pEpClassFile, "AC Delay", &pEpClassFile->pTimer);
+# ifdef PDM_ASYNC_COMPLETION_FILE_WITH_DELAY
+    rc = TMR3TimerCreate(pEpClassFile->Core.pVM, TMCLOCK_REAL, pdmacR3TimerCallback, pEpClassFile,
+                         TMTIMER_FLAGS_NO_RING0, "AC Delay", &pEpClassFile->hTimer);
     AssertRC(rc);
     pEpClassFile->cMilliesNext = UINT64_MAX;
-#endif
+# endif
 #endif
 
     return rc;
@@ -948,7 +954,7 @@ static DECLCALLBACK(int) pdmacFileEpInitialize(PPDMASYNCCOMPLETIONENDPOINT pEndp
         {
             uint64_t cbSize;
 
-            rc = RTFileGetSize(hFile, &cbSize);
+            rc = RTFileQuerySize(hFile, &cbSize);
 
             if (RT_SUCCESS(rc) && ((cbSize % 512) == 0))
                 fFileFlags |= RTFILE_O_NO_CACHE;
@@ -1006,7 +1012,7 @@ static DECLCALLBACK(int) pdmacFileEpInitialize(PPDMASYNCCOMPLETIONENDPOINT pEndp
     {
         pEpFile->fFlags = fFileFlags;
 
-        rc = RTFileGetSize(pEpFile->hFile, (uint64_t *)&pEpFile->cbFile);
+        rc = RTFileQuerySize(pEpFile->hFile, (uint64_t *)&pEpFile->cbFile);
         if (RT_SUCCESS(rc))
         {
             /* Initialize the segment cache */
@@ -1152,6 +1158,8 @@ static DECLCALLBACK(int) pdmacFileEpClose(PPDMASYNCCOMPLETIONENDPOINT pEndpoint)
 
     /* Destroy the locked ranges tree now. */
     RTAvlrFileOffsetDestroy(pEpFile->AioMgr.pTreeRangesLocked, pdmacFileEpRangesLockedDestroy, NULL);
+    RTMemFree(pEpFile->AioMgr.pTreeRangesLocked);
+    pEpFile->AioMgr.pTreeRangesLocked = NULL;
 
     RTFileClose(pEpFile->hFile);
 

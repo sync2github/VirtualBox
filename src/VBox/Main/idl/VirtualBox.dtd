@@ -5,7 +5,7 @@
      It is still the only sort-of-documentation available about what is valid
      XIDL syntax.
 
-     Copyright (C) 2008-2015 Oracle Corporation
+     Copyright (C) 2008-2020 Oracle Corporation
 
      This file is part of VirtualBox Open Source Edition (OSE), as
      available from http://www.virtualbox.org. This file is free software;
@@ -16,17 +16,18 @@
      hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 -->
   <!ELEMENT idl (desc|if|library)*>                           <!-- done -->
-  <!ELEMENT if ANY>
-    <!ATTLIST if target (midl|xpidl|wsdl) #REQUIRED>          <!-- done -->
-  <!ELEMENT cpp ANY>
-    <!ATTLIST cpp line CDATA #IMPLIED>                        <!-- done -->
-  <!ELEMENT library (descGroup|if|result|enum|interface|module)*>
+  <!ELEMENT if ANY>                                           <!-- done -->
+    <!ATTLIST if target (midl|xpidl|wsdl) #REQUIRED>
+  <!ELEMENT cpp ANY>                                          <!-- done -->
+    <!ATTLIST cpp line CDATA #IMPLIED>
+  <!ELEMENT library (application|if)*>                        <!-- done -->
     <!ATTLIST library name CDATA #REQUIRED>
     <!ATTLIST library uuid CDATA #REQUIRED>
     <!ATTLIST library version CDATA #REQUIRED>
-    <!ATTLIST library desc CDATA #REQUIRED>
-    <!ATTLIST library appUuid CDATA #REQUIRED>
-    <!ATTLIST library supportsErrorInfo CDATA #REQUIRED>
+  <!ELEMENT application (descGroup|if|result|enum|interface|module)*>   <!-- done -->
+    <!ATTLIST application name CDATA #REQUIRED>
+    <!ATTLIST application uuid CDATA #REQUIRED>
+    <!ATTLIST application supportsErrorInfo CDATA #REQUIRED>
   <!ELEMENT result (#PCDATA|desc|link)*>                      <!-- done -->
     <!ATTLIST result name CDATA #REQUIRED>
     <!ATTLIST result value CDATA #IMPLIED>
@@ -65,6 +66,9 @@
     <!ATTLIST interface autogen CDATA #IMPLIED>
                 <!-- autogen names the style of code auto-generation for this
                      interface (currently only VBoxEvent). -->
+    <!ATTLIST interface autogenflags CDATA #IMPLIED>
+                <!-- autogenflags contains autogen tweaks.
+                     For autoget=VBoxEvent: 'BSTR' - generate IN_BSTR variants of the functions. -->
     <!ATTLIST interface id CDATA #IMPLIED>
                 <!-- id is only relevant for event interfaces, and specifies
                      which const name will be generated. -->
@@ -73,6 +77,8 @@
                      specifies that this event can be waited for. -->
     <!ATTLIST interface wrap-hint-server-addinterfaces CDATA #IMPLIED>
     <!ATTLIST interface wrap-hint-server CDATA #IMPLIED>
+    <!ATTLIST interface wrap-gen-hook (yes|no) "no">
+    <!ATTLIST interface notdual (yes|no) "no">
     <!-- DTrace has a probe name length limit, so dtracename helps dealing with excessivly long names. -->
     <!ATTLIST interface dtracename CDATA #IMPLIED>
     <!ATTLIST interface reservedAttributes CDATA #IMPLIED>

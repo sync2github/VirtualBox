@@ -5,7 +5,7 @@
  *  type library definitions for VirtualBox COM components
  *  from the generic interface definition expressed in XML.
 
-    Copyright (C) 2007-2016 Oracle Corporation
+    Copyright (C) 2007-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -27,6 +27,7 @@
 <xsl:strip-space elements="*"/>
 
 <xsl:param name="a_sTarget">all</xsl:param>
+<xsl:param name="a_sWithSDS" select="no"/>
 
 
 <!--
@@ -65,23 +66,53 @@
       <xsl:attribute name="MajorVersion"><xsl:value-of select="substring(@version,1,1)"/></xsl:attribute>
       <xsl:attribute name="MinorVersion"><xsl:value-of select="substring(@version,3)"/></xsl:attribute>
       <xsl:attribute name="Language">0</xsl:attribute>
-      <xsl:attribute name="Description"><xsl:value-of select="@desc"/></xsl:attribute>
+      <xsl:attribute name="Description"><xsl:value-of select="@name"/></xsl:attribute>
       <xsl:attribute name="HelpDirectory"><xsl:text>msm_VBoxApplicationFolder</xsl:text></xsl:attribute>
-      <AppId>
-        <xsl:attribute name="Id"><xsl:value-of select="@appUuid"/></xsl:attribute>
-        <xsl:attribute name="Description"><xsl:value-of select="@name"/> Application</xsl:attribute>
-        <xsl:choose>
-          <xsl:when test="$a_sTarget = 'VBoxClient-x86'">
-            <xsl:apply-templates select="module[@name='VBoxC']/class"/>
-          </xsl:when>
-          <xsl:otherwise>
-            <xsl:apply-templates select="module/class"/>
-          </xsl:otherwise>
-        </xsl:choose>
-      </AppId>
+      <xsl:apply-templates select="application | if[@target='midl']/application"/>
     </TypeLib>
   </Include>
 </xsl:template>
+
+
+    <!--
+* filters to skip VBoxSDS class and interfaces if a VBOX_WITH_SDS is not defined in kmk
+-->
+    <xsl:template match="application[@uuid='ec0e78e8-fa43-43e8-ac0a-02c784c4a4fa']">
+        <xsl:if test="$a_sWithSDS='yes'" >
+            <xsl:call-template name="application_template" />
+        </xsl:if>
+    </xsl:template>
+
+    <!--
+    * applications
+    -->
+    <xsl:template match="idl/library//application" name="application_template">
+        <AppId>
+            <xsl:attribute name="Id">
+                <xsl:value-of select="@uuid"/>
+            </xsl:attribute>
+            <xsl:attribute name="Description">
+                <xsl:value-of select="@name"/> Application
+            </xsl:attribute>
+            <!--
+                The name of windows service should be defined as module name in .xidl.
+                It's viable for correct registration of COM windows service.
+            -->
+            <xsl:if test="module/@context = 'LocalService'">
+                <xsl:attribute name="LocalService" >
+                    <xsl:value-of select="module/@name"/>
+                </xsl:attribute>
+            </xsl:if>
+            <xsl:choose>
+                <xsl:when test="$a_sTarget = 'VBoxClient-x86'">
+                    <xsl:apply-templates select="module[@name='VBoxC']/class"/>
+                </xsl:when>
+                <xsl:otherwise>
+                    <xsl:apply-templates select="module/class"/>
+                </xsl:otherwise>
+            </xsl:choose>
+        </AppId>
+    </xsl:template>
 
 
 <!--
@@ -95,7 +126,8 @@
     <xsl:attribute name="Context">
       <xsl:choose>
         <xsl:when test="../@context='InprocServer'">InprocServer32</xsl:when>
-        <xsl:when test="../@context='LocalServer'">LocalServer32</xsl:when>
+        <xsl:when test="../@context='LocalServer'" >LocalServer32</xsl:when>
+        <xsl:when test="../@context='LocalService'">LocalServer32</xsl:when>
         <xsl:otherwise>
           <xsl:message terminate="yes">
             <xsl:value-of select="concat(../../@name,'::',../@name,': ')"/>
@@ -141,7 +173,6 @@
     </ProgId>
   </Class>
 </xsl:template>
-
 
 <!--
  *  eat everything else not explicitly matched

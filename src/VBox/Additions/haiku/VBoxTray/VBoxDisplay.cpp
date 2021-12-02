@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDisplay.cpp 92179 2021-11-02 21:44:49Z vboxsync $ */
 /** @file
  * VBoxDisplayService, Haiku Guest Additions, implementation.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,7 +20,7 @@
  *
  * VirtualBox Guest Additions for Haiku.
  * Copyright (c) 2011 Mike Smith <mike@scgtrp.net>
- *                    François Revol <revol@free.fr>
+ *                    FranÃ§ois Revol <revol@free.fr>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -123,7 +123,8 @@ status_t VBoxDisplayService::_ServiceThread()
     {
         uint32_t events;
         int rc = VbglR3WaitEvent(VMMDEV_EVENT_DISPLAY_CHANGE_REQUEST, 5000, &events);
-        if (rc == -6) // timed out?
+        if (   rc == VERR_TIMEOUT
+            || rc == VERR_INTERRUPTED)
             continue;
 
         if (RT_SUCCESS(rc))

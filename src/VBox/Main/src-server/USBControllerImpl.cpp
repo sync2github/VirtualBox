@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBControllerImpl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Implementation of IUSBController.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_USBCONTROLLER
 #include "USBControllerImpl.h"
 
 #include "Global.h"
@@ -25,7 +26,7 @@
 #include <iprt/string.h>
 #include <iprt/cpp/utils.h>
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/settings.h>
 #include <VBox/com/array.h>
 
@@ -33,7 +34,7 @@
 
 #include "AutoStateDep.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 // defines
 /////////////////////////////////////////////////////////////////////////////
@@ -120,7 +121,7 @@ HRESULT USBController::init(Machine *aParent, const Utf8Str &aName, USBControlle
  * @returns COM result indicator.
  * @param aParent       Pointer to our parent object.
  * @param aPeer         The object to share.
- *  @param  aReshare
+ * @param fReshare
  *      When false, the original object will remain a data owner.
  *      Otherwise, data ownership will be transferred from the original
  *      object to this one.

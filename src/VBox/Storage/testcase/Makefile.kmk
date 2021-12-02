@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 87050 2020-12-08 12:51:48Z vboxsync $
 ## @file
 # Sub-Makefile for the storage device & driver testcases.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -75,10 +75,6 @@ ifdef VBOX_WITH_TESTCASES
 	$(QUIET)$(APPEND) -n "$@" '' \
                $(call TSTVDIO_GEN_TEST_MACRO,VDIoTests,%) \
 
- ifn1of ($(KBUILD_TARGET), win)
-  VBOX_TSTVDIO_WITH_LOG_REPLAY = 1
- endif
-
  tstVDIo_TEMPLATE = VBOXR3TSTEXE
  tstVDIo_INCS := $(PATH_SUB_CURRENT)
 
@@ -86,7 +82,8 @@ ifdef VBOX_WITH_TESTCASES
   tstVDIo_DEFS += VBOX_TSTVDIO_WITH_LOG_REPLAY
  endif
 
- tstVDIo_SOURCES  = tstVDIo.cpp \
+ tstVDIo_SOURCES  = \
+ 	tstVDIo.cpp \
  	VDIoBackend.cpp \
  	VDIoBackendMem.cpp \
  	VDMemDisk.cpp \
@@ -98,12 +95,8 @@ ifdef VBOX_WITH_TESTCASES
  	$(TSTVDIO_BUILTIN_TESTS_FILE)
  tstVDIo_LIBS = \
  	$(LIB_DDU)
-
- ifdef VBOX_TSTVDIO_WITH_LOG_REPLAY
-  tstVDIo_LIBS += \
-  	$(PATH_STAGE_LIB)/StorageDbgLib$(VBOX_SUFF_LIB)
- endif
-
+ tstVDIo_CLEAN = \
+ 	$(TSTVDIO_BUILTIN_TESTS_FILE)
  tstVDSnap_TEMPLATE = VBOXR3TSTEXE
  tstVDSnap_LIBS = $(LIB_DDU)
  tstVDSnap_SOURCES  = tstVDSnap.cpp
@@ -113,13 +106,16 @@ if defined(VBOX_WITH_TESTCASES) || defined(VBOX_WITH_VBOX_IMG)
  PROGRAMS += vbox-img
 
  #
- # vbox-img - static because it migth be used as at standalone tool.
+ # vbox-img - static because it might be used as a standalone tool.
  #
  vbox-img_TEMPLATE = VBoxR3Static
  vbox-img_DEFS += IN_VBOXDDU IN_VBOXDDU_STATIC VBOX_HDD_NO_DYNAMIC_BACKENDS
+ vbox-img_INCS += \
+	../../Main/include
  vbox-img_SOURCES = \
 	vbox-img.cpp \
 	../VD.cpp \
+	../VDPlugin.cpp \
 	../VDVfs.cpp \
 	../VDI.cpp \
 	../VMDK.cpp \
@@ -131,6 +127,8 @@ if defined(VBOX_WITH_TESTCASES) || defined(VBOX_WITH_VBOX_IMG)
 	../QED.cpp \
 	../QCOW.cpp \
 	../VHDX.cpp \
+	../CUE.cpp \
+	../VISO.cpp \
 	../VCICache.cpp \
 	../VDIfVfs.cpp
  vbox-img_SOURCES.win = \
@@ -139,24 +137,31 @@ if defined(VBOX_WITH_TESTCASES) || defined(VBOX_WITH_VBOX_IMG)
 	$(VBOX_LIB_RUNTIME_STATIC)
  if1of ($(KBUILD_TARGET),os2 win)
   vbox-img_LIBS += \
-	$(PATH_STAGE_LIB)/VBox-liblzf-static$(VBOX_SUFF_LIB) \
-	$(PATH_STAGE_LIB)/VBox-zlib-static$(VBOX_SUFF_LIB)
+	$(SDK_VBOX_LZF_STATIC_LIBS) \
+	$(SDK_VBOX_ZLIB_STATIC_LIBS)
  else
   vbox-img_LIBS += \
-	$(PATH_STAGE_LIB)/VBox-liblzf$(VBOX_SUFF_LIB) \
+	$(SDK_VBOX_LZF_LIBS) \
 	$(SDK_VBOX_ZLIB_LIBS)
  endif
  ifeq ($(KBUILD_TARGET),linux)
-  vbox-img_LIBS += crypt
   ifdef SDK_VBOX_LIBXML2_LIBS
    vbox-img_LIBS += xml2
   endif
- else if1of ($(KBUILD_TARGET),darwin freebsd)
+ else ifeq ($(KBUILD_TARGET),freebsd)
+  vbox-img_LIBS += iconv geom bsdxml sbuf
+  ifdef SDK_VBOX_LIBXML2_LIBS
+   vbox-img_LIBS += xml2 lzma
+  endif
+ else ifeq ($(KBUILD_TARGET),darwin)
   vbox-img_LIBS += iconv
  else ifeq ($(KBUILD_TARGET),win)
   vbox-img_SDKS.win = VBOX_NTDLL
  else ifeq ($(KBUILD_TARGET),solaris)
-  vbox-img_LIBS += kstat
+  vbox-img_LIBS += kstat efi
+  ifdef SDK_VBOX_LIBXML2_LIBS
+   vbox-img_LIBS += xml2
+  endif
  endif
 
 endif
@@ -167,7 +172,7 @@ if    defined(VBOX_WITH_TESTCASES) && defined(VBOX_WITH_PLUGIN_CRYPT) \
  PROGRAMS += vdkeystoremgr
 
  #
- # vdkeystoremgr - static because it migth be used as at standalone tool.
+ # vdkeystoremgr - static because it might be used as a standalone tool.
  #
  vdkeystoremgr_TEMPLATE = VBoxR3Static
  vdkeystoremgr_DEFS += IN_VBOXDDU IN_VBOXDDU_STATIC VBOX_HDD_NO_DYNAMIC_BACKENDS
@@ -181,15 +186,14 @@ if    defined(VBOX_WITH_TESTCASES) && defined(VBOX_WITH_PLUGIN_CRYPT) \
 	$(PATH_STAGE_LIB)/SUPR3$(VBOX_SUFF_LIB)
  if1of ($(KBUILD_TARGET),os2 win)
   vdkeystoremgr_LIBS += \
-	$(PATH_STAGE_LIB)/VBox-liblzf-static$(VBOX_SUFF_LIB) \
-	$(PATH_STAGE_LIB)/VBox-zlib-static$(VBOX_SUFF_LIB)
+	$(SDK_VBOX_LZF_STATIC_LIBS) \
+	$(SDK_VBOX_ZLIB_STATIC_LIBS)
  else
   vdkeystoremgr_LIBS += \
-	$(PATH_STAGE_LIB)/VBox-liblzf$(VBOX_SUFF_LIB) \
+	$(SDK_VBOX_LZF_LIBS) \
 	$(SDK_VBOX_ZLIB_LIBS)
  endif
  ifeq ($(KBUILD_TARGET),linux)
-   vdkeystoremgr_LIBS += crypt
   ifdef SDK_VBOX_LIBXML2_LIBS
    vdkeystoremgr_LIBS += xml2
   endif

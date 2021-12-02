@@ -1,8 +1,10 @@
+; $Id: VBoxMouse.inf 82968 2020-02-04 10:35:17Z vboxsync $
+;; @file
+; INF file for installing the VBox Guest Mouse (driver for Windows NT5+).
 ;
-; INF file for installing the VBox Guest Mouse
-; (driver for Windows NT5+).
+
 ;
-; Copyright (C) 2011-2016 Oracle Corporation
+; Copyright (C) 2011-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +17,7 @@
 
 [Version]
 Signature="$Windows NT$"
+Provider=%ORACLE%
 ClassGuid={4D36E96F-E325-11CE-BFC1-08002BE10318}
 Class=Mouse
 DriverPackageType=ClassFilter
@@ -28,22 +31,27 @@ DriverPackageType=ClassFilter
 VBoxMouse.sys = 1
 
 [DestinationDirs]
-DefaultDestDir = 12	; DIRID_DRIVERS
+DefaultDestDir = 12     ; DIRID_DRIVERS
 
-[Manufacturer]
-;x86   %ORACLE%=VBoxMouse
-;amd64 %ORACLE%=VBoxMouse, NTamd64
+; Disabled install via [Manufacturer], not working. See [DefaultInstall].
+;[Manufacturer]
+;;x86   %ORACLE%=VBoxMouse
+;;amd64 %ORACLE%=VBoxMouse, NTamd64
+;
+;;x86   [VBoxMouse]
+;;amd64 [VBoxMouse.NTamd64]
+;%ORACLE%=VBoxMouse_Install
+;
+;[VBoxMouse_Install]
+;CopyFiles = @VBoxMouse.sys
+;
+;[VBoxMouse_Install.Services]
+;AddService = VBoxMouse,,VBoxMouse.Service
 
-[VBoxMouse_Install]
+[DefaultInstall@DOT-NT-ARCH@]
 CopyFiles = @VBoxMouse.sys
 
-[VBoxMouse_Install.Services]
-AddService = VBoxMouse,,VBoxMouse.Service
-
-[DefaultInstall]
-CopyFiles = @VBoxMouse.sys
-
-[DefaultInstall.Services]
+[DefaultInstall@DOT-NT-ARCH@.Services]
 AddService = VBoxMouse,,VBoxMouse.Service
 
 [VBoxMouse.AddRegistry]

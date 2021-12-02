@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMNetShaperInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * PDM Network Shaper - Internal data structures and functions common for both R0 and R3 parts.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+#ifndef VMM_INCLUDED_SRC_include_PDMNetShaperInternal_h
+#define VMM_INCLUDED_SRC_include_PDMNetShaperInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /**
  * Bandwidth group instance data
@@ -43,4 +49,6 @@ typedef struct PDMNSBWGROUP
 } PDMNSBWGROUP;
 /** Pointer to a bandwidth group. */
 typedef PDMNSBWGROUP *PPDMNSBWGROUP;
+
+#endif /* !VMM_INCLUDED_SRC_include_PDMNetShaperInternal_h */
 

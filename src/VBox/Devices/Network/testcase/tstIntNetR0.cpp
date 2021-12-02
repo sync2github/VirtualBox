@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: tstIntNetR0.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * Internal networking - Usermode testcase for the kernel mode bits.
  *
@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -75,7 +75,7 @@ typedef enum SUPDRVOBJTYPE
  * @param   pvUser1     The first user argument.
  * @param   pvUser2     The second user argument.
  */
-typedef DECLCALLBACK(void) FNSUPDRVDESTRUCTOR(void *pvObj, void *pvUser1, void *pvUser2);
+typedef DECLCALLBACKTYPE(void, FNSUPDRVDESTRUCTOR,(void *pvObj, void *pvUser1, void *pvUser2));
 /** Pointer to a FNSUPDRVDESTRUCTOR(). */
 typedef FNSUPDRVDESTRUCTOR *PFNSUPDRVDESTRUCTOR;
 
@@ -100,7 +100,7 @@ static RTTEST           g_hTest      = NIL_RTTEST;
 /** The size (in bytes) of the large transfer tests. */
 static uint32_t         g_cbTransfer = _1M * 384;
 /** Fake session handle. */
-const PSUPDRVSESSION    g_pSession   = (PSUPDRVSESSION)0xdeadface;
+const PSUPDRVSESSION    g_pSession   = (PSUPDRVSESSION)(uintptr_t)0xdeadface;
 
 
 INTNETR3DECL(void *) SUPR0ObjRegister(PSUPDRVSESSION pSession, SUPDRVOBJTYPE enmType,
@@ -556,12 +556,12 @@ static void tstBidirectionalTransfer(PTSTSTATE pThis, uint32_t cbFrame)
                  pThis->pBuf0->cStatBadFrames.c);
     RTTestPrintf(g_hTest, RTTESTLVL_ALWAYS,
                  "Buf0.Recv: Frames=%llu Bytes=%llu Overflows=%llu\n",
-                 pThis->pBuf0->Recv.cStatFrames,
+                 pThis->pBuf0->Recv.cStatFrames.c,
                  pThis->pBuf0->Recv.cbStatWritten.c,
                  pThis->pBuf0->Recv.cOverflows.c);
     RTTestPrintf(g_hTest, RTTESTLVL_ALWAYS,
                  "Buf0.Send: Frames=%llu Bytes=%llu Overflows=%llu\n",
-                 pThis->pBuf0->Send.cStatFrames,
+                 pThis->pBuf0->Send.cStatFrames.c,
                  pThis->pBuf0->Send.cbStatWritten.c,
                  pThis->pBuf0->Send.cOverflows.c);
 
@@ -573,12 +573,12 @@ static void tstBidirectionalTransfer(PTSTSTATE pThis, uint32_t cbFrame)
                  pThis->pBuf1->cStatBadFrames.c);
     RTTestPrintf(g_hTest, RTTESTLVL_ALWAYS,
                  "Buf1.Recv: Frames=%llu Bytes=%llu Overflows=%llu\n",
-                 pThis->pBuf1->Recv.cStatFrames,
+                 pThis->pBuf1->Recv.cStatFrames.c,
                  pThis->pBuf1->Recv.cbStatWritten.c,
                  pThis->pBuf1->Recv.cOverflows.c);
     RTTestPrintf(g_hTest, RTTESTLVL_ALWAYS,
                  "Buf1.Send: Frames=%llu Bytes=%llu Overflows=%llu\n",
-                 pThis->pBuf1->Send.cStatFrames,
+                 pThis->pBuf1->Send.cStatFrames.c,
                  pThis->pBuf1->Send.cbStatWritten.c,
                  pThis->pBuf1->Send.cOverflows.c);
 

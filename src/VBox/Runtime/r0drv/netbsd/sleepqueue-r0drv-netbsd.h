@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: sleepqueue-r0drv-netbsd.h 88949 2021-05-08 23:02:05Z vboxsync $ */
 /** @file
  * IPRT - NetBSD Ring-0 Driver Helpers for Abstracting Sleep Queues,
  */
 
 /*
- * Copyright (C) 2006-2012 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___r0drv_netbsd_sleepqueue_r0drv_netbsd_h
-#define ___r0drv_netbsd_sleepqueue_r0drv_netbsd_h
+#ifndef IPRT_INCLUDED_SRC_r0drv_netbsd_sleepqueue_r0drv_netbsd_h
+#define IPRT_INCLUDED_SRC_r0drv_netbsd_sleepqueue_r0drv_netbsd_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "the-netbsd-kernel.h"
 
@@ -35,7 +37,7 @@
 #include <iprt/time.h>
 
 static syncobj_t vbox_syncobj = {
-        SOBJ_SLEEPQ_FIFO,
+        SOBJ_SLEEPQ_SORTED,
         sleepq_unsleep,
         sleepq_changepri,
         sleepq_lendpri,
@@ -43,7 +45,7 @@ static syncobj_t vbox_syncobj = {
 };
 
 /**
- * Kernel mode Linux wait state structure.
+ * Kernel mode NetBSD wait state structure.
  */
 typedef struct RTR0SEMBSDSLEEP
 {
@@ -167,6 +169,11 @@ DECLINLINE(void) rtR0SemBsdWaitPrepare(PRTR0SEMBSDSLEEP pWait)
  */
 DECLINLINE(void) rtR0SemBsdWaitDoIt(PRTR0SEMBSDSLEEP pWait)
 {
+#if __NetBSD_Prereq__(9,99,57)
+#define sleepq_enqueue(sq, wchan, wmesg, sobj) \
+            sleepq_enqueue((sq), (wchan), (wmesg), (sobj), true)
+#endif
+
     sleepq_enter(pWait->sq, curlwp, pWait->sq_lock);
     sleepq_enqueue(pWait->sq, pWait->wchan, "VBoxIS", &vbox_syncobj);
 
@@ -276,4 +283,4 @@ DECLINLINE(uint32_t) rtR0SemBsdWaitGetResolution(void)
     return 1000000000 / hz; /* ns */
 }
 
-#endif /* ___r0drv_netbsd_sleepqueue_r0drv_netbsd_h */
+#endif /* !IPRT_INCLUDED_SRC_r0drv_netbsd_sleepqueue_r0drv_netbsd_h */

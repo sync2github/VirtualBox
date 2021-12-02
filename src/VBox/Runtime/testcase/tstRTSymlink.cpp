@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTSymlink.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - Symbolic Links.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -66,7 +66,7 @@ static void test1Worker(RTTEST hTest, const char *pszBaseDir,
     /* Create it.*/
     RTTESTI_CHECK_RC_OK_RETV(RTPathJoin(szPath1, sizeof(szPath1), pszBaseDir, "tstRTSymlink-link-1"));
     RTSymlinkDelete(szPath1, 0); /* clean up previous run */
-    int rc = RTSymlinkCreate(szPath1, pszTarget, RTSYMLINKTYPE_FILE, 0);
+    int rc = RTSymlinkCreate(szPath1, pszTarget, enmType, 0);
     if (rc == VERR_NOT_SUPPORTED)
     {
         RTTestPrintf(hTest, RTTESTLVL_ALWAYS, "VERR_NOT_SUPPORTED - skipping\n");

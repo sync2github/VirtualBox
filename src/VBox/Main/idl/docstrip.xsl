@@ -9,7 +9,7 @@
     original XIDL should not cause a full recompile of nearly all of
     VirtualBox.
 
-    Copyright (C) 2009-2016 Oracle Corporation
+    Copyright (C) 2009-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -21,7 +21,7 @@
 -->
 
 <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
-<xsl:output method="xml" indent="yes"/>
+<xsl:output method="xml" indent="yes" encoding="utf-8" />
 
 <!-- copy everything unless there's a more specific template -->
 <xsl:template match="@*|node()">

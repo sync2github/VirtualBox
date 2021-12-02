@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: buildblacklist.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 Test Manager - Builds Blacklist.
@@ -7,7 +7,7 @@ Test Manager - Builds Blacklist.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Validation Kit imports.
@@ -52,12 +52,12 @@ class BuildBlacklistData(ModelDataBase):
     ksParam_iFirstRevision  = 'BuildBlacklist_iFirstRevision'
     ksParam_iLastRevision   = 'BuildBlacklist_iLastRevision'
 
-    kasAllowNullAttributes    = [ 'idBlacklisting',
-                                  'tsEffective',
-                                  'tsExpire',
-                                  'uidAuthor',
-                                  'asTypes',
-                                  'asOsArches' ];
+    kasAllowNullAttributes  = [ 'idBlacklisting',
+                                'tsEffective',
+                                'tsExpire',
+                                'uidAuthor',
+                                'asTypes',
+                                'asOsArches' ];
 
     def __init__(self):
         ModelDataBase.__init__(self);
@@ -118,18 +118,23 @@ class BuildBlacklistData(ModelDataBase):
         return self.initFromDbRow(aoRow);
 
 
-class BuildBlacklistLogic(ModelLogicBase): # pylint: disable=R0903
+class BuildBlacklistLogic(ModelLogicBase): # pylint: disable=too-few-public-methods
     """
     Build Back List logic.
     """
 
-    def fetchForListing(self, iStart, cMaxRows, tsNow):
+    def __init__(self, oDb):
+        ModelLogicBase.__init__(self, oDb)
+        self.dCache = None;
+
+    def fetchForListing(self, iStart, cMaxRows, tsNow, aiSortColumns = None):
         """
         Fetches Build Blacklist records.
 
         Returns an array (list) of BuildBlacklistData items, empty list if none.
         Raises exception on error.
         """
+        _ = aiSortColumns;
 
         if tsNow is None:
             self._oDb.execute('SELECT   *\n'
@@ -187,7 +192,7 @@ class BuildBlacklistLogic(ModelLogicBase): # pylint: disable=R0903
         #
         assert isinstance(oData, BuildBlacklistData);
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Edit);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('editEntry invalid input: %s' % (dErrors,));
 
         oOldData = BuildBlacklistData().initFromDbWithId(self._oDb, oData.idBlacklisting);
@@ -222,6 +227,42 @@ class BuildBlacklistLogic(ModelLogicBase): # pylint: disable=R0903
                           , (idBlacklisting,));
         self._oDb.maybeCommit(fCommit);
         return True;
+
+
+    def cachedLookup(self, idBlacklisting):
+        """
+        Looks up the most recent BuildBlacklistData object for idBlacklisting
+        via an object cache.
+
+        Returns a shared BuildBlacklistData object.  None if not found.
+        Raises exception on DB error.
+        """
+        if self.dCache is None:
+            self.dCache = self._oDb.getCache('BuildBlacklistData');
+        oEntry = self.dCache.get(idBlacklisting, None);
+        if oEntry is None:
+            self._oDb.execute('SELECT   *\n'
+                              'FROM     BuildBlacklist\n'
+                              'WHERE    idBlacklisting = %s\n'
+                              '     AND tsExpire   = \'infinity\'::TIMESTAMP\n'
+                              , (idBlacklisting, ));
+            if self._oDb.getRowCount() == 0:
+                # Maybe it was deleted, try get the last entry.
+                self._oDb.execute('SELECT   *\n'
+                                  'FROM     BuildBlacklist\n'
+                                  'WHERE    idBlacklisting = %s\n'
+                                  'ORDER BY tsExpire DESC\n'
+                                  'LIMIT 1\n'
+                                  , (idBlacklisting, ));
+            elif self._oDb.getRowCount() > 1:
+                raise self._oDb.integrityException('%s infinity rows for %s' % (self._oDb.getRowCount(), idBlacklisting));
+
+            if self._oDb.getRowCount() == 1:
+                aaoRow = self._oDb.fetchOne();
+                oEntry = BuildBlacklistData();
+                oEntry.initFromDbRow(aaoRow);
+                self.dCache[idBlacklisting] = oEntry;
+        return oEntry;
 
 
     #

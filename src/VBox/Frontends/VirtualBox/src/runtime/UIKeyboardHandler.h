@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIKeyboardHandler.h 91001 2021-08-30 14:26:27Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIKeyboardHandler class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIKeyboardHandler_h___
-#define ___UIKeyboardHandler_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_UIKeyboardHandler_h
+#define FEQT_INCLUDED_SRC_runtime_UIKeyboardHandler_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QMap>
@@ -36,7 +39,6 @@
 
 /* Forward declarations: */
 class QWidget;
-class VBoxGlobalSettings;
 class UIActionPool;
 class UISession;
 class UIMachineLogic;
@@ -45,12 +47,10 @@ class UIMachineView;
 class CKeyboard;
 #ifdef VBOX_WS_WIN
 class WinAltGrMonitor;
-#endif /* VBOX_WS_WIN */
+#endif
 #ifdef VBOX_WS_X11
-# if QT_VERSION < 0x050000
-typedef union _XEvent XEvent;
-# endif /* QT_VERSION < 0x050000 */
-#endif /* VBOX_WS_X11 */
+#  include <xcb/xcb.h>
+#endif
 
 
 /* Delegate to control VM keyboard functionality: */
@@ -72,13 +72,6 @@ public:
     /* Prepare/cleanup listeners: */
     void prepareListener(ulong uScreenId, UIMachineWindow *pMachineWindow);
     void cleanupListener(ulong uScreenId);
-
-    /* Commands to capture/release keyboard: */
-#ifdef VBOX_WS_X11
-# if QT_VERSION < 0x050000
-    bool checkForX11FocusEvents(unsigned long hWindow);
-# endif /* QT_VERSION < 0x050000 */
-#endif /* VBOX_WS_X11 */
 
     /** Captures the keyboard for @a uScreenId. */
     void captureKeyboard(ulong uScreenId);
@@ -111,34 +104,20 @@ public:
     void winSkipKeyboardEvents(bool fSkip);
 #endif /* VBOX_WS_WIN */
 
-#if QT_VERSION < 0x050000
-# if defined(VBOX_WS_MAC)
-    /** Qt4: Mac: Performs pre-processing of all the native events. */
-    bool macEventFilter(const void *pvCocoaEvent, EventRef event, ulong uScreenId);
-# elif defined(VBOX_WS_WIN)
-    /** Qt4: Win: Performs pre-processing of all the native events. */
-    bool winEventFilter(MSG *pMsg, ulong uScreenId);
-# elif defined(VBOX_WS_X11)
-    /** Qt4: X11: Performs pre-processing of all the native events. */
-    bool x11EventFilter(XEvent *pEvent, ulong uScreenId);
-# endif /* VBOX_WS_X11 */
-#else
     /** Qt5: Performs pre-processing of all the native events. */
     bool nativeEventFilter(void *pMessage, ulong uScreenId);
-#endif
+
+    /** Called whenever host key press/release scan codes are inserted to the guest.
+      * @a bPressed is true for press and false for release inserts. */
+    void setHostKeyComboPressedFlag(bool bPressed);
 
 protected slots:
 
     /* Machine state-change handler: */
     virtual void sltMachineStateChanged();
 
-#if QT_VERSION >= 0x050000
     /** Finalises keyboard capture. */
     void sltFinaliseCaptureKeyboard();
-#elif QT_VERSION == 0
-    /** Stupid moc does not warn if it cannot find headers! */
-    void QT_VERSION_NOT_DEFINED
-#endif
 
 protected:
 
@@ -172,7 +151,7 @@ protected:
     bool macKeyboardEvent(const void *pvCocoaEvent, EventRef inEvent);
 #elif defined(VBOX_WS_WIN)
     /** Win: Performs initial pre-processing of all the native keyboard events. */
-    static LRESULT CALLBACK winKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK winKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) RT_NOTHROW_PROTO;
     /** Win: Performs initial pre-processing of all the native keyboard events. */
     bool winKeyboardEvent(UINT msg, const KBDLLHOOKSTRUCT &event);
 #endif /* VBOX_WS_WIN */
@@ -195,6 +174,7 @@ protected:
     bool autoCaptureSetGlobally();
     bool viewHasFocus(ulong uScreenId);
     bool isSessionRunning();
+    bool isSessionStuck();
 
     UIMachineWindow* isItListenedWindow(QObject *pWatchedObject) const;
     UIMachineView* isItListenedView(QObject *pWatchedObject) const;
@@ -209,7 +189,6 @@ protected:
 
     /* Other keyboard variables: */
     int m_iKeyboardCaptureViewIndex;
-    const VBoxGlobalSettings &m_globalSettings;
 
     uint8_t m_pressedKeys[128];
     uint8_t m_pressedKeysCopy[128];
@@ -221,6 +200,7 @@ protected:
     bool m_bIsHostComboAlone : 1;
     bool m_bIsHostComboProcessed : 1;
     bool m_fPassCADtoGuest : 1;
+    bool m_fHostKeyComboPressInserted : 1;
     /** Whether the debugger is active.
      * Currently only affects auto capturing. */
     bool m_fDebuggerActive : 1;
@@ -242,10 +222,10 @@ protected:
     WinAltGrMonitor *m_pAltGrMonitor;
     /** Win: Holds the keyboard handler reference to be accessible from the keyboard hook. */
     static UIKeyboardHandler *m_spKeyboardHandler;
-#endif /* VBOX_WS_WIN */
-
-    ULONG m_cMonitors;
+#elif defined(VBOX_WS_X11)
+    /** The root window at the time we grab the mouse buttons. */
+    xcb_window_t m_hButtonGrabWindow;
+#endif /* VBOX_WS_X11 */
 };
 
-#endif // !___UIKeyboardHandler_h___
-
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIKeyboardHandler_h */

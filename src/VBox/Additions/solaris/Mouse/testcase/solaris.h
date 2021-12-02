@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: solaris.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxGuest - Guest Additions Driver for Solaris - testcase stubs.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBoxGuestTestCaseSolaris_h
-#define ___VBoxGuestTestCaseSolaris_h
+#ifndef GA_INCLUDED_SRC_solaris_Mouse_testcase_solaris_h
+#define GA_INCLUDED_SRC_solaris_Mouse_testcase_solaris_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/assert.h>
 #include <iprt/string.h>  /* RT_ZERO */
@@ -346,11 +349,11 @@ extern int vboxguestSolarisInfo(struct modinfo *pModInfo);
 #define VBoxGuestDeleteDevExt(...) do {} while(0)
 #define VBoxGuestCommonIOCtl(...) VINF_SUCCESS
 #define VBoxGuestCommonISR(...) true
-#define VbglGRAlloc(...) VINF_SUCCESS
-#define VbglGRPerform(...) VINF_SUCCESS
-#define VbglGRFree(...) do {} while(0)
+#define VbglR0GRAlloc(...) VINF_SUCCESS
+#define VbglR0GRPerform(...) VINF_SUCCESS
+#define VbglR0GRFree(...) do {} while(0)
 #endif
-#define VbglInitClient(...) VINF_SUCCESS
+#define VbglR0InitClient(...) VINF_SUCCESS
 #define vbglDriverOpen(...) VINF_SUCCESS
 #define vbglDriverClose(...) do {} while(0)
 #define vbglDriverIOCtl(...) VINF_SUCCESS
@@ -438,4 +441,4 @@ static inline unsigned getmajor(dev_t device)
 
 /* API stubs with controllable logic */
 
-#endif  /* ___VBoxGuestTestCaseSolaris_h */
+#endif /* !GA_INCLUDED_SRC_solaris_Mouse_testcase_solaris_h */

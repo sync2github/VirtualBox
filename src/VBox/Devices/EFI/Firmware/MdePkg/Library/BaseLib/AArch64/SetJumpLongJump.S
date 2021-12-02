@@ -1,20 +1,14 @@
 #------------------------------------------------------------------------------
 #
 # Copyright (c) 2009-2013, ARM Ltd.  All rights reserved.
-# This program and the accompanying materials
-# are licensed and made available under the terms and conditions of the BSD License
-# which accompanies this distribution.  The full text of the license may be found at
-# http://opensource.org/licenses/bsd-license.php.
-#
-# THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-# WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+# SPDX-License-Identifier: BSD-2-Clause-Patent
 #
 #------------------------------------------------------------------------------
 .text
 .p2align 3
 
-ASM_GLOBAL ASM_PFX(SetJump)
-ASM_GLOBAL ASM_PFX(InternalLongJump)
+GCC_ASM_EXPORT(SetJump)
+GCC_ASM_EXPORT(InternalLongJump)
 
 #define GPR_LAYOUT                         \
         REG_PAIR (x19, x20,  0);           \
@@ -26,10 +20,10 @@ ASM_GLOBAL ASM_PFX(InternalLongJump)
         REG_ONE  (x16,      96) /*IP0*/
 
 #define FPR_LAYOUT                      \
-        REG_PAIR ( d8,  d9, 112);       \
-        REG_PAIR (d10, d11, 128);       \
-        REG_PAIR (d12, d13, 144);       \
-        REG_PAIR (d14, d15, 160);
+        REG_PAIR ( d8,  d9, 104);       \
+        REG_PAIR (d10, d11, 120);       \
+        REG_PAIR (d12, d13, 136);       \
+        REG_PAIR (d14, d15, 152);
 
 #/**
 #  Saves the current CPU context that can be restored with a call to LongJump() and returns 0.#

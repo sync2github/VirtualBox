@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTUtf16NLen.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTUtf16NLen.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,14 +28,14 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#include <iprt/string.h>
+#include <iprt/utf16.h>
 #include "internal/iprt.h"
 
 
 RTDECL(size_t) RTUtf16NLen(PCRTUTF16 pwszString, size_t cwcMax)
 {
     PCRTUTF16 pwszStart = pwszString;
-    while (cwcMax-- > 0 && pwszString != '\0')
+    while (cwcMax-- > 0 && *pwszString != '\0')
         pwszString++;
     return pwszString - pwszStart;
 }

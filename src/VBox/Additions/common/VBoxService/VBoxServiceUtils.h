@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxServiceUtils.h 86876 2020-11-12 16:38:00Z vboxsync $ */
 /** @file
  * VBoxServiceUtils - Guest Additions Services (Utilities).
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxServiceUtils_h
-#define ___VBoxServiceUtils_h
+#ifndef GA_INCLUDED_SRC_common_VBoxService_VBoxServiceUtils_h
+#define GA_INCLUDED_SRC_common_VBoxService_VBoxServiceUtils_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VBoxServiceInternal.h"
 
@@ -32,5 +35,5 @@ int VGSvcWritePropF(uint32_t u32ClientId, const char *pszName, const char *pszVa
 int VGSvcUtilWinGetFileVersionString(const char *pszPath, const char *pszFileName, char *pszVersion, size_t cbVersion);
 #endif
 
-#endif
+#endif /* !GA_INCLUDED_SRC_common_VBoxService_VBoxServiceUtils_h */
 

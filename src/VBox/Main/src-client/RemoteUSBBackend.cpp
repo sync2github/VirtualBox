@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RemoteUSBBackend.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Remote USB backend
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,6 +16,8 @@
  */
 
 #define LOG_GROUP LOG_GROUP_USB_REMOTE
+#include "LoggingNew.h"
+
 #include "ConsoleImpl.h"
 #include "ConsoleVRDPServer.h"
 #include "RemoteUSBBackend.h"
@@ -63,7 +65,7 @@
  * will not affect the timeout, so it is ok.
  *
  *
- * @subsection sub_vrdb_usb_dad  Device attaching/detaching
+ * @section sub_vrdb_usb_dad  Device attaching/detaching
  *
  * Devices are attached when client is connected or when a new device is connected to client.
  * Devices are detached when client is disconnected (all devices) or a device is disconnected

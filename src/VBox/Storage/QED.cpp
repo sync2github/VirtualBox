@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QED.cpp 90802 2021-08-23 19:08:27Z vboxsync $ */
 /** @file
  * QED - QED Disk image.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,7 @@
 #include <iprt/list.h>
 
 #include "VDBackends.h"
+#include "VDBackendsInline.h"
 
 /**
  * The QED backend implements support for the qemu enhanced disk format (short QED)
@@ -216,7 +217,8 @@ typedef struct QEDIMAGE
     RTLISTNODE          ListSearch;
     /** The LRU L2 entry list used for eviction. */
     RTLISTNODE          ListLru;
-
+    /** The static region list. */
+    VDREGIONLIST        RegionList;
 } QEDIMAGE, *PQEDIMAGE;
 
 /**
@@ -1104,7 +1106,7 @@ static int qedFreeImage(PQEDIMAGE pImage, bool fDelete)
 
         if (pImage->pszBackingFilename)
         {
-            RTMemFree(pImage->pszBackingFilename);
+            RTStrFree(pImage->pszBackingFilename);
             pImage->pszBackingFilename = NULL;
         }
 
@@ -1172,17 +1174,20 @@ static int qedOpenImage(PQEDIMAGE pImage, unsigned uOpenFlags)
                             && (Header.u64FeatureFlags & QED_FEATURE_BACKING_FILE))
                         {
                             /* Load backing filename from image. */
-                            pImage->pszBackingFilename = (char *)RTMemAllocZ(Header.u32BackingFilenameSize + 1); /* +1 for \0 terminator. */
+                            pImage->pszBackingFilename = RTStrAlloc(Header.u32BackingFilenameSize + 1); /* +1 for \0 terminator. */
                             if (pImage->pszBackingFilename)
                             {
+                                RT_BZERO(pImage->pszBackingFilename, Header.u32BackingFilenameSize + 1);
                                 pImage->cbBackingFilename  = Header.u32BackingFilenameSize;
                                 pImage->offBackingFilename = Header.u32OffBackingFilename;
                                 rc = vdIfIoIntFileReadSync(pImage->pIfIo, pImage->pStorage,
                                                            Header.u32OffBackingFilename, pImage->pszBackingFilename,
                                                            Header.u32BackingFilenameSize);
+                                if (RT_SUCCESS(rc))
+                                    rc = RTStrValidateEncoding(pImage->pszBackingFilename);
                             }
                             else
-                                rc = VERR_NO_MEMORY;
+                                rc = VERR_NO_STR_MEMORY;
                         }
 
                         if (RT_SUCCESS(rc))
@@ -1241,7 +1246,21 @@ static int qedOpenImage(PQEDIMAGE pImage, unsigned uOpenFlags)
                        N_("Qed: Creating the L2 table cache for image '%s' failed"),
                        pImage->pszFilename);
 
-    if (RT_FAILURE(rc))
+    if (RT_SUCCESS(rc))
+    {
+        PVDREGIONDESC pRegion = &pImage->RegionList.aRegions[0];
+        pImage->RegionList.fFlags   = 0;
+        pImage->RegionList.cRegions = 1;
+
+        pRegion->offRegion            = 0; /* Disk start. */
+        pRegion->cbBlock              = 512;
+        pRegion->enmDataForm          = VDREGIONDATAFORM_RAW;
+        pRegion->enmMetadataForm      = VDREGIONMETADATAFORM_NONE;
+        pRegion->cbData               = 512;
+        pRegion->cbMetadata           = 0;
+        pRegion->cRegionBlocksOrBytes = pImage->cbSize;
+    }
+    else
         qedFreeImage(pImage, false);
     return rc;
 }
@@ -1311,7 +1330,21 @@ static int qedCreateImage(PQEDIMAGE pImage, uint64_t cbSize,
         rc = vdIfError(pImage->pIfError, VERR_VD_INVALID_TYPE, RT_SRC_POS, N_("Qed: cannot create fixed image '%s'"), pImage->pszFilename);
 
     if (RT_SUCCESS(rc))
+    {
+        PVDREGIONDESC pRegion = &pImage->RegionList.aRegions[0];
+        pImage->RegionList.fFlags   = 0;
+        pImage->RegionList.cRegions = 1;
+
+        pRegion->offRegion            = 0; /* Disk start. */
+        pRegion->cbBlock              = 512;
+        pRegion->enmDataForm          = VDREGIONDATAFORM_RAW;
+        pRegion->enmMetadataForm      = VDREGIONMETADATAFORM_NONE;
+        pRegion->cbData               = 512;
+        pRegion->cbMetadata           = 0;
+        pRegion->cRegionBlocksOrBytes = pImage->cbSize;
+
         vdIfProgress(pIfProgress, uPercentStart + uPercentSpan);
+    }
     else
         qedFreeImage(pImage, rc != VERR_ALREADY_EXISTS);
 
@@ -1404,8 +1437,8 @@ static DECLCALLBACK(int) qedAsyncClusterAllocUpdate(void *pBackendData, PVDIOCTX
                 qedAsyncClusterAllocRollback(pImage, pIoCtx, pClusterAlloc);
                 break;
             }
-            /* Success, fall through. */
         }
+        RT_FALL_THRU();
         case QEDCLUSTERASYNCALLOCSTATE_L2_LINK:
         {
             /* L2 link updated in L1 , save L2 entry in cache and allocate new user data cluster. */
@@ -1431,6 +1464,7 @@ static DECLCALLBACK(int) qedAsyncClusterAllocUpdate(void *pBackendData, PVDIOCTX
                 break;
             }
         }
+        RT_FALL_THRU();
         case QEDCLUSTERASYNCALLOCSTATE_USER_ALLOC:
         {
             pClusterAlloc->enmAllocState = QEDCLUSTERASYNCALLOCSTATE_USER_LINK;
@@ -1449,6 +1483,7 @@ static DECLCALLBACK(int) qedAsyncClusterAllocUpdate(void *pBackendData, PVDIOCTX
                 break;
             }
         }
+        RT_FALL_THRU();
         case QEDCLUSTERASYNCALLOCSTATE_USER_LINK:
         {
             /* Everything done without errors, signal completion. */
@@ -1467,9 +1502,9 @@ static DECLCALLBACK(int) qedAsyncClusterAllocUpdate(void *pBackendData, PVDIOCTX
 
 /** @copydoc VDIMAGEBACKEND::pfnProbe */
 static DECLCALLBACK(int) qedProbe(const char *pszFilename, PVDINTERFACE pVDIfsDisk,
-                                  PVDINTERFACE pVDIfsImage, VDTYPE *penmType)
+                                  PVDINTERFACE pVDIfsImage, VDTYPE enmDesiredType, VDTYPE *penmType)
 {
-    RT_NOREF1(pVDIfsDisk);
+    RT_NOREF(pVDIfsDisk, enmDesiredType);
     LogFlowFunc(("pszFilename=\"%s\" pVDIfsDisk=%#p pVDIfsImage=%#p\n", pszFilename, pVDIfsDisk, pVDIfsImage));
     PVDIOSTORAGE pStorage = NULL;
     int rc = VINF_SUCCESS;
@@ -1477,7 +1512,9 @@ static DECLCALLBACK(int) qedProbe(const char *pszFilename, PVDINTERFACE pVDIfsDi
     /* Get I/O interface. */
     PVDINTERFACEIOINT pIfIo = VDIfIoIntGet(pVDIfsImage);
     AssertPtrReturn(pIfIo, VERR_INVALID_PARAMETER);
-    AssertReturn((VALID_PTR(pszFilename) && *pszFilename), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+
 
     /*
      * Open the file and read the footer.
@@ -1527,9 +1564,11 @@ static DECLCALLBACK(int) qedOpen(const char *pszFilename, unsigned uOpenFlags,
 
     /* Check open flags. All valid flags are supported. */
     AssertReturn(!(uOpenFlags & ~VD_OPEN_FLAGS_MASK), VERR_INVALID_PARAMETER);
-    AssertReturn((VALID_PTR(pszFilename) && *pszFilename), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
 
-    PQEDIMAGE pImage = (PQEDIMAGE)RTMemAllocZ(sizeof(QEDIMAGE));
+
+    PQEDIMAGE pImage = (PQEDIMAGE)RTMemAllocZ(RT_UOFFSETOF(QEDIMAGE, RegionList.aRegions[1]));
     if (RT_LIKELY(pImage))
     {
         pImage->pszFilename = pszFilename;
@@ -1571,12 +1610,12 @@ static DECLCALLBACK(int) qedCreate(const char *pszFilename, uint64_t cbSize,
 
     /* Check open flags. All valid flags are supported. */
     AssertReturn(!(uOpenFlags & ~VD_OPEN_FLAGS_MASK), VERR_INVALID_PARAMETER);
-    AssertReturn(   VALID_PTR(pszFilename)
-                 && *pszFilename
-                 && VALID_PTR(pPCHSGeometry)
-                 && VALID_PTR(pLCHSGeometry), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pPCHSGeometry, VERR_INVALID_POINTER);
+    AssertPtrReturn(pLCHSGeometry, VERR_INVALID_POINTER);
 
-    PQEDIMAGE pImage = (PQEDIMAGE)RTMemAllocZ(sizeof(QEDIMAGE));
+    PQEDIMAGE pImage = (PQEDIMAGE)RTMemAllocZ(RT_UOFFSETOF(QEDIMAGE, RegionList.aRegions[1]));
     if (RT_LIKELY(pImage))
     {
         PVDINTERFACEPROGRESS pIfProgress = VDIfProgressGet(pVDIfsOperation);
@@ -1678,7 +1717,8 @@ static DECLCALLBACK(int) qedRead(void *pBackendData, uint64_t uOffset, size_t cb
     AssertPtr(pImage);
     Assert(uOffset % 512 == 0);
     Assert(cbToRead % 512 == 0);
-    AssertReturn((VALID_PTR(pIoCtx) && cbToRead), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pIoCtx, VERR_INVALID_POINTER);
+    AssertReturn(cbToRead, VERR_INVALID_PARAMETER);
     AssertReturn(uOffset + cbToRead <= pImage->cbSize, VERR_INVALID_PARAMETER);
 
     qedConvertLogicalOffset(pImage, uOffset, &idxL1, &idxL2, &offCluster);
@@ -1719,7 +1759,8 @@ static DECLCALLBACK(int) qedWrite(void *pBackendData, uint64_t uOffset, size_t c
     AssertPtr(pImage);
     Assert(!(uOffset % 512));
     Assert(!(cbToWrite % 512));
-    AssertReturn((VALID_PTR(pIoCtx) && cbToWrite), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pIoCtx, VERR_INVALID_POINTER);
+    AssertReturn(cbToWrite, VERR_INVALID_PARAMETER);
     AssertReturn(uOffset + cbToWrite <= pImage->cbSize, VERR_INVALID_PARAMETER);
 
     if (!(pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY))
@@ -1922,38 +1963,6 @@ static DECLCALLBACK(unsigned) qedGetVersion(void *pBackendData)
     return 1;
 }
 
-/** @copydoc VDIMAGEBACKEND::pfnGetSectorSize */
-static DECLCALLBACK(uint32_t) qedGetSectorSize(void *pBackendData)
-{
-    LogFlowFunc(("pBackendData=%#p\n", pBackendData));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-    uint32_t cb = 0;
-
-    AssertPtrReturn(pImage, 0);
-
-    if (pImage->pStorage)
-        cb = 512;
-
-    LogFlowFunc(("returns %u\n", cb));
-    return cb;
-}
-
-/** @copydoc VDIMAGEBACKEND::pfnGetSize */
-static DECLCALLBACK(uint64_t) qedGetSize(void *pBackendData)
-{
-    LogFlowFunc(("pBackendData=%#p\n", pBackendData));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-    uint64_t cb = 0;
-
-    AssertPtrReturn(pImage, 0);
-
-    if (pImage->pStorage)
-        cb = pImage->cbSize;
-
-    LogFlowFunc(("returns %llu\n", cb));
-    return cb;
-}
-
 /** @copydoc VDIMAGEBACKEND::pfnGetFileSize */
 static DECLCALLBACK(uint64_t) qedGetFileSize(void *pBackendData)
 {
@@ -2052,6 +2061,30 @@ static DECLCALLBACK(int) qedSetLCHSGeometry(void *pBackendData, PCVDGEOMETRY pLC
     return rc;
 }
 
+/** @copydoc VDIMAGEBACKEND::pfnQueryRegions */
+static DECLCALLBACK(int) qedQueryRegions(void *pBackendData, PCVDREGIONLIST *ppRegionList)
+{
+    LogFlowFunc(("pBackendData=%#p ppRegionList=%#p\n", pBackendData, ppRegionList));
+    PQEDIMAGE pThis = (PQEDIMAGE)pBackendData;
+
+    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
+
+    *ppRegionList = &pThis->RegionList;
+    LogFlowFunc(("returns %Rrc\n", VINF_SUCCESS));
+    return VINF_SUCCESS;
+}
+
+/** @copydoc VDIMAGEBACKEND::pfnRegionListRelease */
+static DECLCALLBACK(void) qedRegionListRelease(void *pBackendData, PCVDREGIONLIST pRegionList)
+{
+    RT_NOREF1(pRegionList);
+    LogFlowFunc(("pBackendData=%#p pRegionList=%#p\n", pBackendData, pRegionList));
+    PQEDIMAGE pThis = (PQEDIMAGE)pBackendData;
+    AssertPtr(pThis); RT_NOREF(pThis);
+
+    /* Nothing to do here. */
+}
+
 /** @copydoc VDIMAGEBACKEND::pfnGetImageFlags */
 static DECLCALLBACK(unsigned) qedGetImageFlags(void *pBackendData)
 {
@@ -2101,165 +2134,34 @@ static DECLCALLBACK(int) qedSetOpenFlags(void *pBackendData, unsigned uOpenFlags
 }
 
 /** @copydoc VDIMAGEBACKEND::pfnGetComment */
-static DECLCALLBACK(int) qedGetComment(void *pBackendData, char *pszComment,
-                                       size_t cbComment)
-{
-    RT_NOREF2(pszComment, cbComment);
-    LogFlowFunc(("pBackendData=%#p pszComment=%#p cbComment=%zu\n", pBackendData, pszComment, cbComment));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc comment='%s'\n", VERR_NOT_SUPPORTED, pszComment));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_COMMENT_DEF_NOT_SUPPORTED(qedGetComment);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetComment */
-static DECLCALLBACK(int) qedSetComment(void *pBackendData, const char *pszComment)
-{
-    RT_NOREF1(pszComment);
-    LogFlowFunc(("pBackendData=%#p pszComment=\"%s\"\n", pBackendData, pszComment));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_COMMENT_DEF_NOT_SUPPORTED(qedSetComment, PQEDIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetUuid */
-static DECLCALLBACK(int) qedGetUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(qedGetUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetUuid */
-static DECLCALLBACK(int) qedSetUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(qedSetUuid, PQEDIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetModificationUuid */
-static DECLCALLBACK(int) qedGetModificationUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(qedGetModificationUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetModificationUuid */
-static DECLCALLBACK(int) qedSetModificationUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(qedSetModificationUuid, PQEDIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetParentUuid */
-static DECLCALLBACK(int) qedGetParentUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(qedGetParentUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetParentUuid */
-static DECLCALLBACK(int) qedSetParentUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(qedSetParentUuid, PQEDIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnGetParentModificationUuid */
-static DECLCALLBACK(int) qedGetParentModificationUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(qedGetParentModificationUuid);
 
 /** @copydoc VDIMAGEBACKEND::pfnSetParentModificationUuid */
-static DECLCALLBACK(int) qedSetParentModificationUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PQEDIMAGE pImage = (PQEDIMAGE)pBackendData;
-
-    AssertPtrReturn(pImage, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pImage->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(qedSetParentModificationUuid, PQEDIMAGE);
 
 /** @copydoc VDIMAGEBACKEND::pfnDump */
 static DECLCALLBACK(void) qedDump(void *pBackendData)
@@ -2309,7 +2211,7 @@ static DECLCALLBACK(int) qedSetParentFilename(void *pBackendData, const char *ps
             RTStrFree(pImage->pszBackingFilename);
         pImage->pszBackingFilename = RTStrDup(pszParentFilename);
         if (!pImage->pszBackingFilename)
-            rc = VERR_NO_MEMORY;
+            rc = VERR_NO_STR_MEMORY;
         else
         {
             if (!pImage->offBackingFilename)
@@ -2419,10 +2321,6 @@ const VDIMAGEBACKEND g_QedBackend =
     NULL,
     /* pfnGetVersion */
     qedGetVersion,
-    /* pfnGetSectorSize */
-    qedGetSectorSize,
-    /* pfnGetSize */
-    qedGetSize,
     /* pfnGetFileSize */
     qedGetFileSize,
     /* pfnGetPCHSGeometry */
@@ -2433,6 +2331,10 @@ const VDIMAGEBACKEND g_QedBackend =
     qedGetLCHSGeometry,
     /* pfnSetLCHSGeometry */
     qedSetLCHSGeometry,
+    /* pfnQueryRegions */
+    qedQueryRegions,
+    /* pfnRegionListRelease */
+    qedRegionListRelease,
     /* pfnGetImageFlags */
     qedGetImageFlags,
     /* pfnGetOpenFlags */

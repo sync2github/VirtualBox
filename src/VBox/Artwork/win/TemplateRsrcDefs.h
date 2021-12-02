@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: TemplateRsrcDefs.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Defines for templates that does not have Windows.h handy.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,10 +24,6 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifdef IN_ICON_FILE
-IDI_ICON1 ICON IN_ICON_FILE
-#endif
 
 #define VS_VERSION_INFO         1
 #define VS_FFI_FILEFLAGSMASK    0x3f

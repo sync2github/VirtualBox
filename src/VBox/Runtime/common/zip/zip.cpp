@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: zip.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * IPRT - Compression.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,9 @@
 #define RTZIP_USE_STORE 1
 #define RTZIP_USE_ZLIB 1
 //#define RTZIP_USE_BZLIB 1
-#define RTZIP_USE_LZF 1
+#ifndef IN_GUEST
+# define RTZIP_USE_LZF 1
+#endif
 #define RTZIP_LZF_BLOCK_BY_BLOCK
 //#define RTZIP_USE_LZJB 1
 //#define RTZIP_USE_LZO 1
@@ -129,17 +131,17 @@ typedef struct RTZIPCOMP
     /**
      * @copydoc RTZipCompress
      */
-    DECLCALLBACKMEMBER(int, pfnCompress)(PRTZIPCOMP pZip, const void *pvBuf, size_t cbBuf);
+    DECLCALLBACKMEMBER(int, pfnCompress,(PRTZIPCOMP pZip, const void *pvBuf, size_t cbBuf));
 
     /**
      * @copydoc RTZipCompFinish
      */
-    DECLCALLBACKMEMBER(int, pfnFinish)(PRTZIPCOMP pZip);
+    DECLCALLBACKMEMBER(int, pfnFinish,(PRTZIPCOMP pZip));
 
     /**
      * @copydoc RTZipCompDestroy
      */
-    DECLCALLBACKMEMBER(int, pfnDestroy)(PRTZIPCOMP pZip);
+    DECLCALLBACKMEMBER(int, pfnDestroy,(PRTZIPCOMP pZip));
 
     /** Compression type. */
     RTZIPTYPE           enmType;
@@ -197,12 +199,12 @@ typedef struct RTZIPDECOMP
     /**
      * @copydoc RTZipDecompress
      */
-    DECLCALLBACKMEMBER(int, pfnDecompress)(PRTZIPDECOMP pZip, void *pvBuf, size_t cbBuf, size_t *pcbWritten);
+    DECLCALLBACKMEMBER(int, pfnDecompress,(PRTZIPDECOMP pZip, void *pvBuf, size_t cbBuf, size_t *pcbWritten));
 
     /**
      * @copydoc RTZipDecompDestroy
      */
-    DECLCALLBACKMEMBER(int, pfnDestroy)(PRTZIPDECOMP pZip);
+    DECLCALLBACKMEMBER(int, pfnDestroy,(PRTZIPDECOMP pZip));
 
     /** Compression type. */
     RTZIPTYPE           enmType;
@@ -1932,6 +1934,7 @@ RTDECL(int) RTZipBlockDecompress(RTZIPTYPE enmType, uint32_t fFlags,
         }
 
         case RTZIPTYPE_ZLIB:
+        case RTZIPTYPE_ZLIB_NO_HEADER:
         {
 #ifdef RTZIP_USE_ZLIB
             AssertReturn(cbSrc == (uInt)cbSrc, VERR_TOO_MUCH_DATA);
@@ -1944,7 +1947,14 @@ RTDECL(int) RTZipBlockDecompress(RTZIPTYPE enmType, uint32_t fFlags,
             ZStrm.next_out  = (Bytef *)pvDst;
             ZStrm.avail_out = (uInt)cbDst;
 
-            int rc = inflateInit(&ZStrm);
+            int rc;
+            if (enmType == RTZIPTYPE_ZLIB)
+                rc = inflateInit(&ZStrm);
+            else if (enmType == RTZIPTYPE_ZLIB_NO_HEADER)
+                rc = inflateInit2(&ZStrm, -Z_DEF_WBITS);
+            else
+                AssertFailedReturn(VERR_INTERNAL_ERROR);
+
             if (RT_UNLIKELY(rc != Z_OK))
                 return zipErrConvertFromZlib(rc, false /*fCompressing*/);
             rc = inflate(&ZStrm, Z_FINISH);

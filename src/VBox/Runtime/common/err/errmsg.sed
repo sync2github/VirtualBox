@@ -1,10 +1,10 @@
-# $Id$
+# $Id: errmsg.sed 88965 2021-05-10 12:19:27Z vboxsync $
 ## @file
 # IPRT - SED script for converting */err.h.
 #
 
 #
-# Copyright (C) 2006-2015 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -43,7 +43,7 @@ b end
 ##
 # Convert the defines
 :defines
-s/^[[:space:]]*#[[:space:]]*define[[:space:]]*\([[:alnum:]_]*\)[[:space:]]*\(.*\)[[:space:]]*$/    "\1",\n     \1 }, /
+s/^[[:space:]]*#[[:space:]]*define[[:space:]]*\([[:alnum:]_]*\)[[:space:]]*\(.*\)[[:space:]]*$/    "\1",\n     \1, false }, /
 b end
 
 ##

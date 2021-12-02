@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: slirp_dns.c 92108 2021-10-27 14:54:48Z vboxsync $ */
 /** @file
  * NAT - dns initialization.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,12 +20,13 @@
 # include <paths.h>
 #endif
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/vmm/pdmdrv.h>
 #include <iprt/assert.h>
 #include <iprt/file.h>
 
 #ifdef RT_OS_WINDOWS
+# include <iprt/utf16.h>
 # include <Winnls.h>
 # define _WINSOCK2API_
 # include <iprt/win/iphlpapi.h>
@@ -178,6 +179,17 @@ static int get_dns_addr_domain(PNATState pData)
     {
         struct dns_entry *pDns;
         RTNETADDRU *address = &st.rcps_nameserver[i].uAddr;
+
+        if (address->IPv4.u == INADDR_ANY)
+        {
+            /*
+             * This doesn't seem to be very well documented except for
+             * RTFS of res_init.c, but INADDR_ANY is a valid value for
+             * for "nameserver".
+             */
+            address->IPv4.u = RT_H2N_U32_C(INADDR_LOOPBACK);
+        }
+
         if (  (address->IPv4.u & RT_H2N_U32_C(IN_CLASSA_NET))
            == RT_N2H_U32_C(INADDR_LOOPBACK & IN_CLASSA_NET))
         {
@@ -185,11 +197,18 @@ static int get_dns_addr_domain(PNATState pData)
              * XXX: Note shouldn't patch the address in case of using DNS proxy,
              * because DNS proxy we do revert it back actually.
              */
-            if (address->IPv4.u == RT_N2H_U32_C(INADDR_LOOPBACK))
+            if (   address->IPv4.u == RT_N2H_U32_C(INADDR_LOOPBACK)
+                && pData->fLocalhostReachable)
                 address->IPv4.u = RT_H2N_U32(RT_N2H_U32(pData->special_addr.s_addr) | CTL_ALIAS);
             else if (pData->fUseDnsProxy == 0) {
-                /* We detects that using some address in 127/8 network */
-                LogRel(("NAT: DNS server %RTnaipv4 registration detected, switching to the DNS proxy\n", address->IPv4));
+                /*
+                 * Either the resolver lives somewhere else on the 127/8 network or the loopback interface
+                 * is blocked for access from the guest, either way switch to the DNS proxy.
+                 */
+                if (pData->fLocalhostReachable)
+                    LogRel(("NAT: DNS server %RTnaipv4 registration detected, switching to the DNS proxy\n", address->IPv4));
+                else
+                    LogRel(("NAT: Switching to DNS proxying due to access to the loopback interface being blocked\n"));
                 pData->fUseDnsProxy = 1;
             }
         }

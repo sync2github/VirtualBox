@@ -1,11 +1,9 @@
 /** @file
- *
- * VBox frontends: Framebuffer (FB, DirectFB):
- * Declaration of VBoxDirectFB class
+ * VBoxFB - Declaration of VBoxDirectFB class.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +14,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __H_FRAMEBUFFER
-#define __H_FRAMEBUFFER
+#ifndef VBOX_INCLUDED_SRC_VBoxFB_Framebuffer_h
+#define VBOX_INCLUDED_SRC_VBoxFB_Framebuffer_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VBoxFB.h"
 
@@ -50,7 +51,7 @@ public:
     NS_IMETHOD GetVisibleRegion(PRUint8 *aRectangles, PRUint32 aCount, PRUint32 *aCountCopied);
     NS_IMETHOD SetVisibleRegion(PRUint8 *aRectangles, PRUint32 aCount);
 
-    NS_IMETHOD ProcessVHWACommand(PRUint8 *pCommand);
+    NS_IMETHOD ProcessVHWACommand(PRUint8 *pCommand, LONG enmCmd, BOOL fGuestCmd);
 
     NS_IMETHOD Notify3DEvent(PRUint32 type, PRUint8 *reserved);
 private:
@@ -69,5 +70,5 @@ private:
 };
 
 
-#endif // __H_FRAMEBUFFER
+#endif /* !VBOX_INCLUDED_SRC_VBoxFB_Framebuffer_h */
 

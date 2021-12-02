@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxTray.rdef 92179 2021-11-02 21:44:49Z vboxsync $ */
 /** @file
  * VBoxApp - Resource definition file containing version info and icon, Haiku Guest Additions.
  */
 
 /*
- * Copyright (C) 2012 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,14 +13,13 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
- */
-
-/*
+ *-----------------------------------------------------------------------------
+ *
  * This code is based on:
  *
  * VirtualBox Guest Additions for Haiku.
  * Copyright (c) 2011 Mike Smith <mike@scgtrp.net>
- *                    Fran�ois Revol <revol@free.fr>
+ *                    François Revol <revol@free.fr>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -60,7 +59,7 @@ resource app_version {
     internal = VBOX_SVN_REV,
 
     short_info = VBOX_PRODUCT,
-    long_info = VBOX_PRODUCT " " VBOX_VERSION_STRING " ©2009-" VBOX_C_YEAR " " VBOX_VENDOR
+    long_info = VBOX_PRODUCT " " VBOX_VERSION_STRING " Â©2009-" VBOX_C_YEAR " " VBOX_VENDOR
 };
 */
 

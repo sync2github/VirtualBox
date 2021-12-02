@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tftp.h 91627 2021-10-07 21:27:26Z vboxsync $ */
 /** @file
  * NAT - TFTP server (declarations/defines).
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,6 +30,19 @@
 #define TFTP_ACK    4
 #define TFTP_ERROR  5
 #define TFTP_OACK   6
+
+/* error codes */
+#define TFTP_EUNDEF     0 /* Not defined, see error message (if any). */
+#define TFTP_ENOENT     1 /* File not found. */
+#define TFTP_EACCESS    2 /* Access violation. */
+#define TFTP_EFBIG      3 /* Disk full or allocation exceeded. */
+#define TFTP_ENOSYS     4 /* Illegal TFTP operation. */
+#define TFTP_ESRCH      5 /* Unknown transfer ID. */
+#define TFTP_EEXIST     6 /* File already exists. */
+#define TFTP_EUSER      7 /* No such user. */
+/* RFC 2347 */
+#define TFTP_EONAK      8 /* Option refused. */
+
 
 #define TFTP_FILENAME_MAX 512
 

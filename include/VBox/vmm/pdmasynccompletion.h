@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,12 +23,13 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmasynccompletion_h
-#define ___VBox_vmm_pdmasynccompletion_h
+#ifndef VBOX_INCLUDED_vmm_pdmasynccompletion_h
+#define VBOX_INCLUDED_vmm_pdmasynccompletion_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
-#include <VBox/err.h>
-#include <iprt/assert.h>
 #include <iprt/sg.h>
 
 
@@ -62,7 +63,7 @@ typedef PPDMASYNCCOMPLETIONENDPOINT *PPPDMASYNCCOMPLETIONENDPOINT;
  * @param   pvUser      User argument.
  * @param   rc          The status code of the completed request.
  */
-typedef DECLCALLBACK(void) FNPDMASYNCCOMPLETEDEV(PPDMDEVINS pDevIns, void *pvUser, int rc);
+typedef DECLCALLBACKTYPE(void, FNPDMASYNCCOMPLETEDEV,(PPDMDEVINS pDevIns, void *pvUser, int rc));
 /** Pointer to a FNPDMASYNCCOMPLETEDEV(). */
 typedef FNPDMASYNCCOMPLETEDEV *PFNPDMASYNCCOMPLETEDEV;
 
@@ -75,7 +76,7 @@ typedef FNPDMASYNCCOMPLETEDEV *PFNPDMASYNCCOMPLETEDEV;
  * @param   pvUser         User argument given during request initiation.
  * @param   rc          The status code of the completed request.
  */
-typedef DECLCALLBACK(void) FNPDMASYNCCOMPLETEDRV(PPDMDRVINS pDrvIns, void *pvTemplateUser, void *pvUser, int rc);
+typedef DECLCALLBACKTYPE(void, FNPDMASYNCCOMPLETEDRV,(PPDMDRVINS pDrvIns, void *pvTemplateUser, void *pvUser, int rc));
 /** Pointer to a FNPDMASYNCCOMPLETEDRV(). */
 typedef FNPDMASYNCCOMPLETEDRV *PFNPDMASYNCCOMPLETEDRV;
 
@@ -87,7 +88,7 @@ typedef FNPDMASYNCCOMPLETEDRV *PFNPDMASYNCCOMPLETEDRV;
  * @param   pvUser      User argument.
  * @param   rc          The status code of the completed request.
  */
-typedef DECLCALLBACK(void) FNPDMASYNCCOMPLETEUSB(PPDMUSBINS pUsbIns, void *pvUser, int rc);
+typedef DECLCALLBACKTYPE(void, FNPDMASYNCCOMPLETEUSB,(PPDMUSBINS pUsbIns, void *pvUser, int rc));
 /** Pointer to a FNPDMASYNCCOMPLETEUSB(). */
 typedef FNPDMASYNCCOMPLETEUSB *PFNPDMASYNCCOMPLETEUSB;
 
@@ -100,7 +101,7 @@ typedef FNPDMASYNCCOMPLETEUSB *PFNPDMASYNCCOMPLETEUSB;
  * @param   pvUser2     User argument for the template.
  * @param   rc          The status code of the completed request.
  */
-typedef DECLCALLBACK(void) FNPDMASYNCCOMPLETEINT(PVM pVM, void *pvUser, void *pvUser2, int rc);
+typedef DECLCALLBACKTYPE(void, FNPDMASYNCCOMPLETEINT,(PVM pVM, void *pvUser, void *pvUser2, int rc));
 /** Pointer to a FNPDMASYNCCOMPLETEINT(). */
 typedef FNPDMASYNCCOMPLETEINT *PFNPDMASYNCCOMPLETEINT;
 
@@ -145,5 +146,5 @@ VMMR3DECL(int) PDMR3AsyncCompletionBwMgrSetMaxForFile(PUVM pUVM, const char *psz
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_pdmasynccompletion_h */
 

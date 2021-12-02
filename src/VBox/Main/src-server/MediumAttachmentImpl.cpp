@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: MediumAttachmentImpl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,13 +15,14 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_MEDIUMATTACHMENT
 #include "MediumAttachmentImpl.h"
 #include "MachineImpl.h"
 #include "MediumImpl.h"
 #include "Global.h"
 
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <iprt/cpp/utils.h>
 
@@ -91,11 +91,17 @@ void MediumAttachment::FinalRelease()
  *
  * @param aParent           Machine object.
  * @param aMedium           Medium object.
- * @param aController       Controller the hard disk is attached to.
+ * @param aControllerName   Controller the hard disk is attached to.
  * @param aPort             Port number.
  * @param aDevice           Device number on the port.
+ * @param aType             Device type.
+ * @param aImplicit
  * @param aPassthrough      Whether accesses are directly passed to the host drive.
- * @param aBandwidthLimit   Bandwidth limit in Mbps
+ * @param aTempEject        Whether guest-triggered eject results in unmounting the medium.
+ * @param aNonRotational    Whether this medium is non-rotational (aka SSD).
+ * @param aDiscard          Whether this medium supports discarding unused blocks.
+ * @param aHotPluggable     Whether this medium is hot-pluggable.
+ * @param strBandwidthGroup Bandwidth group.
  */
 HRESULT MediumAttachment::init(Machine *aParent,
                                Medium *aMedium,
@@ -160,7 +166,6 @@ HRESULT MediumAttachment::initCopy(Machine *aParent, MediumAttachment *aThat)
     LogFlowThisFunc(("aParent=%p, aThat=%p\n", aParent, aThat));
 
     ComAssertRet(aParent && aThat, E_INVALIDARG);
-    Assert(!aParent->i_isSnapshotMachine());
 
     /* Enclose the state transition NotReady->InInit->Ready */
     AutoInitSpan autoInitSpan(this);
@@ -210,6 +215,20 @@ void MediumAttachment::uninit()
 
 // IHardDiskAttachment properties
 /////////////////////////////////////////////////////////////////////////////
+
+
+HRESULT MediumAttachment::getMachine(ComPtr<IMachine> &aMachine)
+{
+    LogFlowThisFuncEnter();
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    ComObjPtr<Machine> pMachine(m->pMachine);
+    pMachine.queryInterfaceTo(aMachine.asOutParam());
+
+    LogFlowThisFuncLeave();
+    return S_OK;
+}
 
 
 HRESULT MediumAttachment::getMedium(ComPtr<IMedium> &aHardDisk)
@@ -508,7 +527,7 @@ void MediumAttachment::i_updateName(const Utf8Str &aName)
 void MediumAttachment::i_updateMedium(const ComObjPtr<Medium> &aMedium)
 {
     Assert(isWriteLockOnCurrentThread());
-    Assert(!m->pMachine->i_isSnapshotMachine());
+    /* No assertion for a snapshot. Method used in deleting snapshot. */
 
     m->bd.backup();
     m->bd->pMedium = aMedium;

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vboxfs_vfs.h 88215 2021-03-19 18:42:55Z vboxsync $ */
 /** @file
  * VirtualBox File System for Solaris Guests, VFS header.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef	___VBoxFS_vfs_Solaris_h
-#define	___VBoxFS_vfs_Solaris_h
+#ifndef GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_vfs_h
+#define GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_vfs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
@@ -45,10 +48,33 @@ typedef struct sffs_data {
 	uint64_t	sf_ino;		/* per FS ino generator */
 } sffs_data_t;
 
+/*
+ * Workaround for older Solaris versions which called map_addr()/choose_addr()/
+ * map_addr_proc() with an 'alignment' argument that was removed in Solaris
+ * 11.4.
+ */
+typedef struct VBoxVFS_SolAddrMap
+{
+    union
+    {
+        void *(*pfnSol_map_addr)          (caddr_t *, size_t, offset_t, uint_t);
+        void *(*pfnSol_map_addr_old)      (caddr_t *, size_t, offset_t, int, uint_t);
+    } MapAddr;
+
+    union
+    {
+        int (*pfnSol_choose_addr)       (struct as *, caddr_t *, size_t, offset_t, uint_t);
+        int (*pfnSol_choose_addr_old)   (struct as *, caddr_t *, size_t, offset_t, int, uint_t);
+    } ChooseAddr;
+} VBoxVFS_SolAddrMap;
+typedef VBoxVFS_SolAddrMap *pVBoxVFS_SolAddrMap;
+
+extern bool                     g_fVBoxVFS_SolOldAddrMap;
+extern VBoxVFS_SolAddrMap       g_VBoxVFS_SolAddrMap;
 
 #ifdef	__cplusplus
 }
 #endif
 
-#endif	/* !___VBoxFS_vfs_Solaris_h */
+#endif /* !GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_vfs_h */
 

@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: vboxext.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox extension to Wine D3D
  */
 
 /*
- *
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBOXEXT_H___
-#define ___VBOXEXT_H___
+#ifndef VBOX_INCLUDED_SRC_Graphics_shaderlib_vboxext_h
+#define VBOX_INCLUDED_SRC_Graphics_shaderlib_vboxext_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifdef VBOX_WINE_WITHOUT_LIBWINE
 # ifdef _MSC_VER
@@ -56,15 +58,15 @@ HRESULT VBoxExtWndCreate(DWORD width, DWORD height, HWND *phWnd, HDC *phDC);
 
 
 /* hashmap */
-typedef DECLCALLBACK(uint32_t) FNVBOXEXT_HASHMAP_HASH(void *pvKey);
+typedef DECLCALLBACKTYPE(uint32_t, FNVBOXEXT_HASHMAP_HASH,(void *pvKey));
 typedef FNVBOXEXT_HASHMAP_HASH *PFNVBOXEXT_HASHMAP_HASH;
 
-typedef DECLCALLBACK(bool) FNVBOXEXT_HASHMAP_EQUAL(void *pvKey1, void *pvKey2);
+typedef DECLCALLBACKTYPE(bool, FNVBOXEXT_HASHMAP_EQUAL,(void *pvKey1, void *pvKey2));
 typedef FNVBOXEXT_HASHMAP_EQUAL *PFNVBOXEXT_HASHMAP_EQUAL;
 
 struct VBOXEXT_HASHMAP;
 struct VBOXEXT_HASHMAP_ENTRY;
-typedef DECLCALLBACK(bool) FNVBOXEXT_HASHMAP_VISITOR(struct VBOXEXT_HASHMAP *pMap, void *pvKey, struct VBOXEXT_HASHMAP_ENTRY *pValue, void *pvVisitor);
+typedef DECLCALLBACKTYPE(bool, FNVBOXEXT_HASHMAP_VISITOR,(struct VBOXEXT_HASHMAP *pMap, void *pvKey, struct VBOXEXT_HASHMAP_ENTRY *pValue, void *pvVisitor));
 typedef FNVBOXEXT_HASHMAP_VISITOR *PFNVBOXEXT_HASHMAP_VISITOR;
 
 typedef struct VBOXEXT_HASHMAP_ENTRY
@@ -108,7 +110,7 @@ DECLINLINE(void*) VBoxExtHashEntryKey(PVBOXEXT_HASHMAP_ENTRY pEntry)
 }
 
 struct VBOXEXT_HASHCACHE_ENTRY;
-typedef DECLCALLBACK(void) FNVBOXEXT_HASHCACHE_CLEANUP_ENTRY(void *pvKey, struct VBOXEXT_HASHCACHE_ENTRY *pEntry);
+typedef DECLCALLBACKTYPE(void, FNVBOXEXT_HASHCACHE_CLEANUP_ENTRY,(void *pvKey, struct VBOXEXT_HASHCACHE_ENTRY *pEntry));
 typedef FNVBOXEXT_HASHCACHE_CLEANUP_ENTRY *PFNVBOXEXT_HASHCACHE_CLEANUP_ENTRY;
 
 typedef struct VBOXEXT_HASHCACHE_ENTRY
@@ -161,5 +163,5 @@ DECLINLINE(void) VBoxExtCacheTerm(PVBOXEXT_HASHCACHE pCache)
     VBoxExtCacheCleanup(pCache);
 }
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Graphics_shaderlib_vboxext_h */
 

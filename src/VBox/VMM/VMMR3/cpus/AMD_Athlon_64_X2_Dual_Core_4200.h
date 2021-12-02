@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: AMD_Athlon_64_X2_Dual_Core_4200.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * CPU database entry "AMD Athlon 64 X2 Dual Core 4200+".
  * Generated at 2014-02-28T15:19:16Z by VBoxCpuReport v4.3.53r92578 on linux.amd64                                                        .
@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -21,8 +21,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOX_CPUDB_AMD_Athlon_64_X2_Dual_Core_4200
-#define VBOX_CPUDB_AMD_Athlon_64_X2_Dual_Core_4200
+#ifndef VBOX_CPUDB_AMD_Athlon_64_X2_Dual_Core_4200_h
+#define VBOX_CPUDB_AMD_Athlon_64_X2_Dual_Core_4200_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #ifndef CPUM_DB_STANDALONE
@@ -215,6 +218,7 @@ static CPUMDBENTRY const g_Entry_AMD_Athlon_64_X2_Dual_Core_4200 =
     /*.uScalableBusFreq = */ CPUM_SBUSFREQ_UNKNOWN,
     /*.fFlags           = */ 0,
     /*.cMaxPhysAddrWidth= */ 40,
+    /*.fMxCsrMask       = */ 0xffff,
     /*.paCpuIdLeaves    = */ NULL_ALONE(g_aCpuIdLeaves_AMD_Athlon_64_X2_Dual_Core_4200),
     /*.cCpuIdLeaves     = */ ZERO_ALONE(RT_ELEMENTS(g_aCpuIdLeaves_AMD_Athlon_64_X2_Dual_Core_4200)),
     /*.enmUnknownCpuId  = */ CPUMUNKNOWNCPUID_DEFAULTS,
@@ -224,5 +228,5 @@ static CPUMDBENTRY const g_Entry_AMD_Athlon_64_X2_Dual_Core_4200 =
     /*.paMsrRanges      = */ NULL_ALONE(g_aMsrRanges_AMD_Athlon_64_X2_Dual_Core_4200),
 };
 
-#endif /* !VBOX_DB_AMD_Athlon_64_X2_Dual_Core_4200 */
+#endif /* !VBOX_CPUDB_AMD_Athlon_64_X2_Dual_Core_4200_h */
 

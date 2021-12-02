@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxHook.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxHook -- Global windows hook dll
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,7 +22,9 @@
 #include <iprt/win/windows.h>
 #include <VBoxHook.h>
 #include <VBox/VBoxGuestLib.h>
-#include <stdio.h>
+#ifdef DEBUG
+# include <stdio.h>
+#endif
 
 
 /*********************************************************************************************************************************
@@ -51,7 +53,7 @@ static void WriteLog(const char *pszFormat, ...);
 
 static void CALLBACK VBoxHandleWinEvent(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd,
                                         LONG idObject, LONG idChild,
-                                        DWORD dwEventThread, DWORD dwmsEventTime)
+                                        DWORD dwEventThread, DWORD dwmsEventTime) RT_NOTHROW_DEF
 {
     RT_NOREF(hWinEventHook, idChild, dwEventThread, dwmsEventTime);
     DWORD dwStyle;
@@ -106,7 +108,7 @@ static void CALLBACK VBoxHandleWinEvent(HWINEVENTHOOK hWinEventHook, DWORD event
 
 static void CALLBACK VBoxHandleDesktopEvent(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd,
                                             LONG idObject, LONG idChild,
-                                            DWORD dwEventThread, DWORD dwmsEventTime)
+                                            DWORD dwEventThread, DWORD dwmsEventTime) RT_NOTHROW_DEF
 {
     RT_NOREF(hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime);
     if (!g_hDesktopNotifyEvent)
@@ -230,7 +232,7 @@ static void WriteLog(const char *pszFormat, ...)
         __debugbreak();
 
     DWORD cbReturned;
-    DeviceIoControl(hVBoxGuest, VBOXGUEST_IOCTL_VMMREQUEST(s_uBuf.Req.size),
+    DeviceIoControl(hVBoxGuest, VBGL_IOCTL_VMMDEV_REQUEST(s_uBuf.Req.size),
                     &s_uBuf.Req, s_uBuf.Req.header.size,
                     &s_uBuf.Req, s_uBuf.Req.header.size,
                     &cbReturned, NULL);

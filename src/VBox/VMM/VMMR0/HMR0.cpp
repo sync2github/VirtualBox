@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HMR0.cpp 91323 2021-09-22 10:04:56Z vboxsync $ */
 /** @file
  * Hardware Assisted Virtualization Manager (HM) - Host Context Ring-0.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,13 +20,13 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_HM
+#define VMCPU_INCL_CPUM_GST_CTX
 #include <VBox/vmm/hm.h>
 #include <VBox/vmm/pgm.h>
 #include "HMInternal.h"
-#include <VBox/vmm/vm.h>
-#include <VBox/vmm/hm_vmx.h>
+#include <VBox/vmm/vmcc.h>
 #include <VBox/vmm/hm_svm.h>
-#include <VBox/vmm/gim.h>
+#include <VBox/vmm/hmvmxinline.h>
 #include <VBox/err.h>
 #include <VBox/log.h>
 #include <iprt/assert.h>
@@ -50,8 +50,6 @@
 *********************************************************************************************************************************/
 static DECLCALLBACK(void) hmR0EnableCpuCallback(RTCPUID idCpu, void *pvUser1, void *pvUser2);
 static DECLCALLBACK(void) hmR0DisableCpuCallback(RTCPUID idCpu, void *pvUser1, void *pvUser2);
-static DECLCALLBACK(void) hmR0InitIntelCpu(RTCPUID idCpu, void *pvUser1, void *pvUser2);
-static DECLCALLBACK(void) hmR0InitAmdCpu(RTCPUID idCpu, void *pvUser1, void *pvUser2);
 static DECLCALLBACK(void) hmR0PowerCallback(RTPOWEREVENT enmEvent, void *pvUser);
 static DECLCALLBACK(void) hmR0MpEventCallback(RTMPEVENT enmEvent, RTCPUID idCpu, void *pvData);
 
@@ -72,108 +70,202 @@ typedef struct HMR0FIRSTRC
 /** Pointer to a first return code structure. */
 typedef HMR0FIRSTRC *PHMR0FIRSTRC;
 
+/**
+ * Ring-0 method table for AMD-V and VT-x specific operations.
+ */
+typedef struct HMR0VTABLE
+{
+    DECLR0CALLBACKMEMBER(int,          pfnEnterSession, (PVMCPUCC pVCpu));
+    DECLR0CALLBACKMEMBER(void,         pfnThreadCtxCallback, (RTTHREADCTXEVENT enmEvent, PVMCPUCC pVCpu, bool fGlobalInit));
+    DECLR0CALLBACKMEMBER(int,          pfnCallRing3Callback, (PVMCPUCC pVCpu, VMMCALLRING3 enmOperation));
+    DECLR0CALLBACKMEMBER(int,          pfnExportHostState, (PVMCPUCC pVCpu));
+    DECLR0CALLBACKMEMBER(VBOXSTRICTRC, pfnRunGuestCode, (PVMCPUCC pVCpu));
+    DECLR0CALLBACKMEMBER(int,          pfnEnableCpu, (PHMPHYSCPU pHostCpu, PVMCC pVM, void *pvCpuPage, RTHCPHYS HCPhysCpuPage,
+                                                      bool fEnabledByHost, PCSUPHWVIRTMSRS pHwvirtMsrs));
+    DECLR0CALLBACKMEMBER(int,          pfnDisableCpu, (PHMPHYSCPU pHostCpu, void *pvCpuPage, RTHCPHYS HCPhysCpuPage));
+    DECLR0CALLBACKMEMBER(int,          pfnInitVM, (PVMCC pVM));
+    DECLR0CALLBACKMEMBER(int,          pfnTermVM, (PVMCC pVM));
+    DECLR0CALLBACKMEMBER(int,          pfnSetupVM, (PVMCC pVM));
+} HMR0VTABLE;
+
 
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
-/**
- * Global data.
- */
-static struct
+/** The active ring-0 HM operations (copied from one of the table at init). */
+static HMR0VTABLE       g_HmR0Ops;
+/** Indicates whether the host is suspending or not.  We'll refuse a few
+ *  actions when the host is being suspended to speed up the suspending and
+ *  avoid trouble. */
+static bool volatile    g_fHmSuspended;
+/** If set, VT-x/AMD-V is enabled globally at init time, otherwise it's
+ * enabled and disabled each time it's used to execute guest code. */
+static bool             g_fHmGlobalInit;
+/** Host kernel flags that HM might need to know (SUPKERNELFEATURES_XXX). */
+uint32_t                g_fHmHostKernelFeatures;
+/** Maximum allowed ASID/VPID (inclusive).
+ * @todo r=bird: This is exclusive for VT-x according to source code comment.
+ *       Couldn't immediately find any docs on AMD-V, but suspect it is
+ *       exclusive there as well given how hmR0SvmFlushTaggedTlb() use it. */
+uint32_t                g_uHmMaxAsid;
+
+
+/** Set if VT-x (VMX) is supported by the CPU. */
+bool                    g_fHmVmxSupported = false;
+/** VMX: Whether we're using the preemption timer or not. */
+bool                    g_fHmVmxUsePreemptTimer;
+/** VMX: The shift mask employed by the VMX-Preemption timer. */
+uint8_t                 g_cHmVmxPreemptTimerShift;
+/** VMX: Set if swapping EFER is supported.  */
+bool                    g_fHmVmxSupportsVmcsEfer = false;
+/** VMX: Whether we're using SUPR0EnableVTx or not. */
+static bool             g_fHmVmxUsingSUPR0EnableVTx = false;
+/** VMX: Set if we've called SUPR0EnableVTx(true) and should disable it during
+ * module termination. */
+static bool             g_fHmVmxCalledSUPR0EnableVTx = false;
+/** VMX: Host CR4 value (set by ring-0 VMX init) */
+uint64_t                g_uHmVmxHostCr4;
+/** VMX: Host EFER value (set by ring-0 VMX init) */
+uint64_t                g_uHmVmxHostMsrEfer;
+/** VMX: Host SMM monitor control (used for logging/diagnostics) */
+uint64_t                g_uHmVmxHostSmmMonitorCtl;
+
+
+/** Set if AMD-V is supported by the CPU. */
+bool                    g_fHmSvmSupported = false;
+/** SVM revision. */
+uint32_t                g_uHmSvmRev;
+/** SVM feature bits from cpuid 0x8000000a */
+uint32_t                g_fHmSvmFeatures;
+
+
+/** MSRs. */
+SUPHWVIRTMSRS           g_HmMsrs;
+
+/** Last recorded error code during HM ring-0 init. */
+static int32_t          g_rcHmInit = VINF_SUCCESS;
+
+/** Per CPU globals. */
+static HMPHYSCPU        g_aHmCpuInfo[RTCPUSET_MAX_CPUS];
+
+/** Whether we've already initialized all CPUs.
+ * @remarks We could check the EnableAllCpusOnce state, but this is
+ *          simpler and hopefully easier to understand. */
+static bool             g_fHmEnabled = false;
+/** Serialize initialization in HMR0EnableAllCpus. */
+static RTONCE           g_HmEnableAllCpusOnce = RTONCE_INITIALIZER;
+
+
+/** HM ring-0 operations for VT-x. */
+static HMR0VTABLE const g_HmR0OpsVmx =
 {
-    /** Per CPU globals. */
-    HMGLOBALCPUINFO                 aCpuInfo[RTCPUSET_MAX_CPUS];
+    /* .pfnEnterSession = */        VMXR0Enter,
+    /* .pfnThreadCtxCallback = */   VMXR0ThreadCtxCallback,
+    /* .pfnCallRing3Callback = */   VMXR0CallRing3Callback,
+    /* .pfnExportHostState = */     VMXR0ExportHostState,
+    /* .pfnRunGuestCode = */        VMXR0RunGuestCode,
+    /* .pfnEnableCpu = */           VMXR0EnableCpu,
+    /* .pfnDisableCpu = */          VMXR0DisableCpu,
+    /* .pfnInitVM = */              VMXR0InitVM,
+    /* .pfnTermVM = */              VMXR0TermVM,
+    /* .pfnSetupVM = */             VMXR0SetupVM,
+};
 
-    /** @name Ring-0 method table for AMD-V and VT-x specific operations.
-     * @{ */
-    DECLR0CALLBACKMEMBER(int,  pfnEnterSession, (PVM pVM, PVMCPU pVCpu, PHMGLOBALCPUINFO pCpu));
-    DECLR0CALLBACKMEMBER(void, pfnThreadCtxCallback, (RTTHREADCTXEVENT enmEvent, PVMCPU pVCpu, bool fGlobalInit));
-    DECLR0CALLBACKMEMBER(int,  pfnSaveHostState, (PVM pVM, PVMCPU pVCpu));
-    DECLR0CALLBACKMEMBER(VBOXSTRICTRC, pfnRunGuestCode, (PVM pVM, PVMCPU pVCpu, PCPUMCTX pCtx));
-    DECLR0CALLBACKMEMBER(int,  pfnEnableCpu, (PHMGLOBALCPUINFO pCpu, PVM pVM, void *pvCpuPage, RTHCPHYS HCPhysCpuPage,
-                                              bool fEnabledByHost, void *pvArg));
-    DECLR0CALLBACKMEMBER(int,  pfnDisableCpu, (PHMGLOBALCPUINFO pCpu, void *pvCpuPage, RTHCPHYS HCPhysCpuPage));
-    DECLR0CALLBACKMEMBER(int,  pfnInitVM, (PVM pVM));
-    DECLR0CALLBACKMEMBER(int,  pfnTermVM, (PVM pVM));
-    DECLR0CALLBACKMEMBER(int,  pfnSetupVM ,(PVM pVM));
-    /** @} */
+/** HM ring-0 operations for AMD-V. */
+static HMR0VTABLE const g_HmR0OpsSvm =
+{
+    /* .pfnEnterSession = */        SVMR0Enter,
+    /* .pfnThreadCtxCallback = */   SVMR0ThreadCtxCallback,
+    /* .pfnCallRing3Callback = */   SVMR0CallRing3Callback,
+    /* .pfnExportHostState = */     SVMR0ExportHostState,
+    /* .pfnRunGuestCode = */        SVMR0RunGuestCode,
+    /* .pfnEnableCpu = */           SVMR0EnableCpu,
+    /* .pfnDisableCpu = */          SVMR0DisableCpu,
+    /* .pfnInitVM = */              SVMR0InitVM,
+    /* .pfnTermVM = */              SVMR0TermVM,
+    /* .pfnSetupVM = */             SVMR0SetupVM,
+};
 
-    /** Maximum ASID allowed. */
-    uint32_t                        uMaxAsid;
 
-    /** VT-x data. */
-    struct
-    {
-        /** Set to by us to indicate VMX is supported by the CPU. */
-        bool                        fSupported;
-        /** Whether we're using SUPR0EnableVTx or not. */
-        bool                        fUsingSUPR0EnableVTx;
-        /** Whether we're using the preemption timer or not. */
-        bool                        fUsePreemptTimer;
-        /** The shift mask employed by the VMX-Preemption timer. */
-        uint8_t                     cPreemptTimerShift;
+/** @name Dummy callback handlers for when neither VT-x nor AMD-V is supported.
+ * @{ */
 
-        /** Host CR4 value (set by ring-0 VMX init) */
-        uint64_t                    u64HostCr4;
+static DECLCALLBACK(int) hmR0DummyEnter(PVMCPUCC pVCpu)
+{
+    RT_NOREF(pVCpu);
+    return VINF_SUCCESS;
+}
 
-        /** Host EFER value (set by ring-0 VMX init) */
-        uint64_t                    u64HostEfer;
+static DECLCALLBACK(void) hmR0DummyThreadCtxCallback(RTTHREADCTXEVENT enmEvent, PVMCPUCC pVCpu, bool fGlobalInit)
+{
+    RT_NOREF(enmEvent, pVCpu, fGlobalInit);
+}
 
-        /** Host SMM monitor control (used for logging/diagnostics) */
-        uint64_t                    u64HostSmmMonitorCtl;
+static DECLCALLBACK(int) hmR0DummyEnableCpu(PHMPHYSCPU pHostCpu, PVMCC pVM, void *pvCpuPage, RTHCPHYS HCPhysCpuPage,
+                                            bool fEnabledBySystem, PCSUPHWVIRTMSRS pHwvirtMsrs)
+{
+    RT_NOREF(pHostCpu, pVM, pvCpuPage, HCPhysCpuPage, fEnabledBySystem, pHwvirtMsrs);
+    return VINF_SUCCESS;
+}
 
-        /** VMX MSR values */
-        VMXMSRS                     Msrs;
+static DECLCALLBACK(int) hmR0DummyDisableCpu(PHMPHYSCPU pHostCpu, void *pvCpuPage, RTHCPHYS HCPhysCpuPage)
+{
+    RT_NOREF(pHostCpu, pvCpuPage, HCPhysCpuPage);
+    return VINF_SUCCESS;
+}
 
-        /** Last instruction error. */
-        uint32_t                    ulLastInstrError;
+static DECLCALLBACK(int) hmR0DummyInitVM(PVMCC pVM)
+{
+    RT_NOREF(pVM);
+    return VINF_SUCCESS;
+}
 
-        /** Set if we've called SUPR0EnableVTx(true) and should disable it during
-         * module termination. */
-        bool                        fCalledSUPR0EnableVTx;
-    } vmx;
+static DECLCALLBACK(int) hmR0DummyTermVM(PVMCC pVM)
+{
+    RT_NOREF(pVM);
+    return VINF_SUCCESS;
+}
 
-    /** AMD-V information. */
-    struct
-    {
-        /* HWCR MSR (for diagnostics) */
-        uint64_t                    u64MsrHwcr;
+static DECLCALLBACK(int) hmR0DummySetupVM(PVMCC pVM)
+{
+    RT_NOREF(pVM);
+    return VINF_SUCCESS;
+}
 
-        /** SVM revision. */
-        uint32_t                    u32Rev;
+static DECLCALLBACK(int) hmR0DummyCallRing3Callback(PVMCPUCC pVCpu, VMMCALLRING3 enmOperation)
+{
+    RT_NOREF(pVCpu, enmOperation);
+    return VINF_SUCCESS;
+}
 
-        /** SVM feature bits from cpuid 0x8000000a */
-        uint32_t                    u32Features;
+static DECLCALLBACK(VBOXSTRICTRC) hmR0DummyRunGuestCode(PVMCPUCC pVCpu)
+{
+    RT_NOREF(pVCpu);
+    return VERR_NOT_SUPPORTED;
+}
 
-        /** Set by us to indicate SVM is supported by the CPU. */
-        bool                        fSupported;
-    } svm;
-    /** Saved error from detection */
-    int32_t                         lLastError;
+static DECLCALLBACK(int) hmR0DummyExportHostState(PVMCPUCC pVCpu)
+{
+    RT_NOREF(pVCpu);
+    return VINF_SUCCESS;
+}
 
-    /** CPUID 0x80000001 ecx:edx features */
-    struct
-    {
-        uint32_t                    u32AMDFeatureECX;
-        uint32_t                    u32AMDFeatureEDX;
-    } cpuid;
+/** Dummy ops.    */
+static HMR0VTABLE const g_HmR0OpsDummy =
+{
+    /* .pfnEnterSession = */        hmR0DummyEnter,
+    /* .pfnThreadCtxCallback = */   hmR0DummyThreadCtxCallback,
+    /* .pfnCallRing3Callback = */   hmR0DummyCallRing3Callback,
+    /* .pfnExportHostState = */     hmR0DummyExportHostState,
+    /* .pfnRunGuestCode = */        hmR0DummyRunGuestCode,
+    /* .pfnEnableCpu = */           hmR0DummyEnableCpu,
+    /* .pfnDisableCpu = */          hmR0DummyDisableCpu,
+    /* .pfnInitVM = */              hmR0DummyInitVM,
+    /* .pfnTermVM = */              hmR0DummyTermVM,
+    /* .pfnSetupVM = */             hmR0DummySetupVM,
+};
 
-    /** If set, VT-x/AMD-V is enabled globally at init time, otherwise it's
-     * enabled and disabled each time it's used to execute guest code. */
-    bool                            fGlobalInit;
-    /** Indicates whether the host is suspending or not.  We'll refuse a few
-     *  actions when the host is being suspended to speed up the suspending and
-     *  avoid trouble. */
-    volatile bool                   fSuspended;
-
-    /** Whether we've already initialized all CPUs.
-     * @remarks We could check the EnableAllCpusOnce state, but this is
-     *          simpler and hopefully easier to understand. */
-    bool                            fEnabled;
-    /** Serialize initialization in HMR0EnableAllCpus. */
-    RTONCE                          EnableAllCpusOnce;
-} g_HmR0;
-
+/** @} */
 
 
 /**
@@ -231,570 +323,6 @@ static RTCPUID hmR0FirstRcGetCpuId(PHMR0FIRSTRC pFirstRc)
 #endif /* VBOX_STRICT */
 
 
-/** @name Dummy callback handlers.
- * @{ */
-
-static DECLCALLBACK(int) hmR0DummyEnter(PVM pVM, PVMCPU pVCpu, PHMGLOBALCPUINFO pCpu)
-{
-    NOREF(pVM); NOREF(pVCpu); NOREF(pCpu);
-    return VINF_SUCCESS;
-}
-
-static DECLCALLBACK(void) hmR0DummyThreadCtxCallback(RTTHREADCTXEVENT enmEvent, PVMCPU pVCpu, bool fGlobalInit)
-{
-    NOREF(enmEvent); NOREF(pVCpu); NOREF(fGlobalInit);
-}
-
-static DECLCALLBACK(int) hmR0DummyEnableCpu(PHMGLOBALCPUINFO pCpu, PVM pVM, void *pvCpuPage, RTHCPHYS HCPhysCpuPage,
-                                            bool fEnabledBySystem, void *pvArg)
-{
-    NOREF(pCpu); NOREF(pVM); NOREF(pvCpuPage); NOREF(HCPhysCpuPage); NOREF(fEnabledBySystem); NOREF(pvArg);
-    return VINF_SUCCESS;
-}
-
-static DECLCALLBACK(int) hmR0DummyDisableCpu(PHMGLOBALCPUINFO pCpu, void *pvCpuPage, RTHCPHYS HCPhysCpuPage)
-{
-    NOREF(pCpu);  NOREF(pvCpuPage); NOREF(HCPhysCpuPage);
-    return VINF_SUCCESS;
-}
-
-static DECLCALLBACK(int) hmR0DummyInitVM(PVM pVM)
-{
-    NOREF(pVM);
-    return VINF_SUCCESS;
-}
-
-static DECLCALLBACK(int) hmR0DummyTermVM(PVM pVM)
-{
-    NOREF(pVM);
-    return VINF_SUCCESS;
-}
-
-static DECLCALLBACK(int) hmR0DummySetupVM(PVM pVM)
-{
-    NOREF(pVM);
-    return VINF_SUCCESS;
-}
-
-static DECLCALLBACK(VBOXSTRICTRC) hmR0DummyRunGuestCode(PVM pVM, PVMCPU pVCpu, PCPUMCTX pCtx)
-{
-    NOREF(pVM); NOREF(pVCpu); NOREF(pCtx);
-    return VINF_SUCCESS;
-}
-
-static DECLCALLBACK(int) hmR0DummySaveHostState(PVM pVM, PVMCPU pVCpu)
-{
-    NOREF(pVM); NOREF(pVCpu);
-    return VINF_SUCCESS;
-}
-
-/** @} */
-
-
-/**
- * Checks if the CPU is subject to the "VMX-Preemption Timer Does Not Count
- * Down at the Rate Specified" erratum.
- *
- * Errata names and related steppings:
- *      - BA86   - D0.
- *      - AAX65  - C2.
- *      - AAU65  - C2, K0.
- *      - AAO95  - B1.
- *      - AAT59  - C2.
- *      - AAK139 - D0.
- *      - AAM126 - C0, C1, D0.
- *      - AAN92  - B1.
- *      - AAJ124 - C0, D0.
- *
- *      - AAP86  - B1.
- *
- * Steppings: B1, C0, C1, C2, D0, K0.
- *
- * @returns true if subject to it, false if not.
- */
-static bool hmR0InitIntelIsSubjectToVmxPreemptionTimerErratum(void)
-{
-    uint32_t u = ASMCpuId_EAX(1);
-    u &= ~(RT_BIT_32(14) | RT_BIT_32(15) | RT_BIT_32(28) | RT_BIT_32(29) | RT_BIT_32(30) | RT_BIT_32(31));
-    if (   u == UINT32_C(0x000206E6) /* 323344.pdf - BA86   - D0 - Intel Xeon Processor 7500 Series */
-        || u == UINT32_C(0x00020652) /* 323056.pdf - AAX65  - C2 - Intel Xeon Processor L3406 */
-        || u == UINT32_C(0x00020652) /* 322814.pdf - AAT59  - C2 - Intel CoreTM i7-600, i5-500, i5-400 and i3-300 Mobile Processor Series */
-        || u == UINT32_C(0x00020652) /* 322911.pdf - AAU65  - C2 - Intel CoreTM i5-600, i3-500 Desktop Processor Series and Intel Pentium Processor G6950 */
-        || u == UINT32_C(0x00020655) /* 322911.pdf - AAU65  - K0 - Intel CoreTM i5-600, i3-500 Desktop Processor Series and Intel Pentium Processor G6950 */
-        || u == UINT32_C(0x000106E5) /* 322373.pdf - AAO95  - B1 - Intel Xeon Processor 3400 Series */
-        || u == UINT32_C(0x000106E5) /* 322166.pdf - AAN92  - B1 - Intel CoreTM i7-800 and i5-700 Desktop Processor Series */
-        || u == UINT32_C(0x000106E5) /* 320767.pdf - AAP86  - B1 - Intel Core i7-900 Mobile Processor Extreme Edition Series, Intel Core i7-800 and i7-700 Mobile Processor Series */
-        || u == UINT32_C(0x000106A0) /* 321333.pdf - AAM126 - C0 - Intel Xeon Processor 3500 Series Specification */
-        || u == UINT32_C(0x000106A1) /* 321333.pdf - AAM126 - C1 - Intel Xeon Processor 3500 Series Specification */
-        || u == UINT32_C(0x000106A4) /* 320836.pdf - AAJ124 - C0 - Intel Core i7-900 Desktop Processor Extreme Edition Series and Intel Core i7-900 Desktop Processor Series */
-        || u == UINT32_C(0x000106A5) /* 321333.pdf - AAM126 - D0 - Intel Xeon Processor 3500 Series Specification */
-        || u == UINT32_C(0x000106A5) /* 321324.pdf - AAK139 - D0 - Intel Xeon Processor 5500 Series Specification */
-        || u == UINT32_C(0x000106A5) /* 320836.pdf - AAJ124 - D0 - Intel Core i7-900 Desktop Processor Extreme Edition Series and Intel Core i7-900 Desktop Processor Series */
-        )
-        return true;
-    return false;
-}
-
-
-/**
- * Intel specific initialization code.
- *
- * @returns VBox status code (will only fail if out of memory).
- */
-static int hmR0InitIntel(uint32_t u32FeaturesECX, uint32_t u32FeaturesEDX)
-{
-    /*
-     * Check that all the required VT-x features are present.
-     * We also assume all VT-x-enabled CPUs support fxsave/fxrstor.
-     */
-    if (    (u32FeaturesECX & X86_CPUID_FEATURE_ECX_VMX)
-         && (u32FeaturesEDX & X86_CPUID_FEATURE_EDX_MSR)
-         && (u32FeaturesEDX & X86_CPUID_FEATURE_EDX_FXSR)
-       )
-    {
-        /* Read this MSR now as it may be useful for error reporting when initializing VT-x fails. */
-        g_HmR0.vmx.Msrs.u64FeatureCtrl = ASMRdMsr(MSR_IA32_FEATURE_CONTROL);
-
-        /*
-         * First try use native kernel API for controlling VT-x.
-         * (This is only supported by some Mac OS X kernels atm.)
-         */
-        int rc = g_HmR0.lLastError = SUPR0EnableVTx(true /* fEnable */);
-        g_HmR0.vmx.fUsingSUPR0EnableVTx = rc != VERR_NOT_SUPPORTED;
-        if (g_HmR0.vmx.fUsingSUPR0EnableVTx)
-        {
-            AssertLogRelMsg(rc == VINF_SUCCESS || rc == VERR_VMX_IN_VMX_ROOT_MODE || rc == VERR_VMX_NO_VMX, ("%Rrc\n", rc));
-            if (RT_SUCCESS(rc))
-            {
-                g_HmR0.vmx.fSupported = true;
-                rc = SUPR0EnableVTx(false /* fEnable */);
-                AssertLogRelRC(rc);
-            }
-        }
-        else
-        {
-            HMR0FIRSTRC FirstRc;
-            hmR0FirstRcInit(&FirstRc);
-            g_HmR0.lLastError = RTMpOnAll(hmR0InitIntelCpu, &FirstRc, NULL);
-            if (RT_SUCCESS(g_HmR0.lLastError))
-                g_HmR0.lLastError = hmR0FirstRcGetStatus(&FirstRc);
-        }
-        if (RT_SUCCESS(g_HmR0.lLastError))
-        {
-            /* Reread in case it was changed by SUPR0GetVmxUsability(). */
-            g_HmR0.vmx.Msrs.u64FeatureCtrl = ASMRdMsr(MSR_IA32_FEATURE_CONTROL);
-
-            /*
-             * Read all relevant registers and MSRs.
-             */
-            g_HmR0.vmx.u64HostCr4           = ASMGetCR4();
-            g_HmR0.vmx.u64HostSmmMonitorCtl = ASMRdMsr(MSR_IA32_SMM_MONITOR_CTL);
-            g_HmR0.vmx.u64HostEfer          = ASMRdMsr(MSR_K6_EFER);
-            g_HmR0.vmx.Msrs.u64BasicInfo    = ASMRdMsr(MSR_IA32_VMX_BASIC_INFO);
-            g_HmR0.vmx.Msrs.VmxPinCtls.u    = ASMRdMsr(MSR_IA32_VMX_PINBASED_CTLS);
-            g_HmR0.vmx.Msrs.VmxProcCtls.u   = ASMRdMsr(MSR_IA32_VMX_PROCBASED_CTLS);
-            g_HmR0.vmx.Msrs.VmxExit.u       = ASMRdMsr(MSR_IA32_VMX_EXIT_CTLS);
-            g_HmR0.vmx.Msrs.VmxEntry.u      = ASMRdMsr(MSR_IA32_VMX_ENTRY_CTLS);
-            g_HmR0.vmx.Msrs.u64Misc         = ASMRdMsr(MSR_IA32_VMX_MISC);
-            g_HmR0.vmx.Msrs.u64Cr0Fixed0    = ASMRdMsr(MSR_IA32_VMX_CR0_FIXED0);
-            g_HmR0.vmx.Msrs.u64Cr0Fixed1    = ASMRdMsr(MSR_IA32_VMX_CR0_FIXED1);
-            g_HmR0.vmx.Msrs.u64Cr4Fixed0    = ASMRdMsr(MSR_IA32_VMX_CR4_FIXED0);
-            g_HmR0.vmx.Msrs.u64Cr4Fixed1    = ASMRdMsr(MSR_IA32_VMX_CR4_FIXED1);
-            g_HmR0.vmx.Msrs.u64VmcsEnum     = ASMRdMsr(MSR_IA32_VMX_VMCS_ENUM);
-            /* VPID 16 bits ASID. */
-            g_HmR0.uMaxAsid                 = 0x10000; /* exclusive */
-
-            if (g_HmR0.vmx.Msrs.VmxProcCtls.n.allowed1 & VMX_VMCS_CTRL_PROC_EXEC_USE_SECONDARY_EXEC_CTRL)
-            {
-                g_HmR0.vmx.Msrs.VmxProcCtls2.u = ASMRdMsr(MSR_IA32_VMX_PROCBASED_CTLS2);
-                if (g_HmR0.vmx.Msrs.VmxProcCtls2.n.allowed1 & (VMX_VMCS_CTRL_PROC_EXEC2_EPT | VMX_VMCS_CTRL_PROC_EXEC2_VPID))
-                    g_HmR0.vmx.Msrs.u64EptVpidCaps = ASMRdMsr(MSR_IA32_VMX_EPT_VPID_CAP);
-
-                if (g_HmR0.vmx.Msrs.VmxProcCtls2.n.allowed1 & VMX_VMCS_CTRL_PROC_EXEC2_VMFUNC)
-                    g_HmR0.vmx.Msrs.u64Vmfunc = ASMRdMsr(MSR_IA32_VMX_VMFUNC);
-            }
-
-            if (!g_HmR0.vmx.fUsingSUPR0EnableVTx)
-            {
-                /*
-                 * Enter root mode
-                 */
-                RTR0MEMOBJ hScatchMemObj;
-                rc = RTR0MemObjAllocCont(&hScatchMemObj, PAGE_SIZE, false /* fExecutable */);
-                if (RT_FAILURE(rc))
-                {
-                    LogRel(("hmR0InitIntel: RTR0MemObjAllocCont(,PAGE_SIZE,false) -> %Rrc\n", rc));
-                    return rc;
-                }
-
-                void      *pvScatchPage      = RTR0MemObjAddress(hScatchMemObj);
-                RTHCPHYS   HCPhysScratchPage = RTR0MemObjGetPagePhysAddr(hScatchMemObj, 0);
-                ASMMemZeroPage(pvScatchPage);
-
-                /* Set revision dword at the beginning of the structure. */
-                *(uint32_t *)pvScatchPage = MSR_IA32_VMX_BASIC_INFO_VMCS_ID(g_HmR0.vmx.Msrs.u64BasicInfo);
-
-                /* Make sure we don't get rescheduled to another cpu during this probe. */
-                RTCCUINTREG fFlags = ASMIntDisableFlags();
-
-                /*
-                 * Check CR4.VMXE
-                 */
-                g_HmR0.vmx.u64HostCr4 = ASMGetCR4();
-                if (!(g_HmR0.vmx.u64HostCr4 & X86_CR4_VMXE))
-                {
-                    /* In theory this bit could be cleared behind our back.  Which would cause
-                       #UD faults when we try to execute the VMX instructions... */
-                    ASMSetCR4(g_HmR0.vmx.u64HostCr4 | X86_CR4_VMXE);
-                }
-
-                /*
-                 * The only way of checking if we're in VMX root mode or not is to try and enter it.
-                 * There is no instruction or control bit that tells us if we're in VMX root mode.
-                 * Therefore, try and enter VMX root mode here.
-                 */
-                rc = VMXEnable(HCPhysScratchPage);
-                if (RT_SUCCESS(rc))
-                {
-                    g_HmR0.vmx.fSupported = true;
-                    VMXDisable();
-                }
-                else
-                {
-                    /*
-                     * KVM leaves the CPU in VMX root mode. Not only is  this not allowed,
-                     * it will crash the host when we enter raw mode, because:
-                     *
-                     *   (a) clearing X86_CR4_VMXE in CR4 causes a #GP (we no longer modify
-                     *       this bit), and
-                     *   (b) turning off paging causes a #GP  (unavoidable when switching
-                     *       from long to 32 bits mode or 32 bits to PAE).
-                     *
-                     * They should fix their code, but until they do we simply refuse to run.
-                     */
-                    g_HmR0.lLastError = VERR_VMX_IN_VMX_ROOT_MODE;
-                    Assert(g_HmR0.vmx.fSupported == false);
-                }
-
-                /* Restore CR4 again; don't leave the X86_CR4_VMXE flag set
-                   if it wasn't so before (some software could incorrectly
-                   think it's in VMX mode). */
-                ASMSetCR4(g_HmR0.vmx.u64HostCr4);
-                ASMSetFlags(fFlags);
-
-                RTR0MemObjFree(hScatchMemObj, false);
-            }
-
-            if (g_HmR0.vmx.fSupported)
-            {
-                rc = VMXR0GlobalInit();
-                if (RT_FAILURE(rc))
-                    g_HmR0.lLastError = rc;
-
-                /*
-                 * Install the VT-x methods.
-                 */
-                g_HmR0.pfnEnterSession      = VMXR0Enter;
-                g_HmR0.pfnThreadCtxCallback = VMXR0ThreadCtxCallback;
-                g_HmR0.pfnSaveHostState     = VMXR0SaveHostState;
-                g_HmR0.pfnRunGuestCode      = VMXR0RunGuestCode;
-                g_HmR0.pfnEnableCpu         = VMXR0EnableCpu;
-                g_HmR0.pfnDisableCpu        = VMXR0DisableCpu;
-                g_HmR0.pfnInitVM            = VMXR0InitVM;
-                g_HmR0.pfnTermVM            = VMXR0TermVM;
-                g_HmR0.pfnSetupVM           = VMXR0SetupVM;
-
-                /*
-                 * Check for the VMX-Preemption Timer and adjust for the "VMX-Preemption
-                 * Timer Does Not Count Down at the Rate Specified" erratum.
-                 */
-                if (g_HmR0.vmx.Msrs.VmxPinCtls.n.allowed1 & VMX_VMCS_CTRL_PIN_EXEC_PREEMPT_TIMER)
-                {
-                    g_HmR0.vmx.fUsePreemptTimer   = true;
-                    g_HmR0.vmx.cPreemptTimerShift = MSR_IA32_VMX_MISC_PREEMPT_TSC_BIT(g_HmR0.vmx.Msrs.u64Misc);
-                    if (hmR0InitIntelIsSubjectToVmxPreemptionTimerErratum())
-                        g_HmR0.vmx.cPreemptTimerShift = 0; /* This is about right most of the time here. */
-                }
-            }
-        }
-#ifdef LOG_ENABLED
-        else
-            SUPR0Printf("hmR0InitIntelCpu failed with rc=%d\n", g_HmR0.lLastError);
-#endif
-    }
-    else
-        g_HmR0.lLastError = VERR_VMX_NO_VMX;
-    return VINF_SUCCESS;
-}
-
-
-/**
- * AMD-specific initialization code.
- *
- * @returns VBox status code.
- */
-static int hmR0InitAmd(uint32_t u32FeaturesEDX, uint32_t uMaxExtLeaf)
-{
-    /*
-     * Read all SVM MSRs if SVM is available. (same goes for RDMSR/WRMSR)
-     * We also assume all SVM-enabled CPUs support fxsave/fxrstor.
-     */
-    int rc;
-    if (   (g_HmR0.cpuid.u32AMDFeatureECX & X86_CPUID_AMD_FEATURE_ECX_SVM)
-        && (u32FeaturesEDX & X86_CPUID_FEATURE_EDX_MSR)
-        && (u32FeaturesEDX & X86_CPUID_FEATURE_EDX_FXSR)
-        && ASMIsValidExtRange(uMaxExtLeaf)
-        && uMaxExtLeaf >= 0x8000000a
-       )
-    {
-        /* Call the global AMD-V initialization routine. */
-        rc = SVMR0GlobalInit();
-        if (RT_FAILURE(rc))
-        {
-            g_HmR0.lLastError = rc;
-            return rc;
-        }
-
-        /*
-         * Install the AMD-V methods.
-         */
-        g_HmR0.pfnEnterSession      = SVMR0Enter;
-        g_HmR0.pfnThreadCtxCallback = SVMR0ThreadCtxCallback;
-        g_HmR0.pfnSaveHostState     = SVMR0SaveHostState;
-        g_HmR0.pfnRunGuestCode      = SVMR0RunGuestCode;
-        g_HmR0.pfnEnableCpu         = SVMR0EnableCpu;
-        g_HmR0.pfnDisableCpu        = SVMR0DisableCpu;
-        g_HmR0.pfnInitVM            = SVMR0InitVM;
-        g_HmR0.pfnTermVM            = SVMR0TermVM;
-        g_HmR0.pfnSetupVM           = SVMR0SetupVM;
-
-        /* Query AMD features. */
-        uint32_t u32Dummy;
-        ASMCpuId(0x8000000a, &g_HmR0.svm.u32Rev, &g_HmR0.uMaxAsid, &u32Dummy, &g_HmR0.svm.u32Features);
-
-        /*
-         * We need to check if AMD-V has been properly initialized on all CPUs.
-         * Some BIOSes might do a poor job.
-         */
-        HMR0FIRSTRC FirstRc;
-        hmR0FirstRcInit(&FirstRc);
-        rc = RTMpOnAll(hmR0InitAmdCpu, &FirstRc, NULL);
-        AssertRC(rc);
-        if (RT_SUCCESS(rc))
-            rc = hmR0FirstRcGetStatus(&FirstRc);
-#ifndef DEBUG_bird
-        AssertMsg(rc == VINF_SUCCESS || rc == VERR_SVM_IN_USE,
-                  ("hmR0InitAmdCpu failed for cpu %d with rc=%Rrc\n", hmR0FirstRcGetCpuId(&FirstRc), rc));
-#endif
-        if (RT_SUCCESS(rc))
-        {
-            /* Read the HWCR MSR for diagnostics. */
-            g_HmR0.svm.u64MsrHwcr = ASMRdMsr(MSR_K8_HWCR);
-            g_HmR0.svm.fSupported = true;
-        }
-        else
-        {
-            g_HmR0.lLastError = rc;
-            if (rc == VERR_SVM_DISABLED || rc == VERR_SVM_IN_USE)
-                rc = VINF_SUCCESS; /* Don't fail if AMD-V is disabled or in use. */
-        }
-    }
-    else
-    {
-        rc = VINF_SUCCESS;              /* Don't fail if AMD-V is not supported. See @bugref{6785}. */
-        g_HmR0.lLastError = VERR_SVM_NO_SVM;
-    }
-    return rc;
-}
-
-
-/**
- * Does global Ring-0 HM initialization (at module init).
- *
- * @returns VBox status code.
- */
-VMMR0_INT_DECL(int) HMR0Init(void)
-{
-    /*
-     * Initialize the globals.
-     */
-    g_HmR0.fEnabled = false;
-    static RTONCE s_OnceInit = RTONCE_INITIALIZER;
-    g_HmR0.EnableAllCpusOnce = s_OnceInit;
-    for (unsigned i = 0; i < RT_ELEMENTS(g_HmR0.aCpuInfo); i++)
-    {
-        g_HmR0.aCpuInfo[i].idCpu        = NIL_RTCPUID;
-        g_HmR0.aCpuInfo[i].hMemObj      = NIL_RTR0MEMOBJ;
-        g_HmR0.aCpuInfo[i].HCPhysMemObj = NIL_RTHCPHYS;
-        g_HmR0.aCpuInfo[i].pvMemObj     = NULL;
-    }
-
-    /* Fill in all callbacks with placeholders. */
-    g_HmR0.pfnEnterSession      = hmR0DummyEnter;
-    g_HmR0.pfnThreadCtxCallback = hmR0DummyThreadCtxCallback;
-    g_HmR0.pfnSaveHostState     = hmR0DummySaveHostState;
-    g_HmR0.pfnRunGuestCode      = hmR0DummyRunGuestCode;
-    g_HmR0.pfnEnableCpu         = hmR0DummyEnableCpu;
-    g_HmR0.pfnDisableCpu        = hmR0DummyDisableCpu;
-    g_HmR0.pfnInitVM            = hmR0DummyInitVM;
-    g_HmR0.pfnTermVM            = hmR0DummyTermVM;
-    g_HmR0.pfnSetupVM           = hmR0DummySetupVM;
-
-    /* Default is global VT-x/AMD-V init. */
-    g_HmR0.fGlobalInit         = true;
-
-    /*
-     * Make sure aCpuInfo is big enough for all the CPUs on this system.
-     */
-    if (RTMpGetArraySize() > RT_ELEMENTS(g_HmR0.aCpuInfo))
-    {
-        LogRel(("HM: Too many real CPUs/cores/threads - %u, max %u\n", RTMpGetArraySize(), RT_ELEMENTS(g_HmR0.aCpuInfo)));
-        return VERR_TOO_MANY_CPUS;
-    }
-
-    /*
-     * Check for VT-x and AMD-V capabilities.
-     */
-    int rc;
-    if (ASMHasCpuId())
-    {
-        /* Standard features. */
-        uint32_t uMaxLeaf, u32VendorEBX, u32VendorECX, u32VendorEDX;
-        ASMCpuId(0, &uMaxLeaf, &u32VendorEBX, &u32VendorECX, &u32VendorEDX);
-        if (ASMIsValidStdRange(uMaxLeaf))
-        {
-            uint32_t u32FeaturesECX, u32FeaturesEDX, u32Dummy;
-            ASMCpuId(1, &u32Dummy, &u32Dummy,   &u32FeaturesECX, &u32FeaturesEDX);
-
-            /* Query AMD features. */
-            uint32_t uMaxExtLeaf = ASMCpuId_EAX(0x80000000);
-            if (ASMIsValidExtRange(uMaxExtLeaf))
-                ASMCpuId(0x80000001, &u32Dummy, &u32Dummy,
-                         &g_HmR0.cpuid.u32AMDFeatureECX,
-                         &g_HmR0.cpuid.u32AMDFeatureEDX);
-            else
-                g_HmR0.cpuid.u32AMDFeatureECX = g_HmR0.cpuid.u32AMDFeatureEDX = 0;
-
-            /* Go to CPU specific initialization code. */
-            if (   ASMIsIntelCpuEx(u32VendorEBX, u32VendorECX, u32VendorEDX)
-                || ASMIsViaCentaurCpuEx(u32VendorEBX, u32VendorECX, u32VendorEDX))
-            {
-                rc = hmR0InitIntel(u32FeaturesECX, u32FeaturesEDX);
-                if (RT_FAILURE(rc))
-                    return rc;
-            }
-            else if (ASMIsAmdCpuEx(u32VendorEBX, u32VendorECX, u32VendorEDX))
-            {
-                rc = hmR0InitAmd(u32FeaturesEDX, uMaxExtLeaf);
-                if (RT_FAILURE(rc))
-                    return rc;
-            }
-            else
-                g_HmR0.lLastError = VERR_HM_UNKNOWN_CPU;
-        }
-        else
-            g_HmR0.lLastError = VERR_HM_UNKNOWN_CPU;
-    }
-    else
-        g_HmR0.lLastError = VERR_HM_NO_CPUID;
-
-    /*
-     * Register notification callbacks that we can use to disable/enable CPUs
-     * when brought offline/online or suspending/resuming.
-     */
-    if (!g_HmR0.vmx.fUsingSUPR0EnableVTx)
-    {
-        rc = RTMpNotificationRegister(hmR0MpEventCallback, NULL);
-        AssertRC(rc);
-
-        rc = RTPowerNotificationRegister(hmR0PowerCallback, NULL);
-        AssertRC(rc);
-    }
-
-    /* We return success here because module init shall not fail if HM
-       fails to initialize. */
-    return VINF_SUCCESS;
-}
-
-
-/**
- * Does global Ring-0 HM termination (at module termination).
- *
- * @returns VBox status code.
- */
-VMMR0_INT_DECL(int) HMR0Term(void)
-{
-    int rc;
-    if (   g_HmR0.vmx.fSupported
-        && g_HmR0.vmx.fUsingSUPR0EnableVTx)
-    {
-        /*
-         * Simple if the host OS manages VT-x.
-         */
-        Assert(g_HmR0.fGlobalInit);
-
-        if (g_HmR0.vmx.fCalledSUPR0EnableVTx)
-        {
-            rc = SUPR0EnableVTx(false /* fEnable */);
-            g_HmR0.vmx.fCalledSUPR0EnableVTx = false;
-        }
-        else
-            rc = VINF_SUCCESS;
-
-        for (unsigned iCpu = 0; iCpu < RT_ELEMENTS(g_HmR0.aCpuInfo); iCpu++)
-        {
-            g_HmR0.aCpuInfo[iCpu].fConfigured = false;
-            Assert(g_HmR0.aCpuInfo[iCpu].hMemObj == NIL_RTR0MEMOBJ);
-        }
-    }
-    else
-    {
-        Assert(!g_HmR0.vmx.fSupported || !g_HmR0.vmx.fUsingSUPR0EnableVTx);
-
-        /* Doesn't really matter if this fails. */
-        rc = RTMpNotificationDeregister(hmR0MpEventCallback, NULL);  AssertRC(rc);
-        rc = RTPowerNotificationDeregister(hmR0PowerCallback, NULL); AssertRC(rc);
-
-        /*
-         * Disable VT-x/AMD-V on all CPUs if we enabled it before.
-         */
-        if (g_HmR0.fGlobalInit)
-        {
-            HMR0FIRSTRC FirstRc;
-            hmR0FirstRcInit(&FirstRc);
-            rc = RTMpOnAll(hmR0DisableCpuCallback, NULL /* pvUser 1 */, &FirstRc);
-            Assert(RT_SUCCESS(rc) || rc == VERR_NOT_SUPPORTED);
-            if (RT_SUCCESS(rc))
-                rc = hmR0FirstRcGetStatus(&FirstRc);
-        }
-
-        /*
-         * Free the per-cpu pages used for VT-x and AMD-V.
-         */
-        for (unsigned i = 0; i < RT_ELEMENTS(g_HmR0.aCpuInfo); i++)
-        {
-            if (g_HmR0.aCpuInfo[i].hMemObj != NIL_RTR0MEMOBJ)
-            {
-                RTR0MemObjFree(g_HmR0.aCpuInfo[i].hMemObj, false);
-                g_HmR0.aCpuInfo[i].hMemObj      = NIL_RTR0MEMOBJ;
-                g_HmR0.aCpuInfo[i].HCPhysMemObj = NIL_RTHCPHYS;
-                g_HmR0.aCpuInfo[i].pvMemObj     = NULL;
-            }
-        }
-    }
-
-    /** @todo This needs cleaning up. There's no matching
-     *        hmR0TermIntel()/hmR0TermAmd() and all the VT-x/AMD-V specific bits
-     *        should move into their respective modules. */
-    /* Finally, call global VT-x/AMD-V termination. */
-    if (g_HmR0.vmx.fSupported)
-        VMXR0GlobalTerm();
-    else if (g_HmR0.svm.fSupported)
-        SVMR0GlobalTerm();
-
-    return rc;
-}
-
 
 /**
  * Worker function used by hmR0PowerCallback() and HMR0Init() to initalize VT-x
@@ -813,6 +341,175 @@ static DECLCALLBACK(void) hmR0InitIntelCpu(RTCPUID idCpu, void *pvUser1, void *p
 
     int rc = SUPR0GetVmxUsability(NULL /* pfIsSmxModeAmbiguous */);
     hmR0FirstRcSetStatus(pFirstRc, rc);
+}
+
+
+/**
+ * Intel specific initialization code.
+ *
+ * @returns VBox status code (will only fail if out of memory).
+ */
+static int hmR0InitIntel(void)
+{
+    /* Read this MSR now as it may be useful for error reporting when initializing VT-x fails. */
+    g_HmMsrs.u.vmx.u64FeatCtrl = ASMRdMsr(MSR_IA32_FEATURE_CONTROL);
+
+    /*
+     * First try use native kernel API for controlling VT-x.
+     * (This is only supported by some Mac OS X kernels atm.)
+     */
+    int rc;
+    g_rcHmInit = rc = SUPR0EnableVTx(true /* fEnable */);
+    g_fHmVmxUsingSUPR0EnableVTx = rc != VERR_NOT_SUPPORTED;
+    if (g_fHmVmxUsingSUPR0EnableVTx)
+    {
+        AssertLogRelMsg(rc == VINF_SUCCESS || rc == VERR_VMX_IN_VMX_ROOT_MODE || rc == VERR_VMX_NO_VMX, ("%Rrc\n", rc));
+        if (RT_SUCCESS(rc))
+        {
+            g_fHmVmxSupported = true;
+            rc = SUPR0EnableVTx(false /* fEnable */);
+            AssertLogRelRC(rc);
+            rc = VINF_SUCCESS;
+        }
+    }
+    else
+    {
+        HMR0FIRSTRC FirstRc;
+        hmR0FirstRcInit(&FirstRc);
+        g_rcHmInit = rc = RTMpOnAll(hmR0InitIntelCpu, &FirstRc, NULL);
+        if (RT_SUCCESS(rc))
+            g_rcHmInit = rc = hmR0FirstRcGetStatus(&FirstRc);
+    }
+
+    if (RT_SUCCESS(rc))
+    {
+        /* Read CR4 and EFER for logging/diagnostic purposes. */
+        g_uHmVmxHostCr4     = ASMGetCR4();
+        g_uHmVmxHostMsrEfer = ASMRdMsr(MSR_K6_EFER);
+
+        /* Get VMX MSRs (and feature control MSR) for determining VMX features we can ultimately use. */
+        SUPR0GetHwvirtMsrs(&g_HmMsrs, SUPVTCAPS_VT_X, false /* fForce */);
+
+        /*
+         * Nested KVM workaround: Intel SDM section 34.15.5 describes that
+         * MSR_IA32_SMM_MONITOR_CTL depends on bit 49 of MSR_IA32_VMX_BASIC while
+         * table 35-2 says that this MSR is available if either VMX or SMX is supported.
+         */
+        uint64_t const uVmxBasicMsr = g_HmMsrs.u.vmx.u64Basic;
+        if (RT_BF_GET(uVmxBasicMsr, VMX_BF_BASIC_DUAL_MON))
+            g_uHmVmxHostSmmMonitorCtl = ASMRdMsr(MSR_IA32_SMM_MONITOR_CTL);
+
+        /* Initialize VPID - 16 bits ASID. */
+        g_uHmMaxAsid = 0x10000; /* exclusive */
+
+        /*
+         * If the host OS has not enabled VT-x for us, try enter VMX root mode
+         * to really verify if VT-x is usable.
+         */
+        if (!g_fHmVmxUsingSUPR0EnableVTx)
+        {
+            /* Allocate a temporary VMXON region. */
+            RTR0MEMOBJ hScatchMemObj;
+            rc = RTR0MemObjAllocCont(&hScatchMemObj, PAGE_SIZE, false /* fExecutable */);
+            if (RT_FAILURE(rc))
+            {
+                LogRel(("hmR0InitIntel: RTR0MemObjAllocCont(,PAGE_SIZE,false) -> %Rrc\n", rc));
+                return rc;
+            }
+            void          *pvScatchPage      = RTR0MemObjAddress(hScatchMemObj);
+            RTHCPHYS const HCPhysScratchPage = RTR0MemObjGetPagePhysAddr(hScatchMemObj, 0);
+            ASMMemZeroPage(pvScatchPage);
+
+            /* Set revision dword at the beginning of the VMXON structure. */
+            *(uint32_t *)pvScatchPage = RT_BF_GET(uVmxBasicMsr, VMX_BF_BASIC_VMCS_ID);
+
+            /* Make sure we don't get rescheduled to another CPU during this probe. */
+            RTCCUINTREG const fEFlags = ASMIntDisableFlags();
+
+            /* Enable CR4.VMXE if it isn't already set. */
+            RTCCUINTREG const uOldCr4 = SUPR0ChangeCR4(X86_CR4_VMXE, RTCCUINTREG_MAX);
+
+            /*
+             * The only way of checking if we're in VMX root mode or not is to try and enter it.
+             * There is no instruction or control bit that tells us if we're in VMX root mode.
+             * Therefore, try and enter VMX root mode here.
+             */
+            rc = VMXEnable(HCPhysScratchPage);
+            if (RT_SUCCESS(rc))
+            {
+                g_fHmVmxSupported = true;
+                VMXDisable();
+            }
+            else
+            {
+                /*
+                 * KVM leaves the CPU in VMX root mode. Not only is  this not allowed,
+                 * it will crash the host when we enter raw mode, because:
+                 *
+                 *   (a) clearing X86_CR4_VMXE in CR4 causes a #GP (we no longer modify
+                 *       this bit), and
+                 *   (b) turning off paging causes a #GP  (unavoidable when switching
+                 *       from long to 32 bits mode or 32 bits to PAE).
+                 *
+                 * They should fix their code, but until they do we simply refuse to run.
+                 */
+                g_rcHmInit = VERR_VMX_IN_VMX_ROOT_MODE;
+                Assert(g_fHmVmxSupported == false);
+            }
+
+            /* Restore CR4.VMXE if it wasn't set prior to us setting it above. */
+            if (!(uOldCr4 & X86_CR4_VMXE))
+                SUPR0ChangeCR4(0 /* fOrMask */, ~(uint64_t)X86_CR4_VMXE);
+
+            /* Restore interrupts. */
+            ASMSetFlags(fEFlags);
+
+            RTR0MemObjFree(hScatchMemObj, false);
+        }
+
+        if (g_fHmVmxSupported)
+        {
+            rc = VMXR0GlobalInit();
+            if (RT_SUCCESS(rc))
+            {
+                /*
+                 * Install the VT-x methods.
+                 */
+                g_HmR0Ops = g_HmR0OpsVmx;
+
+                /*
+                 * Check for the VMX-Preemption Timer and adjust for the "VMX-Preemption
+                 * Timer Does Not Count Down at the Rate Specified" CPU erratum.
+                 */
+                if (g_HmMsrs.u.vmx.PinCtls.n.allowed1 & VMX_PIN_CTLS_PREEMPT_TIMER)
+                {
+                    g_fHmVmxUsePreemptTimer   = true;
+                    g_cHmVmxPreemptTimerShift = RT_BF_GET(g_HmMsrs.u.vmx.u64Misc, VMX_BF_MISC_PREEMPT_TIMER_TSC);
+                    if (HMIsSubjectToVmxPreemptTimerErratum())
+                        g_cHmVmxPreemptTimerShift = 0; /* This is about right most of the time here. */
+                }
+                else
+                    g_fHmVmxUsePreemptTimer   = false;
+
+                /*
+                 * Check for EFER swapping support.
+                 */
+                g_fHmVmxSupportsVmcsEfer = (g_HmMsrs.u.vmx.EntryCtls.n.allowed1 & VMX_ENTRY_CTLS_LOAD_EFER_MSR)
+                                        && (g_HmMsrs.u.vmx.ExitCtls.n.allowed1  & VMX_EXIT_CTLS_LOAD_EFER_MSR)
+                                        && (g_HmMsrs.u.vmx.ExitCtls.n.allowed1  & VMX_EXIT_CTLS_SAVE_EFER_MSR);
+            }
+            else
+            {
+                g_rcHmInit = rc;
+                g_fHmVmxSupported = false;
+            }
+        }
+    }
+#ifdef LOG_ENABLED
+    else
+        SUPR0Printf("hmR0InitIntelCpu failed with rc=%Rrc\n", g_rcHmInit);
+#endif
+    return VINF_SUCCESS;
 }
 
 
@@ -837,6 +534,251 @@ static DECLCALLBACK(void) hmR0InitAmdCpu(RTCPUID idCpu, void *pvUser1, void *pvU
 
 
 /**
+ * AMD-specific initialization code.
+ *
+ * @returns VBox status code (will only fail if out of memory).
+ */
+static int hmR0InitAmd(void)
+{
+    /* Call the global AMD-V initialization routine (should only fail in out-of-memory situations). */
+    int rc = SVMR0GlobalInit();
+    if (RT_SUCCESS(rc))
+    {
+        /*
+         * Install the AMD-V methods.
+         */
+        g_HmR0Ops = g_HmR0OpsSvm;
+
+        /* Query AMD features. */
+        uint32_t u32Dummy;
+        ASMCpuId(0x8000000a, &g_uHmSvmRev, &g_uHmMaxAsid, &u32Dummy, &g_fHmSvmFeatures);
+
+        /*
+         * We need to check if AMD-V has been properly initialized on all CPUs.
+         * Some BIOSes might do a poor job.
+         */
+        HMR0FIRSTRC FirstRc;
+        hmR0FirstRcInit(&FirstRc);
+        rc = RTMpOnAll(hmR0InitAmdCpu, &FirstRc, NULL);
+        AssertRC(rc);
+        if (RT_SUCCESS(rc))
+            rc = hmR0FirstRcGetStatus(&FirstRc);
+#ifndef DEBUG_bird
+        AssertMsg(rc == VINF_SUCCESS || rc == VERR_SVM_IN_USE,
+                  ("hmR0InitAmdCpu failed for cpu %d with rc=%Rrc\n", hmR0FirstRcGetCpuId(&FirstRc), rc));
+#endif
+        if (RT_SUCCESS(rc))
+        {
+            SUPR0GetHwvirtMsrs(&g_HmMsrs, SUPVTCAPS_AMD_V, false /* fForce */);
+            g_fHmSvmSupported = true;
+        }
+        else
+        {
+            g_rcHmInit = rc;
+            if (rc == VERR_SVM_DISABLED || rc == VERR_SVM_IN_USE)
+                rc = VINF_SUCCESS; /* Don't fail if AMD-V is disabled or in use. */
+        }
+    }
+    else
+        g_rcHmInit = rc;
+    return rc;
+}
+
+
+/**
+ * Does global Ring-0 HM initialization (at module init).
+ *
+ * @returns VBox status code.
+ */
+VMMR0_INT_DECL(int) HMR0Init(void)
+{
+    /*
+     * Initialize the globals.
+     */
+    g_fHmEnabled = false;
+    for (unsigned i = 0; i < RT_ELEMENTS(g_aHmCpuInfo); i++)
+    {
+        g_aHmCpuInfo[i].idCpu        = NIL_RTCPUID;
+        g_aHmCpuInfo[i].hMemObj      = NIL_RTR0MEMOBJ;
+        g_aHmCpuInfo[i].HCPhysMemObj = NIL_RTHCPHYS;
+        g_aHmCpuInfo[i].pvMemObj     = NULL;
+#ifdef VBOX_WITH_NESTED_HWVIRT_SVM
+        g_aHmCpuInfo[i].n.svm.hNstGstMsrpm      = NIL_RTR0MEMOBJ;
+        g_aHmCpuInfo[i].n.svm.HCPhysNstGstMsrpm = NIL_RTHCPHYS;
+        g_aHmCpuInfo[i].n.svm.pvNstGstMsrpm     = NULL;
+#endif
+    }
+
+    /* Fill in all callbacks with placeholders. */
+    g_HmR0Ops          = g_HmR0OpsDummy;
+
+    /* Default is global VT-x/AMD-V init. */
+    g_fHmGlobalInit    = true;
+
+    g_fHmVmxSupported  = false;
+    g_fHmSvmSupported  = false;
+    g_uHmMaxAsid       = 0;
+
+    /*
+     * Get host kernel features that HM might need to know in order
+     * to co-operate and function properly with the host OS (e.g. SMAP).
+     */
+    g_fHmHostKernelFeatures = SUPR0GetKernelFeatures();
+
+    /*
+     * Make sure aCpuInfo is big enough for all the CPUs on this system.
+     */
+    if (RTMpGetArraySize() > RT_ELEMENTS(g_aHmCpuInfo))
+    {
+        LogRel(("HM: Too many real CPUs/cores/threads - %u, max %u\n", RTMpGetArraySize(), RT_ELEMENTS(g_aHmCpuInfo)));
+        return VERR_TOO_MANY_CPUS;
+    }
+
+    /*
+     * Check for VT-x or AMD-V support.
+     * Return failure only in out-of-memory situations.
+     */
+    uint32_t fCaps = 0;
+    int rc = SUPR0GetVTSupport(&fCaps);
+    if (RT_SUCCESS(rc))
+    {
+        if (fCaps & SUPVTCAPS_VT_X)
+            rc = hmR0InitIntel();
+        else
+        {
+            Assert(fCaps & SUPVTCAPS_AMD_V);
+            rc = hmR0InitAmd();
+        }
+        if (RT_SUCCESS(rc))
+        {
+            /*
+             * Register notification callbacks that we can use to disable/enable CPUs
+             * when brought offline/online or suspending/resuming.
+             */
+            if (!g_fHmVmxUsingSUPR0EnableVTx)
+            {
+                rc = RTMpNotificationRegister(hmR0MpEventCallback, NULL);
+                if (RT_SUCCESS(rc))
+                {
+                    rc = RTPowerNotificationRegister(hmR0PowerCallback, NULL);
+                    if (RT_FAILURE(rc))
+                        RTMpNotificationDeregister(hmR0MpEventCallback, NULL);
+                }
+                if (RT_FAILURE(rc))
+                {
+                    /* There shouldn't be any per-cpu allocations at this point,
+                       so just have to call SVMR0GlobalTerm and VMXR0GlobalTerm. */
+                    if (fCaps & SUPVTCAPS_VT_X)
+                        VMXR0GlobalTerm();
+                    else
+                        SVMR0GlobalTerm();
+                    g_HmR0Ops         = g_HmR0OpsDummy;
+                    g_rcHmInit     = rc;
+                    g_fHmSvmSupported = false;
+                    g_fHmVmxSupported = false;
+                }
+            }
+        }
+    }
+    else
+    {
+        g_rcHmInit = rc;
+        rc = VINF_SUCCESS; /* We return success here because module init shall not fail if HM fails to initialize. */
+    }
+    return rc;
+}
+
+
+/**
+ * Does global Ring-0 HM termination (at module termination).
+ *
+ * @returns VBox status code (ignored).
+ */
+VMMR0_INT_DECL(int) HMR0Term(void)
+{
+    int rc;
+    if (   g_fHmVmxSupported
+        && g_fHmVmxUsingSUPR0EnableVTx)
+    {
+        /*
+         * Simple if the host OS manages VT-x.
+         */
+        Assert(g_fHmGlobalInit);
+
+        if (g_fHmVmxCalledSUPR0EnableVTx)
+        {
+            rc = SUPR0EnableVTx(false /* fEnable */);
+            g_fHmVmxCalledSUPR0EnableVTx = false;
+        }
+        else
+            rc = VINF_SUCCESS;
+
+        for (unsigned iCpu = 0; iCpu < RT_ELEMENTS(g_aHmCpuInfo); iCpu++)
+        {
+            g_aHmCpuInfo[iCpu].fConfigured = false;
+            Assert(g_aHmCpuInfo[iCpu].hMemObj == NIL_RTR0MEMOBJ);
+        }
+    }
+    else
+    {
+        Assert(!g_fHmVmxSupported || !g_fHmVmxUsingSUPR0EnableVTx);
+
+        /* Doesn't really matter if this fails. */
+        RTMpNotificationDeregister(hmR0MpEventCallback, NULL);
+        RTPowerNotificationDeregister(hmR0PowerCallback, NULL);
+        rc = VINF_SUCCESS;
+
+        /*
+         * Disable VT-x/AMD-V on all CPUs if we enabled it before.
+         */
+        if (g_fHmGlobalInit)
+        {
+            HMR0FIRSTRC FirstRc;
+            hmR0FirstRcInit(&FirstRc);
+            rc = RTMpOnAll(hmR0DisableCpuCallback, NULL /* pvUser 1 */, &FirstRc);
+            Assert(RT_SUCCESS(rc) || rc == VERR_NOT_SUPPORTED);
+            if (RT_SUCCESS(rc))
+                rc = hmR0FirstRcGetStatus(&FirstRc);
+        }
+
+        /*
+         * Free the per-cpu pages used for VT-x and AMD-V.
+         */
+        for (unsigned i = 0; i < RT_ELEMENTS(g_aHmCpuInfo); i++)
+        {
+            if (g_aHmCpuInfo[i].hMemObj != NIL_RTR0MEMOBJ)
+            {
+                RTR0MemObjFree(g_aHmCpuInfo[i].hMemObj, false);
+                g_aHmCpuInfo[i].hMemObj      = NIL_RTR0MEMOBJ;
+                g_aHmCpuInfo[i].HCPhysMemObj = NIL_RTHCPHYS;
+                g_aHmCpuInfo[i].pvMemObj     = NULL;
+            }
+#ifdef VBOX_WITH_NESTED_HWVIRT_SVM
+            if (g_aHmCpuInfo[i].n.svm.hNstGstMsrpm != NIL_RTR0MEMOBJ)
+            {
+                RTR0MemObjFree(g_aHmCpuInfo[i].n.svm.hNstGstMsrpm, false);
+                g_aHmCpuInfo[i].n.svm.hNstGstMsrpm      = NIL_RTR0MEMOBJ;
+                g_aHmCpuInfo[i].n.svm.HCPhysNstGstMsrpm = NIL_RTHCPHYS;
+                g_aHmCpuInfo[i].n.svm.pvNstGstMsrpm     = NULL;
+            }
+#endif
+        }
+    }
+
+    /** @todo This needs cleaning up. There's no matching
+     *        hmR0TermIntel()/hmR0TermAmd() and all the VT-x/AMD-V specific bits
+     *        should move into their respective modules. */
+    /* Finally, call global VT-x/AMD-V termination. */
+    if (g_fHmVmxSupported)
+        VMXR0GlobalTerm();
+    else if (g_fHmSvmSupported)
+        SVMR0GlobalTerm();
+
+    return rc;
+}
+
+
+/**
  * Enable VT-x or AMD-V on the current CPU
  *
  * @returns VBox status code.
@@ -845,32 +787,29 @@ static DECLCALLBACK(void) hmR0InitAmdCpu(RTCPUID idCpu, void *pvUser1, void *pvU
  *
  * @remarks Maybe called with interrupts disabled!
  */
-static int hmR0EnableCpu(PVM pVM, RTCPUID idCpu)
+static int hmR0EnableCpu(PVMCC pVM, RTCPUID idCpu)
 {
-    PHMGLOBALCPUINFO pCpu = &g_HmR0.aCpuInfo[idCpu];
+    PHMPHYSCPU pHostCpu = &g_aHmCpuInfo[idCpu];
 
     Assert(idCpu == (RTCPUID)RTMpCpuIdToSetIndex(idCpu)); /** @todo fix idCpu == index assumption (rainy day) */
-    Assert(idCpu < RT_ELEMENTS(g_HmR0.aCpuInfo));
-    Assert(!pCpu->fConfigured);
+    Assert(idCpu < RT_ELEMENTS(g_aHmCpuInfo));
+    Assert(!pHostCpu->fConfigured);
     Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
 
-    pCpu->idCpu = idCpu;
+    pHostCpu->idCpu = idCpu;
     /* Do NOT reset cTlbFlushes here, see @bugref{6255}. */
 
     int rc;
-    if (g_HmR0.vmx.fSupported && g_HmR0.vmx.fUsingSUPR0EnableVTx)
-        rc = g_HmR0.pfnEnableCpu(pCpu, pVM, NULL /* pvCpuPage */, NIL_RTHCPHYS, true, &g_HmR0.vmx.Msrs);
+    if (   g_fHmVmxSupported
+        && g_fHmVmxUsingSUPR0EnableVTx)
+        rc = g_HmR0Ops.pfnEnableCpu(pHostCpu, pVM, NULL /* pvCpuPage */, NIL_RTHCPHYS, true, &g_HmMsrs);
     else
     {
-        AssertLogRelMsgReturn(pCpu->hMemObj != NIL_RTR0MEMOBJ, ("hmR0EnableCpu failed idCpu=%u.\n", idCpu), VERR_HM_IPE_1);
-        if (g_HmR0.vmx.fSupported)
-            rc = g_HmR0.pfnEnableCpu(pCpu, pVM, pCpu->pvMemObj, pCpu->HCPhysMemObj, false, &g_HmR0.vmx.Msrs);
-        else
-            rc = g_HmR0.pfnEnableCpu(pCpu, pVM, pCpu->pvMemObj, pCpu->HCPhysMemObj, false, NULL /* pvArg */);
+        AssertLogRelMsgReturn(pHostCpu->hMemObj != NIL_RTR0MEMOBJ, ("hmR0EnableCpu failed idCpu=%u.\n", idCpu), VERR_HM_IPE_1);
+        rc = g_HmR0Ops.pfnEnableCpu(pHostCpu, pVM, pHostCpu->pvMemObj, pHostCpu->HCPhysMemObj, false, &g_HmMsrs);
     }
     if (RT_SUCCESS(rc))
-        pCpu->fConfigured = true;
-
+        pHostCpu->fConfigured = true;
     return rc;
 }
 
@@ -884,9 +823,9 @@ static int hmR0EnableCpu(PVM pVM, RTCPUID idCpu)
  */
 static DECLCALLBACK(void) hmR0EnableCpuCallback(RTCPUID idCpu, void *pvUser1, void *pvUser2)
 {
-    PVM             pVM      = (PVM)pvUser1;     /* can be NULL! */
+    PVMCC           pVM      = (PVMCC)pvUser1;     /* can be NULL! */
     PHMR0FIRSTRC    pFirstRc = (PHMR0FIRSTRC)pvUser2;
-    AssertReturnVoid(g_HmR0.fGlobalInit);
+    AssertReturnVoid(g_fHmGlobalInit);
     Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
     hmR0FirstRcSetStatus(pFirstRc, hmR0EnableCpu(pVM, idCpu));
 }
@@ -900,7 +839,7 @@ static DECLCALLBACK(void) hmR0EnableCpuCallback(RTCPUID idCpu, void *pvUser1, vo
  */
 static DECLCALLBACK(int32_t) hmR0EnableAllCpuOnce(void *pvUser)
 {
-    PVM pVM = (PVM)pvUser;
+    PVMCC pVM = (PVMCC)pvUser;
 
     /*
      * Indicate that we've initialized.
@@ -908,29 +847,34 @@ static DECLCALLBACK(int32_t) hmR0EnableAllCpuOnce(void *pvUser)
      * Note! There is a potential race between this function and the suspend
      *       notification.  Kind of unlikely though, so ignored for now.
      */
-    AssertReturn(!g_HmR0.fEnabled, VERR_HM_ALREADY_ENABLED_IPE);
-    ASMAtomicWriteBool(&g_HmR0.fEnabled, true);
+    AssertReturn(!g_fHmEnabled, VERR_HM_ALREADY_ENABLED_IPE);
+    ASMAtomicWriteBool(&g_fHmEnabled, true);
 
     /*
      * The global init variable is set by the first VM.
      */
-    g_HmR0.fGlobalInit = pVM->hm.s.fGlobalInit;
+    g_fHmGlobalInit = pVM->hm.s.fGlobalInit;
 
 #ifdef VBOX_STRICT
-    for (unsigned i = 0; i < RT_ELEMENTS(g_HmR0.aCpuInfo); i++)
+    for (unsigned i = 0; i < RT_ELEMENTS(g_aHmCpuInfo); i++)
     {
-        Assert(g_HmR0.aCpuInfo[i].hMemObj == NIL_RTR0MEMOBJ);
-        Assert(g_HmR0.aCpuInfo[i].HCPhysMemObj == NIL_RTHCPHYS);
-        Assert(g_HmR0.aCpuInfo[i].pvMemObj == NULL);
-        Assert(!g_HmR0.aCpuInfo[i].fConfigured);
-        Assert(!g_HmR0.aCpuInfo[i].cTlbFlushes);
-        Assert(!g_HmR0.aCpuInfo[i].uCurrentAsid);
+        Assert(g_aHmCpuInfo[i].hMemObj      == NIL_RTR0MEMOBJ);
+        Assert(g_aHmCpuInfo[i].HCPhysMemObj == NIL_RTHCPHYS);
+        Assert(g_aHmCpuInfo[i].pvMemObj     == NULL);
+        Assert(!g_aHmCpuInfo[i].fConfigured);
+        Assert(!g_aHmCpuInfo[i].cTlbFlushes);
+        Assert(!g_aHmCpuInfo[i].uCurrentAsid);
+# ifdef VBOX_WITH_NESTED_HWVIRT_SVM
+        Assert(g_aHmCpuInfo[i].n.svm.hNstGstMsrpm      == NIL_RTR0MEMOBJ);
+        Assert(g_aHmCpuInfo[i].n.svm.HCPhysNstGstMsrpm == NIL_RTHCPHYS);
+        Assert(g_aHmCpuInfo[i].n.svm.pvNstGstMsrpm     == NULL);
+# endif
     }
 #endif
 
     int rc;
-    if (   g_HmR0.vmx.fSupported
-        && g_HmR0.vmx.fUsingSUPR0EnableVTx)
+    if (   g_fHmVmxSupported
+        && g_fHmVmxUsingSUPR0EnableVTx)
     {
         /*
          * Global VT-x initialization API (only darwin for now).
@@ -938,9 +882,9 @@ static DECLCALLBACK(int32_t) hmR0EnableAllCpuOnce(void *pvUser)
         rc = SUPR0EnableVTx(true /* fEnable */);
         if (RT_SUCCESS(rc))
         {
-            g_HmR0.vmx.fCalledSUPR0EnableVTx = true;
+            g_fHmVmxCalledSUPR0EnableVTx = true;
             /* If the host provides a VT-x init API, then we'll rely on that for global init. */
-            g_HmR0.fGlobalInit = pVM->hm.s.fGlobalInit = true;
+            g_fHmGlobalInit = pVM->hm.s.fGlobalInit = true;
         }
         else
             AssertMsgFailed(("hmR0EnableAllCpuOnce/SUPR0EnableVTx: rc=%Rrc\n", rc));
@@ -951,23 +895,39 @@ static DECLCALLBACK(int32_t) hmR0EnableAllCpuOnce(void *pvUser)
          * We're doing the job ourselves.
          */
         /* Allocate one page per cpu for the global VT-x and AMD-V pages */
-        for (unsigned i = 0; i < RT_ELEMENTS(g_HmR0.aCpuInfo); i++)
+        for (unsigned i = 0; i < RT_ELEMENTS(g_aHmCpuInfo); i++)
         {
-            Assert(g_HmR0.aCpuInfo[i].hMemObj == NIL_RTR0MEMOBJ);
-
+            Assert(g_aHmCpuInfo[i].hMemObj == NIL_RTR0MEMOBJ);
+#ifdef VBOX_WITH_NESTED_HWVIRT_SVM
+            Assert(g_aHmCpuInfo[i].n.svm.hNstGstMsrpm == NIL_RTR0MEMOBJ);
+#endif
             if (RTMpIsCpuPossible(RTMpCpuIdFromSetIndex(i)))
             {
                 /** @todo NUMA */
-                rc = RTR0MemObjAllocCont(&g_HmR0.aCpuInfo[i].hMemObj, PAGE_SIZE, false /* executable R0 mapping */);
+                rc = RTR0MemObjAllocCont(&g_aHmCpuInfo[i].hMemObj, PAGE_SIZE, false /* executable R0 mapping */);
                 AssertLogRelRCReturn(rc, rc);
 
-                g_HmR0.aCpuInfo[i].HCPhysMemObj = RTR0MemObjGetPagePhysAddr(g_HmR0.aCpuInfo[i].hMemObj, 0);
-                Assert(g_HmR0.aCpuInfo[i].HCPhysMemObj != NIL_RTHCPHYS);
-                Assert(!(g_HmR0.aCpuInfo[i].HCPhysMemObj & PAGE_OFFSET_MASK));
+                g_aHmCpuInfo[i].HCPhysMemObj = RTR0MemObjGetPagePhysAddr(g_aHmCpuInfo[i].hMemObj, 0);
+                Assert(g_aHmCpuInfo[i].HCPhysMemObj != NIL_RTHCPHYS);
+                Assert(!(g_aHmCpuInfo[i].HCPhysMemObj & PAGE_OFFSET_MASK));
 
-                g_HmR0.aCpuInfo[i].pvMemObj     = RTR0MemObjAddress(g_HmR0.aCpuInfo[i].hMemObj);
-                AssertPtr(g_HmR0.aCpuInfo[i].pvMemObj);
-                ASMMemZeroPage(g_HmR0.aCpuInfo[i].pvMemObj);
+                g_aHmCpuInfo[i].pvMemObj     = RTR0MemObjAddress(g_aHmCpuInfo[i].hMemObj);
+                AssertPtr(g_aHmCpuInfo[i].pvMemObj);
+                ASMMemZeroPage(g_aHmCpuInfo[i].pvMemObj);
+
+#ifdef VBOX_WITH_NESTED_HWVIRT_SVM
+                rc = RTR0MemObjAllocCont(&g_aHmCpuInfo[i].n.svm.hNstGstMsrpm, SVM_MSRPM_PAGES << X86_PAGE_4K_SHIFT,
+                                         false /* executable R0 mapping */);
+                AssertLogRelRCReturn(rc, rc);
+
+                g_aHmCpuInfo[i].n.svm.HCPhysNstGstMsrpm = RTR0MemObjGetPagePhysAddr(g_aHmCpuInfo[i].n.svm.hNstGstMsrpm, 0);
+                Assert(g_aHmCpuInfo[i].n.svm.HCPhysNstGstMsrpm != NIL_RTHCPHYS);
+                Assert(!(g_aHmCpuInfo[i].n.svm.HCPhysNstGstMsrpm & PAGE_OFFSET_MASK));
+
+                g_aHmCpuInfo[i].n.svm.pvNstGstMsrpm    = RTR0MemObjAddress(g_aHmCpuInfo[i].n.svm.hNstGstMsrpm);
+                AssertPtr(g_aHmCpuInfo[i].n.svm.pvNstGstMsrpm);
+                ASMMemFill32(g_aHmCpuInfo[i].n.svm.pvNstGstMsrpm, SVM_MSRPM_PAGES << X86_PAGE_4K_SHIFT, UINT32_C(0xffffffff));
+#endif
             }
         }
 
@@ -975,7 +935,7 @@ static DECLCALLBACK(int32_t) hmR0EnableAllCpuOnce(void *pvUser)
     }
 
     if (   RT_SUCCESS(rc)
-        && g_HmR0.fGlobalInit)
+        && g_fHmGlobalInit)
     {
         /* First time, so initialize each cpu/core. */
         HMR0FIRSTRC FirstRc;
@@ -995,13 +955,13 @@ static DECLCALLBACK(int32_t) hmR0EnableAllCpuOnce(void *pvUser)
  * @returns VBox status code.
  * @param   pVM                 The cross context VM structure.
  */
-VMMR0_INT_DECL(int) HMR0EnableAllCpus(PVM pVM)
+VMMR0_INT_DECL(int) HMR0EnableAllCpus(PVMCC pVM)
 {
     /* Make sure we don't touch HM after we've disabled HM in preparation of a suspend. */
-    if (ASMAtomicReadBool(&g_HmR0.fSuspended))
+    if (ASMAtomicReadBool(&g_fHmSuspended))
         return VERR_HM_SUSPEND_PENDING;
 
-    return RTOnce(&g_HmR0.EnableAllCpusOnce, hmR0EnableAllCpuOnce, pVM);
+    return RTOnce(&g_HmEnableAllCpusOnce, hmR0EnableAllCpuOnce, pVM);
 }
 
 
@@ -1015,28 +975,28 @@ VMMR0_INT_DECL(int) HMR0EnableAllCpus(PVM pVM)
  */
 static int hmR0DisableCpu(RTCPUID idCpu)
 {
-    PHMGLOBALCPUINFO pCpu = &g_HmR0.aCpuInfo[idCpu];
+    PHMPHYSCPU pHostCpu = &g_aHmCpuInfo[idCpu];
 
-    Assert(!g_HmR0.vmx.fSupported || !g_HmR0.vmx.fUsingSUPR0EnableVTx);
+    Assert(!g_fHmVmxSupported || !g_fHmVmxUsingSUPR0EnableVTx);
     Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
     Assert(idCpu == (RTCPUID)RTMpCpuIdToSetIndex(idCpu)); /** @todo fix idCpu == index assumption (rainy day) */
-    Assert(idCpu < RT_ELEMENTS(g_HmR0.aCpuInfo));
-    Assert(!pCpu->fConfigured || pCpu->hMemObj != NIL_RTR0MEMOBJ);
+    Assert(idCpu < RT_ELEMENTS(g_aHmCpuInfo));
+    Assert(!pHostCpu->fConfigured || pHostCpu->hMemObj != NIL_RTR0MEMOBJ);
     AssertRelease(idCpu == RTMpCpuId());
 
-    if (pCpu->hMemObj == NIL_RTR0MEMOBJ)
-        return pCpu->fConfigured ? VERR_NO_MEMORY : VINF_SUCCESS /* not initialized. */;
-    AssertPtr(pCpu->pvMemObj);
-    Assert(pCpu->HCPhysMemObj != NIL_RTHCPHYS);
+    if (pHostCpu->hMemObj == NIL_RTR0MEMOBJ)
+        return pHostCpu->fConfigured ? VERR_NO_MEMORY : VINF_SUCCESS /* not initialized. */;
+    AssertPtr(pHostCpu->pvMemObj);
+    Assert(pHostCpu->HCPhysMemObj != NIL_RTHCPHYS);
 
     int rc;
-    if (pCpu->fConfigured)
+    if (pHostCpu->fConfigured)
     {
-        rc = g_HmR0.pfnDisableCpu(pCpu, pCpu->pvMemObj, pCpu->HCPhysMemObj);
+        rc = g_HmR0Ops.pfnDisableCpu(pHostCpu, pHostCpu->pvMemObj, pHostCpu->HCPhysMemObj);
         AssertRCReturn(rc, rc);
 
-        pCpu->fConfigured = false;
-        pCpu->idCpu = NIL_RTCPUID;
+        pHostCpu->fConfigured = false;
+        pHostCpu->idCpu = NIL_RTCPUID;
     }
     else
         rc = VINF_SUCCESS; /* nothing to do */
@@ -1055,7 +1015,7 @@ static int hmR0DisableCpu(RTCPUID idCpu)
 static DECLCALLBACK(void) hmR0DisableCpuCallback(RTCPUID idCpu, void *pvUser1, void *pvUser2)
 {
     PHMR0FIRSTRC pFirstRc = (PHMR0FIRSTRC)pvUser2; NOREF(pvUser1);
-    AssertReturnVoid(g_HmR0.fGlobalInit);
+    AssertReturnVoid(g_fHmGlobalInit);
     hmR0FirstRcSetStatus(pFirstRc, hmR0DisableCpu(idCpu));
 }
 
@@ -1081,12 +1041,12 @@ static DECLCALLBACK(void) hmR0DisableCpuOnSpecificCallback(RTCPUID idCpu, void *
  *
  * @param   enmEvent            The Mp event.
  * @param   idCpu               The identifier for the CPU the function is called on.
- * @param   pvData              Opaque data (PVM pointer).
+ * @param   pvData              Opaque data (PVMCC pointer).
  */
 static DECLCALLBACK(void) hmR0MpEventCallback(RTMPEVENT enmEvent, RTCPUID idCpu, void *pvData)
 {
     NOREF(pvData);
-    Assert(!g_HmR0.vmx.fSupported || !g_HmR0.vmx.fUsingSUPR0EnableVTx);
+    Assert(!g_fHmVmxSupported || !g_fHmVmxUsingSUPR0EnableVTx);
 
     /*
      * We only care about uninitializing a CPU that is going offline. When a
@@ -1127,7 +1087,7 @@ static DECLCALLBACK(void) hmR0MpEventCallback(RTMPEVENT enmEvent, RTCPUID idCpu,
 static DECLCALLBACK(void) hmR0PowerCallback(RTPOWEREVENT enmEvent, void *pvUser)
 {
     NOREF(pvUser);
-    Assert(!g_HmR0.vmx.fSupported || !g_HmR0.vmx.fUsingSUPR0EnableVTx);
+    Assert(!g_fHmVmxSupported || !g_fHmVmxUsingSUPR0EnableVTx);
 
 #ifdef LOG_ENABLED
     if (enmEvent == RTPOWEREVENT_SUSPEND)
@@ -1137,9 +1097,9 @@ static DECLCALLBACK(void) hmR0PowerCallback(RTPOWEREVENT enmEvent, void *pvUser)
 #endif
 
     if (enmEvent == RTPOWEREVENT_SUSPEND)
-        ASMAtomicWriteBool(&g_HmR0.fSuspended, true);
+        ASMAtomicWriteBool(&g_fHmSuspended, true);
 
-    if (g_HmR0.fEnabled)
+    if (g_fHmEnabled)
     {
         int         rc;
         HMR0FIRSTRC FirstRc;
@@ -1147,7 +1107,7 @@ static DECLCALLBACK(void) hmR0PowerCallback(RTPOWEREVENT enmEvent, void *pvUser)
 
         if (enmEvent == RTPOWEREVENT_SUSPEND)
         {
-            if (g_HmR0.fGlobalInit)
+            if (g_fHmGlobalInit)
             {
                 /* Turn off VT-x or AMD-V on all CPUs. */
                 rc = RTMpOnAll(hmR0DisableCpuCallback, NULL /* pvUser 1 */, &FirstRc);
@@ -1159,7 +1119,7 @@ static DECLCALLBACK(void) hmR0PowerCallback(RTPOWEREVENT enmEvent, void *pvUser)
         {
             /* Reinit the CPUs from scratch as the suspend state might have
                messed with the MSRs. (lousy BIOSes as usual) */
-            if (g_HmR0.vmx.fSupported)
+            if (g_fHmVmxSupported)
                 rc = RTMpOnAll(hmR0InitIntelCpu, &FirstRc, NULL);
             else
                 rc = RTMpOnAll(hmR0InitAmdCpu, &FirstRc, NULL);
@@ -1170,7 +1130,7 @@ static DECLCALLBACK(void) hmR0PowerCallback(RTPOWEREVENT enmEvent, void *pvUser)
             if (RT_FAILURE(rc))
                 SUPR0Printf("hmR0PowerCallback hmR0InitXxxCpu failed with %Rc\n", rc);
 #endif
-            if (g_HmR0.fGlobalInit)
+            if (g_fHmGlobalInit)
             {
                 /* Turn VT-x or AMD-V back on on all CPUs. */
                 rc = RTMpOnAll(hmR0EnableCpuCallback, NULL /* pVM */, &FirstRc /* output ignored */);
@@ -1181,15 +1141,15 @@ static DECLCALLBACK(void) hmR0PowerCallback(RTPOWEREVENT enmEvent, void *pvUser)
     }
 
     if (enmEvent == RTPOWEREVENT_RESUME)
-        ASMAtomicWriteBool(&g_HmR0.fSuspended, false);
+        ASMAtomicWriteBool(&g_fHmSuspended, false);
 }
 
 
 /**
  * Does ring-0 per-VM HM initialization.
  *
- * This will copy HM global into the VM structure and call the CPU specific
- * init routine which will allocate resources for each virtual CPU and such.
+ * This will call the CPU specific init. routine which may initialize and allocate
+ * resources for virtual CPUs.
  *
  * @returns VBox status code.
  * @param   pVM         The cross context VM structure.
@@ -1197,65 +1157,140 @@ static DECLCALLBACK(void) hmR0PowerCallback(RTPOWEREVENT enmEvent, void *pvUser)
  * @remarks This is called after HMR3Init(), see vmR3CreateU() and
  *          vmR3InitRing3().
  */
-VMMR0_INT_DECL(int) HMR0InitVM(PVM pVM)
+VMMR0_INT_DECL(int) HMR0InitVM(PVMCC pVM)
 {
     AssertReturn(pVM, VERR_INVALID_PARAMETER);
 
-#ifdef LOG_ENABLED
-    SUPR0Printf("HMR0InitVM: %p\n", pVM);
-#endif
-
     /* Make sure we don't touch HM after we've disabled HM in preparation of a suspend. */
-    if (ASMAtomicReadBool(&g_HmR0.fSuspended))
+    if (ASMAtomicReadBool(&g_fHmSuspended))
         return VERR_HM_SUSPEND_PENDING;
 
     /*
      * Copy globals to the VM structure.
      */
-    pVM->hm.s.vmx.fSupported            = g_HmR0.vmx.fSupported;
-    pVM->hm.s.svm.fSupported            = g_HmR0.svm.fSupported;
-
-    pVM->hm.s.vmx.fUsePreemptTimer     &= g_HmR0.vmx.fUsePreemptTimer;     /* Can be overridden by CFGM. See HMR3Init(). */
-    pVM->hm.s.vmx.cPreemptTimerShift    = g_HmR0.vmx.cPreemptTimerShift;
-    pVM->hm.s.vmx.u64HostCr4            = g_HmR0.vmx.u64HostCr4;
-    pVM->hm.s.vmx.u64HostEfer           = g_HmR0.vmx.u64HostEfer;
-    pVM->hm.s.vmx.u64HostSmmMonitorCtl  = g_HmR0.vmx.u64HostSmmMonitorCtl;
-    pVM->hm.s.vmx.Msrs                  = g_HmR0.vmx.Msrs;
-    pVM->hm.s.svm.u64MsrHwcr            = g_HmR0.svm.u64MsrHwcr;
-    pVM->hm.s.svm.u32Rev                = g_HmR0.svm.u32Rev;
-    pVM->hm.s.svm.u32Features           = g_HmR0.svm.u32Features;
-    pVM->hm.s.cpuid.u32AMDFeatureECX    = g_HmR0.cpuid.u32AMDFeatureECX;
-    pVM->hm.s.cpuid.u32AMDFeatureEDX    = g_HmR0.cpuid.u32AMDFeatureEDX;
-    pVM->hm.s.lLastError                = g_HmR0.lLastError;
-    pVM->hm.s.uMaxAsid                  = g_HmR0.uMaxAsid;
-
-    if (!pVM->hm.s.cMaxResumeLoops) /* allow ring-3 overrides */
+    Assert(!(pVM->hm.s.vmx.fSupported && pVM->hm.s.svm.fSupported));
+    if (pVM->hm.s.vmx.fSupported)
     {
-        pVM->hm.s.cMaxResumeLoops       = 1024;
-        if (RTThreadPreemptIsPendingTrusty())
-            pVM->hm.s.cMaxResumeLoops   = 8192;
+        pVM->hmr0.s.vmx.fUsePreemptTimer            = pVM->hm.s.vmx.fUsePreemptTimerCfg && g_fHmVmxUsePreemptTimer;
+        pVM->hm.s.vmx.fUsePreemptTimerCfg           = pVM->hmr0.s.vmx.fUsePreemptTimer;
+        pVM->hm.s.vmx.cPreemptTimerShift            = g_cHmVmxPreemptTimerShift;
+        pVM->hm.s.ForR3.vmx.u64HostCr4              = g_uHmVmxHostCr4;
+        pVM->hm.s.ForR3.vmx.u64HostMsrEfer          = g_uHmVmxHostMsrEfer;
+        pVM->hm.s.ForR3.vmx.u64HostSmmMonitorCtl    = g_uHmVmxHostSmmMonitorCtl;
+        pVM->hm.s.ForR3.vmx.u64HostFeatCtrl         = g_HmMsrs.u.vmx.u64FeatCtrl;
+        HMGetVmxMsrsFromHwvirtMsrs(&g_HmMsrs, &pVM->hm.s.ForR3.vmx.Msrs);
+        /* If you need to tweak host MSRs for testing VMX R0 code, do it here. */
+
+        /* Enable VPID if supported and configured. */
+        if (g_HmMsrs.u.vmx.ProcCtls2.n.allowed1 & VMX_PROC_CTLS2_VPID)
+            pVM->hm.s.ForR3.vmx.fVpid = pVM->hmr0.s.vmx.fVpid = pVM->hm.s.vmx.fAllowVpid; /* Can be overridden by CFGM in HMR3Init(). */
+
+        /* Use VMCS shadowing if supported. */
+        pVM->hmr0.s.vmx.fUseVmcsShadowing = pVM->cpum.ro.GuestFeatures.fVmx
+                                         && (g_HmMsrs.u.vmx.ProcCtls2.n.allowed1 & VMX_PROC_CTLS2_VMCS_SHADOWING);
+        pVM->hm.s.ForR3.vmx.fUseVmcsShadowing = pVM->hmr0.s.vmx.fUseVmcsShadowing;
+
+        /* Use the VMCS controls for swapping the EFER MSR if supported. */
+        pVM->hm.s.ForR3.vmx.fSupportsVmcsEfer = g_fHmVmxSupportsVmcsEfer;
+
+#if 0
+        /* Enable APIC register virtualization and virtual-interrupt delivery if supported. */
+        if (   (g_HmMsrs.u.vmx.ProcCtls2.n.allowed1 & VMX_PROC_CTLS2_APIC_REG_VIRT)
+            && (g_HmMsrs.u.vmx.ProcCtls2.n.allowed1 & VMX_PROC_CTLS2_VIRT_INTR_DELIVERY))
+            pVM->hm.s.fVirtApicRegs = true;
+
+        /* Enable posted-interrupt processing if supported. */
+        /** @todo Add and query IPRT API for host OS support for posted-interrupt IPI
+         *        here. */
+        if (   (g_HmMsrs.u.vmx.PinCtls.n.allowed1  & VMX_PIN_CTLS_POSTED_INT)
+            && (g_HmMsrs.u.vmx.ExitCtls.n.allowed1 & VMX_EXIT_CTLS_ACK_EXT_INT))
+            pVM->hm.s.fPostedIntrs = true;
+#endif
     }
+    else if (pVM->hm.s.svm.fSupported)
+    {
+        pVM->hm.s.ForR3.svm.u32Rev      = g_uHmSvmRev;
+        pVM->hm.s.ForR3.svm.fFeatures   = g_fHmSvmFeatures;
+        pVM->hm.s.ForR3.svm.u64MsrHwcr  = g_HmMsrs.u.svm.u64MsrHwcr;
+        /* If you need to tweak host MSRs for testing SVM R0 code, do it here. */
+    }
+    pVM->hm.s.ForR3.rcInit      = g_rcHmInit;
+    pVM->hm.s.ForR3.uMaxAsid    = g_uHmMaxAsid;
+
+    /*
+     * Set default maximum inner loops in ring-0 before returning to ring-3.
+     * Can be overriden using CFGM.
+     */
+    uint32_t cMaxResumeLoops = pVM->hm.s.cMaxResumeLoopsCfg;
+    if (!cMaxResumeLoops)
+    {
+        cMaxResumeLoops     = 1024;
+        if (RTThreadPreemptIsPendingTrusty())
+            cMaxResumeLoops = 8192;
+    }
+    else if (cMaxResumeLoops > 16384)
+        cMaxResumeLoops = 16384;
+    else if (cMaxResumeLoops < 32)
+        cMaxResumeLoops = 32;
+    pVM->hm.s.cMaxResumeLoopsCfg = pVM->hmr0.s.cMaxResumeLoops = cMaxResumeLoops;
 
     /*
      * Initialize some per-VCPU fields.
      */
-    for (VMCPUID i = 0; i < pVM->cCpus; i++)
+    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
     {
-        PVMCPU pVCpu = &pVM->aCpus[i];
-        pVCpu->hm.s.idEnteredCpu   = NIL_RTCPUID;
-        pVCpu->hm.s.idLastCpu      = NIL_RTCPUID;
-        pVCpu->hm.s.fGIMTrapXcptUD = GIMShouldTrapXcptUD(pVCpu);
+        PVMCPUCC pVCpu = VMCC_GET_CPU(pVM, idCpu);
+        pVCpu->hmr0.s.idEnteredCpu  = NIL_RTCPUID;
+        pVCpu->hmr0.s.idLastCpu     = NIL_RTCPUID;
 
         /* We'll aways increment this the first time (host uses ASID 0). */
-        AssertReturn(!pVCpu->hm.s.uCurrentAsid, VERR_HM_IPE_3);
+        AssertReturn(!pVCpu->hmr0.s.uCurrentAsid, VERR_HM_IPE_3);
     }
 
-    pVM->hm.s.fHostKernelFeatures = SUPR0GetKernelFeatures();
+    /*
+     * Configure defences against spectre and other CPU bugs.
+     */
+    uint32_t fWorldSwitcher = 0;
+    uint32_t cLastStdLeaf   = ASMCpuId_EAX(0);
+    if (cLastStdLeaf >= 0x00000007 && ASMIsValidStdRange(cLastStdLeaf))
+    {
+        uint32_t uEdx = 0;
+        ASMCpuIdExSlow(0x00000007, 0, 0, 0, NULL, NULL, NULL, &uEdx);
+
+        if (uEdx & X86_CPUID_STEXT_FEATURE_EDX_IBRS_IBPB)
+        {
+            if (pVM->hm.s.fIbpbOnVmExit)
+                fWorldSwitcher |= HM_WSF_IBPB_EXIT;
+            if (pVM->hm.s.fIbpbOnVmEntry)
+                fWorldSwitcher |= HM_WSF_IBPB_ENTRY;
+        }
+        if (uEdx & X86_CPUID_STEXT_FEATURE_EDX_FLUSH_CMD)
+        {
+            if (pVM->hm.s.fL1dFlushOnVmEntry)
+                fWorldSwitcher |= HM_WSF_L1D_ENTRY;
+            else if (pVM->hm.s.fL1dFlushOnSched)
+                fWorldSwitcher |= HM_WSF_L1D_SCHED;
+        }
+        if (uEdx & X86_CPUID_STEXT_FEATURE_EDX_MD_CLEAR)
+        {
+            if (pVM->hm.s.fMdsClearOnVmEntry)
+                fWorldSwitcher |= HM_WSF_MDS_ENTRY;
+            else if (pVM->hm.s.fMdsClearOnSched)
+                fWorldSwitcher |= HM_WSF_MDS_SCHED;
+        }
+    }
+    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
+    {
+        PVMCPUCC pVCpu = VMCC_GET_CPU(pVM, idCpu);
+        pVCpu->hmr0.s.fWorldSwitcher = fWorldSwitcher;
+    }
+    pVM->hm.s.ForR3.fWorldSwitcher = fWorldSwitcher;
+
 
     /*
      * Call the hardware specific initialization method.
      */
-    return g_HmR0.pfnInitVM(pVM);
+    return g_HmR0Ops.pfnInitVM(pVM);
 }
 
 
@@ -1265,7 +1300,7 @@ VMMR0_INT_DECL(int) HMR0InitVM(PVM pVM)
  * @returns VBox status code.
  * @param   pVM         The cross context VM structure.
  */
-VMMR0_INT_DECL(int) HMR0TermVM(PVM pVM)
+VMMR0_INT_DECL(int) HMR0TermVM(PVMCC pVM)
 {
     Log(("HMR0TermVM: %p\n", pVM));
     AssertReturn(pVM, VERR_INVALID_PARAMETER);
@@ -1276,7 +1311,7 @@ VMMR0_INT_DECL(int) HMR0TermVM(PVM pVM)
      * Note! We might be preparing for a suspend, so the pfnTermVM() functions should probably not
      * mess with VT-x/AMD-V features on the CPU, currently all they do is free memory so this is safe.
      */
-    return g_HmR0.pfnTermVM(pVM);
+    return g_HmR0Ops.pfnTermVM(pVM);
 }
 
 
@@ -1288,17 +1323,16 @@ VMMR0_INT_DECL(int) HMR0TermVM(PVM pVM)
  * @returns VBox status code.
  * @param   pVM         The cross context VM structure.
  */
-VMMR0_INT_DECL(int) HMR0SetupVM(PVM pVM)
+VMMR0_INT_DECL(int) HMR0SetupVM(PVMCC pVM)
 {
     Log(("HMR0SetupVM: %p\n", pVM));
     AssertReturn(pVM, VERR_INVALID_PARAMETER);
 
     /* Make sure we don't touch HM after we've disabled HM in preparation of a suspend. */
-    AssertReturn(!ASMAtomicReadBool(&g_HmR0.fSuspended), VERR_HM_SUSPEND_PENDING);
+    AssertReturn(!ASMAtomicReadBool(&g_fHmSuspended), VERR_HM_SUSPEND_PENDING);
 
     /* On first entry we'll sync everything. */
-    for (VMCPUID i = 0; i < pVM->cCpus; i++)
-        HMCPU_CF_RESET_TO(&pVM->aCpus[i], HM_CHANGED_HOST_CONTEXT | HM_CHANGED_ALL_GUEST);
+    VMCC_FOR_EACH_VMCPU_STMT(pVM, pVCpu->hm.s.fCtxChanged |= HM_CHANGED_HOST_CONTEXT | HM_CHANGED_ALL_GUEST);
 
     /*
      * Call the hardware specific setup VM method. This requires the CPU to be
@@ -1306,13 +1340,13 @@ VMMR0_INT_DECL(int) HMR0SetupVM(PVM pVM)
      */
     RTTHREADPREEMPTSTATE PreemptState = RTTHREADPREEMPTSTATE_INITIALIZER;
     RTThreadPreemptDisable(&PreemptState);
-    RTCPUID          idCpu  = RTMpCpuId();
+    RTCPUID const idCpu = RTMpCpuId();
 
     /* Enable VT-x or AMD-V if local init is required. */
     int rc;
-    if (!g_HmR0.fGlobalInit)
+    if (!g_fHmGlobalInit)
     {
-        Assert(!g_HmR0.vmx.fSupported || !g_HmR0.vmx.fUsingSUPR0EnableVTx);
+        Assert(!g_fHmVmxSupported || !g_fHmVmxUsingSUPR0EnableVTx);
         rc = hmR0EnableCpu(pVM, idCpu);
         if (RT_FAILURE(rc))
         {
@@ -1322,18 +1356,35 @@ VMMR0_INT_DECL(int) HMR0SetupVM(PVM pVM)
     }
 
     /* Setup VT-x or AMD-V. */
-    rc = g_HmR0.pfnSetupVM(pVM);
+    rc = g_HmR0Ops.pfnSetupVM(pVM);
 
     /* Disable VT-x or AMD-V if local init was done before. */
-    if (!g_HmR0.fGlobalInit)
+    if (!g_fHmGlobalInit)
     {
-        Assert(!g_HmR0.vmx.fSupported || !g_HmR0.vmx.fUsingSUPR0EnableVTx);
+        Assert(!g_fHmVmxSupported || !g_fHmVmxUsingSUPR0EnableVTx);
         int rc2 = hmR0DisableCpu(idCpu);
         AssertRC(rc2);
     }
 
     RTThreadPreemptRestore(&PreemptState);
     return rc;
+}
+
+
+/**
+ * Notification callback before performing a longjump to ring-3.
+ *
+ * @returns VBox status code.
+ * @param   pVCpu           The cross context virtual CPU structure.
+ * @param   enmOperation    The operation causing the ring-3 longjump.
+ * @param   pvUser          User argument, currently unused, NULL.
+ */
+static DECLCALLBACK(int) hmR0CallRing3Callback(PVMCPUCC pVCpu, VMMCALLRING3 enmOperation, void *pvUser)
+{
+    RT_NOREF(pvUser);
+    Assert(pVCpu);
+    Assert(g_HmR0Ops.pfnCallRing3Callback);
+    return g_HmR0Ops.pfnCallRing3Callback(pVCpu, enmOperation);
 }
 
 
@@ -1346,24 +1397,30 @@ VMMR0_INT_DECL(int) HMR0SetupVM(PVM pVM)
  *
  * @remarks No-long-jump zone!!!
  */
-VMMR0_INT_DECL(int) HMR0EnterCpu(PVMCPU pVCpu)
+VMMR0_INT_DECL(int) hmR0EnterCpu(PVMCPUCC pVCpu)
 {
     Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
 
-    int              rc    = VINF_SUCCESS;
-    RTCPUID          idCpu = RTMpCpuId();
-    PHMGLOBALCPUINFO pCpu = &g_HmR0.aCpuInfo[idCpu];
-    AssertPtr(pCpu);
+    int              rc       = VINF_SUCCESS;
+    RTCPUID const    idCpu    = RTMpCpuId();
+    PHMPHYSCPU       pHostCpu = &g_aHmCpuInfo[idCpu];
+    AssertPtr(pHostCpu);
 
     /* Enable VT-x or AMD-V if local init is required, or enable if it's a freshly onlined CPU. */
-    if (!pCpu->fConfigured)
+    if (!pHostCpu->fConfigured)
         rc = hmR0EnableCpu(pVCpu->CTX_SUFF(pVM), idCpu);
 
-    /* Reload host-state (back from ring-3/migrated CPUs) and shared guest/host bits. */
-    HMCPU_CF_SET(pVCpu, HM_CHANGED_HOST_CONTEXT | HM_CHANGED_HOST_GUEST_SHARED_STATE);
+    /* Register a callback to fire prior to performing a longjmp to ring-3 so HM can disable VT-x/AMD-V if needed. */
+    VMMRZCallRing3SetNotification(pVCpu, hmR0CallRing3Callback, NULL /* pvUser */);
 
-    Assert(pCpu->idCpu == idCpu && pCpu->idCpu != NIL_RTCPUID);
-    pVCpu->hm.s.idEnteredCpu = idCpu;
+    /* Reload host-state (back from ring-3/migrated CPUs) and shared guest/host bits. */
+    if (g_fHmVmxSupported)
+        pVCpu->hm.s.fCtxChanged |= HM_CHANGED_HOST_CONTEXT | HM_CHANGED_VMX_HOST_GUEST_SHARED_STATE;
+    else
+        pVCpu->hm.s.fCtxChanged |= HM_CHANGED_HOST_CONTEXT | HM_CHANGED_SVM_HOST_GUEST_SHARED_STATE;
+
+    Assert(pHostCpu->idCpu == idCpu && pHostCpu->idCpu != NIL_RTCPUID);
+    pVCpu->hmr0.s.idEnteredCpu = idCpu;
     return rc;
 }
 
@@ -1372,47 +1429,36 @@ VMMR0_INT_DECL(int) HMR0EnterCpu(PVMCPU pVCpu)
  * Enters the VT-x or AMD-V session.
  *
  * @returns VBox status code.
- * @param   pVM        The cross context VM structure.
  * @param   pVCpu      The cross context virtual CPU structure.
  *
  * @remarks This is called with preemption disabled.
  */
-VMMR0_INT_DECL(int) HMR0Enter(PVM pVM, PVMCPU pVCpu)
+VMMR0_INT_DECL(int) HMR0Enter(PVMCPUCC pVCpu)
 {
     /* Make sure we can't enter a session after we've disabled HM in preparation of a suspend. */
-    AssertReturn(!ASMAtomicReadBool(&g_HmR0.fSuspended), VERR_HM_SUSPEND_PENDING);
+    AssertReturn(!ASMAtomicReadBool(&g_fHmSuspended), VERR_HM_SUSPEND_PENDING);
     Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
 
     /* Load the bare minimum state required for entering HM. */
-    int rc = HMR0EnterCpu(pVCpu);
-    AssertRCReturn(rc, rc);
+    int rc = hmR0EnterCpu(pVCpu);
+    if (RT_SUCCESS(rc))
+    {
+        if (g_fHmVmxSupported)
+            Assert(   (pVCpu->hm.s.fCtxChanged & (HM_CHANGED_HOST_CONTEXT | HM_CHANGED_VMX_HOST_GUEST_SHARED_STATE))
+                   ==                            (HM_CHANGED_HOST_CONTEXT | HM_CHANGED_VMX_HOST_GUEST_SHARED_STATE));
+        else
+            Assert(   (pVCpu->hm.s.fCtxChanged & (HM_CHANGED_HOST_CONTEXT | HM_CHANGED_SVM_HOST_GUEST_SHARED_STATE))
+                   ==                            (HM_CHANGED_HOST_CONTEXT | HM_CHANGED_SVM_HOST_GUEST_SHARED_STATE));
 
-#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
-    AssertReturn(!VMMR0ThreadCtxHookIsEnabled(pVCpu), VERR_HM_IPE_5);
-    bool fStartedSet = PGMR0DynMapStartOrMigrateAutoSet(pVCpu);
-#endif
+        /* Keep track of the CPU owning the VMCS for debugging scheduling weirdness and ring-3 calls. */
+        rc = g_HmR0Ops.pfnEnterSession(pVCpu);
+        AssertMsgRCReturnStmt(rc, ("rc=%Rrc pVCpu=%p\n", rc, pVCpu),  pVCpu->hmr0.s.idEnteredCpu = NIL_RTCPUID, rc);
 
-    RTCPUID          idCpu = RTMpCpuId();
-    PHMGLOBALCPUINFO pCpu  = &g_HmR0.aCpuInfo[idCpu];
-    Assert(pCpu);
-    Assert(HMCPU_CF_IS_SET(pVCpu, HM_CHANGED_HOST_CONTEXT | HM_CHANGED_HOST_GUEST_SHARED_STATE));
-
-    rc = g_HmR0.pfnEnterSession(pVM, pVCpu, pCpu);
-    AssertMsgRCReturn(rc, ("pfnEnterSession failed. rc=%Rrc pVCpu=%p HostCpuId=%u\n", rc, pVCpu, idCpu), rc);
-
-    /* Load the host-state as we may be resuming code after a longjmp and quite
-       possibly now be scheduled on a different CPU. */
-    rc = g_HmR0.pfnSaveHostState(pVM, pVCpu);
-    AssertMsgRCReturn(rc, ("pfnSaveHostState failed. rc=%Rrc pVCpu=%p HostCpuId=%u\n", rc, pVCpu, idCpu), rc);
-
-#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
-    if (fStartedSet)
-        PGMRZDynMapReleaseAutoSet(pVCpu);
-#endif
-
-    /* Keep track of the CPU owning the VMCS for debugging scheduling weirdness and ring-3 calls. */
-    if (RT_FAILURE(rc))
-        pVCpu->hm.s.idEnteredCpu = NIL_RTCPUID;
+        /* Exports the host-state as we may be resuming code after a longjmp and quite
+           possibly now be scheduled on a different CPU. */
+        rc = g_HmR0Ops.pfnExportHostState(pVCpu);
+        AssertMsgRCReturnStmt(rc, ("rc=%Rrc pVCpu=%p\n", rc, pVCpu),  pVCpu->hmr0.s.idEnteredCpu = NIL_RTCPUID, rc);
+    }
     return rc;
 }
 
@@ -1426,29 +1472,31 @@ VMMR0_INT_DECL(int) HMR0Enter(PVM pVM, PVMCPU pVCpu)
  *
  * @remarks No-long-jump zone!!!
  */
-VMMR0_INT_DECL(int) HMR0LeaveCpu(PVMCPU pVCpu)
+VMMR0_INT_DECL(int) HMR0LeaveCpu(PVMCPUCC pVCpu)
 {
     Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
     VMCPU_ASSERT_EMT_RETURN(pVCpu, VERR_HM_WRONG_CPU);
 
-    RTCPUID          idCpu = RTMpCpuId();
-    PHMGLOBALCPUINFO pCpu  = &g_HmR0.aCpuInfo[idCpu];
+    RTCPUID const idCpu    = RTMpCpuId();
+    PCHMPHYSCPU   pHostCpu = &g_aHmCpuInfo[idCpu];
 
-    if (   !g_HmR0.fGlobalInit
-        && pCpu->fConfigured)
+    if (   !g_fHmGlobalInit
+        && pHostCpu->fConfigured)
     {
         int rc = hmR0DisableCpu(idCpu);
         AssertRCReturn(rc, rc);
-        Assert(!pCpu->fConfigured);
-        Assert(pCpu->idCpu == NIL_RTCPUID);
+        Assert(!pHostCpu->fConfigured);
+        Assert(pHostCpu->idCpu == NIL_RTCPUID);
 
         /* For obtaining a non-zero ASID/VPID on next re-entry. */
-        pVCpu->hm.s.idLastCpu = NIL_RTCPUID;
+        pVCpu->hmr0.s.idLastCpu = NIL_RTCPUID;
     }
 
     /* Clear it while leaving HM context, hmPokeCpuForTlbFlush() relies on this. */
-    pVCpu->hm.s.idEnteredCpu = NIL_RTCPUID;
+    pVCpu->hmr0.s.idEnteredCpu = NIL_RTCPUID;
 
+    /* De-register the longjmp-to-ring 3 callback now that we have reliquished hardware resources. */
+    VMMRZCallRing3RemoveNotification(pVCpu);
     return VINF_SUCCESS;
 }
 
@@ -1456,16 +1504,20 @@ VMMR0_INT_DECL(int) HMR0LeaveCpu(PVMCPU pVCpu)
 /**
  * Thread-context hook for HM.
  *
+ * This is used together with RTThreadCtxHookCreate() on platforms which
+ * supports it, and directly from VMMR0EmtPrepareForBlocking() and
+ * VMMR0EmtResumeAfterBlocking() on platforms which don't.
+ *
  * @param   enmEvent        The thread-context event.
  * @param   pvUser          Opaque pointer to the VMCPU.
  */
 VMMR0_INT_DECL(void) HMR0ThreadCtxCallback(RTTHREADCTXEVENT enmEvent, void *pvUser)
 {
-    PVMCPU pVCpu = (PVMCPU)pvUser;
+    PVMCPUCC pVCpu = (PVMCPUCC)pvUser;
     Assert(pVCpu);
-    Assert(g_HmR0.pfnThreadCtxCallback);
+    Assert(g_HmR0Ops.pfnThreadCtxCallback);
 
-    g_HmR0.pfnThreadCtxCallback(enmEvent, pVCpu, g_HmR0.fGlobalInit);
+    g_HmR0Ops.pfnThreadCtxCallback(enmEvent, pVCpu, g_fHmGlobalInit);
 }
 
 
@@ -1480,30 +1532,22 @@ VMMR0_INT_DECL(void) HMR0ThreadCtxCallback(RTTHREADCTXEVENT enmEvent, void *pvUs
  * @remarks Can be called with preemption enabled if thread-context hooks are
  *          used!!!
  */
-VMMR0_INT_DECL(int) HMR0RunGuestCode(PVM pVM, PVMCPU pVCpu)
+VMMR0_INT_DECL(int) HMR0RunGuestCode(PVMCC pVM, PVMCPUCC pVCpu)
 {
+    RT_NOREF(pVM);
+
 #ifdef VBOX_STRICT
     /* With thread-context hooks we would be running this code with preemption enabled. */
     if (!RTThreadPreemptIsEnabled(NIL_RTTHREAD))
     {
-        PHMGLOBALCPUINFO pCpu = &g_HmR0.aCpuInfo[RTMpCpuId()];
-        Assert(!VMCPU_FF_IS_PENDING(pVCpu, VMCPU_FF_PGM_SYNC_CR3 | VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL));
-        Assert(pCpu->fConfigured);
-        AssertReturn(!ASMAtomicReadBool(&g_HmR0.fSuspended), VERR_HM_SUSPEND_PENDING);
+        PCHMPHYSCPU pHostCpu = &g_aHmCpuInfo[RTMpCpuId()];
+        Assert(!VMCPU_FF_IS_ANY_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3 | VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL));
+        Assert(pHostCpu->fConfigured);
+        AssertReturn(!ASMAtomicReadBool(&g_fHmSuspended), VERR_HM_SUSPEND_PENDING);
     }
 #endif
 
-#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
-    AssertReturn(!VMMR0ThreadCtxHookIsEnabled(pVCpu), VERR_HM_IPE_4);
-    Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
-    PGMRZDynMapStartAutoSet(pVCpu);
-#endif
-
-    VBOXSTRICTRC rcStrict = g_HmR0.pfnRunGuestCode(pVM, pVCpu, CPUMQueryGuestCtxPtr(pVCpu));
-
-#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
-    PGMRZDynMapReleaseAutoSet(pVCpu);
-#endif
+    VBOXSTRICTRC rcStrict = g_HmR0Ops.pfnRunGuestCode(pVCpu);
     return VBOXSTRICTRC_VAL(rcStrict);
 }
 
@@ -1514,9 +1558,9 @@ VMMR0_INT_DECL(int) HMR0RunGuestCode(PVM pVM, PVMCPU pVCpu)
  *
  * @param   pVCpu   The cross context virtual CPU structure of the calling EMT.
  */
-VMMR0_INT_DECL(void) HMR0NotifyCpumUnloadedGuestFpuState(PVMCPU pVCpu)
+VMMR0_INT_DECL(void) HMR0NotifyCpumUnloadedGuestFpuState(PVMCPUCC pVCpu)
 {
-    HMCPU_CF_SET(pVCpu, HM_CHANGED_GUEST_CR0);
+    ASMAtomicUoOrU64(&pVCpu->hm.s.fCtxChanged, HM_CHANGED_GUEST_CR0);
 }
 
 
@@ -1525,72 +1569,11 @@ VMMR0_INT_DECL(void) HMR0NotifyCpumUnloadedGuestFpuState(PVMCPU pVCpu)
  *
  * @param   pVCpu   The cross context virtual CPU structure of the calling EMT.
  */
-VMMR0_INT_DECL(void) HMR0NotifyCpumModifiedHostCr0(PVMCPU pVCpu)
+VMMR0_INT_DECL(void) HMR0NotifyCpumModifiedHostCr0(PVMCPUCC pVCpu)
 {
-    HMCPU_CF_SET(pVCpu, HM_CHANGED_HOST_CONTEXT);
+    ASMAtomicUoOrU64(&pVCpu->hm.s.fCtxChanged, HM_CHANGED_HOST_CONTEXT);
 }
 
-
-#if HC_ARCH_BITS == 32 && defined(VBOX_ENABLE_64_BITS_GUESTS)
-
-/**
- * Save guest FPU/XMM state (64 bits guest mode & 32 bits host only)
- *
- * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
- * @param   pVCpu       The cross context virtual CPU structure.
- * @param   pCtx        Pointer to the guest CPU context.
- */
-VMMR0_INT_DECL(int)   HMR0SaveFPUState(PVM pVM, PVMCPU pVCpu, PCPUMCTX pCtx)
-{
-    STAM_COUNTER_INC(&pVCpu->hm.s.StatFpu64SwitchBack);
-    if (pVM->hm.s.vmx.fSupported)
-        return VMXR0Execute64BitsHandler(pVM, pVCpu, pCtx, HM64ON32OP_HMRCSaveGuestFPU64, 0, NULL);
-    return SVMR0Execute64BitsHandler(pVM, pVCpu, pCtx, HM64ON32OP_HMRCSaveGuestFPU64, 0, NULL);
-}
-
-
-/**
- * Save guest debug state (64 bits guest mode & 32 bits host only)
- *
- * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
- * @param   pVCpu       The cross context virtual CPU structure.
- * @param   pCtx        Pointer to the guest CPU context.
- */
-VMMR0_INT_DECL(int)   HMR0SaveDebugState(PVM pVM, PVMCPU pVCpu, PCPUMCTX pCtx)
-{
-    STAM_COUNTER_INC(&pVCpu->hm.s.StatDebug64SwitchBack);
-    if (pVM->hm.s.vmx.fSupported)
-        return VMXR0Execute64BitsHandler(pVM, pVCpu, pCtx, HM64ON32OP_HMRCSaveGuestDebug64, 0, NULL);
-    return SVMR0Execute64BitsHandler(pVM, pVCpu, pCtx, HM64ON32OP_HMRCSaveGuestDebug64, 0, NULL);
-}
-
-
-/**
- * Test the 32->64 bits switcher.
- *
- * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
- */
-VMMR0_INT_DECL(int)   HMR0TestSwitcher3264(PVM pVM)
-{
-    PVMCPU   pVCpu     = &pVM->aCpus[0];
-    PCPUMCTX pCtx      = CPUMQueryGuestCtxPtr(pVCpu);
-    uint32_t aParam[5] = {0, 1, 2, 3, 4};
-    int      rc;
-
-    STAM_PROFILE_ADV_START(&pVCpu->hm.s.StatWorldSwitch3264, z);
-    if (pVM->hm.s.vmx.fSupported)
-        rc = VMXR0Execute64BitsHandler(pVM, pVCpu, pCtx, HM64ON32OP_HMRCTestSwitcher64, 5, &aParam[0]);
-    else
-        rc = SVMR0Execute64BitsHandler(pVM, pVCpu, pCtx, HM64ON32OP_HMRCTestSwitcher64, 5, &aParam[0]);
-    STAM_PROFILE_ADV_STOP(&pVCpu->hm.s.StatWorldSwitch3264, z);
-
-    return rc;
-}
-
-#endif /* HC_ARCH_BITS == 32 && defined(VBOX_WITH_64_BITS_GUESTS) */
 
 /**
  * Returns suspend status of the host.
@@ -1599,7 +1582,22 @@ VMMR0_INT_DECL(int)   HMR0TestSwitcher3264(PVM pVM)
  */
 VMMR0_INT_DECL(bool) HMR0SuspendPending(void)
 {
-    return ASMAtomicReadBool(&g_HmR0.fSuspended);
+    return ASMAtomicReadBool(&g_fHmSuspended);
+}
+
+
+/**
+ * Invalidates a guest page from the host TLB.
+ *
+ * @param   pVCpu       The cross context virtual CPU structure.
+ * @param   GCVirt      Page to invalidate.
+ */
+VMMR0_INT_DECL(int) HMR0InvalidatePage(PVMCPUCC pVCpu, RTGCPTR GCVirt)
+{
+    PVMCC pVM = pVCpu->CTX_SUFF(pVM);
+    if (pVM->hm.s.vmx.fSupported)
+        return VMXR0InvalidatePage(pVCpu, GCVirt);
+    return SVMR0InvalidatePage(pVCpu, GCVirt);
 }
 
 
@@ -1609,159 +1607,39 @@ VMMR0_INT_DECL(bool) HMR0SuspendPending(void)
  *
  * @returns The cpu structure pointer.
  */
-VMMR0DECL(PHMGLOBALCPUINFO) HMR0GetCurrentCpu(void)
+VMMR0_INT_DECL(PHMPHYSCPU) hmR0GetCurrentCpu(void)
 {
     Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
-    RTCPUID idCpu = RTMpCpuId();
-    Assert(idCpu < RT_ELEMENTS(g_HmR0.aCpuInfo));
-    return &g_HmR0.aCpuInfo[idCpu];
+    RTCPUID const idCpu = RTMpCpuId();
+    Assert(idCpu < RT_ELEMENTS(g_aHmCpuInfo));
+    return &g_aHmCpuInfo[idCpu];
 }
 
 
 /**
- * Returns the cpu structure for the current cpu.
- * Keep in mind that there is no guarantee it will stay the same (long jumps to ring 3!!!).
- *
- * @returns The cpu structure pointer.
- * @param   idCpu       id of the VCPU.
- */
-VMMR0DECL(PHMGLOBALCPUINFO) HMR0GetCurrentCpuEx(RTCPUID idCpu)
-{
-    Assert(idCpu < RT_ELEMENTS(g_HmR0.aCpuInfo));
-    return &g_HmR0.aCpuInfo[idCpu];
-}
-
-
-/**
- * Save a pending IO read.
- *
- * @param   pVCpu           The cross context virtual CPU structure.
- * @param   GCPtrRip        Address of IO instruction.
- * @param   GCPtrRipNext    Address of the next instruction.
- * @param   uPort           Port address.
- * @param   uAndVal         AND mask for saving the result in eax.
- * @param   cbSize          Read size.
- */
-VMMR0_INT_DECL(void) HMR0SavePendingIOPortRead(PVMCPU pVCpu, RTGCPTR GCPtrRip, RTGCPTR GCPtrRipNext,
-                                               unsigned uPort, unsigned uAndVal, unsigned cbSize)
-{
-    pVCpu->hm.s.PendingIO.enmType         = HMPENDINGIO_PORT_READ;
-    pVCpu->hm.s.PendingIO.GCPtrRip        = GCPtrRip;
-    pVCpu->hm.s.PendingIO.GCPtrRipNext    = GCPtrRipNext;
-    pVCpu->hm.s.PendingIO.s.Port.uPort    = uPort;
-    pVCpu->hm.s.PendingIO.s.Port.uAndVal  = uAndVal;
-    pVCpu->hm.s.PendingIO.s.Port.cbSize   = cbSize;
-    return;
-}
-
-#ifdef VBOX_WITH_RAW_MODE
-
-/**
- * Raw-mode switcher hook - disable VT-x if it's active *and* the current
- * switcher turns off paging.
+ * Interface for importing state on demand (used by IEM).
  *
  * @returns VBox status code.
- * @param   pVM             The cross context VM structure.
- * @param   enmSwitcher     The switcher we're about to use.
- * @param   pfVTxDisabled   Where to store whether VT-x was disabled or not.
+ * @param   pVCpu       The cross context CPU structure.
+ * @param   fWhat       What to import, CPUMCTX_EXTRN_XXX.
  */
-VMMR0_INT_DECL(int) HMR0EnterSwitcher(PVM pVM, VMMSWITCHER enmSwitcher, bool *pfVTxDisabled)
+VMMR0_INT_DECL(int) HMR0ImportStateOnDemand(PVMCPUCC pVCpu, uint64_t fWhat)
 {
-    NOREF(pVM);
-
-    Assert(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
-
-    *pfVTxDisabled = false;
-
-    /* No such issues with AMD-V */
-    if (!g_HmR0.vmx.fSupported)
-        return VINF_SUCCESS;
-
-    /* Check if the switching we're up to is safe. */
-    switch (enmSwitcher)
-    {
-        case VMMSWITCHER_32_TO_32:
-        case VMMSWITCHER_PAE_TO_PAE:
-            return VINF_SUCCESS;    /* safe switchers as they don't turn off paging */
-
-        case VMMSWITCHER_32_TO_PAE:
-        case VMMSWITCHER_PAE_TO_32: /* is this one actually used?? */
-        case VMMSWITCHER_AMD64_TO_32:
-        case VMMSWITCHER_AMD64_TO_PAE:
-            break;                  /* unsafe switchers */
-
-        default:
-            AssertFailedReturn(VERR_HM_WRONG_SWITCHER);
-    }
-
-    /* When using SUPR0EnableVTx we must let the host suspend and resume VT-x,
-       regardless of whether we're currently using VT-x or not. */
-    if (g_HmR0.vmx.fUsingSUPR0EnableVTx)
-    {
-        *pfVTxDisabled = SUPR0SuspendVTxOnCpu();
-        return VINF_SUCCESS;
-    }
-
-    /** @todo Check if this code is presumptive wrt other VT-x users on the
-    *        system... */
-
-    /* Nothing to do if we haven't enabled VT-x. */
-    if (!g_HmR0.fEnabled)
-        return VINF_SUCCESS;
-
-    /* Local init implies the CPU is currently not in VMX root mode. */
-    if (!g_HmR0.fGlobalInit)
-        return VINF_SUCCESS;
-
-    /* Ok, disable VT-x. */
-    PHMGLOBALCPUINFO pCpu = HMR0GetCurrentCpu();
-    AssertReturn(pCpu && pCpu->hMemObj != NIL_RTR0MEMOBJ && pCpu->pvMemObj && pCpu->HCPhysMemObj != NIL_RTHCPHYS, VERR_HM_IPE_2);
-
-    *pfVTxDisabled = true;
-    return VMXR0DisableCpu(pCpu, pCpu->pvMemObj, pCpu->HCPhysMemObj);
+    if (pVCpu->CTX_SUFF(pVM)->hm.s.vmx.fSupported)
+        return VMXR0ImportStateOnDemand(pVCpu, fWhat);
+    return SVMR0ImportStateOnDemand(pVCpu, fWhat);
 }
 
-
-/**
- * Raw-mode switcher hook - re-enable VT-x if was active *and* the current
- * switcher turned off paging.
- *
- * @param   pVM             The cross context VM structure.
- * @param   fVTxDisabled    Whether VT-x was disabled or not.
- */
-VMMR0_INT_DECL(void) HMR0LeaveSwitcher(PVM pVM, bool fVTxDisabled)
-{
-    Assert(!ASMIntAreEnabled());
-
-    if (!fVTxDisabled)
-        return;         /* nothing to do */
-
-    Assert(g_HmR0.vmx.fSupported);
-    if (g_HmR0.vmx.fUsingSUPR0EnableVTx)
-        SUPR0ResumeVTxOnCpu(fVTxDisabled);
-    else
-    {
-        Assert(g_HmR0.fEnabled);
-        Assert(g_HmR0.fGlobalInit);
-
-        PHMGLOBALCPUINFO pCpu = HMR0GetCurrentCpu();
-        AssertReturnVoid(pCpu && pCpu->hMemObj != NIL_RTR0MEMOBJ && pCpu->pvMemObj && pCpu->HCPhysMemObj != NIL_RTHCPHYS);
-
-        VMXR0EnableCpu(pCpu, pVM, pCpu->pvMemObj, pCpu->HCPhysMemObj, false, &g_HmR0.vmx.Msrs);
-    }
-}
-
-#endif /* VBOX_WITH_RAW_MODE */
 #ifdef VBOX_STRICT
 
 /**
  * Dumps a descriptor.
  *
  * @param   pDesc    Descriptor to dump.
- * @param   Sel      Selector number.
- * @param   pszMsg   Message to prepend the log entry with.
+ * @param   Sel      The selector.
+ * @param   pszSel   The name of the selector.
  */
-VMMR0DECL(void) HMR0DumpDescriptor(PCX86DESCHC pDesc, RTSEL Sel, const char *pszMsg)
+VMMR0_INT_DECL(void) hmR0DumpDescriptor(PCX86DESCHC pDesc, RTSEL Sel, const char *pszSel)
 {
     /*
      * Make variable description string.
@@ -1844,7 +1722,7 @@ VMMR0DECL(void) HMR0DumpDescriptor(PCX86DESCHC pDesc, RTSEL Sel, const char *psz
     if (pDesc->Gen.u1Long)
         ADD_STR(psz, "64-bit ");
     else
-        ADD_STR(psz, "Comp   ");
+        ADD_STR(psz, "Comp ");
 # else
     if (pDesc->Gen.u1Granularity)
         ADD_STR(psz, "Page ");
@@ -1863,16 +1741,16 @@ VMMR0DECL(void) HMR0DumpDescriptor(PCX86DESCHC pDesc, RTSEL Sel, const char *psz
     uint32_t u32Limit = X86DESC_LIMIT_G(pDesc);
 
 # if HC_ARCH_BITS == 64
-    uint64_t    u32Base  = X86DESC64_BASE(pDesc);
-    Log(("%s %04x - %RX64 %RX64 - base=%RX64 limit=%08x dpl=%d %s\n", pszMsg,
-         Sel, pDesc->au64[0], pDesc->au64[1], u32Base, u32Limit, pDesc->Gen.u2Dpl, szMsg));
+    uint64_t const u64Base  = X86DESC64_BASE(pDesc);
+    Log(("  %s { %#04x - %#RX64 %#RX64 - base=%#RX64 limit=%#08x dpl=%d } %s\n", pszSel,
+         Sel, pDesc->au64[0], pDesc->au64[1], u64Base, u32Limit, pDesc->Gen.u2Dpl, szMsg));
 # else
-    uint32_t    u32Base  = X86DESC_BASE(pDesc);
-    Log(("%s %04x - %08x %08x - base=%08x limit=%08x dpl=%d %s\n", pszMsg,
+    uint32_t const u32Base  = X86DESC_BASE(pDesc);
+    Log(("  %s { %#04x - %#08x %#08x - base=%#08x limit=%#08x dpl=%d } %s\n", pszSel,
          Sel, pDesc->au32[0], pDesc->au32[1], u32Base, u32Limit, pDesc->Gen.u2Dpl, szMsg));
 # endif
 #else
-    NOREF(Sel); NOREF(pszMsg);
+    NOREF(Sel); NOREF(pszSel);
 #endif
 }
 
@@ -1880,40 +1758,40 @@ VMMR0DECL(void) HMR0DumpDescriptor(PCX86DESCHC pDesc, RTSEL Sel, const char *psz
 /**
  * Formats a full register dump.
  *
- * @param   pVM         The cross context VM structure.
- * @param   pVCpu       The cross context virtual CPU structure.
- * @param   pCtx        Pointer to the CPU context.
+ * @param   pVCpu   The cross context virtual CPU structure.
+ * @param   fFlags  The dumping flags (HM_DUMP_REG_FLAGS_XXX).
  */
-VMMR0DECL(void) HMDumpRegs(PVM pVM, PVMCPU pVCpu, PCPUMCTX pCtx)
+VMMR0_INT_DECL(void) hmR0DumpRegs(PVMCPUCC pVCpu, uint32_t fFlags)
 {
-    NOREF(pVM);
-
     /*
      * Format the flags.
      */
     static struct
     {
-        const char *pszSet; const char *pszClear; uint32_t fFlag;
+        const char *pszSet;
+        const char *pszClear;
+        uint32_t    fFlag;
     } const s_aFlags[] =
     {
         { "vip", NULL, X86_EFL_VIP },
         { "vif", NULL, X86_EFL_VIF },
-        { "ac",  NULL, X86_EFL_AC },
-        { "vm",  NULL, X86_EFL_VM },
-        { "rf",  NULL, X86_EFL_RF },
-        { "nt",  NULL, X86_EFL_NT },
-        { "ov",  "nv", X86_EFL_OF },
-        { "dn",  "up", X86_EFL_DF },
-        { "ei",  "di", X86_EFL_IF },
-        { "tf",  NULL, X86_EFL_TF },
-        { "nt",  "pl", X86_EFL_SF },
-        { "nz",  "zr", X86_EFL_ZF },
-        { "ac",  "na", X86_EFL_AF },
-        { "po",  "pe", X86_EFL_PF },
-        { "cy",  "nc", X86_EFL_CF },
+        { "ac",  NULL, X86_EFL_AC  },
+        { "vm",  NULL, X86_EFL_VM  },
+        { "rf",  NULL, X86_EFL_RF  },
+        { "nt",  NULL, X86_EFL_NT  },
+        { "ov",  "nv", X86_EFL_OF  },
+        { "dn",  "up", X86_EFL_DF  },
+        { "ei",  "di", X86_EFL_IF  },
+        { "tf",  NULL, X86_EFL_TF  },
+        { "nt",  "pl", X86_EFL_SF  },
+        { "nz",  "zr", X86_EFL_ZF  },
+        { "ac",  "na", X86_EFL_AF  },
+        { "po",  "pe", X86_EFL_PF  },
+        { "cy",  "nc", X86_EFL_CF  },
     };
     char szEFlags[80];
     char *psz = szEFlags;
+    PCCPUMCTX pCtx = &pVCpu->cpum.GstCtx;
     uint32_t uEFlags = pCtx->eflags.u32;
     for (unsigned i = 0; i < RT_ELEMENTS(s_aFlags); i++)
     {
@@ -1927,104 +1805,111 @@ VMMR0DECL(void) HMDumpRegs(PVM pVM, PVMCPU pVCpu, PCPUMCTX pCtx)
     }
     psz[-1] = '\0';
 
-
-    /*
-     * Format the registers.
-     */
-    if (CPUMIsGuestIn64BitCode(pVCpu))
+    if (fFlags & HM_DUMP_REG_FLAGS_GPRS)
     {
-        Log(("rax=%016RX64 rbx=%016RX64 rcx=%016RX64 rdx=%016RX64\n"
-             "rsi=%016RX64 rdi=%016RX64 r8 =%016RX64 r9 =%016RX64\n"
-             "r10=%016RX64 r11=%016RX64 r12=%016RX64 r13=%016RX64\n"
-             "r14=%016RX64 r15=%016RX64\n"
-             "rip=%016RX64 rsp=%016RX64 rbp=%016RX64 iopl=%d %*s\n"
-             "cs={%04x base=%016RX64 limit=%08x flags=%08x}\n"
-             "ds={%04x base=%016RX64 limit=%08x flags=%08x}\n"
-             "es={%04x base=%016RX64 limit=%08x flags=%08x}\n"
-             "fs={%04x base=%016RX64 limit=%08x flags=%08x}\n"
-             "gs={%04x base=%016RX64 limit=%08x flags=%08x}\n"
-             "ss={%04x base=%016RX64 limit=%08x flags=%08x}\n"
-             "cr0=%016RX64 cr2=%016RX64 cr3=%016RX64 cr4=%016RX64\n"
-             "dr0=%016RX64 dr1=%016RX64 dr2=%016RX64 dr3=%016RX64\n"
-             "dr4=%016RX64 dr5=%016RX64 dr6=%016RX64 dr7=%016RX64\n"
-             "gdtr=%016RX64:%04x  idtr=%016RX64:%04x  eflags=%08x\n"
-             "ldtr={%04x base=%08RX64 limit=%08x flags=%08x}\n"
-             "tr  ={%04x base=%08RX64 limit=%08x flags=%08x}\n"
-             "SysEnter={cs=%04llx eip=%08llx esp=%08llx}\n"
-             ,
-             pCtx->rax, pCtx->rbx, pCtx->rcx, pCtx->rdx, pCtx->rsi, pCtx->rdi,
-             pCtx->r8, pCtx->r9, pCtx->r10, pCtx->r11, pCtx->r12, pCtx->r13,
-             pCtx->r14, pCtx->r15,
-             pCtx->rip, pCtx->rsp, pCtx->rbp, X86_EFL_GET_IOPL(uEFlags), 31, szEFlags,
-             pCtx->cs.Sel, pCtx->cs.u64Base, pCtx->cs.u32Limit, pCtx->cs.Attr.u,
-             pCtx->ds.Sel, pCtx->ds.u64Base, pCtx->ds.u32Limit, pCtx->ds.Attr.u,
-             pCtx->es.Sel, pCtx->es.u64Base, pCtx->es.u32Limit, pCtx->es.Attr.u,
-             pCtx->fs.Sel, pCtx->fs.u64Base, pCtx->fs.u32Limit, pCtx->fs.Attr.u,
-             pCtx->gs.Sel, pCtx->gs.u64Base, pCtx->gs.u32Limit, pCtx->gs.Attr.u,
-             pCtx->ss.Sel, pCtx->ss.u64Base, pCtx->ss.u32Limit, pCtx->ss.Attr.u,
-             pCtx->cr0,  pCtx->cr2, pCtx->cr3,  pCtx->cr4,
-             pCtx->dr[0],  pCtx->dr[1], pCtx->dr[2],  pCtx->dr[3],
-             pCtx->dr[4],  pCtx->dr[5], pCtx->dr[6],  pCtx->dr[7],
-             pCtx->gdtr.pGdt, pCtx->gdtr.cbGdt, pCtx->idtr.pIdt, pCtx->idtr.cbIdt, uEFlags,
-             pCtx->ldtr.Sel, pCtx->ldtr.u64Base, pCtx->ldtr.u32Limit, pCtx->ldtr.Attr.u,
-             pCtx->tr.Sel, pCtx->tr.u64Base, pCtx->tr.u32Limit, pCtx->tr.Attr.u,
-             pCtx->SysEnter.cs, pCtx->SysEnter.eip, pCtx->SysEnter.esp));
+        /*
+         * Format the registers.
+         */
+        if (CPUMIsGuestIn64BitCode(pVCpu))
+        {
+            Log(("rax=%016RX64 rbx=%016RX64 rcx=%016RX64 rdx=%016RX64\n"
+                 "rsi=%016RX64 rdi=%016RX64 r8 =%016RX64 r9 =%016RX64\n"
+                 "r10=%016RX64 r11=%016RX64 r12=%016RX64 r13=%016RX64\n"
+                 "r14=%016RX64 r15=%016RX64\n"
+                 "rip=%016RX64 rsp=%016RX64 rbp=%016RX64 iopl=%d %*s\n"
+                 "cs={%04x base=%016RX64 limit=%08x flags=%08x}\n"
+                 "ds={%04x base=%016RX64 limit=%08x flags=%08x}\n"
+                 "es={%04x base=%016RX64 limit=%08x flags=%08x}\n"
+                 "fs={%04x base=%016RX64 limit=%08x flags=%08x}\n"
+                 "gs={%04x base=%016RX64 limit=%08x flags=%08x}\n"
+                 "ss={%04x base=%016RX64 limit=%08x flags=%08x}\n"
+                 "cr0=%016RX64 cr2=%016RX64 cr3=%016RX64 cr4=%016RX64\n"
+                 "dr0=%016RX64 dr1=%016RX64 dr2=%016RX64 dr3=%016RX64\n"
+                 "dr4=%016RX64 dr5=%016RX64 dr6=%016RX64 dr7=%016RX64\n"
+                 "gdtr=%016RX64:%04x  idtr=%016RX64:%04x  eflags=%08x\n"
+                 "ldtr={%04x base=%08RX64 limit=%08x flags=%08x}\n"
+                 "tr  ={%04x base=%08RX64 limit=%08x flags=%08x}\n"
+                 "SysEnter={cs=%04llx eip=%08llx esp=%08llx}\n"
+                 ,
+                 pCtx->rax, pCtx->rbx, pCtx->rcx, pCtx->rdx, pCtx->rsi, pCtx->rdi,
+                 pCtx->r8, pCtx->r9, pCtx->r10, pCtx->r11, pCtx->r12, pCtx->r13,
+                 pCtx->r14, pCtx->r15,
+                 pCtx->rip, pCtx->rsp, pCtx->rbp, X86_EFL_GET_IOPL(uEFlags), 31, szEFlags,
+                 pCtx->cs.Sel, pCtx->cs.u64Base, pCtx->cs.u32Limit, pCtx->cs.Attr.u,
+                 pCtx->ds.Sel, pCtx->ds.u64Base, pCtx->ds.u32Limit, pCtx->ds.Attr.u,
+                 pCtx->es.Sel, pCtx->es.u64Base, pCtx->es.u32Limit, pCtx->es.Attr.u,
+                 pCtx->fs.Sel, pCtx->fs.u64Base, pCtx->fs.u32Limit, pCtx->fs.Attr.u,
+                 pCtx->gs.Sel, pCtx->gs.u64Base, pCtx->gs.u32Limit, pCtx->gs.Attr.u,
+                 pCtx->ss.Sel, pCtx->ss.u64Base, pCtx->ss.u32Limit, pCtx->ss.Attr.u,
+                 pCtx->cr0,  pCtx->cr2, pCtx->cr3,  pCtx->cr4,
+                 pCtx->dr[0],  pCtx->dr[1], pCtx->dr[2],  pCtx->dr[3],
+                 pCtx->dr[4],  pCtx->dr[5], pCtx->dr[6],  pCtx->dr[7],
+                 pCtx->gdtr.pGdt, pCtx->gdtr.cbGdt, pCtx->idtr.pIdt, pCtx->idtr.cbIdt, uEFlags,
+                 pCtx->ldtr.Sel, pCtx->ldtr.u64Base, pCtx->ldtr.u32Limit, pCtx->ldtr.Attr.u,
+                 pCtx->tr.Sel, pCtx->tr.u64Base, pCtx->tr.u32Limit, pCtx->tr.Attr.u,
+                 pCtx->SysEnter.cs, pCtx->SysEnter.eip, pCtx->SysEnter.esp));
+        }
+        else
+            Log(("eax=%08x ebx=%08x ecx=%08x edx=%08x esi=%08x edi=%08x\n"
+                 "eip=%08x esp=%08x ebp=%08x iopl=%d %*s\n"
+                 "cs={%04x base=%016RX64 limit=%08x flags=%08x} dr0=%08RX64 dr1=%08RX64\n"
+                 "ds={%04x base=%016RX64 limit=%08x flags=%08x} dr2=%08RX64 dr3=%08RX64\n"
+                 "es={%04x base=%016RX64 limit=%08x flags=%08x} dr4=%08RX64 dr5=%08RX64\n"
+                 "fs={%04x base=%016RX64 limit=%08x flags=%08x} dr6=%08RX64 dr7=%08RX64\n"
+                 "gs={%04x base=%016RX64 limit=%08x flags=%08x} cr0=%08RX64 cr2=%08RX64\n"
+                 "ss={%04x base=%016RX64 limit=%08x flags=%08x} cr3=%08RX64 cr4=%08RX64\n"
+                 "gdtr=%016RX64:%04x  idtr=%016RX64:%04x  eflags=%08x\n"
+                 "ldtr={%04x base=%08RX64 limit=%08x flags=%08x}\n"
+                 "tr  ={%04x base=%08RX64 limit=%08x flags=%08x}\n"
+                 "SysEnter={cs=%04llx eip=%08llx esp=%08llx}\n"
+                 ,
+                 pCtx->eax, pCtx->ebx, pCtx->ecx, pCtx->edx, pCtx->esi, pCtx->edi,
+                 pCtx->eip, pCtx->esp, pCtx->ebp, X86_EFL_GET_IOPL(uEFlags), 31, szEFlags,
+                 pCtx->cs.Sel, pCtx->cs.u64Base, pCtx->cs.u32Limit, pCtx->cs.Attr.u, pCtx->dr[0],  pCtx->dr[1],
+                 pCtx->ds.Sel, pCtx->ds.u64Base, pCtx->ds.u32Limit, pCtx->ds.Attr.u, pCtx->dr[2],  pCtx->dr[3],
+                 pCtx->es.Sel, pCtx->es.u64Base, pCtx->es.u32Limit, pCtx->es.Attr.u, pCtx->dr[4],  pCtx->dr[5],
+                 pCtx->fs.Sel, pCtx->fs.u64Base, pCtx->fs.u32Limit, pCtx->fs.Attr.u, pCtx->dr[6],  pCtx->dr[7],
+                 pCtx->gs.Sel, pCtx->gs.u64Base, pCtx->gs.u32Limit, pCtx->gs.Attr.u, pCtx->cr0,  pCtx->cr2,
+                 pCtx->ss.Sel, pCtx->ss.u64Base, pCtx->ss.u32Limit, pCtx->ss.Attr.u, pCtx->cr3,  pCtx->cr4,
+                 pCtx->gdtr.pGdt, pCtx->gdtr.cbGdt, pCtx->idtr.pIdt, pCtx->idtr.cbIdt, uEFlags,
+                 pCtx->ldtr.Sel, pCtx->ldtr.u64Base, pCtx->ldtr.u32Limit, pCtx->ldtr.Attr.u,
+                 pCtx->tr.Sel, pCtx->tr.u64Base, pCtx->tr.u32Limit, pCtx->tr.Attr.u,
+                 pCtx->SysEnter.cs, pCtx->SysEnter.eip, pCtx->SysEnter.esp));
     }
-    else
-        Log(("eax=%08x ebx=%08x ecx=%08x edx=%08x esi=%08x edi=%08x\n"
-             "eip=%08x esp=%08x ebp=%08x iopl=%d %*s\n"
-             "cs={%04x base=%016RX64 limit=%08x flags=%08x} dr0=%08RX64 dr1=%08RX64\n"
-             "ds={%04x base=%016RX64 limit=%08x flags=%08x} dr2=%08RX64 dr3=%08RX64\n"
-             "es={%04x base=%016RX64 limit=%08x flags=%08x} dr4=%08RX64 dr5=%08RX64\n"
-             "fs={%04x base=%016RX64 limit=%08x flags=%08x} dr6=%08RX64 dr7=%08RX64\n"
-             "gs={%04x base=%016RX64 limit=%08x flags=%08x} cr0=%08RX64 cr2=%08RX64\n"
-             "ss={%04x base=%016RX64 limit=%08x flags=%08x} cr3=%08RX64 cr4=%08RX64\n"
-             "gdtr=%016RX64:%04x  idtr=%016RX64:%04x  eflags=%08x\n"
-             "ldtr={%04x base=%08RX64 limit=%08x flags=%08x}\n"
-             "tr  ={%04x base=%08RX64 limit=%08x flags=%08x}\n"
-             "SysEnter={cs=%04llx eip=%08llx esp=%08llx}\n"
-             ,
-             pCtx->eax, pCtx->ebx, pCtx->ecx, pCtx->edx, pCtx->esi, pCtx->edi,
-             pCtx->eip, pCtx->esp, pCtx->ebp, X86_EFL_GET_IOPL(uEFlags), 31, szEFlags,
-             pCtx->cs.Sel, pCtx->cs.u64Base, pCtx->cs.u32Limit, pCtx->cs.Attr.u, pCtx->dr[0],  pCtx->dr[1],
-             pCtx->ds.Sel, pCtx->ds.u64Base, pCtx->ds.u32Limit, pCtx->ds.Attr.u, pCtx->dr[2],  pCtx->dr[3],
-             pCtx->es.Sel, pCtx->es.u64Base, pCtx->es.u32Limit, pCtx->es.Attr.u, pCtx->dr[4],  pCtx->dr[5],
-             pCtx->fs.Sel, pCtx->fs.u64Base, pCtx->fs.u32Limit, pCtx->fs.Attr.u, pCtx->dr[6],  pCtx->dr[7],
-             pCtx->gs.Sel, pCtx->gs.u64Base, pCtx->gs.u32Limit, pCtx->gs.Attr.u, pCtx->cr0,  pCtx->cr2,
-             pCtx->ss.Sel, pCtx->ss.u64Base, pCtx->ss.u32Limit, pCtx->ss.Attr.u, pCtx->cr3,  pCtx->cr4,
-             pCtx->gdtr.pGdt, pCtx->gdtr.cbGdt, pCtx->idtr.pIdt, pCtx->idtr.cbIdt, uEFlags,
-             pCtx->ldtr.Sel, pCtx->ldtr.u64Base, pCtx->ldtr.u32Limit, pCtx->ldtr.Attr.u,
-             pCtx->tr.Sel, pCtx->tr.u64Base, pCtx->tr.u32Limit, pCtx->tr.Attr.u,
-             pCtx->SysEnter.cs, pCtx->SysEnter.eip, pCtx->SysEnter.esp));
 
-    PX86FXSTATE pFpuCtx = &pCtx->CTX_SUFF(pXState)->x87;
-    Log(("FPU:\n"
-        "FCW=%04x FSW=%04x FTW=%02x\n"
-        "FOP=%04x FPUIP=%08x CS=%04x Rsrvd1=%04x\n"
-        "FPUDP=%04x DS=%04x Rsvrd2=%04x MXCSR=%08x MXCSR_MASK=%08x\n"
-        ,
-        pFpuCtx->FCW,   pFpuCtx->FSW,   pFpuCtx->FTW,
-        pFpuCtx->FOP,   pFpuCtx->FPUIP, pFpuCtx->CS, pFpuCtx->Rsrvd1,
-        pFpuCtx->FPUDP, pFpuCtx->DS,    pFpuCtx->Rsrvd2,
-        pFpuCtx->MXCSR, pFpuCtx->MXCSR_MASK));
+    if (fFlags & HM_DUMP_REG_FLAGS_FPU)
+    {
+        PCX86FXSTATE pFpuCtx = &pCtx->XState.x87;
+        Log(("FPU:\n"
+            "FCW=%04x FSW=%04x FTW=%02x\n"
+            "FOP=%04x FPUIP=%08x CS=%04x Rsrvd1=%04x\n"
+            "FPUDP=%04x DS=%04x Rsvrd2=%04x MXCSR=%08x MXCSR_MASK=%08x\n"
+            ,
+            pFpuCtx->FCW,   pFpuCtx->FSW,   pFpuCtx->FTW,
+            pFpuCtx->FOP,   pFpuCtx->FPUIP, pFpuCtx->CS, pFpuCtx->Rsrvd1,
+            pFpuCtx->FPUDP, pFpuCtx->DS,    pFpuCtx->Rsrvd2,
+            pFpuCtx->MXCSR, pFpuCtx->MXCSR_MASK));
+        NOREF(pFpuCtx);
+    }
 
-    Log(("MSR:\n"
-        "EFER         =%016RX64\n"
-        "PAT          =%016RX64\n"
-        "STAR         =%016RX64\n"
-        "CSTAR        =%016RX64\n"
-        "LSTAR        =%016RX64\n"
-        "SFMASK       =%016RX64\n"
-        "KERNELGSBASE =%016RX64\n",
-        pCtx->msrEFER,
-        pCtx->msrPAT,
-        pCtx->msrSTAR,
-        pCtx->msrCSTAR,
-        pCtx->msrLSTAR,
-        pCtx->msrSFMASK,
-        pCtx->msrKERNELGSBASE));
-
-    NOREF(pFpuCtx);
+    if (fFlags & HM_DUMP_REG_FLAGS_MSRS)
+    {
+        Log(("MSR:\n"
+            "EFER         =%016RX64\n"
+            "PAT          =%016RX64\n"
+            "STAR         =%016RX64\n"
+            "CSTAR        =%016RX64\n"
+            "LSTAR        =%016RX64\n"
+            "SFMASK       =%016RX64\n"
+            "KERNELGSBASE =%016RX64\n",
+            pCtx->msrEFER,
+            pCtx->msrPAT,
+            pCtx->msrSTAR,
+            pCtx->msrCSTAR,
+            pCtx->msrLSTAR,
+            pCtx->msrSFMASK,
+            pCtx->msrKERNELGSBASE));
+    }
 }
 
 #endif /* VBOX_STRICT */

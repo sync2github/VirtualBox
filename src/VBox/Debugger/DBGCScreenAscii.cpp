@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGCScreenAscii.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DBGC - Debugger Console, ASCII screen with optional coloring support.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,6 +27,7 @@
 #include <iprt/string.h>
 
 #include "DBGCInternal.h"
+
 
 /*********************************************************************************************************************************
 *   Defined Constants And Macros                                                                                                 *
@@ -235,11 +236,11 @@ DECLHIDDEN(void) dbgcScreenAsciiDestroy(DBGCSCREEN hScreen)
  * Blits the entire screen using the given callback callback.
  *
  * @returns VBox status code.
- * @param   pScreen             The screen to blit.
+ * @param   hScreen             The screen to blit.
  * @param   pfnBlit             Blitting callback.
  * @param   pvUser              Opaque user data to pass to the dumper callback.
  * @param   fAddColors          Flag whether to use the color info inserting
- *                              appropriate escape sequences. 
+ *                              appropriate escape sequences.
  */
 DECLHIDDEN(int) dbgcScreenAsciiBlit(DBGCSCREEN hScreen, PFNDGCSCREENBLIT pfnBlit, void *pvUser, bool fAddColors)
 {

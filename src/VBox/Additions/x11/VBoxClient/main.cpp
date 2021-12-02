@@ -1,12 +1,10 @@
-/* $Id$ */
+/* $Id: main.cpp 90211 2021-07-15 11:53:07Z vboxsync $ */
 /** @file
- *
- * VirtualBox Guest Service:
- * Linux guest.
+ * VirtualBox Guest Additions - X11 Client.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,108 +15,126 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#include <sys/types.h>
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
+#include <sys/wait.h>
 #include <stdlib.h>       /* For exit */
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <poll.h>
 #include <signal.h>
-
 #include <X11/Xlib.h>
-#include <X11/Xatom.h>
-
+#include "product-generated.h"
+#include <iprt/asm.h>
 #include <iprt/buildconfig.h>
 #include <iprt/critsect.h>
-#include <iprt/env.h>
-#include <iprt/file.h>
+#include <iprt/errno.h>
+#include <iprt/getopt.h>
 #include <iprt/initterm.h>
 #include <iprt/message.h>
 #include <iprt/path.h>
-#include <iprt/param.h>
 #include <iprt/stream.h>
-#include <iprt/string.h>
-#include <iprt/types.h>
 #include <VBox/VBoxGuestLib.h>
-#include <VBox/log.h>
-
+#include <VBox/err.h>
+#include <VBox/version.h>
 #include "VBoxClient.h"
 
-/*static int (*gpfnOldIOErrorHandler)(Display *) = NULL; - unused */
 
-/** Object representing the service we are running.  This has to be global
- * so that the cleanup routine can access it. */
-struct VBCLSERVICE **g_pService;
+/*********************************************************************************************************************************
+*   Defines                                                                                                                      *
+*********************************************************************************************************************************/
+#define VBOXCLIENT_OPT_SERVICES             980
+#define VBOXCLIENT_OPT_CHECKHOSTVERSION     VBOXCLIENT_OPT_SERVICES
+#define VBOXCLIENT_OPT_CLIPBOARD            VBOXCLIENT_OPT_SERVICES + 1
+#define VBOXCLIENT_OPT_DRAGANDDROP          VBOXCLIENT_OPT_SERVICES + 2
+#define VBOXCLIENT_OPT_SEAMLESS             VBOXCLIENT_OPT_SERVICES + 3
+#define VBOXCLIENT_OPT_VMSVGA               VBOXCLIENT_OPT_SERVICES + 4
+
+
+/*********************************************************************************************************************************
+*   Local structures                                                                                                             *
+*********************************************************************************************************************************/
+/**
+ * The global service state.
+ */
+typedef struct VBCLSERVICESTATE
+{
+    /** Pointer to the service descriptor. */
+    PVBCLSERVICE    pDesc;
+    /** The worker thread. NIL_RTTHREAD if it's the main thread. */
+    RTTHREAD        Thread;
+    /** Whether Pre-init was called. */
+    bool            fPreInited;
+    /** Shutdown indicator. */
+    bool volatile   fShutdown;
+    /** Indicator set by the service thread exiting. */
+    bool volatile   fStopped;
+    /** Whether the service was started or not. */
+    bool            fStarted;
+} VBCLSERVICESTATE;
+/** Pointer to a service state. */
+typedef VBCLSERVICESTATE *PVBCLSERVICESTATE;
+
+
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
+*********************************************************************************************************************************/
+/** The global service state. */
+VBCLSERVICESTATE     g_Service = { 0 };
+
+/** Set by the signal handler when being called. */
+static volatile bool g_fSignalHandlerCalled = false;
+/** Critical section for the signal handler. */
+static RTCRITSECT    g_csSignalHandler;
+/** Flag indicating Whether the service starts in daemonized  mode or not. */
+bool                 g_fDaemonized = false;
 /** The name of our pidfile.  It is global for the benefit of the cleanup
  * routine. */
-static char g_szPidFile[RTPATH_MAX] = "";
+static char          g_szPidFile[RTPATH_MAX] = "";
 /** The file handle of our pidfile.  It is global for the benefit of the
  * cleanup routine. */
-static RTFILE g_hPidFile;
+static RTFILE        g_hPidFile;
 /** Global critical section held during the clean-up routine (to prevent it
  * being called on multiple threads at once) or things which may not happen
  * during clean-up (e.g. pausing and resuming the service).
  */
-RTCRITSECT g_critSect;
-/** Counter of how often our deamon has been respawned. */
-unsigned cRespawn = 0;
+static RTCRITSECT    g_critSect;
+/** Counter of how often our daemon has been respawned. */
+unsigned             g_cRespawn = 0;
+/** Logging verbosity level. */
+unsigned             g_cVerbosity = 0;
+/** Absolute path to log file, if any. */
+static char          g_szLogFile[RTPATH_MAX + 128] = "";
 
-/** Exit with a fatal error. */
-void vbclFatalError(char *pszMessage)
-{
-    char *pszCommand;
-    int status;
-    if (pszMessage && cRespawn == 0)
-    {
-        pszCommand = RTStrAPrintf2("notify-send \"VBoxClient: %s\"", pszMessage);
-        if (pszCommand)
-        {
-            status = system(pszCommand);
-            if (WEXITSTATUS(status) != 0)  /* Utility or extension not available. */
-            {
-                pszCommand = RTStrAPrintf2("xmessage -buttons OK:0 -center \"VBoxClient: %s\"",
-                                           pszMessage);
-                if (pszCommand)
-                {
-                    status = system(pszCommand);
-                    if (WEXITSTATUS(status) != 0)  /* Utility or extension not available. */
-                    {
-                        RTPrintf("VBoxClient: %s", pszMessage);
-                    }
-                }
-            }
-        }
-    }
-    _exit(1);
-}
-
-/** Clean up if we get a signal or something.  This is extern so that we
- * can call it from other compilation units. */
-void VBClCleanUp()
+/**
+ * Shut down if we get a signal or something.
+ *
+ * This is extern so that we can call it from other compilation units.
+ */
+void VBClShutdown(bool fExit /*=true*/)
 {
     /* We never release this, as we end up with a call to exit(3) which is not
      * async-safe.  Unless we fix this application properly, we should be sure
      * never to exit from anywhere except from this method. */
     int rc = RTCritSectEnter(&g_critSect);
     if (RT_FAILURE(rc))
-        VBClFatalError(("VBoxClient: Failure while acquiring the global critical section, rc=%Rrc\n", rc));
-    if (g_pService)
-        (*g_pService)->cleanup(g_pService);
+        VBClLogFatalError("Failure while acquiring the global critical section, rc=%Rrc\n", rc);
+
+    /* Ask service to stop. */
+    if (g_Service.pDesc &&
+        g_Service.pDesc->pfnStop)
+    {
+        ASMAtomicWriteBool(&g_Service.fShutdown, true);
+        g_Service.pDesc->pfnStop();
+
+    }
+
     if (g_szPidFile[0] && g_hPidFile)
         VbglR3ClosePidFile(g_szPidFile, g_hPidFile);
-    exit(0);
-}
 
-/**
- * A standard signal handler which cleans up and exits.
- */
-static void vboxClientSignalHandler(int cSignal)
-{
-    LogRel(("VBoxClient: terminated with signal %d\n", cSignal));
-    /** Disable seamless mode */
-    RTPrintf(("VBoxClient: terminating...\n"));
-    VBClCleanUp();
+    VBClLogDestroy();
+
+    if (fExit)
+        exit(RTEXITCODE_SUCCESS);
 }
 
 /**
@@ -129,7 +145,7 @@ static int vboxClientXLibErrorHandler(Display *pDisplay, XErrorEvent *pError)
     char errorText[1024];
 
     XGetErrorText(pDisplay, pError->error_code, errorText, sizeof(errorText));
-    LogRelFlow(("VBoxClient: an X Window protocol error occurred: %s (error code %d).  Request code: %d, minor code: %d, serial number: %d\n", errorText, pError->error_code, pError->request_code, pError->minor_code, pError->serial));
+    VBClLogError("An X Window protocol error occurred: %s (error code %d).  Request code: %d, minor code: %d, serial number: %d\n", errorText, pError->error_code, pError->request_code, pError->minor_code, pError->serial);
     return 0;
 }
 
@@ -140,20 +156,52 @@ static int vboxClientXLibErrorHandler(Display *pDisplay, XErrorEvent *pError)
 static int vboxClientXLibIOErrorHandler(Display *pDisplay)
 {
     RT_NOREF1(pDisplay);
-    LogRel(("VBoxClient: a fatal guest X Window error occurred.  This may just mean that the Window system was shut down while the client was still running.\n"));
-    VBClCleanUp();
+    VBClLogError("A fatal guest X Window error occurred. This may just mean that the Window system was shut down while the client was still running\n");
+    VBClShutdown();
     return 0;  /* We should never reach this. */
 }
 
 /**
- * Reset all standard termination signals to call our signal handler, which
- * cleans up and exits.
+ * A standard signal handler which cleans up and exits.
  */
-static void vboxClientSetSignalHandlers(void)
+static void vboxClientSignalHandler(int iSignal)
+{
+    int rc = RTCritSectEnter(&g_csSignalHandler);
+    if (RT_SUCCESS(rc))
+    {
+        if (g_fSignalHandlerCalled)
+        {
+            RTCritSectLeave(&g_csSignalHandler);
+            return;
+        }
+
+        VBClLogVerbose(2, "Received signal %d\n", iSignal);
+        g_fSignalHandlerCalled = true;
+
+        /* Leave critical section before stopping the service. */
+        RTCritSectLeave(&g_csSignalHandler);
+
+        if (   g_Service.pDesc
+            && g_Service.pDesc->pfnStop)
+        {
+            VBClLogVerbose(2, "Notifying service to stop ...\n");
+
+            /* Signal the service to stop. */
+            ASMAtomicWriteBool(&g_Service.fShutdown, true);
+
+            g_Service.pDesc->pfnStop();
+
+            VBClLogVerbose(2, "Service notified to stop, waiting on worker thread to stop ...\n");
+        }
+    }
+}
+
+/**
+ * Reset all standard termination signals to call our signal handler.
+ */
+static int vboxClientSignalHandlerInstall(void)
 {
     struct sigaction sigAction;
-
-    LogRelFlowFunc(("\n"));
     sigAction.sa_handler = vboxClientSignalHandler;
     sigemptyset(&sigAction.sa_mask);
     sigAction.sa_flags = 0;
@@ -165,173 +213,355 @@ static void vboxClientSetSignalHandlers(void)
     sigaction(SIGTERM, &sigAction, NULL);
     sigaction(SIGUSR1, &sigAction, NULL);
     sigaction(SIGUSR2, &sigAction, NULL);
-    LogRelFlowFunc(("returning\n"));
+
+    return RTCritSectInit(&g_csSignalHandler);
+}
+
+/**
+ * Uninstalls a previously installed signal handler.
+ */
+static int vboxClientSignalHandlerUninstall(void)
+{
+    signal(SIGTERM,  SIG_DFL);
+#ifdef SIGBREAK
+    signal(SIGBREAK, SIG_DFL);
+#endif
+
+    return RTCritSectDelete(&g_csSignalHandler);
 }
 
 /**
  * Print out a usage message and exit with success.
  */
-void vboxClientUsage(const char *pcszFileName)
+static void vboxClientUsage(const char *pcszFileName)
 {
-    RTPrintf("Usage: %s --clipboard|"
+    RTPrintf(VBOX_PRODUCT " VBoxClient "
+             VBOX_VERSION_STRING "\n"
+             "(C) 2005-" VBOX_C_YEAR " " VBOX_VENDOR "\n"
+             "All rights reserved.\n"
+             "\n");
+
+    RTPrintf("Usage: %s "
+#ifdef VBOX_WITH_SHARED_CLIPBOARD
+             "--clipboard|"
+#endif
 #ifdef VBOX_WITH_DRAG_AND_DROP
              "--draganddrop|"
 #endif
-             "--display|"
-# ifdef VBOX_WITH_GUEST_PROPS
+#ifdef VBOX_WITH_GUEST_PROPS
              "--checkhostversion|"
 #endif
-             "--seamless|check3d [-d|--nodaemon]\n", pcszFileName);
-    RTPrintf("Starts the VirtualBox X Window System guest services.\n\n");
-    RTPrintf("Options:\n");
-    RTPrintf("  --clipboard        starts the shared clipboard service\n");
-#ifdef VBOX_WITH_DRAG_AND_DROP
-    RTPrintf("  --draganddrop      starts the drag and drop service\n");
+#ifdef VBOX_WITH_SEAMLESS
+             "--seamless|"
 #endif
-    RTPrintf("  --display          starts the display management service\n");
-#ifdef VBOX_WITH_GUEST_PROPS
-    RTPrintf("  --checkhostversion starts the host version notifier service\n");
+#ifdef VBOX_WITH_VMSVGA
+             "--vmsvga"
 #endif
-    RTPrintf("  --check3d          tests whether 3D pass-through is enabled\n");
-    RTPrintf("  --seamless         starts the seamless windows service\n");
-    RTPrintf("  -d, --nodaemon     continues running as a system service\n");
-    RTPrintf("  -h, --help         shows this help text\n");
-    RTPrintf("  -V, --version      shows version information\n");
+             "\n[-d|--nodaemon]\n", pcszFileName);
     RTPrintf("\n");
-    exit(0);
+    RTPrintf("Options:\n");
+#ifdef VBOX_WITH_SHARED_CLIPBOARD
+    RTPrintf("  --clipboard          starts the shared clipboard service\n");
+#endif
+#ifdef VBOX_WITH_DRAG_AND_DROP
+    RTPrintf("  --draganddrop        starts the drag and drop service\n");
+#endif
+#ifdef VBOX_WITH_GUEST_PROPS
+    RTPrintf("  --checkhostversion   starts the host version notifier service\n");
+#endif
+#ifdef VBOX_WITH_SEAMLESS
+    RTPrintf("  --seamless           starts the seamless windows service\n");
+#endif
+#ifdef VBOX_WITH_VMSVGA
+    RTPrintf("  --vmsvga             starts VMSVGA dynamic resizing for X11/Wayland guests\n");
+#endif
+    RTPrintf("  -f, --foreground     run in the foreground (no daemonizing)\n");
+    RTPrintf("  -d, --nodaemon       continues running as a system service\n");
+    RTPrintf("  -h, --help           shows this help text\n");
+    RTPrintf("  -l, --logfile <path> enables logging to a file\n");
+    RTPrintf("  -v, --verbose        increases logging verbosity level\n");
+    RTPrintf("  -V, --version        shows version information\n");
+    RTPrintf("\n");
+}
+
+/**
+ * Complains about seeing more than one service specification.
+ *
+ * @returns RTEXITCODE_SYNTAX.
+ */
+static int vbclSyntaxOnlyOneService(void)
+{
+    RTMsgError("More than one service specified! Only one, please.");
+    return RTEXITCODE_SYNTAX;
+}
+
+/**
+ * The service thread.
+ *
+ * @returns Whatever the worker function returns.
+ * @param   ThreadSelf      My thread handle.
+ * @param   pvUser          The service index.
+ */
+static DECLCALLBACK(int) vbclThread(RTTHREAD ThreadSelf, void *pvUser)
+{
+    PVBCLSERVICESTATE pState = (PVBCLSERVICESTATE)pvUser;
+    AssertPtrReturn(pState, VERR_INVALID_POINTER);
+
+#ifndef RT_OS_WINDOWS
+    /*
+     * Block all signals for this thread. Only the main thread will handle signals.
+     */
+    sigset_t signalMask;
+    sigfillset(&signalMask);
+    pthread_sigmask(SIG_BLOCK, &signalMask, NULL);
+#endif
+
+    AssertPtrReturn(pState->pDesc->pfnWorker, VERR_INVALID_POINTER);
+    int rc = pState->pDesc->pfnWorker(&pState->fShutdown);
+
+    VBClLogVerbose(2, "Worker loop ended with %Rrc\n", rc);
+
+    ASMAtomicXchgBool(&pState->fShutdown, true);
+    RTThreadUserSignal(ThreadSelf);
+    return rc;
 }
 
 /**
  * The main loop for the VBoxClient daemon.
- * @todo Clean up for readability.
  */
 int main(int argc, char *argv[])
 {
-    bool fDaemonise = true, fRespawn = true;
-    int rc;
-    const char *pcszFileName;
+    /* Note: No VBClLogXXX calls before actually creating the log. */
 
-    /* Initialise our runtime before all else. */
-    rc = RTR3InitExe(argc, &argv, 0);
+    /* Initialize our runtime before all else. */
+    int rc = RTR3InitExe(argc, &argv, 0);
     if (RT_FAILURE(rc))
         return RTMsgInitFailure(rc);
+
     /* This should never be called twice in one process - in fact one Display
      * object should probably never be used from multiple threads anyway. */
     if (!XInitThreads())
-        VBClFatalError(("Failed to initialize X11 threads\n"));
-    /* Get our file name for error output. */
-    pcszFileName = RTPathFilename(argv[0]);
+        return RTMsgErrorExitFailure("Failed to initialize X11 threads\n");
+
+    /* Get our file name for usage info and hints. */
+    const char *pcszFileName = RTPathFilename(argv[0]);
     if (!pcszFileName)
         pcszFileName = "VBoxClient";
 
-    /* Parse our option(s) */
-    /** @todo Use RTGetOpt() if the arguments become more complex. */
-    for (int i = 1; i < argc; ++i)
+    /* Parse our option(s). */
+    static const RTGETOPTDEF s_aOptions[] =
     {
-        rc = VERR_INVALID_PARAMETER;
-        if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--nodaemon"))
-        {
-            /* If the user is running in "no daemon" mode anyway, send critical
-             * logging to stdout as well. */
-            PRTLOGGER pReleaseLog = RTLogRelGetDefaultInstance();
-            if (pReleaseLog)
-                rc = RTLogDestinations(pReleaseLog, "stdout");
-            if (pReleaseLog && RT_FAILURE(rc))
-                RTPrintf("%s: failed to redivert error output, rc=%Rrc\n",
-                         pcszFileName, rc);
-            fDaemonise = false;
-        }
-        else if (!strcmp(argv[i], "--no-respawn"))
-        {
-            fRespawn = false;
-        }
-        else if (!strcmp(argv[i], "--clipboard"))
-        {
-            if (g_pService)
-                break;
-            g_pService = VBClGetClipboardService();
-        }
-        else if (!strcmp(argv[i], "--display"))
-        {
-            if (g_pService)
-                break;
-            g_pService = VBClGetDisplayService();
-        }
-        else if (!strcmp(argv[i], "--seamless"))
-        {
-            if (g_pService)
-                break;
-            g_pService = VBClGetSeamlessService();
-        }
-        else if (!strcmp(argv[i], "--checkhostversion"))
-        {
-            if (g_pService)
-                break;
-            g_pService = VBClGetHostVersionService();
-        }
+        { "--nodaemon",                     'd',                                      RTGETOPT_REQ_NOTHING },
+        { "--foreground",                   'f',                                      RTGETOPT_REQ_NOTHING },
+        { "--help",                         'h',                                      RTGETOPT_REQ_NOTHING },
+        { "--logfile",                      'l',                                      RTGETOPT_REQ_STRING  },
+        { "--version",                      'V',                                      RTGETOPT_REQ_NOTHING },
+        { "--verbose",                      'v',                                      RTGETOPT_REQ_NOTHING },
+
+        /* Services */
+#ifdef VBOX_WITH_GUEST_PROPS
+        { "--checkhostversion",             VBOXCLIENT_OPT_CHECKHOSTVERSION,          RTGETOPT_REQ_NOTHING },
+#endif
+#ifdef VBOX_WITH_SHARED_CLIPBOARD
+        { "--clipboard",                    VBOXCLIENT_OPT_CLIPBOARD,                 RTGETOPT_REQ_NOTHING },
+#endif
 #ifdef VBOX_WITH_DRAG_AND_DROP
-        else if (!strcmp(argv[i], "--draganddrop"))
-        {
-            if (g_pService)
-                break;
-            g_pService = VBClGetDragAndDropService();
-        }
-#endif /* VBOX_WITH_DRAG_AND_DROP */
-        else if (!strcmp(argv[i], "--check3d"))
-        {
-            if (g_pService)
-                break;
-            g_pService = VBClCheck3DService();
-        }
-        else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help"))
-        {
-            vboxClientUsage(pcszFileName);
-            return RTEXITCODE_SUCCESS;
-        }
-        else if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version"))
-        {
-            RTPrintf("%sr%s\n", RTBldCfgVersion(), RTBldCfgRevisionStr());
-            return RTEXITCODE_SUCCESS;
-        }
-        else
-        {
-            RTPrintf("%s: unrecognized option `%s'\n", pcszFileName, argv[i]);
-            RTPrintf("Try `%s --help' for more information\n", pcszFileName);
-            return RTEXITCODE_SYNTAX;
-        }
-        rc = VINF_SUCCESS;
-    }
-    if (RT_FAILURE(rc) || !g_pService)
+        { "--draganddrop",                  VBOXCLIENT_OPT_DRAGANDDROP,               RTGETOPT_REQ_NOTHING },
+#endif
+#ifdef VBOX_WITH_SEAMLESS
+        { "--seamless",                     VBOXCLIENT_OPT_SEAMLESS,                  RTGETOPT_REQ_NOTHING },
+#endif
+#ifdef VBOX_WITH_VMSVGA
+        { "--vmsvga",                       VBOXCLIENT_OPT_VMSVGA,                    RTGETOPT_REQ_NOTHING },
+#endif
+    };
+
+    int                     ch;
+    RTGETOPTUNION           ValueUnion;
+    RTGETOPTSTATE           GetState;
+    rc = RTGetOptInit(&GetState, argc, argv, s_aOptions, RT_ELEMENTS(s_aOptions), 0, 0 /* fFlags */);
+    if (RT_FAILURE(rc))
+        return RTMsgErrorExitFailure("Failed to parse command line options, rc=%Rrc\n", rc);
+
+    AssertRC(rc);
+
+    bool fDaemonise = true;
+    bool fRespawn   = true;
+
+    while ((ch = RTGetOpt(&GetState, &ValueUnion)) != 0)
     {
-        vboxClientUsage(pcszFileName);
-        return RTEXITCODE_SYNTAX;
+        /* For options that require an argument, ValueUnion has received the value. */
+        switch (ch)
+        {
+            case 'd':
+            {
+                fDaemonise = false;
+                break;
+            }
+
+            case 'h':
+            {
+                vboxClientUsage(pcszFileName);
+                return RTEXITCODE_SUCCESS;
+            }
+
+            case 'f':
+            {
+               fDaemonise = false;
+               fRespawn   = false;
+               break;
+            }
+
+            case 'l':
+            {
+                rc = RTStrCopy(g_szLogFile, sizeof(g_szLogFile), ValueUnion.psz);
+                if (RT_FAILURE(rc))
+                    return RTMsgErrorExitFailure("Unable to set log file path, rc=%Rrc\n", rc);
+                break;
+            }
+
+            case 'n':
+            {
+                fRespawn = false;
+                break;
+            }
+
+            case 'v':
+            {
+                g_cVerbosity++;
+                break;
+            }
+
+            case 'V':
+            {
+                RTPrintf("%sr%s\n", RTBldCfgVersion(), RTBldCfgRevisionStr());
+                return RTEXITCODE_SUCCESS;
+            }
+
+            /* Services */
+#ifdef VBOX_WITH_GUEST_PROPS
+            case VBOXCLIENT_OPT_CHECKHOSTVERSION:
+            {
+                if (g_Service.pDesc)
+                    return vbclSyntaxOnlyOneService();
+                g_Service.pDesc = &g_SvcHostVersion;
+                break;
+            }
+#endif
+#ifdef VBOX_WITH_SHARED_CLIPBOARD
+            case VBOXCLIENT_OPT_CLIPBOARD:
+            {
+                if (g_Service.pDesc)
+                    return vbclSyntaxOnlyOneService();
+                g_Service.pDesc = &g_SvcClipboard;
+                break;
+            }
+#endif
+#ifdef VBOX_WITH_DRAG_AND_DROP
+            case VBOXCLIENT_OPT_DRAGANDDROP:
+            {
+                if (g_Service.pDesc)
+                    return vbclSyntaxOnlyOneService();
+                g_Service.pDesc = &g_SvcDragAndDrop;
+                break;
+            }
+#endif
+#ifdef VBOX_WITH_SEAMLESS
+            case VBOXCLIENT_OPT_SEAMLESS:
+            {
+                if (g_Service.pDesc)
+                    return vbclSyntaxOnlyOneService();
+                g_Service.pDesc = &g_SvcSeamless;
+                break;
+            }
+#endif
+#ifdef VBOX_WITH_VMSVGA
+            case VBOXCLIENT_OPT_VMSVGA:
+            {
+                if (g_Service.pDesc)
+                    return vbclSyntaxOnlyOneService();
+                g_Service.pDesc = &g_SvcDisplaySVGA;
+                break;
+            }
+#endif
+            case VINF_GETOPT_NOT_OPTION:
+                break;
+
+            case VERR_GETOPT_UNKNOWN_OPTION:
+                RT_FALL_THROUGH();
+            default:
+            {
+                if (   g_Service.pDesc
+                    && g_Service.pDesc->pfnOption)
+                {
+                    rc = g_Service.pDesc->pfnOption(NULL, argc, argv, &GetState.iNext);
+                }
+                else /* No service specified yet. */
+                    rc = VERR_NOT_FOUND;
+
+                if (RT_FAILURE(rc))
+                {
+                    RTMsgError("unrecognized option '%s'", ValueUnion.psz);
+                    RTMsgInfo("Try '%s --help' for more information", pcszFileName);
+                    return RTEXITCODE_SYNTAX;
+                }
+                break;
+            }
+
+        } /* switch */
+    } /* while RTGetOpt */
+
+    if (!g_Service.pDesc)
+        return RTMsgErrorExit(RTEXITCODE_SYNTAX, "No service specified. Quitting because nothing to do!");
+
+    /* Initialize VbglR3 before we do anything else with the logger. */
+    rc = VbglR3InitUser();
+    if (RT_FAILURE(rc))
+        return RTMsgErrorExitFailure("VbglR3InitUser failed: %Rrc", rc);
+
+    rc = VBClLogCreate(g_szLogFile[0] ? g_szLogFile : NULL);
+    if (RT_FAILURE(rc))
+        return RTMsgErrorExitFailure("Failed to create release log '%s', rc=%Rrc\n",
+                              g_szLogFile[0] ? g_szLogFile : "<None>", rc);
+
+    if (!fDaemonise)
+    {
+        /* If the user is running in "no daemon" mode, send critical logging to stdout as well. */
+        PRTLOGGER pReleaseLog = RTLogRelGetDefaultInstance();
+        if (pReleaseLog)
+        {
+            rc = RTLogDestinations(pReleaseLog, "stdout");
+            if (RT_FAILURE(rc))
+                return RTMsgErrorExitFailure("Failed to redivert error output, rc=%Rrc", rc);
+        }
     }
+
+    VBClLogInfo("VBoxClient %s r%s started. Verbose level = %d\n", RTBldCfgVersion(), RTBldCfgRevisionStr(), g_cVerbosity);
+    VBClLogInfo("Service: %s\n", g_Service.pDesc->pszDesc);
 
     rc = RTCritSectInit(&g_critSect);
     if (RT_FAILURE(rc))
-        VBClFatalError(("Initialising critical section failed: %Rrc\n", rc));
-    if ((*g_pService)->getPidFilePath)
+        VBClLogFatalError("Initializing critical section failed: %Rrc\n", rc);
+    if (g_Service.pDesc->pszPidFilePath)
     {
         rc = RTPathUserHome(g_szPidFile, sizeof(g_szPidFile));
         if (RT_FAILURE(rc))
-            VBClFatalError(("Getting home directory for PID file failed: %Rrc\n", rc));
-        rc = RTPathAppend(g_szPidFile, sizeof(g_szPidFile),
-                          (*g_pService)->getPidFilePath());
+            VBClLogFatalError("Getting home directory failed: %Rrc\n", rc);
+        rc = RTPathAppend(g_szPidFile, sizeof(g_szPidFile), g_Service.pDesc->pszPidFilePath);
         if (RT_FAILURE(rc))
-            VBClFatalError(("Creating PID file path failed: %Rrc\n", rc));
+            VBClLogFatalError("Creating PID file path failed: %Rrc\n", rc);
         if (fDaemonise)
-            rc = VbglR3Daemonize(false /* fNoChDir */, false /* fNoClose */, fRespawn, &cRespawn);
+            rc = VbglR3Daemonize(false /* fNoChDir */, false /* fNoClose */, fRespawn, &g_cRespawn);
         if (RT_FAILURE(rc))
-            VBClFatalError(("Daemonizing failed: %Rrc\n", rc));
+            VBClLogFatalError("Daemonizing service failed: %Rrc\n", rc);
         if (g_szPidFile[0])
             rc = VbglR3PidFile(g_szPidFile, &g_hPidFile);
         if (rc == VERR_FILE_LOCK_VIOLATION)  /* Already running. */
             return RTEXITCODE_SUCCESS;
         if (RT_FAILURE(rc))
-            VBClFatalError(("Creating PID file failed: %Rrc\n", rc));
+            VBClLogFatalError("Creating PID file failed: %Rrc\n", rc);
     }
-    /* Set signal handlers to clean up on exit. */
-    vboxClientSetSignalHandlers();
+
 #ifndef VBOXCLIENT_WITHOUT_X11
     /* Set an X11 error handler, so that we don't die when we get unavoidable
      * errors. */
@@ -340,20 +570,105 @@ int main(int argc, char *argv[])
      * fatal errors. */
     XSetIOErrorHandler(vboxClientXLibIOErrorHandler);
 #endif
-    rc = (*g_pService)->init(g_pService);
+
+    bool fSignalHandlerInstalled = false;
     if (RT_SUCCESS(rc))
     {
-        rc = (*g_pService)->run(g_pService, fDaemonise);
+        rc = vboxClientSignalHandlerInstall();
+        if (RT_SUCCESS(rc))
+            fSignalHandlerInstalled = true;
+    }
+
+    if (   RT_SUCCESS(rc)
+        && g_Service.pDesc->pfnInit)
+    {
+        VBClLogInfo("Initializing service ...\n");
+        rc = g_Service.pDesc->pfnInit();
+    }
+
+    if (RT_SUCCESS(rc))
+    {
+        VBClLogInfo("Creating worker thread ...\n");
+        rc = RTThreadCreate(&g_Service.Thread, vbclThread, (void *)&g_Service, 0,
+                            RTTHREADTYPE_DEFAULT, RTTHREADFLAGS_WAITABLE, g_Service.pDesc->pszName);
         if (RT_FAILURE(rc))
-            LogRel2(("Running service failed: %Rrc\n", rc));
+        {
+            VBClLogError("Creating worker thread failed, rc=%Rrc\n", rc);
+        }
+        else
+        {
+            g_Service.fStarted = true;
+
+            /* Wait for the thread to initialize. */
+            /** @todo There is a race between waiting and checking
+             * the fShutdown flag of a thread here and processing
+             * the thread's actual worker loop. If the thread decides
+             * to exit the loop before we skipped the fShutdown check
+             * below the service will fail to start! */
+            /** @todo This presumably means either a one-shot service or that
+             * something has gone wrong.  In the second case treating it as failure
+             * to start is probably right, so we need a way to signal the first
+             * rather than leaving the idle thread hanging around.  A flag in the
+             * service description? */
+            RTThreadUserWait(g_Service.Thread, RT_MS_1MIN);
+            if (g_Service.fShutdown)
+            {
+                VBClLogError("Service failed to start!\n");
+                rc = VERR_GENERAL_FAILURE;
+            }
+            else
+            {
+                VBClLogInfo("Service started\n");
+
+                int rcThread;
+                rc = RTThreadWait(g_Service.Thread, RT_INDEFINITE_WAIT, &rcThread);
+                if (RT_SUCCESS(rc))
+                    rc = rcThread;
+
+                if (RT_FAILURE(rc))
+                    VBClLogError("Waiting on worker thread to stop failed, rc=%Rrc\n", rc);
+
+                if (g_Service.pDesc->pfnTerm)
+                {
+                    VBClLogInfo("Terminating service\n");
+
+                    int rc2 = g_Service.pDesc->pfnTerm();
+                    if (RT_SUCCESS(rc))
+                        rc = rc2;
+
+                    if (RT_SUCCESS(rc))
+                    {
+                        VBClLogInfo("Service terminated\n");
+                    }
+                    else
+                        VBClLogError("Service failed to terminate, rc=%Rrc\n", rc);
+                }
+            }
+        }
+    }
+
+    if (RT_FAILURE(rc))
+    {
+        if (rc == VERR_NOT_AVAILABLE)
+            VBClLogInfo("Service is not availabe, skipping\n");
+        else if (rc == VERR_NOT_SUPPORTED)
+            VBClLogInfo("Service is not supported on this platform, skipping\n");
+        else
+            VBClLogError("Service ended with error %Rrc\n", rc);
     }
     else
+        VBClLogVerbose(2, "Service ended\n");
+
+    if (fSignalHandlerInstalled)
     {
-        /** @todo r=andy Should we return an appropriate exit code if the service failed to init?
-         *               Must be tested carefully with our init scripts first. */
-        LogRel2(("Initializing service failed: %Rrc\n", rc));
+        int rc2 = vboxClientSignalHandlerUninstall();
+        AssertRC(rc2);
     }
-    VBClCleanUp();
+
+    VBClShutdown(false /*fExit*/);
+
+    /** @todo r=andy Should we return an appropriate exit code if the service failed to init?
+     *               Must be tested carefully with our init scripts first. */
     return RTEXITCODE_SUCCESS;
 }
 

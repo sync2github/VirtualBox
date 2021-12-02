@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxDispDbg.h 83827 2020-04-19 02:02:30Z vboxsync $ */
 /** @file
  * VBoxVideo Display D3D User mode dll
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxDispDbg_h__
-#define ___VBoxDispDbg_h__
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispDbg_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispDbg_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #define VBOX_VIDEO_LOG_NAME "VBoxD3D"
 #define VBOX_VIDEO_LOG_LOGGER vboxVDbgInternalLogLogger
@@ -30,26 +32,25 @@
 #ifdef DEBUG
 /* debugging configuration flags */
 
+/* Adds vectored exception handler to be able to catch non-debug UM exceptions in kernel debugger. */
+#define VBOXWDDMDISP_DEBUG_VEHANDLER
+
 /* generic debugging facilities & extra data checks */
 # define VBOXWDDMDISP_DEBUG
-# if defined(DEBUG_misha) || defined(DEBUG_leo)
 /* for some reason when debugging with VirtualKD, user-mode DbgPrint's are discarded
  * the workaround so far is to pass the log info to the kernel driver and DbgPrint'ed from there,
  * which is enabled by this define */
 //#  define VBOXWDDMDISP_DEBUG_PRINTDRV
-/* use OutputDebugString */
-//#  define VBOXWDDMDISP_DEBUG_PRINT
-/* adds vectored exception handler to be able to catch non-debug UM exceptions in kernel debugger */
-//#  define VBOXWDDMDISP_DEBUG_VEHANDLER
+
+/* Uncomment to use OutputDebugString */
+//#define VBOXWDDMDISP_DEBUG_PRINT
+
 /* disable shared resource creation with wine */
 //#  define VBOXWDDMDISP_DEBUG_NOSHARED
 
 //#  define VBOXWDDMDISP_DEBUG_PRINT_SHARED_CREATE
-
 //#  define VBOXWDDMDISP_DEBUG_TIMER
-# endif
 
-# ifndef IN_VBOXCRHGSMI
 /* debug config vars */
 extern DWORD g_VBoxVDbgFDumpSetTexture;
 extern DWORD g_VBoxVDbgFDumpDrawPrim;
@@ -80,12 +81,9 @@ extern DWORD g_VBoxVDbgCfgForceDummyDevCreate;
 extern struct VBOXWDDMDISP_DEVICE *g_VBoxVDbgInternalDevice;
 extern struct VBOXWDDMDISP_RESOURCE *g_VBoxVDbgInternalRc;
 
-extern DWORD g_VBoxVDbgCfgCreateSwapchainOnDdiOnce;
-
-# endif /* #ifndef IN_VBOXCRHGSMI */
 #endif
 
-#if defined(VBOXWDDMDISP_DEBUG) || defined(VBOX_WDDMDISP_WITH_PROFILE)
+#if defined(VBOXWDDMDISP_DEBUG)
 /* log enable flags */
 extern DWORD g_VBoxVDbgFLogRel;
 extern DWORD g_VBoxVDbgFLog;
@@ -117,7 +115,7 @@ void vboxVDbgVEHandlerUnregister();
 # define DbgPrintUsrFlow(_m) do { } while (0)
 #endif
 
-#if defined(VBOXWDDMDISP_DEBUG) || defined(VBOX_WDDMDISP_WITH_PROFILE)
+#if defined(VBOXWDDMDISP_DEBUG)
 #define vboxVDbgInternalLog(_p) if (g_VBoxVDbgFLog) { _p }
 #define vboxVDbgInternalLogFlow(_p) if (g_VBoxVDbgFLogFlow) { _p }
 #define vboxVDbgInternalLogRel(_p) if (g_VBoxVDbgFLogRel) { _p }
@@ -156,7 +154,7 @@ void vboxVDbgVEHandlerUnregister();
         ); \
     } while (0)
 
-#if defined(VBOXWDDMDISP_DEBUG) || defined(VBOX_WDDMDISP_WITH_PROFILE)
+#if defined(VBOXWDDMDISP_DEBUG)
 extern DWORD g_VBoxVDbgPid;
 extern LONG g_VBoxVDbgFIsDwm;
 #define VBOXVDBG_CHECK_EXE(_pszName) (vboxVDbgDoCheckExe(_pszName))
@@ -185,7 +183,7 @@ DECLINLINE(const char*) vboxDispLogD3DRcType(D3DRESOURCETYPE enmType)
     }
 }
 
-#include "VBoxDispMpLogger.h"
+#include <VBoxDispMpLogger.h>
 
 VBOXDISPMPLOGGER_DECL(void) VBoxDispMpLoggerDumpD3DCAPS9(struct _D3DCAPS9 *pCaps);
 
@@ -200,7 +198,6 @@ void vboxDispLogDrvF(char * szString, ...);
 
 void vboxDispLogDbgPrintF(char * szString, ...);
 
-# ifndef IN_VBOXCRHGSMI
 typedef struct VBOXWDDMDISP_ALLOCATION *PVBOXWDDMDISP_ALLOCATION;
 typedef struct VBOXWDDMDISP_RESOURCE *PVBOXWDDMDISP_RESOURCE;
 
@@ -237,8 +234,6 @@ VOID vboxVDbgDoDumpAllocRect(const char * pPrefix, PVBOXWDDMDISP_ALLOCATION pAll
 VOID vboxVDbgDoDumpRcRect(const char * pPrefix, PVBOXWDDMDISP_ALLOCATION pAlloc, IDirect3DResource9 *pD3DRc, RECT *pRect, const char * pSuffix, DWORD fFlags);
 VOID vboxVDbgDoDumpLockUnlockSurfTex(const char * pPrefix, const VBOXWDDMDISP_ALLOCATION *pAlloc, const char * pSuffix, DWORD fFlags);
 VOID vboxVDbgDoDumpRt(const char * pPrefix, struct VBOXWDDMDISP_DEVICE *pDevice, const char * pSuffix, DWORD fFlags);
-VOID vboxVDbgDoDumpBb(const char * pPrefix, IDirect3DSwapChain9 *pSwapchainIf, const char * pSuffix, DWORD fFlags);
-VOID vboxVDbgDoDumpFb(const char * pPrefix, IDirect3DSwapChain9 *pSwapchainIf, const char * pSuffix, DWORD fFlags);
 VOID vboxVDbgDoDumpSamplers(const char * pPrefix, struct VBOXWDDMDISP_DEVICE *pDevice, const char * pSuffix, DWORD fFlags);
 
 void vboxVDbgDoPrintRect(const char * pPrefix, const RECT *pRect, const char * pSuffix);
@@ -373,8 +368,8 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
         if (fDumpShaded \
                 || VBOXVDBG_IS_DUMP_ALLOWED(DrawPrim)) \
         { \
-            vboxVDbgDoDumpRt("==>"__FUNCTION__": Rt: ", (_pDevice), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(DrawPrim)); \
-            vboxVDbgDoDumpSamplers("==>"__FUNCTION__": Sl: ", (_pDevice), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(DrawPrim)); \
+            vboxVDbgDoDumpRt("==>" __FUNCTION__ ": Rt: ", (_pDevice), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(DrawPrim)); \
+            vboxVDbgDoDumpSamplers("==>" __FUNCTION__ ": Sl: ", (_pDevice), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(DrawPrim)); \
         }\
     } while (0)
 
@@ -384,8 +379,8 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
         if (fDumpShaded \
                 || VBOXVDBG_IS_DUMP_ALLOWED(DrawPrim)) \
         { \
-            vboxVDbgDoDumpRt("<=="__FUNCTION__": Rt: ", (_pDevice), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(DrawPrim)); \
-            vboxVDbgDoDumpSamplers("<=="__FUNCTION__": Sl: ", (_pDevice), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(DrawPrim)); \
+            vboxVDbgDoDumpRt("<==" __FUNCTION__ ": Rt: ", (_pDevice), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(DrawPrim)); \
+            vboxVDbgDoDumpSamplers("<==" __FUNCTION__ ": Sl: ", (_pDevice), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(DrawPrim)); \
         }\
     } while (0)
 
@@ -403,7 +398,7 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
                 || VBOXVDBG_IS_DUMP_SHARED_ALLOWED(_pRc) \
                 ) \
         { \
-            vboxVDbgDoDumpRcRect("== "__FUNCTION__": ", &(_pRc)->aAllocations[0], NULL, NULL, "", \
+            vboxVDbgDoDumpRcRect("== " __FUNCTION__ ": ", &(_pRc)->aAllocations[0], NULL, NULL, "", \
                     VBOXVDBG_DUMP_FLAGS_FOR_TYPE(SetTexture) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared)); \
         } \
     } while (0)
@@ -417,9 +412,9 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
             RECT SrcRect = *(_pSrcRect); \
             RECT _DstRect; \
             vboxWddmRectMoved(&_DstRect, &SrcRect, (_pDstPoint)->x, (_pDstPoint)->y); \
-            vboxVDbgDoDumpRcRect("==> "__FUNCTION__": Src: ", &(_pSrcRc)->aAllocations[0], NULL, &SrcRect, "", \
+            vboxVDbgDoDumpRcRect("==> " __FUNCTION__ ": Src: ", &(_pSrcRc)->aAllocations[0], NULL, &SrcRect, "", \
                     VBOXVDBG_DUMP_FLAGS_FOR_TYPE(TexBlt) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared)); \
-            vboxVDbgDoDumpRcRect("==> "__FUNCTION__": Dst: ", &(_pDstRc)->aAllocations[0], NULL, &_DstRect, "", \
+            vboxVDbgDoDumpRcRect("==> " __FUNCTION__ ": Dst: ", &(_pDstRc)->aAllocations[0], NULL, &_DstRect, "", \
                     VBOXVDBG_DUMP_FLAGS_FOR_TYPE(TexBlt) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared)); \
         } \
     } while (0)
@@ -434,9 +429,9 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
             RECT SrcRect = *(_pSrcRect); \
             RECT _DstRect; \
             vboxWddmRectMoved(&_DstRect, &SrcRect, (_pDstPoint)->x, (_pDstPoint)->y); \
-            vboxVDbgDoDumpRcRect("<== "__FUNCTION__": Src: ", &(_pSrcRc)->aAllocations[0], NULL, &SrcRect, "", \
+            vboxVDbgDoDumpRcRect("<== " __FUNCTION__ ": Src: ", &(_pSrcRc)->aAllocations[0], NULL, &SrcRect, "", \
                     VBOXVDBG_DUMP_FLAGS_FOR_TYPE(TexBlt) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared)); \
-            vboxVDbgDoDumpRcRect("<== "__FUNCTION__": Dst: ", &(_pDstRc)->aAllocations[0], NULL, &_DstRect, "", \
+            vboxVDbgDoDumpRcRect("<== " __FUNCTION__ ": Dst: ", &(_pDstRc)->aAllocations[0], NULL, &_DstRect, "", \
                     VBOXVDBG_DUMP_FLAGS_FOR_TYPE(TexBlt) | VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Shared)); \
         } \
     } while (0)
@@ -482,12 +477,6 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
 
 #define VBOXVDBG_DUMP_BLT_LEAVE(_pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect) \
         VBOXVDBG_DUMP_STRETCH_RECT(Blt, "<==", _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect)
-
-#define VBOXVDBG_DUMP_SWAPCHAIN_SYNC_ENTER(_pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect) \
-        VBOXVDBG_DUMP_STRETCH_RECT(ScSync, "==>", _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect)
-
-#define VBOXVDBG_DUMP_SWAPCHAIN_SYNC_LEAVE(_pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect) \
-        VBOXVDBG_DUMP_STRETCH_RECT(ScSync, "<==", _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect)
 
 #define VBOXVDBG_IS_SKIP_DWM_WND_UPDATE(_pSrcRc, _pSrcRect, _pDstRc, _pDstPoint) ( \
             g_VBoxVDbgFSkipCheckTexBltDwmWndUpdate \
@@ -555,40 +544,10 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
 #define VBOXVDBG_CHECK_BLT(_opBlt, _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect) \
         VBOXVDBG_CHECK_STRETCH_RECT(Blt, _opBlt, _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect)
 
-#define VBOXVDBG_CHECK_SWAPCHAIN_SYNC(_op, _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect) \
-        VBOXVDBG_CHECK_STRETCH_RECT(ScSync, _op, _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect)
-
 #define VBOXVDBG_DUMP_SYNC_RT(_pBbSurf) do { \
         if (VBOXVDBG_IS_DUMP_ALLOWED(RtSynch)) \
         { \
-            vboxVDbgDoDumpRcRect("== "__FUNCTION__" Bb:\n", NULL, (_pBbSurf), NULL, "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(RtSynch)); \
-        } \
-    } while (0)
-
-#define VBOXVDBG_DUMP_PRESENT_ENTER(_pDevice, _pSwapchain) do { \
-        if (VBOXVDBG_IS_DUMP_ALLOWED(PresentEnter)) { \
-            if (!(_pSwapchain)->fFlags.bRtReportingPresent) { \
-                vboxVDbgDoDumpBb("==>"__FUNCTION__" Bb:\n", (_pSwapchain)->pSwapChainIf, "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(PresentEnter)); \
-            } \
-            else  { \
-                PVBOXWDDMDISP_ALLOCATION pCurBb = vboxWddmSwapchainGetBb((_pSwapchain))->pAlloc; \
-                IDirect3DSurface9 *pSurf; \
-                HRESULT hr = vboxWddmSwapchainSurfGet(_pDevice, _pSwapchain, pCurBb, &pSurf); \
-                Assert(hr == S_OK); \
-                vboxVDbgDoDumpRcRect("== "__FUNCTION__" Bb:\n", pCurBb, pSurf, NULL, "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(PresentEnter)); \
-                pSurf->Release(); \
-            } \
-        } \
-    } while (0)
-
-#define VBOXVDBG_DUMP_PRESENT_LEAVE(_pDevice, _pSwapchain) do { \
-        if (VBOXVDBG_IS_DUMP_ALLOWED(PresentLeave)) { \
-            if (!(_pSwapchain)->fFlags.bRtReportingPresent) { \
-                vboxVDbgDoDumpFb("<=="__FUNCTION__" Fb:\n", (_pSwapchain)->pSwapChainIf, "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(PresentLeave)); \
-            } \
-            else  { \
-                vboxVDbgPrint(("PRESENT_LEAVE: unsupported for Rt Reporting mode\n")); \
-            } \
+            vboxVDbgDoDumpRcRect("== " __FUNCTION__ " Bb:\n", NULL, (_pBbSurf), NULL, "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(RtSynch)); \
         } \
     } while (0)
 
@@ -596,7 +555,7 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
 #define VBOXVDBG_DUMP_FLUSH(_pDevice) do { \
         if (VBOXVDBG_IS_DUMP_ALLOWED(Flush)) \
         { \
-            vboxVDbgDoDumpRt("== "__FUNCTION__": Rt: ", (_pDevice), "", \
+            vboxVDbgDoDumpRt("== " __FUNCTION__ ": Rt: ", (_pDevice), "", \
                     VBOXVDBG_DUMP_FLAGS_CLEAR(VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Flush), VBOXVDBG_DUMP_TYPEF_SHARED_ONLY)); \
         }\
     } while (0)
@@ -606,7 +565,7 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
                 || VBOXVDBG_IS_DUMP_ALLOWED(Unlock) \
                 ) \
         { \
-            vboxVDbgDoDumpLockSurfTex("== "__FUNCTION__": ", (_pData), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Lock)); \
+            vboxVDbgDoDumpLockSurfTex("== " __FUNCTION__ ": ", (_pData), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Lock)); \
         } \
     } while (0)
 
@@ -614,22 +573,10 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
         if (VBOXVDBG_IS_DUMP_ALLOWED(Unlock) \
                 ) \
         { \
-            vboxVDbgDoDumpUnlockSurfTex("== "__FUNCTION__": ", (_pData), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Unlock)); \
+            vboxVDbgDoDumpUnlockSurfTex("== " __FUNCTION__ ": ", (_pData), "", VBOXVDBG_DUMP_FLAGS_FOR_TYPE(Unlock)); \
         } \
     } while (0)
 
-
-#define VBOXVDBG_CREATE_CHECK_SWAPCHAIN() do { \
-            if (g_VBoxVDbgCfgCreateSwapchainOnDdiOnce && g_VBoxVDbgInternalRc) { \
-                PVBOXWDDMDISP_SWAPCHAIN pSwapchain; \
-                HRESULT hr = vboxWddmSwapchainCreateIfForRc(g_VBoxVDbgInternalDevice, g_VBoxVDbgInternalRc, &pSwapchain); \
-                Assert(hr == S_OK); \
-                g_VBoxVDbgInternalRc = NULL; \
-                g_VBoxVDbgCfgCreateSwapchainOnDdiOnce = 0; \
-            } \
-        } while (0)
-
-# endif /* # ifndef IN_VBOXCRHGSMI */
 #else
 #define VBOXVDBG_DUMP_DRAWPRIM_ENTER(_pDevice) do { } while (0)
 #define VBOXVDBG_DUMP_DRAWPRIM_LEAVE(_pDevice) do { } while (0)
@@ -642,8 +589,6 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
 #define VBOXVDBG_DUMP_FLUSH(_pDevice) do { } while (0)
 #define VBOXVDBG_DUMP_LOCK_ST(_pData) do { } while (0)
 #define VBOXVDBG_DUMP_UNLOCK_ST(_pData) do { } while (0)
-#define VBOXVDBG_DUMP_PRESENT_ENTER(_pDevice, _pSwapchain) do { } while (0)
-#define VBOXVDBG_DUMP_PRESENT_LEAVE(_pDevice, _pSwapchain) do { } while (0)
 #define VBOXVDBG_BREAK_SHARED(_pRc) do { } while (0)
 #define VBOXVDBG_BREAK_SHARED_DEV(_pDevice) do { } while (0)
 #define VBOXVDBG_BREAK_DDI() do { } while (0)
@@ -651,9 +596,7 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer);
 #define VBOXVDBG_CHECK_BLT(_opBlt, _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect) do { _opBlt; } while (0)
 #define VBOXVDBG_CHECK_TEXBLT(_opTexBlt, _pSrcRc, _pSrcRect, _pDstRc, _pDstPoint) do { _opTexBlt; } while (0)
 #define VBOXVDBG_ASSERT_IS_DWM(_bDwm) do { } while (0)
-#define VBOXVDBG_CHECK_SWAPCHAIN_SYNC(_op, _pSrcAlloc, _pSrcSurf, _pSrcRect, _pDstAlloc, _pDstSurf, _pDstRect) do { _op; } while (0)
-#define VBOXVDBG_CREATE_CHECK_SWAPCHAIN() do { } while (0)
 #endif
 
 
-#endif /* #ifndef ___VBoxDispDbg_h__ */
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispDbg_h */

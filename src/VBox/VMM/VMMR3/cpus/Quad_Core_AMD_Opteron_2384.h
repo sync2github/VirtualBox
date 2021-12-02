@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: Quad_Core_AMD_Opteron_2384.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * CPU database entry "Quad-Core AMD Opteron 2384".
  * Generated at 2013-12-09T21:56:56Z by VBoxCpuReport v4.3.51r91133 on win.amd64.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOX_CPUDB_Quad_Core_AMD_Opteron_2384
-#define VBOX_CPUDB_Quad_Core_AMD_Opteron_2384
+#ifndef VBOX_CPUDB_Quad_Core_AMD_Opteron_2384_h
+#define VBOX_CPUDB_Quad_Core_AMD_Opteron_2384_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #ifndef CPUM_DB_STANDALONE
@@ -253,6 +256,7 @@ static CPUMDBENTRY const g_Entry_Quad_Core_AMD_Opteron_2384 =
     /*.uScalableBusFreq = */ CPUM_SBUSFREQ_UNKNOWN,
     /*.fFlags           = */ 0,
     /*.cMaxPhysAddrWidth= */ 48,
+    /*.fMxCsrMask       = */ 0x2ffff,
     /*.paCpuIdLeaves    = */ NULL_ALONE(g_aCpuIdLeaves_Quad_Core_AMD_Opteron_2384),
     /*.cCpuIdLeaves     = */ ZERO_ALONE(RT_ELEMENTS(g_aCpuIdLeaves_Quad_Core_AMD_Opteron_2384)),
     /*.enmUnknownCpuId  = */ CPUMUNKNOWNCPUID_DEFAULTS,
@@ -262,5 +266,5 @@ static CPUMDBENTRY const g_Entry_Quad_Core_AMD_Opteron_2384 =
     /*.paMsrRanges      = */ NULL_ALONE(g_aMsrRanges_Quad_Core_AMD_Opteron_2384),
 };
 
-#endif /* !VBOX_DB_Quad_Core_AMD_Opteron_2384 */
+#endif /* !VBOX_CPUDB_Quad_Core_AMD_Opteron_2384_h */
 

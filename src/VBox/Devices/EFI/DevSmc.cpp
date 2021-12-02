@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: DevSmc.cpp 87284 2021-01-15 20:50:20Z vboxsync $ */
 /** @file
  * DevSmc - Apple System Management Controller.
  *
@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,11 +31,11 @@
 #include <VBox/err.h>
 #include <iprt/assert.h>
 #include <iprt/string.h>
-#ifdef IN_RING0
+#if defined(IN_RING0) && (defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86))
 # include <iprt/asm-amd64-x86.h>
 # include <iprt/once.h>
 #endif
-#if defined(RT_OS_DARWIN) && defined(IN_RING3)
+#if defined(RT_OS_DARWIN) && defined(IN_RING3) && !defined(VBOX_DEVICE_STRUCT_TESTCASE) /* drags in bad PAGE_SIZE */
 # include "IOKit/IOKitLib.h"
 #endif
 
@@ -78,8 +78,8 @@
 
 /** @name Apple SMC Commands.
  *  @{ */
-#define SMC_CMD_GET_KEY_VALUE                            0x10
-#define SMC_CMD_PUT_KEY                           0x11
+#define SMC_CMD_GET_KEY_VALUE                   0x10
+#define SMC_CMD_PUT_KEY                         0x11
 #define SMC_CMD_GET_KEY_BY_INDEX                0x12
 #define SMC_CMD_GET_KEY_INFO                    0x13
 /** @} */
@@ -124,7 +124,7 @@
 #define SMC_KEYIDX_FIRST_ENUM                   2
 
 /** Macro for emitting a static DEVSMC4CHID initializer. */
-#define SMC4CH(a_sz4) { { a_sz4[0], a_sz4[1], a_sz4[2], a_sz4[3] } }
+#define SMC4CH(ch1, ch2, ch3, ch4) { { ch1, ch2, ch3, ch4 } }
 
 /**
  * Macro for comparing DEVSMC4CHID with a string value.
@@ -237,6 +237,9 @@ typedef struct DEVSMC
     /** NATJ - Ninja action timer job. */
     uint8_t                 bNinjaActionTimerJob;
     /** @} */
+
+    /** The I/O port registration handle. */
+    IOMIOPORTHANDLE         hIoPorts;
 } DEVSMC;
 #ifndef _MSC_VER
 AssertCompileMembersAtSameOffset(DEVSMC, u.abRegsRW[SMC_REG_CMD],         DEVSMC, u.s.bState);
@@ -260,8 +263,8 @@ typedef DEVSMC *PDEVSMC;
  * @param   pKeyDesc        Pointer to the key descriptor so that the getter can
  *                          service more than once key.
  */
-typedef DECLCALLBACK(uint8_t) DEVSMCKEYGETTER(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd,
-                                              struct DEVSMCKEYDESC const *pKeyDesc);
+typedef DECLCALLBACKTYPE(uint8_t, FNDEVSMCKEYGETTER,(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd,
+                                                     struct DEVSMCKEYDESC const *pKeyDesc));
 
 /**
  * Method for setting the key value.
@@ -273,8 +276,8 @@ typedef DECLCALLBACK(uint8_t) DEVSMCKEYGETTER(PDEVSMC pThis, PDEVSMCCURKEY pCurK
  * @param   pKeyDesc        Pointer to the key descriptor so that the getter can
  *                          service more than once key.
  */
-typedef DECLCALLBACK(uint8_t) DEVSMCKEYPUTTER(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint8_t bCmd,
-                                              struct DEVSMCKEYDESC const *pKeyDesc);
+typedef DECLCALLBACKTYPE(uint8_t, FNDEVSMCKEYPUTTER,(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint8_t bCmd,
+                                                     struct DEVSMCKEYDESC const *pKeyDesc));
 
 /**
  * Key descriptor.
@@ -285,10 +288,10 @@ typedef struct DEVSMCKEYDESC
     DEVSMC4CHID         Key;
     /** Type 4 character identifier.  0 means the getter will set it dynamically. */
     DEVSMC4CHID         Type;
-    /** Getter method, see DEVSMCKEYPUTTER. */
-    DEVSMCKEYGETTER    *pfnGet;
-    /** Putter method, see DEVSMCKEYPUTTER. */
-    DEVSMCKEYPUTTER    *pfnPut;
+    /** Getter method, see FNDEVSMCKEYGETTER. */
+    FNDEVSMCKEYGETTER  *pfnGet;
+    /** Putter method, see FNDEVSMCKEYPUTTER. */
+    FNDEVSMCKEYPUTTER  *pfnPut;
     /** The keyvalue size.  If 0 the pfnGet/pfnPut will define/check the size. */
     uint8_t             cbValue;
     /** Attributes.  0 means the getter will set it dynamically. */
@@ -301,58 +304,55 @@ typedef DEVSMCKEYDESC const *PCDEVSMCKEYDESC;
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
 *********************************************************************************************************************************/
-#ifdef IN_RING3
-static DEVSMCKEYGETTER scmKeyGetOSKs;
-static DEVSMCKEYGETTER scmKeyGetKeyCount;
-static DEVSMCKEYGETTER scmKeyGetRevision;
-# ifdef VBOX_WITH_SMC_2_x
-static DEVSMCKEYGETTER scmKeyGetDollarAddress;
-static DEVSMCKEYGETTER scmKeyGetDollarNumber;
-static DEVSMCKEYPUTTER scmKeyPutDollarNumber;
-# endif
-static DEVSMCKEYGETTER scmKeyGetShutdownReason;
-static DEVSMCKEYPUTTER scmKeyPutShutdownReason;
-static DEVSMCKEYGETTER scmKeyGetNinjaTimerAction;
-static DEVSMCKEYPUTTER scmKeyPutNinjaTimerAction;
-static DEVSMCKEYGETTER scmKeyGetOne;
-static DEVSMCKEYGETTER scmKeyGetZero;
+static FNDEVSMCKEYGETTER scmKeyGetOSKs;
+static FNDEVSMCKEYGETTER scmKeyGetKeyCount;
+static FNDEVSMCKEYGETTER scmKeyGetRevision;
+#ifdef VBOX_WITH_SMC_2_x
+static FNDEVSMCKEYGETTER scmKeyGetDollarAddress;
+static FNDEVSMCKEYGETTER scmKeyGetDollarNumber;
+static FNDEVSMCKEYPUTTER scmKeyPutDollarNumber;
 #endif
+static FNDEVSMCKEYGETTER scmKeyGetShutdownReason;
+static FNDEVSMCKEYPUTTER scmKeyPutShutdownReason;
+static FNDEVSMCKEYGETTER scmKeyGetNinjaTimerAction;
+static FNDEVSMCKEYPUTTER scmKeyPutNinjaTimerAction;
+static FNDEVSMCKEYGETTER scmKeyGetOne;
+static FNDEVSMCKEYGETTER scmKeyGetZero;
 
 
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
-#ifdef IN_RING3
 /**
  * Apple SMC key descriptor table.
  */
 static const DEVSMCKEYDESC g_aSmcKeys[] =
 {
     /* Non-enum keys first. */
-    { SMC4CH("OSK0"), SMC4CH("ch8*"), scmKeyGetOSKs, NULL, 32, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_FUNCTION },
-    { SMC4CH("OSK1"), SMC4CH("ch8*"), scmKeyGetOSKs, NULL, 32, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_FUNCTION },
+    { SMC4CH('O','S','K','0'), SMC4CH('c','h','8','*'), scmKeyGetOSKs, NULL, 32, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_FUNCTION },
+    { SMC4CH('O','S','K','1'), SMC4CH('c','h','8','*'), scmKeyGetOSKs, NULL, 32, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_FUNCTION },
 
     /* The first enum key is the #KEY value. */
-    { SMC4CH("#KEY"), SMC4CH("ui32"), scmKeyGetKeyCount,            NULL,                       4, SMC_KEY_ATTR_READ },
+    { SMC4CH('#','K','E','Y'), SMC4CH('u','i','3','2'), scmKeyGetKeyCount,            NULL,                       4, SMC_KEY_ATTR_READ },
 # ifdef VBOX_WITH_SMC_2_x
-    { SMC4CH("$Adr"), SMC4CH("ui32"), scmKeyGetDollarAddress,       NULL,                       4, SMC_KEY_ATTR_READ },
-    { SMC4CH("$Num"), SMC4CH("ui8 "), scmKeyGetDollarNumber,        scmKeyPutDollarNumber,      1, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_WRITE | SMC_KEY_ATTR_PRIVATE },
-    { SMC4CH("BEMB"), SMC4CH("flag"), scmKeyGetOne,                 NULL,                       1, SMC_KEY_ATTR_READ },
+    { SMC4CH('$','A','d','r'), SMC4CH('u','i','3','2'), scmKeyGetDollarAddress,       NULL,                       4, SMC_KEY_ATTR_READ },
+    { SMC4CH('$','N','u','m'), SMC4CH('u','i','8',' '), scmKeyGetDollarNumber,        scmKeyPutDollarNumber,      1, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_WRITE | SMC_KEY_ATTR_PRIVATE },
+    { SMC4CH('B','E','M','B'), SMC4CH('f','l','a','g'), scmKeyGetOne,                 NULL,                       1, SMC_KEY_ATTR_READ },
 # else
-    { SMC4CH("LSOF"), SMC4CH("flag"), scmKeyGetZero,                NULL,                       1, SMC_KEY_ATTR_READ },
+    { SMC4CH('L','S','O','F'), SMC4CH('f','l','a','g'), scmKeyGetZero,                NULL,                       1, SMC_KEY_ATTR_READ },
 # endif
-    { SMC4CH("MSSD"), SMC4CH("si8 "), scmKeyGetShutdownReason,      scmKeyPutShutdownReason,    1, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_WRITE | SMC_KEY_ATTR_PRIVATE },
+    { SMC4CH('M','S','S','D'), SMC4CH('s','i','8',' '), scmKeyGetShutdownReason,      scmKeyPutShutdownReason,    1, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_WRITE | SMC_KEY_ATTR_PRIVATE },
     /* MSDS is not present on MacPro3,1 nor MacBookPro10,1, so returning not found is fine. */
 # ifdef VBOX_WITH_SMC_2_x
-    { SMC4CH("MSTf"), SMC4CH("ui8 "), scmKeyGetZero,                NULL,                       1, SMC_KEY_ATTR_READ },
+    { SMC4CH('M','S','T','f'), SMC4CH('u','i','8',' '), scmKeyGetZero,                NULL,                       1, SMC_KEY_ATTR_READ },
 # endif
-    { SMC4CH("NATJ"), SMC4CH("ui8 "), scmKeyGetNinjaTimerAction,    scmKeyPutNinjaTimerAction,  1, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_WRITE | SMC_KEY_ATTR_PRIVATE },
-    { SMC4CH("REV "), SMC4CH("{rev"), scmKeyGetRevision,            NULL,                       6, SMC_KEY_ATTR_READ },
+    { SMC4CH('N','A','T','J'), SMC4CH('u','i','8',' '), scmKeyGetNinjaTimerAction,    scmKeyPutNinjaTimerAction,  1, SMC_KEY_ATTR_READ | SMC_KEY_ATTR_WRITE | SMC_KEY_ATTR_PRIVATE },
+    { SMC4CH('R','E','V',' '), SMC4CH('{','r','e','v'), scmKeyGetRevision,            NULL,                       6, SMC_KEY_ATTR_READ },
 /** @todo MSSP, NTOK and more. */
 };
-#endif
 
-#ifdef IN_RING0
+#if defined(IN_RING0) && (defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86))
+
 /** Do once for the SMC ring-0 static data (g_abOsk0And1, g_fHaveOsk). */
 static RTONCE   g_SmcR0Once = RTONCE_INITIALIZER;
 /** Indicates whether we've successfully queried the OSK* keys. */
@@ -481,15 +481,15 @@ static DECLCALLBACK(int) devR0SmcInitOnce(void *pvUserIgnored)
 
 
 /**
- * @callback_method_impl{FNPDMDEVREQHANDLERR0}
+ * @interface_method_impl{PDMDEVREGR0,pfnRequest}
  */
-PDMBOTHCBDECL(int) devR0SmcReqHandler(PPDMDEVINS pDevIns, uint32_t uOperation, uint64_t u64Arg)
+static DECLCALLBACK(int) devR0SmcReqHandler(PPDMDEVINS pDevIns, uint32_t uReq, uint64_t uArg)
 {
-    PDEVSMC pThis = PDMINS_2_DATA(pDevIns, PDEVSMC);
+    PDEVSMC pThis = PDMDEVINS_2_DATA(pDevIns, PDEVSMC);
     int     rc    = VERR_INVALID_FUNCTION;
-    RT_NOREF_PV(u64Arg);
+    RT_NOREF_PV(uArg);
 
-    if (uOperation == SMC_CALLR0_READ_OSK)
+    if (uReq == SMC_CALLR0_READ_OSK)
     {
         rc = RTOnce(&g_SmcR0Once, devR0SmcInitOnce, NULL);
         if (   RT_SUCCESS(rc)
@@ -503,7 +503,7 @@ PDMBOTHCBDECL(int) devR0SmcReqHandler(PPDMDEVINS pDevIns, uint32_t uOperation, u
     return rc;
 }
 
-#endif /* IN_RING0 */
+#endif /* IN_RING0 && (AMD64 || X86) */
 
 #if defined(IN_RING3) && defined(RT_OS_DARWIN)
 
@@ -576,10 +576,9 @@ static int getSmcKeyOs(char *pabKey, uint32_t cbKey)
 
 #endif /* IN_RING3 && RT_OS_DARWIN */
 
-#ifdef IN_RING3 /* For now. */
 
-/** @callback_method_impl{DEVSMCKEYGETTER, OSK0 and OSK1} */
-static uint8_t scmKeyGetOSKs(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, OSK0 and OSK1} */
+static DECLCALLBACK(uint8_t) scmKeyGetOSKs(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF1(bCmd);
     Assert(SMC4CH_EQ(&pKeyDesc->Key, "OSK0") || SMC4CH_EQ(&pKeyDesc->Key, "OSK1"));
@@ -591,8 +590,8 @@ static uint8_t scmKeyGetOSKs(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd,
 }
 
 
-/** @callback_method_impl{DEVSMCKEYGETTER, \#KEY} */
-static uint8_t scmKeyGetKeyCount(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, \#KEY} */
+static DECLCALLBACK(uint8_t) scmKeyGetKeyCount(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF3(pThis, bCmd, pKeyDesc);
     Assert(pKeyDesc == &g_aSmcKeys[SMC_KEYIDX_FIRST_ENUM]);
@@ -602,8 +601,8 @@ static uint8_t scmKeyGetKeyCount(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t b
 }
 
 
-/** @callback_method_impl{DEVSMCKEYGETTER, REV - Source revision.} */
-static uint8_t scmKeyGetRevision(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, REV - Source revision.} */
+static DECLCALLBACK(uint8_t) scmKeyGetRevision(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF3(pThis, bCmd, pKeyDesc);
 #ifdef VBOX_WITH_SMC_2_x
@@ -626,8 +625,8 @@ static uint8_t scmKeyGetRevision(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t b
 
 #ifdef VBOX_WITH_SMC_2_x
 
-/** @callback_method_impl{DEVSMCKEYGETTER, $Adr - SMC address.} */
-static uint8_t scmKeyGetDollarAddress(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, $Adr - SMC address.} */
+static DECLCALLBACK(uint8_t) scmKeyGetDollarAddress(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF3(pThis, bCmd, pKeyDesc);
     pCurKey->Value.u32 = RT_H2BE_U32(SMC_PORT_FIRST);
@@ -635,16 +634,16 @@ static uint8_t scmKeyGetDollarAddress(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint
 }
 
 
-/** @callback_method_impl{DEVSMCKEYGETTER, $Num - Some kind of number.} */
-static uint8_t scmKeyGetDollarNumber(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, $Num - Some kind of number.} */
+static DECLCALLBACK(uint8_t) scmKeyGetDollarNumber(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF2(bCmd, pKeyDesc);
     pCurKey->Value.ab[0] = pThis->bDollaryNumber;
     return VINF_SUCCESS;
 }
 
-/** @callback_method_impl{DEVSMCKEYPUTTER, $Num - Some kind of number.} */
-static uint8_t scmKeyPutDollarNumber(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYPUTTER, $Num - Some kind of number.} */
+static DECLCALLBACK(uint8_t) scmKeyPutDollarNumber(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF2(bCmd, pKeyDesc);
     Log(("scmKeyPutDollarNumber: %#x -> %#x\n", pThis->bDollaryNumber, pCurKey->Value.ab[0]));
@@ -654,8 +653,8 @@ static uint8_t scmKeyPutDollarNumber(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint
 
 #endif /* VBOX_WITH_SMC_2_x */
 
-/** @callback_method_impl{DEVSMCKEYGETTER, MSSD - Machine Shutdown reason.} */
-static uint8_t scmKeyGetShutdownReason(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, MSSD - Machine Shutdown reason.} */
+static DECLCALLBACK(uint8_t) scmKeyGetShutdownReason(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF2(bCmd, pKeyDesc);
     pCurKey->Value.ab[0] = pThis->bShutdownReason;
@@ -663,8 +662,8 @@ static uint8_t scmKeyGetShutdownReason(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uin
 }
 
 
-/** @callback_method_impl{DEVSMCKEYPUTTER, MSSD - Machine Shutdown reason.} */
-static uint8_t scmKeyPutShutdownReason(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYPUTTER, MSSD - Machine Shutdown reason.} */
+static DECLCALLBACK(uint8_t) scmKeyPutShutdownReason(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF2(bCmd, pKeyDesc);
     Log(("scmKeyPutShutdownReason: %#x -> %#x\n", pThis->bShutdownReason, pCurKey->Value.ab[0]));
@@ -673,8 +672,9 @@ static uint8_t scmKeyPutShutdownReason(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, ui
 }
 
 
-/** @callback_method_impl{DEVSMCKEYGETTER, MSSD - Ninja timer action job.} */
-static uint8_t scmKeyGetNinjaTimerAction(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, MSSD - Ninja timer action job.} */
+static DECLCALLBACK(uint8_t)
+scmKeyGetNinjaTimerAction(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF2(bCmd, pKeyDesc);
     pCurKey->Value.ab[0] = pThis->bNinjaActionTimerJob;
@@ -682,8 +682,9 @@ static uint8_t scmKeyGetNinjaTimerAction(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, u
 }
 
 
-/** @callback_method_impl{DEVSMCKEYPUTTER, NATJ - Ninja timer action job.} */
-static uint8_t scmKeyPutNinjaTimerAction(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYPUTTER, NATJ - Ninja timer action job.} */
+static DECLCALLBACK(uint8_t)
+scmKeyPutNinjaTimerAction(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF2(bCmd, pKeyDesc);
     Log(("scmKeyPutNinjaTimerAction: %#x -> %#x\n", pThis->bNinjaActionTimerJob, pCurKey->Value.ab[0]));
@@ -693,8 +694,8 @@ static uint8_t scmKeyPutNinjaTimerAction(PDEVSMC pThis, PCDEVSMCCURKEY pCurKey, 
 
 #ifdef VBOX_WITH_SMC_2_x
 
-/** @callback_method_impl{DEVSMCKEYGETTER, Generic one getter.} */
-static uint8_t scmKeyGetOne(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, Generic one getter.} */
+static DECLCALLBACK(uint8_t) scmKeyGetOne(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF2(pThis, bCmd);
     memset(&pCurKey->Value.ab[0], 0, pKeyDesc->cbValue);
@@ -704,8 +705,8 @@ static uint8_t scmKeyGetOne(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, 
 
 #endif /* VBOX_WITH_SMC_2_x */
 
-/** @callback_method_impl{DEVSMCKEYGETTER, Generic zero getter.} */
-static uint8_t scmKeyGetZero(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
+/** @callback_method_impl{FNDEVSMCKEYGETTER, Generic zero getter.} */
+static DECLCALLBACK(uint8_t) scmKeyGetZero(PDEVSMC pThis, PDEVSMCCURKEY pCurKey, uint8_t bCmd, PCDEVSMCKEYDESC pKeyDesc)
 {
     RT_NOREF2(pThis, bCmd);
     memset(&pCurKey->Value.ab[0], 0, pKeyDesc->cbValue);
@@ -879,7 +880,7 @@ static uint8_t smcKeyPutValue(PDEVSMC pThis)
  * @param   uReg    The register number.
  * @param   pbValue Where to return the value.
  */
-static int smcRegData_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
+static VBOXSTRICTRC smcRegData_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
 {
     RT_NOREF1(uReg);
     switch (pThis->bCmd)
@@ -969,7 +970,7 @@ static int smcRegData_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
  * @param   uReg    The register number.
  * @param   bValue  The value being written.
  */
-static int smcRegData_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
+static VBOXSTRICTRC smcRegData_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
 {
     RT_NOREF1(uReg);
     switch (pThis->bCmd)
@@ -1084,7 +1085,7 @@ static int smcRegData_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
  * @param   uReg    The register number.
  * @param   bValue  The value being written.
  */
-static int smcRegCmd_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
+static VBOXSTRICTRC smcRegCmd_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
 {
     LogFlow(("smcRegCmd_w: New command: %#x (old=%#x)\n", bValue, pThis->bCmd)); NOREF(uReg);
 
@@ -1125,7 +1126,7 @@ static int smcRegCmd_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
  * @param   uReg    The register number.
  * @param   bValue  The value being written.
  */
-static int smcRegGen_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
+static VBOXSTRICTRC smcRegGen_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
 {
     Log(("smcRegGen_w: %#04x: %#x -> %#x (write)\n", uReg, pThis->u.abRegsRW[uReg], bValue));
     pThis->u.abRegsRW[uReg] = bValue;
@@ -1140,7 +1141,7 @@ static int smcRegGen_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
  * @param   uReg    The register number.
  * @param   pbValue Where to return the value.
  */
-static int smcRegGen_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
+static VBOXSTRICTRC smcRegGen_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
 {
     Log(("smcRegGen_r: %#04x: %#x (read)\n", uReg, pThis->u.abRegsRW[uReg]));
     *pbValue = pThis->u.abRegsRW[uReg];
@@ -1155,7 +1156,7 @@ static int smcRegGen_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
  * @param   uReg    The register number.
  * @param   bValue  The value being written.
  */
-static int smcRegFF_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
+static VBOXSTRICTRC smcRegFF_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
 {
     RT_NOREF3(pThis, uReg, bValue);
     Log(("SMC: %#04x: Writing %#x to unknown register!\n", uReg, bValue));
@@ -1170,7 +1171,7 @@ static int smcRegFF_w(PDEVSMC pThis, uint8_t uReg, uint8_t bValue)
  * @param   uReg    The register number.
  * @param   pbValue Where to return the value.
  */
-static int smcRegFF_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
+static VBOXSTRICTRC smcRegFF_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
 {
     RT_NOREF2(pThis, uReg);
     Log(("SMC: %#04x: Reading from unknown register!\n", uReg));
@@ -1234,8 +1235,8 @@ static int smcRegFF_r(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue)
  */
 static const struct
 {
-    int (*pfnWrite)(PDEVSMC pThis, uint8_t uReg, uint8_t bValue);
-    int (*pfnRead)(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue);
+    VBOXSTRICTRC (*pfnWrite)(PDEVSMC pThis, uint8_t uReg, uint8_t bValue);
+    VBOXSTRICTRC (*pfnRead)(PDEVSMC pThis, uint8_t uReg, uint8_t *pbValue);
 } g_aSmcRegs[SMC_REG_COUNT] =
 {
     /* [0x00] = */ { smcRegData_w,     smcRegData_r },
@@ -1273,33 +1274,42 @@ static const struct
 };
 
 
-/** @callback_method_impl{FNIOMIOPORTOUT} */
-PDMBOTHCBDECL(int) smcIoPortWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb)
+/**
+ * @callback_method_impl{FNIOMIOPORTNEWOUT}
+ */
+static DECLCALLBACK(VBOXSTRICTRC) smcIoPortWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint32_t u32, unsigned cb)
 {
     RT_NOREF1(pvUser);
 #ifndef IN_RING3
     if (cb > 1)
+    {
+        Log3(("smcIoPortWrite: %#04x write access: %#x (LB %u) -> ring-3\n", offPort, u32, cb));
         return VINF_IOM_R3_IOPORT_WRITE;
+    }
+#endif
+#ifdef LOG_ENABLED
+    RTIOPORT const offPortLog = offPort;
+    unsigned const cbLog      = cb;
 #endif
 
     /*
      * The first register, usually only one is accessed.
      */
-    PDEVSMC pThis = PDMINS_2_DATA(pDevIns, PDEVSMC);
-    uint32_t uReg = Port - SMC_PORT_FIRST;
-    int rc = g_aSmcRegs[uReg].pfnWrite(pThis, uReg, u32);
+    PDEVSMC pThis = PDMDEVINS_2_DATA(pDevIns, PDEVSMC);
+    AssertReturn(offPort < RT_ELEMENTS(g_aSmcRegs), VERR_INTERNAL_ERROR_3); /* impossible*/
+    VBOXSTRICTRC rc = g_aSmcRegs[offPort].pfnWrite(pThis, offPort, u32);
 
     /*
      * On the off chance that multiple registers are being read.
      */
     if (cb > 1)
     {
-        while (cb > 1 && uReg < SMC_REG_COUNT - 1)
+        while (cb > 1 && offPort < SMC_REG_COUNT - 1)
         {
             cb--;
-            uReg++;
+            offPort++;
             u32 >>= 8;
-            int rc2 = g_aSmcRegs[uReg].pfnWrite(pThis, uReg, u32);
+            VBOXSTRICTRC rc2 = g_aSmcRegs[offPort].pfnWrite(pThis, offPort, u32);
             if (rc2 != VINF_SUCCESS)
             {
                 if (   rc == VINF_SUCCESS
@@ -1310,13 +1320,15 @@ PDMBOTHCBDECL(int) smcIoPortWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Por
         }
     }
 
-    LogFlow(("smcIoPortWrite: %#04x write access: %#x (LB %u) rc=%Rrc\n", uReg, u32, cb, rc));
+    LogFlow(("smcIoPortWrite: %#04x write access: %#x (LB %u) rc=%Rrc\n", offPortLog, u32, cbLog, VBOXSTRICTRC_VAL(rc) ));
     return rc;
 }
 
 
-/** @callback_method_impl{FNIOMIOPORTIN} */
-PDMBOTHCBDECL(int) smcIoPortRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t *pu32, unsigned cb)
+/**
+ * @callback_method_impl{FNIOMIOPORTNEWIN}
+ */
+static DECLCALLBACK(VBOXSTRICTRC) smcIoPortRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint32_t *pu32, unsigned cb)
 {
     RT_NOREF1(pvUser);
 #ifndef IN_RING3
@@ -1324,15 +1336,19 @@ PDMBOTHCBDECL(int) smcIoPortRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port
         return VINF_IOM_R3_IOPORT_READ;
 #endif
 
-    PDEVSMC pThis = PDMINS_2_DATA(pDevIns, PDEVSMC);
+    PDEVSMC        pThis = PDMDEVINS_2_DATA(pDevIns, PDEVSMC);
+#ifdef LOG_ENABLED
+    RTIOPORT const offPortLog = offPort;
+    unsigned const cbLog      = cb;
+#endif
 
     /*
      * The first register, usually only one is accessed.
      */
-    uint32_t uReg = Port - SMC_PORT_FIRST;
-    Log2(("smcIoPortRead: %#04x read access: LB %u\n", uReg, cb));
+    AssertReturn(offPort < RT_ELEMENTS(g_aSmcRegs), VERR_INTERNAL_ERROR_3); /* impossible*/
+    Log2(("smcIoPortRead: %#04x read access: LB %u\n", offPort, cb));
     uint8_t bValue = 0xff;
-    int rc = g_aSmcRegs[uReg].pfnRead(pThis, uReg, &bValue);
+    VBOXSTRICTRC rc = g_aSmcRegs[offPort].pfnRead(pThis, offPort, &bValue);
     *pu32 = bValue;
 
     /*
@@ -1343,11 +1359,11 @@ PDMBOTHCBDECL(int) smcIoPortRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port
         do
         {
             cb--;
-            uReg++;
+            offPort++;
             bValue = 0xff;
-            if (uReg < SMC_REG_COUNT)
+            if (offPort < SMC_REG_COUNT)
             {
-                int rc2 = g_aSmcRegs[uReg].pfnRead(pThis, uReg, &bValue);
+                VBOXSTRICTRC rc2 = g_aSmcRegs[offPort].pfnRead(pThis, offPort, &bValue);
                 if (rc2 != VINF_SUCCESS)
                 {
                     if (   rc == VINF_SUCCESS
@@ -1359,17 +1375,16 @@ PDMBOTHCBDECL(int) smcIoPortRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port
             *pu32 |= (uint32_t)bValue << ((4 - cb) * 8);
         } while (cb > 1);
     }
-    LogFlow(("smcIoPortRead: %#04x read access: %#x (LB %u) rc=%Rrc\n", uReg, *pu32, cb, rc));
+    LogFlow(("smcIoPortRead: %#04x read access: %#x (LB %u) rc=%Rrc\n", offPortLog, *pu32, cbLog, VBOXSTRICTRC_VAL(rc)));
     return rc;
 }
 
-#endif /* IN_RING3 for now */
 #ifdef IN_RING3
 
 /** @callback_method_impl{FNSSMDEVSAVEEXEC} */
-static DECLCALLBACK(int) smcSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM)
+static DECLCALLBACK(int) smcR3SaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM)
 {
-    PDEVSMC pThis = PDMINS_2_DATA(pDevIns, PDEVSMC);
+    PDEVSMC pThis = PDMDEVINS_2_DATA(pDevIns, PDEVSMC);
     RT_NOREF2(pSSM, pThis);
 
     /** @todo */
@@ -1379,9 +1394,9 @@ static DECLCALLBACK(int) smcSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM)
 
 
 /** @callback_method_impl{FNSSMDEVLOADEXEC} */
-static DECLCALLBACK(int) smcLoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t uPass)
+static DECLCALLBACK(int) smcR3LoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t uPass)
 {
-    PDEVSMC pThis = PDMINS_2_DATA(pDevIns, PDEVSMC);
+    PDEVSMC pThis = PDMDEVINS_2_DATA(pDevIns, PDEVSMC);
     Assert(uPass == SSM_PASS_FINAL); NOREF(uPass);
     RT_NOREF2(pSSM, pThis);
 
@@ -1408,12 +1423,13 @@ static DECLCALLBACK(int) smcLoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM, uint32
 /**
  * @interface_method_impl{PDMDEVREG,pfnConstruct}
  */
-static DECLCALLBACK(int)  smcConstruct(PPDMDEVINS pDevIns, int iInstance, PCFGMNODE pCfg)
+static DECLCALLBACK(int) smcR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFGMNODE pCfg)
 {
-    RT_NOREF1(iInstance);
     PDMDEV_CHECK_VERSIONS_RETURN(pDevIns);
-    PDEVSMC pThis = PDMINS_2_DATA(pDevIns, PDEVSMC);
-    Assert(iInstance == 0);
+    PDEVSMC         pThis = PDMDEVINS_2_DATA(pDevIns, PDEVSMC);
+    PCPDMDEVHLPR3   pHlp = pDevIns->pHlpR3;
+
+    Assert(iInstance == 0); RT_NOREF1(iInstance);
 
     /*
      * Init the data.
@@ -1431,35 +1447,35 @@ static DECLCALLBACK(int)  smcConstruct(PPDMDEVINS pDevIns, int iInstance, PCFGMN
      */
 
     /* The DeviceKey sets OSK0 and OSK1. */
-    int rc = CFGMR3QueryStringDef(pCfg, "DeviceKey", pThis->szOsk0And1, sizeof(pThis->szOsk0And1), "");
+    int rc = pHlp->pfnCFGMQueryStringDef(pCfg, "DeviceKey", pThis->szOsk0And1, sizeof(pThis->szOsk0And1), "");
     if (RT_FAILURE(rc))
         return PDMDevHlpVMSetError(pDevIns, rc, RT_SRC_POS,
                                    N_("Configuration error: Querying \"DeviceKey\" as a string failed"));
 
     /* Query the key from the OS / real hardware if asked to do so. */
     bool fGetKeyFromRealSMC;
-    rc = CFGMR3QueryBoolDef(pCfg, "GetKeyFromRealSMC", &fGetKeyFromRealSMC, false);
+    rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "GetKeyFromRealSMC", &fGetKeyFromRealSMC, false);
     if (RT_FAILURE(rc))
         return PDMDevHlpVMSetError(pDevIns, rc, RT_SRC_POS,
                                    N_("Configuration error: Querying \"GetKeyFromRealSMC\" as a boolean failed"));
     if (fGetKeyFromRealSMC)
     {
-#ifdef RT_OS_DARWIN
+# ifdef RT_OS_DARWIN
         rc = getSmcKeyOs(pThis->szOsk0And1, sizeof(pThis->szOsk0And1));
         if (RT_FAILURE(rc))
         {
             LogRel(("SMC: Retrieving the SMC key from the OS failed (%Rrc), trying to read it from hardware\n", rc));
-#endif
-            rc = PDMDevHlpCallR0(pDevIns, SMC_CALLR0_READ_OSK, 0 /*u64Arg*/);
+# endif
+            rc = PDMDevHlpCallR0(pDevIns, SMC_CALLR0_READ_OSK, 0 /*uArg*/);
             if (RT_SUCCESS(rc))
                 LogRel(("SMC: Successfully retrieved the SMC key from hardware\n"));
             else
                 LogRel(("SMC: Retrieving the SMC key from hardware failed(%Rrc)\n", rc));
-#ifdef RT_OS_DARWIN
+# ifdef RT_OS_DARWIN
         }
         else
             LogRel(("SMC: Successfully retrieved the SMC key from the OS\n"));
-#endif
+# endif
         if (RT_FAILURE(rc))
             return PDMDevHlpVMSetError(pDevIns, rc, RT_SRC_POS,
                                        N_("Failed to query SMC value from the host"));
@@ -1468,9 +1484,8 @@ static DECLCALLBACK(int)  smcConstruct(PPDMDEVINS pDevIns, int iInstance, PCFGMN
     /*
      * Register I/O Ports
      */
-    rc = PDMDevHlpIOPortRegister(pDevIns, SMC_PORT_FIRST, SMC_REG_COUNT, NULL,
-                                 smcIoPortWrite, smcIoPortRead,
-                                 NULL, NULL, "SMC data port");
+    rc = PDMDevHlpIoPortCreateAndMap(pDevIns, SMC_PORT_FIRST, SMC_REG_COUNT, smcIoPortWrite, smcIoPortRead,
+                                     "SMC data port", NULL, &pThis->hIoPorts);
     AssertRCReturn(rc, rc);
 
     /** @todo Newer versions (2.03) have an MMIO mapping as well (ACPI). */
@@ -1479,12 +1494,31 @@ static DECLCALLBACK(int)  smcConstruct(PPDMDEVINS pDevIns, int iInstance, PCFGMN
     /*
      * Saved state.
      */
-    rc = PDMDevHlpSSMRegister(pDevIns, SMC_SAVED_STATE_VERSION, sizeof(*pThis), smcSaveExec, smcLoadExec);
+    rc = PDMDevHlpSSMRegister(pDevIns, SMC_SAVED_STATE_VERSION, sizeof(*pThis), smcR3SaveExec, smcR3LoadExec);
     if (RT_FAILURE(rc))
         return rc;
 
     return VINF_SUCCESS;
 }
+
+#else  /* !IN_RING3 */
+
+/**
+ * @callback_method_impl{PDMDEVREGR0,pfnConstruct}
+ */
+static DECLCALLBACK(int) smcRZConstruct(PPDMDEVINS pDevIns)
+{
+    PDMDEV_CHECK_VERSIONS_RETURN(pDevIns);
+    PDEVSMC pThis = PDMDEVINS_2_DATA(pDevIns, PDEVSMC);
+
+    int rc = PDMDevHlpIoPortSetUpContext(pDevIns, pThis->hIoPorts, smcIoPortWrite, smcIoPortRead, NULL /*pvUser*/);
+    AssertRCReturn(rc, rc);
+    RT_NOREF(pThis);
+
+    return VINF_SUCCESS;
+}
+
+#endif /* !IN_RING3 */
 
 
 /**
@@ -1492,55 +1526,76 @@ static DECLCALLBACK(int)  smcConstruct(PPDMDEVINS pDevIns, int iInstance, PCFGMN
  */
 const PDMDEVREG g_DeviceSmc =
 {
-    /* u32Version */
-    PDM_DEVREG_VERSION,
-    /* szName */
-    "smc",
-    /* szRCMod */
-    "VBoxDDRC.rc",
-    /* szR0Mod */
-    "VBoxDDR0.r0",
-    /* pszDescription */
-    "Apple System Management Controller",
-    /* fFlags */
-    PDM_DEVREG_FLAGS_HOST_BITS_DEFAULT | PDM_DEVREG_FLAGS_GUEST_BITS_DEFAULT | PDM_DEVREG_FLAGS_R0 | PDM_DEVREG_FLAGS_RC,
-    /* fClass */
-    PDM_DEVREG_CLASS_ARCH,
-    /* cMaxInstances */
-    1,
-    /* cbInstance */
-    sizeof(DEVSMC),
-    /* pfnConstruct */
-    smcConstruct,
-    /* pfnDestruct */
-    NULL,
-    /* pfnRelocate */
-    NULL,
-    /* pfnMemSetup */
-    NULL,
-    /* pfnPowerOn */
-    NULL,
-    /* pfnReset */
-    NULL,
-    /* pfnSuspend */
-    NULL,
-    /* pfnResume */
-    NULL,
-    /* pfnAttach */
-    NULL,
-    /* pfnDetach */
-    NULL,
-    /* pfnQueryInterface. */
-    NULL,
-    /* pfnInitComplete. */
-    NULL,
-    /* pfnPowerOff */
-    NULL,
-    /* pfnSoftReset */
-    NULL,
-    /* u32VersionEnd */
-    PDM_DEVREG_VERSION
+    /* .u32Version = */             PDM_DEVREG_VERSION,
+    /* .uReserved0 = */             0,
+    /* .szName = */                 "smc",
+    /* .fFlags = */                 PDM_DEVREG_FLAGS_DEFAULT_BITS | PDM_DEVREG_FLAGS_RZ | PDM_DEVREG_FLAGS_NEW_STYLE,
+    /* .fClass = */                 PDM_DEVREG_CLASS_ARCH,
+    /* .cMaxInstances = */          1,
+    /* .uSharedVersion = */         42,
+    /* .cbInstanceShared = */       sizeof(DEVSMC),
+    /* .cbInstanceCC = */           0,
+    /* .cbInstanceRC = */           0,
+    /* .cMaxPciDevices = */         0,
+    /* .cMaxMsixVectors = */        0,
+    /* .pszDescription = */         "Apple System Management Controller",
+#if defined(IN_RING3)
+    /* .pszRCMod = */               "VBoxDDRC.rc",
+    /* .pszR0Mod = */               "VBoxDDR0.r0",
+    /* .pfnConstruct = */           smcR3Construct,
+    /* .pfnDestruct = */            NULL,
+    /* .pfnRelocate = */            NULL,
+    /* .pfnMemSetup = */            NULL,
+    /* .pfnPowerOn = */             NULL,
+    /* .pfnReset = */               NULL,
+    /* .pfnSuspend = */             NULL,
+    /* .pfnResume = */              NULL,
+    /* .pfnAttach = */              NULL,
+    /* .pfnDetach = */              NULL,
+    /* .pfnQueryInterface = */      NULL,
+    /* .pfnInitComplete = */        NULL,
+    /* .pfnPowerOff = */            NULL,
+    /* .pfnSoftReset = */           NULL,
+    /* .pfnReserved0 = */           NULL,
+    /* .pfnReserved1 = */           NULL,
+    /* .pfnReserved2 = */           NULL,
+    /* .pfnReserved3 = */           NULL,
+    /* .pfnReserved4 = */           NULL,
+    /* .pfnReserved5 = */           NULL,
+    /* .pfnReserved6 = */           NULL,
+    /* .pfnReserved7 = */           NULL,
+#elif defined(IN_RING0)
+    /* .pfnEarlyConstruct = */      NULL,
+    /* .pfnConstruct = */           smcRZConstruct,
+    /* .pfnDestruct = */            NULL,
+    /* .pfnFinalDestruct = */       NULL,
+# if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
+    /* .pfnRequest = */             devR0SmcReqHandler,
+# else
+    /* .pfnRequest = */             NULL,
+# endif
+    /* .pfnReserved0 = */           NULL,
+    /* .pfnReserved1 = */           NULL,
+    /* .pfnReserved2 = */           NULL,
+    /* .pfnReserved3 = */           NULL,
+    /* .pfnReserved4 = */           NULL,
+    /* .pfnReserved5 = */           NULL,
+    /* .pfnReserved6 = */           NULL,
+    /* .pfnReserved7 = */           NULL,
+#elif defined(IN_RC)
+    /* .pfnConstruct = */           smcRZConstruct,
+    /* .pfnReserved0 = */           NULL,
+    /* .pfnReserved1 = */           NULL,
+    /* .pfnReserved2 = */           NULL,
+    /* .pfnReserved3 = */           NULL,
+    /* .pfnReserved4 = */           NULL,
+    /* .pfnReserved5 = */           NULL,
+    /* .pfnReserved6 = */           NULL,
+    /* .pfnReserved7 = */           NULL,
+#else
+# error "Not in IN_RING3, IN_RING0 or IN_RC!"
+#endif
+    /* .u32VersionEnd = */          PDM_DEVREG_VERSION
 };
 
-#endif /* IN_RING3 */
 #endif /* VBOX_DEVICE_STRUCT_TESTCASE */

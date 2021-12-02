@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GIMR0.cpp 86121 2020-09-14 16:56:09Z vboxsync $ */
 /** @file
  * Guest Interface Manager (GIM) - Host Context Ring-0.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,7 +23,7 @@
 #include <VBox/vmm/gim.h>
 #include "GIMInternal.h"
 #include "GIMHvInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 
 #include <VBox/err.h>
 
@@ -34,7 +34,7 @@
  * @returns VBox status code.
  * @param   pVM     The cross context VM structure.
  */
-VMMR0_INT_DECL(int) GIMR0InitVM(PVM pVM)
+VMMR0_INT_DECL(int) GIMR0InitVM(PVMCC pVM)
 {
     if (!GIMIsEnabled(pVM))
         return VINF_SUCCESS;
@@ -43,9 +43,6 @@ VMMR0_INT_DECL(int) GIMR0InitVM(PVM pVM)
     {
         case GIMPROVIDERID_HYPERV:
             return gimR0HvInitVM(pVM);
-
-        case GIMPROVIDERID_KVM:
-            return gimR0KvmInitVM(pVM);
 
         default:
             break;
@@ -60,7 +57,7 @@ VMMR0_INT_DECL(int) GIMR0InitVM(PVM pVM)
  * @returns VBox status code.
  * @param   pVM     The cross context VM structure.
  */
-VMMR0_INT_DECL(int) GIMR0TermVM(PVM pVM)
+VMMR0_INT_DECL(int) GIMR0TermVM(PVMCC pVM)
 {
     if (!GIMIsEnabled(pVM))
         return VINF_SUCCESS;
@@ -69,9 +66,6 @@ VMMR0_INT_DECL(int) GIMR0TermVM(PVM pVM)
     {
         case GIMPROVIDERID_HYPERV:
             return gimR0HvTermVM(pVM);
-
-        case GIMPROVIDERID_KVM:
-            return gimR0KvmTermVM(pVM);
 
         default:
             break;
@@ -96,7 +90,7 @@ VMMR0_INT_DECL(int) GIMR0TermVM(PVM pVM)
  *
  * @thread EMT(pVCpu)
  */
-VMMR0_INT_DECL(int) GIMR0UpdateParavirtTsc(PVM pVM, uint64_t u64Offset)
+VMMR0_INT_DECL(int) GIMR0UpdateParavirtTsc(PVMCC pVM, uint64_t u64Offset)
 {
     switch (pVM->gim.s.enmProviderId)
     {

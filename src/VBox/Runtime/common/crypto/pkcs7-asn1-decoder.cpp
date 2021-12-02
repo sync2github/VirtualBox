@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pkcs7-asn1-decoder.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Crypto - PKCS \#7, Decoder for ASN.1.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -89,9 +89,10 @@ static int rtCrPkcs7ContentInfo_DecodeExtra(PRTASN1CURSOR pCursor, uint32_t fFla
     if (enmChoice != RTCRPKCS7CONTENTINFOCHOICE_UNKNOWN)
     {
         /*
-         * Detect CMS octet string and open the content cursor.
-         * Current we don't have work with any contet which is octet string,
-         * they're all sequences, which make detection so much simpler.
+         * Detect CMS octet string format and open the content cursor.
+         *
+         * Current we don't have any octent string content which, they're all
+         * sequences, which make detection so much simpler.
          */
         PRTASN1OCTETSTRING  pOctetString = &pThis->Content;
         RTASN1CURSOR        ContentCursor;
@@ -142,7 +143,7 @@ static int rtCrPkcs7ContentInfo_DecodeExtra(PRTASN1CURSOR pCursor, uint32_t fFla
                         break;
                 }
                 if (RT_SUCCESS(rc))
-                    rc = RTAsn1CursorCheckEnd(&ContentCursor);
+                    rc = RTAsn1CursorCheckOctStrEnd(&ContentCursor, &pThis->Content);
                 if (RT_SUCCESS(rc))
                     return VINF_SUCCESS;
 

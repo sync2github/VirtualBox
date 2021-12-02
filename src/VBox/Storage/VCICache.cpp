@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VCICache.cpp 90802 2021-08-23 19:08:27Z vboxsync $ */
 /** @file
  * VCICacheCore - VirtualBox Cache Image, Core Code.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -1425,7 +1425,7 @@ static int vciCreateImage(PVCICACHE pCache, uint64_t cbSize,
 
         /* Setup the root tree. */
         memset(&NodeRoot, 0, sizeof(VciTreeNode));
-        NodeRoot.u8Type = RT_H2LE_U32(VCI_TREE_NODE_TYPE_LEAF);
+        NodeRoot.u8Type = VCI_TREE_NODE_TYPE_LEAF;
 
         rc = vdIfIoIntFileWriteSync(pCache->pIfIo, pCache->pStorage, offTreeRoot,
                                     &NodeRoot, VCI_BYTE2BLOCK(sizeof(VciTreeNode)));
@@ -1529,7 +1529,7 @@ static DECLCALLBACK(int) vciOpen(const char *pszFilename, unsigned uOpenFlags,
     }
 
     /* Check remaining arguments. */
-    if (   !VALID_PTR(pszFilename)
+    if (   !RT_VALID_PTR(pszFilename)
         || !*pszFilename)
     {
         rc = VERR_INVALID_PARAMETER;
@@ -1590,7 +1590,7 @@ static DECLCALLBACK(int) vciCreate(const char *pszFilename, uint64_t cbSize,
     }
 
     /* Check remaining arguments. */
-    if (   !VALID_PTR(pszFilename)
+    if (   !RT_VALID_PTR(pszFilename)
         || !*pszFilename)
     {
         rc = VERR_INVALID_PARAMETER;

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: schedulerbeci.py 83341 2020-03-19 20:40:17Z vboxsync $
 
 """
 Test Manager - Best-Effort-Continuous-Integration (BECI) scheduler.
@@ -7,7 +7,7 @@ Test Manager - Best-Effort-Continuous-Integration (BECI) scheduler.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,14 +26,14 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 83341 $"
 
 
 # Validation Kit imports.
 from testmanager.core.schedulerbase  import SchedulerBase, SchedQueueData;
 
 
-class SchdulerBeci(SchedulerBase): # pylint: disable=R0903
+class SchdulerBeci(SchedulerBase): # pylint: disable=too-few-public-methods
     """
     The best-effort-continuous-integration scheduler, BECI for short.
     """
@@ -56,7 +56,7 @@ class SchdulerBeci(SchedulerBase): # pylint: disable=R0903
             for oTestCase in oTestGroup.aoTestCases:
                 iPrio = oTestCase.iSchedPriority;
                 assert iPrio in range(32);
-                iPrio = iPrio / 4;
+                iPrio = iPrio // 4;
                 assert iPrio in range(8);
                 if iPrio > iMaxPriority:
                     iMaxPriority = iPrio;
@@ -87,7 +87,7 @@ class SchdulerBeci(SchedulerBase): # pylint: disable=R0903
                     #self.msgDebug('testgroup loop: %s' % (oTestGroup,));
                     for oTestCase in oTestGroup.aoTestCases:
                         #self.msgDebug('testcase loop: idTestCase=%s' % (oTestCase.idTestCase,));
-                        if iPrio <= oTestCase.iBeciPrio  and  len(oTestCase.aoArgsVariations) > 0:
+                        if iPrio <= oTestCase.iBeciPrio  and  oTestCase.aoArgsVariations:
                             # Get variation.
                             iNext = oTestCase.iNextVariation;
                             if iNext != 0:

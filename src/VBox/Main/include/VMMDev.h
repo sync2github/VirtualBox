@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VMMDev.h 89952 2021-06-29 13:36:53Z vboxsync $ */
 /** @file
  * VirtualBox Driver interface to VMM device
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,11 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_VMMDEV
-#define ____H_VMMDEV
+#ifndef MAIN_INCLUDED_VMMDev_h
+#define MAIN_INCLUDED_VMMDev_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VirtualBoxBase.h"
 #include <VBox/vmm/pdmdrv.h>
+#include <VBox/hgcmsvc.h>
 #include <iprt/asm.h>
 
 class Console;
@@ -27,6 +31,7 @@ class Console;
 class VMMDevMouseInterface
 {
 public:
+    virtual ~VMMDevMouseInterface() { /* Make VC++ 19.2 happy. */ }
     virtual PPDMIVMMDEVPORT getVMMDevPort() = 0;
 };
 
@@ -58,21 +63,28 @@ public:
 #ifdef VBOX_WITH_HGCM
     int hgcmLoadService (const char *pszServiceLibrary, const char *pszServiceName);
     int hgcmHostCall (const char *pszServiceName, uint32_t u32Function, uint32_t cParms, PVBOXHGCMSVCPARM paParms);
-#ifdef VBOX_WITH_CRHGSMI
-    int hgcmHostSvcHandleCreate (const char *pszServiceName, HGCMCVSHANDLE * phSvc);
-    int hgcmHostSvcHandleDestroy (HGCMCVSHANDLE hSvc);
-    int hgcmHostFastCallAsync (HGCMCVSHANDLE hSvc, uint32_t function, PVBOXHGCMSVCPARM pParm, PHGCMHOSTFASTCALLCB pfnCompletion, void *pvCompletion);
-#endif
-    void hgcmShutdown (void);
+    void hgcmShutdown(bool fUvmIsInvalid = false);
 
     bool hgcmIsActive (void) { return ASMAtomicReadBool(&m_fHGCMActive); }
 #endif /* VBOX_WITH_HGCM */
 
 private:
+#ifdef VBOX_WITH_HGCM
+# ifdef VBOX_WITH_GUEST_PROPS
+    void i_guestPropSetMultiple(void *names, void *values, void *timestamps, void *flags);
+    void i_guestPropSet(const char *pszName, const char *pszValue, const char *pszFlags);
+    int  i_guestPropSetGlobalPropertyFlags(uint32_t fFlags);
+    int  i_guestPropLoadAndConfigure();
+# endif
+#endif
     static DECLCALLBACK(void *) drvQueryInterface(PPDMIBASE pInterface, const char *pszIID);
     static DECLCALLBACK(int)    drvConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint32_t fFlags);
     static DECLCALLBACK(void)   drvDestruct(PPDMDRVINS pDrvIns);
     static DECLCALLBACK(void)   drvReset(PPDMDRVINS pDrvIns);
+    static DECLCALLBACK(void)   drvPowerOn(PPDMDRVINS pDrvIns);
+    static DECLCALLBACK(void)   drvPowerOff(PPDMDRVINS pDrvIns);
+    static DECLCALLBACK(void)   drvSuspend(PPDMDRVINS pDrvIns);
+    static DECLCALLBACK(void)   drvResume(PPDMDRVINS pDrvIns);
 
     Console * const         mParent;
 
@@ -84,5 +96,8 @@ private:
 #endif /* VBOX_WITH_HGCM */
 };
 
-#endif // !____H_VMMDEV
+/** VMMDev object ID used by Console::i_vmm2User_QueryGenericObject and VMMDev::drvConstruct. */
+#define VMMDEV_OID                          "e2ff0c7b-c02b-46d0-aa90-b9caf0f60561"
+
+#endif /* !MAIN_INCLUDED_VMMDev_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DevPcArch.cpp 92193 2021-11-03 14:46:30Z vboxsync $ */
 /** @file
  * DevPcArch - PC Architecture Device.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,6 +22,7 @@
 #define LOG_GROUP LOG_GROUP_DEV_PC_ARCH
 #include <VBox/vmm/pdmdev.h>
 #include <VBox/vmm/mm.h>
+#include <VBox/vmm/pgm.h>
 #include <VBox/log.h>
 #include <VBox/err.h>
 #include <iprt/assert.h>
@@ -46,29 +47,33 @@ typedef struct DEVPCARCH
 
 
 /**
- * @callback_method_impl{FNIOMIOPORTIN, Math coprocessor.}
+ * @callback_method_impl{FNIOMIOPORTNEWIN, Math coprocessor.}
+ * @note offPort is absolute
  */
-static DECLCALLBACK(int) pcarchIOPortFPURead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t *pu32, unsigned cb)
+static DECLCALLBACK(VBOXSTRICTRC)
+pcarchIOPortFPURead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint32_t *pu32, unsigned cb)
 {
     int rc;
     NOREF(pvUser); NOREF(pDevIns); NOREF(pu32);
-    rc = PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d\n", Port, cb);
+    rc = PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d\n", offPort, cb);
     if (rc == VINF_SUCCESS)
         rc = VERR_IOM_IOPORT_UNUSED;
     return rc;
 }
 
 /**
- * @callback_method_impl{FNIOMIOPORTOUT, Math coprocessor.}
+ * @callback_method_impl{FNIOMIOPORTNEWOUT, Math coprocessor.}
+ * @note    offPort is absolute
  * @todo Add IGNNE support.
  */
-static DECLCALLBACK(int) pcarchIOPortFPUWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb)
+static DECLCALLBACK(VBOXSTRICTRC)
+pcarchIOPortFPUWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint32_t u32, unsigned cb)
 {
     int rc = VINF_SUCCESS;
     NOREF(pvUser);
     if (cb == 1)
     {
-        switch (Port)
+        switch (offPort)
         {
             /*
              * Clear busy latch.
@@ -78,7 +83,7 @@ static DECLCALLBACK(int) pcarchIOPortFPUWrite(PPDMDEVINS pDevIns, void *pvUser, 
 /* This is triggered when booting Knoppix (3.7) */
 #if 0
                 if (!u32)
-                    rc = PDMDeviceDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d u32=%#x\n", Port, cb, u32);
+                    rc = PDMDeviceDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d u32=%#x\n", offPort, cb, u32);
 #endif
                 /* pDevIns->pHlp->pfnPICSetIrq(pDevIns, 13, 0); */
                 break;
@@ -95,14 +100,14 @@ static DECLCALLBACK(int) pcarchIOPortFPUWrite(PPDMDEVINS pDevIns, void *pvUser, 
             case 0xfa:
             case 0xfc:
             default:
-                rc = PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d u32=%#x\n", Port, cb, u32);
+                rc = PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d u32=%#x\n", offPort, cb, u32);
                 break;
         }
         /* this works better, but probably not entirely correct. */
         PDMDevHlpISASetIrq(pDevIns, 13, 0);
     }
     else
-        rc = PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d u32=%#x\n", Port, cb, u32);
+        rc = PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d u32=%#x\n", offPort, cb, u32);
     return rc;
 }
 
@@ -141,9 +146,10 @@ Notes:  once set, bit 3 may only be cleared by a power-on reset
           (see #P0398).
 SeeAlso: #P0416,#P0417,MSR 00001000h
  * @endverbatim
+ * @note    offPort is absolute
  */
-static DECLCALLBACK(int)
-pcarchIOPortPS2SysControlPortARead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t *pu32, unsigned cb)
+static DECLCALLBACK(VBOXSTRICTRC)
+pcarchIOPortPS2SysControlPortARead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint32_t *pu32, unsigned cb)
 {
     RT_NOREF1(pvUser);
     if (cb == 1)
@@ -151,16 +157,17 @@ pcarchIOPortPS2SysControlPortARead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Po
         *pu32 = PDMDevHlpA20IsEnabled(pDevIns) << 1;
         return VINF_SUCCESS;
     }
-    return PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d\n", Port, cb);
+    return PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d\n", offPort, cb);
 }
 
 
 /**
  * @callback_method_impl{FNIOMIOPORTOUT, PS/2 system control port A.}
  * @see     Remark and todo of pcarchIOPortPS2SysControlPortARead().
+ * @note    offPort is absolute
  */
-static DECLCALLBACK(int)
-pcarchIOPortPS2SysControlPortAWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb)
+static DECLCALLBACK(VBOXSTRICTRC)
+pcarchIOPortPS2SysControlPortAWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint32_t u32, unsigned cb)
 {
     NOREF(pvUser);
     if (cb == 1)
@@ -180,7 +187,7 @@ pcarchIOPortPS2SysControlPortAWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT P
         PDMDevHlpA20Set(pDevIns, !!(u32 & 2));
         return VINF_SUCCESS;
     }
-    return PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d u32=%#x\n", Port, cb, u32);
+    return PDMDevHlpDBGFStop(pDevIns, RT_SRC_POS, "Port=%#x cb=%d u32=%#x\n", offPort, cb, u32);
 }
 
 
@@ -189,17 +196,16 @@ pcarchIOPortPS2SysControlPortAWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT P
  */
 static DECLCALLBACK(int)  pcarchConstruct(PPDMDEVINS pDevIns, int iInstance, PCFGMNODE pCfg)
 {
-    RT_NOREF1(iInstance);
     PDMDEV_CHECK_VERSIONS_RETURN(pDevIns);
-    PDEVPCARCH  pThis = PDMINS_2_DATA(pDevIns, PDEVPCARCH);
+    PDEVPCARCH  pThis = PDMDEVINS_2_DATA(pDevIns, PDEVPCARCH);
     int         rc;
+    RT_NOREF(iInstance, pCfg);
     Assert(iInstance == 0);
 
     /*
      * Validate configuration.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "\0"))
-        return VERR_PDM_DEVINS_UNKNOWN_CFG_VALUES;
+    PDMDEV_VALIDATE_CONFIG_RETURN(pDevIns, "", "");
 
     /*
      * Init the data.
@@ -209,16 +215,15 @@ static DECLCALLBACK(int)  pcarchConstruct(PPDMDEVINS pDevIns, int iInstance, PCF
     /*
      * Register I/O Ports
      */
-    rc = PDMDevHlpIOPortRegister(pDevIns, 0xF0, 0x10, NULL,
-                                 pcarchIOPortFPUWrite, pcarchIOPortFPURead,
-                                 NULL, NULL, "Math Co-Processor (DOS/OS2 mode)");
-    if (RT_FAILURE(rc))
-        return rc;
-    rc = PDMDevHlpIOPortRegister(pDevIns, 0x92, 1, NULL,
-                                 pcarchIOPortPS2SysControlPortAWrite, pcarchIOPortPS2SysControlPortARead,
-                                 NULL, NULL, "PS/2 system control port A (A20 and more)");
-    if (RT_FAILURE(rc))
-        return rc;
+    IOMIOPORTHANDLE hIoPorts;
+    rc = PDMDevHlpIoPortCreateFlagsAndMap(pDevIns, 0xf0 /*uPort*/, 0x10 /*cPorts*/, IOM_IOPORT_F_ABS,
+                                          pcarchIOPortFPUWrite, pcarchIOPortFPURead,
+                                          "Math Co-Processor (DOS/OS2 mode)", NULL /*paExtDescs*/, &hIoPorts);
+    AssertRCReturn(rc, rc);
+    rc = PDMDevHlpIoPortCreateFlagsAndMap(pDevIns, 0x92 /*uPort*/, 1 /*cPorts*/, IOM_IOPORT_F_ABS,
+                                          pcarchIOPortPS2SysControlPortAWrite, pcarchIOPortPS2SysControlPortARead,
+                                          "PS/2 system control port A (A20 and more)", NULL /*paExtDescs*/, &hIoPorts);
+    AssertRCReturn(rc, rc);
 
     return VINF_SUCCESS;
 }
@@ -229,53 +234,71 @@ static DECLCALLBACK(int)  pcarchConstruct(PPDMDEVINS pDevIns, int iInstance, PCF
  */
 const PDMDEVREG g_DevicePcArch =
 {
-    /* u32Version */
-    PDM_DEVREG_VERSION,
-    /* szName */
-    "pcarch",
-    /* szRCMod */
-    "",
-    /* szR0Mod */
-    "",
-    /* pszDescription */
-    "PC Architecture Device",
-    /* fFlags */
-    PDM_DEVREG_FLAGS_HOST_BITS_DEFAULT | PDM_DEVREG_FLAGS_GUEST_BITS_DEFAULT,
-    /* fClass */
-    PDM_DEVREG_CLASS_ARCH,
-    /* cMaxInstances */
-    1,
-    /* cbInstance */
-    sizeof(DEVPCARCH),
-    /* pfnConstruct */
-    pcarchConstruct,
-    /* pfnDestruct */
-    NULL,
-    /* pfnRelocate */
-    NULL,
-    /* pfnMemSetup */
-    NULL,
-    /* pfnPowerOn */
-    NULL,
-    /* pfnReset */
-    NULL,
-    /* pfnSuspend */
-    NULL,
-    /* pfnResume */
-    NULL,
-    /* pfnAttach */
-    NULL,
-    /* pfnDetach */
-    NULL,
-    /* pfnQueryInterface. */
-    NULL,
-    /* pfnInitComplete. */
-    NULL,
-    /* pfnPowerOff */
-    NULL,
-    /* pfnSoftReset */
-    NULL,
-    /* u32VersionEnd */
-    PDM_DEVREG_VERSION
+    /* .u32Version = */             PDM_DEVREG_VERSION,
+    /* .uReserved0 = */             0,
+    /* .szName = */                 "pcarch",
+    /* .fFlags = */                 PDM_DEVREG_FLAGS_DEFAULT_BITS | PDM_DEVREG_FLAGS_NEW_STYLE,
+    /* .fClass = */                 PDM_DEVREG_CLASS_ARCH,
+    /* .cMaxInstances = */          1,
+    /* .uSharedVersion = */         42,
+    /* .cbInstanceShared = */       sizeof(DEVPCARCH),
+    /* .cbInstanceCC = */           0,
+    /* .cbInstanceRC = */           0,
+    /* .cMaxPciDevices = */         0,
+    /* .cMaxMsixVectors = */        0,
+    /* .pszDescription = */         "PC Architecture Device",
+#if defined(IN_RING3)
+    /* .pszRCMod = */               "",
+    /* .pszR0Mod = */               "",
+    /* .pfnConstruct = */           pcarchConstruct,
+    /* .pfnDestruct = */            NULL,
+    /* .pfnRelocate = */            NULL,
+    /* .pfnMemSetup = */            NULL,
+    /* .pfnPowerOn = */             NULL,
+    /* .pfnReset = */               NULL,
+    /* .pfnSuspend = */             NULL,
+    /* .pfnResume = */              NULL,
+    /* .pfnAttach = */              NULL,
+    /* .pfnDetach = */              NULL,
+    /* .pfnQueryInterface = */      NULL,
+    /* .pfnInitComplete = */        NULL,
+    /* .pfnPowerOff = */            NULL,
+    /* .pfnSoftReset = */           NULL,
+    /* .pfnReserved0 = */           NULL,
+    /* .pfnReserved1 = */           NULL,
+    /* .pfnReserved2 = */           NULL,
+    /* .pfnReserved3 = */           NULL,
+    /* .pfnReserved4 = */           NULL,
+    /* .pfnReserved5 = */           NULL,
+    /* .pfnReserved6 = */           NULL,
+    /* .pfnReserved7 = */           NULL,
+#elif defined(IN_RING0)
+    /* .pfnEarlyConstruct = */      NULL,
+    /* .pfnConstruct = */           NULL,
+    /* .pfnDestruct = */            NULL,
+    /* .pfnFinalDestruct = */       NULL,
+    /* .pfnRequest = */             NULL,
+    /* .pfnReserved0 = */           NULL,
+    /* .pfnReserved1 = */           NULL,
+    /* .pfnReserved2 = */           NULL,
+    /* .pfnReserved3 = */           NULL,
+    /* .pfnReserved4 = */           NULL,
+    /* .pfnReserved5 = */           NULL,
+    /* .pfnReserved6 = */           NULL,
+    /* .pfnReserved7 = */           NULL,
+#elif defined(IN_RC)
+    /* .pfnConstruct = */           NULL,
+    /* .pfnReserved0 = */           NULL,
+    /* .pfnReserved1 = */           NULL,
+    /* .pfnReserved2 = */           NULL,
+    /* .pfnReserved3 = */           NULL,
+    /* .pfnReserved4 = */           NULL,
+    /* .pfnReserved5 = */           NULL,
+    /* .pfnReserved6 = */           NULL,
+    /* .pfnReserved7 = */           NULL,
+#else
+# error "Not in IN_RING3, IN_RING0 or IN_RC!"
+#endif
+    /* .u32VersionEnd = */          PDM_DEVREG_VERSION
 };
 

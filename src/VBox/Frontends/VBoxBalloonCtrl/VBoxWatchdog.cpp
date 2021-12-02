@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxWatchdog.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxWatchdog.cpp - VirtualBox Watchdog.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -52,15 +52,40 @@
 #include <iprt/system.h>
 #include <iprt/time.h>
 
-
 #include <algorithm>
-#include <string>
 #include <signal.h>
 
 #include "VBoxWatchdogInternal.h"
 
 using namespace com;
 
+
+/*********************************************************************************************************************************
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
+/**
+ * The details of the services that has been compiled in.
+ */
+typedef struct VBOXWATCHDOGMOD
+{
+    /** Pointer to the service descriptor. */
+    PCVBOXMODULE    pDesc;
+    /** Whether Pre-init was called. */
+    bool            fPreInited;
+    /** Whether the module is enabled or not. */
+    bool            fEnabled;
+} VBOXWATCHDOGMOD, *PVBOXWATCHDOGMOD;
+
+enum GETOPTDEF_WATCHDOG
+{
+    GETOPTDEF_WATCHDOG_DISABLE_MODULE = 1000,
+    GETOPTDEF_WATCHDOG_DRYRUN
+};
+
+
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
+*********************************************************************************************************************************/
 /** External globals. */
 bool                                g_fDryrun     = false;
 bool                                g_fVerbose    = false;
@@ -68,9 +93,9 @@ ComPtr<IVirtualBox>                 g_pVirtualBox = NULL;
 ComPtr<ISession>                    g_pSession    = NULL;
 mapVM                               g_mapVM;
 mapGroup                            g_mapGroup;
-# ifdef VBOX_WATCHDOG_GLOBAL_PERFCOL
+#ifdef VBOX_WATCHDOG_GLOBAL_PERFCOL
 ComPtr<IPerformanceCollector>       g_pPerfCollector = NULL;
-# endif
+#endif
 
 /** The critical section for the machines map. */
 static RTCRITSECT    g_csMachines;
@@ -86,35 +111,17 @@ static uint64_t      g_uHistoryFileSize = 100 * _1M;    /* Max 100MB per file. *
 /** Run in background. */
 static bool          g_fDaemonize = false;
 
-/**
- * The details of the services that has been compiled in.
- */
-typedef struct VBOXWATCHDOGMOD
-{
-    /** Pointer to the service descriptor. */
-    PCVBOXMODULE    pDesc;
-    /** Whether Pre-init was called. */
-    bool            fPreInited;
-    /** Whether the module is enabled or not. */
-    bool            fEnabled;
-} VBOXWATCHDOGMOD, *PVBOXWATCHDOGMOD;
-
 static VBOXWATCHDOGMOD g_aModules[] =
 {
     { &g_ModBallooning, false /* Pre-inited */, true /* Enabled */ },
     { &g_ModAPIMonitor, false /* Pre-inited */, true /* Enabled */ }
 };
 
-enum GETOPTDEF_WATCHDOG
-{
-    GETOPTDEF_WATCHDOG_DISABLE_MODULE = 1000,
-    GETOPTDEF_WATCHDOG_DRYRUN
-};
-
 /**
  * Command line arguments.
  */
-static const RTGETOPTDEF g_aOptions[] = {
+static const RTGETOPTDEF g_aOptions[] =
+{
 #if defined(RT_OS_DARWIN) || defined(RT_OS_LINUX) || defined (RT_OS_SOLARIS) || defined(RT_OS_FREEBSD)
     { "--background",           'b',                                       RTGETOPT_REQ_NOTHING },
 #endif
@@ -137,7 +144,10 @@ static ComPtr<IEventSource>      g_pEventSourceClient = NULL;
 static ComPtr<IEventListener>    g_pVBoxEventListener = NULL;
 static NativeEventQueue         *g_pEventQ = NULL;
 
-/* Prototypes. */
+
+/*********************************************************************************************************************************
+*   Internal Functions                                                                                                           *
+*********************************************************************************************************************************/
 static int machineAdd(const Bstr &strUuid);
 static int machineRemove(const Bstr &strUuid);
 static int watchdogSetup();
@@ -291,7 +301,7 @@ VBOX_LISTENER_DECLARE(VirtualBoxEventListenerImpl)
  * a thread dedicated to delivering this signal.  Do not doing anything
  * unnecessary here.
  */
-static void signalHandler(int iSignal)
+static void signalHandler(int iSignal) RT_NOTHROW_DEF
 {
     NOREF(iSignal);
     ASMAtomicWriteBool(&g_fCanceled, true);
@@ -696,9 +706,9 @@ static RTEXITCODE watchdogMain(/*HandlerArg *a */)
          * Install signal handlers.
          */
         signal(SIGINT,   signalHandler);
-    #ifdef SIGBREAK
+#ifdef SIGBREAK
         signal(SIGBREAK, signalHandler);
-    #endif
+#endif
 
         /*
          * Setup the global event listeners:
@@ -825,31 +835,21 @@ static void displayHelp(const char *pszImage)
     displayHeader();
 
     RTStrmPrintf(g_pStdErr,
-                 "Usage:\n"
-                 " %s [-v|--verbose] [-h|-?|--help] [-P|--pidfile]\n"
-                 " [-F|--logfile=<file>] [-R|--logrotate=<num>] [-S|--logsize=<bytes>]\n"
-                 " [-I|--loginterval=<seconds>]\n", pszImage);
+                 "Usage: %s [-v|--verbose] [-h|-?|--help] [-P|--pidfile]\n"
+                 "           [-F|--logfile=<file>] [-R|--logrotate=<num>] \n"
+                 "           [-S|--logsize=<bytes>] [-I|--loginterval=<seconds>]\n",
+                 pszImage);
     for (unsigned j = 0; j < RT_ELEMENTS(g_aModules); j++)
         if (g_aModules[j].pDesc->pszUsage)
             RTStrmPrintf(g_pStdErr, "%s", g_aModules[j].pDesc->pszUsage);
 
-    RTStrmPrintf(g_pStdErr, "\n"
+    RTStrmPrintf(g_pStdErr,
+                 "\n"
                  "Options:\n");
 
-    for (unsigned i = 0;
-         i < RT_ELEMENTS(g_aOptions);
-         ++i)
+    for (unsigned i = 0; i < RT_ELEMENTS(g_aOptions); i++)
     {
-        std::string str(g_aOptions[i].pszLong);
-        if (g_aOptions[i].iShort < 1000) /* Don't show short options which are defined by an ID! */
-        {
-            str += ", -";
-            str += g_aOptions[i].iShort;
-        }
-        str += ":";
-
-        const char *pcszDescr = "";
-
+        const char *pcszDescr;
         switch (g_aOptions[i].iShort)
         {
             case GETOPTDEF_WATCHDOG_DISABLE_MODULE:
@@ -888,9 +888,18 @@ static void displayHelp(const char *pszImage)
             case 'I':
                 pcszDescr = "Maximum time interval to trigger log rotation (seconds).";
                 break;
+            default:
+                AssertFailedBreakStmt(pcszDescr = "");
         }
 
-        RTStrmPrintf(g_pStdErr, "%-23s%s\n", str.c_str(), pcszDescr);
+        if (g_aOptions[i].iShort < 1000)
+            RTStrmPrintf(g_pStdErr,
+                         "  %s, -%c\n"
+                         "      %s\n", g_aOptions[i].pszLong, g_aOptions[i].iShort, pcszDescr);
+        else
+            RTStrmPrintf(g_pStdErr,
+                         "  %s\n"
+                         "      %s\n", g_aOptions[i].pszLong, pcszDescr);
     }
 
     for (unsigned j = 0; j < RT_ELEMENTS(g_aModules); j++)
@@ -1098,15 +1107,15 @@ int main(int argc, char *argv[])
     displayHeader();
 
     /* create release logger, to stdout */
-    char szError[RTPATH_MAX + 128];
+    RTERRINFOSTATIC ErrInfo;
     rc = com::VBoxLogRelCreate("Watchdog", g_fDaemonize ? NULL : pszLogFile,
                                RTLOGFLAGS_PREFIX_THREAD | RTLOGFLAGS_PREFIX_TIME_PROG,
                                "all", "VBOXBALLOONCTRL_RELEASE_LOG",
                                RTLOGDEST_STDOUT, UINT32_MAX /* cMaxEntriesPerGroup */,
                                g_cHistory, g_uHistoryFileTime, g_uHistoryFileSize,
-                               szError, sizeof(szError));
+                               RTErrInfoInitStatic(&ErrInfo));
     if (RT_FAILURE(rc))
-        return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", szError, rc);
+        return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", ErrInfo.Core.pszMsg, rc);
 
 #if defined(RT_OS_DARWIN) || defined(RT_OS_LINUX) || defined (RT_OS_SOLARIS) || defined(RT_OS_FREEBSD)
     if (g_fDaemonize)
@@ -1134,9 +1143,9 @@ int main(int argc, char *argv[])
                                    "all", "VBOXBALLOONCTRL_RELEASE_LOG",
                                    RTLOGDEST_FILE, UINT32_MAX /* cMaxEntriesPerGroup */,
                                    g_cHistory, g_uHistoryFileTime, g_uHistoryFileSize,
-                                   szError, sizeof(szError));
+                                   RTErrInfoInitStatic(&ErrInfo));
         if (RT_FAILURE(rc))
-            return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", szError, rc);
+            return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", ErrInfo.Core.pszMsg, rc);
     }
 #endif
 

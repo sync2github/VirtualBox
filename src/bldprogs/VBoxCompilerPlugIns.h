@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxCompilerPlugIns.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxCompilerPlugIns - Types, Prototypes and Macros common to the VBox compiler plug-ins.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxCompilerPlugIns_h__
-#define ___VBoxCompilerPlugIns_h__
+#ifndef VBOX_INCLUDED_SRC_bldprogs_VBoxCompilerPlugIns_h
+#define VBOX_INCLUDED_SRC_bldprogs_VBoxCompilerPlugIns_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 #include <stdio.h>
@@ -37,13 +40,17 @@
  */
 typedef struct VFMTCHKSTATE
 {
-    long        iFmt;
-    long        iArgs;
-    const char *pszFmt;
-    bool        fMaybeNull;
+    long            iFmt;
+    long            iArgs;
+    const char     *pszFmt;
+    bool            fMaybeNull;
 #if defined(__GNUC__) && !defined(VBOX_COMPILER_PLUG_IN_AGNOSTIC)
-    gimple      hStmt;
-    location_t  hFmtLoc;
+# if RT_GNUC_PREREQ(6, 0)
+    gimple const   *hStmt;
+# else
+    gimple          hStmt;
+# endif
+    location_t      hFmtLoc;
 #endif
 } VFMTCHKSTATE;
 /** Pointer to my checker state. */
@@ -116,5 +123,5 @@ bool            VFmtChkRequireVaListPtrArg(PVFMTCHKSTATE pState, const char *psz
 void            MyCheckFormatCString(PVFMTCHKSTATE pState, const char *pszFmt);
 
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_bldprogs_VBoxCompilerPlugIns_h */
 

@@ -1,15 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0301
+# $Id: close_orphaned_testsets.py 82968 2020-02-04 10:35:17Z vboxsync $
+# pylint: disable=line-too-long
 
 """
 Maintenance tool for closing orphaned testsets.
 """
 
+from __future__ import print_function;
+
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -28,12 +30,12 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 # Standard python imports
 import sys
 import os
-from optparse import OptionParser
+from optparse import OptionParser;  # pylint: disable=deprecated-module
 
 # Add Test Manager's modules path
 g_ksTestManagerDir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -68,23 +70,23 @@ class CloseOrphanedTestSets(object):
         # Get a list of orphans.
         oLogic = TestSetLogic(oDb);
         aoOrphans = oLogic.fetchOrphaned();
-        if len(aoOrphans) > 0:
+        if aoOrphans:
             # Complete them.
             if self.oConfig.fJustDoIt:
-                print 'Completing %u test sets as abandoned:' % (len(aoOrphans),);
+                print('Completing %u test sets as abandoned:' % (len(aoOrphans),));
                 for oTestSet in aoOrphans:
-                    print '#%-7u: idTestBox=%-3u tsCreated=%s tsDone=%s' \
-                        % (oTestSet.idTestSet, oTestSet.idTestBox, oTestSet.tsCreated, oTestSet.tsDone);
+                    print('#%-7u: idTestBox=%-3u tsCreated=%s tsDone=%s'
+                          % (oTestSet.idTestSet, oTestSet.idTestBox, oTestSet.tsCreated, oTestSet.tsDone));
                     oLogic.completeAsAbandoned(oTestSet.idTestSet);
-                print 'Committing...';
+                print('Committing...');
                 oDb.commit();
             else:
                 for oTestSet in aoOrphans:
-                    print '#%-7u: idTestBox=%-3u tsCreated=%s tsDone=%s' \
-                        % (oTestSet.idTestSet, oTestSet.idTestBox, oTestSet.tsCreated, oTestSet.tsDone);
-                print 'Not completing any testsets without seeing the --just-do-it option.'
+                    print('#%-7u: idTestBox=%-3u tsCreated=%s tsDone=%s'
+                          % (oTestSet.idTestSet, oTestSet.idTestBox, oTestSet.tsCreated, oTestSet.tsDone));
+                print('Not completing any testsets without seeing the --just-do-it option.');
         else:
-            print 'No orphaned test sets.\n'
+            print('No orphaned test sets.\n');
         return 0;
 
 

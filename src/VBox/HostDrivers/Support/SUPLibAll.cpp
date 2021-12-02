@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPLibAll.cpp 87702 2021-02-10 20:37:53Z vboxsync $ */
 /** @file
  * VirtualBox Support Library - All Contexts Code.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -39,10 +39,14 @@
 #if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
 # include <iprt/asm-amd64-x86.h>
 #endif
+#include <iprt/errcore.h>
+#if defined(IN_RING0) && defined(RT_OS_LINUX)
+# include "SUPDrvInternal.h"
+#endif
+
 
 
 #if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
-
 /**
  * The slow case for SUPReadTsc where we need to apply deltas.
  *
@@ -90,6 +94,48 @@ SUPDECL(uint64_t) SUPReadTscWithDelta(PSUPGLOBALINFOPAGE pGip)
                 uint16_t iCpuSet = cbLim - 256 * (ARCH_BITS == 64 ? 16 : 8);
                 iCpuSet &= RTCPUSET_MAX_CPUS - 1;
                 iGipCpu  = pGip->aiCpuFromCpuSetIdx[iCpuSet];
+                break;
+            }
+            if (cTries >= 16)
+            {
+                iGipCpu = UINT16_MAX;
+                break;
+            }
+            cTries++;
+        }
+    }
+    else if (pGip->fGetGipCpu & SUPGIPGETCPU_APIC_ID_EXT_0B)
+    {
+        /* Get APIC ID / 0x1b via the slow CPUID instruction, requires looping. */
+        uint32_t cTries = 0;
+        for (;;)
+        {
+            uint32_t idApic = ASMGetApicIdExt0B();
+            uTsc = ASMReadTSC();
+            if (RT_LIKELY(ASMGetApicIdExt0B() == idApic))
+            {
+                iGipCpu = pGip->aiCpuFromApicId[idApic];
+                break;
+            }
+            if (cTries >= 16)
+            {
+                iGipCpu = UINT16_MAX;
+                break;
+            }
+            cTries++;
+        }
+    }
+    else if (pGip->fGetGipCpu & SUPGIPGETCPU_APIC_ID_EXT_8000001E)
+    {
+        /* Get APIC ID / 0x8000001e via the slow CPUID instruction, requires looping. */
+        uint32_t cTries = 0;
+        for (;;)
+        {
+            uint32_t idApic = ASMGetApicIdExt8000001E();
+            uTsc = ASMReadTSC();
+            if (RT_LIKELY(ASMGetApicIdExt8000001E() == idApic))
+            {
+                iGipCpu = pGip->aiCpuFromApicId[idApic];
                 break;
             }
             if (cTries >= 16)
@@ -174,6 +220,10 @@ SUPDECL(uint64_t) SUPReadTscWithDelta(PSUPGLOBALINFOPAGE pGip)
     AssertMsgFailed(("iGipCpu=%d (%#x) cCpus=%d fGetGipCpu=%#x\n", iGipCpu, iGipCpu, pGip->cCpus, pGip->fGetGipCpu));
     return uTsc;
 }
+# ifdef SUPR0_EXPORT_SYMBOL
+SUPR0_EXPORT_SYMBOL(SUPReadTscWithDelta);
+# endif
+#endif /* RT_ARCH_AMD64 || RT_ARCH_X86 */
 
 
 /**
@@ -186,6 +236,7 @@ DECLINLINE(uint16_t) supGetGipCpuIndex(PSUPGLOBALINFOPAGE pGip)
 {
     uint16_t iGipCpu;
 #ifdef IN_RING3
+# if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
     if (pGip->fGetGipCpu & SUPGIPGETCPU_IDTR_LIMIT_MASK_MAX_SET_CPUS)
     {
         /* Storing the IDTR is normally very fast. */
@@ -202,12 +253,33 @@ DECLINLINE(uint16_t) supGetGipCpuIndex(PSUPGLOBALINFOPAGE pGip)
         iCpuSet  &= RTCPUSET_MAX_CPUS - 1;
         iGipCpu   = pGip->aiCpuFromCpuSetIdx[iCpuSet];
     }
+    else if (pGip->fGetGipCpu & SUPGIPGETCPU_APIC_ID_EXT_0B)
+    {
+        /* Get APIC ID via the slow CPUID/0000000B instruction. */
+        uint32_t idApic = ASMGetApicIdExt0B();
+        iGipCpu = pGip->aiCpuFromApicId[idApic];
+    }
+    else if (pGip->fGetGipCpu & SUPGIPGETCPU_APIC_ID_EXT_8000001E)
+    {
+        /* Get APIC ID via the slow CPUID/8000001E instruction. */
+        uint32_t idApic = ASMGetApicIdExt8000001E();
+        iGipCpu = pGip->aiCpuFromApicId[idApic];
+    }
     else
     {
         /* Get APIC ID via the slow CPUID instruction. */
         uint8_t idApic = ASMGetApicId();
         iGipCpu = pGip->aiCpuFromApicId[idApic];
     }
+
+# else
+    int iCpuSet = RTMpCpuIdToSetIndex(RTMpCpuId());
+    if (RT_LIKELY((unsigned)iCpuSet < RT_ELEMENTS(pGip->aiCpuFromCpuSetIdx)))
+        iGipCpu = pGip->aiCpuFromCpuSetIdx[iCpuSet];
+    else
+        iGipCpu = UINT16_MAX;
+# endif
+
 #elif defined(IN_RING0)
     /* Ring-0: Use use RTMpCpuId() (disables cli to avoid host OS assertions about unsafe CPU number usage). */
     RTCCUINTREG uFlags  = ASMIntDisableFlags();
@@ -225,6 +297,7 @@ DECLINLINE(uint16_t) supGetGipCpuIndex(PSUPGLOBALINFOPAGE pGip)
         iGipCpu = pGip->aiCpuFromCpuSetIdx[iCpuSet];
     else
         iGipCpu = UINT16_MAX;
+
 #else
 # error "IN_RING3, IN_RC or IN_RING0 must be defined!"
 #endif
@@ -239,7 +312,7 @@ DECLINLINE(uint16_t) supGetGipCpuIndex(PSUPGLOBALINFOPAGE pGip)
  * @param   pGip        The GIP.
  * @internal
  */
-SUPDECL(uint64_t) SUPGetTscDeltaSlow(PSUPGLOBALINFOPAGE pGip)
+SUPDECL(int64_t) SUPGetTscDeltaSlow(PSUPGLOBALINFOPAGE pGip)
 {
     uint16_t iGipCpu = supGetGipCpuIndex(pGip);
     if (RT_LIKELY(iGipCpu < pGip->cCpus))
@@ -268,6 +341,7 @@ SUPDECL(uint64_t) SUPGetCpuHzFromGipForAsyncMode(PSUPGLOBALINFOPAGE pGip)
     AssertFailed();
     return pGip->u64CpuHz;
 }
+
 
 
 /**
@@ -326,6 +400,4 @@ SUPDECL(bool) SUPIsTscFreqCompatible(uint64_t uCpuHz, uint64_t *puGipCpuHz, bool
         *puGipCpuHz = uGipCpuHz;
     return fCompat;
 }
-
-#endif /* RT_ARCH_AMD64 || RT_ARCH_X86 */
 

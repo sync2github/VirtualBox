@@ -5,7 +5,7 @@
         XSLT stylesheet that generates C++ API wrappers (server side) from
         VirtualBox.xidl.
 
-    Copyright (C) 2010-2016 Oracle Corporation
+    Copyright (C) 2010-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -79,8 +79,8 @@ templates for file headers/footers
  * Generator: src/VBox/Main/idl/apiwrap-server.xsl
  */
 
-/**
- * Copyright (C) 2010-2016 Oracle Corporation
+/*
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -111,25 +111,22 @@ templates for file headers/footers
     <xsl:value-of select="concat('#ifndef ', substring(@name, 2), 'Wrap_H_', $G_sNewLine)"/>
     <xsl:value-of select="concat('#define ', substring(@name, 2), 'Wrap_H_')"/>
     <xsl:text>
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VirtualBoxBase.h"
 #include "Wrapper.h"
 
 </xsl:text>
-    <xsl:value-of select="concat('class ATL_NO_VTABLE ', substring(@name, 2), 'Wrap:')"/>
+    <xsl:value-of select="concat('class ATL_NO_VTABLE ', substring(@name, 2), 'Wrap')"/>
     <xsl:text>
-    public VirtualBoxBase,
+    : public VirtualBoxBase
 </xsl:text>
-    <xsl:value-of select="concat('    VBOX_SCRIPTABLE_IMPL(', @name, ')')"/>
-    <xsl:if test="count(exsl:node-set($addinterfaces)/token) > 0">
-        <xsl:text>,</xsl:text>
-    </xsl:if>
+    <xsl:value-of select="concat('    , VBOX_SCRIPTABLE_IMPL(', @name, ')')"/>
     <xsl:value-of select="$G_sNewLine"/>
     <xsl:for-each select="exsl:node-set($addinterfaces)/token">
-        <xsl:value-of select="concat('    VBOX_SCRIPTABLE_IMPL(', text(), ')')"/>
-        <xsl:if test="not(position()=last())">
-            <xsl:text>,</xsl:text>
-        </xsl:if>
+        <xsl:value-of select="concat('    , VBOX_SCRIPTABLE_IMPL(', text(), ')')"/>
         <xsl:value-of select="$G_sNewLine"/>
     </xsl:for-each>
     <xsl:text>{
@@ -173,11 +170,17 @@ public:
     <xsl:text>    END_COM_MAP()
 
 </xsl:text>
-    <xsl:value-of select="concat('    DECLARE_EMPTY_CTOR_DTOR(', substring(@name, 2), 'Wrap)', $G_sNewLine)"/>
+    <xsl:value-of select="concat('    DECLARE_COMMON_CLASS_METHODS(', substring(@name, 2), 'Wrap)', $G_sNewLine)"/>
 </xsl:template>
 
 <xsl:template match="interface" mode="classfooter">
     <xsl:param name="addinterfaces"/>
+    <xsl:if test="@wrap-gen-hook = 'yes'">
+        <xsl:text>
+public:
+    virtual void i_callHook(const char *a_pszFunction) { RT_NOREF_PV(a_pszFunction); }
+</xsl:text>
+    </xsl:if>
     <xsl:text>
 private:
     DECLARE_CLS_COPY_CTOR_ASSIGN_NOOP(</xsl:text>
@@ -192,9 +195,9 @@ private:
 
 <xsl:template match="interface" mode="codeheader">
     <xsl:param name="addinterfaces"/>
-    <xsl:value-of select="concat('#define LOG_GROUP_MAIN_OVERRIDE LOG_GROUP_MAIN_', translate(substring(@name, 2), $G_lowerCase, $G_upperCase), $G_sNewLine, $G_sNewLine)"/>
+    <xsl:value-of select="concat('#define LOG_GROUP LOG_GROUP_MAIN_', translate(substring(@name, 2), $G_lowerCase, $G_upperCase), $G_sNewLine, $G_sNewLine)"/>
     <xsl:value-of select="concat('#include &quot;', substring(@name, 2), 'Wrap.h&quot;', $G_sNewLine)"/>
-    <xsl:text>#include "Logging.h"
+    <xsl:text>#include "LoggingNew.h"
 #ifdef VBOX_WITH_DTRACE_R3_MAIN
 # include "dtrace/VBoxAPI.h"
 #endif
@@ -515,8 +518,8 @@ private:
         </xsl:call-template>
     </xsl:variable>
 
-    <!-- interface santiy check, prevents crashes -->
-    <xsl:if test="(count(attribute) + count(method)) = 0">
+    <!-- interface sanity check, prevents crashes -->
+    <xsl:if test="(count(attribute) + count(method) + sum(@reservedMethods[number()= number()]) + sum(@reservedAttributes[number()= number()])) = 0">
         <xsl:message terminate="yes">
             Interface <xsl:value-of select="@name"/> is empty which causes midl generated proxy
             stubs to crash. Please add a dummy:<xsl:value-of select="$G_sNewLine"/>
@@ -1219,7 +1222,14 @@ Returns empty if not needed, non-empty ('yes') if needed. -->
         <xsl:with-param name="isref" select="'yes'"/>
     </xsl:apply-templates>
     <xsl:text>));
-
+</xsl:text>
+    <xsl:if test="ancestor::interface[@wrap-gen-hook = 'yes']">
+        <xsl:text>
+    i_callHook(__FUNCTION__);</xsl:text>
+    </xsl:if>
+<xsl:text>
+    // Clear error info, to make in-process calls behave the same as
+    // cross-apartment calls or out-of-process calls.
     VirtualBoxBase::clearError();
 
     HRESULT hrc;
@@ -1361,7 +1371,14 @@ Returns empty if not needed, non-empty ('yes') if needed. -->
             <xsl:with-param name="isref" select="''"/>
         </xsl:apply-templates>
         <xsl:text>));
-
+</xsl:text>
+    <xsl:if test="ancestor::interface[@wrap-gen-hook = 'yes']">
+        <xsl:text>
+    i_callHook(__FUNCTION__);</xsl:text>
+    </xsl:if>
+<xsl:text>
+    // Clear error info, to make in-process calls behave the same as
+    // cross-apartment calls or out-of-process calls.
     VirtualBoxBase::clearError();
 
     HRESULT hrc;
@@ -1543,7 +1560,9 @@ Returns empty if not needed, non-empty ('yes') if needed. -->
 </xsl:text>
         </xsl:when>
         <xsl:when test="$pmode != 'dtrace-probes'">
-            <xsl:value-of select="concat($G_sNewLine, '    // ', $pmode, ' ', $name, ' properties', $G_sNewLine)"/>
+            <xsl:value-of select="concat($G_sNewLine, '    /** @name ', translate(substring($pmode, 1, 1), $G_lowerCase, $G_upperCase), substring($pmode,2), ' ', $name, ' properties', $G_sNewLine)"/>
+            <xsl:text>     * @{ */
+</xsl:text>
         </xsl:when>
     </xsl:choose>
     <xsl:choose>
@@ -1595,6 +1614,12 @@ Returns empty if not needed, non-empty ('yes') if needed. -->
         </xsl:when>
         <xsl:otherwise><xsl:message terminate="yes">Otherwise oops in emitAttributes</xsl:message></xsl:otherwise>
     </xsl:choose>
+
+    <!-- close doxygen @name -->
+    <xsl:if test="($pmode != 'code') and ($pmode != 'dtrace-probes')" >
+            <xsl:text>    /** @} */
+</xsl:text>
+    </xsl:if>
 </xsl:template>
 
 <xsl:template name="emitTargetBegin">
@@ -1781,7 +1806,7 @@ Returns empty if not needed, non-empty ('yes') if needed. -->
     </xsl:for-each>
     <xsl:text>)
 {
-    LogRelFlow(("{%p} %s:enter</xsl:text>
+    LogRelFlow(("{%p} %s: enter</xsl:text>
     <xsl:for-each select="param">
         <xsl:text> </xsl:text>
         <xsl:apply-templates select="@type" mode="logparamtext">
@@ -1799,7 +1824,14 @@ Returns empty if not needed, non-empty ('yes') if needed. -->
         </xsl:apply-templates>
     </xsl:for-each>
     <xsl:text>));
-
+</xsl:text>
+    <xsl:if test="ancestor::interface[@wrap-gen-hook = 'yes']">
+        <xsl:text>
+    i_callHook(__FUNCTION__);</xsl:text>
+    </xsl:if>
+<xsl:text>
+    // Clear error info, to make in-process calls behave the same as
+    // cross-apartment calls or out-of-process calls.
     VirtualBoxBase::clearError();
 
     HRESULT hrc;
@@ -2171,7 +2203,9 @@ Returns empty if not needed, non-empty ('yes') if needed. -->
         </xsl:when>
         <xsl:when test="$pmode='dtrace-probes'"/>
         <xsl:otherwise>
-            <xsl:value-of select="concat($G_sNewLine, '    // ', $pmode, ' ', $name, ' methods', $G_sNewLine)"/>
+            <xsl:value-of select="concat($G_sNewLine, '    /** @name ', translate(substring($pmode, 1, 1), $G_lowerCase, $G_upperCase), substring($pmode,2), ' ', $name, ' methods', $G_sNewLine)"/>
+            <xsl:text>     * @{ */
+</xsl:text>
         </xsl:otherwise>
     </xsl:choose>
     <xsl:choose>
@@ -2222,6 +2256,12 @@ Returns empty if not needed, non-empty ('yes') if needed. -->
         </xsl:when>
         <xsl:otherwise/>
     </xsl:choose>
+
+    <!-- close doxygen @name -->
+    <xsl:if test="($pmode != 'code') and ($pmode != 'dtrace-probes')" >
+            <xsl:text>    /** @} */
+</xsl:text>
+    </xsl:if>
 </xsl:template>
 
 <!-- - - - - - - - - - - - - - - - - - - - - - -
@@ -2483,9 +2523,17 @@ private:</xsl:text>
  - - - - - - - - - - - - - - - - - - - - - - -->
 
 <xsl:template match="interface">
-    <xsl:if test="not(@internal='yes') and not(@supportsErrorInfo='no')">
+    <xsl:if test="not(@internal='yes') and not(@autogen='VBoxEvent') and not(@supportsErrorInfo='no')">
         <xsl:call-template name="emitInterface"/>
     </xsl:if>
+</xsl:template>
+
+<!-- - - - - - - - - - - - - - - - - - - - - - -
+  application match
+ - - - - - - - - - - - - - - - - - - - - - - -->
+
+<xsl:template match="application">
+    <xsl:apply-templates/>
 </xsl:template>
 
 <!-- - - - - - - - - - - - - - - - - - - - - - -

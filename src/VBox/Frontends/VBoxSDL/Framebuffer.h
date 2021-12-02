@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: Framebuffer.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  *
  * VBox frontends: VBoxSDL (simple frontend based on SDL):
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __H_FRAMEBUFFER
-#define __H_FRAMEBUFFER
+#ifndef VBOX_INCLUDED_SRC_VBoxSDL_Framebuffer_h
+#define VBOX_INCLUDED_SRC_VBoxSDL_Framebuffer_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VBoxSDL.h"
 #include <iprt/thread.h>
@@ -38,7 +41,7 @@ extern DECLSPEC SDL_Surface* (SDLCALL *pTTF_RenderUTF8_Blended)(TTF_Font *font, 
 extern DECLSPEC void (SDLCALL *pTTF_CloseFont)(TTF_Font *font);
 extern DECLSPEC void (SDLCALL *pTTF_Quit)(void);
 }
-#endif /* VBOX_SECURELABEL && !VBOX_WITH_SDL13 */
+#endif /* VBOX_SECURELABEL && !VBOX_WITH_SDL2 */
 
 class VBoxSDLFBOverlay;
 
@@ -94,7 +97,7 @@ public:
     STDMETHOD(GetVisibleRegion)(BYTE *aRectangles, ULONG aCount, ULONG *aCountCopied);
     STDMETHOD(SetVisibleRegion)(BYTE *aRectangles, ULONG aCount);
 
-    STDMETHOD(ProcessVHWACommand)(BYTE *pCommand);
+    STDMETHOD(ProcessVHWACommand)(BYTE *pCommand, LONG enmCmd, BOOL fGuestCmd);
 
     STDMETHOD(Notify3DEvent)(ULONG uType, ComSafeArrayIn(BYTE, aData));
 
@@ -114,8 +117,10 @@ public:
     int32_t getOriginY() { return mOriginY; }
     int32_t getXOffset() { return mCenterXOffset; }
     int32_t getYOffset() { return mCenterYOffset; }
-#ifdef VBOX_WITH_SDL13
-    bool hasWindow(SDL_WindowID id) { return mScreen && mWindow == id; }
+#ifdef VBOX_WITH_SDL2
+    SDL_Window *getWindow() { return mpWindow; }
+    bool hasWindow(uint32_t id) { return mScreen && SDL_GetWindowID(mpWindow) == id; }
+    int setWindowTitle(const char *pcszTitle);
 #endif
 #ifdef VBOX_SECURELABEL
     int  initSecureLabel(uint32_t height, char *font, uint32_t pointsize, uint32_t labeloffs);
@@ -130,11 +135,13 @@ public:
 private:
     /** current SDL framebuffer pointer (also includes screen width/height) */
     SDL_Surface *mScreen;
-#ifdef VBOX_WITH_SDL13
+#ifdef VBOX_WITH_SDL2
     /** the SDL window */
-    SDL_WindowID mWindow;
+    SDL_Window *mpWindow;
     /** the texture */
-    SDL_TextureID mTexture;
+    SDL_Texture *mpTexture;
+    /** renderer */
+    SDL_Renderer *mpRenderer;
     /** render info */
     SDL_RendererInfo mRenderInfo;
 #endif
@@ -288,4 +295,4 @@ private:
 #endif
 };
 
-#endif // __H_FRAMEBUFFER
+#endif /* !VBOX_INCLUDED_SRC_VBoxSDL_Framebuffer_h */

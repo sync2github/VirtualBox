@@ -4,7 +4,7 @@
     <!--
             Language Definition Include for VirtualBox WiX script.
 
-            Copyright (C) 2011-2016 Oracle Corporation
+            Copyright (C) 2011-2020 Oracle Corporation
 
             This file is part of VirtualBox Open Source Edition (OSE), as
             available from http://www.virtualbox.org. This file is free software;
@@ -144,6 +144,14 @@ This is default for newer versions of Windows (Vista and newer).</String>
     <String Id="WarnDisconNetIfacesDlg_Title2">網路介面</String>
     <String Id="WarnDisconNetIfacesDlg_Desc">安裝 [ProductName] 網路功能將重設您的網路連線並暫時中斷網路連線。</String>
     <String Id="WarnDisconNetIfacesDlg_Question">立即進行安裝嗎？</String>
+
+    <!---->
+
+    <String Id="WarnPythonDlg_Title">Missing Dependencies</String>
+    <String Id="WarnPythonDlg_Title2">Python Core / win32api</String>
+    <String Id="WarnPythonDlg_Desc">Installing the [ProductName] Python bindings requires the Python Core package and the win32api bindings to be installed first.</String>
+    <String Id="WarnPythonDlg_Desc2">When continuing the installation of the [ProductName] Python bindings now, those need to be set up manually later. Refert to the [ProductName] SDK manual for more information.</String>
+    <String Id="WarnPythonDlg_Question">Proceed with installation now?</String>
 
     <!---->
 

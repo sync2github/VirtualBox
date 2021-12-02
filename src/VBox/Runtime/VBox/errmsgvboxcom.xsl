@@ -6,7 +6,7 @@
     %Rhrc format specifier) as they are defined in the VirtualBox interface
     definition file (src/VBox/Main/idl/VirtualBox.xidl).
 
-    Copyright (C) 2006-2016 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -50,7 +50,7 @@
 <xsl:template match="*"/>
 
 <xsl:template match="idl">
-  <xsl:for-each select="library/result">
+  <xsl:for-each select="library/application/result">
     <xsl:text>{ "</xsl:text>
     <xsl:choose>
       <xsl:when test="contains(normalize-space(desc/text()), '. ')">
@@ -65,9 +65,9 @@
     </xsl:choose>
     <xsl:text>", "</xsl:text>
     <xsl:value-of select="@name"/>
-    <xsl:text>", </xsl:text>
+    <xsl:text>", (VBOXSTATUSTYPE)</xsl:text>
     <xsl:value-of select="@value"/>
-    <xsl:text> },&#x0A;</xsl:text>
+    <xsl:text>L },&#x0A;</xsl:text>
   </xsl:for-each>
 </xsl:template>
 

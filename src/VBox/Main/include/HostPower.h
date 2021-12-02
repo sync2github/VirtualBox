@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: HostPower.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  *
  * VirtualBox interface to host's power notification service
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_HOSTPOWER
-#define ____H_HOSTPOWER
+#ifndef MAIN_INCLUDED_HostPower_h
+#define MAIN_INCLUDED_HostPower_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifdef RT_OS_DARWIN /* first, so we can undef pVM in iprt/cdefs.h */
 # include <IOKit/pwr_mgt/IOPMLib.h>
@@ -44,7 +47,7 @@ class HostPowerService
     std::vector<ComPtr<IInternalSessionControl> > mSessionControls;
 };
 
-# ifdef RT_OS_WINDOWS
+# if defined(RT_OS_WINDOWS) || defined(DOXYGEN_RUNNING)
 /**
  * The Windows hosted Power Service.
  */
@@ -63,7 +66,8 @@ private:
     HWND        mHwnd;
     RTTHREAD    mThread;
 };
-#elif defined(RT_OS_LINUX)
+# endif
+# if defined(RT_OS_LINUX) || defined(DOXYGEN_RUNNING)
 /**
  * The Linux hosted Power Service.
  */
@@ -86,7 +90,8 @@ private:
     DBusConnection *mpConnection;
 };
 
-# elif defined(RT_OS_DARWIN) /* RT_OS_WINDOWS */
+# endif
+# if defined(RT_OS_DARWIN) || defined(DOXYGEN_RUNNING)
 /**
  * The Darwin hosted Power Service.
  */
@@ -115,7 +120,7 @@ private:
 
     bool mCritical; /* Indicate if the battery was in the critical state last checked */
 };
-# endif /* RT_OS_DARWIN */
+# endif
 
-#endif /* !____H_HOSTPOWER */
+#endif /* !MAIN_INCLUDED_HostPower_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

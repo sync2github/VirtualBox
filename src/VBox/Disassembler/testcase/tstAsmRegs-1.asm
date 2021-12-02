@@ -1,4 +1,4 @@
-; $Id$
+; $Id: tstAsmRegs-1.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; Disassembly testcase - Accessing all the registers
 ;
@@ -8,7 +8,7 @@
 ;
 
 ;
-; Copyright (C) 2008-2016 Oracle Corporation
+; Copyright (C) 2008-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -106,5 +106,4 @@
     mov     rax, r14
     mov     rax, r15
 %endif
-
 

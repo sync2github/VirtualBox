@@ -1,4 +1,4 @@
-# $Id$
+# $Id: VBoxXGccX86RedHatLinux.kmk 62534 2016-07-22 19:30:22Z vboxsync $
 ## @file
 # kBuild Tool Config - GCC Cross compiler for CentOS 3 x86.
 #

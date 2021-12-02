@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: HGCMObjects.h 91113 2021-09-03 23:00:42Z vboxsync $ */
 /** @file
- *
  * HGCMObjects - Host-Guest Communication Manager objects header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,11 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __HGCMOBJECTS__H
-#define __HGCMOBJECTS__H
-
-#define LOG_GROUP_MAIN_OVERRIDE LOG_GROUP_HGCM
-#include "Logging.h"
+#ifndef MAIN_INCLUDED_HGCMObjects_h
+#define MAIN_INCLUDED_HGCMObjects_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/assert.h>
 #include <iprt/avl.h>
@@ -29,9 +28,9 @@
 
 class HGCMObject;
 
-typedef struct _ObjectAVLCore
+typedef struct ObjectAVLCore
 {
-    AVLULNODECORE AvlCore;
+    AVLU32NODECORE AvlCore;
     HGCMObject *pSelf;
 } ObjectAVLCore;
 
@@ -43,75 +42,87 @@ typedef enum
     HGCMOBJ_SizeHack   = 0x7fffffff
 } HGCMOBJ_TYPE;
 
-class HGCMObject
+
+/**
+ * A referenced object.
+ */
+class HGCMReferencedObject
+{
+    private:
+        int32_t volatile m_cRefs;
+        HGCMOBJ_TYPE     m_enmObjType;
+
+    protected:
+        virtual ~HGCMReferencedObject()
+        {}
+
+    public:
+        HGCMReferencedObject(HGCMOBJ_TYPE enmObjType)
+            : m_cRefs(0)   /** @todo change to 1! */
+            , m_enmObjType(enmObjType)
+        {}
+
+        void Reference()
+        {
+            int32_t cRefs = ASMAtomicIncS32(&m_cRefs);
+            NOREF(cRefs);
+            Log(("Reference(%p/%d): cRefs = %d\n", this, m_enmObjType, cRefs));
+        }
+
+        void Dereference()
+        {
+            int32_t cRefs = ASMAtomicDecS32(&m_cRefs);
+            Log(("Dereference(%p/%d): cRefs = %d \n", this, m_enmObjType, cRefs));
+            AssertRelease(cRefs >= 0);
+
+            if (cRefs)
+            { /* likely */ }
+            else
+                delete this;
+        }
+
+        HGCMOBJ_TYPE Type()
+        {
+            return m_enmObjType;
+        }
+};
+
+
+class HGCMObject : public HGCMReferencedObject
 {
     private:
         friend uint32_t hgcmObjMake(HGCMObject *pObject, uint32_t u32HandleIn);
-
-        int32_t volatile m_cRefs;
-        HGCMOBJ_TYPE     m_enmObjType;
 
         ObjectAVLCore   m_core;
 
     protected:
         virtual ~HGCMObject()
-        {};
+        {}
 
     public:
         HGCMObject(HGCMOBJ_TYPE enmObjType)
-            : m_cRefs(0)
-        {
-            this->m_enmObjType  = enmObjType;
-        };
-
-        void Reference()
-        {
-            int32_t refCnt = ASMAtomicIncS32(&m_cRefs);
-            NOREF(refCnt);
-            Log(("Reference: refCnt = %d\n", refCnt));
-        }
-
-        void Dereference()
-        {
-            int32_t refCnt = ASMAtomicDecS32(&m_cRefs);
-
-            Log(("Dereference: refCnt = %d\n", refCnt));
-
-            AssertRelease(refCnt >= 0);
-
-            if (refCnt)
-            {
-                return;
-            }
-
-            delete this;
-        }
+            : HGCMReferencedObject(enmObjType)
+        {}
 
         uint32_t Handle()
         {
             return (uint32_t)m_core.AvlCore.Key;
-        };
-
-        HGCMOBJ_TYPE Type()
-        {
-            return m_enmObjType;
-        };
+        }
 };
 
-int hgcmObjInit();
+int         hgcmObjInit();
+void        hgcmObjUninit();
 
-void hgcmObjUninit();
+uint32_t    hgcmObjGenerateHandle(HGCMObject *pObject);
+uint32_t    hgcmObjAssignHandle(HGCMObject *pObject, uint32_t u32Handle);
 
-uint32_t hgcmObjGenerateHandle(HGCMObject *pObject);
-uint32_t hgcmObjAssignHandle(HGCMObject *pObject, uint32_t u32Handle);
-
-void hgcmObjDeleteHandle(uint32_t handle);
+void        hgcmObjDeleteHandle(uint32_t handle);
 
 HGCMObject *hgcmObjReference(uint32_t handle, HGCMOBJ_TYPE enmObjType);
+void        hgcmObjDereference(HGCMObject *pObject);
 
-void hgcmObjDereference(HGCMObject *pObject);
+uint32_t    hgcmObjQueryHandleCount();
+void        hgcmObjSetHandleCount(uint32_t u32HandleCount);
 
-uint32_t hgcmObjQueryHandleCount();
-void     hgcmObjSetHandleCount(uint32_t u32HandleCount);
 
-#endif /* __HGCMOBJECTS__H */
+#endif /* !MAIN_INCLUDED_HGCMObjects_h */

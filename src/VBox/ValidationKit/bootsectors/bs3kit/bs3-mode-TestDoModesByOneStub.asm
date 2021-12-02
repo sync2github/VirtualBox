@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-mode-TestDoModesByOneStub.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - Bs3TestDoModesByOne near stub.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 %include "bs3kit-template-header.mac"
 
 ;
-; Finally near stub for the API call (16-bit only).
+; Near stub for the API call (16-bit only).
 ;
 %if TMPL_BITS == 16
  %if TMPL_MODE == BS3_MODE_RM
@@ -39,14 +39,12 @@ BS3_BEGIN_RMTEXT16
 BS3_BEGIN_TEXT16_NEARSTUBS
 BS3_PROC_BEGIN_MODE Bs3TestDoModesByOne, BS3_PBC_NEAR
         pop     ax
- %if TMPL_MODE == BS3_MODE_RM
         push    cs
         push    ax
+ %if TMPL_MODE == BS3_MODE_RM
         extern TMPL_FAR_NM(Bs3TestDoModesByOne):wrt BS3GROUPRMTEXT16
         jmp far TMPL_FAR_NM(Bs3TestDoModesByOne)
  %else
-        push    cs
-        push    ax
         extern TMPL_FAR_NM(Bs3TestDoModesByOne):wrt CGROUP16
         jmp     TMPL_NM(Bs3TestDoModesByOne)
  %endif

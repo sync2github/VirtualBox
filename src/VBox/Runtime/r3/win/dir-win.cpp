@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: dir-win.cpp 90781 2021-08-23 09:26:08Z vboxsync $ */
 /** @file
  * IPRT - Directory, Windows.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -50,14 +50,14 @@ RTDECL(int) RTDirCreate(const char *pszPath, RTFMODE fMode, uint32_t fCreate)
      * Validate the file mode.
      */
     int rc;
-    fMode = rtFsModeNormalize(fMode, pszPath, 0);
+    fMode = rtFsModeNormalize(fMode, pszPath, 0, RTFS_TYPE_DIRECTORY);
     if (rtFsModeIsValidPermissions(fMode))
     {
         /*
          * Convert to UTF-16.
          */
         PRTUTF16 pwszString;
-        rc = RTStrToUtf16(pszPath, &pwszString);
+        rc = RTPathWinFromUtf8(&pwszString, pszPath, 0 /*fFlags*/);
         AssertRC(rc);
         if (RT_SUCCESS(rc))
         {
@@ -88,7 +88,7 @@ RTDECL(int) RTDirCreate(const char *pszPath, RTFMODE fMode, uint32_t fCreate)
                     rc = RTErrConvertFromWin32(GetLastError());
             }
 
-            RTUtf16Free(pwszString);
+            RTPathWinFree(pwszString);
         }
     }
     else
@@ -108,7 +108,7 @@ RTDECL(int) RTDirRemove(const char *pszPath)
      * Convert to UTF-16.
      */
     PRTUTF16 pwszString;
-    int rc = RTStrToUtf16(pszPath, &pwszString);
+    int rc = RTPathWinFromUtf8(&pwszString, pszPath, 0 /*fFlags*/);
     AssertRC(rc);
     if (RT_SUCCESS(rc))
     {
@@ -120,7 +120,7 @@ RTDECL(int) RTDirRemove(const char *pszPath)
         else
             rc = RTErrConvertFromWin32(GetLastError());
 
-        RTUtf16Free(pwszString);
+        RTPathWinFree(pwszString);
     }
 
     LogFlow(("RTDirRemove(%p:{%s}): returns %Rrc\n", pszPath, pszPath, rc));
@@ -140,8 +140,8 @@ RTDECL(int) RTDirRename(const char *pszSrc, const char *pszDst, unsigned fRename
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszSrc), ("%p\n", pszSrc), VERR_INVALID_POINTER);
-    AssertMsgReturn(VALID_PTR(pszDst), ("%p\n", pszDst), VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSrc, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszDst, VERR_INVALID_POINTER);
     AssertMsgReturn(*pszSrc, ("%p\n", pszSrc), VERR_INVALID_PARAMETER);
     AssertMsgReturn(*pszDst, ("%p\n", pszDst), VERR_INVALID_PARAMETER);
     AssertMsgReturn(!(fRename & ~RTPATHRENAME_FLAGS_REPLACE), ("%#x\n", fRename), VERR_INVALID_PARAMETER);

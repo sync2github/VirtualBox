@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: schedgroup.py 83407 2020-03-25 12:52:31Z vboxsync $
 
 """
 Test Manager - Scheduling Group.
@@ -7,7 +7,7 @@ Test Manager - Scheduling Group.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 83407 $"
 
 
 # Standard python imports.
@@ -34,12 +34,15 @@ import unittest;
 
 # Validation Kit imports.
 from testmanager.core.base          import ModelDataBase, ModelDataBaseTestCase, ModelLogicBase, TMExceptionBase, \
-                                           TMRowInUse, TMInvalidData, TMRowAlreadyExists, TMRowNotFound;
+                                           TMRowInUse, TMInvalidData, TMRowAlreadyExists, TMRowNotFound, \
+                                           ChangeLogEntry, AttributeChangeEntry, AttributeChangeEntryPre;
 from testmanager.core.buildsource   import BuildSourceData;
+from testmanager.core               import db;
 from testmanager.core.testcase      import TestCaseData;
 from testmanager.core.testcaseargs  import TestCaseArgsData;
-from testmanager.core.testbox       import TestBoxData, TestBoxLogic;
+from testmanager.core.testbox       import TestBoxLogic, TestBoxDataForSchedGroup;
 from testmanager.core.testgroup     import TestGroupData;
+from testmanager.core.useraccount   import UserAccountLogic;
 
 
 
@@ -146,6 +149,7 @@ class SchedGroupMemberDataEx(SchedGroupMemberData):
 
 
 
+
 class SchedGroupData(ModelDataBase):
     """
     SchedGroup Data.
@@ -249,22 +253,24 @@ class SchedGroupDataEx(SchedGroupData):
     """
 
     ksParam_aoMembers    = 'SchedGroup_aoMembers';
-    kasAltArrayNull      = [ 'aoMembers', ];
+    ksParam_aoTestBoxes  = 'SchedGroup_aoTestboxes';
+    kasAltArrayNull      = [ 'aoMembers', 'aoTestboxes' ];
 
     ## Helper parameter containing the comma separated list with the IDs of
     #  potential members found in the parameters.
     ksParam_aidTestGroups = 'TestGroupDataEx_aidTestGroups';
+    ## Ditto for testbox meembers.
+    ksParam_aidTestBoxes  = 'TestGroupDataEx_aidTestBoxes';
 
 
     def __init__(self):
         SchedGroupData.__init__(self);
-        self.aoMembers          = [];       # type: SchedGroupMemberDataEx
+        self.aoMembers              = []    # type: list[SchedGroupMemberDataEx]
+        self.aoTestBoxes            = []    # type: list[TestBoxDataForSchedGroup]
 
-        # Two build sources for convenience sake.
-        self.oBuildSrc          = None;     # type: TestBoxData
-        self.oBuildSrcValidationKit = None; # type: TestBoxData
-        # List of test boxes that uses this group for convenience.
-        self.aoTestBoxes        = None;     # type: list[TestBoxData]
+        # The two build sources for the sake of convenience.
+        self.oBuildSrc              = None  # type: BuildSourceData
+        self.oBuildSrcValidationKit = None  # type: BuildSourceData
 
     def _initExtraMembersFromDb(self, oDb, tsNow = None, sPeriodBack = None):
         """
@@ -272,13 +278,13 @@ class SchedGroupDataEx(SchedGroupData):
         Returns self.  Raises exception if no row or database error.
         """
         #
-        # It all upfront so the object has some kind of consistency if anything
-        # below raises exceptions.
+        # Clear all members upfront so the object has some kind of consistency
+        # if anything below raises exceptions.
         #
-        self.oBuildSrc    = None;
+        self.oBuildSrc              = None;
         self.oBuildSrcValidationKit = None;
-        self.aoTestBoxes = [];
-        self.aoMembers   = [];
+        self.aoTestBoxes            = [];
+        self.aoMembers              = [];
 
         #
         # Build source.
@@ -293,20 +299,11 @@ class SchedGroupDataEx(SchedGroupData):
         #
         # Test Boxes.
         #
-        oDb.execute('SELECT TestBoxesWithStrings.*\n'
-                    'FROM   TestBoxesWithStrings,\n'
-                    '       TestBoxesInSchedGroups\n'
-                    'WHERE  TestBoxesInSchedGroups.idSchedGroup = %s\n'
-                    + self.formatSimpleNowAndPeriod(oDb, tsNow, sPeriodBack, sTablePrefix = 'TestBoxesInSchedGroups.') +
-                    '   AND TestBoxesWithStrings.idTestBox      = TestBoxesInSchedGroups.idTestBox\n'
-                    + self.formatSimpleNowAndPeriod(oDb, tsNow, sPeriodBack, sTablePrefix = 'TestBoxesWithStrings.') +
-                    'ORDER BY TestBoxesWithStrings.sName, TestBoxesWithStrings.idTestBox\n'
-                    , (self.idSchedGroup,));
-        for aoRow in oDb.fetchAll():
-            self.aoTestBoxes.append(TestBoxData().initFromDbRow(aoRow));
+        self.aoTestBoxes = TestBoxLogic(oDb).fetchForSchedGroup(self.idSchedGroup, tsNow);
 
         #
         # Test groups.
+        # The fetchForChangeLog method makes ASSUMPTIONS about sorting!
         #
         oDb.execute('SELECT SchedGroupMembers.*, TestGroups.*\n'
                     'FROM   SchedGroupMembers\n'
@@ -314,7 +311,9 @@ class SchedGroupDataEx(SchedGroupData):
                     'WHERE  SchedGroupMembers.idSchedGroup = %s\n'
                     + self.formatSimpleNowAndPeriod(oDb, tsNow, sPeriodBack, sTablePrefix = 'SchedGroupMembers.')
                     + self.formatSimpleNowAndPeriod(oDb, tsNow, sPeriodBack, sTablePrefix = 'TestGroups.') +
-                    'ORDER BY SchedGroupMembers.idTestGroupPreReq, SchedGroupMembers.idTestGroup\n'
+                    'ORDER BY SchedGroupMembers.idTestGroupPreReq ASC NULLS FIRST,\n'
+                    '         TestGroups.sName,\n'
+                    '         SchedGroupMembers.idTestGroup\n'
                     , (self.idSchedGroup,));
         for aoRow in oDb.fetchAll():
             self.aoMembers.append(SchedGroupMemberDataEx().initFromDbRow(aoRow));
@@ -340,53 +339,92 @@ class SchedGroupDataEx(SchedGroupData):
         asAttributes = SchedGroupData.getDataAttributes(self);
         asAttributes.remove('oBuildSrc');
         asAttributes.remove('oBuildSrcValidationKit');
-        asAttributes.remove('aoTestBoxes');
         return asAttributes;
 
     def getAttributeParamNullValues(self, sAttr):
-        if sAttr != 'aoMembers':
+        if sAttr not in [ 'aoMembers', 'aoTestBoxes' ]:
             return SchedGroupData.getAttributeParamNullValues(self, sAttr);
         return ['', [], None];
 
     def convertParamToAttribute(self, sAttr, sParam, oValue, oDisp, fStrict):
-        if sAttr != 'aoMembers':
-            return SchedGroupData.convertParamToAttribute(self, sAttr, sParam, oValue, oDisp, fStrict);
-
         aoNewValue  = [];
-        aidSelected = oDisp.getListOfIntParams(sParam, iMin = 1, iMax = 0x7ffffffe, aiDefaults = [])
-        sIds        = oDisp.getStringParam(self.ksParam_aidTestGroups, sDefault = '');
-        for idTestGroup in sIds.split(','):
-            try:    idTestGroup = int(idTestGroup);
-            except: pass;
-            oDispWrapper = self.DispWrapper(oDisp, '%s[%s][%%s]' % (SchedGroupDataEx.ksParam_aoMembers, idTestGroup,))
-            oMember = SchedGroupMemberDataEx().initFromParams(oDispWrapper, fStrict = False);
-            if idTestGroup in aidSelected:
-                aoNewValue.append(oMember);
+        if sAttr == 'aoMembers':
+            aidSelected = oDisp.getListOfIntParams(sParam, iMin = 1, iMax = 0x7ffffffe, aiDefaults = [])
+            sIds        = oDisp.getStringParam(self.ksParam_aidTestGroups, sDefault = '');
+            for idTestGroup in sIds.split(','):
+                try:    idTestGroup = int(idTestGroup);
+                except: pass;
+                oDispWrapper = self.DispWrapper(oDisp, '%s[%s][%%s]' % (SchedGroupDataEx.ksParam_aoMembers, idTestGroup,))
+                oMember = SchedGroupMemberDataEx().initFromParams(oDispWrapper, fStrict = False);
+                if idTestGroup in aidSelected:
+                    oMember.idTestGroup = idTestGroup;
+                    aoNewValue.append(oMember);
+        elif sAttr == 'aoTestBoxes':
+            aidSelected = oDisp.getListOfIntParams(sParam, iMin = 1, iMax = 0x7ffffffe, aiDefaults = [])
+            sIds        = oDisp.getStringParam(self.ksParam_aidTestBoxes, sDefault = '');
+            for idTestBox in sIds.split(','):
+                try:    idTestBox = int(idTestBox);
+                except: pass;
+                oDispWrapper = self.DispWrapper(oDisp, '%s[%s][%%s]' % (SchedGroupDataEx.ksParam_aoTestBoxes, idTestBox,))
+                oBoxInGrp = TestBoxDataForSchedGroup().initFromParams(oDispWrapper, fStrict = False);
+                if idTestBox in aidSelected:
+                    oBoxInGrp.idTestBox = idTestBox;
+                    aoNewValue.append(oBoxInGrp);
+        else:
+            return SchedGroupData.convertParamToAttribute(self, sAttr, sParam, oValue, oDisp, fStrict);
         return aoNewValue;
 
     def _validateAndConvertAttribute(self, sAttr, sParam, oValue, aoNilValues, fAllowNull, oDb):
-        if sAttr != 'aoMembers':
+        if sAttr not in [ 'aoMembers', 'aoTestBoxes' ]:
             return SchedGroupData._validateAndConvertAttribute(self, sAttr, sParam, oValue, aoNilValues, fAllowNull, oDb);
+
+        if oValue in aoNilValues:
+            return ([], None);
 
         asErrors     = [];
         aoNewMembers = [];
-        for oOldMember in oValue:
-            oNewMember = SchedGroupMemberDataEx().initFromOther(oOldMember);
-            aoNewMembers.append(oNewMember);
+        if sAttr == 'aoMembers':
+            asAllowNulls = ['bmHourlySchedule', 'idTestGroupPreReq', 'tsEffective', 'tsExpire', 'uidAuthor', ];
+            if self.idSchedGroup in [None, '-1', -1]:
+                asAllowNulls.append('idSchedGroup'); # Probably new group, so allow null scheduling group.
 
-            dErrors = oNewMember.validateAndConvert(oDb, ModelDataBase.ksValidateFor_Other);
-            if len(dErrors) > 0:
-                asErrors.append(str(dErrors));
+            for oOldMember in oValue:
+                oNewMember = SchedGroupMemberDataEx().initFromOther(oOldMember);
+                aoNewMembers.append(oNewMember);
 
-        if len(asErrors) == 0:
-            for i, _ in enumerate(aoNewMembers):
-                idTestGroup = aoNewMembers[i];
-                for j in range(i + 1, len(aoNewMembers)):
-                    if aoNewMembers[j].idTestGroup == idTestGroup:
-                        asErrors.append('Duplicate test group #%d!' % (idTestGroup, ));
-                        break;
+                dErrors = oNewMember.validateAndConvertEx(asAllowNulls, oDb, ModelDataBase.ksValidateFor_Other);
+                if dErrors:
+                    asErrors.append(str(dErrors));
 
-        return (aoNewMembers, None if len(asErrors) == 0 else '<br>\n'.join(asErrors));
+            if not asErrors:
+                for i, _ in enumerate(aoNewMembers):
+                    idTestGroup = aoNewMembers[i];
+                    for j in range(i + 1, len(aoNewMembers)):
+                        if aoNewMembers[j].idTestGroup == idTestGroup:
+                            asErrors.append('Duplicate test group #%d!' % (idTestGroup, ));
+                            break;
+        else:
+            asAllowNulls = list(TestBoxDataForSchedGroup.kasAllowNullAttributes);
+            if self.idSchedGroup in [None, '-1', -1]:
+                asAllowNulls.append('idSchedGroup'); # Probably new group, so allow null scheduling group.
+
+            for oOldMember in oValue:
+                oNewMember = TestBoxDataForSchedGroup().initFromOther(oOldMember);
+                aoNewMembers.append(oNewMember);
+
+                dErrors = oNewMember.validateAndConvertEx(asAllowNulls, oDb, ModelDataBase.ksValidateFor_Other);
+                if dErrors:
+                    asErrors.append(str(dErrors));
+
+            if not asErrors:
+                for i, _ in enumerate(aoNewMembers):
+                    idTestBox = aoNewMembers[i];
+                    for j in range(i + 1, len(aoNewMembers)):
+                        if aoNewMembers[j].idTestBox == idTestBox:
+                            asErrors.append('Duplicate test box #%d!' % (idTestBox, ));
+                            break;
+
+        return (aoNewMembers, None if not asErrors else '<br>\n'.join(asErrors));
 
     def _validateAndConvertWorker(self, asAllowNullAttributes, oDb, enmValidateFor = ModelDataBase.ksValidateFor_Other):
         dErrors = SchedGroupData._validateAndConvertWorker(self, asAllowNullAttributes, oDb, enmValidateFor);
@@ -420,28 +458,33 @@ class SchedGroupDataEx(SchedGroupData):
 
 
 
-class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
+class SchedGroupLogic(ModelLogicBase): # pylint: disable=too-few-public-methods
     """
     SchedGroup logic.
     """
+
+    def __init__(self, oDb):
+        ModelLogicBase.__init__(self, oDb);
+        self.dCache = None;
 
     #
     # Standard methods.
     #
 
-    def fetchForListing(self, iStart, cMaxRows, tsNow):
+    def fetchForListing(self, iStart, cMaxRows, tsNow, aiSortColumns = None):
         """
         Fetches build sources.
 
         Returns an array (list) of BuildSourceData items, empty list if none.
         Raises exception on error.
         """
+        _ = aiSortColumns;
 
         if tsNow is None:
             self._oDb.execute('SELECT   *\n'
                               'FROM     SchedGroups\n'
                               'WHERE    tsExpire = \'infinity\'::TIMESTAMP\n'
-                              'ORDER BY idSchedGroup DESC\n'
+                              'ORDER BY fEnabled DESC, sName DESC\n'
                               'LIMIT %s OFFSET %s\n'
                               , (cMaxRows, iStart,));
         else:
@@ -449,7 +492,7 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
                               'FROM     SchedGroups\n'
                               'WHERE    tsExpire     > %s\n'
                               '     AND tsEffective <= %s\n'
-                              'ORDER BY idSchedGroup DESC\n'
+                              'ORDER BY fEnabled DESC, sName DESC\n'
                               'LIMIT %s OFFSET %s\n'
                               , (tsNow, tsNow, cMaxRows, iStart,));
 
@@ -458,6 +501,243 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
             aoRet.append(SchedGroupDataEx().initFromDbRowEx(aoRow, self._oDb, tsNow));
         return aoRet;
 
+    def fetchForChangeLog(self, idSchedGroup, iStart, cMaxRows, tsNow): # pylint: disable=too-many-locals,too-many-statements
+        """
+        Fetches change log entries for a scheduling group.
+
+        Returns an array of ChangeLogEntry instance and an indicator whether
+        there are more entries.
+        Raises exception on error.
+        """
+
+        ## @todo calc changes to scheduler group!
+
+        if tsNow is None:
+            tsNow = self._oDb.getCurrentTimestamp();
+
+        #
+        # First gather the change log timeline using the effective dates.
+        # (ASSUMES that we'll always have a separate delete entry, rather
+        # than just setting tsExpire.)
+        #
+        self._oDb.execute('''
+(
+SELECT      tsEffective,
+            uidAuthor
+FROM        SchedGroups
+WHERE       idSchedGroup = %s
+        AND tsEffective <= %s
+ORDER BY    tsEffective DESC
+) UNION (
+SELECT      CASE WHEN tsEffective + %s::INTERVAL = tsExpire THEN tsExpire ELSE tsEffective END,
+            uidAuthor
+FROM        SchedGroupMembers
+WHERE       idSchedGroup = %s
+        AND tsEffective <= %s
+ORDER BY    tsEffective DESC
+) UNION (
+SELECT      CASE WHEN tsEffective + %s::INTERVAL = tsExpire THEN tsExpire ELSE tsEffective END,
+            uidAuthor
+FROM        TestBoxesInSchedGroups
+WHERE       idSchedGroup = %s
+        AND tsEffective <= %s
+ORDER BY    tsEffective DESC
+)
+ORDER BY    tsEffective DESC
+LIMIT %s OFFSET %s
+''', (idSchedGroup, tsNow,
+      db.dbOneTickIntervalString(), idSchedGroup, tsNow,
+      db.dbOneTickIntervalString(), idSchedGroup, tsNow,
+      cMaxRows + 1, iStart, ));
+
+        aoEntries = [] # type: list[ChangeLogEntry]
+        tsPrevious = tsNow;
+        for aoDbRow in self._oDb.fetchAll():
+            (tsEffective, uidAuthor) = aoDbRow;
+            aoEntries.append(ChangeLogEntry(uidAuthor, None, tsEffective, tsPrevious, None, None, []));
+            tsPrevious = db.dbTimestampPlusOneTick(tsEffective);
+
+        if True: # pylint: disable=using-constant-test
+            #
+            # Fetch data for each for each change log entry point.
+            #
+            # We add one tick to the timestamp here to skip past delete records
+            # that only there to record the user doing the deletion.
+            #
+            for iEntry, oEntry in enumerate(aoEntries):
+                oEntry.oNewRaw = SchedGroupDataEx().initFromDbWithId(self._oDb, idSchedGroup, oEntry.tsEffective);
+                if iEntry > 0:
+                    aoEntries[iEntry - 1].oOldRaw = oEntry.oNewRaw;
+
+            # Chop off the +1 entry, if any.
+            fMore = len(aoEntries) > cMaxRows;
+            if fMore:
+                aoEntries = aoEntries[:-1];
+
+            # Figure out the changes.
+            for oEntry in aoEntries:
+                oOld = oEntry.oOldRaw;
+                if not oOld:
+                    break;
+                oNew      = oEntry.oNewRaw;
+                aoChanges = oEntry.aoChanges;
+                for sAttr in oNew.getDataAttributes():
+                    if sAttr in [ 'tsEffective', 'tsExpire', 'uidAuthor', ]:
+                        continue;
+                    oOldAttr = getattr(oOld, sAttr);
+                    oNewAttr = getattr(oNew, sAttr);
+                    if oOldAttr == oNewAttr:
+                        continue;
+                    if sAttr in [ 'aoMembers', 'aoTestBoxes', ]:
+                        iNew = 0;
+                        iOld = 0;
+                        asNewAttr = [];
+                        asOldAttr = [];
+                        if sAttr == 'aoMembers':
+                            # ASSUMES aoMembers is sorted by idTestGroupPreReq (nulls first), oTestGroup.sName, idTestGroup!
+                            while iNew < len(oNewAttr) and iOld < len(oOldAttr):
+                                if oNewAttr[iNew].idTestGroup == oOldAttr[iOld].idTestGroup:
+                                    if oNewAttr[iNew].idTestGroupPreReq != oOldAttr[iOld].idTestGroupPreReq:
+                                        if oNewAttr[iNew].idTestGroupPreReq is None:
+                                            asOldAttr.append('Dropped test group #%s (%s) dependency on #%s'
+                                                             % (oNewAttr[iNew].idTestGroup, oNewAttr[iNew].oTestGroup.sName,
+                                                                oOldAttr[iOld].idTestGroupPreReq));
+                                        elif oOldAttr[iOld].idTestGroupPreReq is None:
+                                            asNewAttr.append('Added test group #%s (%s) dependency on #%s'
+                                                             % (oNewAttr[iNew].idTestGroup, oNewAttr[iNew].oTestGroup.sName,
+                                                                oNewAttr[iOld].idTestGroupPreReq));
+                                        else:
+                                            asNewAttr.append('Test group #%s (%s) dependency on #%s'
+                                                             % (oNewAttr[iNew].idTestGroup, oNewAttr[iNew].oTestGroup.sName,
+                                                                oNewAttr[iNew].idTestGroupPreReq));
+                                            asOldAttr.append('Test group #%s (%s) dependency on #%s'
+                                                             % (oNewAttr[iNew].idTestGroup, oNewAttr[iNew].oTestGroup.sName,
+                                                                oOldAttr[iOld].idTestGroupPreReq));
+                                    if oNewAttr[iNew].iSchedPriority != oOldAttr[iOld].iSchedPriority:
+                                        asNewAttr.append('Test group #%s (%s) priority %s'
+                                                         % (oNewAttr[iNew].idTestGroup, oNewAttr[iNew].oTestGroup.sName,
+                                                            oNewAttr[iNew].iSchedPriority));
+                                        asOldAttr.append('Test group #%s (%s) priority %s'
+                                                         % (oNewAttr[iNew].idTestGroup, oNewAttr[iNew].oTestGroup.sName,
+                                                            oOldAttr[iOld].iSchedPriority));
+                                    iNew += 1;
+                                    iOld += 1;
+                                elif oNewAttr[iNew].oTestGroup.sName      <  oOldAttr[iOld].oTestGroup.sName \
+                                  or (    oNewAttr[iNew].oTestGroup.sName == oOldAttr[iOld].oTestGroup.sName
+                                      and oNewAttr[iNew].idTestGroup      <  oOldAttr[iOld].idTestGroup):
+                                    asNewAttr.append('New test group #%s - %s'
+                                                     % (oNewAttr[iNew].idTestGroup, oNewAttr[iNew].oTestGroup.sName));
+                                    iNew += 1;
+                                else:
+                                    asOldAttr.append('Removed test group #%s - %s'
+                                                     % (oOldAttr[iOld].idTestGroup, oOldAttr[iOld].oTestGroup.sName));
+                                    iOld += 1;
+                            while iNew < len(oNewAttr):
+                                asNewAttr.append('New test group #%s - %s'
+                                                 % (oNewAttr[iNew].idTestGroup, oNewAttr[iNew].oTestGroup.sName));
+                                iNew += 1;
+                            while iOld < len(oOldAttr):
+                                asOldAttr.append('Removed test group #%s - %s'
+                                                 % (oOldAttr[iOld].idTestGroup, oOldAttr[iOld].oTestGroup.sName));
+                                iOld += 1;
+                        else:
+                            dNewIds    = { oBoxInGrp.idTestBox: oBoxInGrp for oBoxInGrp in oNewAttr };
+                            dOldIds    = { oBoxInGrp.idTestBox: oBoxInGrp for oBoxInGrp in oOldAttr };
+                            hCommonIds = set(dNewIds.keys()) & set(dOldIds.keys());
+                            for idTestBox in hCommonIds:
+                                oNewBoxInGrp = dNewIds[idTestBox];
+                                oOldBoxInGrp = dOldIds[idTestBox];
+                                if oNewBoxInGrp.iSchedPriority != oOldBoxInGrp.iSchedPriority:
+                                    asNewAttr.append('Test box \'%s\' (#%s) priority %s'
+                                                     % (getattr(oNewBoxInGrp.oTestBox, 'sName', '[Partial DB]'),
+                                                        oNewBoxInGrp.idTestBox, oNewBoxInGrp.iSchedPriority));
+                                    asOldAttr.append('Test box \'%s\' (#%s) priority %s'
+                                                     % (getattr(oOldBoxInGrp.oTestBox, 'sName', '[Partial DB]'),
+                                                        oOldBoxInGrp.idTestBox, oOldBoxInGrp.iSchedPriority));
+                            asNewAttr = sorted(asNewAttr);
+                            asOldAttr = sorted(asOldAttr);
+                            for idTestBox in set(dNewIds.keys()) - hCommonIds:
+                                oNewBoxInGrp = dNewIds[idTestBox];
+                                asNewAttr.append('New test box \'%s\' (#%s) priority %s'
+                                                 % (getattr(oNewBoxInGrp.oTestBox, 'sName', '[Partial DB]'),
+                                                    oNewBoxInGrp.idTestBox, oNewBoxInGrp.iSchedPriority));
+                            for idTestBox in set(dOldIds.keys()) - hCommonIds:
+                                oOldBoxInGrp = dOldIds[idTestBox];
+                                asOldAttr.append('Removed test box \'%s\' (#%s) priority %s'
+                                                 % (getattr(oOldBoxInGrp.oTestBox, 'sName', '[Partial DB]'),
+                                                    oOldBoxInGrp.idTestBox, oOldBoxInGrp.iSchedPriority));
+
+                        if asNewAttr or asOldAttr:
+                            aoChanges.append(AttributeChangeEntryPre(sAttr, oNewAttr, oOldAttr,
+                                                                     '\n'.join(asNewAttr), '\n'.join(asOldAttr)));
+                    else:
+                        aoChanges.append(AttributeChangeEntry(sAttr, oNewAttr, oOldAttr, str(oNewAttr), str(oOldAttr)));
+
+        else:
+            ##
+            ## @todo Incomplete: A more complicate apporach, probably faster though.
+            ##
+            def findEntry(tsEffective, iPrev = 0):
+                """ Find entry with matching effective + expiration time """
+                self._oDb.dprint('findEntry: iPrev=%s len(aoEntries)=%s tsEffective=%s' % (iPrev, len(aoEntries), tsEffective));
+                while iPrev < len(aoEntries):
+                    self._oDb.dprint('%s iPrev=%u' % (aoEntries[iPrev].tsEffective, iPrev, ));
+                    if aoEntries[iPrev].tsEffective > tsEffective:
+                        iPrev += 1;
+                    elif aoEntries[iPrev].tsEffective == tsEffective:
+                        self._oDb.dprint('hit %u' % (iPrev,));
+                        return iPrev;
+                    else:
+                        break;
+                self._oDb.dprint('%s not found!' % (tsEffective,));
+                return -1;
+
+            fMore = True;
+
+            #
+            # Track scheduling group changes.  Not terribly efficient for large cMaxRows
+            # values, but not in the mood for figure out if there is any way to optimize that.
+            #
+            self._oDb.execute('''
+SELECT      *
+FROM        SchedGroups
+WHERE       idSchedGroup = %s
+        AND tsEffective <= %s
+ORDER BY    tsEffective DESC
+LIMIT %s''', (idSchedGroup, aoEntries[0].tsEffective, cMaxRows + 1,));
+
+            iEntry  = 0;
+            aaoRows = self._oDb.fetchAll();
+            for iRow, oRow in enumerate(aaoRows):
+                oNew   = SchedGroupDataEx().initFromDbRow(oRow);
+                iEntry = findEntry(oNew.tsEffective, iEntry);
+                self._oDb.dprint('iRow=%s iEntry=%s' % (iRow, iEntry));
+                if iEntry < 0:
+                    break;
+                oEntry = aoEntries[iEntry];
+                aoChanges = oEntry.aoChanges;
+                oEntry.oNewRaw = oNew;
+                if iRow + 1 < len(aaoRows):
+                    oOld = SchedGroupDataEx().initFromDbRow(aaoRows[iRow + 1]);
+                    self._oDb.dprint('oOld=%s' % (oOld,));
+                    for sAttr in oNew.getDataAttributes():
+                        if sAttr not in [ 'tsEffective', 'tsExpire', 'uidAuthor', ]:
+                            oOldAttr = getattr(oOld, sAttr);
+                            oNewAttr = getattr(oNew, sAttr);
+                            if oOldAttr != oNewAttr:
+                                aoChanges.append(AttributeChangeEntry(sAttr, oNewAttr, oOldAttr, str(oNewAttr), str(oOldAttr)));
+                else:
+                    self._oDb.dprint('New');
+
+            #
+            # ...
+            #
+
+        # FInally
+        UserAccountLogic(self._oDb).resolveChangeLogAuthors(aoEntries);
+        return (aoEntries, fMore);
+
+
     def addEntry(self, oData, uidAuthor, fCommit = False):
         """Add Scheduling Group record"""
 
@@ -465,7 +745,7 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
         # Validate.
         #
         dDataErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Add);
-        if len(dDataErrors) > 0:
+        if dDataErrors:
             raise TMInvalidData('Invalid data passed to addEntry: %s' % (dDataErrors,));
         if self.exists(oData.sName):
             raise TMRowAlreadyExists('Scheduling group "%s" already exists.' % (oData.sName,));
@@ -495,6 +775,10 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
         idSchedGroup = self._oDb.fetchOne()[0];
         oData.idSchedGroup = idSchedGroup;
 
+        for oBoxInGrp in oData.aoTestBoxes:
+            oBoxInGrp.idSchedGroup = idSchedGroup;
+            self._addSchedGroupTestBox(uidAuthor, oBoxInGrp);
+
         for oMember in oData.aoMembers:
             oMember.idSchedGroup = idSchedGroup;
             self._addSchedGroupMember(uidAuthor, oMember);
@@ -509,7 +793,7 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
         # Validate input and retrieve the old data.
         #
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Edit);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('editEntry got invalid data: %s' % (dErrors,));
         self._assertUnique(oData.sName, oData.idSchedGroup);
         oOldData = SchedGroupDataEx().initFromDbWithId(self._oDb, oData.idSchedGroup);
@@ -547,6 +831,31 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
                 self._historizeSchedGroupMember(oMember);
                 self._addSchedGroupMember(uidAuthor, oMember);
 
+        # Remove testboxes.
+        for oOld in oOldData.aoTestBoxes:
+            fRemove = True;
+            for oNew in oData.aoTestBoxes:
+                if oNew.idTestBox == oOld.idTestBox:
+                    fRemove = False;
+                    break;
+            if fRemove:
+                self._removeSchedGroupTestBox(uidAuthor, oOld);
+
+        # Add / modify testboxes.
+        for oBoxInGrp in oData.aoTestBoxes:
+            oOldBoxInGrp = None;
+            for oOld in oOldData.aoTestBoxes:
+                if oOld.idTestBox == oBoxInGrp.idTestBox:
+                    oOldBoxInGrp = oOld;
+                    break;
+
+            oBoxInGrp.idSchedGroup = oData.idSchedGroup;
+            if oOldBoxInGrp is None:
+                self._addSchedGroupTestBox(uidAuthor, oBoxInGrp);
+            elif not oBoxInGrp.isEqualEx(oOldBoxInGrp, ['tsEffective', 'tsExpire', 'uidAuthor', 'oTestBox']):
+                self._historizeSchedGroupTestBox(oBoxInGrp);
+                self._addSchedGroupTestBox(uidAuthor, oBoxInGrp);
+
         self._oDb.maybeCommit(fCommit);
         return True;
 
@@ -554,6 +863,7 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
         """
         Deletes a scheduling group.
         """
+        _ = fCascade;
 
         #
         # Input validation and retrival of current data.
@@ -563,29 +873,18 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
         oData = SchedGroupDataEx().initFromDbWithId(self._oDb, idSchedGroup);
 
         #
-        # We use cascade a little different here... We don't actually delete
-        # associated testboxes or testgroups.
+        # Remove the test box member records.
         #
-        if len(oData.aoTestBoxes) > 0:
-            if fCascade is not True:
-                # Complain about there being associated testboxes.
-                asTestBoxes = ['%s (#%d)' % (oTestBox.sName, oTestBox.idTestBox) for oTestBox in oData.aoTestBoxes];
-                raise TMRowInUse('Scheduling group #%d is associated with one or more test boxes: %s'
-                                 % (idSchedGroup, ', '.join(asTestBoxes),));
-            else:
-                # Reassign testboxes to scheduling group #1 (the default group).
-                oTbLogic = TestBoxLogic(self._oDb);
-                for oTestBox in oData.aoTestBoxes:
-                    oTbCopy = TestBoxData().initFromOther(oTestBox);
-                    oTbCopy.idSchedGroup = 1;
-                    oTbLogic.editEntry(oTbCopy, uidAuthor, fCommit = False);
-
-                oData = SchedGroupDataEx().initFromDbWithId(self._oDb, idSchedGroup);
-                if len(oData.aoTestBoxes) != 0:
-                    raise TMRowInUse('More testboxes was added to the scheduling group as we were trying to delete it.');
+        for oBoxInGrp in oData.aoTestBoxes:
+            self._removeSchedGroupTestBox(uidAuthor, oBoxInGrp);
+        self._oDb.execute('UPDATE   TestBoxesInSchedGroups\n'
+                          'SET      tsExpire     = CURRENT_TIMESTAMP\n'
+                          'WHERE    idSchedGroup = %s\n'
+                          '     AND tsExpire     = \'infinity\'::TIMESTAMP\n'
+                          , (idSchedGroup,));
 
         #
-        # Remove the group and all member records.
+        # Remove the test group member records.
         #
         for oMember in oData.aoMembers:
             self._removeSchedGroupMember(uidAuthor, oMember);
@@ -595,6 +894,9 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
                           '     AND tsExpire     = \'infinity\'::TIMESTAMP\n'
                           , (idSchedGroup,));
 
+        #
+        # Now the SchedGroups entry.
+        #
         (tsCur, tsCurMinusOne) = self._oDb.getCurrentTimestamps();
         if oData.tsEffective != tsCur and oData.tsEffective != tsCurMinusOne:
             self._historizeEntry(idSchedGroup, tsCurMinusOne);
@@ -609,6 +911,40 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
         self._oDb.maybeCommit(fCommit)
         return True;
 
+
+    def cachedLookup(self, idSchedGroup):
+        """
+        Looks up the most recent SchedGroupData object for idSchedGroup
+        via an object cache.
+
+        Returns a shared SchedGroupData object.  None if not found.
+        Raises exception on DB error.
+        """
+        if self.dCache is None:
+            self.dCache = self._oDb.getCache('SchedGroup');
+
+        oEntry = self.dCache.get(idSchedGroup, None);
+        if oEntry is None:
+            self._oDb.execute('SELECT   *\n'
+                              'FROM     SchedGroups\n'
+                              'WHERE    idSchedGroup = %s\n'
+                              '     AND tsExpire = \'infinity\'::TIMESTAMP\n'
+                              , (idSchedGroup, ));
+            if self._oDb.getRowCount() == 0:
+                # Maybe it was deleted, try get the last entry.
+                self._oDb.execute('SELECT   *\n'
+                                  'FROM     SchedGroups\n'
+                                  'WHERE    idSchedGroup = %s\n'
+                                  'ORDER BY tsExpire DESC\n'
+                                  'LIMIT 1\n'
+                                  , (idSchedGroup, ));
+            elif self._oDb.getRowCount() > 1:
+                raise self._oDb.integrityException('%s infinity rows for %s' % (self._oDb.getRowCount(), idSchedGroup));
+
+            if self._oDb.getRowCount() == 1:
+                oEntry = SchedGroupData().initFromDbRow(self._oDb.fetchOne());
+                self.dCache[idSchedGroup] = oEntry;
+        return oEntry;
 
 
     #
@@ -684,7 +1020,7 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
         Gets the scheduling groups members for the given scheduling group.
 
         Returns an array of SchedGroupMemberDataEx instances (sorted by
-        priority and idTestGroup).  May raise exception DB error.
+        priority (descending) and idTestGroup).  May raise exception DB error.
         """
 
         if tsEffective is None:
@@ -694,7 +1030,7 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
                               '     AND SchedGroupMembers.tsExpire     = \'infinity\'::TIMESTAMP\n'
                               '     AND TestGroups.idTestGroup         = SchedGroupMembers.idTestGroup\n'
                               '     AND TestGroups.tsExpire            = \'infinity\'::TIMESTAMP\n'
-                              'ORDER BY SchedGroupMembers.iSchedPriority, SchedGroupMembers.idTestGroup\n'
+                              'ORDER BY SchedGroupMembers.iSchedPriority DESC, SchedGroupMembers.idTestGroup\n'
                               , (idSchedGroup,));
         else:
             self._oDb.execute('SELECT   *\n'
@@ -717,8 +1053,8 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
         """
         Gets the enabled testcases w/ testgroup+priority for the given scheduling group.
 
-        Returns an array TestCaseData instance (group id, testcase priority and
-        testcase ids) with an extra iSchedPriority member.
+        Returns an array of TestCaseData instances (ordered by group id, descending
+        testcase priority, and testcase IDs) with an extra iSchedPriority member.
         May raise exception on DB error or if the result exceeds cMax.
         """
 
@@ -733,7 +1069,7 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
                           '     AND TestCases.idTestCase           = TestGroupMembers.idTestCase\n'
                           '     AND TestCases.tsExpire             = \'infinity\'::TIMESTAMP\n'
                           '     AND TestCases.fEnabled             = TRUE\n'
-                          'ORDER BY TestGroupMembers.idTestGroup, TestGroupMembers.iSchedPriority, TestCases.idTestCase\n'
+                          'ORDER BY TestGroupMembers.idTestGroup, TestGroupMembers.iSchedPriority DESC, TestCases.idTestCase\n'
                           , (idSchedGroup,));
 
         if cMax is not None  and  self._oDb.getRowCount() > cMax:
@@ -935,6 +1271,55 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
                           , ( tsExpire, oMember.idSchedGroup, oMember.idTestGroup, ));
         return True;
 
+    #
+    def _addSchedGroupTestBox(self, uidAuthor, oBoxInGroup, tsEffective = None):
+        """
+        addEntry worker for adding a test box to a scheduling group.
+        """
+        if tsEffective is None:
+            tsEffective = self._oDb.getCurrentTimestamp();
+        self._oDb.execute('INSERT INTO TestBoxesInSchedGroups(\n'
+                          '         idSchedGroup,\n'
+                          '         idTestBox,\n'
+                          '         tsEffective,\n'
+                          '         uidAuthor,\n'
+                          '         iSchedPriority)\n'
+                          'VALUES (%s, %s, %s, %s, %s)\n'
+                          , ( oBoxInGroup.idSchedGroup,
+                              oBoxInGroup.idTestBox,
+                              tsEffective,
+                              uidAuthor,
+                              oBoxInGroup.iSchedPriority, ));
+        return True;
+
+    def _removeSchedGroupTestBox(self, uidAuthor, oBoxInGroup):
+        """
+        Removes a testbox from a scheduling group.
+        """
+
+        # Try record who removed it by adding an dummy entry that expires immediately.
+        (tsCur, tsCurMinusOne) = self._oDb.getCurrentTimestamps();
+        if oBoxInGroup.tsEffective != tsCur and oBoxInGroup.tsEffective != tsCurMinusOne:
+            self._historizeSchedGroupTestBox(oBoxInGroup, tsCurMinusOne);
+            self._addSchedGroupTestBox(uidAuthor, oBoxInGroup, tsCurMinusOne); # lazy bird.
+            self._historizeSchedGroupTestBox(oBoxInGroup);
+        else:
+            self._historizeSchedGroupTestBox(oBoxInGroup);
+        return True;
+
+    def _historizeSchedGroupTestBox(self, oBoxInGroup, tsExpire = None):
+        """
+        Historizes the current entry for the given scheduling group.
+        """
+        if tsExpire is None:
+            tsExpire = self._oDb.getCurrentTimestamp();
+        self._oDb.execute('UPDATE TestBoxesInSchedGroups\n'
+                          'SET    tsExpire = %s\n'
+                          'WHERE  idSchedGroup = %s\n'
+                          '   AND idTestBox    = %s\n'
+                          '   AND tsExpire     = \'infinity\'::TIMESTAMP\n'
+                          , ( tsExpire, oBoxInGroup.idSchedGroup, oBoxInGroup.idTestBox, ));
+        return True;
 
 
 
@@ -942,7 +1327,7 @@ class SchedGroupLogic(ModelLogicBase): # pylint: disable=R0903
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class SchedGroupMemberDataTestCase(ModelDataBaseTestCase):
     def setUp(self):
         self.aoSamples = [SchedGroupMemberData(),];

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineViewNormal.cpp 84790 2020-06-11 10:30:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineViewNormal class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,45 +15,29 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QApplication>
-# include <QMainWindow>
-# include <QMenuBar>
-# include <QScrollBar>
-# include <QTimer>
+#include <QApplication>
+#include <QMainWindow>
+#include <QMenuBar>
+#include <QScrollBar>
+#include <QTimer>
 
 /* GUI includes: */
-# include "UISession.h"
-# include "UIActionPoolRuntime.h"
-# include "UIMachineLogic.h"
-# include "UIMachineWindow.h"
-# include "UIMachineViewNormal.h"
-# include "UIFrameBuffer.h"
-# include "UIExtraDataManager.h"
-# include "UIDesktopWidgetWatchdog.h"
+#include "UISession.h"
+#include "UIActionPoolRuntime.h"
+#include "UIMachineLogic.h"
+#include "UIMachineWindow.h"
+#include "UIMachineViewNormal.h"
+#include "UIFrameBuffer.h"
+#include "UIExtraDataManager.h"
+#include "UIDesktopWidgetWatchdog.h"
 
 /* Other VBox includes: */
-# include "VBox/log.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "VBox/log.h"
 
 
-UIMachineViewNormal::UIMachineViewNormal(  UIMachineWindow *pMachineWindow
-                                         , ulong uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                                         , bool bAccelerate2DVideo
-#endif
-                                         )
-    : UIMachineView(  pMachineWindow
-                    , uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                    , bAccelerate2DVideo
-#endif
-                    )
+UIMachineViewNormal::UIMachineViewNormal(UIMachineWindow *pMachineWindow, ulong uScreenId)
+    : UIMachineView(pMachineWindow, uScreenId)
     , m_bIsGuestAutoresizeEnabled(actionPool()->action(UIActionIndexRT_M_View_T_GuestAutoresize)->isChecked())
 {
 }
@@ -74,7 +58,7 @@ bool UIMachineViewNormal::eventFilter(QObject *pWatched, QEvent *pEvent)
                 /* Recalculate max guest size: */
                 setMaxGuestSize();
                 /* And resize guest to current window size: */
-                if (pEvent->spontaneous() && m_bIsGuestAutoresizeEnabled && uisession()->isGuestSupportsGraphics())
+                if (m_bIsGuestAutoresizeEnabled && uisession()->isGuestSupportsGraphics())
                     QTimer::singleShot(300, this, SLOT(sltPerformGuestResize()));
                 break;
             }
@@ -137,7 +121,7 @@ void UIMachineViewNormal::prepareConsoleConnections()
     UIMachineView::prepareConsoleConnections();
 
     /* Guest additions state-change updater: */
-    connect(uisession(), SIGNAL(sigAdditionsStateActualChange()), this, SLOT(sltAdditionsStateChanged()));
+    connect(uisession(), &UISession::sigAdditionsStateActualChange, this, &UIMachineViewNormal::sltAdditionsStateChanged);
 }
 
 void UIMachineViewNormal::setGuestAutoresizeEnabled(bool fEnabled)
@@ -153,6 +137,10 @@ void UIMachineViewNormal::setGuestAutoresizeEnabled(bool fEnabled)
 
 void UIMachineViewNormal::resendSizeHint()
 {
+    /* Skip if another visual representation mode requested: */
+    if (uisession()->requestedVisualState() == UIVisualStateType_Seamless) // Seamless only for now.
+        return;
+
     /* Get the last guest-screen size-hint, taking the scale factor into account. */
     const QSize sizeHint = scaledBackward(guestScreenSizeHint());
     LogRel(("GUI: UIMachineViewNormal::resendSizeHint: Restoring guest size-hint for screen %d to %dx%d\n",
@@ -167,72 +155,45 @@ void UIMachineViewNormal::resendSizeHint()
      * until the first machine view resize. */
     m_sizeHintOverride = QSize(800, 600).expandedTo(sizeHint);
 
-    /* Send saved size-hint to the guest: */
-    /// @todo What if not m_bIsGuestAutoresizeEnabled?
-    ///       Just let the guest start at the default 800x600?
+    /* Restore saved monitor information to the guest.  The guest may not respond
+     * until a suitable driver or helper is enabled (or at all).  We do not notify
+     * the guest (aNotify == false), because there is technically no change (same
+     * hardware as before shutdown), and notifying would interfere with the Windows
+     * guest driver which saves the video mode to the registry on shutdown. */
+    uisession()->setScreenVisibleHostDesires(screenId(), guestScreenVisibilityStatus());
     display().SetVideoModeHint(screenId(),
                                guestScreenVisibilityStatus(),
-                               false, 0, 0, sizeHint.width(), sizeHint.height(), 0);
-    uisession()->setScreenVisibleHostDesires(screenId(), guestScreenVisibilityStatus());
+                               false, 0, 0, sizeHint.width(), sizeHint.height(), 0, false);
 }
 
 void UIMachineViewNormal::adjustGuestScreenSize()
 {
-    /* Should we adjust guest-screen size? Logging paranoia is required here to reveal the truth. */
-    LogRel(("GUI: UIMachineViewNormal::adjustGuestScreenSize: Adjust guest-screen size if necessary.\n"));
-    bool fAdjust = false;
+    LogRel(("GUI: UIMachineViewNormal::adjustGuestScreenSize: Adjust guest-screen size if necessary\n"));
 
-    /* Step 1: Is the guest-screen of another size than necessary? */
-    if (!fAdjust)
+    /* Get last monitor size set, if any: */
+    BOOL fEnabled, fChangeOrigin;
+    LONG iOriginX, iOriginY;
+    ULONG uWidth, uHeight, uBitsPerPixel;
+    display().GetVideoModeHint(screenId(), fEnabled, fChangeOrigin,
+                               iOriginX, iOriginY, uWidth, uHeight, uBitsPerPixel);
+
+    /* Acquire effective frame-buffer size otherwise: */
+    if (uWidth == 0 || uHeight == 0)
     {
-        /* Acquire frame-buffer size: */
-        QSize frameBufferSize(frameBuffer()->width(), frameBuffer()->height());
-        /* Take the scale-factor(s) into account: */
-        frameBufferSize = scaledForward(frameBufferSize);
-
-        /* Acquire central-widget size: */
-        const QSize centralWidgetSize = machineWindow()->centralWidget()->size();
-
-        if (frameBufferSize != centralWidgetSize)
-        {
-            LogRel2(("GUI: UIMachineViewNormal::adjustGuestScreenSize: Guest-screen is of another size than necessary, adjustment is required.\n"));
-            fAdjust = true;
-        }
+        uWidth = frameBuffer()->width();
+        uHeight = frameBuffer()->height();
     }
 
-    /* Step 2: Is guest-additions supports graphics? */
-    if (fAdjust)
-    {
-        if (!uisession()->isGuestSupportsGraphics())
-        {
-            LogRel2(("GUI: UIMachineViewNormal::adjustGuestScreenSize: Guest-additions are not supporting graphics, adjustment is omitted.\n"));
-            fAdjust = false;
-        }
-    }
-    /* Step 3: Is guest-screen visible? */
-    if (fAdjust)
-    {
-        if (!uisession()->isScreenVisible(screenId()))
-        {
-            LogRel2(("GUI: UIMachineViewNormal::adjustGuestScreenSize: Guest-screen is not visible, adjustment is omitted.\n"));
-            fAdjust = false;
-        }
-    }
-    /* Step 4: Is guest-screen auto-resize enabled? */
-    if (fAdjust)
-    {
-        if (!m_bIsGuestAutoresizeEnabled)
-        {
-            LogRel2(("GUI: UIMachineViewNormal::adjustGuestScreenSize: Guest-screen auto-resize is disabled, adjustment is omitted.\n"));
-            fAdjust = false;
-        }
-    }
+    /* Compose frame-buffer size: */
+    QSize frameBufferSize(uWidth, uHeight);
+    /* Take the scale-factor(s) into account: */
+    frameBufferSize = scaledForward(frameBufferSize);
 
-    /* Final step: Adjust if requested/allowed. */
-    if (fAdjust)
-    {
+    /* Adjust guest-screen size if the last size hint is too big for the screen: */
+    const QSize maxGuestSize = calculateMaxGuestSize();
+    if (   maxGuestSize.width() < frameBufferSize.width()
+        || maxGuestSize.height() < frameBufferSize.height())
         sltPerformGuestResize(machineWindow()->centralWidget()->size());
-    }
 }
 
 QSize UIMachineViewNormal::sizeHint() const
@@ -286,4 +247,3 @@ QSize UIMachineViewNormal::calculateMaxGuestSize() const
      * sanity (or insanity) reasons. */
     return maximumSize - (windowSize - centralWidgetSize.boundedTo(windowSize));
 }
-

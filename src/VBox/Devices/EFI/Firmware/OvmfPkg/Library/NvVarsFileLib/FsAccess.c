@@ -2,13 +2,7 @@
   File System Access for NvVarsFileLib
 
   Copyright (c) 2004 - 2014, Intel Corporation. All rights reserved.<BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -77,9 +71,6 @@ GetNvVarsFile (
                      ),
                    0
                    );
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
 
   return Status;
 }
@@ -184,7 +175,7 @@ FileHandleEmpty (
   @param[in]  ReadSize - The size of data to read from the file
 
   @return     Pointer to buffer allocated to hold the file
-              contents.  NULL if an error occured.
+              contents.  NULL if an error occurred.
 
 **/
 VOID*
@@ -237,7 +228,7 @@ ReadNvVarsFile (
 
   Status = GetNvVarsFile (FsHandle, TRUE, &File);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_INFO, "FsAccess.c: Could not open NV Variables file on this file system\n"));
+    DEBUG ((DEBUG_INFO, "FsAccess.c: Could not open NV Variables file on this file system\n"));
     return Status;
   }
 
@@ -254,9 +245,9 @@ ReadNvVarsFile (
   }
 
   DEBUG ((
-    EFI_D_INFO,
-    "FsAccess.c: Read %d bytes from NV Variables file\n",
-    FileSize
+    DEBUG_INFO,
+    "FsAccess.c: Read %Lu bytes from NV Variables file\n",
+    (UINT64)FileSize
     ));
 
   Status = SerializeVariablesNewInstanceFromBuffer (
@@ -326,13 +317,13 @@ LoadNvVarsFromFs (
   BOOLEAN                        VarData;
   UINTN                          Size;
 
-  DEBUG ((EFI_D_INFO, "FsAccess.c: LoadNvVarsFromFs\n"));
+  DEBUG ((DEBUG_INFO, "FsAccess.c: LoadNvVarsFromFs\n"));
 
   //
   // We write a variable to indicate we've already loaded the
   // variable data.  If it is found, we skip the loading.
   //
-  // This is relevent if the non-volatile variable have been
+  // This is relevant if the non-volatile variable have been
   // able to survive a reboot operation.  In that case, we don't
   // want to re-load the file as it would overwrite newer changes
   // made to the variables.
@@ -347,7 +338,7 @@ LoadNvVarsFromFs (
                   (VOID*) &VarData
                   );
   if (Status == EFI_SUCCESS) {
-    DEBUG ((EFI_D_INFO, "NV Variables were already loaded\n"));
+    DEBUG ((DEBUG_INFO, "NV Variables were already loaded\n"));
     return EFI_ALREADY_STARTED;
   }
 
@@ -356,7 +347,7 @@ LoadNvVarsFromFs (
   //
   Status = ReadNvVarsFile (FsHandle);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_INFO, "Error while restoring NV variable data\n"));
+    DEBUG ((DEBUG_INFO, "Error while restoring NV variable data\n"));
     return Status;
   }
 
@@ -368,9 +359,9 @@ LoadNvVarsFromFs (
   SetNvVarsVariable();
 
   DEBUG ((
-    EFI_D_INFO,
-    "FsAccess.c: Read NV Variables file (size=%d)\n",
-    Size
+    DEBUG_INFO,
+    "FsAccess.c: Read NV Variables file (size=%Lu)\n",
+    (UINT64)Size
     ));
 
   return Status;
@@ -478,7 +469,7 @@ SaveNvVarsToFs (
   //
   Status = GetNvVarsFile (FsHandle, FALSE, &File);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_INFO, "FsAccess.c: Unable to open file to saved NV Variables\n"));
+    DEBUG ((DEBUG_INFO, "FsAccess.c: Unable to open file to saved NV Variables\n"));
     return Status;
   }
 
@@ -507,7 +498,7 @@ SaveNvVarsToFs (
     //
     SetNvVarsVariable();
 
-    DEBUG ((EFI_D_INFO, "Saved NV Variables to NvVars file\n"));
+    DEBUG ((DEBUG_INFO, "Saved NV Variables to NvVars file\n"));
   }
 
   return Status;

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_thread_h
-#define ___iprt_thread_h
+#ifndef IPRT_INCLUDED_thread_h
+#define IPRT_INCLUDED_thread_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -163,7 +166,7 @@ typedef enum RTTHREADTYPE
 } RTTHREADTYPE;
 
 
-#ifndef IN_RC
+#if !defined(IN_RC) || defined(DOXYGEN_RUNNING)
 
 /**
  * Checks if the IPRT thread component has been initialized.
@@ -234,7 +237,7 @@ RTDECL(bool) RTThreadYield(void);
  * @param   ThreadSelf  Thread handle to this thread.
  * @param   pvUser      User argument.
  */
-typedef DECLCALLBACK(int) FNRTTHREAD(RTTHREAD ThreadSelf, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNRTTHREAD,(RTTHREAD ThreadSelf, void *pvUser));
 /** Pointer to a FNRTTHREAD(). */
 typedef FNRTTHREAD *PFNRTTHREAD;
 
@@ -251,8 +254,20 @@ typedef enum RTTHREADFLAGS
     /** The bit number corresponding to the RTTHREADFLAGS_WAITABLE mask. */
     RTTHREADFLAGS_WAITABLE_BIT = 0,
 
+    /** Call CoInitializeEx w/ COINIT_MULTITHREADED, COINIT_DISABLE_OLE1DDE and
+     * COINIT_SPEED_OVER_MEMORY.  Ignored on non-windows platforms. */
+    RTTHREADFLAGS_COM_MTA = RT_BIT(1),
+    /** Call CoInitializeEx w/ COINIT_APARTMENTTHREADED and
+     *  COINIT_SPEED_OVER_MEMORY.   Ignored on non-windows platforms.  */
+    RTTHREADFLAGS_COM_STA = RT_BIT(2),
+
+    /** Mask all signals that we can mask.  Ignored on most non-posix platforms.
+     * @note RTThreadPoke() will not necessarily work for a thread create with
+     *       this flag. */
+    RTTHREADFLAGS_NO_SIGNALS = RT_BIT(3),
+
     /** Mask of valid flags, use for validation. */
-    RTTHREADFLAGS_MASK = RT_BIT(0)
+    RTTHREADFLAGS_MASK = UINT32_C(0xf)
 } RTTHREADFLAGS;
 
 
@@ -276,9 +291,9 @@ typedef enum RTTHREADFLAGS
 RTDECL(int) RTThreadCreate(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUser, size_t cbStack,
                            RTTHREADTYPE enmType, unsigned fFlags, const char *pszName);
 #ifndef RT_OS_LINUX /* XXX crashes genksyms at least on 32-bit Linux hosts */
-/** @copydoc RTThreadCreate */
-typedef DECLCALLBACKPTR(int, PFNRTTHREADCREATE)(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUser, size_t cbStack,
-                                                RTTHREADTYPE enmType, unsigned fFlags, const char *pszName);
+/** Pointer to a RTThreadCreate function. */
+typedef DECLCALLBACKPTR(int, PFNRTTHREADCREATE,(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUser, size_t cbStack,
+                                                RTTHREADTYPE enmType, unsigned fFlags, const char *pszName));
 #endif
 
 
@@ -294,7 +309,7 @@ typedef DECLCALLBACKPTR(int, PFNRTTHREADCREATE)(PRTTHREAD pThread, PFNRTTHREAD p
  * @param   cbStack     See RTThreadCreate.
  * @param   enmType     See RTThreadCreate.
  * @param   fFlags      See RTThreadCreate.
- * @param   pszName     Thread name format.
+ * @param   pszNameFmt  Thread name format.
  * @param   va          Format arguments.
  */
 RTDECL(int) RTThreadCreateV(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUser, size_t cbStack,
@@ -312,7 +327,7 @@ RTDECL(int) RTThreadCreateV(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUs
  * @param   cbStack     See RTThreadCreate.
  * @param   enmType     See RTThreadCreate.
  * @param   fFlags      See RTThreadCreate.
- * @param   pszName     Thread name format.
+ * @param   pszNameFmt  Thread name format.
  * @param   ...         Format arguments.
  */
 RTDECL(int) RTThreadCreateF(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUser, size_t cbStack,
@@ -325,6 +340,17 @@ RTDECL(int) RTThreadCreateF(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUs
  * @param   Thread      The IPRT thread.
  */
 RTDECL(RTNATIVETHREAD) RTThreadGetNative(RTTHREAD Thread);
+
+/**
+ * Gets the native thread handle for a IPRT thread.
+ *
+ * @returns The thread handle. INVALID_HANDLE_VALUE on failure.
+ * @param   hThread     The IPRT thread handle.
+ *
+ * @note    Windows only.
+ * @note    Only valid after parent returns from the thread creation call.
+ */
+RTDECL(uintptr_t) RTThreadGetNativeHandle(RTTHREAD hThread);
 
 /**
  * Gets the IPRT thread of a native thread.
@@ -426,12 +452,22 @@ RTDECL(bool) RTThreadIsSelfKnown(void);
  */
 RTDECL(bool) RTThreadIsSelfAlive(void);
 
+#ifdef IN_RING0
 /**
- * Checks if the calling thread is known to IPRT.
+ * Checks whether the specified thread is terminating.
  *
- * @returns @c true if it is, @c false if it isn't.
+ * @retval  VINF_SUCCESS if not terminating.
+ * @retval  VINF_THREAD_IS_TERMINATING if terminating.
+ * @retval  VERR_INVALID_HANDLE if hThread is not NIL_RTTHREAD.
+ * @retval  VERR_NOT_SUPPORTED if the OS doesn't provide ways to check.
+ *
+ * @param   hThread     The thread to query about, NIL_RTTHREAD is an alias for
+ *                      the calling thread.  Must be NIL_RTTHREAD for now.
+ *
+ * @note    Not suppored on all OSes, so check for VERR_NOT_SUPPORTED.
  */
-RTDECL(bool) RTThreadIsOperational(void);
+RTDECL(int) RTThreadQueryTerminationStatus(RTTHREAD hThread);
+#endif
 
 /**
  * Signal the user event.
@@ -471,14 +507,26 @@ RTDECL(int) RTThreadUserReset(RTTHREAD Thread);
 /**
  * Pokes the thread.
  *
- * This will signal the thread, attempting to interrupt whatever it's currently
- * doing.  This is *NOT* implemented on all platforms and may cause unresolved
- * symbols during linking or VERR_NOT_IMPLEMENTED at runtime.
+ * This will wake up or/and signal the thread, attempting to interrupt whatever
+ * it's currently doing.
+ *
+ * The posixy version of this will send a signal to the thread, quite likely
+ * waking it up from normal sleeps, waits, and I/O.  When IPRT is in
+ * non-obtrusive mode, the posixy version will definitely return
+ * VERR_NOT_IMPLEMENTED, and it may also do so if no usable signal was found.
+ *
+ * On Windows the thread will be alerted, waking it up from most sleeps and
+ * waits, but not probably very little in the I/O area (needs testing).  On NT
+ * 3.50 and 3.1 VERR_NOT_IMPLEMENTED will be returned.
  *
  * @returns IPRT status code.
  *
  * @param   hThread             The thread to poke.  This must not be the
  *                              calling thread.
+ *
+ * @note    This is *NOT* implemented on all platforms and may cause unresolved
+ *          symbols during linking or VERR_NOT_IMPLEMENTED at runtime.
+ *
  */
 RTDECL(int) RTThreadPoke(RTTHREAD hThread);
 
@@ -503,7 +551,10 @@ RTDECL(bool) RTThreadPreemptIsEnabled(RTTHREAD hThread);
  * code with preemption disabled.
  *
  * @returns true if pending, false if not.
- * @param       hThread         Must be NIL_RTTHREAD for now.
+ * @param   hThread         Must be NIL_RTTHREAD for now.
+ *
+ * @note    If called with interrupts disabled, the NT kernel may temporarily
+ *          re-enable them while checking.
  */
 RTDECL(bool) RTThreadPreemptIsPending(RTTHREAD hThread);
 
@@ -615,7 +666,7 @@ typedef enum RTTHREADCTXEVENT
  *                      events, we may add more (thread exit, ++) later.
  * @param   pvUser      User argument.
  */
-typedef DECLCALLBACK(void) FNRTTHREADCTXHOOK(RTTHREADCTXEVENT enmEvent, void *pvUser);
+typedef DECLCALLBACKTYPE(void, FNRTTHREADCTXHOOK,(RTTHREADCTXEVENT enmEvent, void *pvUser));
 /** Pointer to a context switching hook. */
 typedef FNRTTHREADCTXHOOK *PFNRTTHREADCTXHOOK;
 
@@ -843,7 +894,7 @@ RTR3DECL(int) RTThreadGetExecutionTimeMilli(uint64_t *pKernelTime, uint64_t *pUs
  *
  * @param   pvValue     The current value.
  */
-typedef DECLCALLBACK(void) FNRTTLSDTOR(void *pvValue);
+typedef DECLCALLBACKTYPE(void, FNRTTLSDTOR,(void *pvValue));
 /** Pointer to a FNRTTLSDTOR. */
 typedef FNRTTLSDTOR *PFNRTTLSDTOR;
 
@@ -885,8 +936,11 @@ RTR3DECL(RTTLS) RTTlsAlloc(void);
  * @param   piTls           Where to store the index of the allocated TLS entry.
  *                          This is set to NIL_RTTLS on failure.
  * @param   pfnDestructor   Optional callback function for cleaning up on
- *                          thread termination. WARNING! This feature may not
- *                          be implemented everywhere.
+ *                          thread termination.
+ * @note    In static builds on windows, the destructor will only be invoked for
+ *          IPRT threads.
+ * @note    There are probably OS specific restrictions on what operations you
+ *          are allowed to perform from a TLS destructor, so keep it simple.
  */
 RTR3DECL(int) RTTlsAllocEx(PRTTLS piTls, PFNRTTLSDTOR pfnDestructor);
 
@@ -933,11 +987,11 @@ RTR3DECL(int) RTTlsSet(RTTLS iTls, void *pvValue);
 /** @} */
 
 # endif /* IN_RING3 */
-# endif /* !IN_RC */
+#endif /* !IN_RC || defined(DOXYGEN_RUNNING) */
 
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_thread_h */
 

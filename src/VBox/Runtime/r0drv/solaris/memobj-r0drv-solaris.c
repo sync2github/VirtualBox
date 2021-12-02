@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: memobj-r0drv-solaris.c 92246 2021-11-06 03:10:49Z vboxsync $ */
 /** @file
  * IPRT - Ring-0 Memory Objects, Solaris.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -569,7 +569,7 @@ static void rtR0MemObjSolUnlock(void *pv, size_t cb, int fPageAccess)
 static int rtR0MemObjSolUserMap(caddr_t *pVirtAddr, unsigned fPageAccess, uint64_t *paPhysAddrs, size_t cb, size_t cbPageSize)
 {
     struct as *pAddrSpace = ((proc_t *)RTR0ProcHandleSelf())->p_as;
-    int rc = VERR_INTERNAL_ERROR;
+    int rc;
     SEGVBOX_CRARGS Args;
 
     Args.paPhysAddrs = paPhysAddrs;
@@ -577,7 +577,10 @@ static int rtR0MemObjSolUserMap(caddr_t *pVirtAddr, unsigned fPageAccess, uint64
     Args.cbPageSize  = cbPageSize;
 
     as_rangelock(pAddrSpace);
-    map_addr(pVirtAddr, cb, 0 /* offset */, 0 /* vacalign */, MAP_SHARED);
+    if (g_frtSolOldMapAddr)
+        g_rtSolMapAddr.u.pfnSol_map_addr_old(pVirtAddr, cb, 0 /* offset */, 0 /* vacalign */, MAP_SHARED);
+    else
+        g_rtSolMapAddr.u.pfnSol_map_addr(pVirtAddr, cb, 0 /* offset */, MAP_SHARED);
     if (*pVirtAddr != NULL)
         rc = as_map(pAddrSpace, *pVirtAddr, cb, rtR0SegVBoxSolCreate, &Args);
     else
@@ -646,107 +649,117 @@ DECLHIDDEN(int) rtR0MemObjNativeFree(RTR0MEMOBJ pMem)
 }
 
 
-DECLHIDDEN(int) rtR0MemObjNativeAllocPage(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, bool fExecutable)
+DECLHIDDEN(int) rtR0MemObjNativeAllocPage(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, bool fExecutable, const char *pszTag)
 {
     /* Create the object. */
-    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_PAGE, NULL, cb);
-    if (RT_UNLIKELY(!pMemSolaris))
-        return VERR_NO_MEMORY;
-
-    void *pvMem = ddi_umem_alloc(cb, DDI_UMEM_SLEEP, &pMemSolaris->Cookie);
-    if (RT_UNLIKELY(!pvMem))
+    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_PAGE, NULL, cb, pszTag);
+    if (pMemSolaris)
     {
+        void *pvMem = ddi_umem_alloc(cb, DDI_UMEM_SLEEP, &pMemSolaris->Cookie);
+        if (pvMem)
+        {
+            pMemSolaris->Core.fFlags |= RTR0MEMOBJ_FLAGS_ZERO_AT_ALLOC;
+            pMemSolaris->Core.pv  = pvMem;
+            pMemSolaris->pvHandle = NULL;
+            *ppMem = &pMemSolaris->Core;
+            return VINF_SUCCESS;
+        }
         rtR0MemObjDelete(&pMemSolaris->Core);
         return VERR_NO_PAGE_MEMORY;
     }
-
-    pMemSolaris->Core.pv  = pvMem;
-    pMemSolaris->pvHandle = NULL;
-    *ppMem = &pMemSolaris->Core;
-    return VINF_SUCCESS;
+    return VERR_NO_MEMORY;
 }
 
 
-DECLHIDDEN(int) rtR0MemObjNativeAllocLow(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, bool fExecutable)
+DECLHIDDEN(int) rtR0MemObjNativeAllocLarge(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, size_t cbLargePage, uint32_t fFlags,
+                                           const char *pszTag)
+{
+    return rtR0MemObjFallbackAllocLarge(ppMem, cb, cbLargePage, fFlags, pszTag);
+}
+
+
+DECLHIDDEN(int) rtR0MemObjNativeAllocLow(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, bool fExecutable, const char *pszTag)
 {
     NOREF(fExecutable);
 
     /* Create the object */
-    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_LOW, NULL, cb);
-    if (!pMemSolaris)
-        return VERR_NO_MEMORY;
-
-    /* Allocate physically low page-aligned memory. */
-    uint64_t uPhysHi = _4G - 1;
-    void *pvMem = rtR0SolMemAlloc(uPhysHi, NULL /* puPhys */, cb, PAGE_SIZE, false /* fContig */);
-    if (RT_UNLIKELY(!pvMem))
+    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_LOW, NULL, cb, pszTag);
+    if (pMemSolaris)
     {
+        /* Allocate physically low page-aligned memory. */
+        uint64_t uPhysHi = _4G - 1;
+        void *pvMem = rtR0SolMemAlloc(uPhysHi, NULL /* puPhys */, cb, PAGE_SIZE, false /* fContig */);
+        if (pvMem)
+        {
+            pMemSolaris->Core.fFlags |= RTR0MEMOBJ_FLAGS_UNINITIALIZED_AT_ALLOC;
+            pMemSolaris->Core.pv = pvMem;
+            pMemSolaris->pvHandle = NULL;
+            *ppMem = &pMemSolaris->Core;
+            return VINF_SUCCESS;
+        }
         rtR0MemObjDelete(&pMemSolaris->Core);
         return VERR_NO_LOW_MEMORY;
     }
-    pMemSolaris->Core.pv = pvMem;
-    pMemSolaris->pvHandle = NULL;
-    *ppMem = &pMemSolaris->Core;
-    return VINF_SUCCESS;
+    return VERR_NO_MEMORY;
 }
 
 
-DECLHIDDEN(int) rtR0MemObjNativeAllocCont(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, bool fExecutable)
+DECLHIDDEN(int) rtR0MemObjNativeAllocCont(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, bool fExecutable, const char *pszTag)
 {
     NOREF(fExecutable);
-    return rtR0MemObjNativeAllocPhys(ppMem, cb, _4G - 1, PAGE_SIZE /* alignment */);
+    return rtR0MemObjNativeAllocPhys(ppMem, cb, _4G - 1, PAGE_SIZE /* alignment */, pszTag);
 }
 
 
-DECLHIDDEN(int) rtR0MemObjNativeAllocPhysNC(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, RTHCPHYS PhysHighest)
+DECLHIDDEN(int) rtR0MemObjNativeAllocPhysNC(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, RTHCPHYS PhysHighest, const char *pszTag)
 {
 #if HC_ARCH_BITS == 64
-    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_PHYS_NC, NULL, cb);
-    if (RT_UNLIKELY(!pMemSolaris))
-        return VERR_NO_MEMORY;
-
-    if (PhysHighest == NIL_RTHCPHYS)
+    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_PHYS_NC, NULL, cb, pszTag);
+    if (pMemSolaris)
     {
-        uint64_t PhysAddr = UINT64_MAX;
-        void *pvPages = rtR0MemObjSolPagesAlloc(&PhysAddr, cb);
-        if (!pvPages)
+        if (PhysHighest == NIL_RTHCPHYS)
         {
-            LogRel(("rtR0MemObjNativeAllocPhysNC: rtR0MemObjSolPagesAlloc failed for cb=%u.\n", cb));
-            rtR0MemObjDelete(&pMemSolaris->Core);
-            return VERR_NO_MEMORY;
-        }
-        Assert(PhysAddr != UINT64_MAX);
-        Assert(!(PhysAddr & PAGE_OFFSET_MASK));
+            uint64_t PhysAddr = UINT64_MAX;
+            void *pvPages = rtR0MemObjSolPagesAlloc(&PhysAddr, cb);
+            if (!pvPages)
+            {
+                LogRel(("rtR0MemObjNativeAllocPhysNC: rtR0MemObjSolPagesAlloc failed for cb=%u.\n", cb));
+                rtR0MemObjDelete(&pMemSolaris->Core);
+                return VERR_NO_MEMORY;
+            }
+            Assert(PhysAddr != UINT64_MAX);
+            Assert(!(PhysAddr & PAGE_OFFSET_MASK));
 
-        pMemSolaris->Core.pv     = NULL;
-        pMemSolaris->pvHandle    = pvPages;
-        pMemSolaris->fIndivPages = true;
+            pMemSolaris->Core.pv     = NULL;
+            pMemSolaris->pvHandle    = pvPages;
+            pMemSolaris->fIndivPages = true;
+        }
+        else
+        {
+            /*
+             * If we must satisfy an upper limit constraint, it isn't feasible to grab individual pages.
+             * We fall back to using contig_alloc().
+             */
+            uint64_t PhysAddr = UINT64_MAX;
+            void *pvMem = rtR0SolMemAlloc(PhysHighest, &PhysAddr, cb, PAGE_SIZE, false /* fContig */);
+            if (!pvMem)
+            {
+                LogRel(("rtR0MemObjNativeAllocPhysNC: rtR0SolMemAlloc failed for cb=%u PhysHighest=%RHp.\n", cb, PhysHighest));
+                rtR0MemObjDelete(&pMemSolaris->Core);
+                return VERR_NO_MEMORY;
+            }
+            Assert(PhysAddr != UINT64_MAX);
+            Assert(!(PhysAddr & PAGE_OFFSET_MASK));
+
+            pMemSolaris->Core.pv     = pvMem;
+            pMemSolaris->pvHandle    = NULL;
+            pMemSolaris->fIndivPages = false;
+        }
+        pMemSolaris->Core.fFlags |= RTR0MEMOBJ_FLAGS_UNINITIALIZED_AT_ALLOC;
         *ppMem = &pMemSolaris->Core;
         return VINF_SUCCESS;
     }
-    else
-    {
-        /*
-         * If we must satisfy an upper limit constraint, it isn't feasible to grab individual pages.
-         * We fall back to using contig_alloc().
-         */
-        uint64_t PhysAddr = UINT64_MAX;
-        void *pvMem = rtR0SolMemAlloc(PhysHighest, &PhysAddr, cb, PAGE_SIZE, false /* fContig */);
-        if (!pvMem)
-        {
-            LogRel(("rtR0MemObjNativeAllocPhysNC: rtR0SolMemAlloc failed for cb=%u PhysHighest=%RHp.\n", cb, PhysHighest));
-            rtR0MemObjDelete(&pMemSolaris->Core);
-            return VERR_NO_MEMORY;
-        }
-        Assert(PhysAddr != UINT64_MAX);
-        Assert(!(PhysAddr & PAGE_OFFSET_MASK));
-
-        pMemSolaris->Core.pv     = pvMem;
-        pMemSolaris->pvHandle    = NULL;
-        pMemSolaris->fIndivPages = false;
-        *ppMem = &pMemSolaris->Core;
-        return VINF_SUCCESS;
-    }
+    return VERR_NO_MEMORY;
 
 #else /* 32 bit: */
     return VERR_NOT_SUPPORTED; /* see the RTR0MemObjAllocPhysNC specs */
@@ -754,11 +767,12 @@ DECLHIDDEN(int) rtR0MemObjNativeAllocPhysNC(PPRTR0MEMOBJINTERNAL ppMem, size_t c
 }
 
 
-DECLHIDDEN(int) rtR0MemObjNativeAllocPhys(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, RTHCPHYS PhysHighest, size_t uAlignment)
+DECLHIDDEN(int) rtR0MemObjNativeAllocPhys(PPRTR0MEMOBJINTERNAL ppMem, size_t cb, RTHCPHYS PhysHighest, size_t uAlignment,
+                                          const char *pszTag)
 {
     AssertMsgReturn(PhysHighest >= 16 *_1M, ("PhysHigest=%RHp\n", PhysHighest), VERR_NOT_SUPPORTED);
 
-    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_PHYS, NULL, cb);
+    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_PHYS, NULL, cb, pszTag);
     if (RT_UNLIKELY(!pMemSolaris))
         return VERR_NO_MEMORY;
 
@@ -786,6 +800,7 @@ DECLHIDDEN(int) rtR0MemObjNativeAllocPhys(PPRTR0MEMOBJINTERNAL ppMem, size_t cb,
         if (RT_LIKELY(pvPages))
         {
             AssertMsg(!(PhysAddr & (cb - 1)), ("%RHp\n", PhysAddr));
+            pMemSolaris->Core.fFlags           |= RTR0MEMOBJ_FLAGS_UNINITIALIZED_AT_ALLOC; /*?*/
             pMemSolaris->Core.pv                = NULL;
             pMemSolaris->Core.u.Phys.PhysBase   = PhysAddr;
             pMemSolaris->Core.u.Phys.fAllocated = true;
@@ -810,6 +825,7 @@ DECLHIDDEN(int) rtR0MemObjNativeAllocPhys(PPRTR0MEMOBJINTERNAL ppMem, size_t cb,
             Assert(PhysAddr < PhysHighest);
             Assert(PhysAddr + cb <= PhysHighest);
 
+            pMemSolaris->Core.fFlags           |= RTR0MEMOBJ_FLAGS_UNINITIALIZED_AT_ALLOC;
             pMemSolaris->Core.pv                = pvMem;
             pMemSolaris->Core.u.Phys.PhysBase   = PhysAddr;
             pMemSolaris->Core.u.Phys.fAllocated = true;
@@ -825,12 +841,13 @@ DECLHIDDEN(int) rtR0MemObjNativeAllocPhys(PPRTR0MEMOBJINTERNAL ppMem, size_t cb,
 }
 
 
-DECLHIDDEN(int) rtR0MemObjNativeEnterPhys(PPRTR0MEMOBJINTERNAL ppMem, RTHCPHYS Phys, size_t cb, uint32_t uCachePolicy)
+DECLHIDDEN(int) rtR0MemObjNativeEnterPhys(PPRTR0MEMOBJINTERNAL ppMem, RTHCPHYS Phys, size_t cb, uint32_t uCachePolicy,
+                                          const char *pszTag)
 {
     AssertReturn(uCachePolicy == RTMEM_CACHE_POLICY_DONT_CARE, VERR_NOT_SUPPORTED);
 
     /* Create the object. */
-    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_PHYS, NULL, cb);
+    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_PHYS, NULL, cb, pszTag);
     if (!pMemSolaris)
         return VERR_NO_MEMORY;
 
@@ -844,13 +861,14 @@ DECLHIDDEN(int) rtR0MemObjNativeEnterPhys(PPRTR0MEMOBJINTERNAL ppMem, RTHCPHYS P
 
 
 DECLHIDDEN(int) rtR0MemObjNativeLockUser(PPRTR0MEMOBJINTERNAL ppMem, RTR3PTR R3Ptr, size_t cb, uint32_t fAccess,
-                                         RTR0PROCESS R0Process)
+                                         RTR0PROCESS R0Process, const char *pszTag)
 {
     AssertReturn(R0Process == RTR0ProcHandleSelf(), VERR_INVALID_PARAMETER);
     NOREF(fAccess);
 
     /* Create the locking object */
-    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_LOCK, (void *)R3Ptr, cb);
+    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_LOCK,
+                                                               (void *)R3Ptr, cb, pszTag);
     if (!pMemSolaris)
         return VERR_NO_MEMORY;
 
@@ -877,11 +895,11 @@ DECLHIDDEN(int) rtR0MemObjNativeLockUser(PPRTR0MEMOBJINTERNAL ppMem, RTR3PTR R3P
 }
 
 
-DECLHIDDEN(int) rtR0MemObjNativeLockKernel(PPRTR0MEMOBJINTERNAL ppMem, void *pv, size_t cb, uint32_t fAccess)
+DECLHIDDEN(int) rtR0MemObjNativeLockKernel(PPRTR0MEMOBJINTERNAL ppMem, void *pv, size_t cb, uint32_t fAccess, const char *pszTag)
 {
     NOREF(fAccess);
 
-    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_LOCK, pv, cb);
+    PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_LOCK, pv, cb, pszTag);
     if (!pMemSolaris)
         return VERR_NO_MEMORY;
 
@@ -908,7 +926,8 @@ DECLHIDDEN(int) rtR0MemObjNativeLockKernel(PPRTR0MEMOBJINTERNAL ppMem, void *pv,
 }
 
 
-DECLHIDDEN(int) rtR0MemObjNativeReserveKernel(PPRTR0MEMOBJINTERNAL ppMem, void *pvFixed, size_t cb, size_t uAlignment)
+DECLHIDDEN(int) rtR0MemObjNativeReserveKernel(PPRTR0MEMOBJINTERNAL ppMem, void *pvFixed, size_t cb, size_t uAlignment,
+                                              const char *pszTag)
 {
     PRTR0MEMOBJSOL  pMemSolaris;
 
@@ -921,7 +940,7 @@ DECLHIDDEN(int) rtR0MemObjNativeReserveKernel(PPRTR0MEMOBJINTERNAL ppMem, void *
         return VERR_NO_MEMORY;
 
     /* Create the object. */
-    pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_RES_VIRT, pv, cb);
+    pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_RES_VIRT, pv, cb, pszTag);
     if (!pMemSolaris)
     {
         LogRel(("rtR0MemObjNativeReserveKernel failed to alloc memory object.\n"));
@@ -936,14 +955,15 @@ DECLHIDDEN(int) rtR0MemObjNativeReserveKernel(PPRTR0MEMOBJINTERNAL ppMem, void *
 
 
 DECLHIDDEN(int) rtR0MemObjNativeReserveUser(PPRTR0MEMOBJINTERNAL ppMem, RTR3PTR R3PtrFixed, size_t cb, size_t uAlignment,
-                                            RTR0PROCESS R0Process)
+                                            RTR0PROCESS R0Process, const char *pszTag)
 {
+    RT_NOREF(ppMem, R3PtrFixed, cb, uAlignment, R0Process, pszTag);
     return VERR_NOT_SUPPORTED;
 }
 
 
 DECLHIDDEN(int) rtR0MemObjNativeMapKernel(PPRTR0MEMOBJINTERNAL ppMem, RTR0MEMOBJ pMemToMap, void *pvFixed, size_t uAlignment,
-                                          unsigned fProt, size_t offSub, size_t cbSub)
+                                          unsigned fProt, size_t offSub, size_t cbSub, const char *pszTag)
 {
     /* Fail if requested to do something we can't. */
     AssertMsgReturn(pvFixed == (void *)-1, ("%p\n", pvFixed), VERR_NOT_SUPPORTED);
@@ -976,7 +996,7 @@ DECLHIDDEN(int) rtR0MemObjNativeMapKernel(PPRTR0MEMOBJINTERNAL ppMem, RTR0MEMOBJ
     size_t off = 0;
     while (off < cbSub)
     {
-        RTHCPHYS HCPhys = RTR0MemObjGetPagePhysAddr(pMemToMap, (offSub + offSub) >> PAGE_SHIFT);
+        RTHCPHYS HCPhys = RTR0MemObjGetPagePhysAddr(pMemToMap, (offSub + off) >> PAGE_SHIFT);
         AssertBreakStmt(HCPhys != NIL_RTHCPHYS, rc = VERR_INTERNAL_ERROR_2);
         pfn_t pfn = HCPhys >> PAGE_SHIFT;
         AssertBreakStmt(((RTHCPHYS)pfn << PAGE_SHIFT) == HCPhys, rc = VERR_INTERNAL_ERROR_3);
@@ -991,7 +1011,8 @@ DECLHIDDEN(int) rtR0MemObjNativeMapKernel(PPRTR0MEMOBJINTERNAL ppMem, RTR0MEMOBJ
         /*
          * Create a memory object for the mapping.
          */
-        PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_MAPPING, pv, cbSub);
+        PRTR0MEMOBJSOL pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_MAPPING,
+                                                                   pv, cbSub, pszTag);
         if (pMemSolaris)
         {
             pMemSolaris->Core.u.Mapping.R0Process = NIL_RTR0PROCESS;
@@ -1011,7 +1032,8 @@ DECLHIDDEN(int) rtR0MemObjNativeMapKernel(PPRTR0MEMOBJINTERNAL ppMem, RTR0MEMOBJ
 
 
 DECLHIDDEN(int) rtR0MemObjNativeMapUser(PPRTR0MEMOBJINTERNAL ppMem, PRTR0MEMOBJINTERNAL pMemToMap, RTR3PTR R3PtrFixed,
-                                        size_t uAlignment, unsigned fProt, RTR0PROCESS R0Process)
+                                        size_t uAlignment, unsigned fProt, RTR0PROCESS R0Process, size_t offSub, size_t cbSub,
+                                        const char *pszTag)
 {
     /*
      * Fend off things we cannot do.
@@ -1022,73 +1044,76 @@ DECLHIDDEN(int) rtR0MemObjNativeMapUser(PPRTR0MEMOBJINTERNAL ppMem, PRTR0MEMOBJI
         return VERR_NOT_SUPPORTED;
 
     /*
-     * Get parameters from the source object.
+     * Get parameters from the source object and offSub/cbSub.
      */
-    PRTR0MEMOBJSOL  pMemToMapSolaris     = (PRTR0MEMOBJSOL)pMemToMap;
-    void           *pv                   = pMemToMapSolaris->Core.pv;
-    size_t          cb                   = pMemToMapSolaris->Core.cb;
-    size_t          cPages               = (cb + PAGE_SIZE - 1) >> PAGE_SHIFT;
+    PRTR0MEMOBJSOL  pMemToMapSolaris    = (PRTR0MEMOBJSOL)pMemToMap;
+    uint8_t        *pb                  = pMemToMapSolaris->Core.pv ? (uint8_t *)pMemToMapSolaris->Core.pv + offSub : NULL;
+    size_t const    cb                  = cbSub ? cbSub : pMemToMapSolaris->Core.cb;
+    size_t const    cPages              = cb >> PAGE_SHIFT;
+    Assert(!offSub || cbSub);
+    Assert(!(cb & PAGE_OFFSET_MASK));
 
     /*
      * Create the mapping object
      */
     PRTR0MEMOBJSOL pMemSolaris;
-    pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_MAPPING, pv, cb);
+    pMemSolaris = (PRTR0MEMOBJSOL)rtR0MemObjNew(sizeof(*pMemSolaris), RTR0MEMOBJTYPE_MAPPING, pb, cb, pszTag);
     if (RT_UNLIKELY(!pMemSolaris))
         return VERR_NO_MEMORY;
 
+    /*
+     * Gather the physical page address of the pages to be mapped.
+     */
     int rc = VINF_SUCCESS;
     uint64_t *paPhysAddrs = kmem_zalloc(sizeof(uint64_t) * cPages, KM_SLEEP);
     if (RT_LIKELY(paPhysAddrs))
     {
-        /*
-         * Prepare the pages for mapping according to type.
-         */
         if (   pMemToMapSolaris->Core.enmType == RTR0MEMOBJTYPE_PHYS_NC
             && pMemToMapSolaris->fIndivPages)
         {
-            page_t **ppPages = pMemToMapSolaris->pvHandle;
-            AssertPtr(ppPages);
+            /* Translate individual page_t to physical addresses. */
+            page_t **papPages = pMemToMapSolaris->pvHandle;
+            AssertPtr(papPages);
+            papPages += offSub >> PAGE_SHIFT;
             for (size_t iPage = 0; iPage < cPages; iPage++)
-                paPhysAddrs[iPage] = rtR0MemObjSolPagePhys(ppPages[iPage]);
+                paPhysAddrs[iPage] = rtR0MemObjSolPagePhys(papPages[iPage]);
         }
         else if (   pMemToMapSolaris->Core.enmType == RTR0MEMOBJTYPE_PHYS
                  && pMemToMapSolaris->fLargePage)
         {
+            /* Split up the large page into page-sized chunks. */
             RTHCPHYS Phys = pMemToMapSolaris->Core.u.Phys.PhysBase;
+            Phys += offSub;
             for (size_t iPage = 0; iPage < cPages; iPage++, Phys += PAGE_SIZE)
                 paPhysAddrs[iPage] = Phys;
         }
         else
         {
-            /*
-             * Have kernel mapping, just translate virtual to physical.
-             */
-            AssertPtr(pv);
-            rc = VINF_SUCCESS;
+            /* Have kernel mapping, just translate virtual to physical. */
+            AssertPtr(pb);
             for (size_t iPage = 0; iPage < cPages; iPage++)
             {
-                paPhysAddrs[iPage] = rtR0MemObjSolVirtToPhys(pv);
+                paPhysAddrs[iPage] = rtR0MemObjSolVirtToPhys(pb);
                 if (RT_UNLIKELY(paPhysAddrs[iPage] == -(uint64_t)1))
                 {
                     LogRel(("rtR0MemObjNativeMapUser: no page to map.\n"));
                     rc = VERR_MAP_FAILED;
                     break;
                 }
-                pv = (void *)((uintptr_t)pv + PAGE_SIZE);
+                pb += PAGE_SIZE;
             }
         }
         if (RT_SUCCESS(rc))
         {
+            /*
+             * Perform the actual mapping.
+             */
             unsigned fPageAccess = PROT_READ;
             if (fProt & RTMEM_PROT_WRITE)
                 fPageAccess |= PROT_WRITE;
             if (fProt & RTMEM_PROT_EXEC)
                 fPageAccess |= PROT_EXEC;
 
-            /*
-             * Perform the actual mapping.
-             */
             caddr_t UserAddr = NULL;
             rc = rtR0MemObjSolUserMap(&UserAddr, fPageAccess, paPhysAddrs, cb, PAGE_SIZE);
             if (RT_SUCCESS(rc))

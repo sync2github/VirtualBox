@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmthread_h
-#define ___VBox_vmm_pdmthread_h
+#ifndef VBOX_INCLUDED_vmm_pdmthread_h
+#define VBOX_INCLUDED_vmm_pdmthread_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -90,7 +93,7 @@ typedef PPDMTHREAD *PPPDMTHREAD;
  * @param   pDevIns     The device instance.
  * @param   pThread     The PDM thread data.
  */
-typedef DECLCALLBACK(int) FNPDMTHREADDEV(PPDMDEVINS pDevIns, PPDMTHREAD pThread);
+typedef DECLCALLBACKTYPE(int, FNPDMTHREADDEV,(PPDMDEVINS pDevIns, PPDMTHREAD pThread));
 /** Pointer to a FNPDMTHREADDEV(). */
 typedef FNPDMTHREADDEV *PFNPDMTHREADDEV;
 
@@ -101,7 +104,7 @@ typedef FNPDMTHREADDEV *PFNPDMTHREADDEV;
  * @param   pUsbIns     The USB device instance.
  * @param   pThread     The PDM thread data.
  */
-typedef DECLCALLBACK(int) FNPDMTHREADUSB(PPDMUSBINS pUsbIns, PPDMTHREAD pThread);
+typedef DECLCALLBACKTYPE(int, FNPDMTHREADUSB,(PPDMUSBINS pUsbIns, PPDMTHREAD pThread));
 /** Pointer to a FNPDMTHREADUSB(). */
 typedef FNPDMTHREADUSB *PFNPDMTHREADUSB;
 
@@ -112,7 +115,7 @@ typedef FNPDMTHREADUSB *PFNPDMTHREADUSB;
  * @param   pDrvIns     The driver instance.
  * @param   pThread     The PDM thread data.
  */
-typedef DECLCALLBACK(int) FNPDMTHREADDRV(PPDMDRVINS pDrvIns, PPDMTHREAD pThread);
+typedef DECLCALLBACKTYPE(int, FNPDMTHREADDRV,(PPDMDRVINS pDrvIns, PPDMTHREAD pThread));
 /** Pointer to a FNPDMTHREADDRV(). */
 typedef FNPDMTHREADDRV *PFNPDMTHREADDRV;
 
@@ -123,7 +126,7 @@ typedef FNPDMTHREADDRV *PFNPDMTHREADDRV;
  * @param   pVM         The cross context VM structure.
  * @param   pThread     The PDM thread data.
  */
-typedef DECLCALLBACK(int) FNPDMTHREADINT(PVM pVM, PPDMTHREAD pThread);
+typedef DECLCALLBACKTYPE(int, FNPDMTHREADINT,(PVM pVM, PPDMTHREAD pThread));
 /** Pointer to a FNPDMTHREADINT(). */
 typedef FNPDMTHREADINT *PFNPDMTHREADINT;
 
@@ -146,7 +149,7 @@ typedef FNPDMTHREADEXT *PFNPDMTHREADEXT;
  * @param   pDevIns     The device instance.
  * @param   pThread     The PDM thread data.
  */
-typedef DECLCALLBACK(int) FNPDMTHREADWAKEUPDEV(PPDMDEVINS pDevIns, PPDMTHREAD pThread);
+typedef DECLCALLBACKTYPE(int, FNPDMTHREADWAKEUPDEV,(PPDMDEVINS pDevIns, PPDMTHREAD pThread));
 /** Pointer to a FNPDMTHREADDEV(). */
 typedef FNPDMTHREADWAKEUPDEV *PFNPDMTHREADWAKEUPDEV;
 
@@ -157,7 +160,7 @@ typedef FNPDMTHREADWAKEUPDEV *PFNPDMTHREADWAKEUPDEV;
  * @param   pUsbIns     The USB device instance.
  * @param   pThread     The PDM thread data.
  */
-typedef DECLCALLBACK(int) FNPDMTHREADWAKEUPUSB(PPDMUSBINS pUsbIns, PPDMTHREAD pThread);
+typedef DECLCALLBACKTYPE(int, FNPDMTHREADWAKEUPUSB,(PPDMUSBINS pUsbIns, PPDMTHREAD pThread));
 /** Pointer to a FNPDMTHREADUSB(). */
 typedef FNPDMTHREADWAKEUPUSB *PFNPDMTHREADWAKEUPUSB;
 
@@ -168,7 +171,7 @@ typedef FNPDMTHREADWAKEUPUSB *PFNPDMTHREADWAKEUPUSB;
  * @param   pDrvIns     The driver instance.
  * @param   pThread     The PDM thread data.
  */
-typedef DECLCALLBACK(int) FNPDMTHREADWAKEUPDRV(PPDMDRVINS pDrvIns, PPDMTHREAD pThread);
+typedef DECLCALLBACKTYPE(int, FNPDMTHREADWAKEUPDRV,(PPDMDRVINS pDrvIns, PPDMTHREAD pThread));
 /** Pointer to a FNPDMTHREADDRV(). */
 typedef FNPDMTHREADWAKEUPDRV *PFNPDMTHREADWAKEUPDRV;
 
@@ -179,7 +182,7 @@ typedef FNPDMTHREADWAKEUPDRV *PFNPDMTHREADWAKEUPDRV;
  * @param   pVM         The cross context VM structure.
  * @param   pThread     The PDM thread data.
  */
-typedef DECLCALLBACK(int) FNPDMTHREADWAKEUPINT(PVM pVM, PPDMTHREAD pThread);
+typedef DECLCALLBACKTYPE(int, FNPDMTHREADWAKEUPINT,(PVM pVM, PPDMTHREAD pThread));
 /** Pointer to a FNPDMTHREADWAKEUPINT(). */
 typedef FNPDMTHREADWAKEUPINT *PFNPDMTHREADWAKEUPINT;
 
@@ -295,4 +298,4 @@ VMMR3DECL(int) PDMR3ThreadResume(PPDMTHREAD pThread);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_pdmthread_h */

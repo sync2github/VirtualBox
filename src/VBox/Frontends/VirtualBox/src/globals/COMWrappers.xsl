@@ -7,7 +7,7 @@
  *  in platform-independent script-like manner.
  */
 
-    Copyright (C) 2006-2016 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -55,6 +55,7 @@
 -->
 <xsl:template match="*"/>
 <xsl:template match="*|/" mode="declare"/>
+<xsl:template match="*|/" mode="include"/>
 <xsl:template match="*|/" mode="define"/>
 <xsl:template match="*|/" mode="end"/>
 <xsl:template match="*|/" mode="begin"/>
@@ -68,6 +69,22 @@
   <xsl:apply-templates/>
 </xsl:template>
 
+
+<!--
+ *  Encloses |if| element's contents (unconditionally expanded by
+ *  <apply-templates mode="include"/>) with #ifdef / #endif.
+ *
+ *  @note this can produce an empty #if/#endif block if |if|'s children
+ *  expand to nothing (such as |cpp|). I see no need to handle this situation
+ *  specially.
+-->
+<xsl:template match="if" mode="include">
+  <xsl:if test="(@target='xpidl') or (@target='midl')">
+    <xsl:apply-templates select="." mode="begin"/>
+    <xsl:apply-templates mode="include"/>
+    <xsl:apply-templates select="." mode="end"/>
+  </xsl:if>
+</xsl:template>
 
 <!--
  *  Encloses |if| element's contents (unconditionally expanded by
@@ -148,7 +165,7 @@
     <xsl:call-template name="declareEnums"/>
 
     <!-- Declare interfaces: -->
-    <xsl:apply-templates select="if | interface[not(@internal='yes')]" mode="declare"/>
+    <xsl:apply-templates select="application/if | application/interface[not(@internal='yes')]" mode="declare"/>
 
     <!-- Define interfaces: -->
     <xsl:call-template name="defineInterfaces"/>
@@ -180,7 +197,7 @@
     <xsl:text>#include "QMetaType"&#x0A;&#x0A;</xsl:text>
 
     <!-- Enumerate all enums: -->
-    <xsl:for-each select="enum">
+    <xsl:for-each select="application/enum">
         <xsl:text>/* </xsl:text>
         <xsl:value-of select="concat('K',@name)"/>
         <xsl:text> enum: */&#x0A;</xsl:text>
@@ -202,7 +219,7 @@
 
     <!-- Declare enums to QMetaObject: -->
     <xsl:text>/* Let QMetaType know about generated enums: */&#x0A;</xsl:text>
-    <xsl:for-each select="enum">
+    <xsl:for-each select="application/enum">
         <xsl:text>Q_DECLARE_METATYPE(</xsl:text>
         <xsl:value-of select="concat('K',@name)"/>
         <xsl:text>)&#x0A;</xsl:text>
@@ -238,23 +255,16 @@
     <xsl:text> * Source    : src/VBox/Main/idl/VirtualBox.xidl&#x0A;</xsl:text>
     <xsl:text> * Generator : src/VBox/Frontends/VirtualBox/src/globals/COMWrappers.xsl&#x0A;</xsl:text>
     <xsl:text> */&#x0A;&#x0A;</xsl:text>
-    <xsl:text>/* VirtualBox interface declarations: */&#x0A;</xsl:text>
-    <xsl:text>#ifndef VBOX_WITH_XPCOM&#x0A;</xsl:text>
-    <xsl:text># include "VirtualBox.h"&#x0A;</xsl:text>
-    <xsl:text>#else /* !VBOX_WITH_XPCOM */&#x0A;</xsl:text>
-    <xsl:text># include "VirtualBox_XPCOM.h"&#x0A;</xsl:text>
-    <xsl:text>#endif /* VBOX_WITH_XPCOM */&#x0A;&#x0A;</xsl:text>
+
+    <xsl:text>#include "VBox/com/VirtualBox.h"&#x0A;&#x0A;</xsl:text>
+
     <xsl:text>/* COM includes: */&#x0A;</xsl:text>
     <xsl:text>#include "COMEnums.h"&#x0A;</xsl:text>
 
     <!-- Enumerate all interface definitions: -->
-    <xsl:for-each select="interface[not(@internal='yes')]">
-        <xsl:text>#include "C</xsl:text>
-        <xsl:value-of select="substring(@name,2)"/>
-        <xsl:text>.h"&#x0A;</xsl:text>
-    </xsl:for-each>
+    <xsl:apply-templates select="application/if | application/interface[not(@internal='yes')]" mode="include"/>
     <xsl:text>&#x0A;</xsl:text>
-    <xsl:apply-templates select="if | interface[not(@internal='yes')]" mode="define"/>
+    <xsl:apply-templates select="application/if | application/interface[not(@internal='yes')]" mode="define"/>
 
     <!-- Finishing COMWrappers.cpp file: -->
     <xsl:call-template name="endFile">
@@ -288,8 +298,21 @@
     <xsl:text>#define __C</xsl:text>
     <xsl:value-of select="substring(@name,2)"/>
     <xsl:text>_h__&#x0A;&#x0A;</xsl:text>
+    <xsl:if test="@name='IVirtualBox' or @name='IMachine'">
+        <xsl:text>/* Qt includes: */&#x0A;</xsl:text>
+        <xsl:text>#include &lt;QList&gt;&#x0A;</xsl:text>
+        <xsl:text>#include &lt;QRect&gt;&#x0A;</xsl:text>
+        <xsl:text>#include &lt;QStringList&gt;&#x0A;&#x0A;</xsl:text>
+    </xsl:if>
     <xsl:text>/* GUI includes: */&#x0A;</xsl:text>
-    <xsl:text>#include "COMDefs.h"&#x0A;&#x0A;</xsl:text>
+    <xsl:text>#include "COMDefs.h"&#x0A;</xsl:text>
+    <xsl:text>#include "UILibraryDefs.h"&#x0A;&#x0A;</xsl:text>
+    <xsl:text>/* VirtualBox interface declarations: */&#x0A;</xsl:text>
+    <xsl:text>#ifndef VBOX_WITH_LESS_VIRTUALBOX_INCLUDING&#x0A;</xsl:text>
+    <xsl:text># include &lt;VBox/com/VirtualBox.h&gt;&#x0A;</xsl:text>
+    <xsl:text>#else&#x0A;</xsl:text>
+    <xsl:text>COM_STRUCT_OR_CLASS(</xsl:text><xsl:value-of select="@name"/><xsl:text>);&#x0A;</xsl:text>
+    <xsl:text>#endif&#x0A;</xsl:text>
 
     <!-- Forward declarations: -->
     <xsl:text>/* Forward declarations: */&#x0A;</xsl:text>
@@ -308,7 +331,7 @@
 
     <!-- Interface wrapper declaration: -->
     <xsl:text>/* Interface wrapper declaration: */&#x0A;</xsl:text>
-    <xsl:text>class C</xsl:text>
+    <xsl:text>class SHARED_LIBRARY_STUFF C</xsl:text>
     <xsl:value-of select="substring(@name,2)"/>
     <xsl:text> : public CInterface&lt;</xsl:text>
     <xsl:value-of select="@name"/>
@@ -381,7 +404,7 @@
   <!-- go to the base interface -->
   <xsl:if test="$iface/@extends and $iface/@extends!='$unknown'">
     <xsl:choose>
-      <!-- interfaces within library/if -->
+      <!-- interfaces within application/if -->
       <xsl:when test="name(..)='if'">
         <xsl:call-template name="declareAttributes">
           <xsl:with-param name="iface" select="
@@ -396,7 +419,7 @@
           "/>
         </xsl:call-template>
       </xsl:when>
-      <!-- interfaces within library -->
+      <!-- interfaces within application -->
       <xsl:otherwise>
         <xsl:call-template name="declareAttributes">
           <xsl:with-param name="iface" select="
@@ -423,7 +446,7 @@
   <!-- go to the base interface -->
   <xsl:if test="$iface/@extends and $iface/@extends!='$unknown'">
     <xsl:choose>
-      <!-- interfaces within library/if -->
+      <!-- interfaces within application/if -->
       <xsl:when test="name(..)='if'">
         <xsl:call-template name="declareMethods">
           <xsl:with-param name="iface" select="
@@ -438,7 +461,7 @@
           "/>
         </xsl:call-template>
       </xsl:when>
-      <!-- interfaces within library -->
+      <!-- interfaces within application -->
       <xsl:otherwise>
         <xsl:call-template name="declareMethods">
           <xsl:with-param name="iface" select="
@@ -552,6 +575,10 @@
 <xsl:text> * aIface);&#x0A;</xsl:text>
   <xsl:text>&#x0A;</xsl:text>
 
+  <xsl:text>#ifdef VBOX_WITH_LESS_VIRTUALBOX_INCLUDING&#x0A;</xsl:text>
+  <xsl:text>const IID &amp;getIID() const RT_OVERRIDE;&#x0A;</xsl:text>
+  <xsl:text>#endif&#x0A;&#x0A;</xsl:text>
+
   <xsl:text>    /* Attributes (properties): */&#x0A;</xsl:text>
   <xsl:call-template name="declareAttributes">
     <xsl:with-param name="iface" select="."/>
@@ -598,7 +625,7 @@
       </xsl:if>
     </xsl:for-each>
   </xsl:if>
-  <!-- for definitions outside <if> (i.e. inside <library>) -->
+  <!-- for definitions outside <if> (i.e. inside <application>) -->
   <xsl:if test="name(..)!='if'">
     <xsl:for-each select="
       preceding-sibling::*[self::interface] |
@@ -641,6 +668,17 @@
   <xsl:call-template name="composeMethod"/>
   <xsl:apply-templates select="@if" mode="end"/>
   <xsl:apply-templates select="parent::node()" mode="end"/>
+</xsl:template>
+
+
+<!--
+ *  interface includes
+-->
+<xsl:template match="interface" mode="include">
+
+  <xsl:text>#include "C</xsl:text>
+  <xsl:value-of select="substring(@name,2)"/>
+  <xsl:text>.h"&#x0A;</xsl:text>
 </xsl:template>
 
 
@@ -728,6 +766,20 @@
 
 </xsl:template>
 
+<xsl:template name="defineIIDGetter">
+  <xsl:text>#ifdef VBOX_WITH_LESS_VIRTUALBOX_INCLUDING&#x0A;</xsl:text>
+  <xsl:text>const IID &amp;C</xsl:text>
+  <xsl:value-of select="substring(@name,2)"/>
+  <xsl:text>::getIID() const&#x0A;</xsl:text>
+  <xsl:text>{&#x0A;</xsl:text>
+  <xsl:text>    return COM_IIDOF(</xsl:text>
+  <xsl:value-of select="@name"/>
+  <xsl:text>);&#x0A;</xsl:text>
+  <xsl:text>}&#x0A;</xsl:text>
+  <xsl:text>#endif&#x0A;&#x0A;</xsl:text>
+
+</xsl:template>
+
 <xsl:template name="defineAttributes">
 
   <xsl:param name="iface"/>
@@ -739,7 +791,7 @@
   <!-- go to the base interface -->
   <xsl:if test="$iface/@extends and $iface/@extends!='$unknown'">
     <xsl:choose>
-      <!-- interfaces within library/if -->
+      <!-- interfaces within application/if -->
       <xsl:when test="name(..)='if'">
         <xsl:call-template name="defineAttributes">
           <xsl:with-param name="iface" select="
@@ -754,7 +806,7 @@
           "/>
         </xsl:call-template>
       </xsl:when>
-      <!-- interfaces within library -->
+      <!-- interfaces within application -->
       <xsl:otherwise>
         <xsl:call-template name="defineAttributes">
           <xsl:with-param name="iface" select="
@@ -781,7 +833,7 @@
   <!-- go to the base interface -->
   <xsl:if test="$iface/@extends and $iface/@extends!='$unknown'">
     <xsl:choose>
-      <!-- interfaces within library/if -->
+      <!-- interfaces within application/if -->
       <xsl:when test="name(..)='if'">
         <xsl:call-template name="defineMethods">
           <xsl:with-param name="iface" select="
@@ -796,7 +848,7 @@
           "/>
         </xsl:call-template>
       </xsl:when>
-      <!-- interfaces within library -->
+      <!-- interfaces within application -->
       <xsl:otherwise>
         <xsl:call-template name="defineMethods">
           <xsl:with-param name="iface" select="
@@ -968,6 +1020,9 @@
 
 <xsl:template name="defineMembers">
   <xsl:call-template name="defineConstructors">
+    <xsl:with-param name="iface" select="."/>
+  </xsl:call-template>
+  <xsl:call-template name="defineIIDGetter">
     <xsl:with-param name="iface" select="."/>
   </xsl:call-template>
   <xsl:call-template name="defineAttributes">
@@ -1313,7 +1368,7 @@
   <xsl:variable name="ifaceSupportsErrorInfo" select="
     ancestor-or-self::interface[1]/@supportsErrorInfo
   "/>
-  <xsl:variable name="librarySupportsErrorInfo" select="ancestor::library/@supportsErrorInfo"/>
+  <xsl:variable name="applicationSupportsErrorInfo" select="ancestor::application/@supportsErrorInfo"/>
 
   <xsl:choose>
     <xsl:when test="$ifaceSupportsErrorInfo">
@@ -1322,9 +1377,9 @@
         <xsl:with-param name="mode" select="$mode"/>
       </xsl:call-template>
     </xsl:when>
-    <xsl:when test="$librarySupportsErrorInfo">
+    <xsl:when test="$applicationSupportsErrorInfo">
       <xsl:call-template name="composeFetchErrorInfo">
-        <xsl:with-param name="supports" select="string($librarySupportsErrorInfo)"/>
+        <xsl:with-param name="supports" select="string($applicationSupportsErrorInfo)"/>
         <xsl:with-param name="mode" select="$mode"/>
       </xsl:call-template>
     </xsl:when>
@@ -1376,7 +1431,7 @@
       </xsl:choose>
     </xsl:when>
     <!-- string types -->
-    <xsl:when test="@type = 'wstring' or @type = 'uuid'">
+    <xsl:when test="@type = 'wstring'">
       <xsl:choose>
         <xsl:when test="$isIn">
           <xsl:text>BSTRIn(a</xsl:text>
@@ -1387,6 +1442,25 @@
         </xsl:when>
         <xsl:when test="$isOut">
           <xsl:text>BSTROut(a</xsl:text>
+          <xsl:call-template name="capitalize">
+            <xsl:with-param name="str" select="@name"/>
+          </xsl:call-template>
+          <xsl:text>)</xsl:text>
+        </xsl:when>
+      </xsl:choose>
+    </xsl:when>
+    <!-- uuid is represented as string in the com -->
+    <xsl:when test="@type = 'uuid'">
+      <xsl:choose>
+        <xsl:when test="$isIn">
+          <xsl:text>GuidAsBStrIn(a</xsl:text>
+          <xsl:call-template name="capitalize">
+            <xsl:with-param name="str" select="@name"/>
+          </xsl:call-template>
+          <xsl:text>)</xsl:text>
+        </xsl:when>
+        <xsl:when test="$isOut">
+          <xsl:text>GuidAsBStrOut(a</xsl:text>
           <xsl:call-template name="capitalize">
             <xsl:with-param name="str" select="@name"/>
           </xsl:call-template>
@@ -1506,7 +1580,7 @@
           <xsl:choose>
             <!-- standard types -->
             <!--xsl:when test=".='result'">??</xsl:when-->
-            <xsl:when test=".='uuid'">QString</xsl:when>
+            <xsl:when test=".='uuid'">QUuid</xsl:when>
             <xsl:otherwise>
               <xsl:message terminate="yes">
                 <xsl:value-of select="concat(../../../@name,'::',../../@name,'::',../@name,': ')"/>

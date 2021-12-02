@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: init-win.cpp 92245 2021-11-05 23:40:02Z vboxsync $ */
 /** @file
  * IPRT - Init Ring-3, Windows Specific Code.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP RTLOGGROUP_DEFAULT
-#include <iprt/win/windows.h>
+#include <iprt/nt/nt-and-windows.h>
 #ifndef LOAD_LIBRARY_SEARCH_APPLICATION_DIR
 # define LOAD_LIBRARY_SEARCH_APPLICATION_DIR    0x200
 # define LOAD_LIBRARY_SEARCH_SYSTEM32           0x800
@@ -39,26 +39,124 @@
 #include <iprt/initterm.h>
 #include <iprt/assert.h>
 #include <iprt/err.h>
+#include <iprt/ldr.h>
+#include <iprt/log.h>
+#include <iprt/param.h>
+#include <iprt/process.h>
 #include <iprt/string.h>
+#include <iprt/thread.h>
 #include "../init.h"
+
+
+/*********************************************************************************************************************************
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
+typedef VOID (WINAPI *PFNGETCURRENTTHREADSTACKLIMITS)(PULONG_PTR puLow, PULONG_PTR puHigh);
+typedef LPTOP_LEVEL_EXCEPTION_FILTER (WINAPI * PFNSETUNHANDLEDEXCEPTIONFILTER)(LPTOP_LEVEL_EXCEPTION_FILTER);
 
 
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
 /** Windows DLL loader protection level. */
-DECLHIDDEN(RTR3WINLDRPROT)      g_enmWinLdrProt = RTR3WINLDRPROT_NONE;
+DECL_HIDDEN_DATA(RTR3WINLDRPROT)      g_enmWinLdrProt = RTR3WINLDRPROT_NONE;
 /** Our simplified windows version.    */
-DECLHIDDEN(RTWINOSTYPE)         g_enmWinVer = kRTWinOSType_UNKNOWN;
+DECL_HIDDEN_DATA(RTWINOSTYPE)         g_enmWinVer = kRTWinOSType_UNKNOWN;
 /** Extended windows version information. */
-DECLHIDDEN(OSVERSIONINFOEXW)    g_WinOsInfoEx;
-/** The native kernel32.dll handle. */
-DECLHIDDEN(HMODULE)             g_hModKernel32 = NULL;
-/** The native ntdll.dll handle. */
-DECLHIDDEN(HMODULE)             g_hModNtDll = NULL;
-/** GetSystemWindowsDirectoryW or GetWindowsDirectoryW (NT4). */
-DECLHIDDEN(PFNGETWINSYSDIR)     g_pfnGetSystemWindowsDirectoryW = NULL;
+DECL_HIDDEN_DATA(OSVERSIONINFOEXW)    g_WinOsInfoEx;
 
+/** The native kernel32.dll handle. */
+DECL_HIDDEN_DATA(HMODULE)                       g_hModKernel32 = NULL;
+/** GetSystemWindowsDirectoryW or GetWindowsDirectoryW (NT4). */
+DECL_HIDDEN_DATA(PFNGETWINSYSDIR)               g_pfnGetSystemWindowsDirectoryW = NULL;
+/** The GetCurrentThreadStackLimits API. */
+static PFNGETCURRENTTHREADSTACKLIMITS           g_pfnGetCurrentThreadStackLimits = NULL;
+/** SetUnhandledExceptionFilter. */
+static PFNSETUNHANDLEDEXCEPTIONFILTER           g_pfnSetUnhandledExceptionFilter = NULL;
+/** The previous unhandled exception filter. */
+static LPTOP_LEVEL_EXCEPTION_FILTER             g_pfnUnhandledXcptFilter = NULL;
+/** SystemTimeToTzSpecificLocalTime. */
+DECL_HIDDEN_DATA(decltype(SystemTimeToTzSpecificLocalTime) *) g_pfnSystemTimeToTzSpecificLocalTime = NULL;
+/** CreateWaitableTimerEx . */
+DECL_HIDDEN_DATA(PFNCREATEWAITABLETIMEREX)      g_pfnCreateWaitableTimerExW = NULL;
+
+/** The native ntdll.dll handle. */
+DECL_HIDDEN_DATA(HMODULE)                       g_hModNtDll = NULL;
+/** NtQueryFullAttributesFile   */
+DECL_HIDDEN_DATA(PFNNTQUERYFULLATTRIBUTESFILE)  g_pfnNtQueryFullAttributesFile = NULL;
+/** NtDuplicateToken (NT 3.51). */
+DECL_HIDDEN_DATA(PFNNTDUPLICATETOKEN)           g_pfnNtDuplicateToken = NULL;
+/** NtAlertThread (NT 3.51). */
+DECL_HIDDEN_DATA(decltype(NtAlertThread) *)     g_pfnNtAlertThread = NULL;
+
+/** Either ws2_32.dll (NT4+) or wsock32.dll (NT3.x). */
+DECL_HIDDEN_DATA(HMODULE)                       g_hModWinSock = NULL;
+/** Set if we're dealing with old winsock.   */
+DECL_HIDDEN_DATA(bool)                          g_fOldWinSock = false;
+/** WSAStartup   */
+DECL_HIDDEN_DATA(PFNWSASTARTUP)                 g_pfnWSAStartup = NULL;
+/** WSACleanup */
+DECL_HIDDEN_DATA(PFNWSACLEANUP)                 g_pfnWSACleanup = NULL;
+/** Pointner to WSAGetLastError (for RTErrVarsSave). */
+DECL_HIDDEN_DATA(PFNWSAGETLASTERROR)            g_pfnWSAGetLastError = NULL;
+/** Pointner to WSASetLastError (for RTErrVarsRestore). */
+DECL_HIDDEN_DATA(PFNWSASETLASTERROR)            g_pfnWSASetLastError = NULL;
+/** WSACreateEvent */
+DECL_HIDDEN_DATA(PFNWSACREATEEVENT)             g_pfnWSACreateEvent = NULL;
+/** WSACloseEvent  */
+DECL_HIDDEN_DATA(PFNWSACLOSEEVENT)              g_pfnWSACloseEvent = NULL;
+/** WSASetEvent */
+DECL_HIDDEN_DATA(PFNWSASETEVENT)                g_pfnWSASetEvent = NULL;
+/** WSAEventSelect   */
+DECL_HIDDEN_DATA(PFNWSAEVENTSELECT)             g_pfnWSAEventSelect = NULL;
+/** WSAEnumNetworkEvents */
+DECL_HIDDEN_DATA(PFNWSAENUMNETWORKEVENTS)       g_pfnWSAEnumNetworkEvents = NULL;
+/** WSASend */
+DECL_HIDDEN_DATA(PFNWSASend)                    g_pfnWSASend = NULL;
+/** socket */
+DECL_HIDDEN_DATA(PFNWINSOCKSOCKET)              g_pfnsocket = NULL;
+/** closesocket */
+DECL_HIDDEN_DATA(PFNWINSOCKCLOSESOCKET)         g_pfnclosesocket = NULL;
+/** recv */
+DECL_HIDDEN_DATA(PFNWINSOCKRECV)                g_pfnrecv = NULL;
+/** send */
+DECL_HIDDEN_DATA(PFNWINSOCKSEND)                g_pfnsend = NULL;
+/** recvfrom */
+DECL_HIDDEN_DATA(PFNWINSOCKRECVFROM)            g_pfnrecvfrom = NULL;
+/** sendto */
+DECL_HIDDEN_DATA(PFNWINSOCKSENDTO)              g_pfnsendto = NULL;
+/** bind */
+DECL_HIDDEN_DATA(PFNWINSOCKBIND)                g_pfnbind = NULL;
+/** listen  */
+DECL_HIDDEN_DATA(PFNWINSOCKLISTEN)              g_pfnlisten = NULL;
+/** accept */
+DECL_HIDDEN_DATA(PFNWINSOCKACCEPT)              g_pfnaccept = NULL;
+/** connect */
+DECL_HIDDEN_DATA(PFNWINSOCKCONNECT)             g_pfnconnect = NULL;
+/** shutdown */
+DECL_HIDDEN_DATA(PFNWINSOCKSHUTDOWN)            g_pfnshutdown = NULL;
+/** getsockopt */
+DECL_HIDDEN_DATA(PFNWINSOCKGETSOCKOPT)          g_pfngetsockopt = NULL;
+/** setsockopt */
+DECL_HIDDEN_DATA(PFNWINSOCKSETSOCKOPT)          g_pfnsetsockopt = NULL;
+/** ioctlsocket */
+DECL_HIDDEN_DATA(PFNWINSOCKIOCTLSOCKET)         g_pfnioctlsocket = NULL;
+/** getpeername   */
+DECL_HIDDEN_DATA(PFNWINSOCKGETPEERNAME)         g_pfngetpeername = NULL;
+/** getsockname */
+DECL_HIDDEN_DATA(PFNWINSOCKGETSOCKNAME)         g_pfngetsockname = NULL;
+/** __WSAFDIsSet */
+DECL_HIDDEN_DATA(PFNWINSOCK__WSAFDISSET)        g_pfn__WSAFDIsSet = NULL;
+/** select */
+DECL_HIDDEN_DATA(PFNWINSOCKSELECT)              g_pfnselect = NULL;
+/** gethostbyname */
+DECL_HIDDEN_DATA(PFNWINSOCKGETHOSTBYNAME)       g_pfngethostbyname = NULL;
+
+
+/*********************************************************************************************************************************
+*   Internal Functions                                                                                                           *
+*********************************************************************************************************************************/
+static LONG CALLBACK rtR3WinUnhandledXcptFilter(PEXCEPTION_POINTERS);
 
 
 /**
@@ -130,62 +228,55 @@ static RTWINOSTYPE rtR3InitWinSimplifiedVersion(OSVERSIONINFOEXW const *pOSInfoE
     }
     else if (dwPlatformId == VER_PLATFORM_WIN32_NT)
     {
-        if (        dwMajorVersion == 3
-                 && dwMinorVersion == 51)
-            enmVer = kRTWinOSType_NT351;
-        else if (   dwMajorVersion == 4
-                 && dwMinorVersion == 0)
+        if (dwMajorVersion == 3)
+        {
+            if (     dwMinorVersion < 50)
+                enmVer = kRTWinOSType_NT310;
+            else if (dwMinorVersion == 50)
+                enmVer = kRTWinOSType_NT350;
+            else
+                enmVer = kRTWinOSType_NT351;
+        }
+        else if (dwMajorVersion == 4)
             enmVer = kRTWinOSType_NT4;
-        else if (   dwMajorVersion == 5
-                 && dwMinorVersion == 0)
-            enmVer = kRTWinOSType_2K;
-        else if (   dwMajorVersion == 5
-                 && dwMinorVersion == 1)
-            enmVer = kRTWinOSType_XP;
-        else if (   dwMajorVersion == 5
-                 && dwMinorVersion == 2)
-            enmVer = kRTWinOSType_2003;
-        else if (   dwMajorVersion == 6
-                 && dwMinorVersion == 0)
+        else if (dwMajorVersion == 5)
         {
-            if (bProductType != VER_NT_WORKSTATION)
-                enmVer = kRTWinOSType_2008;
+            if (dwMinorVersion == 0)
+                enmVer = kRTWinOSType_2K;
+            else if (dwMinorVersion == 1)
+                enmVer = kRTWinOSType_XP;
             else
-                enmVer = kRTWinOSType_VISTA;
+                enmVer = kRTWinOSType_2003;
         }
-        else if (   dwMajorVersion == 6
-                 && dwMinorVersion == 1)
+        else if (dwMajorVersion == 6)
         {
-            if (bProductType != VER_NT_WORKSTATION)
-                enmVer = kRTWinOSType_2008R2;
+            if (dwMinorVersion == 0)
+                enmVer = bProductType != VER_NT_WORKSTATION ? kRTWinOSType_2008   : kRTWinOSType_VISTA;
+            else if (dwMinorVersion == 1)
+                enmVer = bProductType != VER_NT_WORKSTATION ? kRTWinOSType_2008R2 : kRTWinOSType_7;
+            else if (dwMinorVersion == 2)
+                enmVer = bProductType != VER_NT_WORKSTATION ? kRTWinOSType_2012   : kRTWinOSType_8;
+            else if (dwMinorVersion == 3)
+                enmVer = bProductType != VER_NT_WORKSTATION ? kRTWinOSType_2012R2 : kRTWinOSType_81;
+            else if (dwMinorVersion == 4)
+                enmVer = bProductType != VER_NT_WORKSTATION ? kRTWinOSType_2016   : kRTWinOSType_10;
             else
-                enmVer = kRTWinOSType_7;
+                enmVer = kRTWinOSType_NT_UNKNOWN;
         }
-        else if (   dwMajorVersion == 6
-                 && dwMinorVersion == 2)
+        else if (dwMajorVersion == 10)
         {
-            if (bProductType != VER_NT_WORKSTATION)
-                enmVer = kRTWinOSType_2012;
+            if (dwMinorVersion == 0)
+            {
+                /* The version detection for server 2019, server 2022 and windows 11
+                   are by build number.  Stupid, stupid, Microsoft. */
+                if (bProductType == VER_NT_WORKSTATION)
+                    enmVer = dwBuildNumber >= 22000 ? kRTWinOSType_11 : kRTWinOSType_10;
+                else
+                    enmVer = dwBuildNumber >= 20348 ? kRTWinOSType_2022
+                           : dwBuildNumber >= 17763 ? kRTWinOSType_2019 : kRTWinOSType_2016;
+            }
             else
-                enmVer = kRTWinOSType_8;
-        }
-        else if (   dwMajorVersion == 6
-                 && dwMinorVersion == 3)
-        {
-            if (bProductType != VER_NT_WORKSTATION)
-               enmVer = kRTWinOSType_2012R2;
-            else
-                enmVer = kRTWinOSType_81;
-        }
-        else if (   (   dwMajorVersion == 6
-                     && dwMinorVersion == 4)
-                 || (   dwMajorVersion == 10
-                     && dwMinorVersion == 0))
-        {
-            if (bProductType != VER_NT_WORKSTATION)
-                enmVer = kRTWinOSType_2016;
-            else
-                enmVer = kRTWinOSType_10;
+                enmVer = kRTWinOSType_NT_UNKNOWN;
         }
         else
             enmVer = kRTWinOSType_NT_UNKNOWN;
@@ -249,6 +340,97 @@ static void rtR3InitWindowsVersion(void)
 }
 
 
+/**
+ * Resolves the winsock error APIs.
+ */
+static void rtR3InitWinSockApis(void)
+{
+    /*
+     * Try get ws2_32.dll, then try load it, then finally fall back to the old
+     * wsock32.dll.  We use RTLdrLoadSystem to the loading as it has all the fancy
+     * logic for safely doing that.
+     */
+    g_hModWinSock = GetModuleHandleW(L"ws2_32.dll");
+    if (g_hModWinSock == NULL)
+    {
+        RTLDRMOD hLdrMod;
+        int rc = RTLdrLoadSystem("ws2_32.dll", true /*fNoUnload*/, &hLdrMod);
+        if (RT_FAILURE(rc))
+        {
+            rc = RTLdrLoadSystem("wsock32.dll", true /*fNoUnload*/, &hLdrMod);
+            if (RT_FAILURE(rc))
+            {
+                AssertMsgFailed(("rc=%Rrc\n", rc));
+                return;
+            }
+            g_fOldWinSock = true;
+        }
+        g_hModWinSock = (HMODULE)RTLdrGetNativeHandle(hLdrMod);
+        RTLdrClose(hLdrMod);
+    }
+
+    g_pfnWSAStartup           = (decltype(g_pfnWSAStartup))         GetProcAddress(g_hModWinSock, "WSAStartup");
+    g_pfnWSACleanup           = (decltype(g_pfnWSACleanup))         GetProcAddress(g_hModWinSock, "WSACleanup");
+    g_pfnWSAGetLastError      = (decltype(g_pfnWSAGetLastError))    GetProcAddress(g_hModWinSock, "WSAGetLastError");
+    g_pfnWSASetLastError      = (decltype(g_pfnWSASetLastError))    GetProcAddress(g_hModWinSock, "WSASetLastError");
+    g_pfnWSACreateEvent       = (decltype(g_pfnWSACreateEvent))     GetProcAddress(g_hModWinSock, "WSACreateEvent");
+    g_pfnWSACloseEvent        = (decltype(g_pfnWSACloseEvent))      GetProcAddress(g_hModWinSock, "WSACloseEvent");
+    g_pfnWSASetEvent          = (decltype(g_pfnWSASetEvent))        GetProcAddress(g_hModWinSock, "WSASetEvent");
+    g_pfnWSAEventSelect       = (decltype(g_pfnWSAEventSelect))     GetProcAddress(g_hModWinSock, "WSAEventSelect");
+    g_pfnWSAEnumNetworkEvents = (decltype(g_pfnWSAEnumNetworkEvents))GetProcAddress(g_hModWinSock,"WSAEnumNetworkEvents");
+    g_pfnWSASend              = (decltype(g_pfnWSASend))            GetProcAddress(g_hModWinSock, "WSASend");
+    g_pfnsocket               = (decltype(g_pfnsocket))             GetProcAddress(g_hModWinSock, "socket");
+    g_pfnclosesocket          = (decltype(g_pfnclosesocket))        GetProcAddress(g_hModWinSock, "closesocket");
+    g_pfnrecv                 = (decltype(g_pfnrecv))               GetProcAddress(g_hModWinSock, "recv");
+    g_pfnsend                 = (decltype(g_pfnsend))               GetProcAddress(g_hModWinSock, "send");
+    g_pfnrecvfrom             = (decltype(g_pfnrecvfrom))           GetProcAddress(g_hModWinSock, "recvfrom");
+    g_pfnsendto               = (decltype(g_pfnsendto))             GetProcAddress(g_hModWinSock, "sendto");
+    g_pfnbind                 = (decltype(g_pfnbind))               GetProcAddress(g_hModWinSock, "bind");
+    g_pfnlisten               = (decltype(g_pfnlisten))             GetProcAddress(g_hModWinSock, "listen");
+    g_pfnaccept               = (decltype(g_pfnaccept))             GetProcAddress(g_hModWinSock, "accept");
+    g_pfnconnect              = (decltype(g_pfnconnect))            GetProcAddress(g_hModWinSock, "connect");
+    g_pfnshutdown             = (decltype(g_pfnshutdown))           GetProcAddress(g_hModWinSock, "shutdown");
+    g_pfngetsockopt           = (decltype(g_pfngetsockopt))         GetProcAddress(g_hModWinSock, "getsockopt");
+    g_pfnsetsockopt           = (decltype(g_pfnsetsockopt))         GetProcAddress(g_hModWinSock, "setsockopt");
+    g_pfnioctlsocket          = (decltype(g_pfnioctlsocket))        GetProcAddress(g_hModWinSock, "ioctlsocket");
+    g_pfngetpeername          = (decltype(g_pfngetpeername))        GetProcAddress(g_hModWinSock, "getpeername");
+    g_pfngetsockname          = (decltype(g_pfngetsockname))        GetProcAddress(g_hModWinSock, "getsockname");
+    g_pfn__WSAFDIsSet         = (decltype(g_pfn__WSAFDIsSet))       GetProcAddress(g_hModWinSock, "__WSAFDIsSet");
+    g_pfnselect               = (decltype(g_pfnselect))             GetProcAddress(g_hModWinSock, "select");
+    g_pfngethostbyname        = (decltype(g_pfngethostbyname))      GetProcAddress(g_hModWinSock, "gethostbyname");
+
+    Assert(g_pfnWSAStartup);
+    Assert(g_pfnWSACleanup);
+    Assert(g_pfnWSAGetLastError);
+    Assert(g_pfnWSASetLastError);
+    Assert(g_pfnWSACreateEvent       || g_fOldWinSock);
+    Assert(g_pfnWSACloseEvent        || g_fOldWinSock);
+    Assert(g_pfnWSASetEvent          || g_fOldWinSock);
+    Assert(g_pfnWSAEventSelect       || g_fOldWinSock);
+    Assert(g_pfnWSAEnumNetworkEvents || g_fOldWinSock);
+    Assert(g_pfnWSASend              || g_fOldWinSock);
+    Assert(g_pfnsocket);
+    Assert(g_pfnclosesocket);
+    Assert(g_pfnrecv);
+    Assert(g_pfnsend);
+    Assert(g_pfnrecvfrom);
+    Assert(g_pfnsendto);
+    Assert(g_pfnbind);
+    Assert(g_pfnlisten);
+    Assert(g_pfnaccept);
+    Assert(g_pfnconnect);
+    Assert(g_pfnshutdown);
+    Assert(g_pfngetsockopt);
+    Assert(g_pfnsetsockopt);
+    Assert(g_pfnioctlsocket);
+    Assert(g_pfngetpeername);
+    Assert(g_pfngetsockname);
+    Assert(g_pfn__WSAFDIsSet);
+    Assert(g_pfnselect);
+    Assert(g_pfngethostbyname);
+}
+
+
 static int rtR3InitNativeObtrusiveWorker(uint32_t fFlags)
 {
     /*
@@ -300,6 +482,17 @@ static int rtR3InitNativeObtrusiveWorker(uint32_t fFlags)
         }
     }
 
+    /*
+     * Register an unhandled exception callback if we can.
+     */
+    g_pfnGetCurrentThreadStackLimits = (PFNGETCURRENTTHREADSTACKLIMITS)GetProcAddress(g_hModKernel32, "GetCurrentThreadStackLimits");
+    g_pfnSetUnhandledExceptionFilter = (PFNSETUNHANDLEDEXCEPTIONFILTER)GetProcAddress(g_hModKernel32, "SetUnhandledExceptionFilter");
+    if (g_pfnSetUnhandledExceptionFilter && !g_pfnUnhandledXcptFilter)
+    {
+        g_pfnUnhandledXcptFilter = g_pfnSetUnhandledExceptionFilter(rtR3WinUnhandledXcptFilter);
+        AssertStmt(g_pfnUnhandledXcptFilter != rtR3WinUnhandledXcptFilter, g_pfnUnhandledXcptFilter = NULL);
+    }
+
     return rc;
 }
 
@@ -329,6 +522,20 @@ DECLHIDDEN(int) rtR3InitNativeFirst(uint32_t fFlags)
     g_pfnGetSystemWindowsDirectoryW = (PFNGETWINSYSDIR)GetProcAddress(g_hModKernel32, "GetSystemWindowsDirectoryW");
     if (g_pfnGetSystemWindowsDirectoryW)
         g_pfnGetSystemWindowsDirectoryW = (PFNGETWINSYSDIR)GetProcAddress(g_hModKernel32, "GetWindowsDirectoryW");
+    g_pfnSystemTimeToTzSpecificLocalTime = (decltype(SystemTimeToTzSpecificLocalTime) *)GetProcAddress(g_hModKernel32, "SystemTimeToTzSpecificLocalTime");
+    g_pfnCreateWaitableTimerExW = (PFNCREATEWAITABLETIMEREX)GetProcAddress(g_hModKernel32, "CreateWaitableTimerExW");
+
+    /*
+     * Resolve some ntdll.dll APIs that weren't there in early NT versions.
+     */
+    g_pfnNtQueryFullAttributesFile = (PFNNTQUERYFULLATTRIBUTESFILE)GetProcAddress(g_hModNtDll, "NtQueryFullAttributesFile");
+    g_pfnNtDuplicateToken          = (PFNNTDUPLICATETOKEN)GetProcAddress(         g_hModNtDll, "NtDuplicateToken");
+    g_pfnNtAlertThread             = (decltype(NtAlertThread) *)GetProcAddress(   g_hModNtDll, "NtAlertThread");
+
+    /*
+     * Resolve the winsock error getter and setter so assertions can save those too.
+     */
+    rtR3InitWinSockApis();
 
     return rc;
 }
@@ -345,5 +552,278 @@ DECLHIDDEN(int) rtR3InitNativeFinal(uint32_t fFlags)
     /* Nothing to do here. */
     RT_NOREF_PV(fFlags);
     return VINF_SUCCESS;
+}
+
+
+/**
+ * Unhandled exception filter callback.
+ *
+ * Will try log stuff.
+ */
+static LONG CALLBACK rtR3WinUnhandledXcptFilter(PEXCEPTION_POINTERS pPtrs)
+{
+    /*
+     * Try get the logger and log exception details.
+     *
+     * Note! We'll be using RTLogLogger for now, though we should probably add
+     *       a less deadlock prone API here and gives up pretty fast if it
+     *       cannot get the lock...
+     */
+    PRTLOGGER pLogger = RTLogRelGetDefaultInstance();
+    if (!pLogger)
+        pLogger = RTLogGetDefaultInstance();
+    if (pLogger)
+    {
+        RTLogLogger(pLogger, NULL, "\n!!! rtR3WinUnhandledXcptFilter caught an exception on thread %p in %u !!!\n",
+                    RTThreadNativeSelf(), RTProcSelf());
+
+        /*
+         * Dump the exception record.
+         */
+        uintptr_t         uXcptPC  = 0;
+        PEXCEPTION_RECORD pXcptRec = RT_VALID_PTR(pPtrs) && RT_VALID_PTR(pPtrs->ExceptionRecord) ? pPtrs->ExceptionRecord : NULL;
+        if (pXcptRec)
+        {
+            RTLogLogger(pLogger, NULL, "\nExceptionCode=%#010x ExceptionFlags=%#010x ExceptionAddress=%p\n",
+                        pXcptRec->ExceptionCode, pXcptRec->ExceptionFlags, pXcptRec->ExceptionAddress);
+            for (uint32_t i = 0; i < RT_MIN(pXcptRec->NumberParameters, EXCEPTION_MAXIMUM_PARAMETERS); i++)
+                RTLogLogger(pLogger, NULL, "ExceptionInformation[%d]=%p\n", i, pXcptRec->ExceptionInformation[i]);
+            uXcptPC = (uintptr_t)pXcptRec->ExceptionAddress;
+
+            /* Nested? Display one level only. */
+            PEXCEPTION_RECORD pNestedRec = pXcptRec->ExceptionRecord;
+            if (RT_VALID_PTR(pNestedRec))
+            {
+                RTLogLogger(pLogger, NULL, "Nested: ExceptionCode=%#010x ExceptionFlags=%#010x ExceptionAddress=%p (nested %p)\n",
+                            pNestedRec->ExceptionCode, pNestedRec->ExceptionFlags, pNestedRec->ExceptionAddress,
+                            pNestedRec->ExceptionRecord);
+                for (uint32_t i = 0; i < RT_MIN(pNestedRec->NumberParameters, EXCEPTION_MAXIMUM_PARAMETERS); i++)
+                    RTLogLogger(pLogger, NULL, "Nested: ExceptionInformation[%d]=%p\n", i, pNestedRec->ExceptionInformation[i]);
+                uXcptPC = (uintptr_t)pNestedRec->ExceptionAddress;
+            }
+        }
+
+        /*
+         * Dump the context record.
+         */
+        volatile char   szMarker[] = "stackmarker";
+        uintptr_t       uXcptSP = (uintptr_t)&szMarker[0];
+        PCONTEXT pXcptCtx = RT_VALID_PTR(pPtrs) && RT_VALID_PTR(pPtrs->ContextRecord)   ? pPtrs->ContextRecord   : NULL;
+        if (pXcptCtx)
+        {
+#ifdef RT_ARCH_AMD64
+            RTLogLogger(pLogger, NULL, "\ncs:rip=%04x:%016RX64\n", pXcptCtx->SegCs, pXcptCtx->Rip);
+            RTLogLogger(pLogger, NULL, "ss:rsp=%04x:%016RX64 rbp=%016RX64\n", pXcptCtx->SegSs, pXcptCtx->Rsp, pXcptCtx->Rbp);
+            RTLogLogger(pLogger, NULL, "rax=%016RX64 rcx=%016RX64 rdx=%016RX64 rbx=%016RX64\n",
+                        pXcptCtx->Rax, pXcptCtx->Rcx, pXcptCtx->Rdx, pXcptCtx->Rbx);
+            RTLogLogger(pLogger, NULL, "rsi=%016RX64 rdi=%016RX64 rsp=%016RX64 rbp=%016RX64\n",
+                        pXcptCtx->Rsi, pXcptCtx->Rdi, pXcptCtx->Rsp, pXcptCtx->Rbp);
+            RTLogLogger(pLogger, NULL, "r8 =%016RX64 r9 =%016RX64 r10=%016RX64 r11=%016RX64\n",
+                        pXcptCtx->R8,  pXcptCtx->R9,  pXcptCtx->R10, pXcptCtx->R11);
+            RTLogLogger(pLogger, NULL, "r12=%016RX64 r13=%016RX64 r14=%016RX64 r15=%016RX64\n",
+                        pXcptCtx->R12,  pXcptCtx->R13,  pXcptCtx->R14, pXcptCtx->R15);
+            RTLogLogger(pLogger, NULL, "ds=%04x es=%04x fs=%04x gs=%04x eflags=%08x\n",
+                        pXcptCtx->SegDs, pXcptCtx->SegEs, pXcptCtx->SegFs, pXcptCtx->SegGs, pXcptCtx->EFlags);
+            RTLogLogger(pLogger, NULL, "p1home=%016RX64 p2home=%016RX64 pe3home=%016RX64\n",
+                        pXcptCtx->P1Home, pXcptCtx->P2Home, pXcptCtx->P3Home);
+            RTLogLogger(pLogger, NULL, "p4home=%016RX64 p5home=%016RX64 pe6home=%016RX64\n",
+                        pXcptCtx->P4Home, pXcptCtx->P5Home, pXcptCtx->P6Home);
+            RTLogLogger(pLogger, NULL, "   LastBranchToRip=%016RX64    LastBranchFromRip=%016RX64\n",
+                        pXcptCtx->LastBranchToRip, pXcptCtx->LastBranchFromRip);
+            RTLogLogger(pLogger, NULL, "LastExceptionToRip=%016RX64 LastExceptionFromRip=%016RX64\n",
+                        pXcptCtx->LastExceptionToRip, pXcptCtx->LastExceptionFromRip);
+            uXcptSP = pXcptCtx->Rsp;
+            uXcptPC = pXcptCtx->Rip;
+
+#elif defined(RT_ARCH_X86)
+            RTLogLogger(pLogger, NULL, "\ncs:eip=%04x:%08RX32\n", pXcptCtx->SegCs, pXcptCtx->Eip);
+            RTLogLogger(pLogger, NULL, "ss:esp=%04x:%08RX32 ebp=%08RX32\n", pXcptCtx->SegSs, pXcptCtx->Esp, pXcptCtx->Ebp);
+            RTLogLogger(pLogger, NULL, "eax=%08RX32 ecx=%08RX32 edx=%08RX32 ebx=%08RX32\n",
+                        pXcptCtx->Eax, pXcptCtx->Ecx,  pXcptCtx->Edx,  pXcptCtx->Ebx);
+            RTLogLogger(pLogger, NULL, "esi=%08RX32 edi=%08RX32 esp=%08RX32 ebp=%08RX32\n",
+                        pXcptCtx->Esi, pXcptCtx->Edi,  pXcptCtx->Esp,  pXcptCtx->Ebp);
+            RTLogLogger(pLogger, NULL, "ds=%04x es=%04x fs=%04x gs=%04x eflags=%08x\n",
+                        pXcptCtx->SegDs, pXcptCtx->SegEs, pXcptCtx->SegFs, pXcptCtx->SegGs, pXcptCtx->EFlags);
+            uXcptSP = pXcptCtx->Esp;
+            uXcptPC = pXcptCtx->Eip;
+#endif
+        }
+
+        /*
+         * Dump stack.
+         */
+        uintptr_t uStack = (uintptr_t)(void *)&szMarker[0];
+        uStack -= uStack & 15;
+
+        size_t cbToDump = PAGE_SIZE - (uStack & PAGE_OFFSET_MASK);
+        if (cbToDump < 512)
+            cbToDump += PAGE_SIZE;
+        size_t cbToXcpt = uXcptSP - uStack;
+        while (cbToXcpt > cbToDump && cbToXcpt <= _16K)
+            cbToDump += PAGE_SIZE;
+        ULONG_PTR uLow  = (uintptr_t)&szMarker[0];
+        ULONG_PTR uHigh = (uintptr_t)&szMarker[0];
+        if (g_pfnGetCurrentThreadStackLimits)
+        {
+            g_pfnGetCurrentThreadStackLimits(&uLow, &uHigh);
+            size_t cbToTop = RT_MAX(uLow, uHigh) - uStack;
+            if (cbToTop < _1M)
+                cbToDump = cbToTop;
+        }
+
+        RTLogLogger(pLogger, NULL, "\nStack %p, dumping %#x bytes (low=%p, high=%p)\n", uStack, cbToDump, uLow, uHigh);
+        RTLogLogger(pLogger, NULL, "%.*RhxD\n", cbToDump, uStack);
+
+        /*
+         * Try figure the thread name.
+         *
+         * Note! This involves the thread db lock, so it may deadlock, which
+         *       is why it's at the end.
+         */
+        RTLogLogger(pLogger, NULL,  "Thread ID:   %p\n", RTThreadNativeSelf());
+        RTLogLogger(pLogger, NULL,  "Thread name: %s\n", RTThreadSelfName());
+        RTLogLogger(pLogger, NULL,  "Thread IPRT: %p\n", RTThreadSelf());
+
+        /*
+         * Try dump the load information.
+         */
+        PPEB pPeb = RTNtCurrentPeb();
+        if (RT_VALID_PTR(pPeb))
+        {
+            PPEB_LDR_DATA pLdrData = pPeb->Ldr;
+            if (RT_VALID_PTR(pLdrData))
+            {
+                PLDR_DATA_TABLE_ENTRY pFound     = NULL;
+                LIST_ENTRY * const    pList      = &pLdrData->InMemoryOrderModuleList;
+                LIST_ENTRY           *pListEntry = pList->Flink;
+                uint32_t              cLoops     = 0;
+                RTLogLogger(pLogger, NULL,
+                            "\nLoaded Modules:\n"
+                            "%-*s[*] Timestamp Path\n", sizeof(void *) * 4 + 2 - 1, "Address range"
+                            );
+                while (pListEntry != pList && RT_VALID_PTR(pListEntry) && cLoops < 1024)
+                {
+                    PLDR_DATA_TABLE_ENTRY pLdrEntry = RT_FROM_MEMBER(pListEntry, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+                    uint32_t const        cbLength  = (uint32_t)(uintptr_t)pLdrEntry->Reserved3[1];
+                    char                  chInd     = ' ';
+                    if (uXcptPC - (uintptr_t)pLdrEntry->DllBase < cbLength)
+                    {
+                        chInd = '*';
+                        pFound = pLdrEntry;
+                    }
+
+                    if (   RT_VALID_PTR(pLdrEntry->FullDllName.Buffer)
+                        && pLdrEntry->FullDllName.Length > 0
+                        && pLdrEntry->FullDllName.Length < _8K
+                        && (pLdrEntry->FullDllName.Length & 1) == 0
+                        && pLdrEntry->FullDllName.Length <= pLdrEntry->FullDllName.MaximumLength)
+                        RTLogLogger(pLogger, NULL, "%p..%p%c  %08RX32  %.*ls\n",
+                                    pLdrEntry->DllBase, (uintptr_t)pLdrEntry->DllBase + cbLength - 1, chInd,
+                                    pLdrEntry->TimeDateStamp, pLdrEntry->FullDllName.Length / sizeof(RTUTF16),
+                                    pLdrEntry->FullDllName.Buffer);
+                    else
+                        RTLogLogger(pLogger, NULL, "%p..%p%c  %08RX32  <bad or missing: %p LB %#x max %#x\n",
+                                    pLdrEntry->DllBase, (uintptr_t)pLdrEntry->DllBase + cbLength - 1, chInd,
+                                    pLdrEntry->TimeDateStamp, pLdrEntry->FullDllName.Buffer, pLdrEntry->FullDllName.Length,
+                                    pLdrEntry->FullDllName.MaximumLength);
+
+                    /* advance */
+                    pListEntry = pListEntry->Flink;
+                    cLoops++;
+                }
+
+                /*
+                 * Use the above to pick out code addresses on the stack.
+                 */
+                if (   cLoops < 1024
+                    && uXcptSP - uStack < cbToDump)
+                {
+                    RTLogLogger(pLogger, NULL, "\nPotential code addresses on the stack:\n");
+                    if (pFound)
+                    {
+                        if (   RT_VALID_PTR(pFound->FullDllName.Buffer)
+                            && pFound->FullDllName.Length > 0
+                            && pFound->FullDllName.Length < _8K
+                            && (pFound->FullDllName.Length & 1) == 0
+                            && pFound->FullDllName.Length <= pFound->FullDllName.MaximumLength)
+                            RTLogLogger(pLogger, NULL, "%-*s: %p - %#010RX32 bytes into %.*ls\n",
+                                        sizeof(void *) * 2, "Xcpt PC", uXcptPC, (uint32_t)(uXcptPC - (uintptr_t)pFound->DllBase),
+                                        pFound->FullDllName.Length / sizeof(RTUTF16), pFound->FullDllName.Buffer);
+                        else
+                            RTLogLogger(pLogger, NULL, "%-*s: %p - %08RX32 into module at %p\n",
+                                        sizeof(void *) * 2, "Xcpt PC", uXcptPC, (uint32_t)(uXcptPC - (uintptr_t)pFound->DllBase),
+                                        pFound->DllBase);
+                    }
+
+                    uintptr_t const *puStack = (uintptr_t const *)uXcptSP;
+                    uintptr_t        cLeft   = (cbToDump - (uXcptSP - uStack)) / sizeof(uintptr_t);
+                    while (cLeft-- > 0)
+                    {
+                        uintptr_t uPtr = *puStack;
+                        if (RT_VALID_PTR(uPtr))
+                        {
+                            /* Search the module table. */
+                            pFound     = NULL;
+                            cLoops     = 0;
+                            pListEntry = pList->Flink;
+                            while (pListEntry != pList && RT_VALID_PTR(pListEntry) && cLoops < 1024)
+                            {
+                                PLDR_DATA_TABLE_ENTRY pLdrEntry = RT_FROM_MEMBER(pListEntry, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+                                uint32_t const        cbLength  = (uint32_t)(uintptr_t)pLdrEntry->Reserved3[1];
+                                if (uPtr - (uintptr_t)pLdrEntry->DllBase < cbLength)
+                                {
+                                    pFound = pLdrEntry;
+                                    break;
+                                }
+
+                                /* advance */
+                                pListEntry = pListEntry->Flink;
+                                cLoops++;
+                            }
+
+                            if (pFound)
+                            {
+                                if (   RT_VALID_PTR(pFound->FullDllName.Buffer)
+                                    && pFound->FullDllName.Length > 0
+                                    && pFound->FullDllName.Length < _8K
+                                    && (pFound->FullDllName.Length & 1) == 0
+                                    && pFound->FullDllName.Length <= pFound->FullDllName.MaximumLength)
+                                    RTLogLogger(pLogger, NULL, "%p: %p - %#010RX32 bytes into %.*ls\n",
+                                                puStack, uPtr, (uint32_t)(uPtr - (uintptr_t)pFound->DllBase),
+                                                pFound->FullDllName.Length / sizeof(RTUTF16), pFound->FullDllName.Buffer);
+                                else
+                                    RTLogLogger(pLogger, NULL, "%p: %p - %08RX32 into module at %p\n",
+                                                puStack, uPtr, (uint32_t)(uPtr - (uintptr_t)pFound->DllBase), pFound->DllBase);
+                            }
+                        }
+
+                        puStack++;
+                    }
+                }
+            }
+
+            /*
+             * Dump the command line if we have one. We do this last in case it crashes.
+             */
+            PRTL_USER_PROCESS_PARAMETERS pProcParams = pPeb->ProcessParameters;
+            if (RT_VALID_PTR(pProcParams))
+            {
+                if (RT_VALID_PTR(pProcParams->CommandLine.Buffer)
+                    && pProcParams->CommandLine.Length > 0
+                    && pProcParams->CommandLine.Length <= pProcParams->CommandLine.MaximumLength
+                    && !(pProcParams->CommandLine.Length & 1)
+                    && !(pProcParams->CommandLine.MaximumLength & 1))
+                    RTLogLogger(pLogger, NULL, "PEB/CommandLine: %.*ls\n",
+                                pProcParams->CommandLine.Length / sizeof(RTUTF16), pProcParams->CommandLine.Buffer);
+            }
+        }
+    }
+
+    /*
+     * Do the default stuff, never mind us.
+     */
+    if (g_pfnUnhandledXcptFilter)
+        return g_pfnUnhandledXcptFilter(pPtrs);
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 

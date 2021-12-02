@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIRichToolButton.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * VBox Qt GUI - QIRichToolButton class declaration.
+ * VBox Qt GUI - Qt extensions: QIRichToolButton class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,25 +15,19 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QHBoxLayout>
-# include <QLabel>
-# include <QStylePainter>
-# include <QStyleOptionFocusRect>
-# include <QKeyEvent>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QStyleOptionFocusRect>
+#include <QStylePainter>
 
 /* GUI includes: */
-# include "QIRichToolButton.h"
-# include "QIToolButton.h"
+#include "QIRichToolButton.h"
+#include "QIToolButton.h"
 
 /* Other VBox includes: */
-# include "iprt/assert.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "iprt/assert.h"
 
 
 QIRichToolButton::QIRichToolButton(QWidget *pParent)
@@ -76,7 +70,6 @@ void QIRichToolButton::paintEvent(QPaintEvent *pEvent)
         option.rect = geometry();
         painter.drawPrimitive(QStyle::PE_FrameFocusRect, option);
     }
-
     /* Call to base-class: */
     QWidget::paintEvent(pEvent);
 }
@@ -120,8 +113,8 @@ void QIRichToolButton::prepare()
             /* Configure tool-button: */
             m_pButton->removeBorder();
             m_pButton->setFocusPolicy(Qt::NoFocus);
-            connect(m_pButton, SIGNAL(clicked(bool)), this, SLOT(sltButtonClicked()));
-            connect(m_pButton, SIGNAL(clicked(bool)), this, SIGNAL(sigClicked()));
+            connect(m_pButton, &QIToolButton::clicked, this, &QIRichToolButton::sltButtonClicked);
+            connect(m_pButton, &QIToolButton::clicked, this, &QIRichToolButton::sigClicked);
             /* Add tool-button into main-layout: */
             pMainLayout->addWidget(m_pButton);
         }
@@ -137,4 +130,3 @@ void QIRichToolButton::prepare()
         }
     }
 }
-

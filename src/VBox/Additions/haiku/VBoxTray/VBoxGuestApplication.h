@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxGuestApplication.h 92179 2021-11-02 21:44:49Z vboxsync $ */
 /** @file
  * VBoxGuestApplication, Haiku Guest Additions, header.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,7 +20,7 @@
  *
  * VirtualBox Guest Additions for Haiku.
  * Copyright (c) 2011 Mike Smith <mike@scgtrp.net>
- *                    François Revol <revol@free.fr>
+ *                    FranÃ§ois Revol <revol@free.fr>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -44,8 +44,11 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef __VBOXGUESTAPPLICATION__H
-#define __VBOXGUESTAPPLICATION__H
+#ifndef GA_INCLUDED_SRC_haiku_VBoxTray_VBoxGuestApplication_h
+#define GA_INCLUDED_SRC_haiku_VBoxTray_VBoxGuestApplication_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /** @todo r=ramshankar; why are we including all the headers here!?? Do it in
  *        the .cpp please. */
@@ -61,7 +64,7 @@
 
 #include <VBoxGuestInternal.h>
 
-class VBoxClipboardService;
+class VBoxShClService;
 
 class VBoxGuestApplication : public BApplication
 {
@@ -72,5 +75,5 @@ class VBoxGuestApplication : public BApplication
         virtual void ReadyToRun();
 };
 
-#endif /* __VBOXGUESTAPPLICATION__H */
+#endif /* !GA_INCLUDED_SRC_haiku_VBoxTray_VBoxGuestApplication_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineLogicNormal.cpp 90878 2021-08-25 12:05:26Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineLogicNormal class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,38 +15,33 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# ifndef VBOX_WS_MAC
-#  include <QTimer>
-# endif /* !VBOX_WS_MAC */
+#ifndef VBOX_WS_MAC
+# include <QTimer>
+#endif /* !VBOX_WS_MAC */
 
 /* GUI includes: */
-# include "VBoxGlobal.h"
-# include "UIDesktopWidgetWatchdog.h"
-# include "UIMessageCenter.h"
-# include "UISession.h"
-# include "UIActionPoolRuntime.h"
-# include "UIMachineLogicNormal.h"
-# include "UIMachineWindow.h"
-# include "UIMenuBarEditorWindow.h"
-# include "UIStatusBarEditorWindow.h"
-# include "UIExtraDataManager.h"
-# include "UIFrameBuffer.h"
-# ifndef VBOX_WS_MAC
-#  include "QIMenu.h"
-# else  /* VBOX_WS_MAC */
-#  include "VBoxUtils.h"
-# endif /* VBOX_WS_MAC */
+#include "UICommon.h"
+#include "UIDesktopWidgetWatchdog.h"
+#include "UIMessageCenter.h"
+#include "UISession.h"
+#include "UIActionPoolRuntime.h"
+#include "UIMachineLogicNormal.h"
+#include "UIMachineWindow.h"
+#include "UIMenuBarEditorWindow.h"
+#include "UIStatusBarEditorWindow.h"
+#include "UIExtraDataManager.h"
+#include "UIFrameBuffer.h"
+#ifndef VBOX_WS_MAC
+# include "QIMenu.h"
+#else  /* VBOX_WS_MAC */
+# include "VBoxUtils.h"
+#endif /* VBOX_WS_MAC */
 
 /* COM includes: */
-# include "CConsole.h"
-# include "CDisplay.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "CConsole.h"
+#include "CDisplay.h"
+#include "CGraphicsAdapter.h"
 
 
 UIMachineLogicNormal::UIMachineLogicNormal(QObject *pParent, UISession *pSession)
@@ -73,7 +68,7 @@ void UIMachineLogicNormal::sltCheckForRequestedVisualStateType()
         return;
 
     /* Do not try to change visual-state type in 'manual override' mode: */
-    if (isManualOverrideMode())
+    if (uisession()->isManualOverrideMode())
         return;
 
     /* Check requested visual-state types: */
@@ -133,11 +128,11 @@ void UIMachineLogicNormal::sltOpenMenuBarSettings()
     AssertPtrReturnVoid(pMenuBarEditor);
     {
         /* Configure menu-bar editor: */
-        connect(pMenuBarEditor, SIGNAL(destroyed(QObject*)),
-                this, SLOT(sltMenuBarSettingsClosed()));
+        connect(pMenuBarEditor, &UIMenuBarEditorWindow::destroyed,
+                this, &UIMachineLogicNormal::sltMenuBarSettingsClosed);
 #ifdef VBOX_WS_MAC
-        connect(this, SIGNAL(sigNotifyAbout3DOverlayVisibilityChange(bool)),
-                pMenuBarEditor, SLOT(sltActivateWindow()));
+        connect(this, &UIMachineLogicNormal::sigNotifyAbout3DOverlayVisibilityChange,
+                pMenuBarEditor, &UIMenuBarEditorWindow::sltActivateWindow);
 #endif /* VBOX_WS_MAC */
         /* Show window: */
         pMenuBarEditor->show();
@@ -166,8 +161,8 @@ void UIMachineLogicNormal::sltToggleMenuBar()
     AssertReturnVoid(isMachineWindowsCreated());
 
     /* Invert menu-bar availability option: */
-    const bool fEnabled = gEDataManager->menuBarEnabled(vboxGlobal().managedVMUuid());
-    gEDataManager->setMenuBarEnabled(!fEnabled, vboxGlobal().managedVMUuid());
+    const bool fEnabled = gEDataManager->menuBarEnabled(uiCommon().managedVMUuid());
+    gEDataManager->setMenuBarEnabled(!fEnabled, uiCommon().managedVMUuid());
 }
 #endif /* !RT_OS_DARWIN */
 
@@ -188,11 +183,11 @@ void UIMachineLogicNormal::sltOpenStatusBarSettings()
     AssertPtrReturnVoid(pStatusBarEditor);
     {
         /* Configure status-bar editor: */
-        connect(pStatusBarEditor, SIGNAL(destroyed(QObject*)),
-                this, SLOT(sltStatusBarSettingsClosed()));
+        connect(pStatusBarEditor, &UIStatusBarEditorWindow::destroyed,
+                this, &UIMachineLogicNormal::sltStatusBarSettingsClosed);
 #ifdef VBOX_WS_MAC
-        connect(this, SIGNAL(sigNotifyAbout3DOverlayVisibilityChange(bool)),
-                pStatusBarEditor, SLOT(sltActivateWindow()));
+        connect(this, &UIMachineLogicNormal::sigNotifyAbout3DOverlayVisibilityChange,
+                pStatusBarEditor, &UIStatusBarEditorWindow::sltActivateWindow);
 #endif /* VBOX_WS_MAC */
         /* Show window: */
         pStatusBarEditor->show();
@@ -216,55 +211,36 @@ void UIMachineLogicNormal::sltToggleStatusBar()
     AssertReturnVoid(isMachineWindowsCreated());
 
     /* Invert status-bar availability option: */
-    const bool fEnabled = gEDataManager->statusBarEnabled(vboxGlobal().managedVMUuid());
-    gEDataManager->setStatusBarEnabled(!fEnabled, vboxGlobal().managedVMUuid());
-}
-
-void UIMachineLogicNormal::sltHandleActionTriggerViewScreenToggle(int iIndex, bool fEnabled)
-{
-    /* Enable/disable guest keeping current size: */
-    ULONG uWidth, uHeight, uBitsPerPixel;
-    LONG uOriginX, uOriginY;
-    KGuestMonitorStatus monitorStatus = KGuestMonitorStatus_Enabled;
-    display().GetScreenResolution(iIndex, uWidth, uHeight, uBitsPerPixel, uOriginX, uOriginY, monitorStatus);
-    if (!fEnabled)
-    {
-        display().SetVideoModeHint(iIndex, false, false, 0, 0, 0, 0, 0);
-        uisession()->setScreenVisibleHostDesires(iIndex, false);
-    }
-    else
-    {
-        /* Defaults: */
-        if (!uWidth)
-            uWidth = 800;
-        if (!uHeight)
-            uHeight = 600;
-        display().SetVideoModeHint(iIndex, true, false, 0, 0, uWidth, uHeight, 32);
-        uisession()->setScreenVisibleHostDesires(iIndex, true);
-    }
-}
-
-void UIMachineLogicNormal::sltHandleActionTriggerViewScreenResize(int iIndex, const QSize &size)
-{
-    /* Resize guest to required size: */
-    display().SetVideoModeHint(iIndex, uisession()->isScreenVisible(iIndex),
-                             false, 0, 0, size.width(), size.height(), 0);
+    const bool fEnabled = gEDataManager->statusBarEnabled(uiCommon().managedVMUuid());
+    gEDataManager->setStatusBarEnabled(!fEnabled, uiCommon().managedVMUuid());
 }
 
 void UIMachineLogicNormal::sltHostScreenAvailableAreaChange()
 {
-#if defined(VBOX_WS_X11) && QT_VERSION >= 0x050000
+#if defined(VBOX_WS_X11) && !defined(VBOX_GUI_WITH_CUSTOMIZATIONS1)
     /* Prevent handling if fake screen detected: */
     if (gpDesktop->isFakeScreenDetected())
         return;
 
     /* Make sure all machine-window(s) have previous but normalized geometry: */
     foreach (UIMachineWindow *pMachineWindow, machineWindows())
-        pMachineWindow->restoreCachedGeometry();
-#endif /* VBOX_WS_X11 && QT_VERSION >= 0x050000 */
+        if (!pMachineWindow->isMaximized())
+            pMachineWindow->restoreCachedGeometry();
+#endif /* VBOX_WS_X11 && !VBOX_GUI_WITH_CUSTOMIZATIONS1 */
 
     /* Call to base-class: */
     UIMachineLogic::sltHostScreenAvailableAreaChange();
+}
+
+void UIMachineLogicNormal::prepareActionGroups()
+{
+    /* Call to base-class: */
+    UIMachineLogic::prepareActionGroups();
+
+    /* Restrict 'Remap' actions for 'View' menu: */
+    actionPool()->toRuntime()->setRestrictionForMenuView(UIActionRestrictionLevel_Logic,
+                                                         (UIExtraDataMetaDefs::RuntimeMenuViewActionType)
+                                                         (UIExtraDataMetaDefs::RuntimeMenuViewActionType_Remap));
 }
 
 void UIMachineLogicNormal::prepareActionConnections()
@@ -273,26 +249,22 @@ void UIMachineLogicNormal::prepareActionConnections()
     UIMachineLogic::prepareActionConnections();
 
     /* Prepare 'View' actions connections: */
-    connect(actionPool()->action(UIActionIndexRT_M_View_T_Fullscreen), SIGNAL(triggered(bool)),
-            this, SLOT(sltChangeVisualStateToFullscreen()));
-    connect(actionPool()->action(UIActionIndexRT_M_View_T_Seamless), SIGNAL(triggered(bool)),
-            this, SLOT(sltChangeVisualStateToSeamless()));
-    connect(actionPool()->action(UIActionIndexRT_M_View_T_Scale), SIGNAL(triggered(bool)),
-            this, SLOT(sltChangeVisualStateToScale()));
-    connect(actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_S_Settings), SIGNAL(triggered(bool)),
-            this, SLOT(sltOpenMenuBarSettings()));
+    connect(actionPool()->action(UIActionIndexRT_M_View_T_Fullscreen), &UIAction::triggered,
+            this, &UIMachineLogicNormal::sltChangeVisualStateToFullscreen);
+    connect(actionPool()->action(UIActionIndexRT_M_View_T_Seamless), &UIAction::triggered,
+            this, &UIMachineLogicNormal::sltChangeVisualStateToSeamless);
+    connect(actionPool()->action(UIActionIndexRT_M_View_T_Scale), &UIAction::triggered,
+            this, &UIMachineLogicNormal::sltChangeVisualStateToScale);
+    connect(actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_S_Settings), &UIAction::triggered,
+            this, &UIMachineLogicNormal::sltOpenMenuBarSettings);
 #ifndef VBOX_WS_MAC
-    connect(actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_T_Visibility), SIGNAL(triggered(bool)),
-            this, SLOT(sltToggleMenuBar()));
+    connect(actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_T_Visibility), &UIAction::triggered,
+            this, &UIMachineLogicNormal::sltToggleMenuBar);
 #endif /* !VBOX_WS_MAC */
-    connect(actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_S_Settings), SIGNAL(triggered(bool)),
-            this, SLOT(sltOpenStatusBarSettings()));
-    connect(actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_T_Visibility), SIGNAL(triggered(bool)),
-            this, SLOT(sltToggleStatusBar()));
-    connect(actionPool(), SIGNAL(sigNotifyAboutTriggeringViewScreenToggle(int, bool)),
-            this, SLOT(sltHandleActionTriggerViewScreenToggle(int, bool)));
-    connect(actionPool(), SIGNAL(sigNotifyAboutTriggeringViewScreenResize(int, const QSize&)),
-            this, SLOT(sltHandleActionTriggerViewScreenResize(int, const QSize&)));
+    connect(actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_S_Settings), &UIAction::triggered,
+            this, &UIMachineLogicNormal::sltOpenStatusBarSettings);
+    connect(actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_T_Visibility), &UIAction::triggered,
+            this, &UIMachineLogicNormal::sltToggleStatusBar);
 }
 
 void UIMachineLogicNormal::prepareMachineWindows()
@@ -308,7 +280,7 @@ void UIMachineLogicNormal::prepareMachineWindows()
 #endif /* VBOX_WS_MAC */
 
     /* Get monitors count: */
-    ulong uMonitorCount = machine().GetMonitorCount();
+    ulong uMonitorCount = machine().GetGraphicsAdapter().GetMonitorCount();
     /* Create machine window(s): */
     for (ulong uScreenId = 0; uScreenId < uMonitorCount; ++ uScreenId)
         addMachineWindow(UIMachineWindow::create(this, uScreenId));
@@ -318,8 +290,8 @@ void UIMachineLogicNormal::prepareMachineWindows()
 
     /* Listen for frame-buffer resize: */
     foreach (UIMachineWindow *pMachineWindow, machineWindows())
-        connect(pMachineWindow, SIGNAL(sigFrameBufferResize()),
-                this, SIGNAL(sigFrameBufferResize()));
+        connect(pMachineWindow, &UIMachineWindow::sigFrameBufferResize,
+                this, &UIMachineLogicNormal::sigFrameBufferResize);
     emit sigFrameBufferResize();
 
     /* Mark machine-window(s) created: */
@@ -366,24 +338,23 @@ void UIMachineLogicNormal::cleanupMachineWindows()
 void UIMachineLogicNormal::cleanupActionConnections()
 {
     /* "View" actions disconnections: */
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Fullscreen), SIGNAL(triggered(bool)),
-               this, SLOT(sltChangeVisualStateToFullscreen()));
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Seamless), SIGNAL(triggered(bool)),
-               this, SLOT(sltChangeVisualStateToSeamless()));
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Scale), SIGNAL(triggered(bool)),
-               this, SLOT(sltChangeVisualStateToScale()));
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_S_Settings), SIGNAL(triggered(bool)),
-               this, SLOT(sltOpenMenuBarSettings()));
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Fullscreen), &UIAction::triggered,
+               this, &UIMachineLogicNormal::sltChangeVisualStateToFullscreen);
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Seamless), &UIAction::triggered,
+               this, &UIMachineLogicNormal::sltChangeVisualStateToSeamless);
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Scale), &UIAction::triggered,
+               this, &UIMachineLogicNormal::sltChangeVisualStateToScale);
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_S_Settings), &UIAction::triggered,
+               this, &UIMachineLogicNormal::sltOpenMenuBarSettings);
 #ifndef VBOX_WS_MAC
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_T_Visibility), SIGNAL(triggered(bool)),
-               this, SLOT(sltToggleMenuBar()));
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_M_MenuBar_T_Visibility), &UIAction::triggered,
+               this, &UIMachineLogicNormal::sltToggleMenuBar);
 #endif /* !VBOX_WS_MAC */
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_S_Settings), SIGNAL(triggered(bool)),
-               this, SLOT(sltOpenStatusBarSettings()));
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_T_Visibility), SIGNAL(triggered(bool)),
-               this, SLOT(sltToggleStatusBar()));
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_S_Settings), &UIAction::triggered,
+               this, &UIMachineLogicNormal::sltOpenStatusBarSettings);
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_M_StatusBar_T_Visibility), &UIAction::triggered,
+               this, &UIMachineLogicNormal::sltToggleStatusBar);
 
     /* Call to base-class: */
     UIMachineLogic::cleanupActionConnections();
 }
-

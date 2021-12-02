@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QILineEdit.h 90642 2021-08-12 06:47:02Z vboxsync $ */
 /** @file
- * VBox Qt GUI - QILineEdit class declarations.
+ * VBox Qt GUI - Qt extensions: QILineEdit class declaration.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,28 +15,75 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __QILineEdit_h__
-#define __QILineEdit_h__
+#ifndef FEQT_INCLUDED_SRC_extensions_QILineEdit_h
+#define FEQT_INCLUDED_SRC_extensions_QILineEdit_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes */
+#include <QIcon>
 #include <QLineEdit>
 
-class QILineEdit: public QLineEdit
+/* GUI includes: */
+#include "UILibraryDefs.h"
+
+class QLabel;
+
+/** QLineEdit extension with advanced functionality. */
+class SHARED_LIBRARY_STUFF QILineEdit : public QLineEdit
 {
+    Q_OBJECT;
+
 public:
 
-    QILineEdit (QWidget *aParent = 0)
-        :QLineEdit (aParent) {}
-    QILineEdit (const QString &aContents, QWidget *aParent = 0)
-        :QLineEdit (aContents, aParent) {}
+    /** Constructs line-edit passing @a pParent to the base-class. */
+    QILineEdit(QWidget *pParent = 0);
+    /** Constructs line-edit passing @a pParent to the base-class.
+      * @param  strText  Brings the line-edit text. */
+    QILineEdit(const QString &strText, QWidget *pParent = 0);
 
-    void setMinimumWidthByText (const QString &aText);
-    void setFixedWidthByText (const QString &aText);
+    /** Defines whether this is @a fAllowed to copy contents when disabled. */
+    void setAllowToCopyContentsWhenDisabled(bool fAllowed);
+
+    /** Forces line-edit to adjust minimum width acording to passed @a strText. */
+    void setMinimumWidthByText(const QString &strText);
+    /** Forces line-edit to adjust fixed width acording to passed @a strText. */
+    void setFixedWidthByText(const QString &strText);
+
+    /** Puts an icon to mark some error on the right hand side of the line edit. @p is used as tooltip of the icon. */
+    void mark(bool fError, const QString &strErrorMessage = QString());
+
+protected:
+
+    /** Handles any Qt @a pEvent. */
+    virtual bool event(QEvent *pEvent) /* override */;
+
+    /** Handles resize @a pEvent. */
+    virtual void resizeEvent(QResizeEvent *pResizeEvent) /* override */;
+
+private slots:
+
+    /** Copies text into clipboard. */
+    void copy();
 
 private:
 
-    QSize featTextWidth (const QString &aText) const;
+    /** Prepares all. */
+    void prepare();
+
+    /** Calculates suitable @a strText size. */
+    QSize featTextWidth(const QString &strText) const;
+
+    /** Holds whether this is allowed to copy contents when disabled. */
+    bool     m_fAllowToCopyContentsWhenDisabled;
+    /** Holds the copy to clipboard action. */
+    QAction *m_pCopyAction;
+
+    QLabel *m_pIconLabel;
+    QIcon   m_markIcon;
+    bool    m_fMarkForError;
+    QString m_strErrorMessage;
 };
 
-#endif /* __QILineEdit_h__ */
-
+#endif /* !FEQT_INCLUDED_SRC_extensions_QILineEdit_h */

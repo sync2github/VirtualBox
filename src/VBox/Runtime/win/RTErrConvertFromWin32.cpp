@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTErrConvertFromWin32.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Convert win32 error codes to iprt status codes.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,8 +31,8 @@
 #include <iprt/win/windows.h>
 
 #include <iprt/err.h>
+#include <iprt/log.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
 
 
 RTR3DECL(int)  RTErrConvertFromWin32(unsigned uNativeCode)
@@ -202,6 +202,10 @@ RTR3DECL(int)  RTErrConvertFromWin32(unsigned uNativeCode)
         case ERROR_ACCOUNT_RESTRICTION:
         case ERROR_PASSWORD_RESTRICTION:
         case ERROR_ACCOUNT_DISABLED:        return VERR_ACCOUNT_RESTRICTED;
+
+        case ERROR_INVALID_IMAGE_HASH:      return VERR_LDR_IMAGE_HASH;
+        case ERROR_UNRECOGNIZED_VOLUME:     return VERR_MEDIA_NOT_RECOGNIZED;
+        case ERROR_ELEVATION_REQUIRED:      return VERR_PROC_ELEVATION_REQUIRED;
 
 
         /*
@@ -386,6 +390,8 @@ RTR3DECL(int)  RTErrConvertFromWin32(unsigned uNativeCode)
         case WSAEHOSTUNREACH:      return VERR_NET_HOST_UNREACHABLE;
         case WSAEALREADY:          return VERR_NET_ALREADY_IN_PROGRESS;
         case WSAEINPROGRESS:       return VERR_NET_IN_PROGRESS;
+        case WSAEPROVIDERFAILEDINIT: return VERR_NET_INIT_FAILED;
+
         //case WSAESTALE                116     /* Stale NFS file handle */
         //case WSAEUCLEAN               117     /* Structure needs cleaning */
         //case WSAENOTNAM               118     /* Not a XENIX named type file */
@@ -419,6 +425,8 @@ RTR3DECL(int)  RTErrConvertFromWin32(unsigned uNativeCode)
         case WSANO_DATA:            return VERR_NET_ADDRESS_NOT_AVAILABLE;
 #endif
 
+        case 1272 /*STATUS_SMB_GUEST_LOGON_BLOCKED*/: return VERR_AUTHENTICATION_FAILURE;
+
 
 #ifndef ERROR_NOT_A_REPARSE_POINT
 # define ERROR_NOT_A_REPARSE_POINT 0x1126
@@ -426,10 +434,20 @@ RTR3DECL(int)  RTErrConvertFromWin32(unsigned uNativeCode)
         case ERROR_NOT_A_REPARSE_POINT: return VERR_NOT_SYMLINK;
 
         case NTE_BAD_ALGID:         return VERR_CR_PKIX_UNKNOWN_DIGEST_TYPE;
+
+        case ERROR_SERVICE_DOES_NOT_EXIST: return VERR_NOT_FOUND;
+
+#ifndef STATUS_ELEVATION_REQUIRED
+# define STATUS_ELEVATION_REQUIRED 0xc000042c
+#endif
+        case STATUS_ELEVATION_REQUIRED: return VERR_PRIVILEGE_NOT_HELD;
     }
 
     /* unknown error. */
-#ifndef DEBUG_dmik
+#ifndef IN_SUP_HARDENED_R3
+    AssertLogRelMsgFailed(("Unhandled error %u\n", uNativeCode));
+#else
+    /* hardened main has no LogRel */
     AssertMsgFailed(("Unhandled error %u\n", uNativeCode));
 #endif
     return VERR_UNRESOLVED_ERROR;

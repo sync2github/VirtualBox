@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: stringalloc.cpp 83979 2020-04-26 01:28:56Z vboxsync $ */
 /** @file
  * IPRT - String Manipulation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -186,7 +186,7 @@ RTDECL(int) RTStrAAppendNTag(char **ppsz, const char *pszAppend, size_t cchAppen
 }
 
 
-#ifndef IN_RING0
+#if !defined(IN_RING0) && !defined(IPRT_NO_ALLOCA_TROUBLE)
 
 /* XXX Currently not needed anywhere. alloca() induces some linker problems for ring 0 code
  * with newer versions of VCC */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VDIfVfs2.cpp 83043 2020-02-10 18:11:54Z vboxsync $ */
 /** @file
  * Virtual Disk Image (VDI), I/O interface to IPRT VFS I/O stream glue.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -107,6 +107,7 @@ static DECLCALLBACK(int) notImpl_Delete(void *pvUser, const char *pcszFilename)
 {
     NOREF(pvUser); NOREF(pcszFilename);
     Log(("%s\n",  __FUNCTION__));
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -115,6 +116,7 @@ static DECLCALLBACK(int) notImpl_Move(void *pvUser, const char *pcszSrc, const c
 {
     NOREF(pvUser); NOREF(pcszSrc); NOREF(pcszDst); NOREF(fMove);
     Log(("%s\n",  __FUNCTION__));
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -123,6 +125,7 @@ static DECLCALLBACK(int) notImpl_GetFreeSpace(void *pvUser, const char *pcszFile
 {
     NOREF(pvUser); NOREF(pcszFilename); NOREF(pcbFreeSpace);
     Log(("%s\n",  __FUNCTION__));
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -131,6 +134,7 @@ static DECLCALLBACK(int) notImpl_GetModificationTime(void *pvUser, const char *p
 {
     NOREF(pvUser); NOREF(pcszFilename); NOREF(pModificationTime);
     Log(("%s\n",  __FUNCTION__));
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -139,6 +143,7 @@ static DECLCALLBACK(int) notImpl_SetSize(void *pvUser, void *pvStorage, uint64_t
 {
     NOREF(pvUser); NOREF(pvStorage); NOREF(cb);
     Log(("%s\n",  __FUNCTION__));
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -158,6 +163,7 @@ static DECLCALLBACK(int) notImpl_FlushSync(void *pvUser, void *pvStorage)
 {
     NOREF(pvUser); NOREF(pvStorage);
     Log(("%s\n",  __FUNCTION__));
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -323,6 +329,7 @@ VBOXDDU_DECL(int) VDIfDestroyFromVfsStream(PVDINTERFACEIO pIoIf)
             pThis->hVfsIos = NIL_RTVFSIOSTREAM;
         }
         pThis->u32Magic = ~VDIFFROMVFS_MAGIC;
+        RTMemFree(pThis);
     }
     return VINF_SUCCESS;
 }

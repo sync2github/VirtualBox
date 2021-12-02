@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIAbstractDockIconPreview.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Abstract class for the dock icon preview.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIAbstractDockIconPreview_h___
-#define ___UIAbstractDockIconPreview_h___
+#ifndef FEQT_INCLUDED_SRC_platform_darwin_UIAbstractDockIconPreview_h
+#define FEQT_INCLUDED_SRC_platform_darwin_UIAbstractDockIconPreview_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* System includes */
 #include <ApplicationServices/ApplicationServices.h>
@@ -69,5 +72,5 @@ public:
     CGRect m_monitorRect;
 };
 
-#endif /* ___UIAbstractDockIconPreview_h___ */
+#endif /* !FEQT_INCLUDED_SRC_platform_darwin_UIAbstractDockIconPreview_h */
 

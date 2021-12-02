@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: vbox-greeter.cpp 90862 2021-08-25 00:37:59Z vboxsync $ */
 /** @file
  * vbox-greeter - an own LightDM greeter module supporting auto-logons
  *                controlled by the host.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -98,8 +98,7 @@
 
 #include <VBox/log.h>
 #ifdef VBOX_WITH_GUEST_PROPS
- #include <VBox/HostServices/GuestPropertySvc.h>
- using namespace guestProp;
+# include <VBox/HostServices/GuestPropertySvc.h>
 #endif
 
 /** The program name (derived from argv[0]). */
@@ -216,7 +215,7 @@ static int vbox_read_prop(uint32_t uClientID,
     /* The buffer for storing the data and its initial size.  We leave a bit
      * of space here in case the maximum values are raised. */
     void *pvBuf = NULL;
-    uint32_t cbBuf = MAX_VALUE_LEN + MAX_FLAGS_LEN + _1K;
+    uint32_t cbBuf = GUEST_PROP_MAX_VALUE_LEN + GUEST_PROP_MAX_FLAGS_LEN + _1K;
 
     /* Because there is a race condition between our reading the size of a
      * property and the guest updating it, we loop a few times here and
@@ -935,12 +934,11 @@ static int vboxGreeterLogCreate(const char *pszLogFile)
 #if defined(RT_OS_WINDOWS) || defined(RT_OS_OS2)
     fFlags |= RTLOGFLAGS_USECRLF;
 #endif
-    char szError[RTPATH_MAX + 128] = "";
-    int rc = RTLogCreateEx(&g_pLoggerRelease, fFlags, "all",
-                           "VBOXGREETER_RELEASE_LOG", RT_ELEMENTS(s_apszGroups), s_apszGroups,
-                           RTLOGDEST_STDOUT,
+    int rc = RTLogCreateEx(&g_pLoggerRelease, "VBOXGREETER_RELEASE_LOG", fFlags, "all",
+                           RT_ELEMENTS(s_apszGroups), s_apszGroups, UINT32_MAX /*cMaxEntriesPerGroup*/,
+                           0 /*cBufDescs*/, NULL /*paBufDescs*/, RTLOGDEST_STDOUT,
                            vboxGreeterLogHeaderFooter, g_cHistory, g_uHistoryFileSize, g_uHistoryFileTime,
-                           szError, sizeof(szError), pszLogFile);
+                           NULL /*pErrInfo*/, pszLogFile);
     if (RT_SUCCESS(rc))
     {
         /* register this logger as the release logger */

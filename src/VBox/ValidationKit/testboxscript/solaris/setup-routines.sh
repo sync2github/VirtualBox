@@ -1,10 +1,10 @@
-# $Id$
+# $Id: setup-routines.sh 88632 2021-04-21 12:27:22Z vboxsync $
 ## @file
 # VirtualBox Validation Kit - TestBoxScript Service Setup on Solaris.
 #
 
 #
-# Copyright (C) 2006-2015 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -41,19 +41,40 @@ esac
 # Overriding setup.sh bits.
 #
 MY_FGREP="/usr/xpg4/bin/fgrep" # The other one does grok -q.
-if [ ! -f "${MY_ETC_SUDOERS}"  -a  -f "/opt/csw/etc/sudoers" ]; then
-    MY_ETC_SUDOERS=/opt/csw/etc/sudoers # Sudo isn't standard on S10.
+if [ ! -f "${MY_ETC_SUDOERS}" ]; then # sudo isn't standard on S10.
+    if [ -f "/opt/csw/etc/sudoers" ]; then
+        MY_ETC_SUDOERS=/opt/csw/etc/sudoers
+    fi
+    if [ -f "/etc/opt/csw/sudoers" ]; then
+        MY_ETC_SUDOERS=/etc/opt/csw/sudoers
+    fi
 fi
 
 #
 # Solaris variables.
 #
-MY_SVC_TMP="/tmp/testboxscript.xml"
 MY_SVC_FMRI="svc:/system/virtualbox/testboxscript"
 MY_SVCCFG="/usr/sbin/svccfg"
 MY_SVCADM="/usr/sbin/svcadm"
+MY_CHGRP="/usr/bin/chgrp"
 MY_TR="/usr/bin/tr"
 MY_TAB=`printf "\t"`
+
+if test "${MY_SOLARIS_VER}" -lt 11; then
+    # solaris 10 service import
+    MY_SVC="/tmp/testboxscript.xml"
+else
+    # use propper manifest directory
+    # /lib/svc/manifest/system for solaris 11 and higher for testboxscript.xml file
+
+    # Since sol 11.4 the solaris testboxscript service
+    # generates Warnings in /var/svc/log/system-manifest-import:default.log
+    # -------- Warning!!
+    # Configuring services...
+    # * Warning!! Importing Zone access service  ...FAILED.
+
+    MY_SVC="/lib/svc/manifest/system/testboxscript.xml"
+fi
 if test "${MY_SOLARIS_VER}" -lt 11; then ## No gsed on S10?? ARG!
     MY_SED="/usr/xpg4/bin/sed"
 else
@@ -80,33 +101,6 @@ check_for_cifs() {
 }
 
 ##
-# Checks for a boolean option pair --$2/--no-$2 in the XMLARGS variable,
-# storing the result in the TESTBOXSCRIPT_XXX variable $1.
-solaris_check_for_option_bool() {
-    MY_TMP=`echo "${XMLARGS} " | ${MY_SED} -ne "s/^.*[ \"]--$2[ \"].*\$/yes/p"`
-    if [ -n "${MY_TMP}" ]; then
-        eval $1="yes";
-    fi
-    MY_TMP=`echo "${XMLARGS} " | ${MY_SED} -ne "s/^.*[ \"]--no-$2[ \"].*\$/yes/p"`
-    if [ -n "${MY_TMP}" ]; then
-        eval $1="no";
-    fi
-    return 0;
-}
-
-##
-# Checks for an option $2 taking an argument, storing the result in the
-# TESTBOXSCRIPT_XXX variable $1.
-solaris_check_for_option_arg() {
-    # ASSUMES no quoted option values nor any escaped spaces.
-    MY_TMP=`echo "${XMLARGS} " | ${MY_SED} -ne "s/^.*[ \"]--$2  *\([^ \"]*\)[ \"].*\$/\1/p"`
-    if [ -n "${MY_TMP}" ]; then
-        eval $1="\"${MY_TMP}\"";
-    fi
-    return 0;
-}
-
-##
 # Loads config values from the current installation.
 #
 os_load_config() {
@@ -119,6 +113,8 @@ os_load_config() {
     #
     TESTBOXSCRIPT_BUILDS_TYPE="nfs"
     TESTBOXSCRIPT_TESTRSRC_TYPE="nfs"
+    TESTBOXSCRIPT_DEFAULT_BUILDS_TYPE="nfs"
+    TESTBOXSCRIPT_DEFAULT_TESTRSRC_TYPE="nfs"
     TESTBOXSCRIPT_ENVVARS[${#TESTBOXSCRIPT_ENVVARS[@]}]="PATH=${PATH}";
 
     # Load old current.
@@ -142,46 +138,36 @@ os_load_config() {
         XMLARGS=`"${MY_SVCCFG}" "export" "${MY_SVC_FMRI}" \
                  | ${MY_TR} '\n' ' ' \
                 `;
-        XMLARGS=`echo "${XMLARGS} " \
-                 | ${MY_SED} \
-                   -e 's/>  */> /g' \
-                   -e 's/  *\/>/ \/>/g' \
-                   -e "s/^.*<exec_method \([^>]*\)name='start'\([^>]*\)>.*\$/\1 \2/" \
-                   -e "s/^.*exec='\([^']*\)'.*\$/\1/" \
-                   -e 's/&quot;/"/g' \
-                   -e 's/&lt;/</g' \
-                   -e 's/&gt;/>/g' \
-                   -e 's/&amp;/&/g' \
-                `;
-
-        solaris_check_for_option_arg  TESTBOXSCRIPT_SYSTEM_UUID      system-uuid
-        solaris_check_for_option_arg  TESTBOXSCRIPT_SCRATCH_ROOT     scratch-root
-        solaris_check_for_option_arg  TESTBOXSCRIPT_TEST_MANAGER     test-manager
-        solaris_check_for_option_bool TESTBOXSCRIPT_HWVIRT           hwvirt
-        solaris_check_for_option_bool TESTBOXSCRIPT_NESTED_PAGING    nested-paging
-        solaris_check_for_option_bool TESTBOXSCRIPT_IOMMU            io-mmu
-        solaris_check_for_option_arg  TESTBOXSCRIPT_BUILDS_PATH      builds-path
-        solaris_check_for_option_arg  TESTBOXSCRIPT_BUILDS_TYPE      builds-server-type
-        solaris_check_for_option_arg  TESTBOXSCRIPT_BUILDS_NAME      builds-server-name
-        solaris_check_for_option_arg  TESTBOXSCRIPT_BUILDS_SHARE     builds-server-share
-        solaris_check_for_option_arg  TESTBOXSCRIPT_BUILDS_USER      builds-server-user
-        solaris_check_for_option_arg  TESTBOXSCRIPT_BUILDS_PASSWD    builds-server-passwd
-        solaris_check_for_option_arg  TESTBOXSCRIPT_TESTRSRC_PATH    testrsrc-path
-        solaris_check_for_option_arg  TESTBOXSCRIPT_TESTRSRC_TYPE    testrsrc-server-type
-        solaris_check_for_option_arg  TESTBOXSCRIPT_TESTRSRC_NAME    testrsrc-server-name
-        solaris_check_for_option_arg  TESTBOXSCRIPT_TESTRSRC_SHARE   testrsrc-server-share
-        solaris_check_for_option_arg  TESTBOXSCRIPT_TESTRSRC_USER    testrsrc-server-user
-        solaris_check_for_option_arg  TESTBOXSCRIPT_TESTRSRC_PASSWD  testrsrc-server-passwd
-
-        ## @TODO solaris_check_for_option_arg  TESTBOXSCRIPT_PYTHON           python
-        ## @TODO solaris_check_for_option_arg  TESTBOXSCRIPT_ENVVARS          putenv - Multiple occurences possible.
+        case "${XMLARGS}" in
+            *exec_method*)
+                XMLARGS=`echo "${XMLARGS} " \
+                         | ${MY_SED} \
+                           -e 's/>  */> /g' \
+                           -e 's/  *\/>/ \/>/g' \
+                           -e "s/^.*<exec_method \([^>]*\)name='start'\([^>]*\)>.*\$/\1 \2/" \
+                           -e "s/^.*exec='\([^']*\)'.*\$/\1/" \
+                           -e 's/&quot;/"/g' \
+                           -e 's/&lt;/</g' \
+                           -e 's/&gt;/>/g' \
+                           -e 's/&amp;/&/g' \
+                         | ${MY_SED} \
+                           -e 's/^.*testboxscript -d -m *//' \
+                        `;
+                eval common_testboxscript_args_to_config ${XMLARGS}
+                ;;
+            *)
+                echo "error: ${MY_SVCCFG}" "export" "${MY_SVC_FMRI} contains no exec_method element." >&2
+                echo "       Please delete the service manually and restart setup.sh" >&2
+                exit 2
+                ;;
+        esac
     fi
 }
 
 ##
 # Adds one or more arguments to MY_ARGV after checking them for conformity.
 #
-solaris_add_args() {
+os_add_args() {
     while [ $# -gt 0 ];
     do
         case "$1" in
@@ -228,42 +214,10 @@ os_install_service() {
 
     # Calc the command line.
     MY_ARGV=""
-    if [ -n "${TESTBOXSCRIPT_PYTHON}" ]; then
-        solaris_add_args "${TESTBOXSCRIPT_PYTHON}"
-    fi
-    solaris_add_args "${TESTBOXSCRIPT_DIR}/testboxscript/testboxscript.py"
-
-    if [ "${TESTBOXSCRIPT_HWVIRT}"        = "yes" ]; then solaris_add_args "--hwvirt"; fi
-    if [ "${TESTBOXSCRIPT_HWVIRT}"        = "no"  ]; then solaris_add_args "--no-hwvirt"; fi
-    if [ "${TESTBOXSCRIPT_NESTED_PAGING}" = "yes" ]; then solaris_add_args "--nested-paging"; fi
-    if [ "${TESTBOXSCRIPT_NESTED_PAGING}" = "no"  ]; then solaris_add_args "--no-nested-paging"; fi
-    if [ "${TESTBOXSCRIPT_IOMMU}"         = "yes" ]; then solaris_add_args "--io-mmu"; fi
-    if [ "${TESTBOXSCRIPT_IOMMU}"         = "no"  ]; then solaris_add_args "--no-io-mmu"; fi
-    if [ -n "${TESTBOXSCRIPT_SYSTEM_UUID}"     ]; then solaris_add_args "--system-uuid" "${TESTBOXSCRIPT_SYSTEM_UUID}"; fi
-    if [ -n "${TESTBOXSCRIPT_TEST_MANAGER}"    ]; then solaris_add_args "--test-manager" "${TESTBOXSCRIPT_TEST_MANAGER}"; fi
-    if [ -n "${TESTBOXSCRIPT_SCRATCH_ROOT}"    ]; then solaris_add_args "--scratch-root" "${TESTBOXSCRIPT_SCRATCH_ROOT}"; fi
-
-    if [ -n "${TESTBOXSCRIPT_BUILDS_PATH}"     ]; then solaris_add_args "--builds-path"            "${TESTBOXSCRIPT_BUILDS_PATH}"; fi
-    if [ -n "${TESTBOXSCRIPT_BUILDS_TYPE}"     ]; then solaris_add_args "--builds-server-type"     "${TESTBOXSCRIPT_BUILDS_TYPE}"; fi
-    if [ -n "${TESTBOXSCRIPT_BUILDS_NAME}"     ]; then solaris_add_args "--builds-server-name"     "${TESTBOXSCRIPT_BUILDS_NAME}"; fi
-    if [ -n "${TESTBOXSCRIPT_BUILDS_SHARE}"    ]; then solaris_add_args "--builds-server-share"    "${TESTBOXSCRIPT_BUILDS_SHARE}"; fi
-    if [ -n "${TESTBOXSCRIPT_BUILDS_USER}"     ]; then solaris_add_args "--builds-server-user"     "${TESTBOXSCRIPT_BUILDS_USER}"; fi
-    if [ -n "${TESTBOXSCRIPT_BUILDS_PASSWD}"   ]; then solaris_add_args "--builds-server-passwd"   "${TESTBOXSCRIPT_BUILDS_PASSWD}"; fi
-    if [ -n "${TESTBOXSCRIPT_TESTRSRC_PATH}"   ]; then solaris_add_args "--testrsrc-path"          "${TESTBOXSCRIPT_PATH_TESTRSRC}"; fi
-    if [ -n "${TESTBOXSCRIPT_TESTRSRC_TYPE}"   ]; then solaris_add_args "--testrsrc-server-type"   "${TESTBOXSCRIPT_TESTRSRC_TYPE}"; fi
-    if [ -n "${TESTBOXSCRIPT_TESTRSRC_NAME}"   ]; then solaris_add_args "--testrsrc-server-name"   "${TESTBOXSCRIPT_TESTRSRC_NAME}"; fi
-    if [ -n "${TESTBOXSCRIPT_TESTRSRC_SHARE}"  ]; then solaris_add_args "--testrsrc-server-share"  "${TESTBOXSCRIPT_TESTRSRC_SHARE}"; fi
-    if [ -n "${TESTBOXSCRIPT_TESTRSRC_USER}"   ]; then solaris_add_args "--testrsrc-server-user"   "${TESTBOXSCRIPT_TESTRSRC_USER}"; fi
-    if [ -n "${TESTBOXSCRIPT_TESTRSRC_PASSWD}" ]; then solaris_add_args "--testrsrc-server-passwd" "${TESTBOXSCRIPT_TESTRSRC_PASSWD}"; fi
-    i=0
-    while [ "${i}" -lt "${#TESTBOXSCRIPT_ENVVARS[@]}" ];
-    do
-        solaris_add_args "--putenv" "${TESTBOXSCRIPT_ENVVARS[${i}]}"
-        i=$((${i} + 1))
-    done
+    common_compile_testboxscript_command_line
 
     # Create the service xml config file.
-    cat > "${MY_SVC_TMP}" <<EOF
+    cat > "${MY_SVC}" <<EOF
 <?xml version='1.0'?>
 <!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
 <service_bundle type='manifest' name='export'>
@@ -294,13 +248,13 @@ os_install_service() {
         </dependency>
 EOF
     if [ "`uname -r`" = "5.10" ]; then # Seems to be gone in S11?
-        cat >> "${MY_SVC_TMP}" <<EOF
+        cat >> "${MY_SVC}" <<EOF
             <dependency name='filesystem-volfs'  grouping='require_all' restart_on='none' type='service'>
             <service_fmri value='svc:/system/filesystem/volfs:default' />
         </dependency>
 EOF
     fi
-    cat >> "${MY_SVC_TMP}" <<EOF
+    cat >> "${MY_SVC}" <<EOF
         <!-- start + stop methods -->
         <exec_method type='method' name='start' exec='${MY_SCREEN} -S testboxscript -d -m ${MY_ARGV}'
             timeout_seconds='30'>
@@ -329,12 +283,25 @@ EOF
 </service_bundle>
 EOF
 
-    # Install the service, replacing old stuff.
-    if "${MY_SVCCFG}" "export" "${MY_SVC_FMRI}" > /dev/null 2>&1; then
+    if test "${MY_SOLARIS_VER}" -lt 11; then
+      # Install the service, replacing old stuff.
+      if "${MY_SVCCFG}" "export" "${MY_SVC_FMRI}" > /dev/null 2>&1; then
         "${MY_SVCCFG}" "delete" "${MY_SVC_FMRI}"
+      fi
+      "${MY_SVCCFG}" "import" "${MY_SVC}"
+
+      # only for solaris version less than 11
+      rm -f "${MY_SVC}"
+    else
+      "${MY_CHGRP}" "sys" "${MY_SVC}"
+      "${MY_SVCADM}" "restart" "manifest-import"
+
+      # Do not remove the xml file in Solaris versions 11 and higher.
+      # The service will be removed automatically, if the command
+      # svcadm restart manifest-import
+      # will be executed
+
     fi
-    "${MY_SVCCFG}" "import" "${MY_SVC_TMP}"
-    rm -f "${MY_SVC_TMP}"
     return 0;
 }
 

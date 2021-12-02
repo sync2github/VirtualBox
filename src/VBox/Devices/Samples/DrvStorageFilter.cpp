@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvStorageFilter.cpp 91866 2021-10-20 09:05:06Z vboxsync $ */
 /** @file
  * VBox storage filter driver sample.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,8 +22,9 @@
 #define LOG_GROUP LOG_GROUP_MISC
 #include <VBox/vmm/pdmdrv.h>
 #include <VBox/vmm/pdmstorageifs.h>
-#include <VBox/version.h>
+#include <VBox/err.h>
 #include <VBox/log.h>
+#include <VBox/version.h>
 
 #include <iprt/uuid.h>
 
@@ -335,15 +336,16 @@ static DECLCALLBACK(int) drvStorageFltIMedia_IoReqDiscard(PPDMIMEDIAEX pInterfac
 }
 
 /** @interface_method_impl{PDMIMEDIAEX,pfnIoReqSendScsiCmd} */
-static DECLCALLBACK(int) drvStorageFltIMedia_IoReqSendScsiCmd(PPDMIMEDIAEX pInterface, PDMMEDIAEXIOREQ hIoReq, uint32_t uLun,
-                                                              const uint8_t *pbCdb, size_t cbCdb, PDMMEDIAEXIOREQSCSITXDIR enmTxDir,
-                                                              size_t cbBuf, uint8_t *pabSense, size_t cbSense, uint8_t *pu8ScsiSts,
-                                                              uint32_t cTimeoutMillies)
+static DECLCALLBACK(int) drvStorageFltIMedia_IoReqSendScsiCmd(PPDMIMEDIAEX pInterface, PDMMEDIAEXIOREQ hIoReq,
+                                                              uint32_t uLun, const uint8_t *pbCdb, size_t cbCdb,
+                                                              PDMMEDIAEXIOREQSCSITXDIR enmTxDir, PDMMEDIAEXIOREQSCSITXDIR *penmTxDirRet,
+                                                              size_t cbBuf, uint8_t *pabSense, size_t cbSense, size_t *pcbSenseRet,
+                                                              uint8_t *pu8ScsiSts, uint32_t cTimeoutMillies)
 {
     PDRVSTORAGEFILTER pThis = RT_FROM_MEMBER(pInterface, DRVSTORAGEFILTER, IMediaEx);
     return pThis->pIMediaExBelow->pfnIoReqSendScsiCmd(pThis->pIMediaExBelow, hIoReq, uLun, pbCdb, cbCdb,
-                                                      enmTxDir, cbBuf, pabSense, cbSense, pu8ScsiSts,
-                                                      cTimeoutMillies);
+                                                      enmTxDir, penmTxDirRet, cbBuf, pabSense, cbSense, pcbSenseRet,
+                                                      pu8ScsiSts, cTimeoutMillies);
 }
 
 /** @interface_method_impl{PDMIMEDIAEX,pfnIoReqGetActiveCount} */
@@ -431,9 +433,9 @@ static DECLCALLBACK(void *) drvStorageFltIBase_QueryInterface(PPDMIBASE pInterfa
  */
 static DECLCALLBACK(int) drvStorageFlt_Construct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint32_t fFlags)
 {
-    PDRVSTORAGEFILTER   pThis   = PDMINS_2_DATA(pDrvIns, PDRVSTORAGEFILTER);
-
     PDMDRV_CHECK_VERSIONS_RETURN(pDrvIns);
+    PDRVSTORAGEFILTER   pThis = PDMINS_2_DATA(pDrvIns, PDRVSTORAGEFILTER);
+    PCPDMDRVHLPR3       pHlp  = pDrvIns->pHlpR3;
 
     /*
      * Initialize the instance data.
@@ -485,7 +487,7 @@ static DECLCALLBACK(int) drvStorageFlt_Construct(PPDMDRVINS pDrvIns, PCFGMNODE p
      */
     PDMDRV_VALIDATE_CONFIG_RETURN(pDrvIns, "AsyncIOSupported|", "");
 
-    int rc = CFGMR3QueryBoolDef(pCfg, "AsyncIOSupported", &pThis->fAsyncIOSupported, true);
+    int rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "AsyncIOSupported", &pThis->fAsyncIOSupported, true);
     AssertLogRelRCReturn(rc, rc);
 
     /*

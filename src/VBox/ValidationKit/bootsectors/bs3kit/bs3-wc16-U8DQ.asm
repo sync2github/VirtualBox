@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-wc16-U8DQ.asm 90681 2021-08-13 11:15:07Z vboxsync $
 ;; @file
 ; BS3Kit - 16-bit Watcom C/C++, 64-bit unsigned integer division.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -43,12 +43,12 @@ $_?U8DQ:
         push    es
         push    ss
         pop     es
-%ifdef BS3_MODEL_FAR_CODE
+%ifdef ASM_MODEL_FAR_CODE
         push    cs
 %endif
         call    $_?U8DQE
         pop     es
-%ifdef BS3_MODEL_FAR_CODE
+%ifdef ASM_MODEL_FAR_CODE
         retf
 %else
         ret

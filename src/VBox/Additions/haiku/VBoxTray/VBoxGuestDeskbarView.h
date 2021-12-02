@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxGuestDeskbarView.h 92179 2021-11-02 21:44:49Z vboxsync $ */
 /** @file
  * VBoxGuestDeskbarView, Haiku Guest Additions, header.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,7 +20,7 @@
  *
  * VirtualBox Guest Additions for Haiku.
  * Copyright (c) 2011 Mike Smith <mike@scgtrp.net>
- *                    François Revol <revol@free.fr>
+ *                    FranÃ§ois Revol <revol@free.fr>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -44,8 +44,11 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef __VBOXGUESTTRAYVIEW__H
-#define __VBOXGUESTTRAYVIEW__H
+#ifndef GA_INCLUDED_SRC_haiku_VBoxTray_VBoxGuestDeskbarView_h
+#define GA_INCLUDED_SRC_haiku_VBoxTray_VBoxGuestDeskbarView_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <Bitmap.h>
 #include <View.h>
@@ -88,9 +91,9 @@ class VBoxGuestDeskbarView : public BView
         status_t               _Init(BMessage *archive = NULL);
         BBitmap               *fIcon;
 
-        VBoxClipboardService *fClipboardService;
+        VBoxShClService *fClipboardService;
         VBoxDisplayService *fDisplayService;
 };
 
-#endif /* __VBOXGUESTTRAYVIEW__H */
+#endif /* !GA_INCLUDED_SRC_haiku_VBoxTray_VBoxGuestDeskbarView_h */
 

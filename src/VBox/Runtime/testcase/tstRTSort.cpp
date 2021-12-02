@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTSort.cpp 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT Testcase - Sorting.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 *********************************************************************************************************************************/
 #include <iprt/sort.h>
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/rand.h>
 #include <iprt/string.h>
 #include <iprt/test.h>
@@ -53,7 +53,7 @@ static DECLCALLBACK(int) testApvCompare(void const *pvElement1, void const *pvEl
     TSTRTSORTAPV   *pData        = (TSTRTSORTAPV *)pvUser;
     uint32_t const *pu32Element1 = (uint32_t const *)pvElement1;
     uint32_t const *pu32Element2 = (uint32_t const *)pvElement2;
-    RTTESTI_CHECK(VALID_PTR(pData) && pData->cElements <= RT_ELEMENTS(pData->aValues));
+    RTTESTI_CHECK(RT_VALID_PTR(pData) && pData->cElements <= RT_ELEMENTS(pData->aValues));
     RTTESTI_CHECK((uintptr_t)(pu32Element1 - &pData->aValues[0]) < pData->cElements);
     RTTESTI_CHECK((uintptr_t)(pu32Element2 - &pData->aValues[0]) < pData->cElements);
 
@@ -91,6 +91,8 @@ static void testApvSorter(FNRTSORTAPV pfnSorter, const char *pszName)
         if (!RTSortApvIsSorted(&Data.apv[0], cElements, testApvCompare, &Data))
             RTTestIFailed("failed sorting %u elements", cElements);
     }
+
+    RTRandAdvDestroy(hRand);
 }
 
 
@@ -131,6 +133,8 @@ static void testSorter(RTTEST hTest, FNRTSORT pfnSorter, const char *pszName)
 
         RTTestGuardedFree(hTest, pbArray);
     }
+
+    RTRandAdvDestroy(hRand);
 }
 
 

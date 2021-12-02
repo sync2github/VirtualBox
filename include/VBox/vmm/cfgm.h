@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_cfgm_h
-#define ___VBox_vmm_cfgm_h
+#ifndef VBOX_INCLUDED_vmm_cfgm_h
+#define VBOX_INCLUDED_vmm_cfgm_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <iprt/stdarg.h>
@@ -78,7 +81,7 @@ typedef enum CFGMCONFIGTYPE
  * @param   pVM         The cross context VM structure.
  * @param   pvUser      The argument supplied to VMR3Create().
  */
-typedef DECLCALLBACK(int) FNCFGMCONSTRUCTOR(PUVM pUVM, PVM pVM, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNCFGMCONSTRUCTOR,(PUVM pUVM, PVM pVM, void *pvUser));
 /** Pointer to a FNCFGMCONSTRUCTOR(). */
 typedef FNCFGMCONSTRUCTOR *PFNCFGMCONSTRUCTOR;
 
@@ -223,5 +226,5 @@ RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_cfgm_h */
 

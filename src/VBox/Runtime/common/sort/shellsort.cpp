@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: shellsort.cpp 85896 2020-08-27 09:31:18Z vboxsync $ */
 /** @file
- * IPRT - RTSortIsSorted.
+ * IPRT - RTSortShell and RTSortApvShell.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,7 +28,6 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#include "internal/iprt.h"
 #include <iprt/sort.h>
 
 #include <iprt/alloca.h>
@@ -39,7 +38,7 @@
 
 RTDECL(void) RTSortShell(void *pvArray, size_t cElements, size_t cbElement, PFNRTSORTCMP pfnCmp, void *pvUser)
 {
-    Assert(cbElement <= 32);
+    Assert(cbElement <= 128);
 
     /* Anything worth sorting? */
     if (cElements < 2)

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvNetShaper.cpp 91872 2021-10-20 09:07:44Z vboxsync $ */
 /** @file
  * NetShaperFilter - Network shaper filter driver.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -107,7 +107,7 @@ PDMBOTHCBDECL(int) drvNetShaperUp_BeginXmit(PPDMINETWORKUP pInterface, bool fOnW
     PDRVNETSHAPER pThis = RT_FROM_MEMBER(pInterface, DRVNETSHAPER, CTX_SUFF(INetworkUp));
     if (RT_UNLIKELY(!pThis->CTX_SUFF(pIBelowNet)))
     {
-        int rc = PDMCritSectTryEnter(&pThis->XmitLock);
+        int rc = PDMDrvHlpCritSectTryEnter(pThis->CTX_SUFF(pDrvIns), &pThis->XmitLock);
         if (RT_UNLIKELY(rc == VERR_SEM_BUSY))
             rc = VERR_TRY_AGAIN;
         return rc;
@@ -129,7 +129,7 @@ PDMBOTHCBDECL(int) drvNetShaperUp_AllocBuf(PPDMINETWORKUP pInterface, size_t cbM
     STAM_REL_COUNTER_ADD(&pThis->StatXmitBytesRequested, cbMin);
     STAM_REL_COUNTER_INC(&pThis->StatXmitPktsRequested);
 #if defined(IN_RING3) || defined(IN_RING0)
-    if (!PDMNsAllocateBandwidth(&pThis->Filter, cbMin))
+    if (!PDMDrvHlpNetShaperAllocateBandwidth(pThis->CTX_SUFF(pDrvIns), &pThis->Filter, cbMin))
     {
         STAM_REL_COUNTER_ADD(&pThis->StatXmitBytesDenied, cbMin);
         STAM_REL_COUNTER_INC(&pThis->StatXmitPktsDenied);
@@ -178,7 +178,7 @@ PDMBOTHCBDECL(void) drvNetShaperUp_EndXmit(PPDMINETWORKUP pInterface)
     if (RT_LIKELY(pThis->CTX_SUFF(pIBelowNet)))
         pThis->CTX_SUFF(pIBelowNet)->pfnEndXmit(pThis->CTX_SUFF(pIBelowNet));
     else
-        PDMCritSectLeave(&pThis->XmitLock);
+        PDMDrvHlpCritSectLeave(pThis->CTX_SUFF(pDrvIns), &pThis->XmitLock);
 }
 
 
@@ -342,10 +342,10 @@ static DECLCALLBACK(void) drvR3NetShaperDetach(PPDMDRVINS pDrvIns, uint32_t fFla
     PDRVNETSHAPER pThis = PDMINS_2_DATA(pDrvIns, PDRVNETSHAPER);
 
     LogFlow(("drvNetShaperDetach: pDrvIns: %p, fFlags: %u\n", pDrvIns, fFlags));
-    PDMCritSectEnter(&pThis->XmitLock, VERR_IGNORED);
+    PDMDrvHlpCritSectEnter(pDrvIns, &pThis->XmitLock, VERR_IGNORED);
     pThis->pIBelowNetR3 = NULL;
     pThis->pIBelowNetR0 = NIL_RTR0PTR;
-    PDMCritSectLeave(&pThis->XmitLock);
+    PDMDrvHlpCritSectLeave(pDrvIns, &pThis->XmitLock);
 }
 
 
@@ -356,7 +356,7 @@ static DECLCALLBACK(int) drvR3NetShaperAttach(PPDMDRVINS pDrvIns, uint32_t fFlag
 {
     PDRVNETSHAPER pThis = PDMINS_2_DATA(pDrvIns, PDRVNETSHAPER);
     LogFlow(("drvNetShaperAttach/#%#x: fFlags=%#x\n", pDrvIns->iInstance, fFlags));
-    PDMCritSectEnter(&pThis->XmitLock, VERR_IGNORED);
+    PDMDrvHlpCritSectEnter(pDrvIns, &pThis->XmitLock, VERR_IGNORED);
 
     /*
      * Query the network connector interface.
@@ -388,7 +388,7 @@ static DECLCALLBACK(int) drvR3NetShaperAttach(PPDMDRVINS pDrvIns, uint32_t fFlag
     else
         AssertMsgFailed(("Failed to attach to driver below! rc=%Rrc\n", rc));
 
-    PDMCritSectLeave(&pThis->XmitLock);
+    PDMDrvHlpCritSectLeave(pDrvIns, &pThis->XmitLock);
     return VINF_SUCCESS;
 }
 
@@ -403,8 +403,8 @@ static DECLCALLBACK(void) drvR3NetShaperDestruct(PPDMDRVINS pDrvIns)
 
     PDMDrvHlpNetShaperDetach(pDrvIns, &pThis->Filter);
 
-    if (PDMCritSectIsInitialized(&pThis->XmitLock))
-        PDMR3CritSectDelete(&pThis->XmitLock);
+    if (PDMDrvHlpCritSectIsInitialized(pDrvIns, &pThis->XmitLock))
+        PDMDrvHlpCritSectDelete(pDrvIns, &pThis->XmitLock);
 }
 
 
@@ -414,9 +414,11 @@ static DECLCALLBACK(void) drvR3NetShaperDestruct(PPDMDRVINS pDrvIns)
  */
 static DECLCALLBACK(int) drvR3NetShaperConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint32_t fFlags)
 {
-    PDRVNETSHAPER pThis = PDMINS_2_DATA(pDrvIns, PDRVNETSHAPER);
-    LogFlow(("drvNetShaperConstruct:\n"));
     PDMDRV_CHECK_VERSIONS_RETURN(pDrvIns);
+    PDRVNETSHAPER pThis = PDMINS_2_DATA(pDrvIns, PDRVNETSHAPER);
+    PCPDMDRVHLPR3 pHlp  = pDrvIns->pHlpR3;
+
+    LogFlow(("drvNetShaperConstruct:\n"));
 
     /*
      * Init the static parts.
@@ -459,13 +461,12 @@ static DECLCALLBACK(int) drvR3NetShaperConstruct(PPDMDRVINS pDrvIns, PCFGMNODE p
     /*
      * Validate the config.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "BwGroup\0"))
-        return VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES;
+    PDMDRV_VALIDATE_CONFIG_RETURN(pDrvIns, "BwGroup", "");
 
     /*
      * Find the bandwidth group we have to attach to.
      */
-    rc = CFGMR3QueryStringAlloc(pCfg, "BwGroup", &pThis->pszBwGroup);
+    rc = pHlp->pfnCFGMQueryStringAlloc(pCfg, "BwGroup", &pThis->pszBwGroup);
     if (RT_FAILURE(rc) && rc != VERR_CFGM_VALUE_NOT_FOUND)
     {
         rc = PDMDRV_SET_ERROR(pDrvIns, rc,

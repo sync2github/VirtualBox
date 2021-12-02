@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: tdUnitTest1.py 86615 2020-10-16 17:35:06Z vboxsync $
 
 """
 VirtualBox Validation Kit - Unit Tests.
@@ -8,7 +8,7 @@ VirtualBox Validation Kit - Unit Tests.
 
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,14 +27,13 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 86615 $"
 
 
 # Standard Python imports.
 import os
 import sys
 import re
-import subprocess
 
 
 # Only the main script needs to modify the path.
@@ -63,6 +62,10 @@ class tdUnitTest1(vbox.TestDriver):
         'linux': {
             'testcase/tstRTFileAio': '',                # See xTracker #8035.
         },
+        'linux.amd64': {
+            'testcase/tstLdr-4': '',        # failed: Failed to get bits for '/home/vbox/test/tmp/bin/testcase/tstLdrObjR0.r0'/0,
+                                                        # rc=VERR_SYMBOL_VALUE_TOO_BIG. aborting test
+        },
         'solaris': {
             'testcase/tstIntNet-1': '',                 # Fails opening rge0, probably a generic issue figuring which nic to use.
             'testcase/tstIprtList': '',                 # Crashes in the multithreaded test, I think.
@@ -70,7 +73,11 @@ class tdUnitTest1(vbox.TestDriver):
             'testcase/tstRTR0MemUserKernelDriver': '',  # Failes when kernel to kernel buffers.
             'testcase/tstRTSemRW': '',                  # line 338: RTSemRWReleaseRead(hSemRW): got VERR_ACCESS_DENIED
             'testcase/tstRTStrAlloc': '',               # VERR_NO_STR_MEMORY!
-            'testcase/tstRTFileGetSize-1': '',          # VERR_DEV_IO_ERROR on /dev/null!
+            'testcase/tstRTFileQuerySize-1': '',        # VERR_DEV_IO_ERROR on /dev/null!
+        },
+        'solaris.amd64': {
+            'testcase/tstLdr-4': '',        # failed: Failed to get bits for '/home/vbox/test/tmp/bin/testcase/tstLdrObjR0.r0'/0,
+                                                        # rc=VERR_SYMBOL_VALUE_TOO_BIG. aborting test
         },
         'win': {
             'testcase/tstFile': '',                     # ??
@@ -87,11 +94,12 @@ class tdUnitTest1(vbox.TestDriver):
             'testcase/tstRTTemp': '',                   # ??
             'testcase/tstRTTime': '',                   # ??
             'testcase/tstTime-2': '',                   # Total time differs too much! ... delta=-10859859
+            'testcase/tstTime-4': '',                   # Needs to be converted to DLL; ditto for tstTime-2.
             'testcase/tstUtf8': '',                     # ??
             'testcase/tstVMMR0CallHost-2': '',          # STATUS_STACK_OVERFLOW
             'testcase/tstX86-1': '',                    # Fails on win.x86.
             'tscpasswd': '',                            # ??
-            'tstVMREQ': '',                            # ?? Same as darwin.x86?
+            'tstVMREQ': '',                             # ?? Same as darwin.x86?
         },
         'win.x86': {
             'testcase/tstRTR0TimerDriver': '',          # See xTracker #8041.
@@ -110,95 +118,100 @@ class tdUnitTest1(vbox.TestDriver):
     ## The permanent exclude list.
     # @note Stripped of extensions!
     kdTestCasesBlackList = {
-        'testcase/tstClipboardX11Smoke': '',
+        'testcase/tstClipboardX11Smoke': '',            # (Old naming, deprecated) Needs X, not available on all test boxes.
+        'testcase/tstClipboardGH-X11Smoke': '',         # (New name) Ditto.
         'testcase/tstFileLock': '',
-        'testcase/tstDisasm-2': '',         # without parameters it will disassembler 1GB starting from 0
+        'testcase/tstDisasm-2': '',                     # without parameters it will disassembler 1GB starting from 0
         'testcase/tstFileAppendWin-1': '',
-        'testcase/tstDir': '',              # useless without parameters
-        'testcase/tstDir-2': '',            # useless without parameters
+        'testcase/tstDir': '',                          # useless without parameters
+        'testcase/tstDir-2': '',                        # useless without parameters
         'testcase/tstGlobalConfig': '',
-        'testcase/tstHostHardwareLinux': '', # must be killed with CTRL-C
-        'testcase/tstHttp': '',             # Talks to outside servers.
-        'testcase/tstRTHttp': '',           # parameters required
-        'testcase/tstLdr-2': '',            # parameters required
-        'testcase/tstLdr-3': '',            # parameters required
-        'testcase/tstLdr': '',              # parameters required
-        'testcase/tstLdrLoad': '',          # parameters required
-        'testcase/tstMove': '',             # parameters required
-        'testcase/tstRTR0Timer': '',        # loads 'tstRTR0Timer.r0'
-        'testcase/tstRTR0ThreadDriver': '', # loads 'tstRTR0Thread.r0'
-        'testcase/tstRunTestcases': '',     # that's a script like this one
-        'testcase/tstRTReqPool': '',        # fails sometimes, testcase buggy
-        'testcase/tstRTS3': '',             # parameters required
-        'testcase/tstSDL': '',              # graphics test
-        'testcase/tstSupLoadModule': '',    # Needs parameters and vboxdrv access. Covered elsewhere.
-        'testcase/tstSeamlessX11': '',      # graphics test
-        'testcase/tstTime-3': '',           # parameters required
-        'testcase/tstVBoxControl': '',      # works only inside a guest
-        'testcase/tstVDCopy': '',           # parameters required
-        'testcase/tstVDFill': '',           # parameters required
-        'tstAnimate': '',                   # parameters required
-        'testcase/tstAPI': '',              # user interaction required
-        'tstCollector': '',                 # takes forever
-        'testcase/tstHeadless': '',         # parameters required
-        'tstHeadless': '',                  # parameters required
-        'tstMicroRC': '',                   # required by tstMicro
-        'tstVBoxDbg': '',                   # interactive test
-        'testcase/tstTestServMgr': '',      # some strange xpcom18a4 test, does not work
-        'tstTestServMgr': '',               # some strange xpcom18a4 test, does not work
-        'tstPDMAsyncCompletion': '',        # parameters required
-        'testcase/tstXptDump': '',          # parameters required
-        'tstXptDump': '',                   # parameters required
-        'testcase/tstnsIFileEnumerator': '', # some strange xpcom18a4 test, does not work
-        'tstnsIFileEnumerator': '',         # some strange xpcom18a4 test, does not work
-        'testcase/tstSimpleTypeLib': '',    # parameters required
-        'tstSimpleTypeLib': '',             # parameters required
-        'testcase/tstTestAtoms': '',        # additional test file (words.txt) required
-        'tstTestAtoms': '',                 # additional test file (words.txt) required
-        'testcase/tstXptLink': '',          # parameters required
-        'tstXptLink': '',                   # parameters required
-        'tstXPCOMCGlue': '',                # user interaction required
-        'testcase/tstXPCOMCGlue': '',       # user interaction required
-        'testcase/tstCAPIGlue': '',         # user interaction required
-        'testcase/tstTestCallTemplates': '',  # some strange xpcom18a4 test, segfaults
-        'tstTestCallTemplates': '',         # some strange xpcom18a4 test, segfaults
-        'testcase/tstRTFilesystem': '',     # parameters required
-        'testcase/tstRTDvm': '',            # parameters required
+        'testcase/tstHostHardwareLinux': '',            # must be killed with CTRL-C
+        'testcase/tstHttp': '',                         # Talks to outside servers.
+        'testcase/tstRTHttp': '',                       # parameters required
+        'testcase/tstLdr-2': '',                        # parameters required
+        'testcase/tstLdr-3': '',                        # parameters required
+        'testcase/tstLdr': '',                          # parameters required
+        'testcase/tstLdrLoad': '',                      # parameters required
+        'testcase/tstMove': '',                         # parameters required
+        'testcase/tstRTR0Timer': '',                    # loads 'tstRTR0Timer.r0'
+        'testcase/tstRTR0ThreadDriver': '',             # loads 'tstRTR0Thread.r0'
+        'testcase/tstRunTestcases': '',                 # that's a script like this one
+        'testcase/tstRTReqPool': '',                    # fails sometimes, testcase buggy
+        'testcase/tstRTS3': '',                         # parameters required
+        'testcase/tstSDL': '',                          # graphics test
+        'testcase/tstSupLoadModule': '',                # Needs parameters and vboxdrv access. Covered elsewhere.
+        'testcase/tstSeamlessX11': '',                  # graphics test
+        'testcase/tstTime-3': '',                       # parameters required
+        'testcase/tstVBoxControl': '',                  # works only inside a guest
+        'testcase/tstVDCopy': '',                       # parameters required
+        'testcase/tstVDFill': '',                       # parameters required
+        'tstAnimate': '',                               # parameters required
+        'testcase/tstAPI': '',                          # user interaction required
+        'tstCollector': '',                             # takes forever
+        'testcase/tstHeadless': '',                     # parameters required
+        'tstHeadless': '',                              # parameters required
+        'tstMicroRC': '',                               # required by tstMicro
+        'tstVBoxDbg': '',                               # interactive test
+        'testcase/tstTestServMgr': '',                  # some strange xpcom18a4 test, does not work
+        'tstTestServMgr': '',                           # some strange xpcom18a4 test, does not work
+        'tstPDMAsyncCompletion': '',                    # parameters required
+        'testcase/tstXptDump': '',                      # parameters required
+        'tstXptDump': '',                               # parameters required
+        'testcase/tstnsIFileEnumerator': '',            # some strange xpcom18a4 test, does not work
+        'tstnsIFileEnumerator': '',                     # some strange xpcom18a4 test, does not work
+        'testcase/tstSimpleTypeLib': '',                # parameters required
+        'tstSimpleTypeLib': '',                         # parameters required
+        'testcase/tstTestAtoms': '',                    # additional test file (words.txt) required
+        'tstTestAtoms': '',                             # additional test file (words.txt) required
+        'testcase/tstXptLink': '',                      # parameters required
+        'tstXptLink': '',                               # parameters required
+        'tstXPCOMCGlue': '',                            # user interaction required
+        'testcase/tstXPCOMCGlue': '',                   # user interaction required
+        'testcase/tstCAPIGlue': '',                     # user interaction required
+        'testcase/tstTestCallTemplates': '',            # some strange xpcom18a4 test, segfaults
+        'tstTestCallTemplates': '',                     # some strange xpcom18a4 test, segfaults
+        'testcase/tstRTFilesystem': '',                 # parameters required
+        'testcase/tstRTDvm': '',                        # parameters required
+        'tstSSLCertDownloads': '',                      # Obsolete.
         # later
-        'testcase/tstIntNetR0': '',         # RTSPINLOCK_FLAGS_INTERRUPT_SAFE == RTSPINLOCK_FLAGS_INTERRUPT_UNSAFE
+        'testcase/tstIntNetR0': '',                     # RTSPINLOCK_FLAGS_INTERRUPT_SAFE == RTSPINLOCK_FLAGS_INTERRUPT_UNSAFE
         # slow stuff
-        'testcase/tstAvl': '',              # SLOW!
-        'testcase/tstRTAvl': '',            # SLOW! (new name)
-        'testcase/tstVD': '',               # 8GB fixed-sized vmdk
+        'testcase/tstAvl': '',                          # SLOW!
+        'testcase/tstRTAvl': '',                        # SLOW! (new name)
+        'testcase/tstVD': '',                           # 8GB fixed-sized vmdk
         # failed or hang
-        'testcase/tstCryptoPkcs7Verify': '', # hang
-        'tstOVF': '',                       # hang (only ancient version, now in new place)
-        'testcase/tstRTLockValidator': '',  # Lock validation is not enabled for critical sections
-        'testcase/tstGuestControlSvc': '',  # failed: line 288: testHost(&svcTable): expected VINF_SUCCESS, got VERR_NOT_FOUND
-        'testcase/tstRTMemEf': '',          # failed w/o error message
-        'testcase/tstSupSem': '',           # failed: SRE Timeout Accuracy (ms) : FAILED (1 errors)
-        'testcase/tstCryptoPkcs7Sign': '',# failed: 29330:error:02001002:lib(2):func(1):reason(2):NA:0:fopen('server.pem': '','r')
-        'testcase/tstCompressionBenchmark': '', # failed: error: RTZipBlockCompress failed
-                                                # for 'RTZipBlock/LZJB' (#4): VERR_NOT_SUPPORTED
-        'testcase/tstLdr-4': '',            # failed: Failed to get bits for '/home/vbox/test/tmp/bin/testcase/tstLdrObjR0.r0'/0,
-                                            # rc=VERR_SYMBOL_VALUE_TOO_BIG. aborting test
-        'tstPDMAsyncCompletionStress': '',  # VERR_INVALID_PARAMETER (cbSize = 0)
-        'tstMicro': '',                     # doesn't work on solaris, fix later if we care.
-        'tstVMM-HwAccm': '',                # failed: Only checked AMD-V on linux
-        'tstVMM-HM': '',                    # failed: Only checked AMD-V on linux
-        'tstVMMFork': '',                   # failed: xtracker 6171
-        'tstTestFactory': '',               # some strange xpcom18a4 test, does not work
-        'testcase/tstRTSemXRoads': '',      # sporadically failed: Traffic - 8 threads per direction, 10 sec : FAILED (8 errors)
-        'tstVBoxAPILinux': '',              # creates VirtualBox directories for root user because of sudo (should be in vbox)
-        'testcase/tstVMStructDTrace': '',   # This is a D-script generator.
-        'tstVMStructRC': '',                # This is a C-code generator.
-        'tstDeviceStructSizeRC': '',        # This is a C-code generator.
-        'testcase/tstTSC': '',              # Doesn't test anything and might fail with HT or/and too many cores.
-        'testcase/tstOpenUSBDev': '',       # Not a useful testcase.
-        'testcase/tstX86-1': '',            # Really more guest side.
-        'testcase/tstX86-FpuSaveRestore': '', # Experiments, could be useful for the guest not the host.
-        'tstAsmStructsRC': '',              # Testcase run during build time (fails to find libstdc++.so.6 on some
-                                            # Solaris testboxes).
+        'testcase/tstCryptoPkcs7Verify': '',            # hang
+        'tstOVF': '',                                   # hang (only ancient version, now in new place)
+        'testcase/tstOVF': '',                          # Creates mess when fails, needs to be run in a separate test.
+        'testcase/tstRTLockValidator': '',              # Lock validation is not enabled for critical sections
+        'testcase/tstGuestControlSvc': '',              # failed: line 288: testHost(&svcTable):
+                                                        # expected VINF_SUCCESS, got VERR_NOT_FOUND
+        'testcase/tstRTMemEf': '',                      # failed w/o error message
+        'testcase/tstSupSem': '',                       # failed: SRE Timeout Accuracy (ms) : FAILED (1 errors)
+        'testcase/tstCryptoPkcs7Sign': '',              # failed: 29330:
+                                                        # error:02001002:lib(2):func(1):reason(2):NA:0:fopen('server.pem': '','r')
+        'testcase/tstCompressionBenchmark': '',         # failed: error: RTZipBlockCompress failed
+                                                        # for 'RTZipBlock/LZJB' (#4): VERR_NOT_SUPPORTED
+        'tstPDMAsyncCompletionStress': '',              # VERR_INVALID_PARAMETER (cbSize = 0)
+        'tstMicro': '',                                 # doesn't work on solaris, fix later if we care.
+        'tstVMM-HwAccm': '',                            # failed: Only checked AMD-V on linux
+        'tstVMM-HM': '',                                # failed: Only checked AMD-V on linux
+        'tstVMMFork': '',                               # failed: xtracker 6171
+        'tstTestFactory': '',                           # some strange xpcom18a4 test, does not work
+        'testcase/tstRTSemXRoads': '',                  # sporadically failed: Traffic - 8 threads per direction, 10 sec :
+                                                        # FAILED (8 errors)
+        'tstVBoxAPILinux': '',                          # creates VirtualBox directories for root user because of sudo
+                                                        # (should be in vbox)
+        'testcase/tstVMStructDTrace': '',               # This is a D-script generator.
+        'tstVMStructRC': '',                            # This is a C-code generator.
+        'tstDeviceStructSizeRC': '',                    # This is a C-code generator.
+        'testcase/tstTSC': '',                          # Doesn't test anything and might fail with HT or/and too many cores.
+        'testcase/tstOpenUSBDev': '',                   # Not a useful testcase.
+        'testcase/tstX86-1': '',                        # Really more guest side.
+        'testcase/tstX86-FpuSaveRestore': '',           # Experiments, could be useful for the guest not the host.
+        'tstAsmStructsRC': '',                          # Testcase run during build time (fails to find libstdc++.so.6 on some
+                                                        # Solaris testboxes).
     };
 
     # Suffix exclude list.
@@ -250,7 +263,9 @@ class tdUnitTest1(vbox.TestDriver):
         'testcase/tstMMHyperHeap',
         'testcase/tstPage',
         'testcase/tstPin',
-        'testcase/tstRTTime', 'testcase/tstTime', # GIP test case.
+        'testcase/tstRTTime',   'testcase/tstTime',   # GIP test case.
+        'testcase/tstRTTime-2', 'testcase/tstTime-2', # GIP test case.
+        'testcase/tstRTTime-4', 'testcase/tstTime-4', # GIP test case.
         'testcase/tstSSM',
         'testcase/tstSupSem-Zombie',
     ]
@@ -340,7 +355,7 @@ class tdUnitTest1(vbox.TestDriver):
             if not sPathName in os.environ:
                 sPathName = 'Path';
             sPath = os.environ.get(sPathName, '.');
-            if len(sPath) > 0 and sPath[-1] != ';':
+            if sPath and sPath[-1] != ';':
                 sPath += ';';
             os.environ[sPathName] = sPath + self.sVBoxInstallRoot + ';';
 
@@ -350,6 +365,12 @@ class tdUnitTest1(vbox.TestDriver):
         sBinOrDist = 'dist' if utils.getHostOs() in [ 'darwin', ] else 'bin';
         asCandidates = [
             self.oBuild.sInstallPath,
+            os.path.join(self.sScratchPath, utils.getHostOsDotArch(), self.oBuild.sType, sBinOrDist),
+            os.path.join(self.sScratchPath, utils.getHostOsDotArch(), 'release', sBinOrDist),
+            os.path.join(self.sScratchPath, utils.getHostOsDotArch(), 'debug',   sBinOrDist),
+            os.path.join(self.sScratchPath, utils.getHostOsDotArch(), 'strict',  sBinOrDist),
+            os.path.join(self.sScratchPath, utils.getHostOsDotArch(), 'dbgopt',  sBinOrDist),
+            os.path.join(self.sScratchPath, utils.getHostOsDotArch(), 'profile', sBinOrDist),
             os.path.join(self.sScratchPath, sBinOrDist + '.' + utils.getHostArch()),
             os.path.join(self.sScratchPath, sBinOrDist, utils.getHostArch()),
             os.path.join(self.sScratchPath, sBinOrDist),
@@ -406,6 +427,7 @@ class tdUnitTest1(vbox.TestDriver):
             sVer = re.sub(r'_BETA.*r', '.', sVer);
             sVer = re.sub(r'_ALPHA.*r', '.', sVer);
             sVer = re.sub(r'_RC.*r', '.', sVer);
+            sVer = re.sub('_SPB', '', sVer)
             sVer = sVer.replace('r', '.');
 
             self.aiVBoxVer = [int(sComp) for sComp in sVer.split('.')];
@@ -457,7 +479,7 @@ class tdUnitTest1(vbox.TestDriver):
                     # Convert the version value, making sure we've got a valid one.
                     try:    aiValue = [int(sComp) for sComp in sValue.replace('r', '.').split('.')];
                     except: aiValue = ();
-                    if len(aiValue) == 0 or len(aiValue) > 4:
+                    if not aiValue or len(aiValue) > 4:
                         reporter.error('Invalid exclusion expression for %s: "%s" [%s]' % (sTest, sSubExpr, dExclList[sTest]));
                         return True;
 
@@ -492,7 +514,7 @@ class tdUnitTest1(vbox.TestDriver):
             reporter.errorXcpt();
             return False;
         reporter.log('Exit code [sudo]: %s (%s)' % (iRc, asArgs));
-        return iRc is 0;
+        return iRc == 0;
 
     def _hardenedMkDir(self, sPath):
         """
@@ -500,7 +522,7 @@ class tdUnitTest1(vbox.TestDriver):
         """
         reporter.log('_hardenedMkDir: %s' % (sPath,));
         if utils.getHostOs() in [ 'win', 'os2' ]:
-            os.makedirs(sPath, 0755);
+            os.makedirs(sPath, 0o755);
         else:
             fRc = self._sudoExecuteSync(['/bin/mkdir', '-p', '-m', '0755', sPath]);
             if fRc is not True:
@@ -552,7 +574,7 @@ class tdUnitTest1(vbox.TestDriver):
                     raise Exception('Failed to remove "%s".' % (sPath,));
         return True;
 
-    def _executeTestCase(self, sName, sFullPath, sTestCaseSubDir, oDevNull): # pylint: disable=R0914
+    def _executeTestCase(self, sName, sFullPath, sTestCaseSubDir, oDevNull): # pylint: disable=too-many-locals
         """
         Executes a test case.
         """
@@ -577,7 +599,7 @@ class tdUnitTest1(vbox.TestDriver):
                 asDirsToRemove.append(sDstDir);
 
             sDst = os.path.join(sDstDir, os.path.basename(sFullPath));
-            self._hardenedCopyFile(sFullPath, sDst, 0755);
+            self._hardenedCopyFile(sFullPath, sDst, 0o755);
             asFilesToRemove.append(sDst);
 
             # Copy any associated .dll/.so/.dylib.
@@ -585,7 +607,7 @@ class tdUnitTest1(vbox.TestDriver):
                 sSrc = os.path.splitext(sFullPath)[0] + sSuff;
                 if os.path.exists(sSrc):
                     sDst = os.path.join(sDstDir, os.path.basename(sSrc));
-                    self._hardenedCopyFile(sSrc, sDst, 0644);
+                    self._hardenedCopyFile(sSrc, sDst, 0o644);
                     asFilesToRemove.append(sDst);
 
             # Copy any associated .r0, .rc and .gc modules.
@@ -595,7 +617,7 @@ class tdUnitTest1(vbox.TestDriver):
                     sSrc = sFullPath[:offDriver] + sSuff;
                     if os.path.exists(sSrc):
                         sDst = os.path.join(sDstDir, os.path.basename(sSrc));
-                        self._hardenedCopyFile(sSrc, sDst, 0644);
+                        self._hardenedCopyFile(sSrc, sDst, 0o644);
                         asFilesToRemove.append(sDst);
 
             sFullPath = os.path.join(sDstDir, os.path.basename(sFullPath));
@@ -632,7 +654,7 @@ class tdUnitTest1(vbox.TestDriver):
                 if fHardened:
                     oChild = utils.sudoProcessPopen(asArgs, stdin = oDevNull, stdout = sys.stdout, stderr = sys.stdout);
                 else:
-                    oChild = subprocess.Popen(      asArgs, stdin = oDevNull, stdout = sys.stdout, stderr = sys.stdout);
+                    oChild = utils.processPopenSafe(asArgs, stdin = oDevNull, stdout = sys.stdout, stderr = sys.stdout);
             except:
                 if sName in [ 'tstAsmStructsRC',    # 32-bit, may fail to start on 64-bit linux. Just ignore.
                             ]:
@@ -644,7 +666,7 @@ class tdUnitTest1(vbox.TestDriver):
                 oChild = None;
 
             if oChild is not None:
-                self.pidFileAdd(oChild.pid, fSudo = fHardened);
+                self.pidFileAdd(oChild.pid, sName, fSudo = fHardened);
                 iRc = oChild.wait();
                 self.pidFileRemove(oChild.pid);
         else:
@@ -711,6 +733,9 @@ class tdUnitTest1(vbox.TestDriver):
         # Determin the host OS specific exclusion lists.
         dTestCasesBuggyForHostOs = self.kdTestCasesBuggyPerOs.get(utils.getHostOs(), []);
         dTestCasesBuggyForHostOs.update(self.kdTestCasesBuggyPerOs.get(utils.getHostOsDotArch(), []));
+
+        ## @todo Add filtering for more specifc OSes (like OL server, doesn't have X installed) by adding a separate
+        #        black list + using utils.getHostOsVersion().
 
         #
         # Process the file list and run everything looking like a testcase.

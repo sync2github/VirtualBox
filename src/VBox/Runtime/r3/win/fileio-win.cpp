@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fileio-win.cpp 90781 2021-08-23 09:26:08Z vboxsync $ */
 /** @file
  * IPRT - File I/O, native implementation for the Windows host platform.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #ifndef _WIN32_WINNT
 # define _WIN32_WINNT 0x0500
 #endif
-#include <iprt/win/windows.h>
+#include <iprt/nt/nt-and-windows.h>
 
 #include <iprt/file.h>
 
@@ -43,9 +43,11 @@
 #include <iprt/err.h>
 #include <iprt/ldr.h>
 #include <iprt/log.h>
+#include <iprt/utf16.h>
 #include "internal/file.h"
 #include "internal/fs.h"
 #include "internal/path.h"
+#include "internal-r3-win.h" /* For g_enmWinVer + kRTWinOSType_XXX */
 
 
 /*********************************************************************************************************************************
@@ -53,6 +55,7 @@
 *********************************************************************************************************************************/
 typedef BOOL WINAPI FNVERIFYCONSOLEIOHANDLE(HANDLE);
 typedef FNVERIFYCONSOLEIOHANDLE *PFNVERIFYCONSOLEIOHANDLE; /* No, nobody fell on the keyboard, really! */
+
 
 /**
  * This is wrapper around the ugly SetFilePointer api.
@@ -94,35 +97,49 @@ DECLINLINE(bool) MySetFilePointer(RTFILE hFile, uint64_t offSeek, uint64_t *poff
 
 
 /**
- * This is a helper to check if an attempt was made to grow a file beyond the
- * limit of the filesystem.
- *
- * @returns true for file size limit exceeded.
- * @param   hFile       Filehandle.
- * @param   offSeek     Offset to seek.
- * @param   uMethod     The seek method.
+ * Helper for checking if a VERR_DISK_FULL isn't a VERR_FILE_TOO_BIG.
+ * @returns VERR_DISK_FULL or VERR_FILE_TOO_BIG.
  */
-DECLINLINE(bool) IsBeyondLimit(RTFILE hFile, uint64_t offSeek, unsigned uMethod)
+static int rtFileWinCheckIfDiskReallyFull(RTFILE hFile, uint64_t cbDesired)
 {
-    bool fIsBeyondLimit = false;
-
     /*
-     * Get the current file position and try set the new one.
-     * If it fails with a seek error it's because we hit the file system limit.
+     * Windows doesn't appear to have a way to query the file size limit of a
+     * file system, so we have to deduce the limit from the file system driver name.
+     * This means it will only work for known file systems.
      */
-/** @todo r=bird: I'd be very interested to know on which versions of windows and on which file systems
- * this supposedly works. The fastfat sources in the latest WDK makes no limit checks during
- * file seeking, only at the time of writing (and some other odd ones we cannot make use of). */
-    uint64_t offCurrent;
-    if (MySetFilePointer(hFile, 0, &offCurrent, FILE_CURRENT))
+    if (cbDesired >= _2G - 1)
     {
-        if (!MySetFilePointer(hFile, offSeek, NULL, uMethod))
-            fIsBeyondLimit = GetLastError() == ERROR_SEEK;
-        else /* Restore file pointer on success. */
-            MySetFilePointer(hFile, offCurrent, NULL, FILE_BEGIN);
-    }
+        uint64_t cbMaxFile = UINT64_MAX;
+        RTFSTYPE enmFsType;
+        int rc = rtNtQueryFsType((HANDLE)RTFileToNative(hFile), &enmFsType);
+        if (RT_SUCCESS(rc))
+            switch (enmFsType)
+            {
+                case RTFSTYPE_NTFS:
+                case RTFSTYPE_EXFAT:
+                case RTFSTYPE_UDF:
+                    cbMaxFile = UINT64_C(0xffffffffffffffff); /* (May be limited by IFS.) */
+                    break;
 
-    return fIsBeyondLimit;
+                case RTFSTYPE_ISO9660:
+                    cbMaxFile = 8 *_1T;
+                    break;
+
+                case RTFSTYPE_FAT:
+                    cbMaxFile = _4G;
+                    break;
+
+                case RTFSTYPE_HPFS:
+                    cbMaxFile = _2G;
+                    break;
+
+                default:
+                    break;
+            }
+        if (cbDesired >= cbMaxFile)
+            return VERR_FILE_TOO_BIG;
+    }
+    return VERR_DISK_FULL;
 }
 
 
@@ -150,20 +167,20 @@ RTR3DECL(RTHCINTPTR) RTFileToNative(RTFILE hFile)
 
 RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
 {
+    return RTFileOpenEx(pszFilename, fOpen, pFile, NULL);
+}
+
+
+RTDECL(int) RTFileOpenEx(const char *pszFilename, uint64_t fOpen, PRTFILE phFile, PRTFILEACTION penmActionTaken)
+{
     /*
      * Validate input.
      */
-    if (!pFile)
-    {
-        AssertMsgFailed(("Invalid pFile\n"));
-        return VERR_INVALID_PARAMETER;
-    }
-    *pFile = NIL_RTFILE;
-    if (!pszFilename)
-    {
-        AssertMsgFailed(("Invalid pszFilename\n"));
-        return VERR_INVALID_PARAMETER;
-    }
+    AssertReturn(phFile, VERR_INVALID_PARAMETER);
+    *phFile = NIL_RTFILE;
+    if (penmActionTaken)
+        *penmActionTaken = RTFILEACTION_INVALID;
+    AssertReturn(pszFilename, VERR_INVALID_PARAMETER);
 
     /*
      * Merge forced open flags and validate them.
@@ -192,8 +209,7 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
             dwCreationDisposition = CREATE_ALWAYS;
             break;
         default:
-            AssertMsgFailed(("Impossible fOpen=%#llx\n", fOpen));
-            return VERR_INVALID_PARAMETER;
+            AssertMsgFailedReturn(("Impossible fOpen=%#llx\n", fOpen), VERR_INVALID_FLAGS);
     }
 
     DWORD dwDesiredAccess;
@@ -218,10 +234,9 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
                 dwDesiredAccess = 0;
                 break;
             }
-            /* fall thru */
+            RT_FALL_THRU();
         default:
-            AssertMsgFailed(("Impossible fOpen=%#llx\n", fOpen));
-            return VERR_INVALID_PARAMETER;
+            AssertMsgFailedReturn(("Impossible fOpen=%#llx\n", fOpen), VERR_INVALID_FLAGS);
     }
     if (dwCreationDisposition == TRUNCATE_EXISTING)
         /* Required for truncating the file (see MSDN), it is *NOT* part of FILE_GENERIC_WRITE. */
@@ -241,8 +256,7 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
                 case RTFILE_O_WRITE:         dwDesiredAccess |= FILE_WRITE_ATTRIBUTES | SYNCHRONIZE; break;
                 case RTFILE_O_READWRITE:     dwDesiredAccess |= FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE; break;
                 default:
-                    AssertMsgFailed(("Impossible fOpen=%#llx\n", fOpen));
-                    return VERR_INVALID_PARAMETER;
+                    AssertMsgFailedReturn(("Impossible fOpen=%#llx\n", fOpen), VERR_INVALID_FLAGS);
             }
     }
 
@@ -254,13 +268,12 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
         case RTFILE_O_DENY_WRITE:                               dwShareMode = FILE_SHARE_READ; break;
         case RTFILE_O_DENY_READWRITE:                           dwShareMode = 0; break;
 
-        case RTFILE_O_DENY_NOT_DELETE | RTFILE_O_DENY_NONE:     dwShareMode = FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE; break;
+        case RTFILE_O_DENY_NOT_DELETE:                          dwShareMode = FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE; break;
         case RTFILE_O_DENY_NOT_DELETE | RTFILE_O_DENY_READ:     dwShareMode = FILE_SHARE_DELETE | FILE_SHARE_WRITE; break;
         case RTFILE_O_DENY_NOT_DELETE | RTFILE_O_DENY_WRITE:    dwShareMode = FILE_SHARE_DELETE | FILE_SHARE_READ; break;
         case RTFILE_O_DENY_NOT_DELETE | RTFILE_O_DENY_READWRITE:dwShareMode = FILE_SHARE_DELETE; break;
         default:
-            AssertMsgFailed(("Impossible fOpen=%#llx\n", fOpen));
-            return VERR_INVALID_PARAMETER;
+            AssertMsgFailedReturn(("Impossible fOpen=%#llx\n", fOpen), VERR_INVALID_FLAGS);
     }
 
     SECURITY_ATTRIBUTES  SecurityAttributes;
@@ -289,55 +302,93 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
      * Open/Create the file.
      */
     PRTUTF16 pwszFilename;
-    rc = RTStrToUtf16(pszFilename, &pwszFilename);
-    if (RT_FAILURE(rc))
-        return rc;
-
-    HANDLE hFile = CreateFileW(pwszFilename,
-                               dwDesiredAccess,
-                               dwShareMode,
-                               pSecurityAttributes,
-                               dwCreationDisposition,
-                               dwFlagsAndAttributes,
-                               NULL);
-    if (hFile != INVALID_HANDLE_VALUE)
+    rc = RTPathWinFromUtf8(&pwszFilename, pszFilename, 0 /*fFlags*/);
+    if (RT_SUCCESS(rc))
     {
-        bool fCreated = dwCreationDisposition == CREATE_ALWAYS
-                     || dwCreationDisposition == CREATE_NEW
-                     || (dwCreationDisposition == OPEN_ALWAYS && GetLastError() == 0);
+        HANDLE hFile = CreateFileW(pwszFilename,
+                                   dwDesiredAccess,
+                                   dwShareMode,
+                                   pSecurityAttributes,
+                                   dwCreationDisposition,
+                                   dwFlagsAndAttributes,
+                                   NULL);
+        DWORD const dwErr = GetLastError();
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            /*
+             * Calculate the action taken value.
+             */
+            RTFILEACTION enmActionTaken;
+            switch (dwCreationDisposition)
+            {
+                case CREATE_NEW:
+                    enmActionTaken = RTFILEACTION_CREATED;
+                    break;
+                case CREATE_ALWAYS:
+                    AssertMsg(dwErr == ERROR_ALREADY_EXISTS || dwErr == NO_ERROR, ("%u\n", dwErr));
+                    enmActionTaken = dwErr == ERROR_ALREADY_EXISTS ? RTFILEACTION_REPLACED : RTFILEACTION_CREATED;
+                    break;
+                case OPEN_EXISTING:
+                    enmActionTaken = RTFILEACTION_OPENED;
+                    break;
+                case OPEN_ALWAYS:
+                    AssertMsg(dwErr == ERROR_ALREADY_EXISTS || dwErr == NO_ERROR, ("%u\n", dwErr));
+                    enmActionTaken = dwErr == ERROR_ALREADY_EXISTS ? RTFILEACTION_OPENED : RTFILEACTION_CREATED;
+                    break;
+                case TRUNCATE_EXISTING:
+                    enmActionTaken = RTFILEACTION_TRUNCATED;
+                    break;
+                default:
+                    AssertMsgFailed(("%d %#x\n", dwCreationDisposition, dwCreationDisposition));
+                    enmActionTaken = RTFILEACTION_INVALID;
+                    break;
+            }
 
-        /*
-         * Turn off indexing of directory through Windows Indexing Service.
-         */
-        if (    fCreated
-            &&  (fOpen & RTFILE_O_NOT_CONTENT_INDEXED))
-        {
-            if (!SetFileAttributesW(pwszFilename, FILE_ATTRIBUTE_NOT_CONTENT_INDEXED))
-                rc = RTErrConvertFromWin32(GetLastError());
-        }
-        /*
-         * Do we need to truncate the file?
-         */
-        else if (    !fCreated
-                 &&     (fOpen & (RTFILE_O_TRUNCATE | RTFILE_O_ACTION_MASK))
-                     == (RTFILE_O_TRUNCATE | RTFILE_O_OPEN_CREATE))
-        {
-            if (!SetEndOfFile(hFile))
-                rc = RTErrConvertFromWin32(GetLastError());
-        }
-        if (RT_SUCCESS(rc))
-        {
-            *pFile = (RTFILE)hFile;
-            Assert((HANDLE)*pFile == hFile);
-            RTUtf16Free(pwszFilename);
-            return VINF_SUCCESS;
-        }
+            /*
+             * Turn off indexing of directory through Windows Indexing Service if
+             * we created a new file or replaced an existing one.
+             */
+            if (   (fOpen & RTFILE_O_NOT_CONTENT_INDEXED)
+                && (   enmActionTaken == RTFILEACTION_CREATED
+                    || enmActionTaken == RTFILEACTION_REPLACED) )
+            {
+                /** @todo there must be a way to do this via the handle! */
+                if (!SetFileAttributesW(pwszFilename, FILE_ATTRIBUTE_NOT_CONTENT_INDEXED))
+                    rc = RTErrConvertFromWin32(GetLastError());
+            }
+            /*
+             * If RTFILEACTION_OPENED, we may need to truncate the file.
+             */
+            else if (  (fOpen & (RTFILE_O_TRUNCATE | RTFILE_O_ACTION_MASK)) == (RTFILE_O_TRUNCATE | RTFILE_O_OPEN_CREATE)
+                     && enmActionTaken == RTFILEACTION_OPENED)
+            {
+                if (SetEndOfFile(hFile))
+                    enmActionTaken = RTFILEACTION_TRUNCATED;
+                else
+                    rc = RTErrConvertFromWin32(GetLastError());
+            }
+            if (penmActionTaken)
+                *penmActionTaken = enmActionTaken;
+            if (RT_SUCCESS(rc))
+            {
+                *phFile = (RTFILE)hFile;
+                Assert((HANDLE)*phFile == hFile);
+                RTPathWinFree(pwszFilename);
+                return VINF_SUCCESS;
+            }
 
-        CloseHandle(hFile);
+            CloseHandle(hFile);
+        }
+        else
+        {
+            if (   penmActionTaken
+                && dwCreationDisposition == CREATE_NEW
+                && dwErr == ERROR_FILE_EXISTS)
+                *penmActionTaken = RTFILEACTION_ALREADY_EXISTS;
+            rc = RTErrConvertFromWin32(dwErr);
+        }
+        RTPathWinFree(pwszFilename);
     }
-    else
-        rc = RTErrConvertFromWin32(GetLastError());
-    RTUtf16Free(pwszFilename);
     return rc;
 }
 
@@ -370,7 +421,6 @@ RTFILE rtFileGetStandard(RTHANDLESTD enmStdHandle)
         case RTHANDLESTD_INPUT:     dwStdHandle = STD_INPUT_HANDLE;  break;
         case RTHANDLESTD_OUTPUT:    dwStdHandle = STD_OUTPUT_HANDLE; break;
         case RTHANDLESTD_ERROR:     dwStdHandle = STD_ERROR_HANDLE;  break;
-            break;
         default:
             AssertFailedReturn(NIL_RTFILE);
     }
@@ -415,7 +465,11 @@ RTR3DECL(int)  RTFileSeek(RTFILE hFile, int64_t offSeek, unsigned uMethod, uint6
 RTR3DECL(int)  RTFileRead(RTFILE hFile, void *pvBuf, size_t cbToRead, size_t *pcbRead)
 {
     if (cbToRead <= 0)
+    {
+        if (pcbRead)
+            *pcbRead = 0;
         return VINF_SUCCESS;
+    }
     ULONG cbToReadAdj = (ULONG)cbToRead;
     AssertReturn(cbToReadAdj == cbToRead, VERR_NUMBER_TOO_BIG);
 
@@ -457,9 +511,9 @@ RTR3DECL(int)  RTFileRead(RTFILE hFile, void *pvBuf, size_t cbToRead, size_t *pc
         cbRead = 0;
         while (cbToReadAdj > cbRead)
         {
-            ULONG cbToRead   = RT_MIN(cbChunk, cbToReadAdj - cbRead);
-            ULONG cbReadPart = 0;
-            if (!ReadFile((HANDLE)RTFileToNative(hFile), (char *)pvBuf + cbRead, cbToRead, &cbReadPart, NULL))
+            ULONG cbToReadNow = RT_MIN(cbChunk, cbToReadAdj - cbRead);
+            ULONG cbReadPart  = 0;
+            if (!ReadFile((HANDLE)RTFileToNative(hFile), (char *)pvBuf + cbRead, cbToReadNow, &cbReadPart, NULL))
             {
                 /* If we failed because the buffer is too big, shrink it and
                    try again. */
@@ -491,11 +545,64 @@ RTR3DECL(int)  RTFileRead(RTFILE hFile, void *pvBuf, size_t cbToRead, size_t *pc
 }
 
 
+RTDECL(int)  RTFileReadAt(RTFILE hFile, RTFOFF off, void *pvBuf, size_t cbToRead, size_t *pcbRead)
+{
+    ULONG cbToReadAdj = (ULONG)cbToRead;
+    AssertReturn(cbToReadAdj == cbToRead, VERR_NUMBER_TOO_BIG);
+
+    OVERLAPPED Overlapped;
+    Overlapped.Offset       = (uint32_t)off;
+    Overlapped.OffsetHigh   = (uint32_t)(off >> 32);
+    Overlapped.hEvent       = NULL;
+    Overlapped.Internal     = 0;
+    Overlapped.InternalHigh = 0;
+
+    ULONG cbRead = 0;
+    if (ReadFile((HANDLE)RTFileToNative(hFile), pvBuf, cbToReadAdj, &cbRead, &Overlapped))
+    {
+        if (pcbRead)
+            /* Caller can handle partial reads. */
+            *pcbRead = cbRead;
+        else
+        {
+            /* Caller expects everything to be read. */
+            while (cbToReadAdj > cbRead)
+            {
+                Overlapped.Offset       = (uint32_t)(off + cbRead);
+                Overlapped.OffsetHigh   = (uint32_t)((off + cbRead) >> 32);
+                Overlapped.hEvent       = NULL;
+                Overlapped.Internal     = 0;
+                Overlapped.InternalHigh = 0;
+
+                ULONG cbReadPart = 0;
+                if (!ReadFile((HANDLE)RTFileToNative(hFile), (char *)pvBuf + cbRead, cbToReadAdj - cbRead,
+                              &cbReadPart, &Overlapped))
+                    return RTErrConvertFromWin32(GetLastError());
+                if (cbReadPart == 0)
+                    return VERR_EOF;
+                cbRead += cbReadPart;
+            }
+        }
+        return VINF_SUCCESS;
+    }
+
+    /* We will get an EOF error when using overlapped I/O.  So, make sure we don't
+       return it when pcbhRead is not NULL. */
+    DWORD dwErr = GetLastError();
+    if (pcbRead && dwErr == ERROR_HANDLE_EOF)
+    {
+        *pcbRead = 0;
+        return VINF_SUCCESS;
+    }
+    return RTErrConvertFromWin32(dwErr);
+}
+
+
 RTR3DECL(int)  RTFileWrite(RTFILE hFile, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten)
 {
     if (cbToWrite <= 0)
         return VINF_SUCCESS;
-    ULONG cbToWriteAdj = (ULONG)cbToWrite;
+    ULONG const cbToWriteAdj = (ULONG)cbToWrite;
     AssertReturn(cbToWriteAdj == cbToWrite, VERR_NUMBER_TOO_BIG);
 
     ULONG cbWritten = 0;
@@ -503,21 +610,19 @@ RTR3DECL(int)  RTFileWrite(RTFILE hFile, const void *pvBuf, size_t cbToWrite, si
     {
         if (pcbWritten)
             /* Caller can handle partial writes. */
-            *pcbWritten = cbWritten;
+            *pcbWritten = RT_MIN(cbWritten, cbToWriteAdj); /* paranoia^3 */
         else
         {
             /* Caller expects everything to be written. */
-            while (cbToWriteAdj > cbWritten)
+            while (cbWritten < cbToWriteAdj)
             {
                 ULONG cbWrittenPart = 0;
                 if (!WriteFile((HANDLE)RTFileToNative(hFile), (char*)pvBuf + cbWritten,
                                cbToWriteAdj - cbWritten, &cbWrittenPart, NULL))
                 {
                     int rc = RTErrConvertFromWin32(GetLastError());
-                    if (   rc == VERR_DISK_FULL
-                        && IsBeyondLimit(hFile, cbToWriteAdj - cbWritten, FILE_CURRENT)
-                       )
-                        rc = VERR_FILE_TOO_BIG;
+                    if (rc == VERR_DISK_FULL)
+                        rc = rtFileWinCheckIfDiskReallyFull(hFile, RTFileTell(hFile) + cbToWriteAdj - cbWritten);
                     return rc;
                 }
                 if (cbWrittenPart == 0)
@@ -542,11 +647,11 @@ RTR3DECL(int)  RTFileWrite(RTFILE hFile, const void *pvBuf, size_t cbToWrite, si
             cbChunk = RT_ALIGN_32(cbChunk, 256);
 
         cbWritten = 0;
-        while (cbToWriteAdj > cbWritten)
+        while (cbWritten < cbToWriteAdj)
         {
-            ULONG cbToWrite     = RT_MIN(cbChunk, cbToWriteAdj - cbWritten);
+            ULONG cbToWriteNow  = RT_MIN(cbChunk, cbToWriteAdj - cbWritten);
             ULONG cbWrittenPart = 0;
-            if (!WriteFile((HANDLE)RTFileToNative(hFile), (const char *)pvBuf + cbWritten, cbToWrite, &cbWrittenPart, NULL))
+            if (!WriteFile((HANDLE)RTFileToNative(hFile), (const char *)pvBuf + cbWritten, cbToWriteNow, &cbWrittenPart, NULL))
             {
                 /* If we failed because the buffer is too big, shrink it and
                    try again. */
@@ -558,9 +663,8 @@ RTR3DECL(int)  RTFileWrite(RTFILE hFile, const void *pvBuf, size_t cbToWrite, si
                     continue;
                 }
                 int rc = RTErrConvertFromWin32(dwErr);
-                if (   rc == VERR_DISK_FULL
-                    && IsBeyondLimit(hFile, cbToWriteAdj - cbWritten, FILE_CURRENT))
-                    rc = VERR_FILE_TOO_BIG;
+                if (rc == VERR_DISK_FULL)
+                    rc = rtFileWinCheckIfDiskReallyFull(hFile, RTFileTell(hFile) + cbToWriteNow);
                 return rc;
             }
             cbWritten += cbWrittenPart;
@@ -569,7 +673,7 @@ RTR3DECL(int)  RTFileWrite(RTFILE hFile, const void *pvBuf, size_t cbToWrite, si
                write out everything. */
             if (pcbWritten)
             {
-                *pcbWritten = cbWritten;
+                *pcbWritten = RT_MIN(cbWritten, cbToWriteAdj); /* paranoia^3 */
                 break;
             }
             if (cbWrittenPart == 0)
@@ -579,9 +683,61 @@ RTR3DECL(int)  RTFileWrite(RTFILE hFile, const void *pvBuf, size_t cbToWrite, si
     }
 
     int rc = RTErrConvertFromWin32(dwErr);
-    if (   rc == VERR_DISK_FULL
-        && IsBeyondLimit(hFile, cbToWriteAdj - cbWritten, FILE_CURRENT))
-        rc = VERR_FILE_TOO_BIG;
+    if (rc == VERR_DISK_FULL)
+        rc = rtFileWinCheckIfDiskReallyFull(hFile, RTFileTell(hFile) + cbToWriteAdj);
+    return rc;
+}
+
+
+RTDECL(int)  RTFileWriteAt(RTFILE hFile, RTFOFF off, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten)
+{
+    ULONG const cbToWriteAdj = (ULONG)cbToWrite;
+    AssertReturn(cbToWriteAdj == cbToWrite, VERR_NUMBER_TOO_BIG);
+
+    OVERLAPPED Overlapped;
+    Overlapped.Offset       = (uint32_t)off;
+    Overlapped.OffsetHigh   = (uint32_t)(off >> 32);
+    Overlapped.hEvent       = NULL;
+    Overlapped.Internal     = 0;
+    Overlapped.InternalHigh = 0;
+
+    ULONG cbWritten = 0;
+    if (WriteFile((HANDLE)RTFileToNative(hFile), pvBuf, cbToWriteAdj, &cbWritten, &Overlapped))
+    {
+        if (pcbWritten)
+            /* Caller can handle partial writes. */
+            *pcbWritten = RT_MIN(cbWritten, cbToWriteAdj); /* paranoia^3 */
+        else
+        {
+            /* Caller expects everything to be written. */
+            while (cbWritten < cbToWriteAdj)
+            {
+                Overlapped.Offset       = (uint32_t)(off + cbWritten);
+                Overlapped.OffsetHigh   = (uint32_t)((off + cbWritten) >> 32);
+                Overlapped.hEvent       = NULL;
+                Overlapped.Internal     = 0;
+                Overlapped.InternalHigh = 0;
+
+                ULONG cbWrittenPart = 0;
+                if (!WriteFile((HANDLE)RTFileToNative(hFile), (char*)pvBuf + cbWritten,
+                               cbToWriteAdj - cbWritten, &cbWrittenPart, &Overlapped))
+                {
+                    int rc = RTErrConvertFromWin32(GetLastError());
+                    if (rc == VERR_DISK_FULL)
+                        rc = rtFileWinCheckIfDiskReallyFull(hFile, off + cbToWriteAdj);
+                    return rc;
+                }
+                if (cbWrittenPart == 0)
+                    return VERR_WRITE_ERROR;
+                cbWritten += cbWrittenPart;
+            }
+        }
+        return VINF_SUCCESS;
+    }
+
+    int rc = RTErrConvertFromWin32(GetLastError());
+    if (rc == VERR_DISK_FULL)
+        rc = rtFileWinCheckIfDiskReallyFull(hFile, off + cbToWriteAdj);
     return rc;
 }
 
@@ -597,9 +753,242 @@ RTR3DECL(int)  RTFileFlush(RTFILE hFile)
     return VINF_SUCCESS;
 }
 
+#if 1
 
-RTR3DECL(int)  RTFileSetSize(RTFILE hFile, uint64_t cbSize)
+/**
+ * Checks the the two handles refers to the same file.
+ *
+ * @returns true if the same file, false if different ones or invalid handles.
+ * @param   hFile1              Handle \#1.
+ * @param   hFile2              Handle \#2.
+ */
+static bool rtFileIsSame(HANDLE hFile1, HANDLE hFile2)
 {
+    /*
+     * We retry in case CreationTime or the Object ID is being modified and there
+     * aren't any IndexNumber (file ID) on this kind of file system.
+     */
+    for (uint32_t iTries = 0; iTries < 3; iTries++)
+    {
+        /*
+         * Fetch data to compare (being a little lazy here).
+         */
+        struct
+        {
+            HANDLE                      hFile;
+            NTSTATUS                    rcObjId;
+            FILE_OBJECTID_INFORMATION   ObjId;
+            FILE_ALL_INFORMATION        All;
+            FILE_FS_VOLUME_INFORMATION  Vol;
+        } auData[2];
+        auData[0].hFile = hFile1;
+        auData[1].hFile = hFile2;
+
+        for (uintptr_t i = 0; i < RT_ELEMENTS(auData); i++)
+        {
+            RT_ZERO(auData[i].ObjId);
+            IO_STATUS_BLOCK Ios = RTNT_IO_STATUS_BLOCK_INITIALIZER;
+            auData[i].rcObjId = NtQueryInformationFile(auData[i].hFile, &Ios, &auData[i].ObjId, sizeof(auData[i].ObjId),
+                                                       FileObjectIdInformation);
+
+            RT_ZERO(auData[i].All);
+            RTNT_IO_STATUS_BLOCK_REINIT(&Ios);
+            NTSTATUS rcNt = NtQueryInformationFile(auData[i].hFile, &Ios, &auData[i].All, sizeof(auData[i].All),
+                                                   FileAllInformation);
+            AssertReturn(rcNt == STATUS_BUFFER_OVERFLOW /* insufficient space for name info */ || NT_SUCCESS(rcNt), false);
+
+            union
+            {
+                 FILE_FS_VOLUME_INFORMATION Info;
+                 uint8_t                    abBuf[sizeof(FILE_FS_VOLUME_INFORMATION) + 4096];
+            } uVol;
+            RT_ZERO(uVol.Info);
+            RTNT_IO_STATUS_BLOCK_REINIT(&Ios);
+            rcNt = NtQueryVolumeInformationFile(auData[i].hFile, &Ios, &uVol, sizeof(uVol), FileFsVolumeInformation);
+            if (NT_SUCCESS(rcNt))
+                auData[i].Vol = uVol.Info;
+            else
+                RT_ZERO(auData[i].Vol);
+        }
+
+        /*
+         * Compare it.
+         */
+        if (   auData[0].All.StandardInformation.Directory
+            == auData[1].All.StandardInformation.Directory)
+        { /* likely */ }
+        else
+            break;
+
+        if (   (auData[0].All.BasicInformation.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE | FILE_ATTRIBUTE_REPARSE_POINT))
+            == (auData[1].All.BasicInformation.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE | FILE_ATTRIBUTE_REPARSE_POINT)))
+        { /* likely */ }
+        else
+            break;
+
+        if (   auData[0].Vol.VolumeSerialNumber
+            == auData[1].Vol.VolumeSerialNumber)
+        { /* likely */ }
+        else
+            break;
+
+        if (   auData[0].All.InternalInformation.IndexNumber.QuadPart
+            == auData[1].All.InternalInformation.IndexNumber.QuadPart)
+        { /* likely */ }
+        else
+            break;
+
+        if (   !NT_SUCCESS(auData[0].rcObjId)
+            || memcmp(&auData[0].ObjId, &auData[1].ObjId, RT_UOFFSETOF(FILE_OBJECTID_INFORMATION, ExtendedInfo)) == 0)
+        {
+            if (   auData[0].All.BasicInformation.CreationTime.QuadPart
+                == auData[1].All.BasicInformation.CreationTime.QuadPart)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+
+/**
+ * If @a hFile is opened in append mode, try return a handle with
+ * FILE_WRITE_DATA permissions.
+ *
+ * @returns Duplicate handle.
+ * @param   hFile               The NT handle to check & duplicate.
+ *
+ * @todo    It would be much easier to implement this by not dropping the
+ *          FILE_WRITE_DATA access and instead have the RTFileWrite APIs
+ *          enforce the appending.  That will require keeping additional
+ *          information along side the handle (instance structure).  However, on
+ *          windows you can grant append permissions w/o giving people access to
+ *          overwrite existing data, so the RTFileOpenEx code would have to deal
+ *          with those kinds of STATUS_ACCESS_DENIED too then.
+ */
+static HANDLE rtFileReOpenAppendOnlyWithFullWriteAccess(HANDLE hFile)
+{
+    OBJECT_BASIC_INFORMATION BasicInfo = {0};
+    ULONG                    cbActual  = 0;
+    NTSTATUS rcNt = NtQueryObject(hFile, ObjectBasicInformation, &BasicInfo, sizeof(BasicInfo), &cbActual);
+    if (NT_SUCCESS(rcNt))
+    {
+        if ((BasicInfo.GrantedAccess & (FILE_APPEND_DATA | FILE_WRITE_DATA)) == FILE_APPEND_DATA)
+        {
+            /*
+             * We cannot use NtDuplicateObject here as it is not possible to
+             * upgrade the access on files, only making it more strict.  So,
+             * query the path and re-open it (we could do by file/object/whatever
+             * id too, but that may not work with all file systems).
+             */
+            for (uint32_t i = 0; i < 16; i++)
+            {
+                UNICODE_STRING  NtName;
+                int rc = RTNtPathFromHandle(&NtName, hFile, 0);
+                AssertRCReturn(rc, INVALID_HANDLE_VALUE);
+
+                HANDLE              hDupFile = RTNT_INVALID_HANDLE_VALUE;
+                IO_STATUS_BLOCK     Ios      = RTNT_IO_STATUS_BLOCK_INITIALIZER;
+                OBJECT_ATTRIBUTES   ObjAttr;
+                InitializeObjectAttributes(&ObjAttr, &NtName, BasicInfo.Attributes & ~OBJ_INHERIT, NULL, NULL);
+
+                rcNt = NtCreateFile(&hDupFile,
+                                    BasicInfo.GrantedAccess | FILE_WRITE_DATA,
+                                    &ObjAttr,
+                                    &Ios,
+                                    NULL /* AllocationSize*/,
+                                    FILE_ATTRIBUTE_NORMAL,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    FILE_OPEN,
+                                    FILE_OPEN_FOR_BACKUP_INTENT /*??*/,
+                                    NULL /*EaBuffer*/,
+                                    0 /*EaLength*/);
+                RTUtf16Free(NtName.Buffer);
+                if (NT_SUCCESS(rcNt))
+                {
+                    /*
+                     * Check that we've opened the same file.
+                     */
+                    if (rtFileIsSame(hFile, hDupFile))
+                        return hDupFile;
+                    NtClose(hDupFile);
+                }
+            }
+            AssertFailed();
+        }
+    }
+    return INVALID_HANDLE_VALUE;
+}
+
+#endif
+
+RTR3DECL(int) RTFileSetSize(RTFILE hFile, uint64_t cbSize)
+{
+#if 1
+    HANDLE hNtFile  = (HANDLE)RTFileToNative(hFile);
+    HANDLE hDupFile = INVALID_HANDLE_VALUE;
+    union
+    {
+        FILE_END_OF_FILE_INFORMATION Eof;
+        FILE_ALLOCATION_INFORMATION  Alloc;
+    } uInfo;
+
+    /*
+     * Change the EOF marker.
+     *
+     * HACK ALERT! If the file was opened in RTFILE_O_APPEND mode, we will have
+     *             to re-open it with FILE_WRITE_DATA access to get the job done.
+     *             This how ftruncate on a unixy system would work but not how
+     *             it is done on Windows where appending is a separate permission
+     *             rather than just a write modifier, making this hack totally wrong.
+     */
+    /** @todo The right way to fix this is either to add a RTFileSetSizeEx function
+     *        for specifically requesting the unixy behaviour, or add an additional
+     *        flag to RTFileOpen[Ex] to request the unixy append behaviour there.
+     *        The latter would require saving the open flags in a instance data
+     *        structure, which is a bit of a risky move, though something we should
+     *        do in 6.2 (or later).
+     *
+     *        Note! Because handle interitance, it is not realyan option to
+     *              always use FILE_WRITE_DATA and implement the RTFILE_O_APPEND
+     *              bits in RTFileWrite and friends.  Besides, it's not like
+     *              RTFILE_O_APPEND is so clearly defined anyway - see
+     *              RTFileWriteAt.
+     */
+    IO_STATUS_BLOCK Ios = RTNT_IO_STATUS_BLOCK_INITIALIZER;
+    uInfo.Eof.EndOfFile.QuadPart = cbSize;
+    NTSTATUS rcNt = NtSetInformationFile(hNtFile, &Ios, &uInfo.Eof, sizeof(uInfo.Eof), FileEndOfFileInformation);
+    if (rcNt == STATUS_ACCESS_DENIED)
+    {
+        hDupFile = rtFileReOpenAppendOnlyWithFullWriteAccess(hNtFile);
+        if (hDupFile != INVALID_HANDLE_VALUE)
+        {
+            hNtFile = hDupFile;
+            uInfo.Eof.EndOfFile.QuadPart = cbSize;
+            rcNt = NtSetInformationFile(hNtFile, &Ios, &uInfo.Eof, sizeof(uInfo.Eof), FileEndOfFileInformation);
+        }
+    }
+
+    if (NT_SUCCESS(rcNt))
+    {
+        /*
+         * Change the allocation.
+         */
+        uInfo.Alloc.AllocationSize.QuadPart = cbSize;
+        rcNt = NtSetInformationFile(hNtFile, &Ios, &uInfo.Eof, sizeof(uInfo.Alloc), FileAllocationInformation);
+    }
+
+    /*
+     * Close the temporary file handle:
+     */
+    if (hDupFile != INVALID_HANDLE_VALUE)
+        NtClose(hDupFile);
+
+    if (RT_SUCCESS(rcNt))
+        return VINF_SUCCESS;
+    return RTErrConvertFromNtStatus(rcNt);
+
+#else /* this version of the code will fail to truncate files when RTFILE_O_APPEND is in effect, which isn't what we want... */
     /*
      * Get current file pointer.
      */
@@ -629,6 +1018,9 @@ RTR3DECL(int)  RTFileSetSize(RTFILE hFile, uint64_t cbSize)
              */
             rc = GetLastError();
             MySetFilePointer(hFile, offCurrent, NULL, FILE_BEGIN);
+
+            if (rc == ERROR_DISK_FULL)
+                return rtFileWinCheckIfDiskReallyFull(hFile, cbSize);
         }
         else
             rc = GetLastError();
@@ -637,10 +1029,11 @@ RTR3DECL(int)  RTFileSetSize(RTFILE hFile, uint64_t cbSize)
         rc = GetLastError();
 
     return RTErrConvertFromWin32(rc);
+#endif
 }
 
 
-RTR3DECL(int)  RTFileGetSize(RTFILE hFile, uint64_t *pcbSize)
+RTR3DECL(int)  RTFileQuerySize(RTFILE hFile, uint64_t *pcbSize)
 {
     /*
      * GetFileSize works for most handles.
@@ -691,7 +1084,7 @@ RTR3DECL(int)  RTFileGetSize(RTFILE hFile, uint64_t *pcbSize)
 }
 
 
-RTR3DECL(int) RTFileGetMaxSizeEx(RTFILE hFile, PRTFOFF pcbMax)
+RTR3DECL(int) RTFileQueryMaxSizeEx(RTFILE hFile, PRTFOFF pcbMax)
 {
     /** @todo r=bird:
      * We might have to make this code OS version specific... In the worse
@@ -836,6 +1229,53 @@ RTR3DECL(int) RTFileQueryInfo(RTFILE hFile, PRTFSOBJINFO pObjInfo, RTFSOBJATTRAD
      * Query file info.
      */
     HANDLE hHandle = (HANDLE)RTFileToNative(hFile);
+#if 1
+    uint64_t auBuf[168 / sizeof(uint64_t)]; /* Missing FILE_ALL_INFORMATION here. */
+    int rc = rtPathNtQueryInfoFromHandle(hFile, auBuf, sizeof(auBuf), pObjInfo, enmAdditionalAttribs, NULL, 0);
+    if (RT_SUCCESS(rc))
+        return rc;
+
+    /*
+     * Console I/O handles make trouble here.  On older windows versions they
+     * end up with ERROR_INVALID_HANDLE when handed to the above API, while on
+     * more recent ones they cause different errors to appear.
+     *
+     * Thus, we must ignore the latter and doubly verify invalid handle claims.
+     * We use the undocumented VerifyConsoleIoHandle to do this, falling back on
+     * GetFileType should it not be there.
+     */
+    if (   rc == VERR_INVALID_HANDLE
+        || rc == VERR_ACCESS_DENIED
+        || rc == VERR_UNEXPECTED_FS_OBJ_TYPE)
+    {
+        static PFNVERIFYCONSOLEIOHANDLE s_pfnVerifyConsoleIoHandle = NULL;
+        static bool volatile            s_fInitialized = false;
+        PFNVERIFYCONSOLEIOHANDLE        pfnVerifyConsoleIoHandle;
+        if (s_fInitialized)
+            pfnVerifyConsoleIoHandle = s_pfnVerifyConsoleIoHandle;
+        else
+        {
+            pfnVerifyConsoleIoHandle = (PFNVERIFYCONSOLEIOHANDLE)RTLdrGetSystemSymbol("kernel32.dll", "VerifyConsoleIoHandle");
+            ASMAtomicWriteBool(&s_fInitialized, true);
+        }
+        if (   pfnVerifyConsoleIoHandle
+            ? !pfnVerifyConsoleIoHandle(hHandle)
+            : GetFileType(hHandle) == FILE_TYPE_UNKNOWN && GetLastError() != NO_ERROR)
+            return VERR_INVALID_HANDLE;
+    }
+    /*
+     * On Windows 10 and (hopefully) 8.1 we get ERROR_INVALID_FUNCTION with console
+     * I/O handles and null device handles.  We must ignore these just like the
+     * above invalid handle error.
+     */
+    else if (rc != VERR_INVALID_FUNCTION && rc != VERR_IO_BAD_COMMAND)
+        return rc;
+
+    RT_ZERO(*pObjInfo);
+    pObjInfo->Attr.enmAdditional = enmAdditionalAttribs;
+    pObjInfo->Attr.fMode = rtFsModeFromDos(RTFS_DOS_NT_DEVICE, "", 0, 0, 0);
+    return VINF_SUCCESS;
+#else
 
     BY_HANDLE_FILE_INFORMATION Data;
     if (!GetFileInformationByHandle(hHandle, &Data))
@@ -938,6 +1378,7 @@ RTR3DECL(int) RTFileQueryInfo(RTFILE hFile, PRTFSOBJINFO pObjInfo, RTFSOBJATTRAD
     }
 
     return VINF_SUCCESS;
+#endif
 }
 
 
@@ -976,6 +1417,7 @@ RTR3DECL(int) RTFileSetTimes(RTFILE hFile, PCRTTIMESPEC pAccessTime, PCRTTIMESPE
 }
 
 
+#if 0 /* RTFileSetMode is implemented by RTFileSetMode-r3-nt.cpp */
 /* This comes from a source file with a different set of system headers (DDK)
  * so it can't be declared in a common header, like internal/file.h.
  */
@@ -1002,6 +1444,7 @@ RTR3DECL(int) RTFileSetMode(RTFILE hFile, RTFMODE fMode)
     }
     return VINF_SUCCESS;
 }
+#endif
 
 
 /* RTFileQueryFsSizes is implemented by ../nt/RTFileQueryFsSizes-nt.cpp */
@@ -1010,12 +1453,12 @@ RTR3DECL(int) RTFileSetMode(RTFILE hFile, RTFMODE fMode)
 RTR3DECL(int)  RTFileDelete(const char *pszFilename)
 {
     PRTUTF16 pwszFilename;
-    int rc = RTStrToUtf16(pszFilename, &pwszFilename);
+    int rc = RTPathWinFromUtf8(&pwszFilename, pszFilename, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         if (!DeleteFileW(pwszFilename))
             rc = RTErrConvertFromWin32(GetLastError());
-        RTUtf16Free(pwszFilename);
+        RTPathWinFree(pwszFilename);
     }
 
     return rc;
@@ -1027,8 +1470,8 @@ RTDECL(int) RTFileRename(const char *pszSrc, const char *pszDst, unsigned fRenam
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszSrc), ("%p\n", pszSrc), VERR_INVALID_POINTER);
-    AssertMsgReturn(VALID_PTR(pszDst), ("%p\n", pszDst), VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSrc, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszDst, VERR_INVALID_POINTER);
     AssertMsgReturn(!(fRename & ~RTPATHRENAME_FLAGS_REPLACE), ("%#x\n", fRename), VERR_INVALID_PARAMETER);
 
     /*
@@ -1050,8 +1493,8 @@ RTDECL(int) RTFileMove(const char *pszSrc, const char *pszDst, unsigned fMove)
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszSrc), ("%p\n", pszSrc), VERR_INVALID_POINTER);
-    AssertMsgReturn(VALID_PTR(pszDst), ("%p\n", pszDst), VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSrc, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszDst, VERR_INVALID_POINTER);
     AssertMsgReturn(!(fMove & ~RTFILEMOVE_FLAGS_REPLACE), ("%#x\n", fMove), VERR_INVALID_PARAMETER);
 
     /*

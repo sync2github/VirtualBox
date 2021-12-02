@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_critsect_h
-#define ___iprt_critsect_h
+#ifndef IPRT_INCLUDED_critsect_h
+#define IPRT_INCLUDED_critsect_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -85,7 +88,7 @@ typedef struct RTCRITSECT
     RTSEMEVENT                          EventSem;
     /** Lock validator record.  Only used in strict builds. */
     R3R0PTRTYPE(PRTLOCKVALRECEXCL)      pValidatorRec;
-    /** Alignmnet padding. */
+    /** Alignment padding. */
     RTHCPTR                             Alignment;
 } RTCRITSECT;
 AssertCompileSize(RTCRITSECT, HC_ARCH_BITS == 32 ? 32 : 48);
@@ -246,7 +249,7 @@ RTDECL(int) RTCritSectEnterMultiple(size_t cCritSects, PRTCRITSECT *papCritSects
  *
  * @remark  See RTCritSectEnterMultiple().
  */
-RTDECL(int) RTCritSectEnterMultipleDebug(size_t cCritSects, PRTCRITSECT *papCritSects, RTUINTPTR uId, RT_SRC_POS_DECL);
+RTDECL(int) RTCritSectEnterMultipleDebug(size_t cCritSects, PRTCRITSECT *papCritSects, RTHCUINTPTR uId, RT_SRC_POS_DECL);
 
 # endif /* IN_RING3 */
 
@@ -333,7 +336,7 @@ DECLINLINE(bool) RTCritSectIsInitialized(PCRTCRITSECT pCritSect)
  */
 DECLINLINE(uint32_t) RTCritSectGetRecursion(PCRTCRITSECT pCritSect)
 {
-    return pCritSect->cNestings;
+    return (uint32_t)pCritSect->cNestings;
 }
 
 /**
@@ -349,7 +352,7 @@ DECLINLINE(int32_t) RTCritSectGetWaiters(PCRTCRITSECT pCritSect)
 
 /* Lock strict build: Remap the three enter calls to the debug versions. */
 #if defined(RT_LOCK_STRICT) && !defined(RTCRITSECT_WITHOUT_REMAPPING) && !defined(RT_WITH_MANGLING)
-# ifdef ___iprt_asm_h
+# ifdef IPRT_INCLUDED_asm_h
 #  define RTCritSectEnter(pCritSect)                        RTCritSectEnterDebug(pCritSect, (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 #  define RTCritSectTryEnter(pCritSect)                     RTCritSectTryEnterDebug(pCritSect, (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 #  define RTCritSectEnterMultiple(cCritSects, pCritSect)    RTCritSectEnterMultipleDebug((cCritSects), (pCritSect), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
@@ -378,6 +381,33 @@ DECLINLINE(int32_t) RTCritSectGetWaiters(PCRTCRITSECT pCritSect)
  */
 
 /**
+ * Union that allows us to atomically update both the state and
+ * exclusive owner if the hardware supports cmpxchg16b or similar.
+ */
+typedef union RTCRITSECTRWSTATE
+{
+    struct
+    {
+        /** The state variable.
+         * All accesses are atomic and it bits are defined like this:
+         *      Bits 0..14  - cReads.
+         *      Bit 15      - Unused.
+         *      Bits 16..31 - cWrites.
+         *      Bit 31      - fDirection; 0=Read, 1=Write.
+         *      Bits 32..46 - cWaitingReads
+         *      Bit 47      - Unused.
+         *      Bits 48..62 - cWaitingWrites - doesn't make sense here, not used.
+         *      Bit 63      - Unused.
+         */
+        uint64_t                    u64State;
+        /** The write owner. */
+        RTNATIVETHREAD              hNativeWriter;
+    } s;
+    RTUINT128U                      u128;
+} RTCRITSECTRWSTATE;
+
+
+/**
  * Read/write critical section.
  */
 typedef struct RTCRITSECTRW
@@ -393,25 +423,13 @@ typedef struct RTCRITSECTRW
     /** Section flags - the RTCRITSECT_FLAGS_* \#defines. */
     uint16_t                            fFlags;
 
-    /** The state variable.
-     * All accesses are atomic and it bits are defined like this:
-     *      Bits 0..14  - cReads.
-     *      Bit 15      - Unused.
-     *      Bits 16..31 - cWrites. - doesn't make sense here
-     *      Bit 31      - fDirection; 0=Read, 1=Write.
-     *      Bits 32..46 - cWaitingReads
-     *      Bit 47      - Unused.
-     *      Bits 48..62 - cWaitingWrites
-     *      Bit 63      - Unused.
-     */
-    uint64_t volatile                   u64State;
-    /** The write owner. */
-    RTNATIVETHREAD volatile             hNativeWriter;
     /** The number of reads made by the current writer. */
     uint32_t volatile                   cWriterReads;
     /** The number of recursions made by the current writer. (The initial grabbing
      *  of the lock counts as the first one.) */
     uint32_t volatile                   cWriteRecursions;
+    /** The core state. */
+    RTCRITSECTRWSTATE volatile          u;
 
     /** What the writer threads are blocking on. */
     RTSEMEVENT                          hEvtWrite;
@@ -423,10 +441,6 @@ typedef struct RTCRITSECTRW
     R3R0PTRTYPE(PRTLOCKVALRECEXCL)      pValidatorWrite;
     /** The validator record for the readers. */
     R3R0PTRTYPE(PRTLOCKVALRECSHRD)      pValidatorRead;
-#if HC_ARCH_BITS == 32
-    /** Size padding.  */
-    RTHCPTR                             HCPtrPadding;
-#endif
 } RTCRITSECTRW;
 AssertCompileSize(RTCRITSECTRW, HC_ARCH_BITS == 32 ? 48 : 64);
 
@@ -715,7 +729,7 @@ DECLINLINE(bool) RTCritSectRwIsInitialized(PCRTCRITSECTRW pThis)
 
 /* Lock strict build: Remap the three enter calls to the debug versions. */
 #if defined(RT_LOCK_STRICT) && !defined(RTCRITSECTRW_WITHOUT_REMAPPING) && !defined(RT_WITH_MANGLING)
-# ifdef ___iprt_asm_h
+# ifdef IPRT_INCLUDED_asm_h
 #  define RTCritSectRwEnterExcl(pThis)      RTCritSectRwEnterExclDebug(pThis, (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 #  define RTCritSectRwTryEnterExcl(pThis)   RTCritSectRwTryEnterExclDebug(pThis, (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 #  define RTCritSectRwEnterShared(pThis)    RTCritSectRwEnterSharedDebug(pThis, (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
@@ -740,5 +754,5 @@ DECLINLINE(bool) RTCritSectRwIsInitialized(PCRTCRITSECTRW pThis)
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_critsect_h */
 

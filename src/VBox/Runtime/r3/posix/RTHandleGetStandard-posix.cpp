@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTHandleGetStandard-posix.cpp 86415 2020-10-02 11:50:21Z vboxsync $ */
 /** @file
  * IPRT - RTHandleGetStandard, POSIX.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -45,14 +45,14 @@
 #include <iprt/file.h>
 #include <iprt/pipe.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
 
 #include "internal/socket.h"
 
 
 
-RTDECL(int) RTHandleGetStandard(RTHANDLESTD enmStdHandle, PRTHANDLE ph)
+RTDECL(int) RTHandleGetStandard(RTHANDLESTD enmStdHandle, bool fLeaveOpen, PRTHANDLE ph)
 {
     /*
      * Validate and convert input.
@@ -107,17 +107,19 @@ RTDECL(int) RTHandleGetStandard(RTHANDLESTD enmStdHandle, PRTHANDLE ph)
     switch (h.enmType)
     {
         case RTHANDLETYPE_FILE:
+            /** @todo fLeaveOpen   */
             rc = RTFileFromNative(&h.u.hFile, fd);
             break;
 
         case RTHANDLETYPE_PIPE:
             rc = RTPipeFromNative(&h.u.hPipe, fd,
                                     (enmStdHandle == RTHANDLESTD_INPUT ? RTPIPE_N_READ : RTPIPE_N_WRITE)
-                                  | (fInherit ? RTPIPE_N_INHERIT : 0));
+                                  | (fInherit ? RTPIPE_N_INHERIT : 0)
+                                  | (fLeaveOpen ? RTPIPE_N_LEAVE_OPEN : 0));
             break;
 
         case RTHANDLETYPE_SOCKET:
-            rc = rtSocketCreateForNative(&h.u.hSocket, fd);
+            rc = rtSocketCreateForNative(&h.u.hSocket, fd, fLeaveOpen);
             break;
 
         default: /* shut up gcc */

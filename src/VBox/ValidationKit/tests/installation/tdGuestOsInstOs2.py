@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: tdGuestOsInstOs2.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 VirtualBox Validation Kit - OS/2 install tests.
@@ -8,7 +8,7 @@ VirtualBox Validation Kit - OS/2 install tests.
 
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,7 +27,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard Python imports.
@@ -83,7 +83,6 @@ class tdGuestOsInstOs2(vbox.TestDriver):
         self.sIso                = None
         self.sFloppy             = None
         self.sIsoPathBase        = os.path.join(self.sResourcePath, '4.2', 'isos')
-        self.oVM                 = None
         self.fEnableIOAPIC       = True
         self.cCpus               = 1
         self.fEnableNestedPaging = True
@@ -159,11 +158,11 @@ class tdGuestOsInstOs2(vbox.TestDriver):
 
         self.sFloppy = os.path.join(self.sIsoPathBase, os.path.splitext(self.sIso)[0] + '.img')
 
-        self.oVM = self.createTestVM(self.sVmName, 1, sKind = sKind, sDvdImage = self.sIso, cCpus = self.cCpus,
-                                     sFloppy = self.sFloppy, eNic0AttachType = eNic0AttachType)
-        assert self.oVM is not None
+        oVM = self.createTestVM(self.sVmName, 1, sKind = sKind, sDvdImage = self.sIso, cCpus = self.cCpus,
+                                sFloppy = self.sFloppy, eNic0AttachType = eNic0AttachType)
+        assert oVM is not None
 
-        oSession = self.openSession(self.oVM)
+        oSession = self.openSession(oVM)
 
         # Create HDD
         sHddPath = os.path.join(self.sScratchPath, self.sHddName)
@@ -215,6 +214,8 @@ class tdGuestOsInstOs2(vbox.TestDriver):
         """
         Execute the testcase itself.
         """
+        if not self.importVBoxApi():
+            return False
         return self.testDoInstallGuestOs()
 
     #
@@ -225,8 +226,6 @@ class tdGuestOsInstOs2(vbox.TestDriver):
         """
         Install guest OS and wait for result
         """
-
-        self.logVmInfo(self.oVM)
         reporter.testStart('Installing %s' % (os.path.basename(self.sIso),))
 
         cMsTimeout = 40*60000;
@@ -245,4 +244,5 @@ class tdGuestOsInstOs2(vbox.TestDriver):
         return False
 
 if __name__ == '__main__':
-    sys.exit(tdGuestOsInstOs2().main(sys.argv))
+    sys.exit(tdGuestOsInstOs2().main(sys.argv));
+

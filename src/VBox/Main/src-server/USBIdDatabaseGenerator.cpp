@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBIdDatabaseGenerator.cpp 83794 2020-04-18 13:25:05Z vboxsync $ */
 /** @file
  * USB device vendor and product ID database - generator.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,9 +23,10 @@
 
 #include <algorithm>
 #include <map>
-#include <string>
+#include <iprt/sanitized/string>
 #include <vector>
 
+#include <iprt/err.h>
 #include <iprt/initterm.h>
 #include <iprt/message.h>
 #include <iprt/string.h>
@@ -246,7 +247,7 @@ static void WriteSourceFile(FILE *pOut, const char *argv0, PBLDPROGSTRTAB pStrTa
             " */\n"
             "\n"
             "/*\n"
-            " * Copyright (C) 2015-2016 Oracle Corporation\n"
+            " * Copyright (C) 2015-2020 Oracle Corporation\n"
             " *\n"
             " * This file is part of VirtualBox Open Source Edition(OSE), as\n"
             " * available from http ://www.virtualbox.org. This file is free software;\n"

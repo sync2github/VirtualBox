@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManageGuestCtrl.h 84519 2020-05-25 17:29:52Z vboxsync $ */
 /** @file
  * VBoxManageGuestCtrl.h - Definitions for guest control.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___H_VBOXMANAGE_GUESTCTRL
-#define ___H_VBOXMANAGE_GUESTCTRL
+#ifndef VBOX_INCLUDED_SRC_VBoxManage_VBoxManageGuestCtrl_h
+#define VBOX_INCLUDED_SRC_VBoxManage_VBoxManageGuestCtrl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifndef VBOX_ONLY_DOCS
 
@@ -24,6 +27,7 @@
 #include <VBox/com/listeners.h>
 #include <VBox/com/VirtualBox.h>
 
+#include <iprt/semaphore.h>
 #include <iprt/time.h>
 
 #include <map>
@@ -45,6 +49,9 @@ typedef ListenerImpl<GuestSessionEventListener> GuestSessionEventListenerImpl;
 
 class GuestEventListener;
 typedef ListenerImpl<GuestEventListener> GuestEventListenerImpl;
+
+class GuestAdditionsRunlevelListener;
+typedef ListenerImpl<GuestAdditionsRunlevelListener> GuestAdditionsRunlevelListenerImpl;
 
 /** Simple statistics class for binding locally
  *  held data to a specific guest object. */
@@ -227,7 +234,31 @@ protected:
 
     GuestEventSessions mSessions;
 };
+
+/**
+ *  Handler for Guest Additions runlevel change events.
+ */
+class GuestAdditionsRunlevelListener : public GuestListenerBase
+{
+
+public:
+
+    GuestAdditionsRunlevelListener(AdditionsRunLevelType_T enmRunLevel);
+
+    virtual ~GuestAdditionsRunlevelListener(void);
+
+public:
+
+    void uninit(void);
+
+    STDMETHOD(HandleEvent)(VBoxEventType_T aType, IEvent *aEvent);
+
+protected:
+
+    /** The run level target we're waiting for. */
+    AdditionsRunLevelType_T mRunLevelTarget;
+};
 #endif /* !VBOX_ONLY_DOCS */
 
-#endif /* !___H_VBOXMANAGE_GUESTCTRL */
+#endif /* !VBOX_INCLUDED_SRC_VBoxManage_VBoxManageGuestCtrl_h */
 

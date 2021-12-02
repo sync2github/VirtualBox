@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxPS2NT.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox NT4 Mouse Driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,9 +17,9 @@
 
 #define LOG_GROUP LOG_GROUP_DRV_MOUSE
 #include <iprt/asm.h>
-#include <VBox/err.h>
+#include <iprt/initterm.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
-#include <VBox/VBoxGuestLib.h>
 
 #include <stdarg.h>
 #include <string.h>
@@ -31,9 +31,18 @@ RT_C_DECLS_BEGIN
 #include <ntddmou.h>
 RT_C_DECLS_END
 
+#include <VBox/VMMDev.h>
+#include <VBox/VBoxGuestLib.h>
+
 /* not available on NT4 */
 #undef ExFreePool
 #undef ExAllocatePool
+
+/* KeQueryTickCount is a macro accessing KeTickCount data export from NT 3.50+. */
+#if 0 //def TARGET_NT3
+# undef KeQueryTickCount
+extern "C" NTKERNELAPI VOID NTAPI KeQueryTickCount(PLARGE_INTEGER);
+#endif
 
 /* i8042 mouse status bits */
 #define LEFT_BUTTON_DOWN                        0x01
@@ -190,7 +199,7 @@ typedef struct _I8042CFGINF
     CM_PARTIAL_RESOURCE_DESCRIPTOR aPorts[i8042MaxPorts];
     CM_PARTIAL_RESOURCE_DESCRIPTOR KbdInt;
     CM_PARTIAL_RESOURCE_DESCRIPTOR MouInt;
-    BOOLEAN               fFloatSave;                   /**< weather to save floating point context */
+    BOOLEAN               fFloatSave;                   /**< whether to save floating point context */
     USHORT                iResend;                      /**< number of retries allowed */
     USHORT                PollingIterations;            /**< number of polling iterations */
     USHORT                PollingIterationsMaximum;
@@ -1462,7 +1471,7 @@ static BOOLEAN MouIntHandler(PKINTERRUPT Interrupt, PVOID pCtx)
                     VMMDevReqMouseStatus *pReq = pDevExt->pReq;
                     if (pReq)
                     {
-                        int rc = VbglGRPerform (&pReq->header);
+                        int rc = VbglR0GRPerform (&pReq->header);
                         if (RT_SUCCESS(rc))
                         {
                             if (pReq->mouseFeatures & VMMDEV_MOUSE_HOST_WANTS_ABSOLUTE)
@@ -1504,7 +1513,7 @@ static BOOLEAN MouIntHandler(PKINTERRUPT Interrupt, PVOID pCtx)
                 VMMDevReqMouseStatus *pReq = pDevExt->pReq;
                 if (pReq)
                 {
-                    int rc = VbglGRPerform(&pReq->header);
+                    int rc = VbglR0GRPerform(&pReq->header);
                     if (RT_SUCCESS(rc))
                     {
                         if (pReq->mouseFeatures & VMMDEV_MOUSE_HOST_WANTS_ABSOLUTE)
@@ -1806,6 +1815,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING RegistryPath)
     WCHAR keyboardBuffer[NAME_MAX];
     WCHAR pointerBuffer[NAME_MAX];
 
+    int rc = RTR0Init(0);
+    if (RT_FAILURE(rc))
+        return STATUS_UNSUCCESSFUL;
+
     LogFlow(("VBoxMouseNT::DriverEntry: enter\n"));
 
     PINITEXT pInit = (PINITEXT)ExAllocatePool(NonPagedPool, sizeof(INITEXT));
@@ -1966,9 +1979,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING RegistryPath)
 
     if (pDevExt->HardwarePresent & KEYBOARD_HARDWARE_PRESENT)
     {
-        pDevExt->KbdExt.InputData = (PKEYBOARD_INPUT_DATA)
-            ExAllocatePool(NonPagedPool, pDevExt->Cfg.KbdAttr.InputDataQueueLength);
-
+        pDevExt->KbdExt.InputData = (PKEYBOARD_INPUT_DATA)ExAllocatePool(NonPagedPool, pDevExt->Cfg.KbdAttr.InputDataQueueLength);
         if (!pDevExt->KbdExt.InputData)
         {
             status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1987,7 +1998,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING RegistryPath)
 
         MouNameFull.MaximumLength = sizeof(L"\\Device\\") + MouNameBase.Length + DevNameSuff.MaximumLength;
         MouNameFull.Buffer = (PWSTR)ExAllocatePool(PagedPool, MouNameFull.MaximumLength);
-
         if (!MouNameFull.Buffer)
         {
             status = STATUS_UNSUCCESSFUL;
@@ -2019,8 +2029,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING RegistryPath)
         if (!NT_SUCCESS(status))
             goto fail;
 
-        pDevExt->MouExt.InputData =
-            (PMOUSE_INPUT_DATA)ExAllocatePool(NonPagedPool, pDevExt->Cfg.MouAttr.InputDataQueueLength);
+        pDevExt->MouExt.InputData = (PMOUSE_INPUT_DATA)ExAllocatePool(NonPagedPool, pDevExt->Cfg.MouAttr.InputDataQueueLength);
         if (!pDevExt->MouExt.InputData)
         {
             status = STATUS_INSUFFICIENT_RESOURCES;
@@ -2129,7 +2138,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING RegistryPath)
 
     ASSERT(status == STATUS_SUCCESS);
 
-    int rcVBox = VbglInitClient();
+    int rcVBox = VbglR0InitClient();
     if (RT_FAILURE(rcVBox))
     {
         Log(("VBoxMouseNT::DriverEntry: could not initialize guest library, rc = %Rrc\n", rcVBox));
@@ -2139,14 +2148,14 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING RegistryPath)
     {
         VMMDevReqMouseStatus *pReq = NULL;
 
-        rcVBox = VbglGRAlloc((VMMDevRequestHeader**)&pReq, sizeof(VMMDevReqMouseStatus), VMMDevReq_SetMouseStatus);
+        rcVBox = VbglR0GRAlloc((VMMDevRequestHeader**)&pReq, sizeof(VMMDevReqMouseStatus), VMMDevReq_SetMouseStatus);
         if (RT_SUCCESS(rcVBox))
         {
             /* Inform host that we support absolute */
             pReq->mouseFeatures = VMMDEV_MOUSE_GUEST_CAN_ABSOLUTE;
             pReq->pointerXPos = 0;
             pReq->pointerYPos = 0;
-            rcVBox = VbglGRPerform(&pReq->header);
+            rcVBox = VbglR0GRPerform(&pReq->header);
             if (RT_FAILURE(rcVBox))
                 Log(("VBoxMouseNT::DriverEntry: ERROR communicating new mouse capabilities to VMMDev. rc = %Rrc\n", rcVBox));
             else
@@ -2158,7 +2167,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING RegistryPath)
         }
         else
         {
-            VbglTerminate();
+            VbglR0TerminateClient();
             Log(("VBoxMouseNT::DriverEntry: could not allocate request buffer, rc = %Rrc\n", rcVBox));
             /* Continue working in non-VBox mode. */
         }
@@ -2221,7 +2230,7 @@ fail:
         ExFreePool(registryPath.Buffer);
 
     LogFlow(("VBoxMouseNT::DriverEntry: leave, status = %d\n", status));
-
+    RTR0Term();
     return status;
 }
 
@@ -2703,8 +2712,7 @@ static VOID HwGetRegstry(PINITEXT pInit, PUNICODE_STRING RegistryPath,
     path = RegistryPath->Buffer;
     if (NT_SUCCESS(status))
     {
-        aQuery = (PRTL_QUERY_REGISTRY_TABLE)
-                        ExAllocatePool(PagedPool, sizeof(RTL_QUERY_REGISTRY_TABLE) * (queries + 1));
+        aQuery = (PRTL_QUERY_REGISTRY_TABLE)ExAllocatePool(PagedPool, sizeof(RTL_QUERY_REGISTRY_TABLE) * (queries + 1));
         if (!aQuery)
             status = STATUS_UNSUCCESSFUL;
         else

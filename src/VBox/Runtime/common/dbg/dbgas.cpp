@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: dbgas.cpp 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT - Debug Address Space.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -197,7 +197,7 @@ RTDECL(int) RTDbgAsCreate(PRTDBGAS phDbgAs, RTUINTPTR FirstAddr, RTUINTPTR LastA
      * Allocate memory for the instance data.
      */
     size_t cchName = strlen(pszName);
-    PRTDBGASINT pDbgAs = (PRTDBGASINT)RTMemAllocVar(RT_OFFSETOF(RTDBGASINT, szName[cchName + 1]));
+    PRTDBGASINT pDbgAs = (PRTDBGASINT)RTMemAllocVar(RT_UOFFSETOF_DYN(RTDBGASINT, szName[cchName + 1]));
     if (!pDbgAs)
         return VERR_NO_MEMORY;
 
@@ -331,7 +331,7 @@ static void rtDbgAsDestroy(PRTDBGASINT pDbgAs)
     {
         PRTDBGASMOD pMod = pDbgAs->papModules[i];
         AssertPtr(pMod);
-        if (VALID_PTR(pMod))
+        if (RT_VALID_PTR(pMod))
         {
             Assert(pMod->iOrdinal == i);
             RTDbgModRelease((RTDBGMOD)pMod->Core.Key);
@@ -341,6 +341,8 @@ static void rtDbgAsDestroy(PRTDBGASINT pDbgAs)
         }
         pDbgAs->papModules[i] = NULL;
     }
+    RTSemRWDestroy(pDbgAs->hLock);
+    pDbgAs->hLock = NIL_RTSEMRW;
     RTMemFree(pDbgAs->papModules);
     pDbgAs->papModules = NULL;
 
@@ -1273,7 +1275,7 @@ DECLINLINE(void) rtDbgAsAdjustLineAddress(PRTDBGLINE pLine, RTDBGMOD hDbgMod, RT
  * @param   pszSymbol       The symbol name.
  * @param   Addr            The address of the symbol.
  * @param   cb              The size of the symbol.
- * @param   fFlags          Symbol flags.
+ * @param   fFlags          Symbol flags, RTDBGSYMBOLADD_F_XXX.
  * @param   piOrdinal       Where to return the symbol ordinal on success. If
  *                          the interpreter doesn't do ordinals, this will be set to
  *                          UINT32_MAX. Optional
@@ -1369,6 +1371,9 @@ RTDECL(int) RTDbgAsSymbolByAddr(RTDBGAS hDbgAs, RTUINTPTR Addr, uint32_t fFlags,
         /*
          * Check for absolute symbols.  Requires iterating all modules.
          */
+        if (fFlags & RTDBGSYMADDR_FLAGS_SKIP_ABS)
+            return VERR_NOT_FOUND;
+
         uint32_t cModules;
         PRTDBGMOD pahModules = rtDbgAsSnapshotModuleTable(pDbgAs, &cModules);
         if (!pahModules)

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTThreadPoke.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT Testcase - RTThreadPoke.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,6 +30,7 @@
 *********************************************************************************************************************************/
 #include <iprt/thread.h>
 
+#include <iprt/errcore.h>
 #include <iprt/test.h>
 #include <iprt/string.h>
 

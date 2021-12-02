@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: utils.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DevVMWare/Shaderlib - Utility/Stub Functions & Data.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,7 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/assert.h>
 #ifdef _MSC_VER

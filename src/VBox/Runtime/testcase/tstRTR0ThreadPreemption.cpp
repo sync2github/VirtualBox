@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTR0ThreadPreemption.cpp 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT R0 Testcase - Thread Preemption.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 #include <iprt/thread.h>
 
 #include <iprt/asm-amd64-x86.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/time.h>
 #include <iprt/string.h>
@@ -167,7 +167,7 @@ DECLEXPORT(int) TSTRTR0ThreadPreemptionSrvReqHandler(PSUPDRVSESSION pSession, ui
     NOREF(pSession);
     if (u64Arg)
         return VERR_INVALID_PARAMETER;
-    if (!VALID_PTR(pReqHdr))
+    if (!RT_VALID_PTR(pReqHdr))
         return VERR_INVALID_PARAMETER;
     char   *pszErr = (char *)(pReqHdr + 1);
     size_t  cchErr = pReqHdr->cbReq - sizeof(*pReqHdr);

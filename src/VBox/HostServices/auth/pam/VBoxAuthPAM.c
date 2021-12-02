@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -244,8 +244,13 @@ typedef struct _PamContext
     char *pszPassword;
 } PamContext;
 
+#if defined(RT_OS_SOLARIS)
+static int conv (int num_msg, struct pam_message **msg,
+                 struct pam_response **resp, void *appdata_ptr)
+#else
 static int conv (int num_msg, const struct pam_message **msg,
                  struct pam_response **resp, void *appdata_ptr)
+#endif
 {
     int i;
     struct pam_response *r;

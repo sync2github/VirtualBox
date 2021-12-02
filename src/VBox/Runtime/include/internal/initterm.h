@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: initterm.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Initialization & Termination.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_initterm_h
-#define ___internal_initterm_h
+#ifndef IPRT_INCLUDED_INTERNAL_initterm_h
+#define IPRT_INCLUDED_INTERNAL_initterm_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 
@@ -45,9 +48,14 @@ DECLHIDDEN(int)  rtR0InitNative(void);
  */
 DECLHIDDEN(void) rtR0TermNative(void);
 
+# ifdef RT_OS_LINUX
+/* in alloc-r0drv0-linux.c */
+DECLHIDDEN(void) rtR0MemExecCleanup(void);
+# endif
+
 #endif /* IN_RING0 */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_initterm_h */
 

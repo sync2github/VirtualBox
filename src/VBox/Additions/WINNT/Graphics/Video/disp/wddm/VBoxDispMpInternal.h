@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxDispMpInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxVideo Display external interface config
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,15 +15,12 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxDispMpInternal_h__
-#define ___VBoxDispMpInternal_h__
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispMpInternal_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispMpInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/win/windows.h>
 
-#if 0
-HRESULT vboxDispMpInternalInit();
-HRESULT vboxDispMpInternalTerm();
-HRESULT vboxDispMpInternalCancel(struct VBOXWDDMDISP_CONTEXT *pContext, struct VBOXWDDMDISP_SWAPCHAIN *pSwapchain);
-#endif
-
-#endif /* #ifndef ___VBoxDispMpInternal_h__ */
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispMpInternal_h */

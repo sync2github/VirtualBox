@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDispDbg.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxVideo Display D3D User mode dll
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,6 +16,10 @@
  */
 
 #include "VBoxDispD3DCmn.h"
+
+#ifdef VBOXWDDMDISP_DEBUG_VEHANDLER
+#include <Psapi.h>
+#endif
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -46,7 +50,7 @@ char *vboxVDbgDoGetModuleName()
 
 static void vboxDispLogDbgFormatStringV(char * szBuffer, uint32_t cbBuffer, const char * szString, va_list pArgList)
 {
-    uint32_t cbWritten = sprintf(szBuffer, "['%s' 0x%x.0x%x] Disp: ", vboxVDbgDoGetModuleName(), GetCurrentProcessId(), GetCurrentThreadId());
+    uint32_t cbWritten = sprintf(szBuffer, "['%s' 0x%lx.0x%lx] Disp: ", vboxVDbgDoGetModuleName(), GetCurrentProcessId(), GetCurrentThreadId());
     if (cbWritten > cbBuffer)
     {
         AssertReleaseFailed();
@@ -56,7 +60,7 @@ static void vboxDispLogDbgFormatStringV(char * szBuffer, uint32_t cbBuffer, cons
     _vsnprintf(szBuffer + cbWritten, cbBuffer - cbWritten, szString, pArgList);
 }
 
-#if defined(VBOXWDDMDISP_DEBUG) || defined(VBOX_WDDMDISP_WITH_PROFILE)
+#if defined(VBOXWDDMDISP_DEBUG)
 LONG g_VBoxVDbgFIsDwm = -1;
 
 DWORD g_VBoxVDbgPid = 0;
@@ -73,7 +77,6 @@ DWORD g_VBoxVDbgFLogFlow = 0;
 
 #ifdef VBOXWDDMDISP_DEBUG
 
-# ifndef IN_VBOXCRHGSMI
 #define VBOXWDDMDISP_DEBUG_DUMP_DEFAULT 0
 DWORD g_VBoxVDbgFDumpSetTexture = VBOXWDDMDISP_DEBUG_DUMP_DEFAULT;
 DWORD g_VBoxVDbgFDumpDrawPrim = VBOXWDDMDISP_DEBUG_DUMP_DEFAULT;
@@ -104,19 +107,6 @@ DWORD g_VBoxVDbgCfgForceDummyDevCreate = 0;
 PVBOXWDDMDISP_DEVICE g_VBoxVDbgInternalDevice = NULL;
 PVBOXWDDMDISP_RESOURCE g_VBoxVDbgInternalRc = NULL;
 
-DWORD g_VBoxVDbgCfgCreateSwapchainOnDdiOnce = 0;
-
-void vboxDispLogDbgPrintF(char * szString, ...)
-{
-    char szBuffer[4096] = {0};
-    va_list pArgList;
-    va_start(pArgList, szString);
-    vboxDispLogDbgFormatStringV(szBuffer, sizeof (szBuffer), szString, pArgList);
-    va_end(pArgList);
-
-    OutputDebugStringA(szBuffer);
-}
-
 VOID vboxVDbgDoPrintDmlCmd(const char* pszDesc, const char* pszCmd)
 {
     vboxVDbgPrint(("<?dml?><exec cmd=\"%s\">%s</exec>, ( %s )\n", pszCmd, pszDesc, pszCmd));
@@ -142,7 +132,7 @@ typedef struct VBOXVDBG_DUMP_INFO
     const RECT *pRect;
 } VBOXVDBG_DUMP_INFO, *PVBOXVDBG_DUMP_INFO;
 
-typedef DECLCALLBACK(void) FNVBOXVDBG_CONTENTS_DUMPER(PVBOXVDBG_DUMP_INFO pInfo, BOOLEAN fBreak, void *pvDumper);
+typedef DECLCALLBACKTYPE(void, FNVBOXVDBG_CONTENTS_DUMPER,(PVBOXVDBG_DUMP_INFO pInfo, BOOLEAN fBreak, void *pvDumper));
 typedef FNVBOXVDBG_CONTENTS_DUMPER *PFNVBOXVDBG_CONTENTS_DUMPER;
 
 static VOID vboxVDbgDoDumpSummary(const char * pPrefix, PVBOXVDBG_DUMP_INFO pInfo, const char * pSuffix)
@@ -151,7 +141,7 @@ static VOID vboxVDbgDoDumpSummary(const char * pPrefix, PVBOXVDBG_DUMP_INFO pInf
     IDirect3DResource9 *pD3DRc = pInfo->pD3DRc;
     char rectBuf[24];
     if (pInfo->pRect)
-        _snprintf(rectBuf, sizeof(rectBuf) / sizeof(rectBuf[0]), "(%d:%d);(%d:%d)",
+        _snprintf(rectBuf, sizeof(rectBuf) / sizeof(rectBuf[0]), "(%ld:%ld);(%ld:%ld)",
                 pInfo->pRect->left, pInfo->pRect->top,
                 pInfo->pRect->right, pInfo->pRect->bottom);
     else
@@ -309,36 +299,6 @@ VOID vboxVDbgDoDumpRcRect(const char * pPrefix, PVBOXWDDMDISP_ALLOCATION pAlloc,
     Info.pD3DRc = pD3DRc;
     Info.pRect = pRect;
     vboxVDbgDoDumpPerform(pPrefix, &Info, pSuffix, vboxVDbgRcRectContentsDumperCb, NULL);
-}
-
-VOID vboxVDbgDoDumpBb(const char * pPrefix, IDirect3DSwapChain9 *pSwapchainIf, const char * pSuffix, DWORD fFlags)
-{
-    IDirect3DSurface9 *pBb = NULL;
-    HRESULT hr = pSwapchainIf->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &pBb);
-    Assert(hr == S_OK);
-    if (FAILED(hr))
-    {
-        return;
-    }
-
-    Assert(pBb);
-    vboxVDbgDoDumpRcRect(pPrefix, NULL, pBb, NULL, pSuffix, fFlags);
-    pBb->Release();
-}
-
-VOID vboxVDbgDoDumpFb(const char * pPrefix, IDirect3DSwapChain9 *pSwapchainIf, const char * pSuffix, DWORD fFlags)
-{
-    IDirect3DSurface9 *pBb = NULL;
-    HRESULT hr = pSwapchainIf->GetBackBuffer(~(UINT)0, D3DBACKBUFFER_TYPE_MONO, &pBb);
-    Assert(hr == S_OK);
-    if (FAILED(hr))
-    {
-        return;
-    }
-
-    Assert(pBb);
-    vboxVDbgDoDumpRcRect(pPrefix, NULL, pBb, NULL, pSuffix, fFlags);
-    pBb->Release();
 }
 
 
@@ -614,12 +574,6 @@ void vboxVDbgDoPrintAlloc(const char * pPrefix, const VBOXWDDMDISP_RESOURCE *pRc
     const VBOXWDDMDISP_ALLOCATION *pAlloc = &pRc->aAllocations[iAlloc];
     BOOL bPrimary = pRc->RcDesc.fFlags.Primary;
     BOOL bFrontBuf = FALSE;
-    if (bPrimary)
-    {
-        PVBOXWDDMDISP_SWAPCHAIN pSwapchain = vboxWddmSwapchainForAlloc((VBOXWDDMDISP_ALLOCATION *)pAlloc);
-        Assert(pSwapchain);
-        bFrontBuf = (vboxWddmSwapchainGetFb(pSwapchain)->pAlloc == pAlloc);
-    }
     vboxVDbgPrint(("%s d3dWidth(%d), width(%d), height(%d), format(%d), usage(%s), %s", pPrefix,
             pAlloc->SurfDesc.d3dWidth, pAlloc->SurfDesc.width, pAlloc->SurfDesc.height, pAlloc->SurfDesc.format,
             bPrimary ?
@@ -633,9 +587,7 @@ void vboxVDbgDoPrintRect(const char * pPrefix, const RECT *pRect, const char * p
     vboxVDbgPrint(("%s left(%d), top(%d), right(%d), bottom(%d) %s", pPrefix, pRect->left, pRect->top, pRect->right, pRect->bottom, pSuffix));
 }
 
-# endif
-
-static VOID CALLBACK vboxVDbgTimerCb(__in PVOID lpParameter, __in BOOLEAN TimerOrWaitFired)
+static VOID CALLBACK vboxVDbgTimerCb(__in PVOID lpParameter, __in BOOLEAN TimerOrWaitFired) RT_NOTHROW_DEF
 {
     RT_NOREF(lpParameter, TimerOrWaitFired);
     Assert(0);
@@ -668,7 +620,7 @@ HRESULT vboxVDbgTimerStop(HANDLE hTimerQueue, HANDLE hTimer)
 }
 #endif
 
-#if defined(VBOXWDDMDISP_DEBUG) || defined(VBOX_WDDMDISP_WITH_PROFILE)
+#if defined(VBOXWDDMDISP_DEBUG)
 BOOL vboxVDbgDoCheckExe(const char * pszName)
 {
     char *pszModule = vboxVDbgDoGetModuleName();
@@ -687,13 +639,65 @@ BOOL vboxVDbgDoCheckExe(const char * pszName)
 
 #ifdef VBOXWDDMDISP_DEBUG_VEHANDLER
 
+typedef BOOL WINAPI FNGetModuleInformation(HANDLE hProcess, HMODULE hModule, LPMODULEINFO lpmodinfo, DWORD cb);
+typedef FNGetModuleInformation *PFNGetModuleInformation;
+
+static PFNGetModuleInformation g_pfnGetModuleInformation = NULL;
+static HMODULE g_hModPsapi = NULL;
 static PVOID g_VBoxWDbgVEHandler = NULL;
-LONG WINAPI vboxVDbgVectoredHandler(struct _EXCEPTION_POINTERS *pExceptionInfo)
+
+static bool vboxVDbgIsAddressInModule(PVOID pv, const char *pszModuleName)
 {
+    HMODULE hMod = GetModuleHandleA(pszModuleName);
+    if (!hMod)
+        return false;
+
+    HANDLE hProcess = GetCurrentProcess();
+
+    if (!g_pfnGetModuleInformation)
+        return false;
+
+    MODULEINFO ModuleInfo = {0};
+    if (!g_pfnGetModuleInformation(hProcess, hMod, &ModuleInfo, sizeof(ModuleInfo)))
+        return false;
+
+    return    (uintptr_t)ModuleInfo.lpBaseOfDll <= (uintptr_t)pv
+           && (uintptr_t)pv < (uintptr_t)ModuleInfo.lpBaseOfDll + ModuleInfo.SizeOfImage;
+}
+
+static bool vboxVDbgIsExceptionIgnored(PEXCEPTION_RECORD pExceptionRecord)
+{
+    /* Module (dll) names for GetModuleHandle.
+     * Exceptions originated from these modules will be ignored.
+     */
+    static const char *apszIgnoredModuleNames[] =
+    {
+        NULL
+    };
+
+    int i = 0;
+    while (apszIgnoredModuleNames[i])
+    {
+        if (vboxVDbgIsAddressInModule(pExceptionRecord->ExceptionAddress, apszIgnoredModuleNames[i]))
+            return true;
+
+        ++i;
+    }
+
+    return false;
+}
+
+static LONG WINAPI vboxVDbgVectoredHandler(struct _EXCEPTION_POINTERS *pExceptionInfo) RT_NOTHROW_DEF
+{
+    static volatile bool g_fAllowIgnore = true; /* Might be changed in kernel debugger. */
+
     PEXCEPTION_RECORD pExceptionRecord = pExceptionInfo->ExceptionRecord;
-    PCONTEXT pContextRecord = pExceptionInfo->ContextRecord;
+    /* PCONTEXT pContextRecord = pExceptionInfo->ContextRecord; */
+
     switch (pExceptionRecord->ExceptionCode)
     {
+        default:
+            break;
         case EXCEPTION_BREAKPOINT:
         case EXCEPTION_ACCESS_VIOLATION:
         case EXCEPTION_STACK_OVERFLOW:
@@ -702,9 +706,12 @@ LONG WINAPI vboxVDbgVectoredHandler(struct _EXCEPTION_POINTERS *pExceptionInfo)
         case EXCEPTION_FLT_INVALID_OPERATION:
         case EXCEPTION_INT_DIVIDE_BY_ZERO:
         case EXCEPTION_ILLEGAL_INSTRUCTION:
-            AssertRelease(0);
+            if (g_fAllowIgnore && vboxVDbgIsExceptionIgnored(pExceptionRecord))
+                break;
+            ASMBreakpoint();
             break;
-        default:
+        case 0x40010006: /* OutputDebugStringA? */
+        case 0x4001000a: /* OutputDebugStringW? */
             break;
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -713,19 +720,26 @@ LONG WINAPI vboxVDbgVectoredHandler(struct _EXCEPTION_POINTERS *pExceptionInfo)
 void vboxVDbgVEHandlerRegister()
 {
     Assert(!g_VBoxWDbgVEHandler);
-    g_VBoxWDbgVEHandler = AddVectoredExceptionHandler(1,vboxVDbgVectoredHandler);
+    g_VBoxWDbgVEHandler = AddVectoredExceptionHandler(1, vboxVDbgVectoredHandler);
     Assert(g_VBoxWDbgVEHandler);
+
+    g_hModPsapi = GetModuleHandleA("Psapi.dll"); /* Usually already loaded. */
+    if (g_hModPsapi)
+        g_pfnGetModuleInformation = (PFNGetModuleInformation)GetProcAddress(g_hModPsapi, "GetModuleInformation");
 }
 
 void vboxVDbgVEHandlerUnregister()
 {
     Assert(g_VBoxWDbgVEHandler);
     ULONG uResult = RemoveVectoredExceptionHandler(g_VBoxWDbgVEHandler);
-    Assert(uResult);
+    Assert(uResult); RT_NOREF(uResult);
     g_VBoxWDbgVEHandler = NULL;
+
+    g_hModPsapi = NULL;
+    g_pfnGetModuleInformation = NULL;
 }
 
-#endif
+#endif /* VBOXWDDMDISP_DEBUG_VEHANDLER */
 
 #if defined(VBOXWDDMDISP_DEBUG) || defined(LOG_TO_BACKDOOR_DRV)
 void vboxDispLogDrvF(char * szString, ...)
@@ -737,5 +751,16 @@ void vboxDispLogDrvF(char * szString, ...)
     va_end(pArgList);
 
     VBoxDispMpLoggerLog(szBuffer);
+}
+
+void vboxDispLogDbgPrintF(char * szString, ...)
+{
+    char szBuffer[4096] = { 0 };
+    va_list pArgList;
+    va_start(pArgList, szString);
+    vboxDispLogDbgFormatStringV(szBuffer, sizeof(szBuffer), szString, pArgList);
+    va_end(pArgList);
+
+    OutputDebugStringA(szBuffer);
 }
 #endif

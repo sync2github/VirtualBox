@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIArrowSplitter.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * VBox Qt GUI - QIArrowSplitter class implementation.
+ * VBox Qt GUI - Qt extensions: QIArrowSplitter class implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,28 +15,21 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QApplication>
-# include <QStyle>
-# include <QHBoxLayout>
-# include <QTextEdit>
+#include <QApplication>
+#include <QHBoxLayout>
+#include <QStyle>
+#include <QTextEdit>
 
 /* GUI includes: */
-# include "QIArrowSplitter.h"
-# include "QIArrowButtonSwitch.h"
-# include "QIArrowButtonPress.h"
-# include "UIDesktopWidgetWatchdog.h"
-# include "UIIconPool.h"
+#include "QIArrowSplitter.h"
+#include "QIArrowButtonPress.h"
+#include "QIArrowButtonSwitch.h"
+#include "UIDesktopWidgetWatchdog.h"
+#include "UIIconPool.h"
 
 /* Other VBox includes: */
-# include "iprt/assert.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
+#include "iprt/assert.h"
 
 
 /** QTextEdit extension
@@ -49,7 +42,7 @@ class QIDetailsBrowser : public QTextEdit
 
 public:
 
-    /** Constructor, passes @a pParent to the QTextEdit constructor. */
+    /** Constructs details-browser passing @a pParent to the base-class. */
     QIDetailsBrowser(QWidget *pParent = 0);
 
     /** Returns minimum size-hint. */
@@ -60,6 +53,11 @@ public:
     /** Update scroll-bars. */
     void updateScrollBars();
 };
+
+
+/*********************************************************************************************************************************
+*   Class QIDetailsBrowser implementation.                                                                                       *
+*********************************************************************************************************************************/
 
 QIDetailsBrowser::QIDetailsBrowser(QWidget *pParent /* = 0 */)
     : QTextEdit(pParent)
@@ -116,6 +114,10 @@ void QIDetailsBrowser::updateScrollBars()
     setVerticalScrollBarPolicy(verticalPolicy);
 }
 
+
+/*********************************************************************************************************************************
+*   Class QIArrowSplitter implementation.                                                                                        *
+*********************************************************************************************************************************/
 
 QIArrowSplitter::QIArrowSplitter(QWidget *pParent /* = 0 */)
     : QIWithRetranslateUI<QWidget>(pParent)
@@ -227,6 +229,12 @@ void QIArrowSplitter::sltSwitchDetailsPageNext()
     updateDetails();
 }
 
+void QIArrowSplitter::retranslateUi()
+{
+    /* Update details: */
+    updateDetails();
+}
+
 void QIArrowSplitter::prepare()
 {
     /* Create main-layout: */
@@ -235,7 +243,11 @@ void QIArrowSplitter::prepare()
     {
         /* Configure main-layout: */
         m_pMainLayout->setContentsMargins(0, 0, 0, 0);
-        m_pMainLayout->setSpacing(3);
+#ifdef VBOX_WS_MAC
+        m_pMainLayout->setSpacing(5);
+#else
+        m_pMainLayout->setSpacing(qApp->style()->pixelMetric(QStyle::PM_LayoutVerticalSpacing) / 2);
+#endif
         /* Create button-layout: */
         QHBoxLayout *pButtonLayout = new QHBoxLayout;
         AssertPtrReturnVoid(pButtonLayout);
@@ -254,8 +266,9 @@ void QIArrowSplitter::prepare()
                 m_pSwitchButton->setIconSize(QSize(iIconMetric, iIconMetric));
                 m_pSwitchButton->setIcons(UIIconPool::iconSet(":/arrow_right_10px.png"),
                                           UIIconPool::iconSet(":/arrow_down_10px.png"));
-                connect(m_pSwitchButton, SIGNAL(sigClicked()), this, SLOT(sltUpdateNavigationButtonsVisibility()));
-                connect(m_pSwitchButton, SIGNAL(sigClicked()), this, SLOT(sltUpdateDetailsBrowserVisibility()));
+                connect(m_pSwitchButton, &QIArrowButtonSwitch::sigClicked, this, &QIArrowSplitter::sltUpdateNavigationButtonsVisibility);
+                connect(m_pSwitchButton, &QIArrowButtonSwitch::sigClicked, this, &QIArrowSplitter::sltUpdateDetailsBrowserVisibility);
+
                 /* Add switch-button into button-layout: */
                 pButtonLayout->addWidget(m_pSwitchButton);
             }
@@ -268,7 +281,8 @@ void QIArrowSplitter::prepare()
                 /* Configure back-button: */
                 m_pBackButton->setIconSize(QSize(iIconMetric, iIconMetric));
                 m_pBackButton->setIcon(UIIconPool::iconSet(":/arrow_left_10px.png"));
-                connect(m_pBackButton, SIGNAL(sigClicked()), this, SLOT(sltSwitchDetailsPageBack()));
+                connect(m_pBackButton, &QIArrowButtonPress::sigClicked, this, &QIArrowSplitter::sltSwitchDetailsPageBack);
+
                 /* Add back-button into button-layout: */
                 pButtonLayout->addWidget(m_pBackButton);
             }
@@ -279,7 +293,8 @@ void QIArrowSplitter::prepare()
                 /* Configure next-button: */
                 m_pNextButton->setIconSize(QSize(iIconMetric, iIconMetric));
                 m_pNextButton->setIcon(UIIconPool::iconSet(":/arrow_right_10px.png"));
-                connect(m_pNextButton, SIGNAL(sigClicked()), this, SLOT(sltSwitchDetailsPageNext()));
+                connect(m_pNextButton, &QIArrowButtonPress::sigClicked, this, &QIArrowSplitter::sltSwitchDetailsPageNext);
+
                 /* Add next-button into button-layout: */
                 pButtonLayout->addWidget(m_pNextButton);
             }
@@ -303,12 +318,6 @@ void QIArrowSplitter::prepare()
 
     /* Apply size-policy finally: */
     setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::MinimumExpanding);
-}
-
-void QIArrowSplitter::retranslateUi()
-{
-    /* Update details: */
-    updateDetails();
 }
 
 void QIArrowSplitter::updateDetails()
@@ -355,5 +364,5 @@ void QIArrowSplitter::updateDetails()
     sltUpdateSizeHints();
 }
 
-#include "QIArrowSplitter.moc"
 
+#include "QIArrowSplitter.moc"

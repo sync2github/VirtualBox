@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: CPUMInternal.h 91283 2021-09-16 13:58:36Z vboxsync $ */
 /** @file
  * CPUM - Internal header file.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,14 +15,18 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___CPUMInternal_h
-#define ___CPUMInternal_h
+#ifndef VMM_INCLUDED_SRC_include_CPUMInternal_h
+#define VMM_INCLUDED_SRC_include_CPUMInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifndef VBOX_FOR_DTRACE_LIB
 # include <VBox/cdefs.h>
 # include <VBox/types.h>
 # include <VBox/vmm/stam.h>
 # include <iprt/x86.h>
+# include <VBox/vmm/pgm.h>
 #else
 # pragma D depends_on library x86.d
 # pragma D depends_on library cpumctx.d
@@ -62,13 +66,14 @@ typedef uint64_t STAMCOUNTER;
 
 /** Use flags (CPUM::fUseFlags).
  * (Don't forget to sync this with CPUMInternal.mac !)
- * @note Part of saved state.
+ * @note Was part of saved state (6.1 and earlier).
  * @{ */
 /** Indicates that we've saved the host FPU, SSE, whatever state and that it
  * needs to be restored. */
 #define CPUM_USED_FPU_HOST              RT_BIT(0)
 /** Indicates that we've loaded the guest FPU, SSE, whatever state and that it
- * needs to be saved. */
+ * needs to be saved.
+ * @note Mirrored in CPUMCTX::fUsedFpuGuest for the HM switcher code. */
 #define CPUM_USED_FPU_GUEST             RT_BIT(10)
 /** Used the guest FPU, SSE or such stuff since last we were in REM.
  * REM syncing is clearing this, lazy FPU is setting it. */
@@ -99,13 +104,6 @@ typedef uint64_t STAMCOUNTER;
  * DR7 (and AMD-V DR6) are handled via the VMCB. */
 #define CPUM_USED_DEBUG_REGS_GUEST      RT_BIT(9)
 
-/** Sync the FPU state on next entry (32->64 switcher only). */
-#define CPUM_SYNC_FPU_STATE             RT_BIT(16)
-/** Sync the debug state on next entry (32->64 switcher only). */
-#define CPUM_SYNC_DEBUG_REGS_GUEST      RT_BIT(17)
-/** Sync the debug state on next entry (32->64 switcher only).
- * Almost the same as CPUM_USE_DEBUG_REGS_HYPER in the raw-mode switchers. */
-#define CPUM_SYNC_DEBUG_REGS_HYPER      RT_BIT(18)
 /** Host CPU requires fxsave/fxrstor leaky bit handling. */
 #define CPUM_USE_FFXSR_LEAKY            RT_BIT(19)
 /** Set if the VM supports long-mode. */
@@ -116,7 +114,15 @@ typedef uint64_t STAMCOUNTER;
 /** @name CPUM Saved State Version.
  * @{ */
 /** The current saved state version. */
-#define CPUM_SAVED_STATE_VERSION                CPUM_SAVED_STATE_VERSION_XSAVE
+#define CPUM_SAVED_STATE_VERSION                CPUM_SAVED_STATE_VERSION_PAE_PDPES
+/** The saved state version with PAE PDPEs added. */
+#define CPUM_SAVED_STATE_VERSION_PAE_PDPES      21
+/** The saved state version with more virtual VMCS fields and CPUMCTX VMX fields. */
+#define CPUM_SAVED_STATE_VERSION_HWVIRT_VMX_2   20
+/** The saved state version including VMX hardware virtualization state. */
+#define CPUM_SAVED_STATE_VERSION_HWVIRT_VMX     19
+/** The saved state version including SVM hardware virtualization state. */
+#define CPUM_SAVED_STATE_VERSION_HWVIRT_SVM     18
 /** The saved state version including XSAVE state. */
 #define CPUM_SAVED_STATE_VERSION_XSAVE          17
 /** The saved state version with good CPUID leaf count. */
@@ -156,13 +162,14 @@ typedef struct CPUMINFO
      * instruction.  Older hardware has been observed to ignore higher bits. */
     uint32_t                    fMsrMask;
 
+    /** MXCSR mask. */
+    uint32_t                    fMxCsrMask;
+
     /** The number of CPUID leaves (CPUMCPUIDLEAF) in the array pointed to below. */
     uint32_t                    cCpuIdLeaves;
     /** The index of the first extended CPUID leaf in the array.
      *  Set to cCpuIdLeaves if none present. */
     uint32_t                    iFirstExtCpuIdLeaf;
-    /** Alignment padding. */
-    uint32_t                    uPadding;
     /** How to handle unknown CPUID leaves. */
     CPUMUNKNOWNCPUID            enmUnknownCpuIdMethod;
     /** For use with CPUMUNKNOWNCPUID_DEFAULTS (DB & VM),
@@ -172,20 +179,17 @@ typedef struct CPUMINFO
     /** Scalable bus frequency used for reporting other frequencies. */
     uint64_t                    uScalableBusFreq;
 
-    /** Pointer to the MSR ranges (ring-0 pointer). */
-    R0PTRTYPE(PCPUMMSRRANGE)    paMsrRangesR0;
-    /** Pointer to the CPUID leaves (ring-0 pointer). */
-    R0PTRTYPE(PCPUMCPUIDLEAF)   paCpuIdLeavesR0;
-
-    /** Pointer to the MSR ranges (ring-3 pointer). */
+    /** Pointer to the MSR ranges (for compatibility with old hyper heap code). */
     R3PTRTYPE(PCPUMMSRRANGE)    paMsrRangesR3;
-    /** Pointer to the CPUID leaves (ring-3 pointer). */
+    /** Pointer to the CPUID leaves (for compatibility with old hyper heap code). */
     R3PTRTYPE(PCPUMCPUIDLEAF)   paCpuIdLeavesR3;
 
-    /** Pointer to the MSR ranges (raw-mode context pointer). */
-    RCPTRTYPE(PCPUMMSRRANGE)    paMsrRangesRC;
-    /** Pointer to the CPUID leaves (raw-mode context pointer). */
-    RCPTRTYPE(PCPUMCPUIDLEAF)   paCpuIdLeavesRC;
+    /** CPUID leaves. */
+    CPUMCPUIDLEAF               aCpuIdLeaves[256];
+    /** MSR ranges.
+     * @todo This is insane, so might want to move this into a separate
+     *       allocation.  The insanity is mainly for more recent AMD CPUs. */
+    CPUMMSRRANGE                aMsrRanges[8192];
 } CPUMINFO;
 /** Pointer to a CPU info structure. */
 typedef CPUMINFO *PCPUMINFO;
@@ -198,9 +202,17 @@ typedef CPUMINFO const *CPCPUMINFO;
  */
 typedef struct CPUMHOSTCTX
 {
+    /** The extended state (FPU/SSE/AVX/AVX-2/XXXX). Must be aligned on 64 bytes. */
+    union /* no tag */
+    {
+        X86XSAVEAREA    XState;
+        /** Byte view for simple indexing and space allocation.
+         * @note Must match or exceed the size of CPUMCTX::abXState. */
+        uint8_t         abXState[0x4000 - 0x300];
+    } CPUM_UNION_NM(u);
+
     /** General purpose register, selectors, flags and more
      * @{ */
-#if HC_ARCH_BITS == 64
     /** General purpose register ++
      * { */
     /*uint64_t        rax; - scratch*/
@@ -221,21 +233,6 @@ typedef struct CPUMHOSTCTX
     uint64_t        r15;
     /*uint64_t        rip; - scratch*/
     uint64_t        rflags;
-#endif
-
-#if HC_ARCH_BITS == 32
-    /*uint32_t        eax; - scratch*/
-    uint32_t        ebx;
-    /*uint32_t        ecx; - scratch*/
-    /*uint32_t        edx; - scratch*/
-    uint32_t        edi;
-    uint32_t        esi;
-    uint32_t        ebp;
-    X86EFLAGS       eflags;
-    /*uint32_t        eip; - scratch*/
-    /* lss pair! */
-    uint32_t        esp;
-#endif
     /** @} */
 
     /** Selector registers
@@ -253,55 +250,6 @@ typedef struct CPUMHOSTCTX
     RTSEL           cs;
     RTSEL           csPadding;
     /** @} */
-
-#if HC_ARCH_BITS == 32
-    /** Control registers.
-     * @{ */
-    uint32_t        cr0;
-    /*uint32_t        cr2; - scratch*/
-    uint32_t        cr3;
-    uint32_t        cr4;
-    /** The CR0 FPU state in HM mode.  Can't use cr0 here because the
-     *  64-bit-on-32-bit-host world switches is using it. */
-    uint32_t        cr0Fpu;
-    /** @} */
-
-    /** Debug registers.
-     * @{ */
-    uint32_t        dr0;
-    uint32_t        dr1;
-    uint32_t        dr2;
-    uint32_t        dr3;
-    uint32_t        dr6;
-    uint32_t        dr7;
-    /** @} */
-
-    /** Global Descriptor Table register. */
-    X86XDTR32       gdtr;
-    uint16_t        gdtrPadding;
-    /** Interrupt Descriptor Table register. */
-    X86XDTR32       idtr;
-    uint16_t        idtrPadding;
-    /** The task register. */
-    RTSEL           ldtr;
-    RTSEL           ldtrPadding;
-    /** The task register. */
-    RTSEL           tr;
-    RTSEL           trPadding;
-
-    /** The sysenter msr registers.
-     * This member is not used by the hypervisor context. */
-    CPUMSYSENTER    SysEnter;
-
-    /** MSRs
-     * @{ */
-    uint64_t        efer;
-    /** @} */
-
-    /* padding to get 64byte aligned size */
-    uint8_t         auPadding[20];
-
-#elif HC_ARCH_BITS == 64
 
     /** Control registers.
      * @{ */
@@ -344,24 +292,17 @@ typedef struct CPUMHOSTCTX
     uint64_t        efer;
     /** @} */
 
-    /* padding to get 64byte aligned size */
-    uint8_t         auPadding[4];
-
-#else
-# error HC_ARCH_BITS not defined or unsupported
-#endif
-
-    /** Pointer to the FPU/SSE/AVX/XXXX state raw-mode mapping. */
-    RCPTRTYPE(PX86XSAVEAREA)    pXStateRC;
-    /** Pointer to the FPU/SSE/AVX/XXXX state ring-0 mapping. */
-    R0PTRTYPE(PX86XSAVEAREA)    pXStateR0;
-    /** Pointer to the FPU/SSE/AVX/XXXX state ring-3 mapping. */
-    R3PTRTYPE(PX86XSAVEAREA)    pXStateR3;
     /** The XCR0 register. */
-    uint64_t                    xcr0;
+    uint64_t        xcr0;
     /** The mask to pass to XSAVE/XRSTOR in EDX:EAX.  If zero we use
      *  FXSAVE/FXRSTOR (since bit 0 will always be set, we only need to test it). */
-    uint64_t                    fXStateMask;
+    uint64_t        fXStateMask;
+
+    /* padding to get 64byte aligned size */
+    uint8_t         auPadding[24];
+#if HC_ARCH_BITS != 64
+# error HC_ARCH_BITS not defined or unsupported
+#endif
 } CPUMHOSTCTX;
 #ifndef VBOX_FOR_DTRACE_LIB
 AssertCompileSizeAlignment(CPUMHOSTCTX, 64);
@@ -371,19 +312,40 @@ typedef CPUMHOSTCTX *PCPUMHOSTCTX;
 
 
 /**
+ * The hypervisor context CPU state (just DRx left now).
+ */
+typedef struct CPUMHYPERCTX
+{
+    /** Debug registers.
+     * @remarks DR4 and DR5 should not be used since they are aliases for
+     *          DR6 and DR7 respectively on both AMD and Intel CPUs.
+     * @remarks DR8-15 are currently not supported by AMD or Intel, so
+     *          neither do we.
+     */
+    uint64_t        dr[8];
+    /** @todo eliminiate the rest.   */
+    uint64_t        cr3;
+    uint64_t        au64Padding[7];
+} CPUMHYPERCTX;
+#ifndef VBOX_FOR_DTRACE_LIB
+AssertCompileSizeAlignment(CPUMHYPERCTX, 64);
+#endif
+/** Pointer to the hypervisor context CPU state. */
+typedef CPUMHYPERCTX *PCPUMHYPERCTX;
+
+
+/**
  * CPUM Data (part of VM)
  */
 typedef struct CPUM
 {
-    /** Offset from CPUM to CPUMCPU for the first CPU. */
-    uint32_t                offCPUMCPU0;
-
     /** Use flags.
      * These flags indicates which CPU features the host uses.
      */
     uint32_t                fHostUseFlags;
 
-    /** CR4 mask */
+    /** CR4 mask
+     * @todo obsolete? */
     struct
     {
         uint32_t            AndMask; /**< @todo Move these to the per-CPU structure and fix the switchers. Saves a register! */
@@ -395,14 +357,27 @@ typedef struct CPUM
     /** Indicates that a state restore is pending.
      * This is used to verify load order dependencies (PGM). */
     bool                    fPendingRestore;
-    uint8_t                 abPadding0[6];
+    uint8_t                 abPadding0[2];
 
     /** XSAVE/XRTOR components we can expose to the guest mask. */
     uint64_t                fXStateGuestMask;
     /** XSAVE/XRSTOR host mask.  Only state components in this mask can be exposed
      * to the guest.  This is 0 if no XSAVE/XRSTOR bits can be exposed. */
     uint64_t                fXStateHostMask;
-    uint8_t                 abPadding1[24];
+
+    /** The host MXCSR mask (determined at init). */
+    uint32_t                fHostMxCsrMask;
+    /** Nested VMX: Whether to expose VMX-preemption timer to the guest. */
+    bool                    fNestedVmxPreemptTimer;
+    /** Nested VMX: Whether to expose EPT to the guest. If this is disabled make sure
+     *  to also disable fNestedVmxUnrestrictedGuest. */
+    bool                    fNestedVmxEpt;
+    /** Nested VMX: Whether to expose "unrestricted guest" to the guest. */
+    bool                    fNestedVmxUnrestrictedGuest;
+    uint8_t                 abPadding1[1];
+
+    /** Align to 64-byte boundary. */
+    uint8_t                 abPadding2[20+4];
 
     /** Host CPU feature information.
      * Externaly visible via the VM structure, aligned on 64-byte boundrary. */
@@ -412,7 +387,6 @@ typedef struct CPUM
     CPUMFEATURES            GuestFeatures;
     /** Guest CPU info. */
     CPUMINFO                GuestInfo;
-
 
     /** The standard set of CpuId leaves. */
     CPUMCPUID               aGuestCpuIdPatmStd[6];
@@ -434,7 +408,7 @@ typedef struct CPUM
 } CPUM;
 #ifndef VBOX_FOR_DTRACE_LIB
 AssertCompileMemberOffset(CPUM, HostFeatures, 64);
-AssertCompileMemberOffset(CPUM, GuestFeatures, 96);
+AssertCompileMemberOffset(CPUM, GuestFeatures, 112);
 #endif
 /** Pointer to the CPUM instance data residing in the shared VM structure. */
 typedef CPUM *PCPUM;
@@ -456,6 +430,9 @@ typedef struct CPUMCPU
      */
     CPUMCTXMSRS             GuestMsrs;
 
+    /** Nested VMX: VMX-preemption timer. */
+    TMTIMERHANDLE           hNestedVmxPreemptTimer;
+
     /** Use flags.
      * These flags indicates both what is to be used and what has been used.
      */
@@ -465,53 +442,51 @@ typedef struct CPUMCPU
      * These flags indicates to REM (and others) which important guest
      * registers which has been changed since last time the flags were cleared.
      * See the CPUM_CHANGED_* defines for what we keep track of.
-     */
+     *
+     * @todo Obsolete, but will probably refactored so keep it for reference. */
     uint32_t                fChanged;
-
-    /** Offset from CPUM to CPUMCPU. */
-    uint32_t                offCPUM;
 
     /** Temporary storage for the return code of the function called in the
      * 32-64 switcher. */
     uint32_t                u32RetCode;
 
 #ifdef VBOX_WITH_VMMR0_DISABLE_LAPIC_NMI
-    /** The address of the APIC mapping, NULL if no APIC.
-     * Call CPUMR0SetLApic to update this before doing a world switch. */
-    RTHCPTR                 pvApicBase;
     /** Used by the world switcher code to store which vectors needs restoring on
      * the way back. */
     uint32_t                fApicDisVectors;
+    /** The address of the APIC mapping, NULL if no APIC.
+     * Call CPUMR0SetLApic to update this before doing a world switch. */
+    RTHCPTR                 pvApicBase;
     /** Set if the CPU has the X2APIC mode enabled.
      * Call CPUMR0SetLApic to update this before doing a world switch. */
     bool                    fX2Apic;
 #else
-    uint8_t                 abPadding3[(HC_ARCH_BITS == 64 ? 8 : 4) + 4 + 1];
+    uint8_t                 abPadding3[4 + sizeof(RTHCPTR) + 1];
 #endif
 
-    /** Have we entered raw-mode? */
-    bool                    fRawEntered;
-    /** Have we entered the recompiler? */
-    bool                    fRemEntered;
     /** Whether the X86_CPUID_FEATURE_EDX_APIC and X86_CPUID_AMD_FEATURE_EDX_APIC
      *  (?) bits are visible or not.  (The APIC is responsible for setting this
      *  when loading state, so we won't save it.) */
     bool                    fCpuIdApicFeatureVisible;
 
-    /** Align the next member on a 64-bit boundrary. */
-    uint8_t                 abPadding2[64 - 16 - (HC_ARCH_BITS == 64 ? 8 : 4) - 4 - 1 - 3];
+    /** Align the next member on a 64-byte boundary. */
+    uint8_t                 abPadding2[64 - (8 + 12 + 4 + 8 + 1 + 1)];
 
     /** Saved host context.  Only valid while inside RC or HM contexts.
      * Must be aligned on a 64-byte boundary. */
     CPUMHOSTCTX             Host;
-    /** Hypervisor context. Must be aligned on a 64-byte boundary. */
-    CPUMCTX                 Hyper;
+    /** Old hypervisor context, only used for combined DRx values now.
+     * Must be aligned on a 64-byte boundary. */
+    CPUMHYPERCTX            Hyper;
 
 #ifdef VBOX_WITH_CRASHDUMP_MAGIC
     uint8_t                 aMagic[56];
     uint64_t                uMagic;
 #endif
 } CPUMCPU;
+#ifndef VBOX_FOR_DTRACE_LIB
+AssertCompileMemberAlignment(CPUMCPU, Host, 64);
+#endif
 /** Pointer to the CPUMCPU instance data residing in the shared VMCPU structure. */
 typedef CPUMCPU *PCPUMCPU;
 
@@ -523,15 +498,17 @@ PCPUMCPUIDLEAF      cpumCpuIdGetLeafEx(PVM pVM, uint32_t uLeaf, uint32_t uSubLea
 
 # ifdef IN_RING3
 int                 cpumR3DbgInit(PVM pVM);
-int                 cpumR3CpuIdExplodeFeatures(PCCPUMCPUIDLEAF paLeaves, uint32_t cLeaves, PCPUMFEATURES pFeatures);
-int                 cpumR3InitCpuIdAndMsrs(PVM pVM);
+int                 cpumR3CpuIdExplodeFeatures(PCCPUMCPUIDLEAF paLeaves, uint32_t cLeaves, PCCPUMMSRS pMsrs, PCPUMFEATURES pFeatures);
+int                 cpumR3InitCpuIdAndMsrs(PVM pVM, PCCPUMMSRS pHostMsrs);
+void                cpumR3InitVmxGuestFeaturesAndMsrs(PVM pVM, PCVMXMSRS pHostVmxMsrs, PVMXMSRS pGuestVmxMsrs);
 void                cpumR3SaveCpuId(PVM pVM, PSSMHANDLE pSSM);
-int                 cpumR3LoadCpuId(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion);
+int                 cpumR3LoadCpuId(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, PCCPUMMSRS pGuestMsrs);
 int                 cpumR3LoadCpuIdPre32(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion);
 DECLCALLBACK(void)  cpumR3CpuIdInfo(PVM pVM, PCDBGFINFOHLP pHlp, const char *pszArgs);
 
 int                 cpumR3DbGetCpuInfo(const char *pszName, PCPUMINFO pInfo);
 int                 cpumR3MsrRangesInsert(PVM pVM, PCPUMMSRRANGE *ppaMsrRanges, uint32_t *pcMsrRanges, PCCPUMMSRRANGE pNewRange);
+int                 cpumR3MsrReconcileWithCpuId(PVM pVM);
 int                 cpumR3MsrApplyFudge(PVM pVM);
 int                 cpumR3MsrRegStats(PVM pVM);
 int                 cpumR3MsrStrictInitChecks(void);
@@ -554,6 +531,7 @@ DECLASM(void)       cpumR0RestoreHostFPUState(PCPUMCPU pCPUM);
 DECLASM(int)        cpumRZSaveHostFPUState(PCPUMCPU pCPUM);
 DECLASM(void)       cpumRZSaveGuestFpuState(PCPUMCPU pCPUM, bool fLeaveFpuAccessible);
 DECLASM(void)       cpumRZSaveGuestSseRegisters(PCPUMCPU pCPUM);
+DECLASM(void)       cpumRZSaveGuestAvxRegisters(PCPUMCPU pCPUM);
 # endif
 
 RT_C_DECLS_END
@@ -561,5 +539,5 @@ RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !VMM_INCLUDED_SRC_include_CPUMInternal_h */
 

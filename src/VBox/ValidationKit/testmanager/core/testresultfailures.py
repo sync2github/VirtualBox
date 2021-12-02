@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0302
+# $Id: testresultfailures.py 82968 2020-02-04 10:35:17Z vboxsync $
+# pylint: disable=too-many-lines
 
 ## @todo Rename this file to testresult.py!
 
@@ -10,7 +10,7 @@ Test Manager - Test result failures.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -29,8 +29,10 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
+
 # Standard python imports.
+import sys;
 import unittest;
 
 # Validation Kit imports.
@@ -39,6 +41,9 @@ from testmanager.core.base          import ModelDataBase, ModelLogicBase, ModelD
 from testmanager.core.failurereason import FailureReasonData;
 from testmanager.core.useraccount   import UserAccountLogic;
 
+# Python 3 hacks:
+if sys.version_info[0] >= 3:
+    xrange = range; # pylint: disable=redefined-builtin,invalid-name
 
 
 class TestResultFailureData(ModelDataBase):
@@ -140,7 +145,7 @@ class TestResultFailureDataEx(TestResultFailureData):
         return self;
 
 
-class TestResultListingData(ModelDataBase): # pylint: disable=R0902
+class TestResultListingData(ModelDataBase): # pylint: disable=too-many-instance-attributes
     """
     Test case result data representation for table listing
     """
@@ -249,7 +254,7 @@ class TestResultListingData(ModelDataBase): # pylint: disable=R0902
 
 
 
-class TestResultFailureLogic(ModelLogicBase): # pylint: disable=R0903
+class TestResultFailureLogic(ModelLogicBase): # pylint: disable=too-few-public-methods
     """
     Test result failure reason logic.
     """
@@ -257,7 +262,7 @@ class TestResultFailureLogic(ModelLogicBase): # pylint: disable=R0903
     def __init__(self, oDb):
         ModelLogicBase.__init__(self, oDb)
 
-    def fetchForChangeLog(self, idTestResult, iStart, cMaxRows, tsNow): # pylint: disable=R0914
+    def fetchForChangeLog(self, idTestResult, iStart, cMaxRows, tsNow): # pylint: disable=too-many-locals
         """
         Fetches change log entries for a failure reason.
 
@@ -352,7 +357,7 @@ class TestResultFailureLogic(ModelLogicBase): # pylint: disable=R0903
             aoEntries.append(ChangeLogEntry(aoNew[1], None, aoNew[0], tsExpire, aoNew[2], aoOld[2], aoChanges));
 
         # If we're at the end of the log, add the initial entry.
-        if len(aaoRows) <= cMaxRows and len(aaoRows) > 0:
+        if len(aaoRows) <= cMaxRows and aaoRows:
             aoNew    = aaoRows[-1];
             tsExpire = aaoRows[-1 - 1][0] if len(aaoRows) > 1 else aoNew[2].tsExpire;
             aoEntries.append(ChangeLogEntry(aoNew[1], None, aoNew[0], tsExpire, aoNew[2], None, []));
@@ -386,7 +391,7 @@ class TestResultFailureLogic(ModelLogicBase): # pylint: disable=R0903
         #
         assert isinstance(oData, TestResultFailureData);
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_AddForeignId);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('editEntry invalid input: %s' % (dErrors,));
 
         # Check if it exist first (we're adding, not editing, collisions not allowed).
@@ -415,7 +420,7 @@ class TestResultFailureLogic(ModelLogicBase): # pylint: disable=R0903
         #
         assert isinstance(oData, TestResultFailureData);
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Edit);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('editEntry invalid input: %s' % (dErrors,));
 
         oOldData = self.getById(oData.idTestResult)
@@ -503,7 +508,7 @@ class TestResultFailureLogic(ModelLogicBase): # pylint: disable=R0903
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class TestResultFailureDataTestCase(ModelDataBaseTestCase):
     def setUp(self):
         self.aoSamples = [TestResultFailureData(),];

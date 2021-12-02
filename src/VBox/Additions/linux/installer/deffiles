@@ -1,9 +1,10 @@
+# $Id: deffiles 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # VirtualBox linux Guest Additions default files list
 #
 
 #
-# Copyright (C) 2009-2010 Oracle Corporation
+# Copyright (C) 2009-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -30,20 +31,6 @@ DEFAULT_FILE_NAMES=" \
     /usr/sbin/vboxadd-service \
     /usr/sbin/VBoxService \
     /sbin/mount.vboxsf \
-    /usr/lib/VBoxOGLarrayspu.so \
-    /usr/lib64/VBoxOGLarrayspu.so \
-    /usr/lib/VBoxOGLcrutil.so \
-    /usr/lib64/VBoxOGLcrutil.so \
-    /usr/lib/VBoxOGLerrorspu.so \
-    /usr/lib64/VBoxOGLerrorspu.so \
-    /usr/lib/VBoxOGLfeedbackspu.so \
-    /usr/lib64/VBoxOGLfeedbackspu.so \
-    /usr/lib/VBoxOGLpackspu.so \
-    /usr/lib64/VBoxOGLpackspu.so \
-    /usr/lib/VBoxOGLpassthroughspu.so \
-    /usr/lib64/VBoxOGLpassthroughspu.so \
-    /usr/lib/VBoxOGL.so \
-    /usr/lib64/VBoxOGL.so \
     /usr/share/xgreeters/vbox-greeter.desktop \
     /etc/X11/Xsession.d/98vboxadd-xclient \
     /etc/X11/xinit.d/98vboxadd-xclient \

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPLib-win.cpp 85129 2020-07-09 00:05:45Z vboxsync $ */
 /** @file
  * VirtualBox Support Library - Windows NT specific parts.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -48,6 +48,10 @@
 #include <VBox/param.h>
 #include <VBox/log.h>
 #include <iprt/assert.h>
+#ifndef IN_SUP_HARDENED_R3
+# include <iprt/x86.h>
+# include <iprt/ldr.h>
+#endif
 #include <iprt/path.h>
 #include <iprt/string.h>
 #include "../SUPLibInternal.h"
@@ -87,7 +91,7 @@ static int suplibConvertWin32Err(int);
 static bool g_fHardenedVerifyInited = false;
 
 
-int suplibOsHardenedVerifyInit(void)
+DECLHIDDEN(int) suplibOsHardenedVerifyInit(void)
 {
     if (!g_fHardenedVerifyInited)
     {
@@ -104,14 +108,14 @@ int suplibOsHardenedVerifyInit(void)
 }
 
 
-int suplibOsHardenedVerifyTerm(void)
+DECLHIDDEN(int) suplibOsHardenedVerifyTerm(void)
 {
     /** @todo free resources...  */
     return VINF_SUCCESS;
 }
 
 
-int suplibOsInit(PSUPLIBDATA pThis, bool fPreInited, bool fUnrestricted, SUPINITOP *penmWhat, PRTERRINFO pErrInfo)
+DECLHIDDEN(int) suplibOsInit(PSUPLIBDATA pThis, bool fPreInited, bool fUnrestricted, SUPINITOP *penmWhat, PRTERRINFO pErrInfo)
 {
     /*
      * Make sure the image verifier is fully initialized.
@@ -241,10 +245,9 @@ int suplibOsInit(PSUPLIBDATA pThis, bool fPreInited, bool fUnrestricted, SUPINIT
         if (pErrInfo && pErrInfo->cbMsg > 32)
         {
             /* Prefix. */
-            size_t      cchPrefix;
-            const char *pszDefine = RTErrGetDefine(rc);
-            if (strncmp(pszDefine, RT_STR_TUPLE("Unknown")))
-                cchPrefix = RTStrPrintf(pErrInfo->pszMsg, pErrInfo->cbMsg / 2, "Integrity error (%#x/%s): ", rcNt, pszDefine);
+            size_t cchPrefix;
+            if (RTErrIsKnown(rc))
+                cchPrefix = RTStrPrintf(pErrInfo->pszMsg, pErrInfo->cbMsg / 2, "Integrity error (%#x/%Rrc): ", rcNt, rc);
             else
                 cchPrefix = RTStrPrintf(pErrInfo->pszMsg, pErrInfo->cbMsg / 2, "Integrity error (%#x/%d): ", rcNt, rc);
 
@@ -269,7 +272,7 @@ int suplibOsInit(PSUPLIBDATA pThis, bool fPreInited, bool fUnrestricted, SUPINIT
 
 #ifndef IN_SUP_HARDENED_R3
 
-int suplibOsInstall(void)
+DECLHIDDEN(int) suplibOsInstall(void)
 {
     int rc = suplibOsCreateService();
     if (RT_SUCCESS(rc))
@@ -282,7 +285,7 @@ int suplibOsInstall(void)
 }
 
 
-int suplibOsUninstall(void)
+DECLHIDDEN(int) suplibOsUninstall(void)
 {
     int rc = suplibOsStopService();
     if (RT_SUCCESS(rc))
@@ -389,8 +392,14 @@ static int suplibOsStopService(void)
             else
             {
                 dwErr = GetLastError();
-                AssertMsgFailed(("ControlService failed with dwErr=%Rwa. status=%d\n", dwErr, Status.dwCurrentState));
-                rc = RTErrConvertFromWin32(dwErr);
+                if (   Status.dwCurrentState == SERVICE_STOP_PENDING
+                    && dwErr == ERROR_SERVICE_CANNOT_ACCEPT_CTRL)
+                    rc = VERR_RESOURCE_BUSY;    /* better than VERR_GENERAL_FAILURE */
+                else
+                {
+                    AssertMsgFailed(("ControlService failed with dwErr=%Rwa. status=%d\n", dwErr, Status.dwCurrentState));
+                    rc = RTErrConvertFromWin32(dwErr);
+                }
             }
             CloseServiceHandle(hService);
         }
@@ -635,17 +644,18 @@ static int suplibOsStartService(void)
 
     return rc;
 }
+#endif /* !IN_SUP_HARDENED_R3 */
 
 
-int suplibOsTerm(PSUPLIBDATA pThis)
+DECLHIDDEN(int) suplibOsTerm(PSUPLIBDATA pThis)
 {
     /*
      * Check if we're inited at all.
      */
     if (pThis->hDevice != NULL)
     {
-        if (!CloseHandle((HANDLE)pThis->hDevice))
-            AssertFailed();
+        NTSTATUS rcNt = NtClose((HANDLE)pThis->hDevice);
+        Assert(NT_SUCCESS(rcNt)); RT_NOREF(rcNt);
         pThis->hDevice = NIL_RTFILE; /* yes, that's right */
     }
 
@@ -653,7 +663,9 @@ int suplibOsTerm(PSUPLIBDATA pThis)
 }
 
 
-int suplibOsIOCtl(PSUPLIBDATA pThis, uintptr_t uFunction, void *pvReq, size_t cbReq)
+#ifndef IN_SUP_HARDENED_R3
+
+DECLHIDDEN(int) suplibOsIOCtl(PSUPLIBDATA pThis, uintptr_t uFunction, void *pvReq, size_t cbReq)
 {
     RT_NOREF1(cbReq);
 
@@ -663,9 +675,7 @@ int suplibOsIOCtl(PSUPLIBDATA pThis, uintptr_t uFunction, void *pvReq, size_t cb
     PSUPREQHDR pHdr = (PSUPREQHDR)pvReq;
     Assert(cbReq == RT_MAX(pHdr->cbIn, pHdr->cbOut));
 # ifdef USE_NT_DEVICE_IO_CONTROL_FILE
-    IO_STATUS_BLOCK Ios;
-    Ios.Status = -1;
-    Ios.Information = 0;
+    IO_STATUS_BLOCK Ios = RTNT_IO_STATUS_BLOCK_INITIALIZER;
     NTSTATUS rcNt = NtDeviceIoControlFile((HANDLE)pThis->hDevice, NULL /*hEvent*/, NULL /*pfnApc*/, NULL /*pvApcCtx*/, &Ios,
                                           (ULONG)uFunction,
                                           pvReq /*pvInput */, pHdr->cbIn /* cbInput */,
@@ -687,15 +697,13 @@ int suplibOsIOCtl(PSUPLIBDATA pThis, uintptr_t uFunction, void *pvReq, size_t cb
 }
 
 
-int suplibOsIOCtlFast(PSUPLIBDATA pThis, uintptr_t uFunction, uintptr_t idCpu)
+DECLHIDDEN(int) suplibOsIOCtlFast(PSUPLIBDATA pThis, uintptr_t uFunction, uintptr_t idCpu)
 {
     /*
      * Issue device I/O control.
      */
 # ifdef USE_NT_DEVICE_IO_CONTROL_FILE
-    IO_STATUS_BLOCK Ios;
-    Ios.Status = -1;
-    Ios.Information = 0;
+    IO_STATUS_BLOCK Ios = RTNT_IO_STATUS_BLOCK_INITIALIZER;
     NTSTATUS rcNt = NtDeviceIoControlFile((HANDLE)pThis->hDevice, NULL /*hEvent*/, NULL /*pfnApc*/, NULL /*pvApcCtx*/, &Ios,
                                           (ULONG)uFunction,
                                           NULL /*pvInput */, 0 /* cbInput */,
@@ -716,7 +724,7 @@ int suplibOsIOCtlFast(PSUPLIBDATA pThis, uintptr_t uFunction, uintptr_t idCpu)
 }
 
 
-int suplibOsPageAlloc(PSUPLIBDATA pThis, size_t cPages, void **ppvPages)
+DECLHIDDEN(int) suplibOsPageAlloc(PSUPLIBDATA pThis, size_t cPages, void **ppvPages)
 {
     NOREF(pThis);
     *ppvPages = VirtualAlloc(NULL, (size_t)cPages << PAGE_SHIFT, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
@@ -726,12 +734,62 @@ int suplibOsPageAlloc(PSUPLIBDATA pThis, size_t cPages, void **ppvPages)
 }
 
 
-int suplibOsPageFree(PSUPLIBDATA pThis, void *pvPages, size_t /* cPages */)
+DECLHIDDEN(int) suplibOsPageFree(PSUPLIBDATA pThis, void *pvPages, size_t /* cPages */)
 {
     NOREF(pThis);
     if (VirtualFree(pvPages, 0, MEM_RELEASE))
         return VINF_SUCCESS;
     return RTErrConvertFromWin32(GetLastError());
+}
+
+
+DECLHIDDEN(bool) suplibOsIsNemSupportedWhenNoVtxOrAmdV(void)
+{
+# if ARCH_BITS == 64
+    /*
+     * Check that we're in a VM.
+     */
+    if (!ASMHasCpuId())
+        return false;
+    if (!ASMIsValidStdRange(ASMCpuId_EAX(0)))
+        return false;
+    if (!(ASMCpuId_ECX(1) & X86_CPUID_FEATURE_ECX_HVP))
+        return false;
+
+    /*
+     * Try load WinHvPlatform and resolve API for checking.
+     * Note! The two size_t arguments and the ssize_t one are all too big, but who cares.
+     */
+    RTLDRMOD hLdrMod = NIL_RTLDRMOD;
+    int rc = RTLdrLoadSystem("WinHvPlatform.dll", false, &hLdrMod);
+    if (RT_FAILURE(rc))
+        return false;
+
+    bool fRet = false;
+    typedef HRESULT (WINAPI *PFNWHVGETCAPABILITY)(ssize_t, void *, size_t, size_t *);
+    PFNWHVGETCAPABILITY pfnWHvGetCapability = (PFNWHVGETCAPABILITY)RTLdrGetFunction(hLdrMod, "WHvGetCapability");
+    if (pfnWHvGetCapability)
+    {
+        /*
+         * Query the API.
+         */
+        union
+        {
+            BOOL fHypervisorPresent;
+            uint64_t u64Padding;
+        } Caps;
+        RT_ZERO(Caps);
+        size_t cbRetIgn = 0;
+        HRESULT hrc = pfnWHvGetCapability(0 /*WHvCapabilityCodeHypervisorPresent*/, &Caps, sizeof(Caps), &cbRetIgn);
+        if (SUCCEEDED(hrc) && Caps.fHypervisorPresent)
+            fRet = true;
+    }
+
+    RTLdrClose(hLdrMod);
+    return fRet;
+# else
+    return false;
+#endif
 }
 
 

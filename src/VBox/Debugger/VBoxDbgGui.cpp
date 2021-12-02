@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDbgGui.cpp 90520 2021-08-04 21:37:54Z vboxsync $ */
 /** @file
  * VBox Debugger GUI - The Manager.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,11 +22,14 @@
 #define LOG_GROUP LOG_GROUP_DBGG
 #define VBOX_COM_NO_ATL
 #include <VBox/com/defs.h>
-#include <VBox/vmm/vm.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 #include "VBoxDbgGui.h"
-#include <QDesktopWidget>
+#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
+# include <QScreen>
+#else
+# include <QDesktopWidget>
+#endif
 #include <QApplication>
 
 
@@ -162,11 +165,14 @@ VBoxDbgGui::setMenu(QMenu *pMenu)
 
 
 int
-VBoxDbgGui::showStatistics()
+VBoxDbgGui::showStatistics(const char *pszFilter, const char *pszExpand)
 {
     if (!m_pDbgStats)
     {
-        m_pDbgStats = new VBoxDbgStats(this, "*", 2, m_pParent);
+        m_pDbgStats = new VBoxDbgStats(this,
+                                       pszFilter && *pszFilter ? pszFilter :  "*",
+                                       pszExpand && *pszExpand ? pszExpand : NULL,
+                                       2, m_pParent);
         connect(m_pDbgStats, SIGNAL(destroyed(QObject *)), this, SLOT(notifyChildDestroyed(QObject *)));
         repositionStatistics();
     }
@@ -195,7 +201,9 @@ VBoxDbgGui::showConsole()
 {
     if (!m_pDbgConsole)
     {
-        m_pDbgConsole = new VBoxDbgConsole(this, m_pParent);
+        IVirtualBox *pVirtualBox = NULL;
+        m_pMachine->COMGETTER(Parent)(&pVirtualBox);
+        m_pDbgConsole = new VBoxDbgConsole(this, m_pParent, pVirtualBox);
         connect(m_pDbgConsole, SIGNAL(destroyed(QObject *)), this, SLOT(notifyChildDestroyed(QObject *)));
         repositionConsole();
     }
@@ -223,9 +231,15 @@ void
 VBoxDbgGui::updateDesktopSize()
 {
     QRect Rct(0, 0, 1600, 1200);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
+    QScreen *pScreen = QApplication::screenAt(QPoint(m_x, m_y));
+    if (pScreen)
+        Rct = pScreen->availableGeometry();
+#else
     QDesktopWidget *pDesktop = QApplication::desktop();
     if (pDesktop)
         Rct = pDesktop->availableGeometry(QPoint(m_x, m_y));
+#endif
     m_xDesktop = Rct.x();
     m_yDesktop = Rct.y();
     m_cxDesktop = Rct.width();
@@ -236,8 +250,9 @@ VBoxDbgGui::updateDesktopSize()
 void
 VBoxDbgGui::adjustRelativePos(int x, int y, unsigned cx, unsigned cy)
 {
-    /* Disregard a width less than 640 since it will mess up the console. */
-    if (cx < 640)
+    /* Disregard a width less than 640 since it will mess up the console,
+     * but only if previos width was already initialized.. */
+    if ((cx < 640) && (m_cx > 0))
         cx = m_cx;
 
     const bool fResize = cx != m_cx || cy != m_cy;
@@ -252,6 +267,22 @@ VBoxDbgGui::adjustRelativePos(int x, int y, unsigned cx, unsigned cy)
         updateDesktopSize();
     repositionConsole(fResize);
     repositionStatistics(fResize);
+}
+
+
+QString
+VBoxDbgGui::getMachineName() const
+{
+    QString strName;
+    AssertReturn(m_pMachine, strName);
+    BSTR bstr;
+    HRESULT hrc = m_pMachine->COMGETTER(Name)(&bstr);
+    if (SUCCEEDED(hrc))
+    {
+        strName = QString::fromUtf16(bstr);
+        SysFreeString(bstr);
+    }
+    return strName;
 }
 
 

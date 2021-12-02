@@ -2,14 +2,7 @@
 
 Copyright (c) 2010, Intel Corporation. All rights reserved.<BR>
 
-This program and the accompanying materials
-are licensed and made available under the terms and conditions
-of the BSD License which accompanies this distribution.  The
-full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -49,6 +42,31 @@ typedef struct {
 } SMM_LOCK_BOX_DATA;
 
 #pragma pack()
+
+/**
+  Constructor for SmmLockBox library.
+  This is used to set SmmLockBox context, which will be used in PEI phase in S3 boot path later.
+
+  @retval EFI_SUCEESS
+  @return Others          Some error occurs.
+**/
+EFI_STATUS
+SmmLockBoxMmConstructor (
+  VOID
+  );
+
+/**
+  Destructor for SmmLockBox library.
+  This is used to uninstall SmmLockBoxCommunication configuration table
+  if it has been installed in Constructor.
+
+  @retval EFI_SUCEESS       The destructor always returns EFI_SUCCESS.
+
+**/
+EFI_STATUS
+SmmLockBoxMmDestructor (
+  VOID
+  );
 
 #endif
 

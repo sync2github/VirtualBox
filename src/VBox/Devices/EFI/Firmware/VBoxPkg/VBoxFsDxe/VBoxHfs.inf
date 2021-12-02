@@ -1,10 +1,10 @@
-# $Id$
+# $Id: VBoxHfs.inf 85801 2020-08-17 16:09:43Z vboxsync $
 ## @file
 # VBoxHfs - VBox HFS FS driver.
 #
 
 #
-# Copyright (C) 2010-2016 Oracle Corporation
+# Copyright (C) 2010-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -45,7 +45,6 @@
 [Packages]
         MdePkg/MdePkg.dec
         MdeModulePkg/MdeModulePkg.dec
-        IntelFrameworkModulePkg/IntelFrameworkModulePkg.dec
         VBoxPkg/VBoxPkg.dec
 
 [LibraryClasses]
@@ -64,6 +63,7 @@
   gEfiFileInfoGuid
   gEfiFileSystemInfoGuid
   gEfiFileSystemVolumeLabelInfoIdGuid
+  gVBoxFsBlessedFileInfoGuid
 
 [Protocols]
   gEfiDiskIoProtocolGuid
@@ -78,8 +78,8 @@
   gEfiMdePkgTokenSpaceGuid.PcdUefiVariableDefaultPlatformLang
 
 [BuildOptions.common]
-    GCC:*_*_*_CC_FLAGS = -DFSTYPE=hfs -DEFI_LOG_ENABLED=1
+    GCC:*_*_*_CC_FLAGS = -DFSTYPE=hfs -DFSTYPE_HFS=1 -DEFI_LOG_ENABLED=1
 # -DFSW_DEBUG_LEVEL=3
-  INTEL:*_*_*_CC_FLAGS = -DFSTYPE=hfs -DEFI_LOG_ENABLED=1
-   MSFT:*_*_*_CC_FLAGS = -DFSTYPE=hfs -DEFI_LOG_ENABLED=1
+  INTEL:*_*_*_CC_FLAGS = -DFSTYPE=hfs -DFSTYPE_HFS=1 -DEFI_LOG_ENABLED=1
+   MSFT:*_*_*_CC_FLAGS = -DFSTYPE=hfs -DFSTYPE_HFS=1 -DEFI_LOG_ENABLED=1
 

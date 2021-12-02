@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SSM.cpp 90783 2021-08-23 09:30:50Z vboxsync $ */
 /** @file
  * SSM - Saved State Manager.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -903,8 +903,9 @@ static int                  ssmR3DataReadRecHdrV2(PSSMHANDLE pSSM);
  * Cleans up resources allocated by SSM on VM termination.
  *
  * @param   pVM                 The cross context VM structure.
+ * @note    Not using VMMR3_INT_DECL because of testcases.
  */
-VMMR3_INT_DECL(void) SSMR3Term(PVM pVM)
+VMMR3DECL(void) SSMR3Term(PVM pVM)
 {
     if (pVM->ssm.s.fInitialized)
     {
@@ -1173,7 +1174,7 @@ static int ssmR3Register(PVM pVM, const char *pszName, uint32_t uInstance,
     /*
      * Allocate new node.
      */
-    pUnit = (PSSMUNIT)MMR3HeapAllocZ(pVM, MM_TAG_SSM, RT_OFFSETOF(SSMUNIT, szName[cchName + 1]));
+    pUnit = (PSSMUNIT)MMR3HeapAllocZ(pVM, MM_TAG_SSM, RT_UOFFSETOF_DYN(SSMUNIT, szName[cchName + 1]));
     if (!pUnit)
         return VERR_NO_MEMORY;
 
@@ -1671,7 +1672,7 @@ VMMR3_INT_DECL(int) SSMR3DeregisterUsb(PVM pVM, PPDMUSBINS pUsbIns, const char *
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pUsbIns), ("pUsbIns is NULL!\n"), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pUsbIns, VERR_INVALID_POINTER);
 
     /*
      * Search the list.
@@ -1964,7 +1965,7 @@ static int ssmR3StrmInit(PSSMSTRM pStrm, PCSSMSTRMOPS pStreamOps, void *pvUser, 
  */
 static DECLCALLBACK(int) ssmR3FileWrite(void *pvUser, uint64_t offStream, const void *pvBuf, size_t cbToWrite)
 {
-    Assert(RTFileTell((RTFILE)(uintptr_t)pvUser) == offStream); NOREF(offStream);
+    NOREF(offStream);
     return RTFileWriteAt((RTFILE)(uintptr_t)pvUser, offStream, pvBuf, cbToWrite, NULL); /** @todo use RTFileWrite */
 }
 
@@ -2002,7 +2003,7 @@ static DECLCALLBACK(uint64_t) ssmR3FileTell(void *pvUser)
  */
 static DECLCALLBACK(int) ssmR3FileSize(void *pvUser, uint64_t *pcb)
 {
-    return RTFileGetSize((RTFILE)(uintptr_t)pvUser, pcb);
+    return RTFileQuerySize((RTFILE)(uintptr_t)pvUser, pcb);
 }
 
 
@@ -3778,7 +3779,7 @@ VMMR3DECL(int) SSMR3PutStructEx(PSSMHANDLE pSSM, const void *pvStruct, size_t cb
         AssertMsgBreakStmt(   cbField            <= cbStruct
                            && offField + cbField <= cbStruct
                            && offField + cbField >= offField,
-                           ("off=%#x cb=%#x cbStruct=%#x (%s)\n", cbField, offField, cbStruct, pCur->pszName),
+                           ("offField=%#x cbField=%#x cbStruct=%#x (%s)\n", offField, cbField, cbStruct, pCur->pszName),
                            rc = VERR_SSM_FIELD_OUT_OF_BOUNDS);
         AssertMsgBreakStmt(   !(fFlags & SSMSTRUCT_FLAGS_FULL_STRUCT)
                            || off == offField,
@@ -4419,10 +4420,10 @@ static int ssmR3LiveControlEmit(PSSMHANDLE pSSM, long double lrdPct, uint32_t uP
     UnitHdr.fFlags          = 0;
     UnitHdr.cbName          = sizeof("SSMLiveControl");
     memcpy(&UnitHdr.szName[0], "SSMLiveControl", UnitHdr.cbName);
-    UnitHdr.u32CRC          = RTCrc32(&UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
+    UnitHdr.u32CRC          = RTCrc32(&UnitHdr, RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
     Log(("SSM: Unit at %#9llx: '%s', instance %u, pass %#x, version %u\n",
          UnitHdr.offStream, UnitHdr.szName, UnitHdr.u32Instance, UnitHdr.u32Pass, UnitHdr.u32Version));
-    int rc = ssmR3StrmWrite(&pSSM->Strm, &UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
+    int rc = ssmR3StrmWrite(&pSSM->Strm, &UnitHdr, RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
     if (RT_SUCCESS(rc))
     {
         /*
@@ -4477,14 +4478,15 @@ static int ssmR3LiveControlEmit(PSSMHANDLE pSSM, long double lrdPct, uint32_t uP
 /**
  * Enters the critical session (optionally) associated with the unit.
  *
+ * @param   pVM                 The cross context VM structure.
  * @param   pUnit               The unit.
  */
-DECLINLINE(void) ssmR3UnitCritSectEnter(PSSMUNIT pUnit)
+DECLINLINE(void) ssmR3UnitCritSectEnter(PVM pVM, PSSMUNIT pUnit)
 {
     PPDMCRITSECT pCritSect = pUnit->pCritSect;
     if (pCritSect)
     {
-        int rc = PDMCritSectEnter(pCritSect, VERR_IGNORED);
+        int rc = PDMCritSectEnter(pVM, pCritSect, VERR_IGNORED);
         AssertRC(rc);
     }
 }
@@ -4493,14 +4495,15 @@ DECLINLINE(void) ssmR3UnitCritSectEnter(PSSMUNIT pUnit)
 /**
  * Leaves the critical session (optionally) associated with the unit.
  *
+ * @param   pVM                 The cross context VM structure.
  * @param   pUnit               The unit.
  */
-DECLINLINE(void) ssmR3UnitCritSectLeave(PSSMUNIT pUnit)
+DECLINLINE(void) ssmR3UnitCritSectLeave(PVM pVM, PSSMUNIT pUnit)
 {
     PPDMCRITSECT pCritSect = pUnit->pCritSect;
     if (pCritSect)
     {
-        int rc = PDMCritSectLeave(pCritSect);
+        int rc = PDMCritSectLeave(pVM, pCritSect);
         AssertRC(rc);
     }
 }
@@ -4529,7 +4532,7 @@ static int ssmR3SaveDoDoneRun(PVM pVM, PSSMHANDLE pSSM)
         {
             int rcOld = pSSM->rc;
             int rc;
-            ssmR3UnitCritSectEnter(pUnit);
+            ssmR3UnitCritSectEnter(pVM, pUnit);
             switch (pUnit->enmType)
             {
                 case SSMUNITTYPE_DEV:
@@ -4551,7 +4554,7 @@ static int ssmR3SaveDoDoneRun(PVM pVM, PSSMHANDLE pSSM)
                     rc = VERR_SSM_IPE_1;
                     break;
             }
-            ssmR3UnitCritSectLeave(pUnit);
+            ssmR3UnitCritSectLeave(pVM, pUnit);
             if (RT_SUCCESS(rc) && pSSM->rc != rcOld)
                 rc = pSSM->rc;
             if (RT_FAILURE(rc))
@@ -4681,7 +4684,7 @@ static int ssmR3WriteDirectory(PVM pVM, PSSMHANDLE pSSM, uint32_t *pcEntries)
     /*
      * Grab some temporary memory for the dictionary.
      */
-    size_t      cbDir = RT_OFFSETOF(SSMFILEDIR, aEntries[pVM->ssm.s.cUnits]);
+    size_t      cbDir = RT_UOFFSETOF_DYN(SSMFILEDIR, aEntries[pVM->ssm.s.cUnits]);
     PSSMFILEDIR pDir  = (PSSMFILEDIR)RTMemTmpAlloc(cbDir);
     if (!pDir)
     {
@@ -4712,7 +4715,7 @@ static int ssmR3WriteDirectory(PVM pVM, PSSMHANDLE pSSM, uint32_t *pcEntries)
      * out to the stream.
      */
     *pcEntries = pDir->cEntries;
-    cbDir = RT_OFFSETOF(SSMFILEDIR, aEntries[pDir->cEntries]);
+    cbDir = RT_UOFFSETOF_DYN(SSMFILEDIR, aEntries[pDir->cEntries]);
     pDir->u32CRC = RTCrc32(pDir, cbDir);
     int rc = ssmR3StrmWrite(&pSSM->Strm, pDir, cbDir);
     RTMemTmpFree(pDir);
@@ -4746,9 +4749,9 @@ static int ssmR3SaveDoFinalization(PVM pVM, PSSMHANDLE pSSM)
     UnitHdr.u32Pass         = SSM_PASS_FINAL;
     UnitHdr.fFlags          = 0;
     UnitHdr.cbName          = 0;
-    UnitHdr.u32CRC          = RTCrc32(&UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[0]));
+    UnitHdr.u32CRC          = RTCrc32(&UnitHdr, RT_UOFFSETOF(SSMFILEUNITHDRV2, szName[0]));
     Log(("SSM: Unit at %#9llx: END UNIT\n", UnitHdr.offStream));
-    int rc = ssmR3StrmWrite(&pSSM->Strm, &UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[0]));
+    int rc = ssmR3StrmWrite(&pSSM->Strm, &UnitHdr, RT_UOFFSETOF(SSMFILEUNITHDRV2, szName[0]));
     if (RT_FAILURE(rc))
     {
         LogRel(("SSM: Failed writing the end unit: %Rrc\n", rc));
@@ -4867,10 +4870,10 @@ static int ssmR3SaveDoExecRun(PVM pVM, PSSMHANDLE pSSM)
         UnitHdr.fFlags          = 0;
         UnitHdr.cbName          = (uint32_t)pUnit->cchName + 1;
         memcpy(&UnitHdr.szName[0], &pUnit->szName[0], UnitHdr.cbName);
-        UnitHdr.u32CRC          = RTCrc32(&UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
+        UnitHdr.u32CRC          = RTCrc32(&UnitHdr, RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
         Log(("SSM: Unit at %#9llx: '%s', instance %u, pass %#x, version %u\n",
              UnitHdr.offStream, UnitHdr.szName, UnitHdr.u32Instance, UnitHdr.u32Pass, UnitHdr.u32Version));
-        int rc = ssmR3StrmWrite(&pSSM->Strm, &UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
+        int rc = ssmR3StrmWrite(&pSSM->Strm, &UnitHdr, RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
         if (RT_FAILURE(rc))
         {
             LogRel(("SSM: Failed to write unit header. rc=%Rrc\n", rc));
@@ -4881,7 +4884,7 @@ static int ssmR3SaveDoExecRun(PVM pVM, PSSMHANDLE pSSM)
          * Call the execute handler.
          */
         ssmR3DataWriteBegin(pSSM);
-        ssmR3UnitCritSectEnter(pUnit);
+        ssmR3UnitCritSectEnter(pVM, pUnit);
         switch (pUnit->enmType)
         {
             case SSMUNITTYPE_DEV:
@@ -4904,7 +4907,7 @@ static int ssmR3SaveDoExecRun(PVM pVM, PSSMHANDLE pSSM)
                 rc = VERR_SSM_IPE_1;
                 break;
         }
-        ssmR3UnitCritSectLeave(pUnit);
+        ssmR3UnitCritSectLeave(pVM, pUnit);
         pUnit->fCalled = true;
         if (RT_FAILURE(rc) && RT_SUCCESS_NP(pSSM->rc))
             pSSM->rc = rc;
@@ -4974,7 +4977,7 @@ static int ssmR3SaveDoPrepRun(PVM pVM, PSSMHANDLE pSSM)
         if (pUnit->u.Common.pfnSavePrep)
         {
             int rc;
-            ssmR3UnitCritSectEnter(pUnit);
+            ssmR3UnitCritSectEnter(pVM, pUnit);
             switch (pUnit->enmType)
             {
                 case SSMUNITTYPE_DEV:
@@ -4996,7 +4999,7 @@ static int ssmR3SaveDoPrepRun(PVM pVM, PSSMHANDLE pSSM)
                     rc = VERR_SSM_IPE_1;
                     break;
             }
-            ssmR3UnitCritSectLeave(pUnit);
+            ssmR3UnitCritSectLeave(pVM, pUnit);
             pUnit->fCalled = true;
             if (RT_FAILURE(rc) && RT_SUCCESS_NP(pSSM->rc))
                 pSSM->rc = rc;
@@ -5320,7 +5323,7 @@ static int ssmR3LiveDoVoteRun(PVM pVM, PSSMHANDLE pSSM, uint32_t uPass)
             &&  !pUnit->fDoneLive)
         {
             int rc;
-            ssmR3UnitCritSectEnter(pUnit);
+            ssmR3UnitCritSectEnter(pVM, pUnit);
             switch (pUnit->enmType)
             {
                 case SSMUNITTYPE_DEV:
@@ -5342,7 +5345,7 @@ static int ssmR3LiveDoVoteRun(PVM pVM, PSSMHANDLE pSSM, uint32_t uPass)
                     rc = VERR_SSM_IPE_1;
                     break;
             }
-            ssmR3UnitCritSectLeave(pUnit);
+            ssmR3UnitCritSectLeave(pVM, pUnit);
             pUnit->fCalled = true;
             Assert(pSSM->rc == VINF_SUCCESS);
             if (rc != VINF_SUCCESS)
@@ -5449,10 +5452,10 @@ static int ssmR3LiveDoExecRun(PVM pVM, PSSMHANDLE pSSM, uint32_t uPass)
         UnitHdr.fFlags          = 0;
         UnitHdr.cbName          = (uint32_t)pUnit->cchName + 1;
         memcpy(&UnitHdr.szName[0], &pUnit->szName[0], UnitHdr.cbName);
-        UnitHdr.u32CRC          = RTCrc32(&UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
+        UnitHdr.u32CRC          = RTCrc32(&UnitHdr, RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
         Log(("SSM: Unit at %#9llx: '%s', instance %u, pass %#x, version %u\n",
              UnitHdr.offStream, UnitHdr.szName, UnitHdr.u32Instance, UnitHdr.u32Pass, UnitHdr.u32Version));
-        int rc = ssmR3StrmWrite(&pSSM->Strm, &UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
+        int rc = ssmR3StrmWrite(&pSSM->Strm, &UnitHdr, RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]));
         if (RT_FAILURE(rc))
         {
             LogRel(("SSM: Failed to write unit header. rc=%Rrc\n", rc));
@@ -5463,7 +5466,7 @@ static int ssmR3LiveDoExecRun(PVM pVM, PSSMHANDLE pSSM, uint32_t uPass)
          * Call the execute handler.
          */
         ssmR3DataWriteBegin(pSSM);
-        ssmR3UnitCritSectEnter(pUnit);
+        ssmR3UnitCritSectEnter(pVM, pUnit);
         switch (pUnit->enmType)
         {
             case SSMUNITTYPE_DEV:
@@ -5485,7 +5488,7 @@ static int ssmR3LiveDoExecRun(PVM pVM, PSSMHANDLE pSSM, uint32_t uPass)
                 rc = VERR_SSM_IPE_1;
                 break;
         }
-        ssmR3UnitCritSectLeave(pUnit);
+        ssmR3UnitCritSectLeave(pVM, pUnit);
         pUnit->fCalled = true;
         if (RT_FAILURE(rc) && RT_SUCCESS_NP(pSSM->rc))
             pSSM->rc = rc;
@@ -5625,7 +5628,7 @@ static int ssmR3DoLivePrepRun(PVM pVM, PSSMHANDLE pSSM)
         if (pUnit->u.Common.pfnLivePrep)
         {
             int rc;
-            ssmR3UnitCritSectEnter(pUnit);
+            ssmR3UnitCritSectEnter(pVM, pUnit);
             switch (pUnit->enmType)
             {
                 case SSMUNITTYPE_DEV:
@@ -5647,7 +5650,7 @@ static int ssmR3DoLivePrepRun(PVM pVM, PSSMHANDLE pSSM)
                     rc = VERR_SSM_IPE_1;
                     break;
             }
-            ssmR3UnitCritSectLeave(pUnit);
+            ssmR3UnitCritSectLeave(pVM, pUnit);
             pUnit->fCalled = true;
             if (RT_FAILURE(rc) && RT_SUCCESS_NP(pSSM->rc))
                 pSSM->rc = rc;
@@ -6219,12 +6222,16 @@ static int ssmR3DataReadRecHdrV2(PSSMHANDLE pSSM)
         {
             case 6:
                 AssertLogRelMsgReturn((abHdr[6] & 0xc0) == 0x80, ("6/%u: %.*Rhxs\n", cb, cb + 1, &abHdr[0]), VERR_SSM_INTEGRITY_REC_HDR);
+                RT_FALL_THRU();
             case 5:
                 AssertLogRelMsgReturn((abHdr[5] & 0xc0) == 0x80, ("5/%u: %.*Rhxs\n", cb, cb + 1, &abHdr[0]), VERR_SSM_INTEGRITY_REC_HDR);
+                RT_FALL_THRU();
             case 4:
                 AssertLogRelMsgReturn((abHdr[4] & 0xc0) == 0x80, ("4/%u: %.*Rhxs\n", cb, cb + 1, &abHdr[0]), VERR_SSM_INTEGRITY_REC_HDR);
+                RT_FALL_THRU();
             case 3:
                 AssertLogRelMsgReturn((abHdr[3] & 0xc0) == 0x80, ("3/%u: %.*Rhxs\n", cb, cb + 1, &abHdr[0]), VERR_SSM_INTEGRITY_REC_HDR);
+                RT_FALL_THRU();
             case 2:
                 AssertLogRelMsgReturn((abHdr[2] & 0xc0) == 0x80, ("2/%u: %.*Rhxs\n", cb, cb + 1, &abHdr[0]), VERR_SSM_INTEGRITY_REC_HDR);
                 break;
@@ -6989,7 +6996,29 @@ VMMR3DECL(int) SSMR3GetBool(PSSMHANDLE pSSM, bool *pfBool)
     if (RT_SUCCESS(rc))
     {
         Assert(u8 <= 1);
-        *pfBool = !!u8;
+        *pfBool = RT_BOOL(u8);
+    }
+    return rc;
+}
+
+
+/**
+ * Loads a volatile boolean item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pfBool          Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetBoolV(PSSMHANDLE pSSM, bool volatile *pfBool)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    uint8_t u8; /* see SSMR3PutBool */
+    int rc = ssmR3DataRead(pSSM, &u8, sizeof(u8));
+    if (RT_SUCCESS(rc))
+    {
+        Assert(u8 <= 1);
+        *pfBool = RT_BOOL(u8);
     }
     return rc;
 }
@@ -7011,6 +7040,21 @@ VMMR3DECL(int) SSMR3GetU8(PSSMHANDLE pSSM, uint8_t *pu8)
 
 
 /**
+ * Loads a volatile 8-bit unsigned integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pu8             Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetU8V(PSSMHANDLE pSSM, uint8_t volatile *pu8)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pu8, sizeof(*pu8));
+}
+
+
+/**
  * Loads a 8-bit signed integer item from the current data unit.
  *
  * @returns VBox status code.
@@ -7022,6 +7066,21 @@ VMMR3DECL(int) SSMR3GetS8(PSSMHANDLE pSSM, int8_t *pi8)
     SSM_ASSERT_READABLE_RET(pSSM);
     SSM_CHECK_CANCELLED_RET(pSSM);
     return ssmR3DataRead(pSSM, pi8, sizeof(*pi8));
+}
+
+
+/**
+ * Loads a volatile 8-bit signed integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pi8             Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetS8V(PSSMHANDLE pSSM, int8_t volatile *pi8)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pi8, sizeof(*pi8));
 }
 
 
@@ -7041,6 +7100,21 @@ VMMR3DECL(int) SSMR3GetU16(PSSMHANDLE pSSM, uint16_t *pu16)
 
 
 /**
+ * Loads a volatile 16-bit unsigned integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pu16            Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetU16V(PSSMHANDLE pSSM, uint16_t volatile *pu16)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pu16, sizeof(*pu16));
+}
+
+
+/**
  * Loads a 16-bit signed integer item from the current data unit.
  *
  * @returns VBox status code.
@@ -7052,6 +7126,21 @@ VMMR3DECL(int) SSMR3GetS16(PSSMHANDLE pSSM, int16_t *pi16)
     SSM_ASSERT_READABLE_RET(pSSM);
     SSM_CHECK_CANCELLED_RET(pSSM);
     return ssmR3DataRead(pSSM, pi16, sizeof(*pi16));
+}
+
+
+/**
+ * Loads a volatile 16-bit signed integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pi16            Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetS16V(PSSMHANDLE pSSM, int16_t volatile *pi16)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pi16, sizeof(*pi16));
 }
 
 
@@ -7071,6 +7160,21 @@ VMMR3DECL(int) SSMR3GetU32(PSSMHANDLE pSSM, uint32_t *pu32)
 
 
 /**
+ * Loads a volatile 32-bit unsigned integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pu32            Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetU32V(PSSMHANDLE pSSM, uint32_t volatile *pu32)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pu32, sizeof(*pu32));
+}
+
+
+/**
  * Loads a 32-bit signed integer item from the current data unit.
  *
  * @returns VBox status code.
@@ -7082,6 +7186,21 @@ VMMR3DECL(int) SSMR3GetS32(PSSMHANDLE pSSM, int32_t *pi32)
     SSM_ASSERT_READABLE_RET(pSSM);
     SSM_CHECK_CANCELLED_RET(pSSM);
     return ssmR3DataRead(pSSM, pi32, sizeof(*pi32));
+}
+
+
+/**
+ * Loads a volatile 32-bit signed integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pi32            Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetS32V(PSSMHANDLE pSSM, int32_t volatile *pi32)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pi32, sizeof(*pi32));
 }
 
 
@@ -7101,6 +7220,21 @@ VMMR3DECL(int) SSMR3GetU64(PSSMHANDLE pSSM, uint64_t *pu64)
 
 
 /**
+ * Loads a volatile 64-bit unsigned integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pu64            Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetU64V(PSSMHANDLE pSSM, uint64_t volatile *pu64)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pu64, sizeof(*pu64));
+}
+
+
+/**
  * Loads a 64-bit signed integer item from the current data unit.
  *
  * @returns VBox status code.
@@ -7112,6 +7246,21 @@ VMMR3DECL(int) SSMR3GetS64(PSSMHANDLE pSSM, int64_t *pi64)
     SSM_ASSERT_READABLE_RET(pSSM);
     SSM_CHECK_CANCELLED_RET(pSSM);
     return ssmR3DataRead(pSSM, pi64, sizeof(*pi64));
+}
+
+
+/**
+ * Loads a volatile 64-bit signed integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pi64            Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetS64V(PSSMHANDLE pSSM, int64_t volatile *pi64)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pi64, sizeof(*pi64));
 }
 
 
@@ -7131,6 +7280,21 @@ VMMR3DECL(int) SSMR3GetU128(PSSMHANDLE pSSM, uint128_t *pu128)
 
 
 /**
+ * Loads a volatile 128-bit unsigned integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pu128           Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetU128V(PSSMHANDLE pSSM, uint128_t volatile *pu128)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pu128, sizeof(*pu128));
+}
+
+
+/**
  * Loads a 128-bit signed integer item from the current data unit.
  *
  * @returns VBox status code.
@@ -7142,6 +7306,21 @@ VMMR3DECL(int) SSMR3GetS128(PSSMHANDLE pSSM, int128_t *pi128)
     SSM_ASSERT_READABLE_RET(pSSM);
     SSM_CHECK_CANCELLED_RET(pSSM);
     return ssmR3DataRead(pSSM, pi128, sizeof(*pi128));
+}
+
+
+/**
+ * Loads a volatile 128-bit signed integer item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pi128           Where to store the item.
+ */
+VMMR3DECL(int) SSMR3GetS128V(PSSMHANDLE pSSM, int128_t volatile *pi128)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pi128, sizeof(*pi128));
 }
 
 
@@ -7221,6 +7400,21 @@ VMMR3DECL(int) SSMR3GetGCPhys32(PSSMHANDLE pSSM, PRTGCPHYS32 pGCPhys)
 
 
 /**
+ * Loads a 32 bits GC physical address item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pGCPhys         Where to store the GC physical address.
+ */
+VMMR3DECL(int) SSMR3GetGCPhys32V(PSSMHANDLE pSSM, RTGCPHYS32 volatile *pGCPhys)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pGCPhys, sizeof(*pGCPhys));
+}
+
+
+/**
  * Loads a 64 bits GC physical address item from the current data unit.
  *
  * @returns VBox status code.
@@ -7232,6 +7426,21 @@ VMMR3DECL(int) SSMR3GetGCPhys64(PSSMHANDLE pSSM, PRTGCPHYS64 pGCPhys)
     SSM_ASSERT_READABLE_RET(pSSM);
     SSM_CHECK_CANCELLED_RET(pSSM);
     return ssmR3DataRead(pSSM, pGCPhys, sizeof(*pGCPhys));
+}
+
+
+/**
+ * Loads a volatile 64 bits GC physical address item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pGCPhys         Where to store the GC physical address.
+ */
+VMMR3DECL(int) SSMR3GetGCPhys64V(PSSMHANDLE pSSM, RTGCPHYS64 volatile *pGCPhys)
+{
+    SSM_ASSERT_READABLE_RET(pSSM);
+    SSM_CHECK_CANCELLED_RET(pSSM);
+    return ssmR3DataRead(pSSM, (void *)pGCPhys, sizeof(*pGCPhys));
 }
 
 
@@ -7274,6 +7483,18 @@ VMMR3DECL(int) SSMR3GetGCPhys(PSSMHANDLE pSSM, PRTGCPHYS pGCPhys)
     /* 32-bit saved, 64-bit load: clear the high part. */
     *pGCPhys = 0;
     return ssmR3DataRead(pSSM, pGCPhys, sizeof(uint32_t));
+}
+
+/**
+ * Loads a volatile GC physical address item from the current data unit.
+ *
+ * @returns VBox status code.
+ * @param   pSSM            The saved state handle.
+ * @param   pGCPhys         Where to store the GC physical address.
+ */
+VMMR3DECL(int) SSMR3GetGCPhysV(PSSMHANDLE pSSM, RTGCPHYS volatile *pGCPhys)
+{
+    return SSMR3GetGCPhys(pSSM, (PRTGCPHYS)pGCPhys);
 }
 
 
@@ -7979,7 +8200,7 @@ static int ssmR3HeaderAndValidate(PSSMHANDLE pSSM, bool fChecksumIt, bool fCheck
         {
             uint32_t u32CRC;
             rc = ssmR3CalcChecksum(&pSSM->Strm,
-                                   RT_OFFSETOF(SSMFILEHDRV11, u32CRC) + sizeof(uHdr.v1_1.u32CRC),
+                                   RT_UOFFSETOF(SSMFILEHDRV11, u32CRC) + sizeof(uHdr.v1_1.u32CRC),
                                    cbFile - pSSM->u.Read.cbFileHdr,
                                    &u32CRC);
             if (RT_FAILURE(rc))
@@ -8114,7 +8335,7 @@ static int ssmR3ValidateDirectory(PSSMFILEDIR pDir, size_t cbDir, uint64_t offDi
     AssertLogRelMsgReturn(pDir->cEntries == cDirEntries,
                           ("Bad directory entry count: %#x, expected %#x (from the footer)\n", pDir->cEntries, cDirEntries),
                            VERR_SSM_INTEGRITY_DIR);
-    AssertLogRelReturn(RT_UOFFSETOF(SSMFILEDIR, aEntries[pDir->cEntries]) == cbDir, VERR_SSM_INTEGRITY_DIR);
+    AssertLogRelReturn(RT_UOFFSETOF_DYN(SSMFILEDIR, aEntries[pDir->cEntries]) == cbDir, VERR_SSM_INTEGRITY_DIR);
 
     for (uint32_t i = 0; i < pDir->cEntries; i++)
     {
@@ -8156,7 +8377,7 @@ static void ssmR3StrmLogUnitContent(PSSMHANDLE pSSM, SSMFILEUNITHDRV2 const *pUn
     /*
      * Reverse back to the start of the unit if we can.
      */
-    uint32_t cbUnitHdr = RT_UOFFSETOF(SSMFILEUNITHDRV2, szName[pUnitHdr->cbName]);
+    uint32_t cbUnitHdr = RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[pUnitHdr->cbName]);
     int rc = ssmR3StrmSeek(&pSSM->Strm, offUnit/* + cbUnitHdr*/, RTFILE_SEEK_BEGIN, pUnitHdr->u32CurStreamCRC);
     if (RT_SUCCESS(rc))
     {
@@ -8321,7 +8542,7 @@ static int ssmR3LoadExecV1(PVM pVM, PSSMHANDLE pSSM)
          */
         uint64_t         offUnit = ssmR3StrmTell(&pSSM->Strm);
         SSMFILEUNITHDRV1 UnitHdr;
-        rc = ssmR3StrmRead(&pSSM->Strm, &UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV1, szName));
+        rc = ssmR3StrmRead(&pSSM->Strm, &UnitHdr, RT_UOFFSETOF(SSMFILEUNITHDRV1, szName));
         if (RT_SUCCESS(rc))
         {
             /*
@@ -8375,7 +8596,7 @@ static int ssmR3LoadExecV1(PVM pVM, PSSMHANDLE pSSM)
                         /*
                          * Call the execute handler.
                          */
-                        pSSM->cbUnitLeftV1 = UnitHdr.cbUnit - RT_OFFSETOF(SSMFILEUNITHDRV1, szName[UnitHdr.cchName]);
+                        pSSM->cbUnitLeftV1 = UnitHdr.cbUnit - RT_UOFFSETOF_DYN(SSMFILEUNITHDRV1, szName[UnitHdr.cchName]);
                         pSSM->offUnit      = 0;
                         pSSM->offUnitUser  = 0;
                         pSSM->u.Read.uCurUnitVer  = UnitHdr.u32Version;
@@ -8387,7 +8608,7 @@ static int ssmR3LoadExecV1(PVM pVM, PSSMHANDLE pSSM)
                             pSSM->rc = rc = VERR_SSM_NO_LOAD_EXEC;
                             break;
                         }
-                        ssmR3UnitCritSectEnter(pUnit);
+                        ssmR3UnitCritSectEnter(pVM, pUnit);
                         switch (pUnit->enmType)
                         {
                             case SSMUNITTYPE_DEV:
@@ -8409,7 +8630,7 @@ static int ssmR3LoadExecV1(PVM pVM, PSSMHANDLE pSSM)
                                 rc = VERR_SSM_IPE_1;
                                 break;
                         }
-                        ssmR3UnitCritSectLeave(pUnit);
+                        ssmR3UnitCritSectLeave(pVM, pUnit);
                         pUnit->fCalled = true;
                         if (RT_FAILURE(rc) && RT_SUCCESS_NP(pSSM->rc))
                             pSSM->rc = rc;
@@ -8526,7 +8747,7 @@ static int ssmR3LoadDirectoryAndFooter(PSSMHANDLE pSSM)
      * entries and pass the combined block to the validation function.
      */
     uint64_t        off      = ssmR3StrmTell(&pSSM->Strm);
-    size_t const    cbDirHdr = RT_OFFSETOF(SSMFILEDIR, aEntries);
+    size_t const    cbDirHdr = RT_UOFFSETOF(SSMFILEDIR, aEntries);
     SSMFILEDIR      DirHdr;
     int rc = ssmR3StrmRead(&pSSM->Strm, &DirHdr, cbDirHdr);
     if (RT_FAILURE(rc))
@@ -8538,7 +8759,7 @@ static int ssmR3LoadDirectoryAndFooter(PSSMHANDLE pSSM)
                           ("Too many directory entries at %#llx (%lld): %#x\n", off, off, DirHdr.cEntries),
                           VERR_SSM_INTEGRITY_DIR);
 
-    size_t      cbDir = RT_OFFSETOF(SSMFILEDIR, aEntries[DirHdr.cEntries]);
+    size_t      cbDir = RT_UOFFSETOF_DYN(SSMFILEDIR, aEntries[DirHdr.cEntries]);
     PSSMFILEDIR pDir  = (PSSMFILEDIR)RTMemTmpAlloc(cbDir);
     if (!pDir)
         return VERR_NO_TMP_MEMORY;
@@ -8582,7 +8803,7 @@ static int ssmR3LoadExecV2(PVM pVM, PSSMHANDLE pSSM)
         uint64_t            offUnit         = ssmR3StrmTell(&pSSM->Strm);
         uint32_t            u32CurStreamCRC = ssmR3StrmCurCRC(&pSSM->Strm);
         SSMFILEUNITHDRV2    UnitHdr;
-        int rc = ssmR3StrmRead(&pSSM->Strm, &UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName));
+        int rc = ssmR3StrmRead(&pSSM->Strm, &UnitHdr, RT_UOFFSETOF(SSMFILEUNITHDRV2, szName));
         if (RT_FAILURE(rc))
             return rc;
         if (RT_UNLIKELY(    memcmp(&UnitHdr.szMagic[0], SSMFILEUNITHDR_MAGIC, sizeof(UnitHdr.szMagic))
@@ -8608,7 +8829,7 @@ static int ssmR3LoadExecV2(PVM pVM, PSSMHANDLE pSSM)
                                    offUnit, offUnit, UnitHdr.cbName, UnitHdr.szName),
                                   VERR_SSM_INTEGRITY_UNIT);
         }
-        SSM_CHECK_CRC32_RET(&UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]),
+        SSM_CHECK_CRC32_RET(&UnitHdr, RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]),
                             ("Unit at %#llx (%lld): CRC mismatch: %08x, correct is %08x\n", offUnit, offUnit, u32CRC, u32ActualCRC));
         AssertLogRelMsgReturn(UnitHdr.offStream == offUnit,
                               ("Unit at %#llx (%lld): offStream=%#llx, expected %#llx\n", offUnit, offUnit, UnitHdr.offStream, offUnit),
@@ -8655,7 +8876,7 @@ static int ssmR3LoadExecV2(PVM pVM, PSSMHANDLE pSSM)
             pSSM->u.Read.uCurUnitPass = UnitHdr.u32Pass;
             pSSM->u.Read.pCurUnit     = pUnit;
             ssmR3DataReadBeginV2(pSSM);
-            ssmR3UnitCritSectEnter(pUnit);
+            ssmR3UnitCritSectEnter(pVM, pUnit);
             switch (pUnit->enmType)
             {
                 case SSMUNITTYPE_DEV:
@@ -8677,7 +8898,7 @@ static int ssmR3LoadExecV2(PVM pVM, PSSMHANDLE pSSM)
                     rc = VERR_SSM_IPE_1;
                     break;
             }
-            ssmR3UnitCritSectLeave(pUnit);
+            ssmR3UnitCritSectLeave(pVM, pUnit);
             pUnit->fCalled = true;
             if (RT_FAILURE(rc) && RT_SUCCESS_NP(pSSM->rc))
                 pSSM->rc = rc;
@@ -8839,7 +9060,7 @@ VMMR3DECL(int) SSMR3Load(PVM pVM, const char *pszFilename, PCSSMSTRMOPS pStreamO
             {
                 Handle.u.Read.pCurUnit = pUnit;
                 pUnit->fCalled = true;
-                ssmR3UnitCritSectEnter(pUnit);
+                ssmR3UnitCritSectEnter(pVM, pUnit);
                 switch (pUnit->enmType)
                 {
                     case SSMUNITTYPE_DEV:
@@ -8861,7 +9082,7 @@ VMMR3DECL(int) SSMR3Load(PVM pVM, const char *pszFilename, PCSSMSTRMOPS pStreamO
                         rc = VERR_SSM_IPE_1;
                         break;
                 }
-                ssmR3UnitCritSectLeave(pUnit);
+                ssmR3UnitCritSectLeave(pVM, pUnit);
                 Handle.u.Read.pCurUnit = NULL;
                 if (RT_FAILURE(rc) && RT_SUCCESS_NP(Handle.rc))
                     Handle.rc = rc;
@@ -8915,7 +9136,7 @@ VMMR3DECL(int) SSMR3Load(PVM pVM, const char *pszFilename, PCSSMSTRMOPS pStreamO
                 Handle.u.Read.pCurUnit = pUnit;
                 int const rcOld = Handle.rc;
                 rc = VINF_SUCCESS;
-                ssmR3UnitCritSectEnter(pUnit);
+                ssmR3UnitCritSectEnter(pVM, pUnit);
                 switch (pUnit->enmType)
                 {
                     case SSMUNITTYPE_DEV:
@@ -8937,7 +9158,7 @@ VMMR3DECL(int) SSMR3Load(PVM pVM, const char *pszFilename, PCSSMSTRMOPS pStreamO
                         rc = VERR_SSM_IPE_1;
                         break;
                 }
-                ssmR3UnitCritSectLeave(pUnit);
+                ssmR3UnitCritSectLeave(pVM, pUnit);
                 Handle.u.Read.pCurUnit = NULL;
                 if (RT_SUCCESS(rc) && Handle.rc != rcOld)
                     rc = Handle.rc;
@@ -9076,6 +9297,21 @@ VMMR3DECL(int) SSMR3SetCfgError(PSSMHANDLE pSSM, RT_SRC_POS_DECL, const char *ps
     return rc;
 }
 
+
+/**
+ * SSMR3SetLoadError wrapper that returns VERR_SSM_LOAD_CONFIG_MISMATCH.
+ *
+ * @returns VERR_SSM_LOAD_CONFIG_MISMATCH.
+ * @param   pSSM                The saved state handle.
+ * @param   SRC_POS             The error location, use RT_SRC_POS.
+ * @param   pszFormat           The message format string.
+ * @param   va                  Variable argument list.
+ */
+VMMR3DECL(int) SSMR3SetCfgErrorV(PSSMHANDLE pSSM, RT_SRC_POS_DECL, const char *pszFormat, va_list va)
+{
+    return SSMR3SetLoadErrorV(pSSM, VERR_SSM_LOAD_CONFIG_MISMATCH, RT_SRC_POS_ARGS, pszFormat, va);
+}
+
 #endif /* !SSM_STANDALONE */
 
 /**
@@ -9128,9 +9364,9 @@ VMMR3DECL(int) SSMR3Open(const char *pszFilename, unsigned fFlags, PSSMHANDLE *p
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszFilename), ("%p\n", pszFilename), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
     AssertMsgReturn(!fFlags, ("%#x\n", fFlags), VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(ppSSM), ("%p\n", ppSSM), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(ppSSM, VERR_INVALID_POINTER);
 
     /*
      * Allocate a handle.
@@ -9175,7 +9411,7 @@ VMMR3DECL(int) SSMR3Close(PSSMHANDLE pSSM)
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pSSM), ("%p\n", pSSM), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pSSM, VERR_INVALID_POINTER);
     AssertMsgReturn(pSSM->enmAfter == SSMAFTER_OPENED, ("%d\n", pSSM->enmAfter),VERR_INVALID_PARAMETER);
     AssertMsgReturn(pSSM->enmOp == SSMSTATE_OPEN_READ, ("%d\n", pSSM->enmOp), VERR_INVALID_PARAMETER);
     Assert(pSSM->fCancelled == SSMHANDLE_OK);
@@ -9217,7 +9453,7 @@ static int ssmR3FileSeekV1(PSSMHANDLE pSSM, const char *pszUnit, uint32_t iInsta
         /*
          * Read the unit header and verify it.
          */
-        int rc = ssmR3StrmPeekAt(&pSSM->Strm, off, &UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV1, szName), NULL);
+        int rc = ssmR3StrmPeekAt(&pSSM->Strm, off, &UnitHdr, RT_UOFFSETOF(SSMFILEUNITHDRV1, szName), NULL);
         AssertRCReturn(rc, rc);
         if (!memcmp(&UnitHdr.achMagic[0], SSMFILEUNITHDR_MAGIC, sizeof(SSMFILEUNITHDR_MAGIC)))
         {
@@ -9227,7 +9463,7 @@ static int ssmR3FileSeekV1(PSSMHANDLE pSSM, const char *pszUnit, uint32_t iInsta
             if (    UnitHdr.u32Instance == iInstance
                 &&  UnitHdr.cchName     == cbUnitNm)
             {
-                rc = ssmR3StrmPeekAt(&pSSM->Strm, off + RT_OFFSETOF(SSMFILEUNITHDRV1, szName), szName, cbUnitNm, NULL);
+                rc = ssmR3StrmPeekAt(&pSSM->Strm, off + RT_UOFFSETOF(SSMFILEUNITHDRV1, szName), szName, cbUnitNm, NULL);
                 AssertRCReturn(rc, rc);
                 AssertLogRelMsgReturn(!szName[UnitHdr.cchName - 1],
                                       (" Unit name '%.*s' was not properly terminated.\n", cbUnitNm, szName),
@@ -9238,8 +9474,8 @@ static int ssmR3FileSeekV1(PSSMHANDLE pSSM, const char *pszUnit, uint32_t iInsta
                  */
                 if (!memcmp(szName, pszUnit, cbUnitNm))
                 {
-                    rc = ssmR3StrmSeek(&pSSM->Strm, off + RT_OFFSETOF(SSMFILEUNITHDRV1, szName) + cbUnitNm, RTFILE_SEEK_BEGIN, 0);
-                    pSSM->cbUnitLeftV1 = UnitHdr.cbUnit - RT_OFFSETOF(SSMFILEUNITHDRV1, szName[cbUnitNm]);
+                    rc = ssmR3StrmSeek(&pSSM->Strm, off + RT_UOFFSETOF(SSMFILEUNITHDRV1, szName) + cbUnitNm, RTFILE_SEEK_BEGIN, 0);
+                    pSSM->cbUnitLeftV1 = UnitHdr.cbUnit - RT_UOFFSETOF_DYN(SSMFILEUNITHDRV1, szName[cbUnitNm]);
                     pSSM->offUnit      = 0;
                     pSSM->offUnitUser  = 0;
                     if (piVersion)
@@ -9319,13 +9555,13 @@ static int ssmR3FileSeekSubV2(PSSMHANDLE pSSM, PSSMFILEDIR pDir, size_t cbDir, u
                                   ("Bad unit header: i=%d off=%lld u32Instance=%u Dir.u32Instance=%u\n",
                                    i, pDir->aEntries[i].off, UnitHdr.u32Instance, pDir->aEntries[i].u32Instance),
                                   VERR_SSM_INTEGRITY_UNIT);
-            uint32_t cbUnitHdr = RT_UOFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]);
+            uint32_t cbUnitHdr = RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]);
             AssertLogRelMsgReturn(   UnitHdr.cbName > 0
                                   && UnitHdr.cbName < sizeof(UnitHdr)
                                   && cbUnitHdr <= cbToRead,
                                   ("Bad unit header: i=%u off=%lld cbName=%#x cbToRead=%#x\n", i, pDir->aEntries[i].off, UnitHdr.cbName, cbToRead),
                                   VERR_SSM_INTEGRITY_UNIT);
-            SSM_CHECK_CRC32_RET(&UnitHdr, RT_OFFSETOF(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]),
+            SSM_CHECK_CRC32_RET(&UnitHdr, RT_UOFFSETOF_DYN(SSMFILEUNITHDRV2, szName[UnitHdr.cbName]),
                                 ("Bad unit header CRC: i=%u off=%lld u32CRC=%#x u32ActualCRC=%#x\n",
                                  i, pDir->aEntries[i].off, u32CRC, u32ActualCRC));
 
@@ -9372,7 +9608,7 @@ static int ssmR3FileSeekV2(PSSMHANDLE pSSM, const char *pszUnit, uint32_t iInsta
     AssertLogRelReturn(!memcmp(Footer.szMagic, SSMFILEFTR_MAGIC, sizeof(Footer.szMagic)), VERR_SSM_INTEGRITY);
     SSM_CHECK_CRC32_RET(&Footer, sizeof(Footer), ("Bad footer CRC: %08x, actual %08x\n", u32CRC, u32ActualCRC));
 
-    size_t const    cbDir = RT_OFFSETOF(SSMFILEDIR, aEntries[Footer.cDirEntries]);
+    size_t const    cbDir = RT_UOFFSETOF_DYN(SSMFILEDIR, aEntries[Footer.cDirEntries]);
     PSSMFILEDIR     pDir  = (PSSMFILEDIR)RTMemTmpAlloc(cbDir);
     if (RT_UNLIKELY(!pDir))
         return VERR_NO_TMP_MEMORY;
@@ -9412,7 +9648,7 @@ VMMR3DECL(int) SSMR3Seek(PSSMHANDLE pSSM, const char *pszUnit, uint32_t iInstanc
     AssertMsgReturn(pSSM->enmAfter == SSMAFTER_OPENED, ("%d\n", pSSM->enmAfter),VERR_INVALID_PARAMETER);
     AssertMsgReturn(pSSM->enmOp == SSMSTATE_OPEN_READ, ("%d\n", pSSM->enmOp), VERR_INVALID_PARAMETER);
     AssertPtrReturn(pszUnit, VERR_INVALID_POINTER);
-    AssertMsgReturn(!piVersion || VALID_PTR(piVersion), ("%p\n", piVersion), VERR_INVALID_POINTER);
+    AssertPtrNullReturn(piVersion, VERR_INVALID_POINTER);
 
     /*
      * Reset the state.
@@ -9626,6 +9862,17 @@ VMMR3DECL(const char *) SSMR3HandleHostOSAndArch(PSSMHANDLE pSSM)
         return pSSM->u.Read.szHostOSAndArch;
     return KBUILD_TARGET "." KBUILD_TARGET_ARCH;
 }
+
+
+#ifdef DEBUG
+/**
+ * Gets current data offset, relative to the start of the unit - only for debugging
+ */
+VMMR3DECL(uint64_t) SSMR3HandleTellInUnit(PSSMHANDLE pSSM)
+{
+    return ssmR3StrmTell(&pSSM->Strm) - pSSM->offUnitUser;
+}
+#endif
 
 
 #ifndef SSM_STANDALONE

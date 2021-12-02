@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMAllNetShaper.cpp 90784 2021-08-23 09:42:32Z vboxsync $ */
 /** @file
  * PDM Network Shaper - Limit network traffic according to bandwidth group settings.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,19 +32,27 @@
  * Obtain bandwidth in a bandwidth group.
  *
  * @returns True if bandwidth was allocated, false if not.
+ * @param   pVM             The cross context VM structure.
  * @param   pFilter         Pointer to the filter that allocates bandwidth.
  * @param   cbTransfer      Number of bytes to allocate.
  */
-VMMDECL(bool) PDMNsAllocateBandwidth(PPDMNSFILTER pFilter, size_t cbTransfer)
+VMM_INT_DECL(bool) PDMNetShaperAllocateBandwidth(PVMCC pVM, PPDMNSFILTER pFilter, size_t cbTransfer)
 {
     AssertPtrReturn(pFilter, true);
-    if (!VALID_PTR(pFilter->CTX_SUFF(pBwGroup)))
+    if (!RT_VALID_PTR(pFilter->CTX_SUFF(pBwGroup)))
         return true;
 
     PPDMNSBWGROUP pBwGroup = ASMAtomicReadPtrT(&pFilter->CTX_SUFF(pBwGroup), PPDMNSBWGROUP);
-    int rc = PDMCritSectEnter(&pBwGroup->Lock, VERR_SEM_BUSY); AssertRC(rc);
-    if (RT_UNLIKELY(rc == VERR_SEM_BUSY))
-        return true;
+    int rc = PDMCritSectEnter(pVM, &pBwGroup->Lock, VERR_SEM_BUSY); AssertRC(rc);
+    if (RT_SUCCESS(rc))
+    { /* likely */ }
+    else
+    {
+        if (rc == VERR_SEM_BUSY)
+            return true;
+        PDM_CRITSECT_RELEASE_ASSERT_RC(pVM, &pBwGroup->Lock, rc);
+        return false;
+    }
 
     bool fAllowed = true;
     if (pBwGroup->cbPerSecMax)
@@ -71,7 +79,7 @@ VMMDECL(bool) PDMNsAllocateBandwidth(PPDMNSFILTER pFilter, size_t cbTransfer)
         Log2(("pdmNsAllocateBandwidth: BwGroup=%#p{%s} disabled fAllowed=%RTbool\n",
               pBwGroup, R3STRING(pBwGroup->pszNameR3), fAllowed));
 
-    rc = PDMCritSectLeave(&pBwGroup->Lock); AssertRC(rc);
+    rc = PDMCritSectLeave(pVM, &pBwGroup->Lock); AssertRC(rc);
     return fAllowed;
 }
 

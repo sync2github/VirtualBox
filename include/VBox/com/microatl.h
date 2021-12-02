@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,13 +23,16 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_com_microatl_h
-#define ___VBox_com_microatl_h
+#ifndef VBOX_INCLUDED_com_microatl_h
+#define VBOX_INCLUDED_com_microatl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-#include <VBox/cdefs.h> /* VBOX_STRICT */
+#include <VBox/cdefs.h>   /* VBOX_STRICT */
 #include <iprt/assert.h>
 #include <iprt/critsect.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h> /* RT_FAILURE() */
 
 #include <iprt/win/windows.h>
 
@@ -109,7 +112,7 @@ public: \
     { &__uuidof(c), (DWORD_PTR)(static_cast<c *>(static_cast<c2 *>((_ComClass *)8)))-8, COM_SIMPLEMAPENTRY },
 
 #define COM_INTERFACE_ENTRY_AGGREGATE(iid, pUnk) \
-    { &iid, (DWORD_PTR)RT_OFFSETOF(_ComClass, pUnk), _Delegate},
+    { &iid, (DWORD_PTR)RT_UOFFSETOF(_ComClass, pUnk), _Delegate},
 
 #define END_COM_MAP() \
             { NULL, 0, NULL} \
@@ -182,7 +185,7 @@ public:
         {
             HRESULT hrc = Lock();
             if (FAILED(hrc))
-            throw hrc;
+                throw hrc;
         }
     }
 
@@ -693,9 +696,6 @@ public:
         // Catch refcount screwups by setting refcount to -(LONG_MAX/2).
         m_iRef = -(LONG_MAX/2);
         FinalRelease();
-#ifdef _ATL_DEBUG_INTERFACES
-        _AtlDebugInterfacesModule.DeleteNonAddRefThunk(_GetRawUnknown());
-#endif
     }
     STDMETHOD_(ULONG, AddRef)() throw()
     {
@@ -1049,13 +1049,28 @@ public:
         *pp = NULL;
 
         HRESULT hrc = E_OUTOFMEMORY;
-        CComObject<Base> *p = new(std::nothrow) CComObject<Base>();
+        CComObject<Base> *p = NULL;
+        try
+        {
+            p = new CComObject<Base>();
+        }
+        catch (std::bad_alloc &)
+        {
+            p = NULL;
+        }
         if (p)
         {
             p->InternalFinalConstructAddRef();
-            hrc = p->_AtlInitialConstruct();
-            if (SUCCEEDED(hrc))
-                hrc = p->FinalConstruct();
+            try
+            {
+                hrc = p->_AtlInitialConstruct();
+                if (SUCCEEDED(hrc))
+                    hrc = p->FinalConstruct();
+            }
+            catch (std::bad_alloc &)
+            {
+                hrc = E_OUTOFMEMORY;
+            }
             p->InternalFinalConstructRelease();
             if (FAILED(hrc))
             {
@@ -1356,5 +1371,5 @@ public:
 
 } /* namespace ATL */
 
-#endif /* !___VBox_com_microatl_h */
+#endif /* !VBOX_INCLUDED_com_microatl_h */
 

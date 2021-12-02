@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineWindowSeamless.h 88635 2021-04-21 14:05:26Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineWindowSeamless class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineWindowSeamless_h___
-#define ___UIMachineWindowSeamless_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_seamless_UIMachineWindowSeamless_h
+#define FEQT_INCLUDED_SRC_runtime_seamless_UIMachineWindowSeamless_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UIMachineWindow.h"
@@ -45,7 +48,14 @@ private slots:
 
     /** Revokes window activation. */
     void sltRevokeWindowActivation();
+
+    /** Handles signal about mini-toolbar auto-hide toggled.
+      * @param  fEnabled  Brings whether auto-hide is enabled. */
+    void sltHandleMiniToolBarAutoHideToggled(bool fEnabled);
 #endif /* VBOX_WS_WIN || VBOX_WS_X11 */
+
+    /** Shows window in minimized state. */
+    void sltShowMinimized();
 
 private:
 
@@ -73,12 +83,15 @@ private:
     void updateAppearanceOf(int iElement);
 #endif /* VBOX_WS_WIN || VBOX_WS_X11 */
 
+#ifdef VBOX_WS_X11
+    /** X11: Handles @a pEvent about state change. */
+    void changeEvent(QEvent *pEvent);
+#endif
+
 #ifdef VBOX_WS_WIN
-# if QT_VERSION >= 0x050000
     /** Win: Handles show @a pEvent. */
     void showEvent(QShowEvent *pEvent);
-# endif /* QT_VERSION >= 0x050000 */
-#endif /* VBOX_WS_WIN */
+#endif
 
 #ifdef VBOX_WITH_MASKED_SEAMLESS
     /** Assigns guest seamless mask. */
@@ -100,10 +113,18 @@ private:
     /** Holds whether the window was minimized before became hidden.
       * Used to restore minimized state when the window shown again. */
     bool m_fWasMinimized;
+#ifdef VBOX_WS_X11
+    /** X11: Holds whether the window minimization is currently requested.
+      * Used to prevent accidentally restoring to seamless state. */
+    bool m_fIsMinimizationRequested;
+    /** X11: Holds whether the window is currently minimized.
+      * Used to restore maximized state when the window restored again. */
+    bool m_fIsMinimized;
+#endif
 
     /** Factory support. */
     friend class UIMachineWindow;
 };
 
-#endif /* !___UIMachineWindowSeamless_h___ */
+#endif /* !FEQT_INCLUDED_SRC_runtime_seamless_UIMachineWindowSeamless_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: reqqueue.cpp 88813 2021-05-01 18:15:13Z vboxsync $ */
 /** @file
  * IPRT - Request Queue.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,6 +33,7 @@
 
 #include <iprt/assert.h>
 #include <iprt/asm.h>
+#include <iprt/err.h>
 #include <iprt/string.h>
 #include <iprt/time.h>
 #include <iprt/semaphore.h>
@@ -165,7 +166,6 @@ RTDECL(int) RTReqQueueProcess(RTREQQUEUE hQueue, RTMSINTERVAL cMillies)
 
             /* Process the request. */
             rc = rtReqProcessOne(pReq);
-            AssertRC(rc);
             if (rc != VINF_SUCCESS)
             {
                 /* Propagate the return code to caller.  If more requests pending, queue them for later. */
@@ -236,7 +236,7 @@ RTDECL(int) RTReqQueueCallV(RTREQQUEUE hQueue, PRTREQ *ppReq, RTMSINTERVAL cMill
     if (!(fFlags & RTREQFLAGS_NO_WAIT) || ppReq)
     {
         AssertPtrReturn(ppReq, VERR_INVALID_POINTER);
-        *ppReq = NULL;
+        *ppReq = NIL_RTREQ;
     }
 
     PRTREQ pReq = NULL;
@@ -268,13 +268,16 @@ RTDECL(int) RTReqQueueCallV(RTREQQUEUE hQueue, PRTREQ *ppReq, RTMSINTERVAL cMill
         RTReqRelease(pReq);
         pReq = NULL;
     }
-    if (!(fFlags & RTREQFLAGS_NO_WAIT))
+    if (ppReq)
     {
         *ppReq = pReq;
         LogFlow(("RTReqQueueCallV: returns %Rrc *ppReq=%p\n", rc, pReq));
     }
     else
+    {
+        RTReqRelease(pReq);
         LogFlow(("RTReqQueueCallV: returns %Rrc\n", rc));
+    }
     Assert(rc != VERR_INTERRUPTED);
     return rc;
 }

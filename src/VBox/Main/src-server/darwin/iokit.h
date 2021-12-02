@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: iokit.h 85929 2020-08-28 14:40:55Z vboxsync $ */
 /** @file
  * Main - Darwin IOKit Routines.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,11 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___darwin_iokit_h___
-#define ___darwin_iokit_h___
+#ifndef MAIN_INCLUDED_SRC_src_server_darwin_iokit_h
+#define MAIN_INCLUDED_SRC_src_server_darwin_iokit_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
+#include <iprt/cpp/ministring.h>
 #ifdef VBOX_WITH_USB
 # include <VBox/usb.h>
 #endif
@@ -36,6 +40,21 @@ typedef struct DARWINDVD
 } DARWINDVD;
 /** Pointer to a Darwin DVD descriptor. */
 typedef DARWINDVD *PDARWINDVD;
+
+/** Darwin fixed drive (SSD, HDD, ++) descriptor as returned by
+ *  DarwinGetFixedDrives(). */
+typedef struct DARWINFIXEDDRIVE
+{
+    /** Pointer to the next DVD. */
+    struct DARWINFIXEDDRIVE *pNext;
+    /** Pointer to the model name, NULL if none.
+     * This points after szName and needs not be freed separately. */
+    const char *pszModel;
+    /** Variable length name / identifier. */
+    char szName[1];
+} DARWINFIXEDDRIVE;
+/** Pointer to a Darwin fixed drive. */
+typedef DARWINFIXEDDRIVE *PDARWINFIXEDDRIVE;
 
 
 /**
@@ -81,7 +100,8 @@ void            DarwinFreeUSBDeviceFromIOKit(PUSBDEVICE pCur);
 int             DarwinReEnumerateUSBDevice(PCUSBDEVICE pCur);
 #endif /* VBOX_WITH_USB */
 PDARWINDVD      DarwinGetDVDDrives(void);
+PDARWINFIXEDDRIVE DarwinGetFixedDrives(void);
 PDARWINETHERNIC DarwinGetEthernetControllers(void);
 RT_C_DECLS_END
 
-#endif
+#endif /* !MAIN_INCLUDED_SRC_src_server_darwin_iokit_h */

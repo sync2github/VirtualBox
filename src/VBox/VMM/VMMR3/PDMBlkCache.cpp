@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMBlkCache.cpp 87766 2021-02-16 14:27:43Z vboxsync $ */
 /** @file
  * PDM Block Cache.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,6 +29,7 @@
 #include <iprt/mem.h>
 #include <iprt/path.h>
 #include <iprt/string.h>
+#include <iprt/trace.h>
 #include <VBox/log.h>
 #include <VBox/vmm/stam.h>
 #include <VBox/vmm/uvm.h>
@@ -36,6 +37,10 @@
 
 #include "PDMBlkCacheInternal.h"
 
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
 #ifdef VBOX_STRICT
 # define PDMACFILECACHE_IS_CRITSECT_OWNER(Cache) \
     do \
@@ -66,6 +71,9 @@
 
 #define PDM_BLK_CACHE_SAVED_STATE_VERSION 1
 
+/* Enable to enable some tracing in the block cache code for investigating issues. */
+/*#define VBOX_BLKCACHE_TRACING 1*/
+
 
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
@@ -74,6 +82,27 @@
 static PPDMBLKCACHEENTRY pdmBlkCacheEntryAlloc(PPDMBLKCACHE pBlkCache,
                                                uint64_t off, size_t cbData, uint8_t *pbBuffer);
 static bool pdmBlkCacheAddDirtyEntry(PPDMBLKCACHE pBlkCache, PPDMBLKCACHEENTRY pEntry);
+
+
+/**
+ * Add message to the VM trace buffer.
+ *
+ * @returns nothing.
+ * @param   pBlkCache     The block cache.
+ * @param   pszFmt        The format string.
+ * @param   ...           Additional parameters for the string formatter.
+ */
+DECLINLINE(void) pdmBlkCacheR3TraceMsgF(PPDMBLKCACHE pBlkCache, const char *pszFmt, ...)
+{
+#if defined(VBOX_BLKCACHE_TRACING)
+    va_list va;
+    va_start(va, pszFmt);
+    RTTraceBufAddMsgV(pBlkCache->pCache->pVM->CTX_SUFF(hTraceBuf), pszFmt, va);
+    va_end(va);
+#else
+    RT_NOREF2(pBlkCache, pszFmt);
+#endif
+}
 
 /**
  * Decrement the reference counter of the given cache entry.
@@ -491,6 +520,10 @@ DECLINLINE(int) pdmBlkCacheEnqueue(PPDMBLKCACHE pBlkCache, uint64_t off, size_t 
     LogFlowFunc(("%s: Enqueuing hIoXfer=%#p enmXferDir=%d\n",
                  __FUNCTION__, pIoXfer, pIoXfer->enmXferDir));
 
+    ASMAtomicIncU32(&pBlkCache->cIoXfersActive);
+    pdmBlkCacheR3TraceMsgF(pBlkCache, "BlkCache: I/O req %#p (%RTbool , %d) queued (%u now active)",
+                           pIoXfer, pIoXfer->fIoCache, pIoXfer->enmXferDir, pBlkCache->cIoXfersActive);
+
     switch (pBlkCache->enmType)
     {
         case PDMBLKCACHETYPE_DEV:
@@ -527,6 +560,12 @@ DECLINLINE(int) pdmBlkCacheEnqueue(PPDMBLKCACHE pBlkCache, uint64_t off, size_t 
         }
         default:
             AssertMsgFailed(("Unknown block cache type!\n"));
+    }
+
+    if (RT_FAILURE(rc))
+    {
+        pdmBlkCacheR3TraceMsgF(pBlkCache, "BlkCache: Queueing I/O req %#p failed %Rrc", pIoXfer, rc);
+        ASMAtomicDecU32(&pBlkCache->cIoXfersActive);
     }
 
     LogFlowFunc(("%s: returns rc=%Rrc\n", __FUNCTION__, rc));
@@ -661,7 +700,6 @@ static void pdmBlkCacheCommit(PPDMBLKCACHE pBlkCache)
     /* The list is moved to a new header to reduce locking overhead. */
     RTLISTANCHOR ListDirtyNotCommitted;
 
-    RTListInit(&ListDirtyNotCommitted);
     RTSpinlockAcquire(pBlkCache->LockList);
     RTListMove(&ListDirtyNotCommitted, &pBlkCache->ListDirtyNotCommitted);
     RTSpinlockRelease(pBlkCache->LockList);
@@ -697,7 +735,7 @@ static void pdmBlkCacheCommit(PPDMBLKCACHE pBlkCache)
     /* Reset the commit timer if we don't have any dirty bits. */
     if (   !(cbDirtyOld - cbCommitted)
         && pBlkCache->pCache->u32CommitTimeoutMs != 0)
-        TMTimerStop(pBlkCache->pCache->pTimerCommit);
+        TMTimerStop(pBlkCache->pCache->pVM, pBlkCache->pCache->hTimerCommit);
 }
 
 /**
@@ -769,7 +807,7 @@ static bool pdmBlkCacheAddDirtyEntry(PPDMBLKCACHE pBlkCache, PPDMBLKCACHEENTRY p
         else if (!cbDirty && pCache->u32CommitTimeoutMs > 0)
         {
             /* Arm the commit timer. */
-            TMTimerSetMillies(pCache->pTimerCommit, pCache->u32CommitTimeoutMs);
+            TMTimerSetMillies(pCache->pVM, pCache->hTimerCommit, pCache->u32CommitTimeoutMs);
         }
     }
 
@@ -794,12 +832,12 @@ static PPDMBLKCACHE pdmR3BlkCacheFindById(PPDMBLKCACHEGLOBAL pBlkCacheGlobal, co
 }
 
 /**
- * Commit timer callback.
+ * @callback_method_impl{FNTMTIMERINT, Commit timer callback.}
  */
-static DECLCALLBACK(void) pdmBlkCacheCommitTimerCallback(PVM pVM, PTMTIMER pTimer, void *pvUser)
+static DECLCALLBACK(void) pdmBlkCacheCommitTimerCallback(PVM pVM, TMTIMERHANDLE hTimer, void *pvUser)
 {
     PPDMBLKCACHEGLOBAL pCache = (PPDMBLKCACHEGLOBAL)pvUser;
-    NOREF(pVM); NOREF(pTimer);
+    RT_NOREF(pVM, hTimer);
 
     LogFlowFunc(("Commit interval expired, commiting dirty entries\n"));
 
@@ -1118,11 +1156,8 @@ int pdmR3BlkCacheInit(PVM pVM)
     {
         /* Create the commit timer */
         if (pBlkCacheGlobal->u32CommitTimeoutMs > 0)
-            rc = TMR3TimerCreateInternal(pVM, TMCLOCK_REAL,
-                                         pdmBlkCacheCommitTimerCallback,
-                                         pBlkCacheGlobal,
-                                         "BlkCache-Commit",
-                                         &pBlkCacheGlobal->pTimerCommit);
+            rc = TMR3TimerCreate(pVM, TMCLOCK_REAL, pdmBlkCacheCommitTimerCallback, pBlkCacheGlobal,
+                                 TMTIMER_FLAGS_NO_RING0,  "BlkCache-Commit", &pBlkCacheGlobal->hTimerCommit);
 
         if (RT_SUCCESS(rc))
         {
@@ -1217,6 +1252,7 @@ static int pdmR3BlkCacheRetain(PVM pVM, PPPDMBLKCACHE ppBlkCache, const char *pc
             && pBlkCache->pszId)
         {
             pBlkCache->fSuspended = false;
+            pBlkCache->cIoXfersActive = 0;
             pBlkCache->pCache = pBlkCacheGlobal;
             RTListInit(&pBlkCache->ListDirtyNotCommitted);
 
@@ -1414,12 +1450,6 @@ static DECLCALLBACK(int) pdmBlkCacheEntryDestroy(PAVLRU64NODECORE pNode, void *p
     return VINF_SUCCESS;
 }
 
-/**
- * Destroys all cache resources used by the given endpoint.
- *
- * @returns nothing.
- * @param   pBlkCache       Block cache handle.
- */
 VMMR3DECL(void) PDMR3BlkCacheRelease(PPDMBLKCACHE pBlkCache)
 {
     PPDMBLKCACHEGLOBAL pCache = pBlkCache->pCache;
@@ -1445,6 +1475,8 @@ VMMR3DECL(void) PDMR3BlkCacheRelease(PPDMBLKCACHE pBlkCache)
 
     pdmBlkCacheLockLeave(pCache);
 
+    RTMemFree(pBlkCache->pTree);
+    pBlkCache->pTree = NULL;
     RTSemRWDestroy(pBlkCache->SemRWEntries);
 
 #ifdef VBOX_WITH_STATISTICS
@@ -2673,6 +2705,10 @@ VMMR3DECL(void) PDMR3BlkCacheIoXferComplete(PPDMBLKCACHE pBlkCache, PPDMBLKCACHE
         pdmBlkCacheIoXferCompleteEntry(pBlkCache, hIoXfer, rcIoXfer);
     else
         pdmBlkCacheReqUpdate(pBlkCache, hIoXfer->pReq, rcIoXfer, true);
+
+    ASMAtomicDecU32(&pBlkCache->cIoXfersActive);
+    pdmBlkCacheR3TraceMsgF(pBlkCache, "BlkCache: I/O req %#p (%RTbool) completed (%u now active)",
+                           hIoXfer, hIoXfer->fIoCache, pBlkCache->cIoXfersActive);
     RTMemFree(hIoXfer);
 }
 
@@ -2741,7 +2777,6 @@ VMMR3DECL(int) PDMR3BlkCacheResume(PPDMBLKCACHE pBlkCache)
 
 VMMR3DECL(int) PDMR3BlkCacheClear(PPDMBLKCACHE pBlkCache)
 {
-    int rc = VINF_SUCCESS;
     PPDMBLKCACHEGLOBAL pCache = pBlkCache->pCache;
 
     /*
@@ -2759,6 +2794,6 @@ VMMR3DECL(int) PDMR3BlkCacheClear(PPDMBLKCACHE pBlkCache)
     RTSemRWReleaseWrite(pBlkCache->SemRWEntries);
 
     pdmBlkCacheLockLeave(pCache);
-    return rc;
+    return VINF_SUCCESS;
 }
 

@@ -1,10 +1,10 @@
-/* $Id: VBoxStubCertUtil.h 64806 2010-08-13 15:57:03Z fmehnert $ */
+/* $Id: VBoxStubCertUtil.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxStub - VirtualBox's Windows installer stub (certificate manipulations).
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,13 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#pragma once
+#ifndef VBOX_INCLUDED_SRC_Stub_VBoxStubCertUtil_h
+#define VBOX_INCLUDED_SRC_Stub_VBoxStubCertUtil_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 extern bool addCertToStore(DWORD dwDst, const char *pszStoreNm, const unsigned char kpCertBuf[], DWORD cbCertBuf);
+
+#endif /* !VBOX_INCLUDED_SRC_Stub_VBoxStubCertUtil_h */
+

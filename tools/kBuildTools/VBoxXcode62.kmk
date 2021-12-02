@@ -1,4 +1,4 @@
-# $Id$
+# $Id: VBoxXcode62.kmk 85050 2020-07-03 09:49:52Z vboxsync $
 ## @file
 # kBuild Tool Config - Xcode 6.2 from tools, dmg or similar.
 #
@@ -71,8 +71,12 @@ TOOL_VBoxXcode62_OBJC   += -fmessage-length=0
 TOOL_VBoxXcode62_OBJCXX += -fmessage-length=0
 endif
 
-# Set up environment macro.
+# Set up environment macros.
 TOOL_VBoxXcode62_ENV_SETUP ?= $(REDIRECT) \
+	-E 'DEVELOPER_DIR=$(PATH_TOOL_VBoxXcode62)' \
+	-E 'PATH=$(PATH_TOOL_VBoxXcode62)/usr/bin/:$(PATH_TOOL_VBoxXcode62)/Toolchains/XcodeDefault.xctoolchain/usr/bin:$(PATH)' \
+       --
+TOOL_VBoxXcode62_ENV_SETUP_EXT ?= $(REDIRECT_EXT) \
 	-E 'DEVELOPER_DIR=$(PATH_TOOL_VBoxXcode62)' \
 	-E 'PATH=$(PATH_TOOL_VBoxXcode62)/usr/bin/:$(PATH_TOOL_VBoxXcode62)/Toolchains/XcodeDefault.xctoolchain/usr/bin:$(PATH)' \
        --
@@ -133,10 +137,6 @@ TOOL_VBoxXcode62_STRIP_SYSMOD     ?= $(PATH_TOOL_VBoxXcode62_TOOLCHAIN_BIN_SLASH
 # @param    1           The whole output filename.
 # @param    2   	The output filename sans suffix.
 TOOL_VBoxXcode62_DEBUG_BUNDLE_FN = \
-    $(1).dSYM/ \
-    $(1).dSYM/Contents/ \
-    $(1).dSYM/Contents/Resources/ \
-    $(1).dSYM/Contents/Resources/DWARF/ \
     $(1).dSYM/Contents/Info.plist \
     $(1).dSYM/Contents/Resources/DWARF/$(notdir $(1))
 
@@ -381,9 +381,9 @@ define TOOL_VBoxXcode62_LINK_LIBRARY_CMDS
 		$(NL)$(TAB)$(QUIET)$(RM_EXT) -f $(dir $(outbase))ar.tmp.dir/* \
 		$(NL)$(TAB)$(QUIET)$(MKDIR) -p $(dir $(outbase))/ar.tmp.dir/ \
 		$(NL)$(TAB)$(QUIET)(cd $(dir $(outbase))ar.tmp.dir/ \
-			&& $(TOOL_VBoxXcode62_ENV_SETUP) $(TOOL_VBoxXcode62_AR) -x $(abspath $(lib)) \
+			&& $(TOOL_VBoxXcode62_ENV_SETUP_EXT) $(TOOL_VBoxXcode62_AR) -x $(abspath $(lib)) \
 		    && $(RM_EXT) -f ./__.SYMDEF* \
-			&& $(TOOL_VBoxXcode62_ENV_SETUP) $(TOOL_VBoxXcode62_AR) $(flags) $(out) *) \
+			&& $(TOOL_VBoxXcode62_ENV_SETUP_EXT) $(TOOL_VBoxXcode62_AR) $(flags) $(out) *) \
 		$(NL)$(TAB)$(QUIET)$(RM_EXT) -f $(dir $(outbase))/ar.tmp.dir/* \
 		$(NL)$(TAB)$(QUIET)$(RMDIR) $(dir $(outbase))ar.tmp.dir/)
 endef

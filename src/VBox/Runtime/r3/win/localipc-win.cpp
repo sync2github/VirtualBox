@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: localipc-win.cpp 86536 2020-10-12 09:16:36Z vboxsync $ */
 /** @file
  * IPRT - Local IPC, Windows Implementation Using Named Pipes.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -59,6 +59,7 @@
 #include <iprt/string.h>
 #include <iprt/thread.h>
 #include <iprt/time.h>
+#include <iprt/utf16.h>
 
 #include "internal/magics.h"
 #include "internal-r3-win.h"
@@ -365,7 +366,8 @@ static int rtLocalIpcWinValidateName(const char *pszName, size_t *pcwcFullName, 
  * Constructs the full pipe name as UTF-16.
  *
  * @returns IPRT status code.
- * @param   pszName         The user supplied name.
+ * @param   pszName         The user supplied name.  ASSUMES reasonable length
+ *                          for now, so no long path prefixing needed.
  * @param   pwszFullName    The output buffer.
  * @param   cwcFullName     The output buffer size excluding the terminator.
  * @param   fNative         Whether the user supplied name is a native or
@@ -400,7 +402,7 @@ RTDECL(int) RTLocalIpcServerCreate(PRTLOCALIPCSERVER phServer, const char *pszNa
         /*
          * Allocate and initialize the instance data.
          */
-        size_t cbThis = RT_OFFSETOF(RTLOCALIPCSERVERINT, wszName[cwcFullName + 1]);
+        size_t cbThis = RT_UOFFSETOF_DYN(RTLOCALIPCSERVERINT, wszName[cwcFullName + 1]);
         PRTLOCALIPCSERVERINT pThis = (PRTLOCALIPCSERVERINT)RTMemAllocVar(cbThis);
         AssertReturn(pThis, VERR_NO_MEMORY);
 
@@ -821,12 +823,14 @@ RTDECL(int) RTLocalIpcSessionConnect(PRTLOCALIPCSESSION phSession, const char *p
                     SecAttrs.lpSecurityDescriptor = pSecDesc;
                     SecAttrs.bInheritHandle       = FALSE;
 
+                    /* The SECURITY_XXX flags are needed in order to prevent the server from impersonating with
+                       this thread's security context (supported at least back to NT 3.51). See @bugref{9773}. */
                     HANDLE hPipe = CreateFileW(pwszFullName,
                                                GENERIC_READ | GENERIC_WRITE,
                                                0 /*no sharing*/,
                                                &SecAttrs,
                                                OPEN_EXISTING,
-                                               FILE_FLAG_OVERLAPPED,
+                                               FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_ANONYMOUS,
                                                NULL /*no template handle*/);
                     if (hPipe != INVALID_HANDLE_VALUE)
                     {
@@ -1391,9 +1395,8 @@ RTDECL(int) RTLocalIpcSessionWrite(RTLOCALIPCSESSION hSession, const void *pvBuf
                     BOOL fRc = ResetEvent(pThis->Write.OverlappedIO.hEvent); Assert(fRc == TRUE);
                     RTCritSectLeave(&pThis->CritSect);
 
-                    fRc = WriteFile(pThis->hNmPipe, pvBuf,
-                                    cbToWrite <= ~(DWORD)0 ? (DWORD)cbToWrite : ~(DWORD)0,
-                                    &cbWritten, &pThis->Write.OverlappedIO);
+                    DWORD const cbToWriteInThisIteration = cbToWrite <= ~(DWORD)0 ? (DWORD)cbToWrite : ~(DWORD)0;
+                    fRc = WriteFile(pThis->hNmPipe, pvBuf, cbToWriteInThisIteration, &cbWritten, &pThis->Write.OverlappedIO);
                     if (fRc)
                         rc = VINF_SUCCESS;
                     else
@@ -1421,6 +1424,9 @@ RTDECL(int) RTLocalIpcSessionWrite(RTLOCALIPCSESSION hSession, const void *pvBuf
                         else
                             rc = RTErrConvertFromWin32(dwErr);
                     }
+
+                    if (cbWritten > cbToWriteInThisIteration) /* paranoia^3 */
+                        cbWritten = cbToWriteInThisIteration;
 
                     RTCritSectEnter(&pThis->CritSect);
                     if (RT_FAILURE(rc))

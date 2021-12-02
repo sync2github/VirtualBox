@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxStubCertUtil.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxStub - VirtualBox's Windows installer stub (certificate manipulations).
  *
@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,9 +25,10 @@
 #include <iprt/win/windows.h>
 #include <Wincrypt.h>
 
-#include <iprt/string.h>
+#include <iprt/errcore.h>
 #include <iprt/message.h>
-#include <iprt/err.h>
+#include <iprt/string.h>
+#include <iprt/utf16.h>
 
 
 /**

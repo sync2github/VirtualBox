@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0302
+# $Id: reporter.py 92309 2021-11-10 08:27:26Z vboxsync $
+# pylint: disable=too-many-lines
 
 """
 Testdriver reporter module.
 """
 
+from __future__ import print_function;
+
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,13 +29,14 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 92309 $"
 
 
 # Standard Python imports.
 import array
 import datetime
 import errno
+import gc
 import os
 import os.path
 import sys
@@ -45,9 +48,64 @@ import traceback
 from common import utils;
 
 ## test reporter instance
-g_oReporter = None;                     # type: ReporterBase
+g_oReporter = None # type: ReporterBase
 g_sReporterName = None;
-g_oLock = threading.Lock();
+
+
+class ReporterLock(object):
+    """
+    Work around problem with garbage collection triggering __del__ method with
+    logging while inside the logger lock and causing a deadlock.
+    """
+
+    def __init__(self, sName):
+        self.sName          = sName;
+        self.oLock          = threading.RLock();
+        self.oOwner         = None;
+        self.cRecursion     = 0;
+        self.fRestoreGC     = False;
+
+    def acquire(self):
+        """ Acquire the lock. """
+        oSelf = threading.current_thread();
+
+        # Take the lock.
+        if not self.oLock.acquire():
+            return False;
+
+        self.oOwner      = oSelf;
+        self.cRecursion += 1;
+
+        # Disable GC to avoid __del__ w/ log statement randomly reenter the logger.
+        if self.cRecursion == 1:
+            self.fRestoreGC = gc.isenabled();
+            if self.fRestoreGC:
+                gc.disable();
+
+        return True;
+
+    def release(self):
+        """ Release the lock. """
+        oSelf = threading.current_thread();
+
+        # Check the ownership.
+        if oSelf != self.oOwner:
+            raise threading.ThreadError();
+
+        # Drop one recursion.
+        self.cRecursion -= 1;
+        if self.cRecursion <= 0:
+
+            # Final recursion. Clear owner and re-enable GC.
+            self.oOwner = None;
+            if self.fRestoreGC:
+                self.fRestoreGC = False;
+                gc.enable();
+
+        self.oLock.release();
+
+## Reporter lock.
+g_oLock = ReporterLock('reporter');
 
 
 
@@ -58,7 +116,7 @@ class PythonLoggingStream(object):
 
     def write(self, sText):
         """Writes python log message to our stream."""
-        if g_oReporter != None:
+        if g_oReporter is not None:
             sText = sText.rstrip("\r\n");
             #g_oReporter.log(0, 'python: %s' % (sText), utils.getCallerName(), utils.getTimePrefix());
         return True;
@@ -102,6 +160,23 @@ class ReporterBase(object):
         """Increases the debug level."""
         self.iDebug += 1;
 
+    def getVerbosity(self):
+        """Returns the current verbosity level."""
+        return self.iVerbose;
+
+    def getDebug(self):
+        """Returns the current debug level."""
+        return self.iDebug;
+
+    def appendToProcessName(self, sAppend):
+        """
+        Appends sAppend to the base process name.
+        Returns the new process name.
+        """
+        self.sName = os.path.splitext(os.path.basename(sys.argv[0]))[0] + sAppend;
+        return self.sName;
+
+
     #
     # Generic logging.
     #
@@ -137,7 +212,7 @@ class ReporterBase(object):
     def xmlFlush(self, fRetry = False, fForce = False):
         """Flushes XML output if buffered."""
         _ = fRetry; _ = fForce;
-        return None;
+        return True;
 
     #
     # XML output from child.
@@ -236,7 +311,7 @@ class ReporterBase(object):
         sFullName        = self._testGetFullName();
 
         # safe pop
-        if len(self.atTests) <= 0:
+        if not self.atTests:
             self.log(0, 'testDone on empty test stack!', sCaller, sTsPrf);
             return ('internal error', 0);
         fTimedOut = self.fTimedOut;
@@ -259,7 +334,7 @@ class ReporterBase(object):
             self.log(0, '** %-50s: FAILED - %d errors' % (sFullName, cErrors), sCaller, sTsPrf);
 
         # Flush buffers when reaching the last test.
-        if len(self.atTests) == 0:
+        if not self.atTests:
             self.xmlFlush(fRetry = True);
 
         return (sName, cErrors);
@@ -278,7 +353,7 @@ class ReporterBase(object):
         Closes all open test as failed.
         Returns True if no open tests, False if there were open tests.
         """
-        if len(self.atTests) == 0:
+        if not self.atTests:
             return True;
         for _ in range(len(self.atTests)):
             self.testFailure('Test not closed by test drver', sCaller)
@@ -318,18 +393,17 @@ class LocalReporter(ReporterBase):
         # Figure the main log directory.
         #
         try:
-            import user;
-            self.sDefLogDir = os.path.abspath(os.path.join(user.home, "VBoxTestLogs"));
+            self.sDefLogDir = os.path.abspath(os.path.expanduser(os.path.join('~', 'VBoxTestLogs')));
         except:
             self.sDefLogDir = os.path.abspath("VBoxTestLogs");
         try:
             sLogDir = os.path.abspath(os.environ.get('TESTBOX_REPORTER_LOG_DIR', self.sDefLogDir));
             if not os.path.isdir(sLogDir):
-                os.makedirs(sLogDir, 0750);
+                os.makedirs(sLogDir, 0o750);
         except:
             sLogDir = self.sDefLogDir;
             if not os.path.isdir(sLogDir):
-                os.makedirs(sLogDir, 0750);
+                os.makedirs(sLogDir, 0o750);
 
         #
         # Make a subdirectory for this test run.
@@ -337,17 +411,20 @@ class LocalReporter(ReporterBase):
         sTs = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H-%M-%S.log');
         self.sLogDir = sLogDir = os.path.join(sLogDir, '%s-%s' % (sTs, self.sName));
         try:
-            os.makedirs(self.sLogDir, 0750);
+            os.makedirs(self.sLogDir, 0o750);
         except:
             self.sLogDir = '%s-%s' % (self.sLogDir, os.getpid());
-            os.makedirs(self.sLogDir, 0750);
+            os.makedirs(self.sLogDir, 0o750);
 
         #
         # Open the log file and write a header.
         #
         sLogName = os.path.join(self.sLogDir, 'testsuite.log');
         sTsIso = utils.getIsoTimestamp();
-        self.oLogFile = utils.openNoInherit(sLogName, "w");
+        if sys.version_info[0] >= 3: # Add 'b' to prevent write taking issue with encode('utf-8') not returning a string.
+            self.oLogFile = utils.openNoInherit(sLogName, "wb");
+        else:
+            self.oLogFile = utils.openNoInherit(sLogName, "w");
         self.oLogFile.write(('Created log file at %s.\nRunning: %s' % (sTsIso, sys.argv)).encode('utf-8'));
 
         #
@@ -358,7 +435,10 @@ class LocalReporter(ReporterBase):
         #       test wrapper either.
         #
         sXmlName = os.path.join(self.sLogDir, 'testsuite.xml');
-        self.oXmlFile = utils.openNoInherit(sXmlName, "w");
+        if sys.version_info[0] >= 3: # Add 'b' to prevent write taking issue with encode('utf-8') not returning a string.
+            self.oXmlFile = utils.openNoInherit(sXmlName, "wb");
+        else:
+            self.oXmlFile = utils.openNoInherit(sXmlName, "w");
         self._xmlWrite([ '<?xml version="1.0" encoding="UTF-8" ?>',
                          '<Test timestamp="%s" name="%s">' % (sTsIso, self._xmlEscAttr(self.sName),), ],
                        fIndent = False);
@@ -366,7 +446,7 @@ class LocalReporter(ReporterBase):
     def __del__(self):
         """Ends and completes the log files."""
         try:    sTsIso = self.fnGetIsoTimestamp();
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             sTsIso = str(oXcpt);
 
         if self.oLogFile is not None:
@@ -384,7 +464,7 @@ class LocalReporter(ReporterBase):
         """Closes the XML file."""
         if self.oXmlFile is not None:
             # pop the test stack
-            while len(self.atTests) > 0:
+            while self.atTests:
                 sName, cErrorsStart, self.fTimedOut = self.atTests.pop();
                 self._xmlWrite([ '<End timestamp="%s" errors="%d"/>' % (sTsIso, self.cErrors - cErrorsStart,),
                                  '</%s>' % (sName,), ]);
@@ -426,17 +506,22 @@ class LocalReporter(ReporterBase):
     def log(self, iLevel, sText, sCaller, sTsPrf):
         if iLevel <= self.iVerbose:
             # format it.
-            if self.iDebug > 0:
+            if self.iDebug <= 0:
+                sLogText = '%s %s' % (sTsPrf, sText);
+            elif self.iDebug <= 1:
                 sLogText = '%s %30s: %s' % (sTsPrf, sCaller, sText);
             else:
-                sLogText = '%s %s' % (sTsPrf, sText);
+                sLogText = '%s e=%u %30s: %s' % (sTsPrf, self.cErrors, sCaller, sText);
 
             # output it.
-            sAscii = sLogText.encode('ascii', 'replace');
-            if self.iDebug == 0:
-                print >> self.oStdErr, '%s: %s' % (self.sName, sAscii)
+            if sys.version_info[0] >= 3:
+                sAscii = sLogText;
             else:
-                print >> self.oStdErr, '%s' % (sAscii)
+                sAscii = sLogText.encode('ascii', 'replace');
+            if self.iDebug == 0:
+                print('%s: %s' % (self.sName, sAscii), file = self.oStdErr);
+            else:
+                print('%s' % (sAscii), file = self.oStdErr);
             sLogText += '\n';
             try:
                 self.oLogFile.write(sLogText.encode('utf-8'));
@@ -455,24 +540,24 @@ class LocalReporter(ReporterBase):
         # Open the destination file and copy over the data.
         fRc = True;
         try:
-            oDstFile = utils.openNoInherit(sDstFilename, 'w');
-        except Exception, oXcpt:
+            oDstFile = utils.openNoInherit(sDstFilename, 'wb');
+        except Exception as oXcpt:
             self.log(0, 'error opening %s: %s' % (sDstFilename, oXcpt), sCaller, sTsPrf);
         else:
             while True:
                 try:
                     abBuf = oSrcFile.read(65536);
-                except Exception, oXcpt:
+                except Exception as oXcpt:
                     fRc = False;
                     self.log(0, 'error reading %s: %s' % (sSrcFilename, oXcpt), sCaller, sTsPrf);
                 else:
                     try:
                         oDstFile.write(abBuf);
-                    except Exception, oXcpt:
+                    except Exception as oXcpt:
                         fRc = False;
                         self.log(0, 'error writing %s: %s' % (sDstFilename, oXcpt), sCaller, sTsPrf);
                     else:
-                        if len(abBuf) > 0:
+                        if abBuf:
                             continue;
                 break;
             oDstFile.close();
@@ -496,12 +581,12 @@ class LocalReporter(ReporterBase):
         fRc = True;
         try:
             oDstFile = utils.openNoInherit(sDstFilename, 'w');
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             self.log(0, 'error opening %s: %s' % (sDstFilename, oXcpt), sCaller, sTsPrf);
         else:
             try:
                 oDstFile.write(sLog);
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 fRc = False;
                 self.log(0, 'error writing %s: %s' % (sDstFilename, oXcpt), sCaller, sTsPrf);
 
@@ -584,25 +669,31 @@ class RemoteReporter(ReporterBase):
         self.fDebugXml          = 'TESTDRIVER_REPORTER_DEBUG_XML' in os.environ;
 
         # Prepare the TM connecting.
-        import urlparse;
-        import httplib;
-        import urllib;
         from common import constants;
-
-        self._fnUrlEncode       = urllib.urlencode;
-        self._fnUrlParseQs      = urlparse.parse_qs;
-        self._oParsedTmUrl      = urlparse.urlparse(self.sTestManagerUrl);
+        if sys.version_info[0] >= 3:
+            import urllib;
+            self._fnUrlEncode       = urllib.parse.urlencode;                       # pylint: disable=no-member
+            self._fnUrlParseQs      = urllib.parse.parse_qs;                        # pylint: disable=no-member
+            self._oParsedTmUrl      = urllib.parse.urlparse(self.sTestManagerUrl);  # pylint: disable=no-member
+            import http.client as httplib;                                      # pylint: disable=no-name-in-module,import-error
+        else:
+            import urllib;
+            self._fnUrlEncode       = urllib.urlencode;                             # pylint: disable=no-member
+            import urlparse;                                                        # pylint: disable=import-error
+            self._fnUrlParseQs      = urlparse.parse_qs;                            # pylint: disable=no-member
+            self._oParsedTmUrl      = urlparse.urlparse(self.sTestManagerUrl);      # pylint: disable=no-member
+            import httplib;                                                     # pylint: disable=no-name-in-module,import-error
 
         if     sys.version_info[0] >= 3 \
            or (sys.version_info[0] == 2 and sys.version_info[1] >= 6):
-            if self._oParsedTmUrl.scheme == 'https': # pylint: disable=E1101
+            if self._oParsedTmUrl.scheme == 'https': # pylint: disable=no-member
                 self._fnTmConnect = lambda: httplib.HTTPSConnection(self._oParsedTmUrl.hostname,
                                                                     timeout = self.kcSecTestManagerRequestTimeout);
             else:
                 self._fnTmConnect = lambda: httplib.HTTPConnection( self._oParsedTmUrl.hostname,
                                                                     timeout = self.kcSecTestManagerRequestTimeout);
         else:
-            if self._oParsedTmUrl.scheme == 'https': # pylint: disable=E1101
+            if self._oParsedTmUrl.scheme == 'https': # pylint: disable=no-member
                 self._fnTmConnect = lambda: httplib.HTTPSConnection(self._oParsedTmUrl.hostname);
             else:
                 self._fnTmConnect = lambda: httplib.HTTPConnection( self._oParsedTmUrl.hostname);
@@ -622,17 +713,20 @@ class RemoteReporter(ReporterBase):
             constants.tbreq.RESULT_PARAM_TEST_SET_ID:   self.idTestSet,
         };
         self._sTmServerPath = '/%s/testboxdisp.py?%s' \
-                            % ( self._oParsedTmUrl.path.strip('/'), # pylint: disable=E1101
-                                urllib.urlencode(dParams), );
+                            % ( self._oParsedTmUrl.path.strip('/'), # pylint: disable=no-member
+                                self._fnUrlEncode(dParams), );
 
     def __del__(self):
         """Flush pending log messages?"""
-        if len(self._asXml) > 0:
+        if self._asXml:
             self._xmlDoFlush(self._asXml, fRetry = True, fDtor = True);
 
     def _writeOutput(self, sText):
         """ Does the actual writing and flushing. """
-        print >> self.oOutput, sText.encode('ascii', 'replace');
+        if sys.version_info[0] >= 3:
+            print(sText, file = self.oOutput);
+        else:
+            print(sText.encode('ascii', 'replace'), file = self.oOutput);
         if self.fFlushEachLine: self.oOutput.flush();
         return None;
 
@@ -646,20 +740,25 @@ class RemoteReporter(ReporterBase):
         Returns True, False or None.  None should be retried, the others not.
         May raise exception on HTTP issue (retry ok).
         """
-        import httplib;
+        if sys.version_info[0] >= 3:    import http.client as httplib;  # pylint: disable=no-name-in-module,import-error
+        else:                           import httplib;                 # pylint: disable=import-error
         from common import constants;
 
         # Read the response and (optionally) close the connection.
         oResponse = oConn.getresponse();
         try:
             sRspBody  = oResponse.read();
-        except httplib.IncompleteRead, oXcpt:
+        except httplib.IncompleteRead as oXcpt:
             self._writeOutput('%s: %s: Warning: httplib.IncompleteRead: %s [expected %s, got %s]'
                               % (utils.getTimePrefix(), sOperation, oXcpt, oXcpt.expected, len(oXcpt.partial),));
             sRspBody = oXcpt.partial;
         if fClose is True:
             try:    oConn.close();
             except: pass;
+
+        # Make sure it's a string which encoding we grok.
+        if hasattr(sRspBody, 'decode'):
+            sRspBody = sRspBody.decode('utf-8', 'ignore');
 
         # Check the content type.
         sContentType = oResponse.getheader('Content-Type');
@@ -693,8 +792,13 @@ class RemoteReporter(ReporterBase):
         dHeader['Content-Type'] = 'application/octet-stream';
         self._writeOutput('%s: _doUploadFile: sHeader=%s' % (utils.getTimePrefix(), dHeader,));
         oSrcFile.seek(0, 2);
-        self._writeOutput('%s: _doUploadFile: size=%d' % (utils.getTimePrefix(), oSrcFile.tell(),));
+        cbFileSize = oSrcFile.tell();
+        self._writeOutput('%s: _doUploadFile: size=%d' % (utils.getTimePrefix(), cbFileSize,));
         oSrcFile.seek(0);
+
+        if cbFileSize <= 0: # The Test Manager will bitch if the file size is 0, so skip uploading.
+            self._writeOutput('%s: _doUploadFile: Empty file, skipping upload' % utils.getTimePrefix());
+            return False;
 
         from common import constants;
         sUrl = self._sTmServerPath + '&' \
@@ -795,7 +899,7 @@ class RemoteReporter(ReporterBase):
                 if fRc is False:
                     self._writeOutput('_xmlDoFlush: Failed - we should abort the test, really.');
                     return (None, True);
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 if not fDtor:
                     logXcpt('warning: exception during XML_RESULTS request');
                 else:
@@ -818,29 +922,47 @@ class RemoteReporter(ReporterBase):
 
     def log(self, iLevel, sText, sCaller, sTsPrf):
         if iLevel <= self.iVerbose:
-            if self.iDebug > 0:
+            if self.iDebug <= 0:
+                sLogText = '%s %s' % (sTsPrf, sText);
+            elif self.iDebug <= 1:
                 sLogText = '%s %30s: %s' % (sTsPrf, sCaller, sText);
             else:
-                sLogText = '%s %s: %s' % (sTsPrf, self.sName, sText);
+                sLogText = '%s e=%u %30s: %s' % (sTsPrf, self.cErrors, sCaller, sText);
             self._writeOutput(sLogText);
         return 0;
 
     def addLogFile(self, oSrcFile, sSrcFilename, sAltName, sDescription, sKind, sCaller, sTsPrf):
         fRc = True;
-        if sKind in [ 'text', 'log', ]  or  sKind.startswith('log/')  or  sKind.startswith('info/'):
+        if    sKind in [ 'text', 'log', 'process'] \
+           or sKind.startswith('log/') \
+           or sKind.startswith('info/') \
+           or sKind.startswith('process/'):
             self.log(0, '*** Uploading "%s" - KIND: "%s" - DESC: "%s" ***'
                         % (sSrcFilename, sKind, sDescription),  sCaller, sTsPrf);
             self.xmlFlush();
             g_oLock.release();
-            self._doUploadFile(oSrcFile, sAltName, sDescription, sKind, 'text/plain');
-            g_oLock.acquire();
+            try:
+                self._doUploadFile(oSrcFile, sAltName, sDescription, sKind, 'text/plain');
+            finally:
+                g_oLock.acquire();
         elif sKind.startswith('screenshot/'):
             self.log(0, '*** Uploading "%s" - KIND: "%s" - DESC: "%s" ***'
                         % (sSrcFilename, sKind, sDescription),  sCaller, sTsPrf);
             self.xmlFlush();
             g_oLock.release();
-            self._doUploadFile(oSrcFile, sAltName, sDescription, sKind, 'image/png');
-            g_oLock.acquire();
+            try:
+                self._doUploadFile(oSrcFile, sAltName, sDescription, sKind, 'image/png');
+            finally:
+                g_oLock.acquire();
+        elif sKind.startswith('misc/'):
+            self.log(0, '*** Uploading "%s" - KIND: "%s" - DESC: "%s" ***'
+                        % (sSrcFilename, sKind, sDescription),  sCaller, sTsPrf);
+            self.xmlFlush();
+            g_oLock.release();
+            try:
+                self._doUploadFile(oSrcFile, sAltName, sDescription, sKind, 'application/octet-stream');
+            finally:
+                g_oLock.acquire();
         else:
             self.log(0, '*** UNKNOWN FILE "%s" - KIND "%s" - DESC "%s" ***'
                      % (sSrcFilename, sKind, sDescription),  sCaller, sTsPrf);
@@ -848,13 +970,18 @@ class RemoteReporter(ReporterBase):
 
     def addLogString(self, sLog, sLogName, sDescription, sKind, sCaller, sTsPrf):
         fRc = True;
-        if sKind in [ 'text', 'log', ]  or  sKind.startswith('log/')  or  sKind.startswith('info/'):
+        if    sKind in [ 'text', 'log', 'process'] \
+           or sKind.startswith('log/') \
+           or sKind.startswith('info/') \
+           or sKind.startswith('process/'):
             self.log(0, '*** Uploading "%s" - KIND: "%s" - DESC: "%s" ***'
                         % (sLogName, sKind, sDescription),  sCaller, sTsPrf);
             self.xmlFlush();
             g_oLock.release();
-            self._doUploadString(sLog, sLogName, sDescription, sKind, 'text/plain');
-            g_oLock.acquire();
+            try:
+                self._doUploadString(sLog, sLogName, sDescription, sKind, 'text/plain');
+            finally:
+                g_oLock.acquire();
         else:
             self.log(0, '*** UNKNOWN FILE "%s" - KIND "%s" - DESC "%s" ***'
                      % (sLogName, sKind, sDescription),  sCaller, sTsPrf);
@@ -868,12 +995,14 @@ class RemoteReporter(ReporterBase):
         if not self._fXmlFlushing:
             asXml = self._asXml;
             self._asXml = [];
-            if len(asXml) > 0  or  fForce is True:
+            if asXml or fForce is True:
                 self._fXmlFlushing = True;
 
                 g_oLock.release();
-                (asXml, fIncErrors) = self._xmlDoFlush(asXml, fRetry = fRetry);
-                g_oLock.acquire();
+                try:
+                    (asXml, fIncErrors) = self._xmlDoFlush(asXml, fRetry = fRetry);
+                finally:
+                    g_oLock.acquire();
 
                 if fIncErrors:
                     self.testIncErrors();
@@ -931,18 +1060,22 @@ class RemoteReporter(ReporterBase):
         ## @todo should validate the document here and maybe auto terminate things.  Adding some hints to have the server do
         # this instead.
         g_oLock.acquire();
-        self._asXml += [ '<PushHint testdepth="%d"/>' % (len(self.atTests),),
-                         sRawXml,
-                         '<PopHint  testdepth="%d"/>' % (len(self.atTests),),];
-        self._xmlFlushIfNecessary();
-        g_oLock.release();
+        try:
+            self._asXml += [ '<PushHint testdepth="%d"/>' % (len(self.atTests),),
+                             sRawXml,
+                             '<PopHint  testdepth="%d"/>' % (len(self.atTests),),];
+            self._xmlFlushIfNecessary();
+        finally:
+            g_oLock.release();
         return None;
 
     def doPollWork(self, sDebug = None):
-        if len(self._asXml) > 0:
+        if self._asXml:
             g_oLock.acquire();
-            self._xmlFlushIfNecessary(fPolling = True, sDebug = sDebug);
-            g_oLock.release();
+            try:
+                self._xmlFlushIfNecessary(fPolling = True, sDebug = sDebug);
+            finally:
+                g_oLock.release();
         return None;
 
 
@@ -950,64 +1083,118 @@ class RemoteReporter(ReporterBase):
 # Helpers
 #
 
+g_fnComXcptFormatter = None;
+
+def setComXcptFormatter(fnCallback):
+    """
+    Install callback for prettier COM exception formatting.
+
+    The callback replaces the work done by format_exception_only() and
+    takes the same arguments.  It returns None if not interested in the
+    exception.
+    """
+    global g_fnComXcptFormatter;
+    g_fnComXcptFormatter = fnCallback;
+    return True;
+
+def formatExceptionOnly(oType, oXcpt, sCaller, sTsPrf):
+    """
+    Wrapper around traceback.format_exception_only and __g_fnComXcptFormatter.
+    """
+    #asRet = ['oType=%s type(oXcpt)=%s' % (oType, type(oXcpt),)];
+    asRet = [];
+
+    # Try the callback first.
+    fnCallback = g_fnComXcptFormatter;
+    if fnCallback:
+        try:
+            asRetCb = fnCallback(oType, oXcpt);
+            if asRetCb:
+                return asRetCb;
+                #asRet += asRetCb;
+        except:
+            g_oReporter.log(0, '** internal-error: Hit exception #2 in __g_fnComXcptFormatter! %s'
+                            % (traceback.format_exc()), sCaller, sTsPrf);
+            asRet += ['internal error: exception in __g_fnComXcptFormatter'];
+
+    # Now try format_exception_only:
+    try:
+        asRet += traceback.format_exception_only(oType, oXcpt);
+    except:
+        g_oReporter.log(0, '** internal-error: Hit exception #2 in format_exception_only! %s'
+                        % (traceback.format_exc()), sCaller, sTsPrf);
+        asRet += ['internal error: Exception in format_exception_only!'];
+    return asRet;
+
+
 def logXcptWorker(iLevel, fIncErrors, sPrefix="", sText=None, cFrames=1):
     """
     Log an exception, optionally with a preceeding message and more than one
     call frame.
     """
     g_oLock.acquire();
-    if fIncErrors:
-        g_oReporter.testIncErrors();
-
-    ## @todo skip all this if iLevel is too high!
-
-    # Try get exception info.
-    sTsPrf = utils.getTimePrefix();
     try:
-        oType, oValue, oTraceback = sys.exc_info();
-    except:
-        oType = oValue = oTraceback = None;
-    if oType is not None:
 
-        # Try format the info
+        if fIncErrors:
+            g_oReporter.testIncErrors();
+
+        ## @todo skip all this if iLevel is too high!
+
+        # Try get exception info.
+        sTsPrf = utils.getTimePrefix();
         try:
-            rc      = 0;
-            sCaller = utils.getCallerName(oTraceback.tb_frame);
-            if sText is not None:
-                rc = g_oReporter.log(iLevel, "%s%s" % (sPrefix, sText), sCaller, sTsPrf);
-            asInfo = [];
-            try:
-                asInfo = asInfo + traceback.format_exception_only(oType, oValue);
-                if cFrames is not None and cFrames <= 1:
-                    asInfo = asInfo + traceback.format_tb(oTraceback, 1);
-                else:
-                    asInfo.append('Traceback:')
-                    asInfo = asInfo + traceback.format_tb(oTraceback, cFrames);
-                    asInfo.append('Stack:')
-                    asInfo = asInfo + traceback.format_stack(oTraceback.tb_frame.f_back, cFrames);
-            except:
-                g_oReporter.log(0, '** internal-error: Hit exception #2! %s' % (traceback.format_exc()), sCaller, sTsPrf);
-
-            if len(asInfo) > 0:
-                # Do the logging.
-                for sItem in asInfo:
-                    asLines = sItem.splitlines();
-                    for sLine in asLines:
-                        rc = g_oReporter.log(iLevel, '%s%s' % (sPrefix, sLine), sCaller, sTsPrf);
-
-            else:
-                g_oReporter.log(iLevel, 'No exception info...', sCaller, sTsPrf);
-                rc = -3;
+            oType, oValue, oTraceback = sys.exc_info();
         except:
-            g_oReporter.log(0, '** internal-error: Hit exception! %s' % (traceback.format_exc()), None, sTsPrf);
-            rc = -2;
-    else:
-        g_oReporter.log(0, '** internal-error: No exception! %s'
-                        % (utils.getCallerName(iFrame=3)), utils.getCallerName(iFrame=3), sTsPrf);
-        rc = -1;
+            oType = oValue = oTraceback = None;
+        if oType is not None:
 
-    g_oLock.release();
+            # Try format the info
+            try:
+                rc      = 0;
+                sCaller = utils.getCallerName(oTraceback.tb_frame);
+                if sText is not None:
+                    rc = g_oReporter.log(iLevel, "%s%s" % (sPrefix, sText), sCaller, sTsPrf);
+                asInfo = None;
+                try:
+                    asInfo = formatExceptionOnly(oType, oValue, sCaller, sTsPrf);
+                    atEntries = traceback.extract_tb(oTraceback);
+                    atEntries.reverse();
+                    if cFrames is not None and cFrames <= 1:
+                        if atEntries:
+                            asInfo = asInfo + traceback.format_list(atEntries[:1]);
+                    else:
+                        asInfo.append('Traceback (stack order):')
+                        if cFrames is not None and cFrames < len(atEntries):
+                            asInfo = asInfo + traceback.format_list(atEntries[:cFrames]);
+                        else:
+                            asInfo = asInfo + traceback.format_list(atEntries);
+                        asInfo.append('Stack:')
+                        asInfo = asInfo + traceback.format_stack(oTraceback.tb_frame.f_back, cFrames);
+                except:
+                    g_oReporter.log(0, '** internal-error: Hit exception #2! %s' % (traceback.format_exc()), sCaller, sTsPrf);
+
+                if asInfo:
+                    # Do the logging.
+                    for sItem in asInfo:
+                        asLines = sItem.splitlines();
+                        for sLine in asLines:
+                            rc = g_oReporter.log(iLevel, '%s%s' % (sPrefix, sLine), sCaller, sTsPrf);
+
+                else:
+                    g_oReporter.log(iLevel, 'No exception info...', sCaller, sTsPrf);
+                    rc = -3;
+            except:
+                g_oReporter.log(0, '** internal-error: Hit exception! %s' % (traceback.format_exc()), None, sTsPrf);
+                rc = -2;
+        else:
+            g_oReporter.log(0, '** internal-error: No exception! %s'
+                            % (utils.getCallerName(iFrame=3)), utils.getCallerName(iFrame=3), sTsPrf);
+            rc = -1;
+
+    finally:
+        g_oLock.release();
     return rc;
+
 
 #
 # The public Classes
@@ -1032,11 +1219,21 @@ class FileWrapper(object):
 
     def write(self, sText):
         """file.write"""
-        if isinstance(sText, array.array):
-            try:
-                sText = sText.tostring();
-            except:
-                pass;
+        if not utils.isString(sText):
+            if isinstance(sText, array.array):
+                try:
+                    if sys.version_info < (3, 9, 0):
+                        # Removed since Python 3.9.
+                        sText = sText.tostring(); # pylint: disable=no-member
+                    else:
+                        sText = sText.tobytes();
+                except:
+                    pass;
+            if hasattr(sText, 'decode'):
+                try:
+                    sText = sText.decode('utf-8', 'ignore');
+                except:
+                    pass;
         g_oLock.acquire();
         try:
             sTsPrf  = utils.getTimePrefix();
@@ -1046,16 +1243,23 @@ class FileWrapper(object):
                 g_oReporter.log(0, '%s: %s' % (self.sPrefix, sLine), sCaller, sTsPrf);
         except:
             traceback.print_exc();
-        g_oLock.release();
+        finally:
+            g_oLock.release();
         return None;
 
 class FileWrapperTestPipe(object):
-    """ File like class for the test pipe (TXS EXEC and similar). """
+    """
+    File like class for the test pipe (TXS EXEC and similar).
+
+    This is also used to submit XML test result files.
+    """
     def __init__(self):
         self.sPrefix    = '';
         self.fStarted   = False;
         self.fClosed    = False;
         self.sTagBuffer = None;
+        self.cTestDepth = 0;
+        self.acTestErrors = [];
 
     def __del__(self):
         self.close();
@@ -1064,6 +1268,22 @@ class FileWrapperTestPipe(object):
         """ file.close """
         if self.fStarted is True and self.fClosed is False:
             self.fClosed = True;
+
+            # Close open <Test> elements:
+            if self.cTestDepth > 0:
+                sNow = utils.getIsoTimestamp()
+                cErrors = 0;
+                while self.cTestDepth > 0:
+                    self.cTestDepth -= 1;
+                    if self.acTestErrors:
+                        cErrors += self.acTestErrors.pop();
+                    cErrors += 1;
+                    g_oReporter.subXmlWrite(self,
+                                            '\n%s  <Failed timestamp="%s" errors="%s"/>\n%s</Test>\n'
+                                            % ('  ' * self.cTestDepth, sNow, cErrors, '  ' * self.cTestDepth),
+                                            utils.getCallerName());
+
+            # Tell the reporter that the XML input is done.
             try:    g_oReporter.subXmlEnd(self);
             except:
                 try:    traceback.print_exc();
@@ -1085,58 +1305,69 @@ class FileWrapperTestPipe(object):
                 traceback.print_exc();
             self.fStarted = True;
 
-        if isinstance(sText, array.array):
-            try:
-                sText = sText.tostring();
-            except:
-                pass;
+        # Turn non-string stuff into strings.
+        if not utils.isString(sText):
+            if isinstance(sText, array.array):
+                try:
+                    if sys.version_info < (3, 9, 0):
+                        # Removed since Python 3.9.
+                        sText = sText.tostring(); # pylint: disable=no-member
+                    else:
+                        sText = sText.tobytes();
+                except:
+                    pass;
+            if hasattr(sText, 'decode'):
+                try:    sText = sText.decode('utf-8', 'ignore');
+                except: pass;
+
         try:
+            #
+            # Write the XML to the reporter.
+            #
             g_oReporter.subXmlWrite(self, sText, utils.getCallerName());
+
+            #
             # Parse the supplied text and look for <Failed.../> tags to keep track of the
             # error counter. This is only a very lazy aproach.
-            sText.strip();
+            #
             idxText = 0;
-            while len(sText) > 0:
+            while sText:
                 if self.sTagBuffer is None:
                     # Look for the start of a tag.
-                    idxStart = sText[idxText:].find('<');
+                    idxStart = sText.find('<', idxText);
                     if idxStart != -1:
-                        # Look for the end of the tag.
-                        idxEnd = sText[idxStart:].find('>');
-
                         # If the end was found inside the current buffer, parse the line,
-                        # else we have to save it for later.
+                        # otherwise we have to save it for later.
+                        idxEnd = sText.find('>', idxStart);
                         if idxEnd != -1:
-                            idxEnd += idxStart + 1;
-                            self._processXmlElement(sText[idxStart:idxEnd]);
+                            self._processXmlElement(sText[idxStart:idxEnd+1]);
                             idxText = idxEnd;
                         else:
                             self.sTagBuffer = sText[idxStart:];
-                            idxText = len(sText);
+                            break;
                     else:
-                        idxText = len(sText);
+                        break;
                 else:
                     # Search for the end of the tag and parse the whole tag.
-                    idxEnd = sText[idxText:].find('>');
+                    assert(idxText == 0);
+                    idxEnd = sText.find('>');
                     if idxEnd != -1:
-                        idxEnd += idxStart + 1;
-                        self._processXmlElement(self.sTagBuffer + sText[idxText:idxEnd]);
+                        self._processXmlElement(self.sTagBuffer + sText[:idxEnd+1]);
                         self.sTagBuffer = None;
                         idxText = idxEnd;
                     else:
                         self.sTagBuffer = self.sTagBuffer + sText[idxText:];
-                        idxText = len(sText);
-
-                sText = sText[idxText:];
-                sText = sText.lstrip();
+                        break;
         except:
             traceback.print_exc();
         return None;
 
     def _processXmlElement(self, sElement):
         """
-        Processes a complete XML tag (so far we only search for the Failed to tag
-        to keep track of the error counter.
+        Processes a complete XML tag.
+
+        We handle the 'Failed' tag to keep track of the error counter.
+        We also track 'Test' tags to make sure we close with all of them properly closed.
         """
         # Make sure we don't parse any space between < and the element name.
         sElement = sElement.strip();
@@ -1144,17 +1375,34 @@ class FileWrapperTestPipe(object):
         # Find the end of the name
         idxEndName = sElement.find(' ');
         if idxEndName == -1:
-            idxEndName = sElement.find('/');
-        if idxEndName == -1:
             idxEndName = sElement.find('>');
+            if idxEndName >= 0:
+                if sElement[idxEndName - 1] == '/':
+                    idxEndName -= 1;
+            else:
+                idxEndName = len(sElement);
+        sElementName = sElement[1:idxEndName];
 
-        if idxEndName != -1:
-            if sElement[1:idxEndName] == 'Failed':
-                g_oLock.acquire();
+        # <Failed>:
+        if sElementName == 'Failed':
+            g_oLock.acquire();
+            try:
                 g_oReporter.testIncErrors();
+            finally:
                 g_oLock.release();
-        else:
-            error('_processXmlElement(%s)' % sElement);
+            if self.acTestErrors:
+                self.acTestErrors[-1] += 1; # get errors attrib
+        # <Test>
+        elif sElementName == 'Test':
+            self.cTestDepth += 1;
+            self.acTestErrors.append(0);
+        # </Test>
+        elif sElementName == '/Test':
+            self.cTestDepth -= 1;
+            if self.acTestErrors:
+                cErrors = self.acTestErrors.pop();
+                if self.acTestErrors:
+                    self.acTestErrors[-1] += cErrors;
 
 
 #
@@ -1168,7 +1416,8 @@ def log(sText):
         rc = g_oReporter.log(1, sText, utils.getCallerName(), utils.getTimePrefix());
     except:
         rc = -1;
-    g_oLock.release();
+    finally:
+        g_oLock.release();
     return rc;
 
 def logXcpt(sText=None, cFrames=1):
@@ -1185,7 +1434,8 @@ def log2(sText):
         rc = g_oReporter.log(2, sText, utils.getCallerName(), utils.getTimePrefix());
     except:
         rc = -1;
-    g_oLock.release();
+    finally:
+        g_oLock.release();
     return rc;
 
 def log2Xcpt(sText=None, cFrames=1):
@@ -1194,6 +1444,78 @@ def log2Xcpt(sText=None, cFrames=1):
     more than one call frame.
     """
     return logXcptWorker(2, False, "", sText, cFrames);
+
+def log3(sText):
+    """Log level 3: Writes the specfied text to the log."""
+    g_oLock.acquire();
+    try:
+        rc = g_oReporter.log(3, sText, utils.getCallerName(), utils.getTimePrefix());
+    except:
+        rc = -1;
+    finally:
+        g_oLock.release();
+    return rc;
+
+def log3Xcpt(sText=None, cFrames=1):
+    """
+    Log level 3: Log an exception, optionally with a preceeding message and
+    more than one call frame.
+    """
+    return logXcptWorker(3, False, "", sText, cFrames);
+
+def log4(sText):
+    """Log level 4: Writes the specfied text to the log."""
+    g_oLock.acquire();
+    try:
+        rc = g_oReporter.log(4, sText, utils.getCallerName(), utils.getTimePrefix());
+    except:
+        rc = -1;
+    finally:
+        g_oLock.release();
+    return rc;
+
+def log4Xcpt(sText=None, cFrames=1):
+    """
+    Log level 4: Log an exception, optionally with a preceeding message and
+    more than one call frame.
+    """
+    return logXcptWorker(4, False, "", sText, cFrames);
+
+def log5(sText):
+    """Log level 2: Writes the specfied text to the log."""
+    g_oLock.acquire();
+    try:
+        rc = g_oReporter.log(5, sText, utils.getCallerName(), utils.getTimePrefix());
+    except:
+        rc = -1;
+    finally:
+        g_oLock.release();
+    return rc;
+
+def log5Xcpt(sText=None, cFrames=1):
+    """
+    Log level 5: Log an exception, optionally with a preceeding message and
+    more than one call frame.
+    """
+    return logXcptWorker(5, False, "", sText, cFrames);
+
+def log6(sText):
+    """Log level 6: Writes the specfied text to the log."""
+    g_oLock.acquire();
+    try:
+        rc = g_oReporter.log(6, sText, utils.getCallerName(), utils.getTimePrefix());
+    except:
+        rc = -1;
+    finally:
+        g_oLock.release();
+    return rc;
+
+def log6Xcpt(sText=None, cFrames=1):
+    """
+    Log level 6: Log an exception, optionally with a preceeding message and
+    more than one call frame.
+    """
+    return logXcptWorker(6, False, "", sText, cFrames);
 
 def maybeErr(fIsError, sText):
     """ Maybe error or maybe normal log entry. """
@@ -1229,12 +1551,13 @@ def error(sText):
     success indicators.
     """
     g_oLock.acquire();
-    g_oReporter.testIncErrors();
     try:
+        g_oReporter.testIncErrors();
         g_oReporter.log(0, '** error: %s' % (sText), utils.getCallerName(), utils.getTimePrefix());
     except:
         pass;
-    g_oLock.release();
+    finally:
+        g_oLock.release();
     return False;
 
 def errorXcpt(sText=None, cFrames=1):
@@ -1260,12 +1583,13 @@ def errorTimeout(sText):
     success indicators.
     """
     g_oLock.acquire();
-    g_oReporter.testSetTimedOut();
     try:
+        g_oReporter.testSetTimedOut();
         g_oReporter.log(0, '** timeout-error: %s' % (sText), utils.getCallerName(), utils.getTimePrefix());
     except:
         pass;
-    g_oLock.release();
+    finally:
+        g_oLock.release();
     return False;
 
 def fatal(sText):
@@ -1278,12 +1602,13 @@ def fatal(sText):
     success indicators.
     """
     g_oLock.acquire();
-    g_oReporter.testIncErrors();
     try:
+        g_oReporter.testIncErrors();
         g_oReporter.log(0, '** fatal error: %s' % (sText), utils.getCallerName(), utils.getTimePrefix());
     except:
         pass
-    g_oLock.release();
+    finally:
+        g_oLock.release();
     return False;
 
 def fatalXcpt(sText=None, cFrames=1):
@@ -1319,7 +1644,7 @@ def addLogFile(sFilename, sKind, sDescription = '', sAltName = None):
 
     try:
         oSrcFile = utils.openNoInherit(sFilename, 'rb');
-    except IOError, oXcpt:
+    except IOError as oXcpt:
         if oXcpt.errno != errno.ENOENT:
             logXcpt('addLogFile(%s,%s,%s)' % (sFilename, sDescription, sKind));
         else:
@@ -1328,9 +1653,11 @@ def addLogFile(sFilename, sKind, sDescription = '', sAltName = None):
         logXcpt('addLogFile(%s,%s,%s)' % (sFilename, sDescription, sKind));
     else:
         g_oLock.acquire();
-        fRc = g_oReporter.addLogFile(oSrcFile, sFilename, sAltName, sDescription, sKind, sCaller, sTsPrf);
-        g_oLock.release();
-        oSrcFile.close();
+        try:
+            fRc = g_oReporter.addLogFile(oSrcFile, sFilename, sAltName, sDescription, sKind, sCaller, sTsPrf);
+        finally:
+            g_oLock.release();
+            oSrcFile.close();
     return fRc;
 
 def addLogString(sLog, sLogName, sKind, sDescription = ''):
@@ -1351,8 +1678,10 @@ def addLogString(sLog, sLogName, sKind, sDescription = ''):
     fRc     = False;
 
     g_oLock.acquire();
-    fRc = g_oReporter.addLogString(sLog, sLogName, sDescription, sKind, sCaller, sTsPrf);
-    g_oLock.release();
+    try:
+        fRc = g_oReporter.addLogString(sLog, sLogName, sDescription, sKind, sCaller, sTsPrf);
+    finally:
+        g_oLock.release();
     return fRc;
 
 def isLocal():
@@ -1367,13 +1696,30 @@ def incDebug():
     """Increases the debug level."""
     return g_oReporter.incDebug()
 
+def getVerbosity():
+    """Returns the current verbosity level."""
+    return g_oReporter.getVerbosity()
+
+def getDebug():
+    """Returns the current debug level."""
+    return g_oReporter.getDebug()
+
+def appendToProcessName(sAppend):
+    """
+    Appends sAppend to the base process name.
+    Returns the new process name.
+    """
+    return g_oReporter.appendToProcessName(sAppend);
+
 def getErrorCount():
     """
     Get the current error count for the entire test run.
     """
     g_oLock.acquire();
-    cErrors = g_oReporter.cErrors;
-    g_oLock.release();
+    try:
+        cErrors = g_oReporter.cErrors;
+    finally:
+        g_oLock.release();
     return cErrors;
 
 def doPollWork(sDebug = None):
@@ -1394,8 +1740,10 @@ def testStart(sName):
     Starts a new test (pushes it).
     """
     g_oLock.acquire();
-    rc = g_oReporter.testStart(sName, utils.getCallerName());
-    g_oLock.release();
+    try:
+        rc = g_oReporter.testStart(sName, utils.getCallerName());
+    finally:
+        g_oLock.release();
     return rc;
 
 def testValue(sName, sValue, sUnit):
@@ -1403,8 +1751,10 @@ def testValue(sName, sValue, sUnit):
     Reports a benchmark value or something simiarlly useful.
     """
     g_oLock.acquire();
-    rc = g_oReporter.testValue(sName, str(sValue), sUnit, utils.getCallerName());
-    g_oLock.release();
+    try:
+        rc = g_oReporter.testValue(sName, str(sValue), sUnit, utils.getCallerName());
+    finally:
+        g_oLock.release();
     return rc;
 
 def testFailure(sDetails):
@@ -1415,8 +1765,10 @@ def testFailure(sDetails):
     Returns False so that a return False line can be saved.
     """
     g_oLock.acquire();
-    g_oReporter.testFailure(sDetails, utils.getCallerName());
-    g_oLock.release();
+    try:
+        g_oReporter.testFailure(sDetails, utils.getCallerName());
+    finally:
+        g_oLock.release();
     return False;
 
 def testFailureXcpt(sDetails = ''):
@@ -1433,18 +1785,20 @@ def testFailureXcpt(sDetails = ''):
         oType = oValue, oTraceback = None;
     if oType is not None:
         sCaller = utils.getCallerName(oTraceback.tb_frame);
-        sXcpt   = ' '.join(traceback.format_exception_only(oType, oValue));
+        sXcpt   = ' '.join(formatExceptionOnly(oType, oValue, sCaller, utils.getTimePrefix()));
     else:
         sCaller = utils.getCallerName();
         sXcpt   = 'No exception at %s' % (sCaller,);
 
     # Use testFailure to do the work.
     g_oLock.acquire();
-    if sDetails == '':
-        g_oReporter.testFailure('Exception: %s' % (sXcpt,), sCaller);
-    else:
-        g_oReporter.testFailure('%s: %s' % (sDetails, sXcpt), sCaller);
-    g_oLock.release();
+    try:
+        if sDetails == '':
+            g_oReporter.testFailure('Exception: %s' % (sXcpt,), sCaller);
+        else:
+            g_oReporter.testFailure('%s: %s' % (sDetails, sXcpt), sCaller);
+    finally:
+        g_oLock.release();
     return False;
 
 def testDone(fSkipped = False):
@@ -1454,8 +1808,10 @@ def testDone(fSkipped = False):
     Returns a tuple with the name of the test and its error count.
     """
     g_oLock.acquire();
-    rc = g_oReporter.testDone(fSkipped, utils.getCallerName());
-    g_oLock.release();
+    try:
+        rc = g_oReporter.testDone(fSkipped, utils.getCallerName());
+    finally:
+        g_oLock.release();
     return rc;
 
 def testErrorCount():
@@ -1465,8 +1821,10 @@ def testErrorCount():
     Returns the number of errors.
     """
     g_oLock.acquire();
-    cErrors = g_oReporter.testErrorCount();
-    g_oLock.release();
+    try:
+        cErrors = g_oReporter.testErrorCount();
+    finally:
+        g_oLock.release();
     return cErrors;
 
 def testCleanup():
@@ -1476,9 +1834,12 @@ def testCleanup():
     Returns True if no open tests, False if something had to be closed with failure.
     """
     g_oLock.acquire();
-    fRc = g_oReporter.testCleanup(utils.getCallerName());
-    g_oReporter.xmlFlush(fRetry = False, fForce = True);
-    g_oLock.release();
+    try:
+        fRc = g_oReporter.testCleanup(utils.getCallerName());
+        g_oReporter.xmlFlush(fRetry = False, fForce = True);
+    finally:
+        g_oLock.release();
+        fRc = False;
     return fRc;
 
 
@@ -1493,7 +1854,7 @@ def addSubXmlFile(sFilename):
     fRc = False;
     try:
         oSrcFile = utils.openNoInherit(sFilename, 'r');
-    except IOError, oXcpt:
+    except IOError as oXcpt:
         if oXcpt.errno != errno.ENOENT:
             logXcpt('addSubXmlFile(%s)' % (sFilename,));
     except:
@@ -1523,7 +1884,7 @@ def logAllStacks(cFrames = None):
     g_oLock.acquire();
 
     cThread = 0;
-    for idThread, oStack in sys._current_frames().items(): # >=2.5, a bit ugly - pylint: disable=W0212
+    for idThread, oStack in sys._current_frames().items(): # >=2.5, a bit ugly - pylint: disable=protected-access
         try:
             if cThread > 0:
                 g_oReporter.log(1, '', sCaller, sTsPrf);
@@ -1554,8 +1915,11 @@ def checkTestManagerConnection():
     Note! This as the sideeffect of flushing XML.
     """
     g_oLock.acquire();
-    fRc = g_oReporter.xmlFlush(fRetry = False, fForce = True);
-    g_oLock.release();
+    try:
+        fRc = g_oReporter.xmlFlush(fRetry = False, fForce = True);
+    finally:
+        g_oLock.release();
+        fRc = False;
     return fRc;
 
 def flushall(fSkipXml = False):
@@ -1570,8 +1934,10 @@ def flushall(fSkipXml = False):
 
     if fSkipXml is not True:
         g_oLock.acquire();
-        g_oReporter.xmlFlush(fRetry = False);
-        g_oLock.release();
+        try:
+            g_oReporter.xmlFlush(fRetry = False);
+        finally:
+            g_oLock.release();
 
     return True;
 
@@ -1592,9 +1958,8 @@ def _InitReporterModule():
     elif g_sReporterName == "remote":
         g_oReporter = RemoteReporter(); # Correct, but still plain stupid. pylint: disable=redefined-variable-type
     else:
-        print >> sys.stderr, os.path.basename(__file__) + ": Unknown TESTBOX_REPORTER value: '" + g_sReporterName + "'";
+        print(os.path.basename(__file__) + ": Unknown TESTBOX_REPORTER value: '" + g_sReporterName + "'", file = sys.stderr);
         raise Exception("Unknown TESTBOX_REPORTER value '" + g_sReporterName + "'");
 
 if __name__ != "checker": # pychecker avoidance.
     _InitReporterModule();
-

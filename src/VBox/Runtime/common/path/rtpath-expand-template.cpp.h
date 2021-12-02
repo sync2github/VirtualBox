@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: rtpath-expand-template.cpp.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTPath - Internal header that includes RTPATH_TEMPLATE_CPP_H multiple
  *                 times to expand the code for different path styles.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;

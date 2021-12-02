@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: vcsrevisions.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 Test Manager - VcsRevisions
@@ -7,7 +7,7 @@ Test Manager - VcsRevisions
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard python imports.
@@ -51,6 +51,7 @@ class VcsRevisionData(ModelDataBase):
 
     kasAllowNullAttributes      = [ ];
     kfAllowUnicode_sMessage     = True;
+    kcchMax_sMessage            = 8192;
 
     def __init__(self):
         ModelDataBase.__init__(self);
@@ -103,7 +104,7 @@ class VcsRevisionData(ModelDataBase):
         return self;
 
 
-class VcsRevisionLogic(ModelLogicBase): # pylint: disable=R0903
+class VcsRevisionLogic(ModelLogicBase): # pylint: disable=too-few-public-methods
     """
     VCS revisions database logic.
     """
@@ -112,14 +113,14 @@ class VcsRevisionLogic(ModelLogicBase): # pylint: disable=R0903
     # Standard methods.
     #
 
-    def fetchForListing(self, iStart, cMaxRows, tsNow):
+    def fetchForListing(self, iStart, cMaxRows, tsNow, aiSortColumns = None):
         """
         Fetches VCS revisions for listing.
 
         Returns an array (list) of VcsRevisionData items, empty list if none.
         Raises exception on error.
         """
-        _ = tsNow;
+        _ = tsNow; _ = aiSortColumns;
         self._oDb.execute('SELECT   *\n'
                           'FROM     VcsRevisions\n'
                           'ORDER BY tsCreated, sRepository, iRevision\n'
@@ -142,7 +143,7 @@ class VcsRevisionLogic(ModelLogicBase): # pylint: disable=R0903
         aaoRows = self._oDb.fetchAll();
         if len(aaoRows) == 1:
             return VcsRevisionData().initFromDbRow(aaoRows[0]);
-        if len(aaoRows) != 0:
+        if aaoRows:
             raise TMExceptionBase('VcsRevisions has a primary key problem: %u duplicates' % (len(aaoRows),));
         return None
 
@@ -159,7 +160,7 @@ class VcsRevisionLogic(ModelLogicBase): # pylint: disable=R0903
 
         # Check VcsRevisionData before do anything
         dDataErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Add);
-        if len(dDataErrors) > 0:
+        if dDataErrors:
             raise TMExceptionBase('Invalid data passed to addVcsRevision(): %s' % (dDataErrors,));
 
         # Does it already exist?
@@ -232,7 +233,7 @@ class VcsRevisionLogic(ModelLogicBase): # pylint: disable=R0903
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class VcsRevisionDataTestCase(ModelDataBaseTestCase):
     def setUp(self):
         self.aoSamples = [VcsRevisionData(),];

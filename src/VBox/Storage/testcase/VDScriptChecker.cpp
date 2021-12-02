@@ -1,11 +1,10 @@
-/** $Id$ */
+/* $Id: VDScriptChecker.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * VBox HDD container test utility - scripting engine, type and context checker.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,15 +14,18 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
 #define LOGGROUP LOGGROUP_DEFAULT
+#include <iprt/assert.h>
+#include <iprt/errcore.h>
 #include <iprt/list.h>
 #include <iprt/mem.h>
-#include <iprt/assert.h>
 
 #include <VBox/log.h>
 
 #include "VDScriptAst.h"
 #include "VDScriptInternal.h"
+
 
 DECLHIDDEN(int) vdScriptCtxCheck(PVDSCRIPTCTXINT pThis)
 {

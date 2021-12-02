@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxDD2.h 86639 2020-10-20 10:16:15Z vboxsync $ */
 /** @file
  * Built-in drivers & devices part 2 header.
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___build_VBoxDD2_h
-#define ___build_VBoxDD2_h
+#ifndef VBOX_INCLUDED_SRC_build_VBoxDD2_h
+#define VBOX_INCLUDED_SRC_build_VBoxDD2_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vmm/pdm.h>
 
@@ -41,6 +44,12 @@ extern DECLEXPORT(const unsigned)       g_cbVgaBiosBinary8086;
 extern DECLEXPORT(const unsigned char)  g_abNetBiosBinary[];
 extern DECLEXPORT(const unsigned)       g_cbNetBiosBinary;
 # endif
+# ifdef VBOX_WITH_EFI_IN_DD2
+extern DECLEXPORT(const unsigned char)  g_abEfiFirmware32[];
+extern DECLEXPORT(const unsigned)       g_cbEfiFirmware32;
+extern DECLEXPORT(const unsigned char)  g_abEfiFirmware64[];
+extern DECLEXPORT(const unsigned)       g_cbEfiFirmware64;
+# endif
 #else  /* !IN_VBOXDD2 */
 extern DECLIMPORT(const unsigned char)  g_abPcBiosBinary386[];
 extern DECLIMPORT(const unsigned)       g_cbPcBiosBinary386;
@@ -58,14 +67,14 @@ extern DECLIMPORT(const unsigned)       g_cbVgaBiosBinary8086;
 extern DECLIMPORT(const unsigned char)  g_abNetBiosBinary[];
 extern DECLIMPORT(const unsigned)       g_cbNetBiosBinary;
 # endif
+# ifdef VBOX_WITH_EFI_IN_DD2
+extern DECLIMPORT(const unsigned char)  g_abEfiFirmware32[];
+extern DECLIMPORT(const unsigned)       g_cbEfiFirmware32;
+extern DECLIMPORT(const unsigned char)  g_abEfiFirmware64[];
+extern DECLIMPORT(const unsigned)       g_cbEfiFirmware64;
+# endif
 #endif /* !IN_VBOXDD2 */
-
-#ifndef VBOX_WITH_NEW_IOAPIC
-extern const PDMDEVREG g_DeviceIOAPIC;
-#endif
-extern const PDMDEVREG g_DeviceLPC;
 
 RT_C_DECLS_END
 
-#endif
-
+#endif /* !VBOX_INCLUDED_SRC_build_VBoxDD2_h */

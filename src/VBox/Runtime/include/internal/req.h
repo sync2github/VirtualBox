@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: req.h 88813 2021-05-01 18:15:13Z vboxsync $ */
 /** @file
  * IPRT - Internal RTReq header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_req_h
-#define ___internal_req_h
+#ifndef IPRT_INCLUDED_INTERNAL_req_h
+#define IPRT_INCLUDED_INTERNAL_req_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -45,11 +48,14 @@ typedef enum RTREQSTATE
     RTREQSTATE_QUEUED,
     /** The request is begin processed. */
     RTREQSTATE_PROCESSING,
+    /** The request has been cancelled. */
+    RTREQSTATE_CANCELLED,
     /** The request is completed, the requester is begin notified. */
     RTREQSTATE_COMPLETED,
-    /** The request packet is in the free chain. (The requester */
+    /** The request packet is in the free chain. */
     RTREQSTATE_FREE
 } RTREQSTATE;
+AssertCompileSize(RTREQSTATE, sizeof(uint32_t));
 
 
 /**
@@ -110,7 +116,7 @@ struct RTREQ
             /** Number of arguments. */
             uint32_t            cArgs;
             /** Array of arguments. */
-            uintptr_t           aArgs[64];
+            uintptr_t           aArgs[12];
         } Internal;
     } u;
 };
@@ -161,10 +167,11 @@ DECLHIDDEN(int)  rtReqProcessOne(PRTREQ pReq);
 /* reqpool.cpp / reqqueue.cpp. */
 DECLHIDDEN(void) rtReqQueueSubmit(PRTREQQUEUEINT pQueue, PRTREQINT pReq);
 DECLHIDDEN(void) rtReqPoolSubmit(PRTREQPOOLINT pPool, PRTREQINT pReq);
+DECLHIDDEN(void) rtReqPoolCancel(PRTREQPOOLINT pPool, PRTREQINT pReq);
 DECLHIDDEN(bool) rtReqQueueRecycle(PRTREQQUEUEINT pQueue, PRTREQINT pReq);
 DECLHIDDEN(bool) rtReqPoolRecycle(PRTREQPOOLINT pPool, PRTREQINT pReq);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_req_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MouseImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_MOUSEIMPL
-#define ____H_MOUSEIMPL
+#ifndef MAIN_INCLUDED_MouseImpl_h
+#define MAIN_INCLUDED_MouseImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "MouseWrap.h"
 #include "ConsoleImpl.h"
@@ -33,7 +36,7 @@ class ATL_NO_VTABLE Mouse :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR (Mouse)
+    DECLARE_COMMON_CLASS_METHODS (Mouse)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -152,5 +155,5 @@ private:
                                uint32_t u32ScanTime);
 };
 
-#endif // !____H_MOUSEIMPL
+#endif /* !MAIN_INCLUDED_MouseImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

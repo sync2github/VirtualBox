@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: init.cpp 85124 2020-07-08 21:13:30Z vboxsync $ */
 /** @file
  * IPRT - Init Ring-3.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -53,13 +53,16 @@
 #include <iprt/initterm.h>
 #include <iprt/asm.h>
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/log.h>
 #include <iprt/mem.h>
 #include <iprt/path.h>
 #include <iprt/time.h>
 #include <iprt/string.h>
 #include <iprt/param.h>
+#ifdef RT_OS_WINDOWS
+# include <iprt/utf16.h>
+#endif
 #if !defined(IN_GUEST) && !defined(RT_NO_GIP)
 # include <iprt/file.h>
 # include <VBox/sup.h>
@@ -84,13 +87,13 @@ static bool volatile        g_fInitializing = false;
 
 /** The process path.
  * This is used by RTPathExecDir and RTProcGetExecutablePath and set by rtProcInitName. */
-DECLHIDDEN(char)            g_szrtProcExePath[RTPATH_MAX];
+DECL_HIDDEN_DATA(char)      g_szrtProcExePath[RTPATH_MAX];
 /** The length of g_szrtProcExePath. */
-DECLHIDDEN(size_t)          g_cchrtProcExePath;
+DECL_HIDDEN_DATA(size_t)    g_cchrtProcExePath;
 /** The length of directory path component of g_szrtProcExePath. */
-DECLHIDDEN(size_t)          g_cchrtProcDir;
+DECL_HIDDEN_DATA(size_t)    g_cchrtProcDir;
 /** The offset of the process name into g_szrtProcExePath. */
-DECLHIDDEN(size_t)          g_offrtProcName;
+DECL_HIDDEN_DATA(size_t)    g_offrtProcName;
 
 /** The IPRT init flags. */
 static uint32_t             g_fInitFlags;
@@ -105,33 +108,23 @@ static char **              g_papszrtOrgArgs;
 /**
  * Program start nanosecond TS.
  */
-DECLHIDDEN(uint64_t)        g_u64ProgramStartNanoTS;
-
-/**
- * Program start microsecond TS.
- */
-DECLHIDDEN(uint64_t)        g_u64ProgramStartMicroTS;
-
-/**
- * Program start millisecond TS.
- */
-DECLHIDDEN(uint64_t)        g_u64ProgramStartMilliTS;
+DECL_HIDDEN_DATA(uint64_t)  g_u64ProgramStartNanoTS;
 
 /**
  * The process identifier of the running process.
  */
-DECLHIDDEN(RTPROCESS)       g_ProcessSelf = NIL_RTPROCESS;
+DECL_HIDDEN_DATA(RTPROCESS) g_ProcessSelf = NIL_RTPROCESS;
 
 /**
  * The current process priority.
  */
-DECLHIDDEN(RTPROCPRIORITY)  g_enmProcessPriority = RTPROCPRIORITY_DEFAULT;
+DECL_HIDDEN_DATA(RTPROCPRIORITY)  g_enmProcessPriority = RTPROCPRIORITY_DEFAULT;
 
 /**
  * Set if the atexit callback has been called, i.e. indicating
  * that the process is terminating.
  */
-DECLHIDDEN(bool volatile)   g_frtAtExitCalled = false;
+DECL_HIDDEN_DATA(bool volatile)   g_frtAtExitCalled = false;
 
 #ifdef IPRT_WITH_ALIGNMENT_CHECKS
 /**
@@ -157,7 +150,7 @@ DECLHIDDEN(void) rtR3InitNativeObtrusive(uint32_t fFlags) { RT_NOREF_PV(fFlags);
  * This makes sure any loggers are flushed and will later also work the
  * termination callback chain.
  */
-static void rtR3ExitCallback(void)
+static void rtR3ExitCallback(void) RT_NOTHROW_DEF
 {
     ASMAtomicWriteBool(&g_frtAtExitCalled, true);
 
@@ -291,6 +284,9 @@ static int rtR3InitArgv(uint32_t fFlags, int cArgs, char ***ppapszArgs)
                Unfortunately for us, __wargv is only initialized if we have a
                unicode main function.  So, we have to use CommandLineToArgvW to get
                something similar. It should do the same conversion... :-) */
+            /** @todo Replace this CommandLineToArgvW call with a call into
+             *        getoptargv.cpp so we don't depend on shell32 and an API not present
+             *        in NT 3.1.  */
             int    cArgsW     = -1;
             PWSTR *papwszArgs = NULL;
             if (   papszOrgArgs == __argv
@@ -300,7 +296,7 @@ static int rtR3InitArgv(uint32_t fFlags, int cArgs, char ***ppapszArgs)
                 AssertMsg(cArgsW == cArgs, ("%d vs %d\n", cArgsW, cArgs));
                 for (int i = 0; i < cArgs; i++)
                 {
-                    int rc = RTUtf16ToUtf8(papwszArgs[i], &papszArgs[i]);
+                    int rc = RTUtf16ToUtf8Tag(papwszArgs[i], &papszArgs[i], "will-leak:rtR3InitArgv");
                     if (RT_FAILURE(rc))
                     {
                         while (i--)
@@ -443,7 +439,7 @@ static int rtR3InitBody(uint32_t fFlags, int cArgs, char ***ppapszArgs, const ch
     if (fFlags & RTR3INIT_FLAGS_SUPLIB)
     {
         rc = SUPR3Init(NULL);
-        AssertMsgRCReturn(rc, ("Failed to initializable the support library, rc=%Rrc!\n", rc), rc);
+        AssertMsgRCReturn(rc, ("Failed to initialize the support library, rc=%Rrc!\n", rc), rc);
     }
 #endif
 
@@ -466,12 +462,10 @@ static int rtR3InitBody(uint32_t fFlags, int cArgs, char ***ppapszArgs, const ch
 #endif
 
     /*
-     * Init the program start TSes.
+     * Init the program start timestamp TS.
      * Do that here to be sure that the GIP time was properly updated the 1st time.
      */
     g_u64ProgramStartNanoTS = RTTimeNanoTS();
-    g_u64ProgramStartMicroTS = g_u64ProgramStartNanoTS / 1000;
-    g_u64ProgramStartMilliTS = g_u64ProgramStartNanoTS / 1000000;
 
     /*
      * The remainder cannot easily be undone, so it has to go last.

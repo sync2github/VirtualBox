@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: coreconsts.py 86427 2020-10-02 16:11:12Z vboxsync $
 
 """
 Test Manager - Test Manager Constants (without a more appropriate home).
@@ -7,7 +7,7 @@ Test Manager - Test Manager Constants (without a more appropriate home).
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 86427 $"
 
 ## OS agnostic.
 g_ksOsAgnostic      = 'os-agnostic';
@@ -51,7 +51,9 @@ g_kasCpuArchesAll   = g_kasCpuArches + [g_ksCpuArchAgnostic,];
 
 ## All known build types
 # See KBUILD_TYPE in kBuild/header.kmk for reference.
-g_kasBuildTypesAll  = [ 'release', 'strict', 'profile', 'debug' ];
+# @note 'blessed' is a special type used for release builds that has been notarized
+#        or attestation signed by the OS vendor.
+g_kasBuildTypesAll  = [ 'release', 'strict', 'profile', 'debug', 'asan', 'blessed' ];
 
 ## OS and CPU architecture agnostic.
 g_ksOsDotArchAgnostic = 'os-agnostic.noarch';

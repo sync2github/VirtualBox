@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Config.kmk 82968 2020-02-04 10:35:17Z vboxsync $
 ## @file
 # kBuild Configuration file for VirtualBox Boot Sector Kit 3.
 #
 
 #
-# Copyright (C) 2010-2016 Oracle Corporation
+# Copyright (C) 2010-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -189,7 +189,7 @@ endef
 # Tools Tools Tools
 #
 
-ifdef VBOX_USE_KSUBMIT
+if defined(VBOX_USE_KSUBMIT) && "$(KBUILD_HOST)" == "win"
  VBOX_BS3KIT_KSUBMIT_OBJ_CONV := kmk_builtin_kSubmit --
 else
  VBOX_BS3KIT_KSUBMIT_OBJ_CONV :=
@@ -231,6 +231,7 @@ else
 endif
 TOOL_VBoxNasm_ASFLAGS ?= $(TOOL_NASM_ASFLAGS)
 TOOL_VBoxNasm_COMPILE_AS_OUTPUT = $(outbase).lst
+TOOL_VBoxNasm_COMPILE_AS_OUTPUT_MAYBE = $(obj).original
 TOOL_VBoxNasm_COMPILE_AS_DEPEND = $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_VBoxNasm_COMPILE_AS_DEPORD =
 define TOOL_VBoxNasm_COMPILE_AS_CMDS
@@ -279,7 +280,7 @@ TOOL_Bs3Gcc64Elf64_CDEFS            =
 TOOL_Bs3Gcc64Elf64_COMPILE_C_DEPEND = $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_Bs3Gcc64Elf64_COMPILE_C_DEPORD =
 TOOL_Bs3Gcc64Elf64_COMPILE_C_OUTPUT =
-TOOL_Bs3Gcc64Elf64_COMPILE_C_OUTPUT_MAYBE = $(obj).orignal
+TOOL_Bs3Gcc64Elf64_COMPILE_C_OUTPUT_MAYBE = $(obj).original
 define TOOL_Bs3Gcc64Elf64_COMPILE_C_CMDS
 	$(QUIET)$(TOOL_Bs3Gcc64Elf64_CC) -c\
 		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
@@ -315,7 +316,7 @@ TOOL_Bs3Gcc64Elf64_CXXDEFS          ?=
 TOOL_Bs3Gcc64Elf64_COMPILE_CXX_DEPEND = $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_Bs3Gcc64Elf64_COMPILE_CXX_DEPORD =
 TOOL_Bs3Gcc64Elf64_COMPILE_CXX_OUTPUT =
-TOOL_Bs3Gcc64Elf64_COMPILE_CXX_OUTPUT_MAYBE = $(obj).orignal
+TOOL_Bs3Gcc64Elf64_COMPILE_CXX_OUTPUT_MAYBE = $(obj).original
 define TOOL_Bs3Gcc64Elf64_COMPILE_CXX_CMDS
 	$(QUIET)$(TOOL_Bs3Gcc64Elf64_CXX) -c\
 		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
@@ -343,7 +344,7 @@ TOOL_Bs3Vcc64_CDEFS                    =
 TOOL_Bs3Vcc64_COMPILE_C_DEPEND         = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_C_DEPEND) $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_Bs3Vcc64_COMPILE_C_DEPORD         = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_C_DEPORD)
 TOOL_Bs3Vcc64_COMPILE_C_OUTPUT         = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_C_OUTPUT)
-TOOL_Bs3Vcc64_COMPILE_C_OUTPUT_MAYBE   = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_C_OUTPUT_MAYBE) $(obj).orignal
+TOOL_Bs3Vcc64_COMPILE_C_OUTPUT_MAYBE   = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_C_OUTPUT_MAYBE) $(obj).original
 define TOOL_Bs3Vcc64_COMPILE_C_CMDS
 $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_C_CMDS)
 	$(QUIET)$(VBOX_BS3KIT_KSUBMIT_OBJ_CONV) $(VBoxBs3ObjConverter_1_TARGET) "$(obj)"
@@ -376,7 +377,7 @@ TOOL_Bs3Vcc64_CXXDEFS                  =
 TOOL_Bs3Vcc64_COMPILE_CXX_DEPEND       = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_CXX_DEPEND) $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_Bs3Vcc64_COMPILE_CXX_DEPORD       = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_CXX_DEPORD)
 TOOL_Bs3Vcc64_COMPILE_CXX_OUTPUT       = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_CXX_OUTPUT)
-TOOL_Bs3Vcc64_COMPILE_CXX_OUTPUT_MAYBE = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_CXX_OUTPUT_MAYBE) $(obj).orignal
+TOOL_Bs3Vcc64_COMPILE_CXX_OUTPUT_MAYBE = $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_CXX_OUTPUT_MAYBE) $(obj).original
 define TOOL_Bs3Vcc64_COMPILE_CXX_CMDS
 $(TOOL_$(VBOX_VCC_TOOL_STEM)AMD64_COMPILE_CXX_CMDS)
 	$(QUIET)$(VBOX_BS3KIT_KSUBMIT_OBJ_CONV) $(VBoxBs3ObjConverter_1_TARGET) "$(obj)"
@@ -405,7 +406,7 @@ TOOL_Bs3Ow32_CDEFS                    =
 TOOL_Bs3Ow32_COMPILE_C_DEPEND         = $(TOOL_OPENWATCOM_COMPILE_C_DEPEND) $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_Bs3Ow32_COMPILE_C_DEPORD         = $(TOOL_OPENWATCOM_COMPILE_C_DEPORD)
 TOOL_Bs3Ow32_COMPILE_C_OUTPUT         = $(TOOL_OPENWATCOM_COMPILE_C_OUTPUT)
-TOOL_Bs3Ow32_COMPILE_C_OUTPUT_MAYBE   = $(TOOL_OPENWATCOM_COMPILE_C_OUTPUT_MAYBE) $(obj).orignal
+TOOL_Bs3Ow32_COMPILE_C_OUTPUT_MAYBE   = $(TOOL_OPENWATCOM_COMPILE_C_OUTPUT_MAYBE) $(obj).original
 define TOOL_Bs3Ow32_COMPILE_C_CMDS
 $(TOOL_OPENWATCOM_COMPILE_C_CMDS)
 	$(QUIET)$(VBOX_BS3KIT_KSUBMIT_OBJ_CONV) $(VBoxBs3ObjConverter_1_TARGET) "$(obj)"
@@ -438,7 +439,7 @@ TOOL_Bs3Ow32_CXXDEFS                  =
 TOOL_Bs3Ow32_COMPILE_CXX_DEPEND       = $(TOOL_OPENWATCOM_COMPILE_CXX_DEPEND) $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_Bs3Ow32_COMPILE_CXX_DEPORD       = $(TOOL_OPENWATCOM_COMPILE_CXX_DEPORD)
 TOOL_Bs3Ow32_COMPILE_CXX_OUTPUT       = $(TOOL_OPENWATCOM_COMPILE_CXX_OUTPUT)
-TOOL_Bs3Ow32_COMPILE_CXX_OUTPUT_MAYBE = $(TOOL_OPENWATCOM_COMPILE_CXX_OUTPUT_MAYBE) $(obj).orignal
+TOOL_Bs3Ow32_COMPILE_CXX_OUTPUT_MAYBE = $(TOOL_OPENWATCOM_COMPILE_CXX_OUTPUT_MAYBE) $(obj).original
 define TOOL_Bs3Ow32_COMPILE_CXX_CMDS
 $(TOOL_OPENWATCOM_COMPILE_CXX_CMDS)
 	$(QUIET)$(VBOX_BS3KIT_KSUBMIT_OBJ_CONV) $(VBoxBs3ObjConverter_1_TARGET) "$(obj)"
@@ -463,7 +464,7 @@ TOOL_Bs3Ow16_CDEFS                    =
 TOOL_Bs3Ow16_COMPILE_C_DEPEND         = $(TOOL_OPENWATCOM-16_COMPILE_C_DEPEND) $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_Bs3Ow16_COMPILE_C_DEPORD         = $(TOOL_OPENWATCOM-16_COMPILE_C_DEPORD)
 TOOL_Bs3Ow16_COMPILE_C_OUTPUT         = $(TOOL_OPENWATCOM-16_COMPILE_C_OUTPUT)
-TOOL_Bs3Ow16_COMPILE_C_OUTPUT_MAYBE   = $(TOOL_OPENWATCOM-16_COMPILE_C_OUTPUT_MAYBE)
+TOOL_Bs3Ow16_COMPILE_C_OUTPUT_MAYBE   = $(TOOL_OPENWATCOM-16_COMPILE_C_OUTPUT_MAYBE) $(obj).original
 define TOOL_Bs3Ow16_COMPILE_C_CMDS
 $(TOOL_OPENWATCOM-16_COMPILE_C_CMDS)
 	$(QUIET)$(VBOX_BS3KIT_KSUBMIT_OBJ_CONV) $(VBoxBs3ObjConverter_1_TARGET) "$(obj)"
@@ -496,7 +497,7 @@ TOOL_Bs3Ow16_CXXDEFS                  =
 TOOL_Bs3Ow16_COMPILE_CXX_DEPEND       = $(TOOL_OPENWATCOM-16_COMPILE_CXX_DEPEND) $(VBoxBs3ObjConverter_1_TARGET)
 TOOL_Bs3Ow16_COMPILE_CXX_DEPORD       = $(TOOL_OPENWATCOM-16_COMPILE_CXX_DEPORD)
 TOOL_Bs3Ow16_COMPILE_CXX_OUTPUT       = $(TOOL_OPENWATCOM-16_COMPILE_CXX_OUTPUT)
-TOOL_Bs3Ow16_COMPILE_CXX_OUTPUT_MAYBE = $(TOOL_OPENWATCOM-16_COMPILE_CXX_OUTPUT_MAYBE)
+TOOL_Bs3Ow16_COMPILE_CXX_OUTPUT_MAYBE = $(TOOL_OPENWATCOM-16_COMPILE_CXX_OUTPUT_MAYBE) $(obj).original
 define TOOL_Bs3Ow16_COMPILE_CXX_CMDS
 $(TOOL_OPENWATCOM-16_COMPILE_CXX_CMDS)
 	$(QUIET)$(VBOX_BS3KIT_KSUBMIT_OBJ_CONV) $(VBoxBs3ObjConverter_1_TARGET) "$(obj)"
@@ -559,6 +560,7 @@ endef
 #       -q                     Quiet, no logos or stuff.
 #       -0                     Use 8086 instruction set (16-bit only).
 #       -3                     Use 386 instruction set (16-bit only).
+#       -e<num>                Stop after <num> errors.
 #       -wx                    Maxium warning level.
 #       -zl                    Don't emit default library information.
 #       -zdp                   DS pegged to BS3DATA16_GROUP/DGROUP.
@@ -574,6 +576,7 @@ endef
 #       -of                    Generate stack frames when needed.
 #       -oi                    Inline instrinsics functions.
 #       -ol                    Loop optimizations.
+#       -oh                    Expensive optimizations. (saves a byte or two)
 #       -or                    Reorder for best pipeline.
 #       -os                    Favor size over speed.
 #
@@ -601,9 +604,9 @@ TEMPLATE_VBoxBS3KitImg_ARTOOL       = OPENWATCOM-16
 TEMPLATE_VBoxBS3KitImg_CTOOL        = Bs3Ow16
 TEMPLATE_VBoxBS3KitImg_CXXTOOL      = Bs3Ow16
 TEMPLATE_VBoxBS3KitImg_CFLAGS       = $(if $(BS3KIT_SEGNM_DATA16),-nd=$(BS3KIT_SEGNM_DATA16),) \
-	-nt=BS3TEXT16 -nc=$(BS3KIT_CLASS_CODE16) -ecc -q -0 -wx -zl -zdp -zu -ml $(BS3_OW_DBG_OPT) -s -oa -ob -of -oi -ol -or -os -d+
+	-nt=BS3TEXT16 -nc=$(BS3KIT_CLASS_CODE16) -ecc -q -0 -e125 -wx -zl -zdp -zu -ml $(BS3_OW_DBG_OPT) -s -oa -ob -of -oi -ol -or -os -oh -d+
 TEMPLATE_VBoxBS3KitImg_CXXFLAGS     = $(if $(BS3KIT_SEGNM_DATA16),-nd=$(BS3KIT_SEGNM_DATA16),) \
-	-nt=BS3TEXT16 -nc=$(BS3KIT_CLASS_CODE16) -ecc -q -0 -wx -zl -zdp -zu -ml $(BS3_OW_DBG_OPT) -s -oa -ob -of -oi -ol -or -os -d+
+	-nt=BS3TEXT16 -nc=$(BS3KIT_CLASS_CODE16) -ecc -q -0 -e125 -wx -zl -zdp -zu -ml $(BS3_OW_DBG_OPT) -s -oa -ob -of -oi -ol -or -os -oh -d+
 TEMPLATE_VBoxBS3KitImg_CDEFS        = ARCH_BITS=16 RT_ARCH_X86
 
 TEMPLATE_VBoxBS3KitImg_TOOL         = $(NO_SUCH_VARIABLE)
@@ -770,9 +773,9 @@ TEMPLATE_VBoxBS3KitImg32_ARTOOL       = OPENWATCOM
 TEMPLATE_VBoxBS3KitImg32_CTOOL        = Bs3Ow32
 TEMPLATE_VBoxBS3KitImg32_CXXTOOL      = Bs3Ow32
 TEMPLATE_VBoxBS3KitImg32_CFLAGS       = \
-	-nt=BS3TEXT32 -nd=BS3DATA32 -nc=BS3CLASS32CODE -ecc -q -wx -zl -mf $(BS3_OW_DBG_OPT) -s -oa -ob -of -oi -ol -or -os -d+
+	-nt=BS3TEXT32 -nd=BS3DATA32 -nc=BS3CLASS32CODE -ecc -q -e125 -wx -zl -mf $(BS3_OW_DBG_OPT) -s -oa -ob -of -oi -ol -or -os -d+
 TEMPLATE_VBoxBS3KitImg32_CXXFLAGS     = \
-	-nt=BS3TEXT32 -nd=BS3DATA32 -nc=BS3CLASS32CODE -ecc -q -wx -zl -mf $(BS3_OW_DBG_OPT) -s -oa -ob -of -oi -ol -or -os -d+
+	-nt=BS3TEXT32 -nd=BS3DATA32 -nc=BS3CLASS32CODE -ecc -q -e125 -wx -zl -mf $(BS3_OW_DBG_OPT) -s -oa -ob -of -oi -ol -or -os -d+
 TEMPLATE_VBoxBS3KitImg32_INCS         = $(VBOX_PATH_BS3KIT_SRC) .
 TEMPLATE_VBoxBS3KitImg32_LDTOOL       = VBoxBsUnusedLd
 

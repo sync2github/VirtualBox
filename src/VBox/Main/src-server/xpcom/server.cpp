@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: server.cpp 85270 2020-07-12 12:21:59Z vboxsync $ */
 /** @file
  * XPCOM server process (VBoxSVC) start point.
  */
 
 /*
- * Copyright (C) 2004-2016 Oracle Corporation
+ * Copyright (C) 2004-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_VBOXSVC
 #include <ipcIService.h>
 #include <ipcCID.h>
 
@@ -27,9 +28,10 @@
 
 #include "server.h"
 
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/param.h>
+#include <VBox/version.h>
 
 #include <iprt/buildconfig.h>
 #include <iprt/initterm.h>
@@ -55,7 +57,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 #include <nsIGenericFactory.h>
-#include <VirtualBox_XPCOM.h>
+#include <VBox/com/VirtualBox.h>
 
 #include "VBox/com/NativeEventQueue.h"
 
@@ -161,7 +163,7 @@ public:
 
                 int vrc = RTTimerLRStart(sTimer, gShutdownDelayMs * RT_NS_1MS_64);
                 AssertRC(vrc);
-                timerStarted = !!(SUCCEEDED(vrc));
+                timerStarted = RT_BOOL(RT_SUCCESS(vrc));
             }
             else
             {
@@ -233,17 +235,28 @@ public:
              * possible destruction */
             RTCritSectEnter(&sLock);
 
-            nsrefcnt count = 0;
+            nsrefcnt count = 1;
 
             /* sInstance is NULL here if it was deleted immediately after
              * creation due to initialization error. See GetInstance(). */
             if (sInstance != NULL)
             {
-                /* Release the guard reference added in GetInstance() */
+                /* Safe way to get current refcount is by first increasing and
+                 * then decreasing. Keep in mind that the Release is overloaded
+                 * (see VirtualBoxClassFactory::Release) and will start the
+                 * timer again if the returned count is 1. It won't do harm,
+                 * but also serves no purpose, so stop it ASAP. */
+                sInstance->AddRef();
                 count = sInstance->Release();
+                if (count == 1)
+                {
+                    RTTimerLRStop(sTimer);
+                    /* Release the guard reference added in GetInstance() */
+                    sInstance->Release();
+                }
             }
 
-            if (count == 0)
+            if (count == 1)
             {
                 if (gAutoShutdown || m_fSignal)
                 {
@@ -260,7 +273,7 @@ public:
                 /* This condition is quite rare: a new client happened to
                  * connect after this event has been posted to the main queue
                  * but before it started to process it. */
-                LogFlowFunc(("Destruction is canceled (refcnt=%d).\n", count));
+                LogRel(("Destruction is canceled (refcnt=%d).\n", count));
             }
 
             RTCritSectLeave(&sLock);
@@ -404,7 +417,7 @@ public:
             nsrefcnt count = sInstance->AddRef();
             Assert(count > 1);
 
-            if (count == 2)
+            if (count >= 2)
             {
                 LogFlowFunc(("Another client has requested a reference to VirtualBox, canceling destruction...\n"));
 
@@ -615,6 +628,34 @@ end:
     return rv;
 }
 
+static void showUsage(const char *pcszFileName)
+{
+    RTPrintf(VBOX_PRODUCT " VBoxSVC "
+             VBOX_VERSION_STRING "\n"
+             "(C) 2005-" VBOX_C_YEAR " " VBOX_VENDOR "\n"
+             "All rights reserved.\n"
+             "\n");
+    RTPrintf("By default the service will be started in the background.\n"
+             "\n");
+    RTPrintf("Usage:\n"
+             "\n");
+    RTPrintf("  %s\n", pcszFileName);
+    RTPrintf("\n");
+    RTPrintf("Options:\n");
+    RTPrintf("  -a, --automate            Start XPCOM on demand and daemonize.\n");
+    RTPrintf("  -A, --auto-shutdown       Shuts down service if no longer in use.\n");
+    RTPrintf("  -d, --daemonize           Starts service in background.\n");
+    RTPrintf("  -D, --shutdown-delay <ms> Sets shutdown delay in ms.\n");
+    RTPrintf("  -h, --help                Displays this help.\n");
+    RTPrintf("  -p, --pidfile <path>      Uses a specific pidfile.\n");
+    RTPrintf("  -F, --logfile <path>      Uses a specific logfile.\n");
+    RTPrintf("  -R, --logrotate <count>   Number of old log files to keep.\n");
+    RTPrintf("  -S, --logsize <bytes>     Maximum size of a log file before rotating.\n");
+    RTPrintf("  -I, --loginterval <s>     Maximum amount of time to put in a log file.\n");
+
+    RTPrintf("\n");
+}
+
 int main(int argc, char **argv)
 {
     /*
@@ -630,6 +671,7 @@ int main(int argc, char **argv)
         { "--automate",         'a', RTGETOPT_REQ_NOTHING },
         { "--auto-shutdown",    'A', RTGETOPT_REQ_NOTHING },
         { "--daemonize",        'd', RTGETOPT_REQ_NOTHING },
+        { "--help",             'h', RTGETOPT_REQ_NOTHING },
         { "--shutdown-delay",   'D', RTGETOPT_REQ_UINT32 },
         { "--pidfile",          'p', RTGETOPT_REQ_STRING },
         { "--logfile",          'F', RTGETOPT_REQ_STRING },
@@ -696,7 +738,7 @@ int main(int argc, char **argv)
                 break;
 
             case 'h':
-                RTPrintf("no help\n");
+                showUsage(argv[0]);
                 return RTEXITCODE_SYNTAX;
 
             case 'V':
@@ -732,15 +774,15 @@ int main(int argc, char **argv)
     if (RT_FAILURE(vrc))
         return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to create logging file name, rc=%Rrc", vrc);
 
-    char szError[RTPATH_MAX + 128];
+    RTERRINFOSTATIC ErrInfo;
     vrc = com::VBoxLogRelCreate("XPCOM Server", szLogFile,
                                 RTLOGFLAGS_PREFIX_THREAD | RTLOGFLAGS_PREFIX_TIME_PROG,
                                 VBOXSVC_LOG_DEFAULT, "VBOXSVC_RELEASE_LOG",
                                 RTLOGDEST_FILE, UINT32_MAX /* cMaxEntriesPerGroup */,
                                 cHistory, uHistoryFileTime, uHistoryFileSize,
-                                szError, sizeof(szError));
+                                RTErrInfoInitStatic(&ErrInfo));
     if (RT_FAILURE(vrc))
-        return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", szError, vrc);
+        return RTMsgErrorExit(RTEXITCODE_FAILURE, "failed to open release log (%s, %Rrc)", ErrInfo.Core.pszMsg, vrc);
 
     /* Set up a build identifier so that it can be seen from core dumps what
      * exact build was used to produce the core. Same as in Console::i_powerUpThread(). */
@@ -831,7 +873,8 @@ int main(int argc, char **argv)
             sigaction(SIGINT, &sa, NULL);
             sigaction(SIGQUIT, &sa, NULL);
             sigaction(SIGTERM, &sa, NULL);
-            sigaction(SIGTRAP, &sa, NULL);
+// XXX Temporary allow release assertions to terminate VBoxSVC
+//            sigaction(SIGTRAP, &sa, NULL);
             sigaction(SIGUSR1, &sa, NULL);
         }
 
@@ -869,11 +912,9 @@ int main(int argc, char **argv)
             vrc = RTFileOpen(&hPidFile, g_pszPidFile, RTFILE_O_WRITE | RTFILE_O_CREATE_REPLACE | RTFILE_O_DENY_NONE);
             if (RT_SUCCESS(vrc))
             {
-                char szBuf[32];
-                const char *lf = "\n";
-                RTStrFormatNumber(szBuf, getpid(), 10, 0, 0, 0);
-                RTFileWrite(hPidFile, szBuf, strlen(szBuf), NULL);
-                RTFileWrite(hPidFile, lf, strlen(lf), NULL);
+                char szBuf[64];
+                size_t cchToWrite = RTStrPrintf(szBuf, sizeof(szBuf), "%ld\n", (long)getpid());
+                RTFileWrite(hPidFile, szBuf, cchToWrite, NULL);
                 RTFileClose(hPidFile);
             }
         }

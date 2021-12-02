@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GIM.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * GIM - Guest Interface Manager.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
  *
  * The GIM provider configured for the VM needs to be recognized by the guest OS
  * in order to make use of features supported by the interface. Since it
- * requires co-operation from the guest OS, a GIM provider may also referred to
+ * requires co-operation from the guest OS, a GIM provider may also be referred to
  * as a paravirtualization interface.
  *
  * One of the goals of having a paravirtualized interface is for enabling guests
@@ -74,6 +74,7 @@
 *********************************************************************************************************************************/
 static FNSSMINTSAVEEXEC  gimR3Save;
 static FNSSMINTLOADEXEC  gimR3Load;
+static FNSSMINTLOADDONE  gimR3LoadDone;
 
 
 /**
@@ -90,7 +91,7 @@ VMMR3_INT_DECL(int) GIMR3Init(PVM pVM)
      * Assert alignment and sizes.
      */
     AssertCompile(sizeof(pVM->gim.s) <= sizeof(pVM->gim.padding));
-    AssertCompile(sizeof(pVM->aCpus[0].gim.s) <= sizeof(pVM->aCpus[0].gim.padding));
+    AssertCompile(sizeof(pVM->apCpusR3[0]->gim.s) <= sizeof(pVM->apCpusR3[0]->gim.padding));
 
     /*
      * Initialize members.
@@ -103,7 +104,7 @@ VMMR3_INT_DECL(int) GIMR3Init(PVM pVM)
     int rc = SSMR3RegisterInternal(pVM, "GIM", 0 /* uInstance */, GIM_SAVED_STATE_VERSION, sizeof(GIM),
                                    NULL /* pfnLivePrep */, NULL /* pfnLiveExec */, NULL /* pfnLiveVote*/,
                                    NULL /* pfnSavePrep */, gimR3Save,              NULL /* pfnSaveDone */,
-                                   NULL /* pfnLoadPrep */, gimR3Load,              NULL /* pfnLoadDone */);
+                                   NULL /* pfnLoadPrep */, gimR3Load,              gimR3LoadDone);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -222,13 +223,14 @@ static DECLCALLBACK(int) gimR3Save(PVM pVM, PSSMHANDLE pSSM)
     AssertReturn(pVM,  VERR_INVALID_PARAMETER);
     AssertReturn(pSSM, VERR_SSM_INVALID_STATE);
 
-    /** @todo Save per-CPU data. */
     int rc = VINF_SUCCESS;
 #if 0
+    /* Save per-CPU data. */
     SSMR3PutU32(pSSM, pVM->cCpus);
-    for (VMCPUID i = 0; i < pVM->cCpus; i++)
+    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
     {
-        rc = SSMR3PutXYZ(pSSM, pVM->aCpus[i].gim.s.XYZ);
+        PVMCPU pVCpu = pVM->apCpusR3[idCpu];
+        rc = SSMR3PutXYZ(pSSM, pVCpu->gim.s.XYZ);
     }
 #endif
 
@@ -271,12 +273,13 @@ static DECLCALLBACK(int) gimR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, 
     if (uVersion != GIM_SAVED_STATE_VERSION)
         return VERR_SSM_UNSUPPORTED_DATA_UNIT_VERSION;
 
-    /** @todo Load per-CPU data. */
     int rc;
 #if 0
-    for (VMCPUID i = 0; i < pVM->cCpus; i++)
+    /* Load per-CPU data. */
+    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
     {
-        rc = SSMR3PutXYZ(pSSM, pVM->aCpus[i].gim.s.XYZ);
+        PVMCPU pVCpu = pVM->apCpusR3[idCpu];
+        rc = SSMR3PutXYZ(pSSM, pVCpu->gim.s.XYZ);
     }
 #endif
 
@@ -286,8 +289,9 @@ static DECLCALLBACK(int) gimR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, 
     uint32_t uProviderId;
     uint32_t uProviderVersion;
 
-    rc = SSMR3GetU32(pSSM, &uProviderId);           AssertRCReturn(rc, rc);
-    rc = SSMR3GetU32(pSSM, &uProviderVersion);      AssertRCReturn(rc, rc);
+    SSMR3GetU32(pSSM, &uProviderId);
+    rc = SSMR3GetU32(pSSM, &uProviderVersion);
+    AssertRCReturn(rc, rc);
 
     if ((GIMPROVIDERID)uProviderId != pVM->gim.s.enmProviderId)
         return SSMR3SetCfgError(pSSM, RT_SRC_POS, N_("Saved GIM provider %u differs from the configured one (%u)."),
@@ -320,6 +324,22 @@ static DECLCALLBACK(int) gimR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t uVersion, 
     }
 
     return VINF_SUCCESS;
+}
+
+
+/**
+ * @callback_method_impl{FNSSMINTLOADDONE}
+ */
+static DECLCALLBACK(int) gimR3LoadDone(PVM pVM, PSSMHANDLE pSSM)
+{
+    switch (pVM->gim.s.enmProviderId)
+    {
+        case GIMPROVIDERID_HYPERV:
+            return gimR3HvLoadDone(pVM, pSSM);
+
+        default:
+            return VINF_SUCCESS;
+    }
 }
 
 
@@ -444,7 +464,7 @@ VMMR3DECL(int) GIMR3GetDebugSetup(PVM pVM, PGIMDEBUGSETUP pDbgSetup)
  * @param   pcbRead             The size of the read buffer as well as where to store
  *                              the number of bytes read.
  * @param   pfnReadComplete     Callback when the buffer has been read and
- *                              before signaling reading of the next buffer.
+ *                              before signalling reading of the next buffer.
  *                              Optional, can be NULL.
  * @thread  EMT.
  */
@@ -505,37 +525,6 @@ VMMR3_INT_DECL(int) gimR3DebugWrite(PVM pVM, void *pvWrite, size_t *pcbWrite)
         }
     }
     return VERR_GIM_NO_DEBUG_CONNECTION;
-}
-
-
-/**
- * Returns the array of MMIO2 regions that are expected to be registered and
- * later mapped into the guest-physical address space for the GIM provider
- * configured for the VM.
- *
- * @returns Pointer to an array of GIM MMIO2 regions, may return NULL.
- * @param   pVM         The cross context VM structure.
- * @param   pcRegions   Where to store the number of items in the array.
- *
- * @remarks The caller does not own and therefore must -NOT- try to free the
- *          returned pointer.
- */
-VMMR3DECL(PGIMMMIO2REGION) GIMR3GetMmio2Regions(PVM pVM, uint32_t *pcRegions)
-{
-    Assert(pVM);
-    Assert(pcRegions);
-
-    *pcRegions = 0;
-    switch (pVM->gim.s.enmProviderId)
-    {
-        case GIMPROVIDERID_HYPERV:
-            return gimR3HvGetMmio2Regions(pVM, pcRegions);
-
-        default:
-            break;
-    }
-
-    return NULL;
 }
 
 #if 0 /* ??? */

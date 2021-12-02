@@ -1,16 +1,9 @@
 /** @file
   The generic memory test driver definition
 
-  Copyright (c) 2006 - 2010, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
 
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions
-  of the BSD License which accompanies this distribution.  The
-  full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -287,12 +280,12 @@ InitializeMemoryTest (
   @param[out] TestedMemorySize  Return the tested extended memory size.
   @param[out] TotalMemorySize   Return the whole system physical memory size.
                                 The total memory size does not include memory in a slot with a disabled DIMM.
-  @param[out] ErrorOut          TRUE if the memory error occured.
+  @param[out] ErrorOut          TRUE if the memory error occurred.
   @param[in]  IfTestAbort       Indicates that the user pressed "ESC" to skip the memory test.
 
   @retval EFI_SUCCESS         One block of memory passed the test.
   @retval EFI_NOT_FOUND       All memory blocks have already been tested.
-  @retval EFI_DEVICE_ERROR    Memory device error occured, and no agent can handle it.
+  @retval EFI_DEVICE_ERROR    Memory device error occurred, and no agent can handle it.
 
 **/
 EFI_STATUS

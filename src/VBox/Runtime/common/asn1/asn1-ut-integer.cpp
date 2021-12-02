@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: asn1-ut-integer.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - ASN.1, INTEGER Type.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -66,14 +66,14 @@ static void rtAsn1Integer_UpdateNativeValue(PRTASN1INTEGER pThis)
     uint32_t offLast = pThis->Asn1Core.cb - 1;
     switch (pThis->Asn1Core.cb)
     {
-        default:
-        case 8: pThis->uValue.u |= (uint64_t)pThis->Asn1Core.uData.pu8[offLast - 7] << 56;
-        case 7: pThis->uValue.u |= (uint64_t)pThis->Asn1Core.uData.pu8[offLast - 6] << 48;
-        case 6: pThis->uValue.u |= (uint64_t)pThis->Asn1Core.uData.pu8[offLast - 5] << 40;
-        case 5: pThis->uValue.u |= (uint64_t)pThis->Asn1Core.uData.pu8[offLast - 4] << 32;
-        case 4: pThis->uValue.u |= (uint32_t)pThis->Asn1Core.uData.pu8[offLast - 3] << 24;
-        case 3: pThis->uValue.u |= (uint32_t)pThis->Asn1Core.uData.pu8[offLast - 2] << 16;
-        case 2: pThis->uValue.u |= (uint16_t)pThis->Asn1Core.uData.pu8[offLast - 1] << 8;
+        default: AssertBreak(pThis->Asn1Core.cb > 8); /* paranoia */ RT_FALL_THRU();
+        case 8: pThis->uValue.u |= (uint64_t)pThis->Asn1Core.uData.pu8[offLast - 7] << 56; RT_FALL_THRU();
+        case 7: pThis->uValue.u |= (uint64_t)pThis->Asn1Core.uData.pu8[offLast - 6] << 48; RT_FALL_THRU();
+        case 6: pThis->uValue.u |= (uint64_t)pThis->Asn1Core.uData.pu8[offLast - 5] << 40; RT_FALL_THRU();
+        case 5: pThis->uValue.u |= (uint64_t)pThis->Asn1Core.uData.pu8[offLast - 4] << 32; RT_FALL_THRU();
+        case 4: pThis->uValue.u |= (uint32_t)pThis->Asn1Core.uData.pu8[offLast - 3] << 24; RT_FALL_THRU();
+        case 3: pThis->uValue.u |= (uint32_t)pThis->Asn1Core.uData.pu8[offLast - 2] << 16; RT_FALL_THRU();
+        case 2: pThis->uValue.u |= (uint16_t)pThis->Asn1Core.uData.pu8[offLast - 1] <<  8; RT_FALL_THRU();
         case 1: pThis->uValue.u |=           pThis->Asn1Core.uData.pu8[offLast];
     }
 }
@@ -221,6 +221,8 @@ RTDECL(int) RTAsn1Integer_UnsignedCompare(PCRTASN1INTEGER pLeft, PCRTASN1INTEGER
                 uint32_t iRight = RTAsn1Integer_UnsignedLastBit(pRight);
                 if (iLeft != iRight)
                     return iLeft < iRight ? -1 : 1;
+                if ((int32_t)iLeft < 0)
+                    return 0; /* Both are all zeros. */
 
                 uint32_t i = iLeft / 8;
                 if (i > 8)

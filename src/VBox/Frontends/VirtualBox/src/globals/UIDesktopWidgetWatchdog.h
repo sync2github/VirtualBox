@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIDesktopWidgetWatchdog.h 91109 2021-09-03 15:31:49Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIDesktopWidgetWatchdog class declaration.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,30 +15,36 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIDesktopWidgetWatchdog_h___
-#define ___UIDesktopWidgetWatchdog_h___
+#ifndef FEQT_INCLUDED_SRC_globals_UIDesktopWidgetWatchdog_h
+#define FEQT_INCLUDED_SRC_globals_UIDesktopWidgetWatchdog_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QObject>
+#include <QWindow>
 #ifdef VBOX_WS_X11
-# include <QVector>
 # include <QRect>
-#endif /* VBOX_WS_X11 */
+# include <QVector>
+#endif
+
+/* GUI includes: */
+#include "UILibraryDefs.h"
 
 /* Forward declarations: */
 class QScreen;
 
-/** Singleton QObject extension used as
-  * a desktop-widget watchdog aware
-  * of the host-screen geometry changes. */
-class UIDesktopWidgetWatchdog : public QObject
+/** Singleton QObject extension used as desktop-widget
+  * watchdog aware of the host-screen geometry changes. */
+class SHARED_LIBRARY_STUFF UIDesktopWidgetWatchdog : public QObject
 {
     Q_OBJECT;
 
     /** Constructs desktop-widget watchdog. */
     UIDesktopWidgetWatchdog();
     /** Destructs desktop-widget watchdog. */
-    ~UIDesktopWidgetWatchdog();
+    virtual ~UIDesktopWidgetWatchdog() /* override final */;
 
 signals:
 
@@ -51,15 +57,15 @@ signals:
     /** Notifies about work-area resize for the host-screen with @a iHostScreenIndex. */
     void sigHostScreenWorkAreaResized(int iHostScreenIndex);
 
-#ifdef VBOX_WS_X11
+#if defined(VBOX_WS_X11) && !defined(VBOX_GUI_WITH_CUSTOMIZATIONS1)
     /** Notifies about work-area recalculated for the host-screen with @a iHostScreenIndex. */
     void sigHostScreenWorkAreaRecalculated(int iHostScreenIndex);
-#endif /* VBOX_WS_X11 */
+#endif
 
 public:
 
     /** Returns the static instance of the desktop-widget watchdog. */
-    static UIDesktopWidgetWatchdog *instance() { return m_spInstance; }
+    static UIDesktopWidgetWatchdog *instance() { return s_pInstance; }
 
     /** Creates the static instance of the desktop-widget watchdog. */
     static void create();
@@ -73,6 +79,9 @@ public:
 
     /** Returns the number of host-screens currently available on the system. */
     int screenCount() const;
+
+    /** Returns primary screen index. */
+    int primaryScreen() const;
 
     /** Returns the index of the screen which contains contains @a pWidget. */
     int screenNumber(const QWidget *pWidget) const;
@@ -100,24 +109,49 @@ public:
     /** Returns overall region unifying all the host-screen available-geometries. */
     const QRegion overallAvailableRegion() const;
 
-#if defined(VBOX_WS_X11) && QT_VERSION >= 0x050000
+#ifdef VBOX_WS_X11
     /** Qt5: X11: Returns whether no or fake screen detected. */
     bool isFakeScreenDetected() const;
-#endif /* VBOX_WS_X11 && QT_VERSION >= 0x050000 */
+#endif
+
+    /** Returns device-pixel-ratio of the host-screen with @a iHostScreenIndex. */
+    double devicePixelRatio(int iHostScreenIndex = -1);
+    /** Returns device-pixel-ratio of the host-screen which contains @a pWidget. */
+    double devicePixelRatio(QWidget *pWidget);
+
+    /** Returns actual device-pixel-ratio of the host-screen with @a iHostScreenIndex. */
+    double devicePixelRatioActual(int iHostScreenIndex = -1);
+    /** Returns actual device-pixel-ratio of the host-screen which contains @a pWidget. */
+    double devicePixelRatioActual(QWidget *pWidget);
+
+    /** Search position for @a rectangle to make sure it is fully
+      * contained within @a boundRegion, performing resize if allowed. */
+    static QRect normalizeGeometry(const QRect &rectangle,
+                                   const QRegion &boundRegion,
+                                   bool fCanResize = true);
+    /** Ensures that the given rectangle @a rectangle is fully
+      * contained within the region @a boundRegion, performing resize if allowed. */
+    static QRect getNormalized(const QRect &rectangle,
+                               const QRegion &boundRegion,
+                               bool fCanResize = true);
+    /** Aligns the center of @a pWidget with the center
+      * of @a pRelative, performing resize if allowed. */
+    static void centerWidget(QWidget *pWidget,
+                             QWidget *pRelative,
+                             bool fCanResize = true);
+
+    /** Assigns top-level @a pWidget geometry passed as QRect coordinates.
+      * @note  Take into account that this request may fail on X11. */
+    static void setTopLevelGeometry(QWidget *pWidget, int x, int y, int w, int h);
+    /** Assigns top-level @a pWidget geometry passed as @a rect.
+      * @note  Take into account that this request may fail on X11. */
+    static void setTopLevelGeometry(QWidget *pWidget, const QRect &rect);
+
+    /** Activates the specified window with given @a wId. Can @a fSwitchDesktop if requested. */
+    static bool activateWindow(WId wId, bool fSwitchDesktop = true);
 
 private slots:
 
-#if QT_VERSION == 0
-    /** Stupid moc does not warn if it cannot find headers! */
-    void QT_VERSION_NOT_DEFINED
-#elif QT_VERSION < 0x050000
-    /** Handles host-screen count change to @a cHostScreenCount. */
-    void sltHandleHostScreenCountChanged(int cHostScreenCount);
-    /** Handles resize for the host-screen with @a iHostScreenIndex. */
-    void sltHandleHostScreenResized(int iHostScreenIndex);
-    /** Handles work-area resize for the host-screen with @a iHostScreenIndex. */
-    void sltHandleHostScreenWorkAreaResized(int iHostScreenIndex);
-#else /* QT_VERSION >= 0x050000 */
     /** Handles @a pHostScreen adding. */
     void sltHostScreenAdded(QScreen *pHostScreen);
     /** Handles @a pHostScreen removing. */
@@ -126,12 +160,11 @@ private slots:
     void sltHandleHostScreenResized(const QRect &geometry);
     /** Handles host-screen work-area resize to passed @a availableGeometry. */
     void sltHandleHostScreenWorkAreaResized(const QRect &availableGeometry);
-#endif /* QT_VERSION >= 0x050000 */
 
-#ifdef VBOX_WS_X11
+#if defined(VBOX_WS_X11) && !defined(VBOX_GUI_WITH_CUSTOMIZATIONS1)
     /** Handles @a availableGeometry calculation result for the host-screen with @a iHostScreenIndex. */
     void sltHandleHostScreenAvailableGeometryCalculated(int iHostScreenIndex, QRect availableGeometry);
-#endif /* VBOX_WS_X11 */
+#endif
 
 private:
 
@@ -140,10 +173,13 @@ private:
     /** Cleanup routine. */
     void cleanup();
 
-    /** Holds the static instance of the desktop-widget watchdog. */
-    static UIDesktopWidgetWatchdog *m_spInstance;
+    /** Returns the flipped (transposed) @a region. */
+    static QRegion flip(const QRegion &region);
 
-#ifdef VBOX_WS_X11
+    /** Holds the static instance of the desktop-widget watchdog. */
+    static UIDesktopWidgetWatchdog *s_pInstance;
+
+#if defined(VBOX_WS_X11) && !defined(VBOX_GUI_WITH_CUSTOMIZATIONS1)
     /** Updates host-screen configuration according to new @a cHostScreenCount.
       * @note If cHostScreenCount is equal to -1 we have to acquire it ourselves. */
     void updateHostScreenConfiguration(int cHostScreenCount = -1);
@@ -155,14 +191,13 @@ private:
     void cleanupExistingWorkers();
 
     /** Holds current host-screen available-geometries. */
-    QVector<QRect> m_availableGeometryData;
+    QVector<QRect>    m_availableGeometryData;
     /** Holds current workers determining host-screen available-geometries. */
     QVector<QWidget*> m_availableGeometryWorkers;
-#endif /* VBOX_WS_X11 */
+#endif /* VBOX_WS_X11 && !VBOX_GUI_WITH_CUSTOMIZATIONS1 */
 };
 
 /** 'Official' name for the desktop-widget watchdog singleton. */
 #define gpDesktop UIDesktopWidgetWatchdog::instance()
 
-#endif /* !___UIDesktopWidgetWatchdog_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_globals_UIDesktopWidgetWatchdog_h */

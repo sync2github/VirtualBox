@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: WinKeyboard.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * VBox Qt GUI - Windows keyboard handling..
+ * VBox Qt GUI - Declarations of utility functions for handling Windows Keyboard specific tasks.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,12 +15,17 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+/* Defines: */
 #define LOG_GROUP LOG_GROUP_GUI
 
+/* GUI includes: */
 #include "WinKeyboard.h"
+
+/* Other VBox includes: */
 #include <iprt/assert.h>
 #include <VBox/log.h>
 
+/* External includes: */
 #include <stdio.h>
 
 
@@ -246,7 +251,7 @@ void WinAltGrMonitor::updateStateFromKeyEvent(unsigned iDownScanCode,
             }
             else
                 m_enmFakeControlDetectionState = LEFT_CONTROL_DOWN;
-            /* Fall through. */
+            RT_FALL_THRU();
         case LEFT_CONTROL_DOWN:
             if (   iDownScanCode == 0x1D /* left control */
                 && !fKeyDown

@@ -1,9 +1,10 @@
+/* $Id: pciutil.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Utility routines for calling the PCI BIOS.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+#ifndef VBOX_INCLUDED_SRC_PC_BIOS_pciutil_h
+#define VBOX_INCLUDED_SRC_PC_BIOS_pciutil_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 extern  uint16_t    pci_find_device(uint16_t v_id, uint16_t d_id);
 /* Warning: pci_find_classcode destroys the high bits of ECX. */
@@ -25,4 +32,7 @@ extern  void        pci_write_config_byte(uint8_t bus, uint8_t dev_fn, uint8_t r
 extern  void        pci_write_config_word(uint8_t bus, uint8_t dev_fn, uint8_t reg, uint16_t val);
 /* Warning: pci_write_config_dword destroys the high bits of ECX. */
 extern  void        pci_write_config_dword(uint8_t bus, uint8_t dev_fn, uint8_t reg, uint32_t val);
+extern  uint16_t    pci_find_class_noif(uint16_t dev_class);
+
+#endif /* !VBOX_INCLUDED_SRC_PC_BIOS_pciutil_h */
 

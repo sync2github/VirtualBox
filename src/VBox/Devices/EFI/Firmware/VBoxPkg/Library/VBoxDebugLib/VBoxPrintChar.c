@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxPrintChar.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxPrintChar.c - Implementation of the VBoxPrintChar() debug logging routine.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,11 +24,13 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include "VBoxDebugLib.h"
 #include "DevEFI.h"
+#include "iprt/asm.h"
 
 
 /**

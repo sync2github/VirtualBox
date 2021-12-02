@@ -1,48 +1,31 @@
 /** @file
   ACPI Timer implements one instance of Timer Library.
 
-  Copyright (c) 2013 - 2014, Intel Corporation. All rights reserved.<BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  Copyright (c) 2013 - 2018, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) Microsoft Corporation.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#include <Base.h>
-#include <Library/TimerLib.h>
-#include <Library/BaseLib.h>
+#include <PiDxe.h>
 
-//
-// Cached performance counter frequency
-//
-UINT64  mPerformanceCounterFrequency = 0;
+#include "DxeStandaloneMmAcpiTimerLib.h"
 
 /**
-  Internal function to retrieves the 64-bit frequency in Hz.
+  The constructor function enables ACPI IO space, and caches PerformanceCounterFrequency.
 
-  Internal function to retrieves the 64-bit frequency in Hz.
+  @param  ImageHandle   The firmware allocated handle for the EFI image.
+  @param  SystemTable   A pointer to the EFI System Table.
 
-  @return The frequency in Hz.
+  @retval EFI_SUCCESS   The constructor always returns RETURN_SUCCESS.
 
 **/
-UINT64
-InternalGetPerformanceCounterFrequency (
-  VOID
+EFI_STATUS
+EFIAPI
+DxeAcpiTimerLibConstructor (
+  IN EFI_HANDLE        ImageHandle,
+  IN EFI_SYSTEM_TABLE  *SystemTable
   )
 {
-  BOOLEAN  InterruptState;
-  UINT64   Count;
-
-  if (mPerformanceCounterFrequency == 0) {
-    InterruptState = SaveAndDisableInterrupts ();
-    Count = GetPerformanceCounter ();
-    MicroSecondDelay (100);
-    mPerformanceCounterFrequency = MultU64x32 (GetPerformanceCounter () - Count, 10000);
-    SetInterruptState (InterruptState);
-  }
-  return  mPerformanceCounterFrequency;
+  return CommonAcpiTimerLibConstructor ();
 }

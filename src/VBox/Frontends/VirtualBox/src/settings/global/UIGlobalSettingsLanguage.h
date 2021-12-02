@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIGlobalSettingsLanguage.h 86152 2020-09-17 12:04:53Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIGlobalSettingsLanguage class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,74 +15,71 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIGlobalSettingsLanguage_h__
-#define __UIGlobalSettingsLanguage_h__
+#ifndef FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsLanguage_h
+#define FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsLanguage_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UISettingsPage.h"
-#include "UIGlobalSettingsLanguage.gen.h"
 
-/* Global settings / Language page / Cache: */
-struct UISettingsCacheGlobalLanguage
-{
-    QString m_strLanguageId;
-};
+/* Forward declartions: */
+class UILanguageSettingsEditor;
+struct UIDataSettingsGlobalLanguage;
+typedef UISettingsCache<UIDataSettingsGlobalLanguage> UISettingsCacheGlobalLanguage;
 
-/* Global settings / Language page: */
-class UIGlobalSettingsLanguage : public UISettingsPageGlobal, public Ui::UIGlobalSettingsLanguage
+/** Global settings: Language page. */
+class SHARED_LIBRARY_STUFF UIGlobalSettingsLanguage : public UISettingsPageGlobal
 {
     Q_OBJECT;
 
 public:
 
-    /* Constructor: */
+    /** Constructs Language settings page. */
     UIGlobalSettingsLanguage();
+    /** Destructs Language settings page. */
+    virtual ~UIGlobalSettingsLanguage() /* override */;
 
 protected:
 
-    /* Load data to cache from corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void loadToCacheFrom(QVariant &data);
-    /* Load data to corresponding widgets from cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void getFromCache();
+    /** Loads settings from external object(s) packed inside @a data to cache.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void loadToCacheFrom(QVariant &data) /* override */;
+    /** Loads data from cache to corresponding widgets.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void getFromCache() /* override */;
 
-    /* Save data from corresponding widgets to cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void putToCache();
-    /* Save data from cache to corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void saveFromCacheTo(QVariant &data);
+    /** Saves data from corresponding widgets to cache.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void putToCache() /* override */;
+    /** Saves settings from cache to external object(s) packed inside @a data.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void saveFromCacheTo(QVariant &data) /* overrride */;
 
-    /* Helper: Navigation stuff: */
-    void setOrderAfter(QWidget *pWidget);
-
-    /* Helper: Translation stuff: */
-    void retranslateUi();
-
-    /* Handlers: Event stuff: */
-    void showEvent(QShowEvent *pEvent);
-    void polishEvent(QShowEvent *pEvent);
-
-private slots:
-
-    /* Handler: List-painting stuff: */
-    void sltLanguageItemPainted(QTreeWidgetItem *pItem, QPainter *pPainter);
-
-    /* Handler: Current-changed stuff: */
-    void sltCurrentLanguageChanged(QTreeWidgetItem *pItem);
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
 
 private:
 
-    /* Helper: List-loading stuff: */
-    void reload(const QString &strLangId);
+    /** Prepares all. */
+    void prepare();
+    /** Prepares widgets. */
+    void prepareWidgets();
+    /** Cleanups all. */
+    void cleanup();
 
-    /* Variables: */
-    bool m_fPolished;
-    bool m_fIsLanguageChanged;
+    /** Saves existing data from cache. */
+    bool saveData();
 
-    /* Cache: */
-    UISettingsCacheGlobalLanguage m_cache;
+    /** Holds the page data cache instance. */
+    UISettingsCacheGlobalLanguage *m_pCache;
+
+    /** @name Widgets
+     * @{ */
+        /** Holds the language settings editor instance. */
+        UILanguageSettingsEditor *m_pEditorLanguageSettings;
+    /** @} */
 };
 
-#endif // __UIGlobalSettingsLanguage_h__
+#endif /* !FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsLanguage_h */

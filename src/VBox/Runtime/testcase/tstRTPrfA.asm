@@ -1,10 +1,10 @@
-; $Id$
+; $Id: tstRTPrfA.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; IPRT - Comparing CPU registers and memory (cache).
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -96,7 +96,7 @@ BEGINPROC tstRTPRfAMemoryAccess
         shr     RTCCPTR_PRE VAR_XAX, 3
         shl     RTCCPTR_PRE VAR_XAX, 1
         xor     RTCCPTR_PRE VAR_XDX, 01010101h
-              
+
         mov     eax, VAR_ECX
         add     VAR_XAX, eax
         mov     xAX, VAR_XAX
@@ -120,9 +120,9 @@ BEGINPROC tstRTPRfAMemoryAccess
 %undef VAR_XDX
 %undef VAR_ECX
 
-        leave  
         leave
-        ret     
+        leave
+        ret
 ENDPROC   tstRTPRfAMemoryAccess
 
 

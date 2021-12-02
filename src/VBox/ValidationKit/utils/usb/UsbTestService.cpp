@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UsbTestService.cpp 90957 2021-08-27 13:35:33Z vboxsync $ */
 /** @file
  * UsbTestService - Remote USB test configuration and execution server.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -207,7 +207,7 @@ static const char *utsClientStateStringify(UTSCLIENTSTATE enmState)
 static int utsSendPkt(PUTSCLIENT pClient, PUTSPKTHDR pPkt)
 {
     Assert(pPkt->cb >= sizeof(*pPkt));
-    pPkt->uCrc32 = RTCrc32(pPkt->achOpcode, pPkt->cb - RT_OFFSETOF(UTSPKTHDR, achOpcode));
+    pPkt->uCrc32 = RTCrc32(pPkt->achOpcode, pPkt->cb - RT_UOFFSETOF(UTSPKTHDR, achOpcode));
     if (pPkt->cb != RT_ALIGN_32(pPkt->cb, UTSPKT_ALIGNMENT))
         memset((uint8_t *)pPkt + pPkt->cb, '\0', RT_ALIGN_32(pPkt->cb, UTSPKT_ALIGNMENT) - pPkt->cb);
 
@@ -266,7 +266,7 @@ static int utsRecvPkt(PUTSCLIENT pClient, PPUTSPKTHDR ppPktHdr, bool fAutoRetryO
                       "%.*Rhxd\n",
                       pPktHdr, pPktHdr->cb, pPktHdr->uCrc32, pPktHdr->achOpcode, RT_MIN(pPktHdr->cb, 256), pPktHdr));
                 uint32_t uCrc32Calc = pPktHdr->uCrc32 != 0
-                                    ? RTCrc32(&pPktHdr->achOpcode[0], pPktHdr->cb - RT_OFFSETOF(UTSPKTHDR, achOpcode))
+                                    ? RTCrc32(&pPktHdr->achOpcode[0], pPktHdr->cb - RT_UOFFSETOF(UTSPKTHDR, achOpcode))
                                     : 0;
                 if (pPktHdr->uCrc32 == uCrc32Calc)
                 {
@@ -1122,7 +1122,7 @@ static DECLCALLBACK(int) utsClientWorker(RTTHREAD hThread, void *pvUser)
                         if (cClientsCur == cClientsMax)
                         {
                             /* Realloc to accommodate for the new clients. */
-                            PUTSCLIENT *papClientsNew = (PUTSCLIENT *)RTMemRealloc(papClients, (cClientsMax + 10) * sizeof(PUTSCLIENT));
+                            PUTSCLIENT *papClientsNew = (PUTSCLIENT *)RTMemReallocZ(papClients, cClientsMax * sizeof(PUTSCLIENT), (cClientsMax + 10) * sizeof(PUTSCLIENT));
                             if (RT_LIKELY(papClientsNew))
                             {
                                 cClientsMax += 10;
@@ -1538,7 +1538,7 @@ static RTEXITCODE utsParseArgv(int argc, char **argv, bool *pfExit)
             case 't':
             {
                 PCUTSTRANSPORT pTransport = NULL;
-                for (size_t i = 0; RT_ELEMENTS(g_apTransports); i++)
+                for (size_t i = 0; i < RT_ELEMENTS(g_apTransports); i++)
                     if (!strcmp(g_apTransports[i]->szName, Val.psz))
                     {
                         pTransport = g_apTransports[i];
@@ -1551,7 +1551,7 @@ static RTEXITCODE utsParseArgv(int argc, char **argv, bool *pfExit)
             }
 
             case 'V':
-                RTPrintf("$Revision$\n");
+                RTPrintf("$Revision: 90957 $\n");
                 *pfExit = true;
                 return RTEXITCODE_SUCCESS;
 

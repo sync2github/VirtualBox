@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardImportApp.cpp 92096 2021-10-27 12:03:43Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardImportApp class implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,30 +15,24 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
-/* Global includes: */
-# include <QDialogButtonBox>
-# include <QLabel>
-# include <QPushButton>
-# include <QTextEdit>
-# include <QTextStream>
-
-/* Local includes: */
-# include "UIWizardImportApp.h"
-# include "UIWizardImportAppPageBasic1.h"
-# include "UIWizardImportAppPageBasic2.h"
-# include "UIWizardImportAppPageExpert.h"
-# include "VBoxGlobal.h"
-# include "QIDialog.h"
-# include "QIFileDialog.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
+/* Qt includes: */
+#include <QDialogButtonBox>
+#include <QLabel>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QPushButton>
+#include <QTextEdit>
+#include <QTextStream>
+#include <QVBoxLayout>
+
+/* GUI includes: */
+#include "QIDialog.h"
+#include "QIFileDialog.h"
+#include "UINotificationCenter.h"
+#include "UIWizardImportApp.h"
+#include "UIWizardImportAppPageExpert.h"
+#include "UIWizardImportAppPageSettings.h"
+#include "UIWizardImportAppPageSource.h"
 
 
 /* Import license viewer: */
@@ -73,10 +67,10 @@ public:
         retranslateUi();
 
         /* Setup connections: */
-        connect(m_pButtonBox, SIGNAL(rejected()), this, SLOT(reject()));
-        connect(m_pButtonBox, SIGNAL(accepted()), this, SLOT(accept()));
-        connect(m_pPrintButton, SIGNAL(clicked()), this, SLOT(sltPrint()));
-        connect(m_pSaveButton, SIGNAL(clicked()), this, SLOT(sltSave()));
+        connect(m_pButtonBox, &QDialogButtonBox::rejected, this, &UIImportLicenseViewer::reject);
+        connect(m_pButtonBox, &QDialogButtonBox::accepted, this, &UIImportLicenseViewer::accept);
+        connect(m_pPrintButton, &QPushButton::clicked,     this, &UIImportLicenseViewer::sltPrint);
+        connect(m_pSaveButton,  &QPushButton::clicked,     this, &UIImportLicenseViewer::sltSave);
     }
 
     /* Content setter: */
@@ -101,7 +95,7 @@ private slots:
     /* Save stuff: */
     void sltSave()
     {
-        QString fileName = QIFileDialog::getSaveFileName(vboxGlobal().documentsPath(), tr("Text (*.txt)"),
+        QString fileName = QIFileDialog::getSaveFileName(uiCommon().documentsPath(), tr("Text (*.txt)"),
                                                          this, tr("Save license to file..."));
         if (!fileName.isEmpty())
         {
@@ -142,101 +136,138 @@ private:
     QString m_strText;
 };
 
-UIWizardImportApp::UIWizardImportApp(QWidget *pParent, const QString &strFileName)
-    : UIWizard(pParent, WizardType_ImportAppliance)
+
+/*********************************************************************************************************************************
+*   Class UIWizardImportApp implementation.                                                                                      *
+*********************************************************************************************************************************/
+
+UIWizardImportApp::UIWizardImportApp(QWidget *pParent,
+                                     bool fImportFromOCIByDefault,
+                                     const QString &strFileName)
+    : UINativeWizard(pParent, WizardType_ImportAppliance, WizardMode_Auto, "ovf")
+    , m_fImportFromOCIByDefault(fImportFromOCIByDefault)
     , m_strFileName(strFileName)
+    , m_fSourceCloudOne(false)
+    , m_enmMacAddressImportPolicy(MACAddressImportPolicy_MAX)
+    , m_fImportHDsAsVDI(false)
 {
 #ifndef VBOX_WS_MAC
     /* Assign watermark: */
-    assignWatermark(":/vmw_ovf_import.png");
+    setPixmapName(":/wizard_ovf_import.png");
 #else /* VBOX_WS_MAC */
     /* Assign background image: */
-    assignBackground(":/vmw_ovf_import_bg.png");
+    setPixmapName(":/wizard_ovf_import_bg.png");
 #endif /* VBOX_WS_MAC */
 }
 
-bool UIWizardImportApp::isValid() const
+bool UIWizardImportApp::setFile(const QString &strName)
 {
-    bool fResult = false;
-    if (UIApplianceImportEditorWidget *pImportApplianceWidget = field("applianceWidget").value<ImportAppliancePointer>())
-        fResult = pImportApplianceWidget->isValid();
-    return fResult;
+    /* Clear object: */
+    m_comLocalAppliance = CAppliance();
+
+    if (strName.isEmpty())
+        return false;
+
+    /* Create an appliance object: */
+    CVirtualBox comVBox = uiCommon().virtualBox();
+    CAppliance comAppliance = comVBox.CreateAppliance();
+    if (!comVBox.isOk())
+    {
+        UINotificationMessage::cannotCreateAppliance(comVBox, notificationCenter());
+        return false;
+    }
+
+    /* Read the file to appliance: */
+    UINotificationProgressApplianceRead *pNotification = new UINotificationProgressApplianceRead(comAppliance, strName);
+    if (!handleNotificationProgressNow(pNotification))
+        return false;
+
+    /* Now we have to interpret that stuff: */
+    comAppliance.Interpret();
+    if (!comAppliance.isOk())
+    {
+        UINotificationMessage::cannotInterpretAppliance(comAppliance, notificationCenter());
+        return false;
+    }
+
+    /* Remember appliance: */
+    m_comLocalAppliance = comAppliance;
+
+    /* Success finally: */
+    return true;
 }
 
 bool UIWizardImportApp::importAppliance()
 {
-    /* Get import appliance widget: */
-    UIApplianceImportEditorWidget *pImportApplianceWidget = field("applianceWidget").value<ImportAppliancePointer>();
-    /* Make sure the final values are puted back: */
-    pImportApplianceWidget->prepareImport();
-    /* Check if there are license agreements the user must confirm: */
-    QList < QPair <QString, QString> > licAgreements = pImportApplianceWidget->licenseAgreements();
-    if (!licAgreements.isEmpty())
+    /* Check whether there was cloud source selected: */
+    if (isSourceCloudOne())
     {
-        UIImportLicenseViewer ilv(this);
-        for (int i = 0; i < licAgreements.size(); ++ i)
+        /* Make sure cloud appliance valid: */
+        AssertReturn(m_comCloudAppliance.isNotNull(), false);
+
+        /* No options for cloud VMs for now: */
+        QVector<KImportOptions> options;
+
+        /* Import appliance: */
+        UINotificationProgressApplianceImport *pNotification = new UINotificationProgressApplianceImport(m_comCloudAppliance,
+                                                                                                         options);
+        gpNotificationCenter->append(pNotification);
+
+        /* Positive: */
+        return true;
+    }
+    else
+    {
+        /* Check if there are license agreements the user must confirm: */
+        QList < QPair <QString, QString> > licAgreements = licenseAgreements();
+        if (!licAgreements.isEmpty())
         {
-            const QPair <QString, QString> &lic = licAgreements.at(i);
-            ilv.setContents(lic.first, lic.second);
-            if (ilv.exec() == QDialog::Rejected)
-                return false;
+            UIImportLicenseViewer ilv(this);
+            for (int i = 0; i < licAgreements.size(); ++i)
+            {
+                const QPair<QString, QString> &lic = licAgreements.at(i);
+                ilv.setContents(lic.first, lic.second);
+                if (ilv.exec() == QDialog::Rejected)
+                    return false;
+            }
         }
-    }
-    /* Now import all virtual systems: */
-    return pImportApplianceWidget->import();
-}
 
-void UIWizardImportApp::sltCurrentIdChanged(int iId)
-{
-    /* Call to base-class: */
-    UIWizard::sltCurrentIdChanged(iId);
-    /* Enable 2nd button (Reset to Defaults) for 2nd and Expert pages only! */
-    setOption(QWizard::HaveCustomButton2, (mode() == WizardMode_Basic && iId == Page2) ||
-                                          (mode() == WizardMode_Expert && iId == PageExpert));
-}
+        /* Gather import options: */
+        QVector<KImportOptions> options;
+        switch (macAddressImportPolicy())
+        {
+            case MACAddressImportPolicy_KeepAllMACs: options.append(KImportOptions_KeepAllMACs); break;
+            case MACAddressImportPolicy_KeepNATMACs: options.append(KImportOptions_KeepNATMACs); break;
+            default: break;
+        }
+        if (isImportHDsAsVDI())
+            options.append(KImportOptions_ImportToVDI);
 
-void UIWizardImportApp::sltCustomButtonClicked(int iId)
-{
-    /* Call to base-class: */
-    UIWizard::sltCustomButtonClicked(iId);
+        /* Import appliance: */
+        UINotificationProgressApplianceImport *pNotification = new UINotificationProgressApplianceImport(m_comLocalAppliance,
+                                                                                                         options);
+        gpNotificationCenter->append(pNotification);
 
-    /* Handle 2nd button: */
-    if (iId == CustomButton2)
-    {
-        /* Get appliance widget: */
-        ImportAppliancePointer pApplianceWidget = field("applianceWidget").value<ImportAppliancePointer>();
-        AssertMsg(!pApplianceWidget.isNull(), ("Appliance Widget is not set!\n"));
-        /* Reset it to default: */
-        pApplianceWidget->restoreDefaults();
+        /* Positive: */
+        return true;
     }
 }
 
-void UIWizardImportApp::retranslateUi()
-{
-    /* Call to base-class: */
-    UIWizard::retranslateUi();
-
-    /* Translate wizard: */
-    setWindowTitle(tr("Import Virtual Appliance"));
-    setButtonText(QWizard::CustomButton2, tr("Restore Defaults"));
-    setButtonText(QWizard::FinishButton, tr("Import"));
-}
-
-void UIWizardImportApp::prepare()
+void UIWizardImportApp::populatePages()
 {
     /* Create corresponding pages: */
     switch (mode())
     {
         case WizardMode_Basic:
         {
-            if (m_strFileName.isEmpty())
-                setPage(Page1, new UIWizardImportAppPageBasic1);
-            setPage(Page2, new UIWizardImportAppPageBasic2(m_strFileName));
+            if (m_fImportFromOCIByDefault || m_strFileName.isEmpty())
+                addPage(new UIWizardImportAppPageSource(m_fImportFromOCIByDefault, m_strFileName));
+            addPage(new UIWizardImportAppPageSettings(m_strFileName));
             break;
         }
         case WizardMode_Expert:
         {
-            setPage(PageExpert, new UIWizardImportAppPageExpert(m_strFileName));
+            addPage(new UIWizardImportAppPageExpert(m_fImportFromOCIByDefault, m_strFileName));
             break;
         }
         default:
@@ -245,9 +276,39 @@ void UIWizardImportApp::prepare()
             break;
         }
     }
-    /* Call to base-class: */
-    UIWizard::prepare();
 }
 
-#include "UIWizardImportApp.moc"
+void UIWizardImportApp::retranslateUi()
+{
+    /* Call to base-class: */
+    UINativeWizard::retranslateUi();
 
+    /* Translate wizard: */
+    setWindowTitle(tr("Import Virtual Appliance"));
+    /// @todo implement this?
+    //setButtonText(QWizard::FinishButton, tr("Import"));
+}
+
+QList<QPair<QString, QString> > UIWizardImportApp::licenseAgreements() const
+{
+    QList<QPair<QString, QString> > list;
+
+    foreach (CVirtualSystemDescription comVsd, m_comLocalAppliance.GetVirtualSystemDescriptions())
+    {
+        QVector<QString> strLicense;
+        strLicense = comVsd.GetValuesByType(KVirtualSystemDescriptionType_License,
+                                            KVirtualSystemDescriptionValueType_Original);
+        if (!strLicense.isEmpty())
+        {
+            QVector<QString> strName;
+            strName = comVsd.GetValuesByType(KVirtualSystemDescriptionType_Name,
+                                             KVirtualSystemDescriptionValueType_Auto);
+            list << QPair<QString, QString>(strName.first(), strLicense.first());
+        }
+    }
+
+    return list;
+}
+
+
+#include "UIWizardImportApp.moc"

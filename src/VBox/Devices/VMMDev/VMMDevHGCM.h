@@ -1,10 +1,10 @@
-/* $Id: */
+/* $Id: VMMDevHGCM.h 90264 2021-07-20 19:37:24Z vboxsync $ */
 /** @file
  * VBoxDev - HGCM - Host-Guest Communication Manager, internal header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,26 +15,38 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VMMDev_VMMDevHGCM_h
-#define ___VMMDev_VMMDevHGCM_h
+#ifndef VBOX_INCLUDED_SRC_VMMDev_VMMDevHGCM_h
+#define VBOX_INCLUDED_SRC_VMMDev_VMMDevHGCM_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VMMDevState.h"
 
 RT_C_DECLS_BEGIN
-int vmmdevHGCMConnect(VMMDevState *pVMMDevState, VMMDevHGCMConnect *pHGCMConnect, RTGCPHYS GCPtr);
-int vmmdevHGCMDisconnect(VMMDevState *pVMMDevState, VMMDevHGCMDisconnect *pHGCMDisconnect, RTGCPHYS GCPtr);
-int vmmdevHGCMCall(VMMDevState *pVMMDevState, VMMDevHGCMCall *pHGCMCall, uint32_t cbHGCMCall, RTGCPHYS GCPtr, bool f64Bits);
-int vmmdevHGCMCancel(VMMDevState *pVMMDevState, VMMDevHGCMCancel *pHGCMCancel, RTGCPHYS GCPtr);
-int vmmdevHGCMCancel2(VMMDevState *pVMMDevState, RTGCPHYS GCPtr);
+int  vmmdevR3HgcmConnect(PPDMDEVINS pDevIns, PVMMDEV pThis, PVMMDEVCC pThisCC,
+                         const VMMDevHGCMConnect *pHGCMConnect, RTGCPHYS GCPhys);
+int  vmmdevR3HgcmDisconnect(PPDMDEVINS pDevIns, PVMMDEV pThis, PVMMDEVCC pThisCC,
+                            const VMMDevHGCMDisconnect *pHGCMDisconnect, RTGCPHYS GCPhys);
+int  vmmdevR3HgcmCall(PPDMDEVINS pDevIns, PVMMDEV pThis, PVMMDEVCC pThisCC, const VMMDevHGCMCall *pHGCMCall, uint32_t cbHGCMCall,
+                      RTGCPHYS GCPhys, VMMDevRequestType enmRequestType, uint64_t tsArrival, PVMMDEVREQLOCK *ppLock);
 
-DECLCALLBACK(void) hgcmCompleted(PPDMIHGCMPORT pInterface, int32_t result, PVBOXHGCMCMD pCmdPtr);
+int  vmmdevR3HgcmCancel(PVMMDEVCC pThisCC, const VMMDevHGCMCancel *pHGCMCancel, RTGCPHYS GCPhys);
+int  vmmdevR3HgcmCancel2(PVMMDEVCC pThisCC, RTGCPHYS GCPhys);
 
-int vmmdevHGCMSaveState(VMMDevState *pVMMDevState, PSSMHANDLE pSSM);
-int vmmdevHGCMLoadState(VMMDevState *pVMMDevState, PSSMHANDLE pSSM, uint32_t u32Version);
-int vmmdevHGCMLoadStateDone(VMMDevState *pVMMDevState);
+DECLCALLBACK(int)  hgcmR3Completed(PPDMIHGCMPORT pInterface, int32_t result, PVBOXHGCMCMD pCmdPtr);
+DECLCALLBACK(bool) hgcmR3IsCmdRestored(PPDMIHGCMPORT pInterface, PVBOXHGCMCMD pCmd);
+DECLCALLBACK(bool) hgcmR3IsCmdCancelled(PPDMIHGCMPORT pInterface, PVBOXHGCMCMD pCmd);
+DECLCALLBACK(uint32_t) hgcmR3GetRequestor(PPDMIHGCMPORT pInterface, PVBOXHGCMCMD pCmd);
+DECLCALLBACK(uint64_t) hgcmR3GetVMMDevSessionId(PPDMIHGCMPORT pInterface);
 
-void vmmdevHGCMDestroy(PVMMDEV pThis);
+int  vmmdevR3HgcmSaveState(PVMMDEVCC pThisCC, PSSMHANDLE pSSM);
+int  vmmdevR3HgcmLoadState(PPDMDEVINS pDevIns, PVMMDEV pThis, PVMMDEVCC pThisCC, PSSMHANDLE pSSM, uint32_t uVersion);
+int  vmmdevR3HgcmLoadStateDone(PPDMDEVINS pDevIns, PVMMDEV pThis, PVMMDEVCC pThisCC);
+
+void vmmdevR3HgcmDestroy(PPDMDEVINS pDevIns, PVMMDEV pThis, PVMMDEVCC pThisCC);
+int  vmmdevR3HgcmInit(PVMMDEVCC pThisCC);
 RT_C_DECLS_END
 
-#endif /* !___VMMDev_VMMDevHGCM_h */
+#endif /* !VBOX_INCLUDED_SRC_VMMDev_VMMDevHGCM_h */
 

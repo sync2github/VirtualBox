@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_crypto_spc_h
-#define ___iprt_crypto_spc_h
+#ifndef IPRT_INCLUDED_crypto_rsa_h
+#define IPRT_INCLUDED_crypto_rsa_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/asn1.h>
 #include <iprt/crypto/x509.h>
@@ -57,6 +60,9 @@ typedef RTCRRSAPUBLICKEY *PRTCRRSAPUBLICKEY;
 /** Pointer to the const ASN.1 IPRT representation of an RSA public key. */
 typedef RTCRRSAPUBLICKEY const *PCRTCRRSAPUBLICKEY;
 RTASN1TYPE_STANDARD_PROTOTYPES(RTCRRSAPUBLICKEY, RTDECL, RTCrRsaPublicKey, SeqCore.Asn1Core);
+
+RTDECL(bool) RTCrRsaPublicKey_CanHandleDigestType(PCRTCRRSAPUBLICKEY pRsaPublicKey, RTDIGESTTYPE enmDigestType,
+                                                  PRTERRINFO pErrInfo);
 
 
 /**
@@ -120,6 +126,9 @@ RTASN1TYPE_STANDARD_PROTOTYPES(RTCRRSAPRIVATEKEY, RTDECL, RTCrRsaPrivateKey, Seq
 #define RTCRRSAPRIVATEKEY_VERSION_MULTI         1
 /** @}  */
 
+RTDECL(bool) RTCrRsaPrivateKey_CanHandleDigestType(PCRTCRRSAPRIVATEKEY pRsaPrivateKey, RTDIGESTTYPE enmDigestType,
+                                                   PRTERRINFO pErrInfo);
+
 
 /**
  * RSA DigestInfo used by the EMSA-PKCS1-v1_5 encoding method.
@@ -143,5 +152,5 @@ RTASN1TYPE_STANDARD_PROTOTYPES(RTCRRSADIGESTINFO, RTDECL, RTCrRsaDigestInfo, Seq
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_crypto_rsa_h */
 

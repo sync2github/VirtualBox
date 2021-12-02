@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTPathSplitA.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTPathSplitA and RTPathSplitFree.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include <iprt/path.h>
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
 
@@ -48,7 +48,7 @@ RTDECL(int) RTPathSplitATag(const char *pszPath, PRTPATHSPLIT *ppSplit, uint32_t
      * Note! No point in trying very hard to get it right.
      */
     size_t cbSplit = strlen(pszPath);
-    cbSplit += RT_OFFSETOF(RTPATHSPLIT, apszComps[cbSplit / 8]) + cbSplit / 8 + 8;
+    cbSplit += RT_UOFFSETOF_DYN(RTPATHSPLIT, apszComps[cbSplit / 8]) + cbSplit / 8 + 8;
     cbSplit = RT_ALIGN(cbSplit, 64);
     PRTPATHSPLIT pSplit = (PRTPATHSPLIT)RTMemAllocTag(cbSplit, pszTag);
     if (pSplit == NULL)

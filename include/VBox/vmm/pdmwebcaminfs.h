@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pdmwebcaminfs.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * webcaminfs - interfaces between dev and driver.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmwebcaminfs_h
-#define ___VBox_vmm_pdmwebcaminfs_h
+#ifndef VBOX_INCLUDED_vmm_pdmwebcaminfs_h
+#define VBOX_INCLUDED_vmm_pdmwebcaminfs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 
@@ -139,5 +142,5 @@ typedef struct PDMIWEBCAMDEV
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_pdmwebcaminfs_h */
 

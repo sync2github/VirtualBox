@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SnapshotImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_SNAPSHOTIMPL
-#define ____H_SNAPSHOTIMPL
+#ifndef MAIN_INCLUDED_SnapshotImpl_h
+#define MAIN_INCLUDED_SnapshotImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "SnapshotWrap.h"
 
@@ -31,7 +34,7 @@ class ATL_NO_VTABLE Snapshot :
     public SnapshotWrap
 {
 public:
-    DECLARE_EMPTY_CTOR_DTOR(Snapshot)
+    DECLARE_COMMON_CLASS_METHODS(Snapshot)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -39,8 +42,8 @@ public:
     // public initializer/uninitializer only for internal purposes
     HRESULT init(VirtualBox *aVirtualBox,
                  const Guid &aId,
-                 const Utf8Str &aName,
-                 const Utf8Str &aDescription,
+                 const com::Utf8Str &aName,
+                 const com::Utf8Str &aDescription,
                  const RTTIMESPEC &aTimeStamp,
                  SnapshotMachine *aMachine,
                  Snapshot *aParent);
@@ -79,7 +82,7 @@ public:
     RTTIMESPEC i_getTimeStamp() const;
 
     ComObjPtr<Snapshot> i_findChildOrSelf(IN_GUID aId);
-    ComObjPtr<Snapshot> i_findChildOrSelf(const Utf8Str &aName);
+    ComObjPtr<Snapshot> i_findChildOrSelf(const com::Utf8Str &aName);
 
     void i_updateSavedStatePaths(const Utf8Str &strOldPath,
                                  const Utf8Str &strNewPath);
@@ -88,6 +91,11 @@ public:
 
     bool i_sharesSavedStateFile(const Utf8Str &strPath,
                                 Snapshot *pSnapshotToIgnore);
+
+    void i_updateNVRAMPaths(const Utf8Str &strOldPath,
+                            const Utf8Str &strNewPath);
+    void i_updateNVRAMPathsImpl(const Utf8Str &strOldPath,
+                                const Utf8Str &strNewPath);
 
     HRESULT i_saveSnapshot(settings::Snapshot &data) const;
     HRESULT i_saveSnapshotImpl(settings::Snapshot &data) const;
@@ -125,6 +133,6 @@ private:
     Data *m;
 };
 
-#endif // ____H_SNAPSHOTIMPL
+#endif /* !MAIN_INCLUDED_SnapshotImpl_h */
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

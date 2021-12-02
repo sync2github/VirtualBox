@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fileio-posix.cpp 90781 2021-08-23 09:26:08Z vboxsync $ */
 /** @file
  * IPRT - File I/O, POSIX, Part 1.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -63,6 +63,7 @@
 #include <iprt/string.h>
 #include <iprt/err.h>
 #include <iprt/log.h>
+#include <iprt/thread.h>
 #include "internal/file.h"
 #include "internal/fs.h"
 #include "internal/path.h"
@@ -78,6 +79,15 @@
 #else
 # define RT_FILE_PERMISSION  (00600)
 #endif
+
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
+#ifdef O_CLOEXEC
+static int volatile g_fHave_O_CLOEXEC = 0; /* {-1,0,1}; since Linux 2.6.23 */
+#endif
+
 
 
 RTDECL(bool) RTFileExists(const char *pszPath)
@@ -99,13 +109,45 @@ RTDECL(bool) RTFileExists(const char *pszPath)
 }
 
 
+#ifdef O_CLOEXEC
+/** Worker for RTFileOpenEx that detects whether the kernel supports
+ *  O_CLOEXEC or not, setting g_fHave_O_CLOEXEC to 1 or -1 accordingly. */
+static int rtFileOpenExDetectCloExecSupport(void)
+{
+    /*
+     * Open /dev/null with O_CLOEXEC and see if FD_CLOEXEC is set or not.
+     */
+    int fHave_O_CLOEXEC = -1;
+    int fd = open("/dev/null", O_RDONLY | O_CLOEXEC, 0);
+    if (fd >= 0)
+    {
+        int fFlags = fcntl(fd, F_GETFD, 0);
+        fHave_O_CLOEXEC = fFlags > 0 && (fFlags & FD_CLOEXEC) ? 1 : -1;
+        close(fd);
+    }
+    else
+        AssertMsg(errno == EINVAL, ("%d\n", errno));
+    g_fHave_O_CLOEXEC = fHave_O_CLOEXEC;
+    return fHave_O_CLOEXEC;
+}
+#endif
+
+
 RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
+{
+    return RTFileOpenEx(pszFilename, fOpen, pFile, NULL);
+}
+
+
+RTDECL(int)  RTFileOpenEx(const char *pszFilename, uint64_t fOpen, PRTFILE phFile, PRTFILEACTION penmActionTaken)
 {
     /*
      * Validate input.
      */
-    AssertPtrReturn(pFile, VERR_INVALID_POINTER);
-    *pFile = NIL_RTFILE;
+    AssertPtrReturn(phFile, VERR_INVALID_POINTER);
+    *phFile = NIL_RTFILE;
+    if (penmActionTaken)
+        *penmActionTaken = RTFILEACTION_INVALID;
     AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
 
     /*
@@ -115,11 +157,7 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
     if (RT_FAILURE(rc))
         return rc;
 #ifndef O_NONBLOCK
-    if (fOpen & RTFILE_O_NON_BLOCK)
-    {
-        AssertMsgFailed(("Invalid parameters! fOpen=%#llx\n", fOpen));
-        return VERR_INVALID_PARAMETER;
-    }
+    AssertReturn(!(fOpen & RTFILE_O_NON_BLOCK), VERR_INVALID_FLAGS);
 #endif
 
     /*
@@ -137,8 +175,11 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
         fOpenMode |= O_NOINHERIT;
 #endif
 #ifdef O_CLOEXEC
-    static int s_fHave_O_CLOEXEC = 0; /* {-1,0,1}; since Linux 2.6.23 */
-    if (!(fOpen & RTFILE_O_INHERIT) && s_fHave_O_CLOEXEC >= 0)
+    int fHave_O_CLOEXEC = g_fHave_O_CLOEXEC;
+    if (   !(fOpen & RTFILE_O_INHERIT)
+        && (   fHave_O_CLOEXEC > 0
+            || (   fHave_O_CLOEXEC == 0
+                && (fHave_O_CLOEXEC = rtFileOpenExDetectCloExecSupport()) > 0)))
         fOpenMode |= O_CLOEXEC;
 #endif
 #ifdef O_NONBLOCK
@@ -167,8 +208,14 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
         case RTFILE_O_OPEN_CREATE:      fOpenMode |= O_CREAT; break;
         case RTFILE_O_CREATE:           fOpenMode |= O_CREAT | O_EXCL; break;
         case RTFILE_O_CREATE_REPLACE:   fOpenMode |= O_CREAT | O_TRUNC; break; /** @todo replacing needs fixing, this is *not* a 1:1 mapping! */
+        default:
+            AssertMsgFailed(("fOpen=%#llx\n", fOpen));
+            fOpen = (fOpen & ~RTFILE_O_ACTION_MASK) | RTFILE_O_OPEN;
+            break;
+
     }
-    if (fOpen & RTFILE_O_TRUNCATE)
+    if (   (fOpen & RTFILE_O_TRUNCATE)
+        && (fOpen & RTFILE_O_ACTION_MASK) != RTFILE_O_CREATE)
         fOpenMode |= O_TRUNC;
 
     switch (fOpen & RTFILE_O_ACCESS_MASK)
@@ -183,8 +230,7 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
             fOpenMode |= fOpen & RTFILE_O_APPEND ? O_APPEND | O_RDWR   : O_RDWR;
             break;
         default:
-            AssertMsgFailed(("RTFileOpen received an invalid RW value, fOpen=%#llx\n", fOpen));
-            return VERR_INVALID_PARAMETER;
+            AssertMsgFailedReturn(("RTFileOpen received an invalid RW value, fOpen=%#llx\n", fOpen), VERR_INVALID_FLAGS);
     }
 
     /* File mode. */
@@ -192,7 +238,7 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
               ? (fOpen & RTFILE_O_CREATE_MODE_MASK) >> RTFILE_O_CREATE_MODE_SHIFT
               : RT_FILE_PERMISSION;
 
-    /** @todo sharing! */
+    /** @todo sharing? */
 
     /*
      * Open/create the file.
@@ -202,23 +248,95 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
     if (RT_FAILURE(rc))
         return (rc);
 
-    int fh = open(pszNativeFilename, fOpenMode, fMode);
-    int iErr = errno;
-
-#ifdef O_CLOEXEC
-    if (   (fOpenMode & O_CLOEXEC)
-        && s_fHave_O_CLOEXEC == 0)
+    int fh;
+    int iErr;
+    if (!penmActionTaken)
     {
-        if (fh < 0 && iErr == EINVAL)
-        {
-            s_fHave_O_CLOEXEC = -1;
-            fh = open(pszNativeFilename, fOpenMode, fMode);
-            iErr = errno;
-        }
-        else if (fh >= 0)
-            s_fHave_O_CLOEXEC = fcntl(fh, F_GETFD, 0) > 0 ? 1 : -1;
+        fh   = open(pszNativeFilename, fOpenMode, fMode);
+        iErr = errno;
     }
-#endif
+    else
+    {
+        /* We need to know exactly which action was taken by open, Windows &
+           OS/2 style.  Can be tedious and subject to races:  */
+        switch (fOpen & RTFILE_O_ACTION_MASK)
+        {
+            case RTFILE_O_OPEN:
+                Assert(!(fOpenMode & O_CREAT));
+                Assert(!(fOpenMode & O_EXCL));
+                fh   = open(pszNativeFilename, fOpenMode, fMode);
+                iErr = errno;
+                if (fh >= 0)
+                    *penmActionTaken = fOpenMode & O_TRUNC ? RTFILEACTION_TRUNCATED : RTFILEACTION_OPENED;
+                break;
+
+            case RTFILE_O_CREATE:
+                Assert(fOpenMode & O_CREAT);
+                Assert(fOpenMode & O_EXCL);
+                fh   = open(pszNativeFilename, fOpenMode, fMode);
+                iErr = errno;
+                if (fh >= 0)
+                    *penmActionTaken = RTFILEACTION_CREATED;
+                else if (iErr == EEXIST)
+                    *penmActionTaken = RTFILEACTION_ALREADY_EXISTS;
+                break;
+
+            case RTFILE_O_OPEN_CREATE:
+            case RTFILE_O_CREATE_REPLACE:
+            {
+                Assert(fOpenMode & O_CREAT);
+                Assert(!(fOpenMode & O_EXCL));
+                int iTries = 64;
+                while (iTries-- > 0)
+                {
+                    /* Yield the CPU if we've raced too long. */
+                    if (iTries < 4)
+                        RTThreadSleep(2 - (iTries & 1));
+
+                    /* Try exclusive creation first: */
+                    fh   = open(pszNativeFilename, fOpenMode | O_EXCL, fMode);
+                    iErr = errno;
+                    if (fh >= 0)
+                    {
+                        *penmActionTaken = RTFILEACTION_CREATED;
+                        break;
+                    }
+                    if (iErr != EEXIST)
+                        break;
+
+                    /* If the file exists, try open it: */
+                    fh   = open(pszNativeFilename, fOpenMode & ~O_CREAT, fMode);
+                    iErr = errno;
+                    if (fh >= 0)
+                    {
+                        if ((fOpen & RTFILE_O_ACTION_MASK) == RTFILE_O_OPEN_CREATE)
+                            *penmActionTaken = fOpenMode & O_TRUNC ? RTFILEACTION_TRUNCATED : RTFILEACTION_OPENED;
+                        else
+                            *penmActionTaken = RTFILEACTION_REPLACED;
+                        break;
+                    }
+                    if (iErr != ENOENT)
+                        break;
+                }
+                Assert(iTries >= 0);
+                if (iTries < 0)
+                {
+                    /* Thanks for the race, but we need to get on with things.  */
+                    fh   = open(pszNativeFilename, fOpenMode, fMode);
+                    iErr = errno;
+                    if (fh >= 0)
+                        *penmActionTaken = RTFILEACTION_OPENED;
+                }
+                break;
+            }
+
+            default:
+                AssertMsgFailed(("fOpen=%#llx fOpenMode=%#x\n", fOpen, fOpenMode));
+                iErr = EINVAL;
+                fh = -1;
+                break;
+        }
+    }
 
     rtPathFreeNative(pszNativeFilename, pszFilename);
     if (fh >= 0)
@@ -233,7 +351,7 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
             &&  !(fOpenMode & O_NOINHERIT)  /* Take care since it might be a zero value dummy. */
 #endif
 #ifdef O_CLOEXEC
-            &&  s_fHave_O_CLOEXEC <= 0
+            &&  fHave_O_CLOEXEC <= 0
 #endif
             )
             iErr = fcntl(fh, F_SETFD, FD_CLOEXEC) >= 0 ? 0 : errno;
@@ -328,10 +446,10 @@ RTR3DECL(int) RTFileOpen(PRTFILE pFile, const char *pszFilename, uint64_t fOpen)
          */
         if (iErr == 0)
         {
-            *pFile = (RTFILE)(uintptr_t)fh;
-            Assert((intptr_t)*pFile == fh);
+            *phFile = (RTFILE)(uintptr_t)fh;
+            Assert((intptr_t)*phFile == fh);
             LogFlow(("RTFileOpen(%p:{%RTfile}, %p:{%s}, %#llx): returns %Rrc\n",
-                     pFile, *pFile, pszFilename, pszFilename, fOpen, rc));
+                     phFile, *phFile, pszFilename, pszFilename, fOpen, rc));
             return VINF_SUCCESS;
         }
 
@@ -457,7 +575,11 @@ RTR3DECL(int)  RTFileSeek(RTFILE hFile, int64_t offSeek, unsigned uMethod, uint6
 RTR3DECL(int)  RTFileRead(RTFILE hFile, void *pvBuf, size_t cbToRead, size_t *pcbRead)
 {
     if (cbToRead <= 0)
+    {
+        if (pcbRead)
+            *pcbRead = 0;
         return VINF_SUCCESS;
+    }
 
     /*
      * Attempt read.
@@ -511,7 +633,7 @@ RTR3DECL(int)  RTFileWrite(RTFILE hFile, const void *pvBuf, size_t cbToWrite, si
             {
                 ssize_t cbWrittenPart = write(RTFileToNative(hFile), (const char *)pvBuf + cbWritten, cbToWrite - cbWritten);
                 if (cbWrittenPart <= 0)
-                    return RTErrConvertFromErrno(errno);
+                    return cbWrittenPart < 0 ? RTErrConvertFromErrno(errno) : VERR_TRY_AGAIN;
                 cbWritten += cbWrittenPart;
             }
         }
@@ -547,7 +669,7 @@ RTR3DECL(int)  RTFileSetSize(RTFILE hFile, uint64_t cbSize)
 }
 
 
-RTR3DECL(int) RTFileGetSize(RTFILE hFile, uint64_t *pcbSize)
+RTR3DECL(int) RTFileQuerySize(RTFILE hFile, uint64_t *pcbSize)
 {
     /*
      * Ask fstat() first.
@@ -557,9 +679,9 @@ RTR3DECL(int) RTFileGetSize(RTFILE hFile, uint64_t *pcbSize)
     {
         *pcbSize = st.st_size;
         if (   st.st_size != 0
-#if defined(RT_OS_SOLARIS)
+#if defined(RT_OS_SOLARIS) || defined(RT_OS_DARWIN)
             || (!S_ISBLK(st.st_mode) && !S_ISCHR(st.st_mode))
-#elif defined(RT_OS_FREEBSD) || defined(RT_OS_NETBSD)
+#elif defined(RT_OS_FREEBSD) || defined(RT_OS_NETBSD) || defined(RT_OS_DARWIN)
             || !S_ISCHR(st.st_mode)
 #else
             || !S_ISBLK(st.st_mode)
@@ -582,7 +704,12 @@ RTR3DECL(int) RTFileGetSize(RTFILE hFile, uint64_t *pcbSize)
                 return VINF_SUCCESS;
             }
         }
-        /* must be a block device, fail on failure. */
+
+        /* Always fail block devices.  Character devices doesn't all need to be
+           /dev/rdisk* nodes, they should return ENOTTY but /dev/null returns ENODEV
+           and we include EINVAL just in case. */
+        if (!S_ISBLK(st.st_mode) && (errno == ENOTTY || errno == ENODEV || errno == EINVAL))
+            return VINF_SUCCESS;
 
 #elif defined(RT_OS_SOLARIS)
         struct dk_minfo MediaInfo;
@@ -608,7 +735,7 @@ RTR3DECL(int) RTFileGetSize(RTFILE hFile, uint64_t *pcbSize)
 
 #else
         /* PORTME! Avoid this path when possible. */
-        uint64_t offSaved;
+        uint64_t offSaved = UINT64_MAX;
         int rc = RTFileSeek(hFile, 0, RTFILE_SEEK_CURRENT, &offSaved);
         if (RT_SUCCESS(rc))
         {
@@ -623,41 +750,73 @@ RTR3DECL(int) RTFileGetSize(RTFILE hFile, uint64_t *pcbSize)
 }
 
 
-RTR3DECL(int) RTFileGetMaxSizeEx(RTFILE hFile, PRTFOFF pcbMax)
+RTR3DECL(int) RTFileQueryMaxSizeEx(RTFILE hFile, PRTFOFF pcbMax)
 {
     /*
      * Save the current location
      */
-    uint64_t offOld;
+    uint64_t offOld = UINT64_MAX;
     int rc = RTFileSeek(hFile, 0, RTFILE_SEEK_CURRENT, &offOld);
     if (RT_FAILURE(rc))
         return rc;
 
-    /*
-     * Perform a binary search for the max file size.
-     */
     uint64_t offLow  =       0;
-    uint64_t offHigh = 8 * _1T; /* we don't need bigger files */
+    uint64_t offHigh = INT64_MAX; /* we don't need bigger files */
     /** @todo Unfortunately this does not work for certain file system types,
      * for instance cifs mounts. Even worse, statvfs.f_fsid returns 0 for such
      * file systems. */
-    //uint64_t offHigh = INT64_MAX;
-    for (;;)
-    {
-        uint64_t cbInterval = (offHigh - offLow) >> 1;
-        if (cbInterval == 0)
-        {
-            if (pcbMax)
-                *pcbMax = offLow;
-            return RTFileSeek(hFile, offOld, RTFILE_SEEK_BEGIN, NULL);
-        }
 
-        rc = RTFileSeek(hFile, offLow + cbInterval, RTFILE_SEEK_BEGIN, NULL);
-        if (RT_FAILURE(rc))
-            offHigh = offLow + cbInterval;
-        else
-            offLow  = offLow + cbInterval;
+    /*
+     * Quickly guess the order of magnitude for offHigh and offLow.
+     */
+    {
+        uint64_t offHighPrev = offHigh;
+        while (offHigh >= INT32_MAX)
+        {
+            rc = RTFileSeek(hFile, offHigh, RTFILE_SEEK_BEGIN, NULL);
+            if (RT_SUCCESS(rc))
+            {
+                offLow = offHigh;
+                offHigh = offHighPrev;
+                break;
+            }
+            else
+            {
+                offHighPrev = offHigh;
+                offHigh >>= 8;
+            }
+        }
     }
+
+    /*
+     * Sanity: if the seek to the initial offHigh (INT64_MAX) works, then
+     * this algorithm cannot possibly work. Declare defeat.
+     */
+    if (offLow == offHigh)
+    {
+        rc = RTFileSeek(hFile, offOld, RTFILE_SEEK_BEGIN, NULL);
+        if (RT_SUCCESS(rc))
+            rc = VERR_NOT_IMPLEMENTED;
+
+        return rc;
+    }
+
+    /*
+     * Perform a binary search for the max file size.
+     */
+    while (offLow <= offHigh)
+    {
+        uint64_t offMid = offLow + (offHigh - offLow) / 2;
+        rc = RTFileSeek(hFile, offMid, RTFILE_SEEK_BEGIN, NULL);
+        if (RT_FAILURE(rc))
+            offHigh = offMid - 1;
+        else
+            offLow  = offMid + 1;
+    }
+
+    if (pcbMax)
+        *pcbMax = RT_MIN(offLow, offHigh);
+    return RTFileSeek(hFile, offOld, RTFILE_SEEK_BEGIN, NULL);
 }
 
 
@@ -696,7 +855,7 @@ RTR3DECL(int) RTFileSetMode(RTFILE hFile, RTFMODE fMode)
     /*
      * Normalize the mode and call the API.
      */
-    fMode = rtFsModeNormalize(fMode, NULL, 0);
+    fMode = rtFsModeNormalize(fMode, NULL, 0, RTFS_TYPE_FILE);
     if (!rtFsModeIsValid(fMode))
         return VERR_INVALID_PARAMETER;
 
@@ -728,8 +887,8 @@ RTR3DECL(int) RTFileRename(const char *pszSrc, const char *pszDst, unsigned fRen
     /*
      * Validate input.
      */
-    AssertMsgReturn(VALID_PTR(pszSrc), ("%p\n", pszSrc), VERR_INVALID_POINTER);
-    AssertMsgReturn(VALID_PTR(pszDst), ("%p\n", pszDst), VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSrc, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszDst, VERR_INVALID_POINTER);
     AssertMsgReturn(*pszSrc, ("%p\n", pszSrc), VERR_INVALID_PARAMETER);
     AssertMsgReturn(*pszDst, ("%p\n", pszDst), VERR_INVALID_PARAMETER);
     AssertMsgReturn(!(fRename & ~RTPATHRENAME_FLAGS_REPLACE), ("%#x\n", fRename), VERR_INVALID_PARAMETER);

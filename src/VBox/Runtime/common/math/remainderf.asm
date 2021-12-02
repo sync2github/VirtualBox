@@ -1,10 +1,10 @@
-; $Id$
+; $Id: remainderf.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; IPRT - No-CRT remainderf - AMD64 & X86.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -63,5 +63,4 @@ BEGINPROC RT_NOCRT(remainderf)
     leave
     ret
 ENDPROC   RT_NOCRT(remainderf)
-
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMultiScreenLayout.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMultiScreenLayout class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,42 +15,42 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QApplication>
-# include <QMenu>
+#include <QApplication>
+#include <QMenu>
 
 /* GUI includes: */
-# include "UIDefs.h"
-# include "UIMultiScreenLayout.h"
-# include "UIActionPoolRuntime.h"
-# include "UIMachineLogic.h"
-# include "UIFrameBuffer.h"
-# include "UISession.h"
-# include "UIMessageCenter.h"
-# include "UIExtraDataManager.h"
-# include "UIDesktopWidgetWatchdog.h"
-# include "VBoxGlobal.h"
+#include "UIDefs.h"
+#include "UIMultiScreenLayout.h"
+#include "UIActionPoolRuntime.h"
+#include "UIMachineLogic.h"
+#include "UIFrameBuffer.h"
+#include "UISession.h"
+#include "UIMessageCenter.h"
+#include "UIExtraDataManager.h"
+#include "UIDesktopWidgetWatchdog.h"
+#include "UICommon.h"
 
 /* COM includes: */
-# include "COMEnums.h"
-# include "CSession.h"
-# include "CConsole.h"
-# include "CMachine.h"
-# include "CDisplay.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "COMEnums.h"
+#include "CSession.h"
+#include "CConsole.h"
+#include "CMachine.h"
+#include "CDisplay.h"
+#include "CGraphicsAdapter.h"
 
 
 UIMultiScreenLayout::UIMultiScreenLayout(UIMachineLogic *pMachineLogic)
     : m_pMachineLogic(pMachineLogic)
+    , m_cGuestScreens(m_pMachineLogic->machine().GetGraphicsAdapter().GetMonitorCount())
+    , m_cHostScreens(0)
 {
     /* Calculate host/guest screen count: */
     calculateHostMonitorCount();
     calculateGuestScreenCount();
+
+    /* Prpeare connections: */
+    prepareConnections();
 }
 
 void UIMultiScreenLayout::update()
@@ -68,8 +68,7 @@ void UIMultiScreenLayout::update()
     /* Load all combinations stored in the settings file.
      * We have to make sure they are valid, which means there have to be unique combinations
      * and all guests screens need there own host screen. */
-    CDisplay display = m_pMachineLogic->session().GetConsole().GetDisplay();
-    bool fShouldWeAutoMountGuestScreens = gEDataManager->autoMountGuestScreensEnabled(vboxGlobal().managedVMUuid());
+    bool fShouldWeAutoMountGuestScreens = gEDataManager->autoMountGuestScreensEnabled(uiCommon().managedVMUuid());
     LogRel(("GUI: UIMultiScreenLayout::update: GUI/AutomountGuestScreens is %s\n", fShouldWeAutoMountGuestScreens ? "enabled" : "disabled"));
     foreach (int iGuestScreen, m_guestScreens)
     {
@@ -80,7 +79,7 @@ void UIMultiScreenLayout::update()
         if (!fValid)
         {
             /* If the user ever selected a combination in the view menu, we have the following entry: */
-            iHostScreen = gEDataManager->hostScreenForPassedGuestScreen(iGuestScreen, vboxGlobal().managedVMUuid());
+            iHostScreen = gEDataManager->hostScreenForPassedGuestScreen(iGuestScreen, uiCommon().managedVMUuid());
             /* Revalidate: */
             fValid =    iHostScreen >= 0 && iHostScreen < m_cHostScreens /* In the host screen bounds? */
                      && m_screenMap.key(iHostScreen, -1) == -1; /* Not taken already? */
@@ -92,7 +91,7 @@ void UIMultiScreenLayout::update()
              * This makes sure that on first use fullscreen/seamless window opens on the same host-screen as the normal window was before.
              * This even works with multi-screen. The user just have to move all the normal windows to the target host-screens
              * and they will magically open there in fullscreen/seamless also. */
-            QRect geo = gEDataManager->machineWindowGeometry(UIVisualStateType_Normal, iGuestScreen, vboxGlobal().managedVMUuid());
+            QRect geo = gEDataManager->machineWindowGeometry(UIVisualStateType_Normal, iGuestScreen, uiCommon().managedVMUuid());
             /* If geometry is valid: */
             if (!geo.isNull())
             {
@@ -129,8 +128,8 @@ void UIMultiScreenLayout::update()
         {
             /* Then we have to disable excessive guest-screen: */
             LogRel(("GUI: UIMultiScreenLayout::update: Disabling excessive guest-screen %d\n", iGuestScreen));
-            display.SetVideoModeHint(iGuestScreen, false, false, 0, 0, 0, 0, 0);
             m_pMachineLogic->uisession()->setScreenVisibleHostDesires(iGuestScreen, false);
+            m_pMachineLogic->display().SetVideoModeHint(iGuestScreen, false, false, 0, 0, 0, 0, 0, true);
         }
     }
 
@@ -163,13 +162,13 @@ void UIMultiScreenLayout::update()
             /* Re-enable guest-screen with proper resolution: */
             LogRel(("GUI: UIMultiScreenLayout::update: Enabling guest-screen %d with following resolution: %dx%d\n",
                     iGuestScreen, uWidth, uHeight));
-            display.SetVideoModeHint(iGuestScreen, true, false, 0, 0, uWidth, uHeight, 32);
             m_pMachineLogic->uisession()->setScreenVisibleHostDesires(iGuestScreen, true);
+            m_pMachineLogic->display().SetVideoModeHint(iGuestScreen, true, false, 0, 0, uWidth, uHeight, 32, true);
         }
     }
 
-    /* Notifies about layout update: */
-    emit sigScreenLayoutUpdate();
+    /* Make sure action-pool knows whether multi-screen layout has host-screen for guest-screen: */
+    m_pMachineLogic->actionPool()->toRuntime()->setHostScreenForGuestScreenMap(m_screenMap);
 
     LogRelFlow(("UIMultiScreenLayout::update: Finished!\n"));
 }
@@ -226,10 +225,9 @@ void UIMultiScreenLayout::sltHandleScreenLayoutChange(int iRequestedGuestScreen,
 
     /* Check the memory requirements first: */
     bool fSuccess = true;
-    CMachine machine = m_pMachineLogic->session().GetMachine();
     if (m_pMachineLogic->uisession()->isGuestSupportsGraphics())
     {
-        quint64 availBits = machine.GetVRAMSize() * _1M * 8;
+        quint64 availBits = m_pMachineLogic->machine().GetGraphicsAdapter().GetVRAMSize() * _1M * 8;
         quint64 usedBits = memoryRequirements(tmpMap);
         fSuccess = availBits >= usedBits;
         if (!fSuccess)
@@ -248,6 +246,9 @@ void UIMultiScreenLayout::sltHandleScreenLayoutChange(int iRequestedGuestScreen,
     /* Swap the maps: */
     m_screenMap = tmpMap;
 
+    /* Make sure action-pool knows whether multi-screen layout has host-screen for guest-screen: */
+    m_pMachineLogic->actionPool()->toRuntime()->setHostScreenForGuestScreenMap(m_screenMap);
+
     /* Save guest-to-host mapping: */
     saveScreenMapping();
 
@@ -262,16 +263,21 @@ void UIMultiScreenLayout::calculateHostMonitorCount()
 
 void UIMultiScreenLayout::calculateGuestScreenCount()
 {
-    /* Get machine: */
-    CMachine machine = m_pMachineLogic->session().GetMachine();
     /* Enumerate all the guest screens: */
     m_guestScreens.clear();
     m_disabledGuestScreens.clear();
-    for (uint iGuestScreen = 0; iGuestScreen < machine.GetMonitorCount(); ++iGuestScreen)
+    for (uint iGuestScreen = 0; iGuestScreen < m_cGuestScreens; ++iGuestScreen)
         if (m_pMachineLogic->uisession()->isScreenVisible(iGuestScreen))
             m_guestScreens << iGuestScreen;
         else
             m_disabledGuestScreens << iGuestScreen;
+}
+
+void UIMultiScreenLayout::prepareConnections()
+{
+    /* Connect action-pool: */
+    connect(m_pMachineLogic->actionPool()->toRuntime(), &UIActionPoolRuntime::sigNotifyAboutTriggeringViewScreenRemap,
+            this, &UIMultiScreenLayout::sltHandleScreenLayoutChange);
 }
 
 void UIMultiScreenLayout::saveScreenMapping()
@@ -279,7 +285,7 @@ void UIMultiScreenLayout::saveScreenMapping()
     foreach (const int &iGuestScreen, m_guestScreens)
     {
         const int iHostScreen = m_screenMap.value(iGuestScreen, -1);
-        gEDataManager->setHostScreenForPassedGuestScreen(iGuestScreen, iHostScreen, vboxGlobal().managedVMUuid());
+        gEDataManager->setHostScreenForPassedGuestScreen(iGuestScreen, iHostScreen, uiCommon().managedVMUuid());
     }
 }
 
@@ -291,7 +297,6 @@ quint64 UIMultiScreenLayout::memoryRequirements(const QMap<int, int> &screenLayo
     LONG xOrigin = 0;
     LONG yOrigin = 0;
     quint64 usedBits = 0;
-    CDisplay display = m_pMachineLogic->uisession()->session().GetConsole().GetDisplay();
     foreach (int iGuestScreen, m_guestScreens)
     {
         QRect screen;
@@ -300,7 +305,7 @@ quint64 UIMultiScreenLayout::memoryRequirements(const QMap<int, int> &screenLayo
         else
             screen = gpDesktop->screenGeometry(screenLayout.value(iGuestScreen, 0));
         KGuestMonitorStatus monitorStatus = KGuestMonitorStatus_Enabled;
-        display.GetScreenResolution(iGuestScreen, width, height, guestBpp, xOrigin, yOrigin, monitorStatus);
+        m_pMachineLogic->display().GetScreenResolution(iGuestScreen, width, height, guestBpp, xOrigin, yOrigin, monitorStatus);
         usedBits += screen.width() * /* display width */
                     screen.height() * /* display height */
                     guestBpp + /* guest bits per pixel */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManageList.cpp 91416 2021-09-28 06:15:49Z vboxsync $ */
 /** @file
  * VBoxManage - The 'list' command.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,6 +37,9 @@
 #include <iprt/getopt.h>
 #include <iprt/ctype.h>
 
+#include <vector>
+#include <algorithm>
+
 #include "VBoxManage.h"
 using namespace com;
 
@@ -49,6 +52,9 @@ static const char *getHostIfMediumTypeText(HostNetworkInterfaceMediumType_T enmT
         case HostNetworkInterfaceMediumType_PPP: return "PPP";
         case HostNetworkInterfaceMediumType_SLIP: return "SLIP";
         case HostNetworkInterfaceMediumType_Unknown: return "Unknown";
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+        case HostNetworkInterfaceMediumType_32BitHack: break; /* Shut up compiler warnings. */
+#endif
     }
     return "unknown";
 }
@@ -60,6 +66,9 @@ static const char *getHostIfStatusText(HostNetworkInterfaceStatus_T enmStatus)
         case HostNetworkInterfaceStatus_Up: return "Up";
         case HostNetworkInterfaceStatus_Down: return "Down";
         case HostNetworkInterfaceStatus_Unknown: return "Unknown";
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+        case HostNetworkInterfaceStatus_32BitHack: break; /* Shut up compiler warnings. */
+#endif
     }
     return "unknown";
 }
@@ -78,6 +87,9 @@ static const char*getDeviceTypeText(DeviceType_T enmType)
         case DeviceType_USB:            return "USB";
         case DeviceType_SharedFolder:   return "SharedFolder";
         case DeviceType_Graphics3D:     return "Graphics3D";
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+        case DeviceType_32BitHack: break; /* Shut up compiler warnings. */
+#endif
     }
     return "Unknown";
 }
@@ -145,9 +157,9 @@ static HRESULT listNetworkInterfaces(const ComPtr<IVirtualBox> pVirtualBox,
         Bstr interfaceGuid;
         networkInterface->COMGETTER(Id)(interfaceGuid.asOutParam());
         RTPrintf("GUID:            %ls\n", interfaceGuid.raw());
-        BOOL bDHCPEnabled;
-        networkInterface->COMGETTER(DHCPEnabled)(&bDHCPEnabled);
-        RTPrintf("DHCP:            %s\n", bDHCPEnabled ? "Enabled" : "Disabled");
+        BOOL fDHCPEnabled = FALSE;
+        networkInterface->COMGETTER(DHCPEnabled)(&fDHCPEnabled);
+        RTPrintf("DHCP:            %s\n", fDHCPEnabled ? "Enabled" : "Disabled");
 
         Bstr IPAddress;
         networkInterface->COMGETTER(IPAddress)(IPAddress.asOutParam());
@@ -167,6 +179,9 @@ static HRESULT listNetworkInterfaces(const ComPtr<IVirtualBox> pVirtualBox,
         HostNetworkInterfaceMediumType_T Type;
         networkInterface->COMGETTER(MediumType)(&Type);
         RTPrintf("MediumType:      %s\n", getHostIfMediumTypeText(Type));
+        BOOL fWireless = FALSE;
+        networkInterface->COMGETTER(Wireless)(&fWireless);
+        RTPrintf("Wireless:        %s\n", fWireless ? "Yes" : "No");
         HostNetworkInterfaceStatus_T Status;
         networkInterface->COMGETTER(Status)(&Status);
         RTPrintf("Status:          %s\n", getHostIfStatusText(Status));
@@ -177,6 +192,95 @@ static HRESULT listNetworkInterfaces(const ComPtr<IVirtualBox> pVirtualBox,
     }
     return rc;
 }
+
+
+#ifdef VBOX_WITH_VMNET
+/**
+ * List configured host-only networks.
+ *
+ * @returns See produceList.
+ * @param   pVirtualBox         Reference to the IVirtualBox smart pointer.
+ * @param   Reserved            Placeholder!
+ */
+static HRESULT listHostOnlyNetworks(const ComPtr<IVirtualBox> pVirtualBox)
+{
+    HRESULT rc;
+    com::SafeIfaceArray<IHostOnlyNetwork> hostOnlyNetworks;
+    CHECK_ERROR(pVirtualBox, COMGETTER(HostOnlyNetworks)(ComSafeArrayAsOutParam(hostOnlyNetworks)));
+    for (size_t i = 0; i < hostOnlyNetworks.size(); ++i)
+    {
+        ComPtr<IHostOnlyNetwork> hostOnlyNetwork = hostOnlyNetworks[i];
+        Bstr networkName;
+        hostOnlyNetwork->COMGETTER(NetworkName)(networkName.asOutParam());
+        RTPrintf("Name:            %ls\n", networkName.raw());
+        Bstr networkGuid;
+        hostOnlyNetwork->COMGETTER(Id)(networkGuid.asOutParam());
+        RTPrintf("GUID:            %ls\n\n", networkGuid.raw());
+        BOOL fEnabled = FALSE;
+        hostOnlyNetwork->COMGETTER(Enabled)(&fEnabled);
+        RTPrintf("State:           %s\n", fEnabled ? "Enabled" : "Disabled");
+
+        Bstr networkMask;
+        hostOnlyNetwork->COMGETTER(NetworkMask)(networkMask.asOutParam());
+        RTPrintf("NetworkMask:     %ls\n", networkMask.raw());
+        Bstr lowerIP;
+        hostOnlyNetwork->COMGETTER(LowerIP)(lowerIP.asOutParam());
+        RTPrintf("LowerIP:         %ls\n", lowerIP.raw());
+        Bstr upperIP;
+        hostOnlyNetwork->COMGETTER(UpperIP)(upperIP.asOutParam());
+        RTPrintf("UpperIP:         %ls\n", upperIP.raw());
+        // Bstr NetworkId;
+        // hostOnlyNetwork->COMGETTER(Id)(NetworkId.asOutParam());
+        // RTPrintf("NetworkId:       %ls\n", NetworkId.raw());
+        Bstr netName = BstrFmt("hostonly-%ls", networkName.raw());
+        RTPrintf("VBoxNetworkName: %ls\n\n", netName.raw());
+    }
+    return rc;
+}
+#endif /* VBOX_WITH_VMNET */
+
+
+#ifdef VBOX_WITH_CLOUD_NET
+/**
+ * List configured cloud network attachments.
+ *
+ * @returns See produceList.
+ * @param   pVirtualBox         Reference to the IVirtualBox smart pointer.
+ * @param   Reserved            Placeholder!
+ */
+static HRESULT listCloudNetworks(const ComPtr<IVirtualBox> pVirtualBox)
+{
+    HRESULT rc;
+    com::SafeIfaceArray<ICloudNetwork> cloudNetworks;
+    CHECK_ERROR(pVirtualBox, COMGETTER(CloudNetworks)(ComSafeArrayAsOutParam(cloudNetworks)));
+    for (size_t i = 0; i < cloudNetworks.size(); ++i)
+    {
+        ComPtr<ICloudNetwork> cloudNetwork = cloudNetworks[i];
+        Bstr networkName;
+        cloudNetwork->COMGETTER(NetworkName)(networkName.asOutParam());
+        RTPrintf("Name:            %ls\n", networkName.raw());
+        // Guid interfaceGuid;
+        // cloudNetwork->COMGETTER(Id)(interfaceGuid.asOutParam());
+        // RTPrintf("GUID:        %ls\n\n", Bstr(interfaceGuid.toString()).raw());
+        BOOL fEnabled = FALSE;
+        cloudNetwork->COMGETTER(Enabled)(&fEnabled);
+        RTPrintf("State:           %s\n", fEnabled ? "Enabled" : "Disabled");
+
+        Bstr Provider;
+        cloudNetwork->COMGETTER(Provider)(Provider.asOutParam());
+        RTPrintf("CloudProvider:   %ls\n", Provider.raw());
+        Bstr Profile;
+        cloudNetwork->COMGETTER(Profile)(Profile.asOutParam());
+        RTPrintf("CloudProfile:    %ls\n", Profile.raw());
+        Bstr NetworkId;
+        cloudNetwork->COMGETTER(NetworkId)(NetworkId.asOutParam());
+        RTPrintf("CloudNetworkId:  %ls\n", NetworkId.raw());
+        Bstr netName = BstrFmt("cloud-%ls", networkName.raw());
+        RTPrintf("VBoxNetworkName: %ls\n\n", netName.raw());
+    }
+    return rc;
+}
+#endif /* VBOX_WITH_CLOUD_NET */
 
 
 /**
@@ -198,6 +302,9 @@ static HRESULT listHostInfo(const ComPtr<IVirtualBox> pVirtualBox)
         { ProcessorFeature_PAE,          "PAE" },
         { ProcessorFeature_LongMode,     "long mode" },
         { ProcessorFeature_NestedPaging, "nested paging" },
+        { ProcessorFeature_UnrestrictedGuest, "unrestricted guest" },
+        { ProcessorFeature_NestedHWVirt, "nested HW virtualization" },
+        { ProcessorFeature_VirtVmsaveVmload, "virt. vmsave/vmload" },
     };
     HRESULT rc;
     ComPtr<IHost> Host;
@@ -374,6 +481,9 @@ static HRESULT listHddBackends(const ComPtr<IVirtualBox> pVirtualBox)
                     case DataType_Int32: RTPrintf("int"); break;
                     case DataType_Int8: RTPrintf("byte"); break;
                     case DataType_String: RTPrintf("string"); break;
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+                    case DataType_32BitHack: break; /* Shut up compiler warnings. */
+#endif
                 }
                 RTPrintf(" flags=%#04x", propertyFlags[j]);
                 RTPrintf(" default='%ls'", Bstr(propertyDefaults[j]).raw());
@@ -427,8 +537,6 @@ static HRESULT listUsbHost(const ComPtr<IVirtualBox> &pVirtualBox)
             CHECK_ERROR_RET(dev, COMGETTER(Port)(&usPort), 1);
             USHORT usVersion;
             CHECK_ERROR_RET(dev, COMGETTER(Version)(&usVersion), 1);
-            USHORT usPortVersion;
-            CHECK_ERROR_RET(dev, COMGETTER(PortVersion)(&usPortVersion), 1);
             USBConnectionSpeed_T enmSpeed;
             CHECK_ERROR_RET(dev, COMGETTER(Speed)(&enmSpeed), 1);
 
@@ -486,6 +594,9 @@ static HRESULT listUsbHost(const ComPtr<IVirtualBox> &pVirtualBox)
             CHECK_ERROR_RET(dev, COMGETTER(Address)(bstr.asOutParam()), 1);
             if (!bstr.isEmpty())
                 RTPrintf("Address:            %ls\n", bstr.raw());
+            CHECK_ERROR_RET(dev, COMGETTER(PortPath)(bstr.asOutParam()), 1);
+            if (!bstr.isEmpty())
+                RTPrintf("Port path:          %ls\n", bstr.raw());
 
             /* current state  */
             USBDeviceState_T state;
@@ -604,7 +715,7 @@ static HRESULT listUsbFilters(const ComPtr<IVirtualBox> &pVirtualBox)
 static HRESULT listSystemProperties(const ComPtr<IVirtualBox> &pVirtualBox)
 {
     ComPtr<ISystemProperties> systemProperties;
-    pVirtualBox->COMGETTER(SystemProperties)(systemProperties.asOutParam());
+    CHECK_ERROR2I_RET(pVirtualBox, COMGETTER(SystemProperties)(systemProperties.asOutParam()), hrcCheck);
 
     Bstr str;
     ULONG ulValue;
@@ -681,6 +792,14 @@ static HRESULT listSystemProperties(const ComPtr<IVirtualBox> &pVirtualBox)
     RTPrintf("Maximum NVMe Port count:         %u\n", ulValue);
     systemProperties->GetMaxDevicesPerPortForStorageBus(StorageBus_PCIe, &ulValue);
     RTPrintf("Maximum Devices per NVMe Port:   %u\n", ulValue);
+    systemProperties->GetMaxInstancesOfStorageBus(ChipsetType_PIIX3, StorageBus_VirtioSCSI, &ulValue);
+    RTPrintf("Maximum virtio-scsi PIIX3 Controllers:  %u\n", ulValue);
+    systemProperties->GetMaxInstancesOfStorageBus(ChipsetType_ICH9, StorageBus_VirtioSCSI, &ulValue);
+    RTPrintf("Maximum virtio-scsi ICH9 Controllers:   %u\n", ulValue);
+    systemProperties->GetMaxPortCountForStorageBus(StorageBus_VirtioSCSI, &ulValue);
+    RTPrintf("Maximum virtio-scsi Port count:         %u\n", ulValue);
+    systemProperties->GetMaxDevicesPerPortForStorageBus(StorageBus_VirtioSCSI, &ulValue);
+    RTPrintf("Maximum Devices per virtio-scsi Port:   %u\n", ulValue);
     systemProperties->GetMaxInstancesOfStorageBus(ChipsetType_PIIX3, StorageBus_Floppy, &ulValue);
     RTPrintf("Maximum PIIX3 Floppy Controllers:%u\n", ulValue);
     systemProperties->GetMaxInstancesOfStorageBus(ChipsetType_ICH9, StorageBus_Floppy, &ulValue);
@@ -739,9 +858,296 @@ static HRESULT listSystemProperties(const ComPtr<IVirtualBox> &pVirtualBox)
     RTPrintf("Default Guest Additions ISO:     %ls\n", str.raw());
     systemProperties->COMGETTER(LoggingLevel)(str.asOutParam());
     RTPrintf("Logging Level:                   %ls\n", str.raw());
+    ProxyMode_T enmProxyMode = (ProxyMode_T)42;
+    systemProperties->COMGETTER(ProxyMode)(&enmProxyMode);
+    psz = "Unknown";
+    switch (enmProxyMode)
+    {
+        case ProxyMode_System:              psz = "System"; break;
+        case ProxyMode_NoProxy:             psz = "NoProxy"; break;
+        case ProxyMode_Manual:              psz = "Manual"; break;
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+        case ProxyMode_32BitHack:           break; /* Shut up compiler warnings. */
+#endif
+    }
+    RTPrintf("Proxy Mode:                      %s\n", psz);
+    systemProperties->COMGETTER(ProxyURL)(str.asOutParam());
+    RTPrintf("Proxy URL:                       %ls\n", str.raw());
+    systemProperties->COMGETTER(VBoxUpdateEnabled)(&fValue);
+    RTPrintf("Update check enabled:            %s\n", fValue ? "yes" : "no");
+    systemProperties->COMGETTER(VBoxUpdateCount)(&ulValue);
+    RTPrintf("Update check count:              %u\n", ulValue);
+    systemProperties->COMGETTER(VBoxUpdateFrequency)(&ulValue);
+    if (ulValue == 0)
+        RTPrintf("Update check frequency:          never\n");
+    else if (ulValue == 1)
+        RTPrintf("Update check frequency:          every day\n");
+    else
+        RTPrintf("Update check frequency:          every %u days\n", ulValue);
+    VBoxUpdateTarget_T enmVBoxUpdateTarget;
+    systemProperties->COMGETTER(VBoxUpdateTarget)(&enmVBoxUpdateTarget);
+    switch (enmVBoxUpdateTarget)
+    {
+        case VBoxUpdateTarget_Stable:
+            psz = "Stable: new minor and maintenance releases";
+            break;
+        case VBoxUpdateTarget_AllReleases:
+            psz = "All releases: new minor, maintenance, and major releases";
+            break;
+        case VBoxUpdateTarget_WithBetas:
+            psz = "With Betas: new minor, maintenance, major, and beta releases";
+            break;
+        default:
+            psz = "Unset";
+            break;
+    }
+    RTPrintf("Update check target:             %s\n", psz);
+    systemProperties->COMGETTER(VBoxUpdateLastCheckDate)(str.asOutParam());
+    RTPrintf("Last check date:                 %ls\n", str.raw());
+#ifdef VBOX_WITH_MAIN_NLS
+    systemProperties->COMGETTER(LanguageId)(str.asOutParam());
+    RTPrintf("User language:                   %ls\n", str.raw());
+#endif
     return S_OK;
 }
 
+
+/**
+ * Helper for listDhcpServers() that shows a DHCP configuration.
+ */
+static HRESULT showDhcpConfig(ComPtr<IDHCPConfig> ptrConfig)
+{
+    HRESULT hrcRet = S_OK;
+
+    ULONG   secs = 0;
+    CHECK_ERROR2I_STMT(ptrConfig, COMGETTER(MinLeaseTime)(&secs), hrcRet = hrcCheck);
+    if (secs == 0)
+        RTPrintf("    minLeaseTime:     default\n");
+    else
+        RTPrintf("    minLeaseTime:     %u sec\n", secs);
+
+    secs = 0;
+    CHECK_ERROR2I_STMT(ptrConfig, COMGETTER(DefaultLeaseTime)(&secs), hrcRet = hrcCheck);
+    if (secs == 0)
+        RTPrintf("    defaultLeaseTime: default\n");
+    else
+        RTPrintf("    defaultLeaseTime: %u sec\n", secs);
+
+    secs = 0;
+    CHECK_ERROR2I_STMT(ptrConfig, COMGETTER(MaxLeaseTime)(&secs), hrcRet = hrcCheck);
+    if (secs == 0)
+        RTPrintf("    maxLeaseTime:     default\n");
+    else
+        RTPrintf("    maxLeaseTime:     %u sec\n", secs);
+
+    com::SafeArray<DHCPOption_T>         Options;
+    HRESULT hrc;
+    CHECK_ERROR2_STMT(hrc, ptrConfig, COMGETTER(ForcedOptions(ComSafeArrayAsOutParam(Options))), hrcRet = hrc);
+    if (FAILED(hrc))
+        RTPrintf("    Forced options:   %Rhrc\n", hrc);
+    else if (Options.size() == 0)
+        RTPrintf("    Forced options:   None\n");
+    else
+    {
+        RTPrintf("    Forced options:   ");
+        for (size_t i = 0; i < Options.size(); i++)
+            RTPrintf(i ? ", %u" : "%u", Options[i]);
+        RTPrintf("\n");
+    }
+
+    CHECK_ERROR2_STMT(hrc, ptrConfig, COMGETTER(SuppressedOptions(ComSafeArrayAsOutParam(Options))), hrcRet = hrc);
+    if (FAILED(hrc))
+        RTPrintf("    Suppressed opt.s: %Rhrc\n", hrc);
+    else if (Options.size() == 0)
+        RTPrintf("    Suppressed opts.: None\n");
+    else
+    {
+        RTPrintf("    Suppressed opts.: ");
+        for (size_t i = 0; i < Options.size(); i++)
+            RTPrintf(i ? ", %u" : "%u", Options[i]);
+        RTPrintf("\n");
+    }
+
+    com::SafeArray<DHCPOptionEncoding_T> Encodings;
+    com::SafeArray<BSTR>                 Values;
+    CHECK_ERROR2_STMT(hrc, ptrConfig, GetAllOptions(ComSafeArrayAsOutParam(Options),
+                                                    ComSafeArrayAsOutParam(Encodings),
+                                                    ComSafeArrayAsOutParam(Values)), hrcRet = hrc);
+    if (FAILED(hrc))
+        RTPrintf("    DHCP options:     %Rhrc\n", hrc);
+    else if (Options.size() != Encodings.size() || Options.size() != Values.size())
+    {
+        RTPrintf("    DHCP options:     Return count mismatch: %zu, %zu, %zu\n", Options.size(), Encodings.size(), Values.size());
+        hrcRet = E_FAIL;
+    }
+    else if (Options.size() == 0)
+        RTPrintf("    DHCP options:     None\n");
+    else
+        for (size_t i = 0; i < Options.size(); i++)
+        {
+            switch (Encodings[i])
+            {
+                case DHCPOptionEncoding_Normal:
+                    RTPrintf("      %3d/legacy: %ls\n", Options[i], Values[i]);
+                    break;
+                case DHCPOptionEncoding_Hex:
+                    RTPrintf("      %3d/hex:    %ls\n", Options[i], Values[i]);
+                    break;
+                default:
+                    RTPrintf("      %3d/%u?: %ls\n", Options[i], Encodings[i], Values[i]);
+                    break;
+            }
+        }
+
+    return S_OK;
+}
+
+
+/**
+ * List DHCP servers.
+ *
+ * @returns See produceList.
+ * @param   pVirtualBox         Reference to the IVirtualBox smart pointer.
+ */
+static HRESULT listDhcpServers(const ComPtr<IVirtualBox> &pVirtualBox)
+{
+    HRESULT hrcRet = S_OK;
+    com::SafeIfaceArray<IDHCPServer> DHCPServers;
+    CHECK_ERROR2I_RET(pVirtualBox, COMGETTER(DHCPServers)(ComSafeArrayAsOutParam(DHCPServers)), hrcCheck);
+    for (size_t i = 0; i < DHCPServers.size(); ++i)
+    {
+        if (i > 0)
+            RTPrintf("\n");
+
+        ComPtr<IDHCPServer> ptrDHCPServer = DHCPServers[i];
+        Bstr bstr;
+        CHECK_ERROR2I_STMT(ptrDHCPServer, COMGETTER(NetworkName)(bstr.asOutParam()), hrcRet = hrcCheck);
+        RTPrintf("NetworkName:    %ls\n", bstr.raw());
+
+        CHECK_ERROR2I_STMT(ptrDHCPServer, COMGETTER(IPAddress)(bstr.asOutParam()), hrcRet = hrcCheck);
+        RTPrintf("Dhcpd IP:       %ls\n", bstr.raw());
+
+        CHECK_ERROR2I_STMT(ptrDHCPServer, COMGETTER(LowerIP)(bstr.asOutParam()), hrcRet = hrcCheck);
+        RTPrintf("LowerIPAddress: %ls\n", bstr.raw());
+
+        CHECK_ERROR2I_STMT(ptrDHCPServer, COMGETTER(UpperIP)(bstr.asOutParam()), hrcRet = hrcCheck);
+        RTPrintf("UpperIPAddress: %ls\n", bstr.raw());
+
+        CHECK_ERROR2I_STMT(ptrDHCPServer, COMGETTER(NetworkMask)(bstr.asOutParam()), hrcRet = hrcCheck);
+        RTPrintf("NetworkMask:    %ls\n", bstr.raw());
+
+        BOOL fEnabled = FALSE;
+        CHECK_ERROR2I_STMT(ptrDHCPServer, COMGETTER(Enabled)(&fEnabled), hrcRet = hrcCheck);
+        RTPrintf("Enabled:        %s\n", fEnabled ? "Yes" : "No");
+
+        /* Global configuration: */
+        RTPrintf("Global Configuration:\n");
+        HRESULT hrc;
+        ComPtr<IDHCPGlobalConfig> ptrGlobal;
+        CHECK_ERROR2_STMT(hrc, ptrDHCPServer, COMGETTER(GlobalConfig)(ptrGlobal.asOutParam()), hrcRet = hrc);
+        if (SUCCEEDED(hrc))
+        {
+            hrc = showDhcpConfig(ptrGlobal);
+            if (FAILED(hrc))
+                hrcRet = hrc;
+        }
+
+        /* Group configurations: */
+        com::SafeIfaceArray<IDHCPGroupConfig> Groups;
+        CHECK_ERROR2_STMT(hrc, ptrDHCPServer, COMGETTER(GroupConfigs)(ComSafeArrayAsOutParam(Groups)), hrcRet = hrc);
+        if (FAILED(hrc))
+            RTPrintf("Groups:               %Rrc\n", hrc);
+        else if (Groups.size() == 0)
+            RTPrintf("Groups:               None\n");
+        else
+        {
+            for (size_t iGrp = 0; iGrp < Groups.size(); iGrp++)
+            {
+                CHECK_ERROR2I_STMT(Groups[iGrp], COMGETTER(Name)(bstr.asOutParam()), hrcRet = hrcCheck);
+                RTPrintf("Group:                %ls\n", bstr.raw());
+
+                com::SafeIfaceArray<IDHCPGroupCondition> Conditions;
+                CHECK_ERROR2_STMT(hrc, Groups[iGrp], COMGETTER(Conditions)(ComSafeArrayAsOutParam(Conditions)), hrcRet = hrc);
+                if (FAILED(hrc))
+                    RTPrintf("    Conditions:       %Rhrc\n", hrc);
+                else if (Conditions.size() == 0)
+                    RTPrintf("    Conditions:       None\n");
+                else
+                    for (size_t iCond = 0; iCond < Conditions.size(); iCond++)
+                    {
+                        BOOL fInclusive = TRUE;
+                        CHECK_ERROR2_STMT(hrc, Conditions[iCond], COMGETTER(Inclusive)(&fInclusive), hrcRet = hrc);
+                        DHCPGroupConditionType_T enmType = DHCPGroupConditionType_MAC;
+                        CHECK_ERROR2_STMT(hrc, Conditions[iCond], COMGETTER(Type)(&enmType), hrcRet = hrc);
+                        CHECK_ERROR2_STMT(hrc, Conditions[iCond], COMGETTER(Value)(bstr.asOutParam()), hrcRet = hrc);
+
+                        RTPrintf("    Conditions:       %s %s %ls\n",
+                                 fInclusive ? "include" : "exclude",
+                                   enmType == DHCPGroupConditionType_MAC                    ? "MAC       "
+                                 : enmType == DHCPGroupConditionType_MACWildcard            ? "MAC*      "
+                                 : enmType == DHCPGroupConditionType_vendorClassID          ? "VendorCID "
+                                 : enmType == DHCPGroupConditionType_vendorClassIDWildcard  ? "VendorCID*"
+                                 : enmType == DHCPGroupConditionType_userClassID            ? "UserCID   "
+                                 : enmType == DHCPGroupConditionType_userClassIDWildcard    ? "UserCID*  "
+                                 :                                                            "!UNKNOWN! ",
+                                 bstr.raw());
+                    }
+
+                hrc = showDhcpConfig(Groups[iGrp]);
+                if (FAILED(hrc))
+                    hrcRet = hrc;
+            }
+            Groups.setNull();
+        }
+
+        /* Individual host / NIC configurations: */
+        com::SafeIfaceArray<IDHCPIndividualConfig> Hosts;
+        CHECK_ERROR2_STMT(hrc, ptrDHCPServer, COMGETTER(IndividualConfigs)(ComSafeArrayAsOutParam(Hosts)), hrcRet = hrc);
+        if (FAILED(hrc))
+            RTPrintf("Individual Configs:   %Rrc\n", hrc);
+        else if (Hosts.size() == 0)
+            RTPrintf("Individual Configs:   None\n");
+        else
+        {
+            for (size_t iHost = 0; iHost < Hosts.size(); iHost++)
+            {
+                DHCPConfigScope_T enmScope = DHCPConfigScope_MAC;
+                CHECK_ERROR2I_STMT(Hosts[iHost], COMGETTER(Scope)(&enmScope), hrcRet = hrcCheck);
+
+                if (enmScope == DHCPConfigScope_MAC)
+                {
+                    CHECK_ERROR2I_STMT(Hosts[iHost], COMGETTER(MACAddress)(bstr.asOutParam()), hrcRet = hrcCheck);
+                    RTPrintf("Individual Config:    MAC %ls\n", bstr.raw());
+                }
+                else
+                {
+                    ULONG uSlot = 0;
+                    CHECK_ERROR2I_STMT(Hosts[iHost], COMGETTER(Slot)(&uSlot), hrcRet = hrcCheck);
+                    CHECK_ERROR2I_STMT(Hosts[iHost], COMGETTER(MachineId)(bstr.asOutParam()), hrcRet = hrcCheck);
+                    Bstr bstrMACAddress;
+                    hrc = Hosts[iHost]->COMGETTER(MACAddress)(bstrMACAddress.asOutParam()); /* No CHECK_ERROR2 stuff! */
+                    if (SUCCEEDED(hrc))
+                        RTPrintf("Individual Config:    VM NIC: %ls slot %u, MAC %ls\n", bstr.raw(), uSlot, bstrMACAddress.raw());
+                    else
+                        RTPrintf("Individual Config:    VM NIC: %ls slot %u, MAC %Rhrc\n", bstr.raw(), uSlot, hrc);
+                }
+
+                CHECK_ERROR2I_STMT(Hosts[iHost], COMGETTER(FixedAddress)(bstr.asOutParam()), hrcRet = hrcCheck);
+                if (bstr.isNotEmpty())
+                    RTPrintf("    Fixed Address:    %ls\n", bstr.raw());
+                else
+                    RTPrintf("    Fixed Address:    dynamic\n");
+
+                hrc = showDhcpConfig(Hosts[iHost]);
+                if (FAILED(hrc))
+                    hrcRet = hrc;
+            }
+            Hosts.setNull();
+        }
+    }
+
+    return hrcRet;
+}
 
 /**
  * List extension packs.
@@ -830,7 +1236,7 @@ static HRESULT listGroups(const ComPtr<IVirtualBox> &pVirtualBox)
  * @returns See produceList.
  * @param   pVirtualBox         Reference to the IVirtualBox pointer.
  */
-static HRESULT listVideoInputDevices(const ComPtr<IVirtualBox> pVirtualBox)
+static HRESULT listVideoInputDevices(const ComPtr<IVirtualBox> &pVirtualBox)
 {
     HRESULT rc;
     ComPtr<IHost> host;
@@ -858,7 +1264,7 @@ static HRESULT listVideoInputDevices(const ComPtr<IVirtualBox> pVirtualBox)
  * @returns See produceList.
  * @param   pVirtualBox         Reference to the IVirtualBox pointer.
  */
-static HRESULT listScreenShotFormats(const ComPtr<IVirtualBox> pVirtualBox)
+static HRESULT listScreenShotFormats(const ComPtr<IVirtualBox> &pVirtualBox)
 {
     HRESULT rc = S_OK;
     ComPtr<ISystemProperties> systemProperties;
@@ -881,11 +1287,566 @@ static HRESULT listScreenShotFormats(const ComPtr<IVirtualBox> pVirtualBox)
     return rc;
 }
 
+/**
+ * List available cloud providers.
+ *
+ * @returns See produceList.
+ * @param   pVirtualBox         Reference to the IVirtualBox pointer.
+ */
+static HRESULT listCloudProviders(const ComPtr<IVirtualBox> &pVirtualBox)
+{
+    HRESULT rc = S_OK;
+    ComPtr<ICloudProviderManager> pCloudProviderManager;
+    CHECK_ERROR(pVirtualBox, COMGETTER(CloudProviderManager)(pCloudProviderManager.asOutParam()));
+    com::SafeIfaceArray<ICloudProvider> apCloudProviders;
+    CHECK_ERROR(pCloudProviderManager, COMGETTER(Providers)(ComSafeArrayAsOutParam(apCloudProviders)));
+
+    RTPrintf("Supported %d cloud providers:\n", apCloudProviders.size());
+    for (size_t i = 0; i < apCloudProviders.size(); ++i)
+    {
+        ComPtr<ICloudProvider> pCloudProvider = apCloudProviders[i];
+        Bstr bstrProviderName;
+        pCloudProvider->COMGETTER(Name)(bstrProviderName.asOutParam());
+        RTPrintf("Name:            %ls\n", bstrProviderName.raw());
+        pCloudProvider->COMGETTER(ShortName)(bstrProviderName.asOutParam());
+        RTPrintf("Short Name:      %ls\n", bstrProviderName.raw());
+        Bstr bstrProviderID;
+        pCloudProvider->COMGETTER(Id)(bstrProviderID.asOutParam());
+        RTPrintf("GUID:            %ls\n", bstrProviderID.raw());
+
+        RTPrintf("\n");
+    }
+    return rc;
+}
+
+
+/**
+ * List all available cloud profiles (by iterating over the cloud providers).
+ *
+ * @returns See produceList.
+ * @param   pVirtualBox         Reference to the IVirtualBox pointer.
+ * @param   fOptLong            If true, list all profile properties.
+ */
+static HRESULT listCloudProfiles(const ComPtr<IVirtualBox> &pVirtualBox, bool fOptLong)
+{
+    HRESULT rc = S_OK;
+    ComPtr<ICloudProviderManager> pCloudProviderManager;
+    CHECK_ERROR(pVirtualBox, COMGETTER(CloudProviderManager)(pCloudProviderManager.asOutParam()));
+    com::SafeIfaceArray<ICloudProvider> apCloudProviders;
+    CHECK_ERROR(pCloudProviderManager, COMGETTER(Providers)(ComSafeArrayAsOutParam(apCloudProviders)));
+
+    for (size_t i = 0; i < apCloudProviders.size(); ++i)
+    {
+        ComPtr<ICloudProvider> pCloudProvider = apCloudProviders[i];
+        com::SafeIfaceArray<ICloudProfile> apCloudProfiles;
+        CHECK_ERROR(pCloudProvider, COMGETTER(Profiles)(ComSafeArrayAsOutParam(apCloudProfiles)));
+        for (size_t j = 0; j < apCloudProfiles.size(); ++j)
+        {
+            ComPtr<ICloudProfile> pCloudProfile = apCloudProfiles[j];
+            Bstr bstrProfileName;
+            pCloudProfile->COMGETTER(Name)(bstrProfileName.asOutParam());
+            RTPrintf("Name:          %ls\n", bstrProfileName.raw());
+            Bstr bstrProviderID;
+            pCloudProfile->COMGETTER(ProviderId)(bstrProviderID.asOutParam());
+            RTPrintf("Provider GUID: %ls\n", bstrProviderID.raw());
+
+            if (fOptLong)
+            {
+                com::SafeArray<BSTR> names;
+                com::SafeArray<BSTR> values;
+                pCloudProfile->GetProperties(Bstr().raw(), ComSafeArrayAsOutParam(names), ComSafeArrayAsOutParam(values));
+                size_t cNames = names.size();
+                size_t cValues = values.size();
+                bool fFirst = true;
+                for (size_t k = 0; k < cNames; k++)
+                {
+                    Bstr value;
+                    if (k < cValues)
+                        value = values[k];
+                    RTPrintf("%s%ls=%ls\n",
+                             fFirst ? "Property:      " : "               ",
+                             names[k], value.raw());
+                    fFirst = false;
+                }
+            }
+
+            RTPrintf("\n");
+        }
+    }
+    return rc;
+}
+
+static HRESULT displayCPUProfile(ICPUProfile *pProfile, size_t idx, int cchIdx, bool fOptLong, HRESULT hrc)
+{
+    /* Retrieve the attributes needed for both long and short display. */
+    Bstr bstrName;
+    CHECK_ERROR2I_RET(pProfile, COMGETTER(Name)(bstrName.asOutParam()), hrcCheck);
+
+    CPUArchitecture_T enmArchitecture = CPUArchitecture_Any;
+    CHECK_ERROR2I_RET(pProfile, COMGETTER(Architecture)(&enmArchitecture), hrcCheck);
+    const char *pszArchitecture = "???";
+    switch (enmArchitecture)
+    {
+        case CPUArchitecture_x86:       pszArchitecture = "x86"; break;
+        case CPUArchitecture_AMD64:     pszArchitecture = "AMD64"; break;
+
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+        case CPUArchitecture_32BitHack:
+#endif
+        case CPUArchitecture_Any:
+            break;
+    }
+
+    /* Print what we've got. */
+    if (!fOptLong)
+        RTPrintf("#%0*zu: %ls [%s]\n", cchIdx, idx, bstrName.raw(), pszArchitecture);
+    else
+    {
+        RTPrintf("CPU Profile #%02zu:\n", idx);
+        RTPrintf("  Architecture: %s\n", pszArchitecture);
+        RTPrintf("  Name:         %ls\n", bstrName.raw());
+        CHECK_ERROR2I_RET(pProfile, COMGETTER(FullName)(bstrName.asOutParam()), hrcCheck);
+        RTPrintf("  Full Name:    %ls\n", bstrName.raw());
+    }
+    return hrc;
+}
+
+
+/**
+ * List all CPU profiles.
+ *
+ * @returns See produceList.
+ * @param   ptrVirtualBox       Reference to the smart IVirtualBox pointer.
+ * @param   fOptLong            If true, list all profile properties.
+ * @param   fOptSorted          Sort the output if true, otherwise display in
+ *                              system order.
+ */
+static HRESULT listCPUProfiles(const ComPtr<IVirtualBox> &ptrVirtualBox, bool fOptLong, bool fOptSorted)
+{
+    ComPtr<ISystemProperties> ptrSysProps;
+    CHECK_ERROR2I_RET(ptrVirtualBox, COMGETTER(SystemProperties)(ptrSysProps.asOutParam()), hrcCheck);
+    com::SafeIfaceArray<ICPUProfile> aCPUProfiles;
+    CHECK_ERROR2I_RET(ptrSysProps, GetCPUProfiles(CPUArchitecture_Any, Bstr().raw(),
+                                                  ComSafeArrayAsOutParam(aCPUProfiles)), hrcCheck);
+
+    int const cchIdx = 1 + (aCPUProfiles.size() >= 10) + (aCPUProfiles.size() >= 100);
+
+    HRESULT hrc = S_OK;
+    if (!fOptSorted)
+        for (size_t i = 0; i < aCPUProfiles.size(); i++)
+            hrc = displayCPUProfile(aCPUProfiles[i], i, cchIdx, fOptLong, hrc);
+    else
+    {
+        std::vector<std::pair<com::Bstr, ICPUProfile *> > vecSortedProfiles;
+        for (size_t i = 0; i < aCPUProfiles.size(); ++i)
+        {
+            Bstr bstrName;
+            CHECK_ERROR2I_RET(aCPUProfiles[i], COMGETTER(Name)(bstrName.asOutParam()), hrcCheck);
+            try
+            {
+                vecSortedProfiles.push_back(std::pair<com::Bstr, ICPUProfile *>(bstrName, aCPUProfiles[i]));
+            }
+            catch (std::bad_alloc &)
+            {
+                return E_OUTOFMEMORY;
+            }
+        }
+
+        std::sort(vecSortedProfiles.begin(), vecSortedProfiles.end());
+
+        for (size_t i = 0; i < vecSortedProfiles.size(); i++)
+            hrc = displayCPUProfile(vecSortedProfiles[i].second, i, cchIdx, fOptLong, hrc);
+    }
+
+    return hrc;
+}
+
+
+/**
+ * Translates PartitionType_T to a string if possible.
+ * @returns read-only string if known value, @a pszUnknown if not.
+ */
+static const char *PartitionTypeToString(PartitionType_T enmType, const char *pszUnknown)
+{
+#define MY_CASE_STR(a_Type) case RT_CONCAT(PartitionType_,a_Type): return #a_Type
+    switch (enmType)
+    {
+        MY_CASE_STR(Empty);
+        MY_CASE_STR(FAT12);
+        MY_CASE_STR(FAT16);
+        MY_CASE_STR(FAT);
+        MY_CASE_STR(IFS);
+        MY_CASE_STR(FAT32CHS);
+        MY_CASE_STR(FAT32LBA);
+        MY_CASE_STR(FAT16B);
+        MY_CASE_STR(Extended);
+        MY_CASE_STR(WindowsRE);
+        MY_CASE_STR(LinuxSwapOld);
+        MY_CASE_STR(LinuxOld);
+        MY_CASE_STR(DragonFlyBSDSlice);
+        MY_CASE_STR(LinuxSwap);
+        MY_CASE_STR(Linux);
+        MY_CASE_STR(LinuxExtended);
+        MY_CASE_STR(LinuxLVM);
+        MY_CASE_STR(BSDSlice);
+        MY_CASE_STR(AppleUFS);
+        MY_CASE_STR(AppleHFS);
+        MY_CASE_STR(Solaris);
+        MY_CASE_STR(GPT);
+        MY_CASE_STR(EFI);
+        MY_CASE_STR(Unknown);
+        MY_CASE_STR(MBR);
+        MY_CASE_STR(iFFS);
+        MY_CASE_STR(SonyBoot);
+        MY_CASE_STR(LenovoBoot);
+        MY_CASE_STR(WindowsMSR);
+        MY_CASE_STR(WindowsBasicData);
+        MY_CASE_STR(WindowsLDMMeta);
+        MY_CASE_STR(WindowsLDMData);
+        MY_CASE_STR(WindowsRecovery);
+        MY_CASE_STR(WindowsStorageSpaces);
+        MY_CASE_STR(WindowsStorageReplica);
+        MY_CASE_STR(IBMGPFS);
+        MY_CASE_STR(LinuxData);
+        MY_CASE_STR(LinuxRAID);
+        MY_CASE_STR(LinuxRootX86);
+        MY_CASE_STR(LinuxRootAMD64);
+        MY_CASE_STR(LinuxRootARM32);
+        MY_CASE_STR(LinuxRootARM64);
+        MY_CASE_STR(LinuxHome);
+        MY_CASE_STR(LinuxSrv);
+        MY_CASE_STR(LinuxPlainDmCrypt);
+        MY_CASE_STR(LinuxLUKS);
+        MY_CASE_STR(LinuxReserved);
+        MY_CASE_STR(FreeBSDBoot);
+        MY_CASE_STR(FreeBSDData);
+        MY_CASE_STR(FreeBSDSwap);
+        MY_CASE_STR(FreeBSDUFS);
+        MY_CASE_STR(FreeBSDVinum);
+        MY_CASE_STR(FreeBSDZFS);
+        MY_CASE_STR(FreeBSDUnknown);
+        MY_CASE_STR(AppleHFSPlus);
+        MY_CASE_STR(AppleAPFS);
+        MY_CASE_STR(AppleRAID);
+        MY_CASE_STR(AppleRAIDOffline);
+        MY_CASE_STR(AppleBoot);
+        MY_CASE_STR(AppleLabel);
+        MY_CASE_STR(AppleTvRecovery);
+        MY_CASE_STR(AppleCoreStorage);
+        MY_CASE_STR(SoftRAIDStatus);
+        MY_CASE_STR(SoftRAIDScratch);
+        MY_CASE_STR(SoftRAIDVolume);
+        MY_CASE_STR(SoftRAIDCache);
+        MY_CASE_STR(AppleUnknown);
+        MY_CASE_STR(SolarisBoot);
+        MY_CASE_STR(SolarisRoot);
+        MY_CASE_STR(SolarisSwap);
+        MY_CASE_STR(SolarisBackup);
+        MY_CASE_STR(SolarisUsr);
+        MY_CASE_STR(SolarisVar);
+        MY_CASE_STR(SolarisHome);
+        MY_CASE_STR(SolarisAltSector);
+        MY_CASE_STR(SolarisReserved);
+        MY_CASE_STR(SolarisUnknown);
+        MY_CASE_STR(NetBSDSwap);
+        MY_CASE_STR(NetBSDFFS);
+        MY_CASE_STR(NetBSDLFS);
+        MY_CASE_STR(NetBSDRAID);
+        MY_CASE_STR(NetBSDConcatenated);
+        MY_CASE_STR(NetBSDEncrypted);
+        MY_CASE_STR(NetBSDUnknown);
+        MY_CASE_STR(ChromeOSKernel);
+        MY_CASE_STR(ChromeOSRootFS);
+        MY_CASE_STR(ChromeOSFuture);
+        MY_CASE_STR(ContLnxUsr);
+        MY_CASE_STR(ContLnxRoot);
+        MY_CASE_STR(ContLnxReserved);
+        MY_CASE_STR(ContLnxRootRAID);
+        MY_CASE_STR(HaikuBFS);
+        MY_CASE_STR(MidntBSDBoot);
+        MY_CASE_STR(MidntBSDData);
+        MY_CASE_STR(MidntBSDSwap);
+        MY_CASE_STR(MidntBSDUFS);
+        MY_CASE_STR(MidntBSDVium);
+        MY_CASE_STR(MidntBSDZFS);
+        MY_CASE_STR(MidntBSDUnknown);
+        MY_CASE_STR(OpenBSDData);
+        MY_CASE_STR(QNXPowerSafeFS);
+        MY_CASE_STR(Plan9);
+        MY_CASE_STR(VMWareVMKCore);
+        MY_CASE_STR(VMWareVMFS);
+        MY_CASE_STR(VMWareReserved);
+        MY_CASE_STR(VMWareUnknown);
+        MY_CASE_STR(AndroidX86Bootloader);
+        MY_CASE_STR(AndroidX86Bootloader2);
+        MY_CASE_STR(AndroidX86Boot);
+        MY_CASE_STR(AndroidX86Recovery);
+        MY_CASE_STR(AndroidX86Misc);
+        MY_CASE_STR(AndroidX86Metadata);
+        MY_CASE_STR(AndroidX86System);
+        MY_CASE_STR(AndroidX86Cache);
+        MY_CASE_STR(AndroidX86Data);
+        MY_CASE_STR(AndroidX86Persistent);
+        MY_CASE_STR(AndroidX86Vendor);
+        MY_CASE_STR(AndroidX86Config);
+        MY_CASE_STR(AndroidX86Factory);
+        MY_CASE_STR(AndroidX86FactoryAlt);
+        MY_CASE_STR(AndroidX86Fastboot);
+        MY_CASE_STR(AndroidX86OEM);
+        MY_CASE_STR(AndroidARMMeta);
+        MY_CASE_STR(AndroidARMExt);
+        MY_CASE_STR(ONIEBoot);
+        MY_CASE_STR(ONIEConfig);
+        MY_CASE_STR(PowerPCPrep);
+        MY_CASE_STR(XDGShrBootConfig);
+        MY_CASE_STR(CephBlock);
+        MY_CASE_STR(CephBlockDB);
+        MY_CASE_STR(CephBlockDBDmc);
+        MY_CASE_STR(CephBlockDBDmcLUKS);
+        MY_CASE_STR(CephBlockDmc);
+        MY_CASE_STR(CephBlockDmcLUKS);
+        MY_CASE_STR(CephBlockWALog);
+        MY_CASE_STR(CephBlockWALogDmc);
+        MY_CASE_STR(CephBlockWALogDmcLUKS);
+        MY_CASE_STR(CephDisk);
+        MY_CASE_STR(CephDiskDmc);
+        MY_CASE_STR(CephJournal);
+        MY_CASE_STR(CephJournalDmc);
+        MY_CASE_STR(CephJournalDmcLUKS);
+        MY_CASE_STR(CephLockbox);
+        MY_CASE_STR(CephMultipathBlock1);
+        MY_CASE_STR(CephMultipathBlock2);
+        MY_CASE_STR(CephMultipathBlockDB);
+        MY_CASE_STR(CephMultipathBLockWALog);
+        MY_CASE_STR(CephMultipathJournal);
+        MY_CASE_STR(CephMultipathOSD);
+        MY_CASE_STR(CephOSD);
+        MY_CASE_STR(CephOSDDmc);
+        MY_CASE_STR(CephOSDDmcLUKS);
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+        case PartitionType_32BitHack: break;
+#endif
+        /* no default! */
+    }
+#undef MY_CASE_STR
+    return pszUnknown;
+}
+
+
+/**
+ * List all available host drives with their partitions.
+ *
+ * @returns See produceList.
+ * @param   pVirtualBox         Reference to the IVirtualBox pointer.
+ * @param   fOptLong            Long listing or human readable.
+ */
+static HRESULT listHostDrives(const ComPtr<IVirtualBox> pVirtualBox, bool fOptLong)
+{
+    HRESULT rc = S_OK;
+    ComPtr<IHost> pHost;
+    CHECK_ERROR2I_RET(pVirtualBox, COMGETTER(Host)(pHost.asOutParam()), hrcCheck);
+    com::SafeIfaceArray<IHostDrive> apHostDrives;
+    CHECK_ERROR2I_RET(pHost, COMGETTER(HostDrives)(ComSafeArrayAsOutParam(apHostDrives)), hrcCheck);
+    for (size_t i = 0; i < apHostDrives.size(); ++i)
+    {
+        ComPtr<IHostDrive> pHostDrive = apHostDrives[i];
+
+        /* The drivePath and model attributes are accessible even when the object
+           is in 'limited' mode. */
+        com::Bstr bstrDrivePath;
+        CHECK_ERROR(pHostDrive,COMGETTER(DrivePath)(bstrDrivePath.asOutParam()));
+        if (SUCCEEDED(rc))
+            RTPrintf("%sDrive:       %ls\n", i > 0 ? "\n" : "", bstrDrivePath.raw());
+        else
+            RTPrintf("%sDrive:       %Rhrc\n", i > 0 ? "\n" : "", rc);
+
+        com::Bstr bstrModel;
+        CHECK_ERROR(pHostDrive,COMGETTER(Model)(bstrModel.asOutParam()));
+        if (FAILED(rc))
+            RTPrintf("Model:       %Rhrc\n", rc);
+        else if (bstrModel.isNotEmpty())
+            RTPrintf("Model:       \"%ls\"\n", bstrModel.raw());
+        else
+            RTPrintf("Model:       unknown/inaccessible\n");
+
+        /* The other attributes are not accessible in limited mode and will fail
+           with E_ACCESSDENIED.  Typically means the user cannot read the drive. */
+        com::Bstr bstrUuidDisk;
+        rc = pHostDrive->COMGETTER(Uuid)(bstrUuidDisk.asOutParam());
+        if (SUCCEEDED(rc) && !com::Guid(bstrUuidDisk).isZero())
+            RTPrintf("UUID:        %ls\n", bstrUuidDisk.raw());
+        else if (rc == E_ACCESSDENIED)
+        {
+            RTPrintf("Further disk and partitioning information is not available for drive \"%ls\". (E_ACCESSDENIED)\n",
+                     bstrDrivePath.raw());
+            continue;
+        }
+        else if (FAILED(rc))
+        {
+            RTPrintf("UUID:        %Rhrc\n", rc);
+            com::GlueHandleComErrorNoCtx(pHostDrive, rc);
+        }
+
+        LONG64 cbSize = 0;
+        rc = pHostDrive->COMGETTER(Size)(&cbSize);
+        if (SUCCEEDED(rc) && fOptLong)
+            RTPrintf("Size:        %llu bytes (%Rhcb)\n", cbSize, cbSize);
+        else if (SUCCEEDED(rc))
+            RTPrintf("Size:        %Rhcb\n", cbSize);
+        else
+        {
+            RTPrintf("Size:        %Rhrc\n", rc);
+            com::GlueHandleComErrorNoCtx(pHostDrive, rc);
+        }
+
+        ULONG cbSectorSize = 0;
+        rc = pHostDrive->COMGETTER(SectorSize)(&cbSectorSize);
+        if (SUCCEEDED(rc))
+            RTPrintf("Sector Size: %u bytes\n", cbSectorSize);
+        else
+        {
+            RTPrintf("Sector Size: %Rhrc\n", rc);
+            com::GlueHandleComErrorNoCtx(pHostDrive, rc);
+        }
+
+        PartitioningType_T partitioningType = (PartitioningType_T)9999;
+        rc = pHostDrive->COMGETTER(PartitioningType)(&partitioningType);
+        if (SUCCEEDED(rc))
+            RTPrintf("Scheme:      %s\n", partitioningType == PartitioningType_MBR ? "MBR" : "GPT");
+        else
+        {
+            RTPrintf("Scheme:      %Rhrc\n", rc);
+            com::GlueHandleComErrorNoCtx(pHostDrive, rc);
+        }
+
+        com::SafeIfaceArray<IHostDrivePartition> apHostDrivesPartitions;
+        rc = pHostDrive->COMGETTER(Partitions)(ComSafeArrayAsOutParam(apHostDrivesPartitions));
+        if (FAILED(rc))
+        {
+            RTPrintf("Partitions:  %Rhrc\n", rc);
+            com::GlueHandleComErrorNoCtx(pHostDrive, rc);
+        }
+        else if (apHostDrivesPartitions.size() == 0)
+            RTPrintf("Partitions:  None (or not able to grok them).\n");
+        else if (partitioningType == PartitioningType_MBR)
+        {
+            if (fOptLong)
+                RTPrintf("Partitions:                              First         Last\n"
+                         "##  Type      Byte Size     Byte Offset  Cyl/Head/Sec  Cyl/Head/Sec Active\n");
+            else
+                RTPrintf("Partitions:                   First         Last\n"
+                         "##  Type  Size      Start     Cyl/Head/Sec  Cyl/Head/Sec Active\n");
+            for (size_t j = 0; j < apHostDrivesPartitions.size(); ++j)
+            {
+                ComPtr<IHostDrivePartition> pHostDrivePartition = apHostDrivesPartitions[j];
+
+                ULONG idx = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Number)(&idx));
+                ULONG uType = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(TypeMBR)(&uType));
+                ULONG uStartCylinder = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(StartCylinder)(&uStartCylinder));
+                ULONG uStartHead = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(StartHead)(&uStartHead));
+                ULONG uStartSector = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(StartSector)(&uStartSector));
+                ULONG uEndCylinder = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(EndCylinder)(&uEndCylinder));
+                ULONG uEndHead = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(EndHead)(&uEndHead));
+                ULONG uEndSector = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(EndSector)(&uEndSector));
+                cbSize = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Size)(&cbSize));
+                LONG64 offStart = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Start)(&offStart));
+                BOOL fActive = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Active)(&fActive));
+                PartitionType_T enmType = PartitionType_Unknown;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Type)(&enmType));
+
+                /* Max size & offset  here is around 16TiB with 4KiB sectors. */
+                if (fOptLong) /* cb/off: max 16TiB; idx: max 64. */
+                    RTPrintf("%2u   %02x  %14llu  %14llu  %4u/%3u/%2u   %4u/%3u/%2u    %s   %s\n",
+                             idx, uType, cbSize, offStart,
+                             uStartCylinder, uStartHead, uStartSector, uEndCylinder, uEndHead, uEndSector,
+                             fActive ? "yes" : "no", PartitionTypeToString(enmType, ""));
+                else
+                    RTPrintf("%2u   %02x   %8Rhcb  %8Rhcb  %4u/%3u/%2u   %4u/%3u/%2u   %s   %s\n",
+                             idx, uType, (uint64_t)cbSize, (uint64_t)offStart,
+                             uStartCylinder, uStartHead, uStartSector, uEndCylinder, uEndHead, uEndSector,
+                             fActive ? "yes" : "no", PartitionTypeToString(enmType, ""));
+            }
+        }
+        else /* GPT */
+        {
+            /* Determin the max partition type length to try reduce the table width: */
+            size_t cchMaxType = 0;
+            for (size_t j = 0; j < apHostDrivesPartitions.size(); ++j)
+            {
+                ComPtr<IHostDrivePartition> pHostDrivePartition = apHostDrivesPartitions[j];
+                PartitionType_T enmType = PartitionType_Unknown;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Type)(&enmType));
+                size_t const cchTypeNm = strlen(PartitionTypeToString(enmType, "e530bf6d-2754-4e9d-b260-60a5d0b80457"));
+                cchMaxType = RT_MAX(cchTypeNm, cchMaxType);
+            }
+            cchMaxType = RT_MIN(cchMaxType, RTUUID_STR_LENGTH);
+
+            if (fOptLong)
+                RTPrintf("Partitions:\n"
+                         "## %-*s Uuid                                           Byte Size         Byte Offset Active Name\n",
+                         (int)cchMaxType, "Type");
+            else
+                RTPrintf("Partitions:\n"
+                         "##  %-*s  Uuid                                   Size      Start   Active Name\n",
+                         (int)cchMaxType, "Type");
+
+            for (size_t j = 0; j < apHostDrivesPartitions.size(); ++j)
+            {
+                ComPtr<IHostDrivePartition> pHostDrivePartition = apHostDrivesPartitions[j];
+
+                ULONG idx = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Number)(&idx));
+                com::Bstr bstrUuidType;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(TypeUuid)(bstrUuidType.asOutParam()));
+                com::Bstr bstrUuidPartition;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Uuid)(bstrUuidPartition.asOutParam()));
+                cbSize = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Size)(&cbSize));
+                LONG64 offStart = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Start)(&offStart));
+                BOOL fActive = 0;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Active)(&fActive));
+                com::Bstr bstrName;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Name)(bstrName.asOutParam()));
+
+                PartitionType_T enmType = PartitionType_Unknown;
+                CHECK_ERROR(pHostDrivePartition, COMGETTER(Type)(&enmType));
+
+                Utf8Str strTypeConv;
+                const char *pszTypeNm = PartitionTypeToString(enmType, NULL);
+                if (!pszTypeNm)
+                    pszTypeNm = (strTypeConv = bstrUuidType).c_str();
+                else if (strlen(pszTypeNm) >= RTUUID_STR_LENGTH /* includes '\0' */)
+                    pszTypeNm -= RTUUID_STR_LENGTH - 1 - strlen(pszTypeNm);
+
+                if (fOptLong)
+                    RTPrintf("%2u %-*s %36ls %19llu %19llu   %-3s  %ls\n", idx, cchMaxType, pszTypeNm,
+                             bstrUuidPartition.raw(), cbSize, offStart, fActive ? "on" : "off", bstrName.raw());
+                else
+                    RTPrintf("%2u  %-*s  %36ls  %8Rhcb  %8Rhcb  %-3s   %ls\n", idx, cchMaxType, pszTypeNm,
+                             bstrUuidPartition.raw(), cbSize, offStart, fActive ? "on" : "off", bstrName.raw());
+            }
+        }
+    }
+    return rc;
+}
+
 
 /**
  * The type of lists we can produce.
  */
-enum enmListType
+enum ListType_T
 {
     kListNotSpecified = 1000,
     kListVMs,
@@ -897,6 +1858,12 @@ enum enmListType
     kListBridgedInterfaces,
 #if defined(VBOX_WITH_NETFLT)
     kListHostOnlyInterfaces,
+#endif
+#if defined(VBOX_WITH_VMNET)
+    kListHostOnlyNetworks,
+#endif
+#if defined(VBOX_WITH_CLOUD_NET)
+    kListCloudNetworks,
 #endif
     kListHostCpuIDs,
     kListHostInfo,
@@ -912,7 +1879,11 @@ enum enmListType
     kListGroups,
     kListNatNetworks,
     kListVideoInputDevices,
-    kListScreenShotFormats
+    kListScreenShotFormats,
+    kListCloudProviders,
+    kListCloudProfiles,
+    kListCPUProfiles,
+    kListHostDrives
 };
 
 
@@ -924,7 +1895,7 @@ enum enmListType
  * @param   fOptLong            Long (@c true) or short list format.
  * @param   pVirtualBox         Reference to the IVirtualBox smart pointer.
  */
-static HRESULT produceList(enum enmListType enmCommand, bool fOptLong, const ComPtr<IVirtualBox> &pVirtualBox)
+static HRESULT produceList(enum ListType_T enmCommand, bool fOptLong, bool fOptSorted, const ComPtr<IVirtualBox> &pVirtualBox)
 {
     HRESULT rc = S_OK;
     switch (enmCommand)
@@ -943,12 +1914,35 @@ static HRESULT produceList(enum enmListType enmCommand, bool fOptLong, const Com
             if (SUCCEEDED(rc))
             {
                 /*
-                 * Iterate through the collection
+                 * Display it.
                  */
-                for (size_t i = 0; i < machines.size(); ++i)
+                if (!fOptSorted)
                 {
-                    if (machines[i])
-                        rc = showVMInfo(pVirtualBox, machines[i], NULL, fOptLong ? VMINFO_STANDARD : VMINFO_COMPACT);
+                    for (size_t i = 0; i < machines.size(); ++i)
+                        if (machines[i])
+                            rc = showVMInfo(pVirtualBox, machines[i], NULL, fOptLong ? VMINFO_STANDARD : VMINFO_COMPACT);
+                }
+                else
+                {
+                    /*
+                     * Sort the list by name before displaying it.
+                     */
+                    std::vector<std::pair<com::Bstr, IMachine *> > sortedMachines;
+                    for (size_t i = 0; i < machines.size(); ++i)
+                    {
+                        IMachine *pMachine = machines[i];
+                        if (pMachine) /* no idea why we need to do this... */
+                        {
+                            Bstr bstrName;
+                            pMachine->COMGETTER(Name)(bstrName.asOutParam());
+                            sortedMachines.push_back(std::pair<com::Bstr, IMachine *>(bstrName, pMachine));
+                        }
+                    }
+
+                    std::sort(sortedMachines.begin(), sortedMachines.end());
+
+                    for (size_t i = 0; i < sortedMachines.size(); ++i)
+                        rc = showVMInfo(pVirtualBox, sortedMachines[i].second, NULL, fOptLong ? VMINFO_STANDARD : VMINFO_COMPACT);
                 }
             }
             break;
@@ -1080,6 +2074,17 @@ static HRESULT produceList(enum enmListType enmCommand, bool fOptLong, const Com
             rc = listNetworkInterfaces(pVirtualBox, enmCommand == kListBridgedInterfaces);
             break;
 
+#if defined(VBOX_WITH_VMNET)
+        case kListHostOnlyNetworks:
+            rc = listHostOnlyNetworks(pVirtualBox);
+            break;
+#endif
+
+#if defined(VBOX_WITH_CLOUD_NET)
+        case kListCloudNetworks:
+            rc = listCloudNetworks(pVirtualBox);
+            break;
+#endif
         case kListHostInfo:
             rc = listHostInfo(pVirtualBox);
             break;
@@ -1154,34 +2159,8 @@ static HRESULT produceList(enum enmListType enmCommand, bool fOptLong, const Com
             break;
 
         case kListDhcpServers:
-        {
-            com::SafeIfaceArray<IDHCPServer> svrs;
-            CHECK_ERROR(pVirtualBox, COMGETTER(DHCPServers)(ComSafeArrayAsOutParam(svrs)));
-            for (size_t i = 0; i < svrs.size(); ++i)
-            {
-                ComPtr<IDHCPServer> svr = svrs[i];
-                Bstr netName;
-                svr->COMGETTER(NetworkName)(netName.asOutParam());
-                RTPrintf("NetworkName:    %ls\n", netName.raw());
-                Bstr ip;
-                svr->COMGETTER(IPAddress)(ip.asOutParam());
-                RTPrintf("IP:             %ls\n", ip.raw());
-                Bstr netmask;
-                svr->COMGETTER(NetworkMask)(netmask.asOutParam());
-                RTPrintf("NetworkMask:    %ls\n", netmask.raw());
-                Bstr lowerIp;
-                svr->COMGETTER(LowerIP)(lowerIp.asOutParam());
-                RTPrintf("lowerIPAddress: %ls\n", lowerIp.raw());
-                Bstr upperIp;
-                svr->COMGETTER(UpperIP)(upperIp.asOutParam());
-                RTPrintf("upperIPAddress: %ls\n", upperIp.raw());
-                BOOL fEnabled;
-                svr->COMGETTER(Enabled)(&fEnabled);
-                RTPrintf("Enabled:        %s\n", fEnabled ? "Yes" : "No");
-                RTPrintf("\n");
-            }
+            rc = listDhcpServers(pVirtualBox);
             break;
-        }
 
         case kListExtPacks:
             rc = listExtensionPacks(pVirtualBox);
@@ -1255,6 +2234,21 @@ static HRESULT produceList(enum enmListType enmCommand, bool fOptLong, const Com
             rc = listScreenShotFormats(pVirtualBox);
             break;
 
+        case kListCloudProviders:
+            rc = listCloudProviders(pVirtualBox);
+            break;
+
+        case kListCloudProfiles:
+            rc = listCloudProfiles(pVirtualBox, fOptLong);
+            break;
+
+        case kListCPUProfiles:
+            rc = listCPUProfiles(pVirtualBox, fOptLong, fOptSorted);
+            break;
+
+        case kListHostDrives:
+            rc = listHostDrives(pVirtualBox, fOptLong);
+            break;
         /* No default here, want gcc warnings. */
 
     } /* end switch */
@@ -1272,12 +2266,16 @@ RTEXITCODE handleList(HandlerArg *a)
 {
     bool                fOptLong      = false;
     bool                fOptMultiple  = false;
-    enum enmListType    enmOptCommand = kListNotSpecified;
+    bool                fOptSorted    = false;
+    bool                fFirst        = true;
+    enum ListType_T     enmOptCommand = kListNotSpecified;
+    RTEXITCODE          rcExit = RTEXITCODE_SUCCESS;
 
     static const RTGETOPTDEF s_aListOptions[] =
     {
         { "--long",             'l',                     RTGETOPT_REQ_NOTHING },
         { "--multiple",         'm',                     RTGETOPT_REQ_NOTHING }, /* not offical yet */
+        { "--sorted",           's',                     RTGETOPT_REQ_NOTHING },
         { "vms",                kListVMs,                RTGETOPT_REQ_NOTHING },
         { "runningvms",         kListRunningVMs,         RTGETOPT_REQ_NOTHING },
         { "ostypes",            kListOsTypes,            RTGETOPT_REQ_NOTHING },
@@ -1288,6 +2286,12 @@ RTEXITCODE handleList(HandlerArg *a)
         { "bridgedifs",         kListBridgedInterfaces,  RTGETOPT_REQ_NOTHING },
 #if defined(VBOX_WITH_NETFLT)
         { "hostonlyifs",        kListHostOnlyInterfaces, RTGETOPT_REQ_NOTHING },
+#endif
+#if defined(VBOX_WITH_VMNET)
+        { "hostonlynets",       kListHostOnlyNetworks,   RTGETOPT_REQ_NOTHING },
+#endif
+#if defined(VBOX_WITH_CLOUD_NET)
+        { "cloudnets",          kListCloudNetworks,      RTGETOPT_REQ_NOTHING },
 #endif
         { "natnetworks",        kListNatNetworks,        RTGETOPT_REQ_NOTHING },
         { "natnets",            kListNatNetworks,        RTGETOPT_REQ_NOTHING },
@@ -1305,6 +2309,10 @@ RTEXITCODE handleList(HandlerArg *a)
         { "groups",             kListGroups,             RTGETOPT_REQ_NOTHING },
         { "webcams",            kListVideoInputDevices,  RTGETOPT_REQ_NOTHING },
         { "screenshotformats",  kListScreenShotFormats,  RTGETOPT_REQ_NOTHING },
+        { "cloudproviders",     kListCloudProviders,     RTGETOPT_REQ_NOTHING },
+        { "cloudprofiles",      kListCloudProfiles,      RTGETOPT_REQ_NOTHING },
+        { "cpu-profiles",       kListCPUProfiles,        RTGETOPT_REQ_NOTHING },
+        { "hostdrives",         kListHostDrives,         RTGETOPT_REQ_NOTHING },
     };
 
     int                 ch;
@@ -1320,12 +2328,16 @@ RTEXITCODE handleList(HandlerArg *a)
                 fOptLong = true;
                 break;
 
+            case 's':
+                fOptSorted = true;
+                break;
+
             case 'm':
                 fOptMultiple = true;
                 if (enmOptCommand == kListNotSpecified)
                     break;
                 ch = enmOptCommand;
-                /* fall thru */
+                RT_FALL_THRU();
 
             case kListVMs:
             case kListRunningVMs:
@@ -1336,6 +2348,12 @@ RTEXITCODE handleList(HandlerArg *a)
             case kListBridgedInterfaces:
 #if defined(VBOX_WITH_NETFLT)
             case kListHostOnlyInterfaces:
+#endif
+#if defined(VBOX_WITH_VMNET)
+            case kListHostOnlyNetworks:
+#endif
+#if defined(VBOX_WITH_CLOUD_NET)
+            case kListCloudNetworks:
 #endif
             case kListHostInfo:
             case kListHostCpuIDs:
@@ -1352,12 +2370,21 @@ RTEXITCODE handleList(HandlerArg *a)
             case kListNatNetworks:
             case kListVideoInputDevices:
             case kListScreenShotFormats:
-                enmOptCommand = (enum enmListType)ch;
+            case kListCloudProviders:
+            case kListCloudProfiles:
+            case kListCPUProfiles:
+            case kListHostDrives:
+                enmOptCommand = (enum ListType_T)ch;
                 if (fOptMultiple)
                 {
-                    HRESULT hrc = produceList((enum enmListType)ch, fOptLong, a->virtualBox);
+                    if (fFirst)
+                        fFirst = false;
+                    else
+                        RTPrintf("\n");
+                    RTPrintf("[%s]\n", ValueUnion.pDef->pszLong);
+                    HRESULT hrc = produceList(enmOptCommand, fOptLong, fOptSorted, a->virtualBox);
                     if (FAILED(hrc))
-                        return RTEXITCODE_FAILURE;
+                        rcExit = RTEXITCODE_FAILURE;
                 }
                 break;
 
@@ -1376,12 +2403,12 @@ RTEXITCODE handleList(HandlerArg *a)
         return errorSyntax(USAGE_LIST, "Missing subcommand for \"list\" command.\n");
     if (!fOptMultiple)
     {
-        HRESULT hrc = produceList(enmOptCommand, fOptLong, a->virtualBox);
+        HRESULT hrc = produceList(enmOptCommand, fOptLong, fOptSorted, a->virtualBox);
         if (FAILED(hrc))
-            return RTEXITCODE_FAILURE;
+            rcExit = RTEXITCODE_FAILURE;
     }
 
-    return RTEXITCODE_SUCCESS;
+    return rcExit;
 }
 
 #endif /* !VBOX_ONLY_DOCS */

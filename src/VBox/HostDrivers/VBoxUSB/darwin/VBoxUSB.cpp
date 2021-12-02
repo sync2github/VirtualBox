@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxUSB.cpp 85175 2020-07-10 12:52:33Z vboxsync $ */
 /** @file
  * VirtualBox USB driver for Darwin.
  *
@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,6 +17,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -41,7 +50,7 @@
 #include <iprt/semaphore.h>
 #include <iprt/process.h>
 #include <iprt/alloc.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/asm.h>
 
 #include <mach/kmod.h>
@@ -294,9 +303,9 @@ extern kern_return_t _start(struct kmod_info *pKModInfo, void *pvData);
 extern kern_return_t _stop(struct kmod_info *pKModInfo, void *pvData);
 
 KMOD_EXPLICIT_DECL(VBoxDrv, VBOX_VERSION_STRING, _start, _stop)
-DECLHIDDEN(kmod_start_func_t *) _realmain = VBoxUSBStart;
-DECLHIDDEN(kmod_stop_func_t  *) _antimain = VBoxUSBStop;
-DECLHIDDEN(int)                 _kext_apple_cc = __APPLE_CC__;
+DECL_HIDDEN_DATA(kmod_start_func_t *) _realmain = VBoxUSBStart;
+DECL_HIDDEN_DATA(kmod_stop_func_t  *) _antimain = VBoxUSBStop;
+DECL_HIDDEN_DATA(int)                 _kext_apple_cc = __APPLE_CC__;
 RT_C_DECLS_END
 
 /** Mutex protecting the lists. */
@@ -1147,7 +1156,7 @@ org_virtualbox_VBoxUSBDevice::start(IOService *pProvider)
     m_pDevice = OSDynamicCast(IOUSBDevice, pProvider);
     if (!m_pDevice)
     {
-        printf("VBoxUSBDevice::start([%p], %p {%s}): failed!\n", this, pProvider, pProvider->getName());
+        printf("VBoxUSBDevice::start([%p], %p {%s}): failed!\n", (void *)this, (void *)pProvider, pProvider->getName());
         return false;
     }
 
@@ -1731,7 +1740,7 @@ org_virtualbox_VBoxUSBInterface::start(IOService *pProvider)
     }
     else
     {
-        printf("VBoxUSBInterface::start([%p], %p {%s}): failed!\n", this, pProvider, pProvider->getName());
+        printf("VBoxUSBInterface::start([%p], %p {%s}): failed!\n", (void *)this, (void *)pProvider, pProvider->getName());
         fRc = false;
     }
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvHostBase-freebsd.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DrvHostBase - Host base drive access driver, FreeBSD specifics.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,11 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DRV_HOST_BASE
 #include <sys/cdefs.h>
 #include <sys/param.h>
@@ -23,9 +28,17 @@
 #include <cam/cam_ccb.h>
 #include <cam/scsi/scsi_message.h>
 #include <cam/scsi/scsi_pass.h>
-#include <VBox/scsi.h>
-#include <iprt/log.h>
+#include <VBox/err.h>
 
+#include <VBox/scsi.h>
+#include <iprt/file.h>
+#include <iprt/log.h>
+#include <iprt/string.h>
+
+
+/*********************************************************************************************************************************
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
 /**
  * Host backend specific data.
  */
@@ -48,6 +61,14 @@ AssertCompile(sizeof(DRVHOSTBASEOS) <= 64);
 
 #define DRVHOSTBASE_OS_INT_DECLARED
 #include "DrvHostBase.h"
+
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
+/** Maximum buffer size supported by the CAM subsystem. */
+#define FBSD_SCSI_MAX_BUFFER_SIZE (64 * _1K)
+
 
 
 DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, size_t cbCmd, PDMMEDIATXDIR enmTxDir,
@@ -145,6 +166,16 @@ DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, s
         else
             rc = RTErrConvertFromErrno(errno);
     }
+
+    return rc;
+}
+
+
+DECLHIDDEN(size_t) drvHostBaseScsiCmdGetBufLimitOs(PDRVHOSTBASE pThis)
+{
+    RT_NOREF(pThis);
+
+    return FBSD_SCSI_MAX_BUFFER_SIZE;
 }
 
 
@@ -193,8 +224,8 @@ DECLHIDDEN(int) drvHostBaseReadOs(PDRVHOSTBASE pThis, uint64_t off, void *pvBuf,
         {
             const uint32_t  LBA       = off / pThis->Os.cbBlock;
             AssertReturn(!(off % pThis->Os.cbBlock), VERR_INVALID_PARAMETER);
-            uint32_t        cbRead32  =   cbRead > SCSI_MAX_BUFFER_SIZE
-                                        ? SCSI_MAX_BUFFER_SIZE
+            uint32_t        cbRead32  =   cbRead > FBSD_SCSI_MAX_BUFFER_SIZE
+                                        ? FBSD_SCSI_MAX_BUFFER_SIZE
                                         : (uint32_t)cbRead;
             const uint32_t  cBlocks   = cbRead32 / pThis->Os.cbBlock;
             AssertReturn(!(cbRead % pThis->Os.cbBlock), VERR_INVALID_PARAMETER);

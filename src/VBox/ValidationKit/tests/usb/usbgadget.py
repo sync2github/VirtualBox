@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0302
+# $Id: usbgadget.py 90594 2021-08-10 12:15:27Z vboxsync $
+# pylint: disable=too-many-lines
 
 """
 UTS (USB Test Service) client.
 """
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,16 +26,16 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 90594 $"
 
 # Standard Python imports.
 import array
 import errno
 import select
 import socket
+import sys;
 import threading
 import time
-import types
 import zlib
 
 # Validation Kit imports.
@@ -43,6 +43,11 @@ from common     import utils;
 from testdriver import base;
 from testdriver import reporter;
 from testdriver.base    import TdTaskBase;
+
+# Python 3 hacks:
+if sys.version_info[0] >= 3:
+    long = int;     # pylint: disable=redefined-builtin,invalid-name
+
 
 ## @name USB gadget impersonation string constants.
 ## @{
@@ -168,16 +173,16 @@ def isValidOpcodeEncoding(sOpcode):
 def u32ToByteArray(u32):
     """Encodes the u32 value as a little endian byte (B) array."""
     return array.array('B', \
-                       (  u32             % 256, \
-                         (u32 / 256)      % 256, \
-                         (u32 / 65536)    % 256, \
-                         (u32 / 16777216) % 256) );
+                       (  u32              % 256, \
+                         (u32 // 256)      % 256, \
+                         (u32 // 65536)    % 256, \
+                         (u32 // 16777216) % 256) );
 
 def u16ToByteArray(u16):
     """Encodes the u16 value as a little endian byte (B) array."""
     return array.array('B', \
-                       (  u16        % 256, \
-                         (u16 / 256) % 256) );
+                       (  u16         % 256, \
+                         (u16 // 256) % 256) );
 
 def u8ToByteArray(uint8):
     """Encodes the u8 value as a little endian byte (B) array."""
@@ -187,7 +192,7 @@ def zeroByteArray(cb):
     """Returns an array with the given size containing 0."""
     abArray = array.array('B', (0, ));
     cb = cb - 1;
-    for i in range(cb): # pylint: disable=W0612
+    for i in range(cb): # pylint: disable=unused-variable
         abArray.append(0);
     return abArray;
 
@@ -195,8 +200,8 @@ def strToByteArry(sStr):
     """Encodes the string as a little endian byte (B) array including the terminator."""
     abArray = array.array('B');
     sUtf8 = sStr.encode('utf_8');
-    for i in range(0, len(sUtf8)):
-        abArray.append(ord(sUtf8[i]))
+    for ch in sUtf8:
+        abArray.append(ord(ch));
     abArray.append(0);
     return abArray;
 
@@ -348,7 +353,7 @@ class TransportBase(object):
                                        ord(sOpcode[5]), \
                                        ord(sOpcode[6]), \
                                        ord(sOpcode[7]) ) ) );
-            if len(abPayload) > 0:
+            if abPayload:
                 abMsg.extend(abPayload);
         except:
             reporter.fatalXcpt('sendMsgInt: packing problem...');
@@ -373,12 +378,12 @@ class TransportBase(object):
         """
 
         # Read the header.
-        if len(self.abReadAheadHdr) > 0:
+        if self.abReadAheadHdr:
             assert(len(self.abReadAheadHdr) == 16);
             abHdr = self.abReadAheadHdr;
             self.abReadAheadHdr = array.array('B');
         else:
-            abHdr = self.recvBytes(16, cMsTimeout, fNoDataOk);
+            abHdr = self.recvBytes(16, cMsTimeout, fNoDataOk); # (virtual method) # pylint: disable=assignment-from-none
             if abHdr is None:
                 return (None, None, None);
         if len(abHdr) != 16:
@@ -407,7 +412,7 @@ class TransportBase(object):
                 cbPadding = 16 - (cbMsg % 16);
             else:
                 cbPadding = 0;
-            abPayload = self.recvBytes(cbMsg - 16 + cbPadding, cMsTimeout, False);
+            abPayload = self.recvBytes(cbMsg - 16 + cbPadding, cMsTimeout, False); # pylint: disable=assignment-from-none
             if abPayload is None:
                 self.abReadAheadHdr = abHdr;
                 if not fNoDataOk    :
@@ -443,18 +448,18 @@ class TransportBase(object):
         abPayload = array.array('B');
         for o in aoPayload:
             try:
-                if isinstance(o, basestring):
+                if utils.isString(o):
                     # the primitive approach...
                     sUtf8 = o.encode('utf_8');
-                    for i in range(0, len(sUtf8)):
-                        abPayload.append(ord(sUtf8[i]))
+                    for ch in sUtf8:
+                        abPayload.append(ord(ch))
                     abPayload.append(0);
-                elif isinstance(o, types.LongType):
+                elif isinstance(o, long):
                     if o < 0 or o > 0xffffffff:
                         reporter.fatal('sendMsg: uint32_t payload is out of range: %s' % (hex(o)));
                         return None;
                     abPayload.extend(u32ToByteArray(o));
-                elif isinstance(o, types.IntType):
+                elif isinstance(o, int):
                     if o < 0 or o > 0xffffffff:
                         reporter.fatal('sendMsg: uint32_t payload is out of range: %s' % (hex(o)));
                         return None;
@@ -586,7 +591,11 @@ class Session(TdTaskBase):
             return False;
 
         oThread.join(61.0);
-        return oThread.isAlive();
+
+        if sys.version_info < (3, 9, 0):
+            # Removed since Python 3.9.
+            return oThread.isAlive(); # pylint: disable=no-member
+        return oThread.is_alive();
 
     def taskThread(self):
         """
@@ -638,7 +647,7 @@ class Session(TdTaskBase):
         cMsLeft = self.cMsTimeout - cMsElapsed;
         if cMsLeft <= cMsMin:
             return cMsMin;
-        if cMsLeft > cMsMax and cMsMax > 0:
+        if cMsLeft > cMsMax > 0:
             return cMsMax
         return cMsLeft;
 
@@ -976,9 +985,10 @@ class TransportTcp(TransportBase):
                     if oXcpt[0] == errno.EINPROGRESS:
                         return True;
                 except: pass;
-                # Windows?
                 try:
                     if oXcpt[0] == errno.EWOULDBLOCK:
+                        return True;
+                    if utils.getHostOs() == 'win' and oXcpt[0] == errno.WSAEWOULDBLOCK: # pylint: disable=no-member
                         return True;
                 except: pass;
         except:
@@ -1062,31 +1072,26 @@ class TransportTcp(TransportBase):
         try:
             oSocket.connect((self.sHostname, self.uPort));
             rc = True;
-        except socket.error, e:
-            iRc = e[0];
-            if self.__isInProgressXcpt(e):
+        except socket.error as oXcpt:
+            iRc = oXcpt.errno;
+            if self.__isInProgressXcpt(oXcpt):
                 # Do the actual waiting.
-                reporter.log2('TransportTcp::connect: operation in progress (%s)...' % (e,));
+                reporter.log2('TransportTcp::connect: operation in progress (%s)...' % (oXcpt,));
                 try:
                     ttRc = select.select([oWakeupR], [oSocket], [oSocket, oWakeupR], cMsTimeout / 1000.0);
                     if len(ttRc[1]) + len(ttRc[2]) == 0:
                         raise socket.error(errno.ETIMEDOUT, 'select timed out');
                     iRc = oSocket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR);
                     rc = iRc == 0;
-                except socket.error, e:
-                    iRc = e[0];
+                except socket.error as oXcpt2:
+                    iRc = oXcpt2.errno;
                 except:
                     iRc = -42;
                     reporter.fatalXcpt('socket.select() on connect failed');
 
             if rc is True:
                 pass;
-            elif  iRc == errno.ECONNREFUSED \
-               or iRc == errno.EHOSTUNREACH \
-               or iRc == errno.EINTR \
-               or iRc == errno.ENETDOWN \
-               or iRc == errno.ENETUNREACH \
-               or iRc == errno.ETIMEDOUT:
+            elif iRc in (errno.ECONNREFUSED, errno.EHOSTUNREACH, errno.EINTR, errno.ENETDOWN, errno.ENETUNREACH, errno.ETIMEDOUT):
                 rc = False; # try again.
             else:
                 if iRc != errno.EBADF  or  not self.fConnectCanceled:
@@ -1116,7 +1121,7 @@ class TransportTcp(TransportBase):
         oWakeupR = None;
         oWakeupW = None;
         if hasattr(socket, 'socketpair'):
-            try:    (oWakeupR, oWakeupW) = socket.socketpair();         # pylint: disable=E1101
+            try:    (oWakeupR, oWakeupW) = socket.socketpair();         # pylint: disable=no-member
             except: reporter.logXcpt('socket.socketpair() failed');
 
         # Update the state.
@@ -1164,7 +1169,7 @@ class TransportTcp(TransportBase):
             try:
                 self.oSocket.setblocking(0);    # just in case it's not set.
                 sData = "1";
-                while len(sData) > 0:
+                while sData:
                     sData = self.oSocket.recv(16384);
             except:
                 pass;
@@ -1180,19 +1185,19 @@ class TransportTcp(TransportBase):
         self._closeWakeupSockets();
         self.oCv.release();
 
-    def sendBytes(self, abMsg, cMsTimeout):
+    def sendBytes(self, abBuf, cMsTimeout):
         if self.oSocket is None:
             reporter.error('TransportTcp.sendBytes: No connection.');
             return False;
 
         # Try send it all.
         try:
-            cbSent = self.oSocket.send(abMsg);
-            if cbSent == len(abMsg):
+            cbSent = self.oSocket.send(abBuf);
+            if cbSent == len(abBuf):
                 return True;
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             if not self.__isWouldBlockXcpt(oXcpt):
-                reporter.errorXcpt('TranportTcp.sendBytes: %s bytes' % (len(abMsg)));
+                reporter.errorXcpt('TranportTcp.sendBytes: %s bytes' % (len(abBuf)));
                 return False;
             cbSent = 0;
 
@@ -1201,17 +1206,17 @@ class TransportTcp(TransportBase):
         while True:
             cMsElapsed = base.timestampMilli() - msStart;
             if cMsElapsed > cMsTimeout:
-                reporter.error('TranportTcp.sendBytes: %s bytes timed out (1)' % (len(abMsg)));
+                reporter.error('TranportTcp.sendBytes: %s bytes timed out (1)' % (len(abBuf)));
                 break;
 
             # wait.
             try:
                 ttRc = select.select([], [self.oSocket], [self.oSocket], (cMsTimeout - cMsElapsed) / 1000.0);
-                if len(ttRc[2]) > 0 and len(ttRc[1]) == 0:
+                if ttRc[2] and not ttRc[1]:
                     reporter.error('TranportTcp.sendBytes: select returned with exception');
                     break;
-                if len(ttRc[1]) == 0:
-                    reporter.error('TranportTcp.sendBytes: %s bytes timed out (2)' % (len(abMsg)));
+                if not ttRc[1]:
+                    reporter.error('TranportTcp.sendBytes: %s bytes timed out (2)' % (len(abBuf)));
                     break;
             except:
                 reporter.errorXcpt('TranportTcp.sendBytes: select failed');
@@ -1219,12 +1224,12 @@ class TransportTcp(TransportBase):
 
             # Try send more.
             try:
-                cbSent += self.oSocket.send(abMsg[cbSent:]);
-                if cbSent == len(abMsg):
+                cbSent += self.oSocket.send(abBuf[cbSent:]);
+                if cbSent == len(abBuf):
                     return True;
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 if not self.__isWouldBlockXcpt(oXcpt):
-                    reporter.errorXcpt('TranportTcp.sendBytes: %s bytes' % (len(abMsg)));
+                    reporter.errorXcpt('TranportTcp.sendBytes: %s bytes' % (len(abBuf)));
                     break;
 
         return False;
@@ -1245,9 +1250,9 @@ class TransportTcp(TransportBase):
         if len(self.abReadAhead) < cb:
             try:
                 abBuf = self.oSocket.recv(cb - len(self.abReadAhead));
-                if len(abBuf) > 0:
+                if abBuf:
                     self.abReadAhead.extend(array.array('B', abBuf));
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 if not self.__isWouldBlockXcpt(oXcpt):
                     reporter.errorXcpt('TranportTcp.recvBytes: 0/%s bytes' % (cb,));
                     return None;
@@ -1260,18 +1265,18 @@ class TransportTcp(TransportBase):
         while True:
             cMsElapsed = base.timestampMilli() - msStart;
             if cMsElapsed > cMsTimeout:
-                if not fNoDataOk or len(self.abReadAhead) > 0:
+                if not fNoDataOk or self.abReadAhead:
                     reporter.error('TranportTcp.recvBytes: %s/%s bytes timed out (1)' % (len(self.abReadAhead), cb));
                 break;
 
             # Wait.
             try:
                 ttRc = select.select([self.oSocket], [], [self.oSocket], (cMsTimeout - cMsElapsed) / 1000.0);
-                if len(ttRc[2]) > 0 and len(ttRc[0]) == 0:
+                if ttRc[2] and not ttRc[0]:
                     reporter.error('TranportTcp.recvBytes: select returned with exception');
                     break;
-                if len(ttRc[0]) == 0:
-                    if not fNoDataOk or len(self.abReadAhead) > 0:
+                if not ttRc[0]:
+                    if not fNoDataOk or self.abReadAhead:
                         reporter.error('TranportTcp.recvBytes: %s/%s bytes timed out (2) fNoDataOk=%s'
                                        % (len(self.abReadAhead), cb, fNoDataOk));
                     break;
@@ -1282,7 +1287,7 @@ class TransportTcp(TransportBase):
             # Try read more.
             try:
                 abBuf = self.oSocket.recv(cb - len(self.abReadAhead));
-                if len(abBuf) == 0:
+                if not abBuf:
                     reporter.error('TranportTcp.recvBytes: %s/%s bytes (%s) - connection has been shut down'
                                    % (len(self.abReadAhead), cb, fNoDataOk));
                     self.disconnect();
@@ -1290,10 +1295,10 @@ class TransportTcp(TransportBase):
 
                 self.abReadAhead.extend(array.array('B', abBuf));
 
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 reporter.log('recv => exception %s' % (oXcpt,));
                 if not self.__isWouldBlockXcpt(oXcpt):
-                    if not fNoDataOk  or  not self.__isConnectionReset(oXcpt)  or  len(self.abReadAhead) > 0:
+                    if not fNoDataOk  or  not self.__isConnectionReset(oXcpt)  or  self.abReadAhead:
                         reporter.errorXcpt('TranportTcp.recvBytes: %s/%s bytes (%s)' % (len(self.abReadAhead), cb, fNoDataOk));
                     break;
 
@@ -1309,7 +1314,7 @@ class TransportTcp(TransportBase):
             return False;
         try:
             ttRc = select.select([], [], [self.oSocket], 0.0);
-            if len(ttRc[2]) > 0:
+            if ttRc[2]:
                 return False;
 
             self.oSocket.send(array.array('B')); # send zero bytes.
@@ -1320,7 +1325,7 @@ class TransportTcp(TransportBase):
     def isRecvPending(self, cMsTimeout = 0):
         try:
             ttRc = select.select([self.oSocket], [], [], cMsTimeout / 1000.0);
-            if len(ttRc[0]) == 0:
+            if not ttRc[0]:
                 return False;
         except:
             pass;
@@ -1409,7 +1414,7 @@ class UsbGadget(object):
         """
         return (self.iBusId, self.iDevId);
 
-    def connectTo(self, cMsTimeout, sHostname, uPort = None, fUsbIpSupport = True, cMsIdleFudge = 0):
+    def connectTo(self, cMsTimeout, sHostname, uPort = None, fUsbIpSupport = True, cMsIdleFudge = 0, fTryConnect = False):
         """
         Connects to the specified target device.
         Returns True on Success.
@@ -1425,11 +1430,11 @@ class UsbGadget(object):
                       (cMsTimeout, sHostname, uPort, cMsIdleFudge));
         try:
             oTransport = TransportTcp(sHostname, uPort);
-            self.oUtsSession = Session(oTransport, cMsTimeout, cMsIdleFudge);
+            self.oUtsSession = Session(oTransport, cMsTimeout, cMsIdleFudge, fTryConnect);
 
             if self.oUtsSession is not None:
                 fDone = self.oUtsSession.waitForTask(30*1000);
-                print 'connect: waitForTask -> %s, result %s' % (fDone, self.oUtsSession.getResult());
+                reporter.log('connect: waitForTask -> %s, result %s' % (fDone, self.oUtsSession.getResult()));
                 if fDone is True and self.oUtsSession.isSuccess():
                     # Parse the reply.
                     _, _, abPayload = self.oUtsSession.getLastReply();
@@ -1461,4 +1466,3 @@ class UsbGadget(object):
             fRc = self.oUtsSession.syncDisconnect();
 
         return fRc;
-

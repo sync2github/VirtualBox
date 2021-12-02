@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: TestExecServiceInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * TestExecServ - Basic Remote Execution Service, Internal Header.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___TestExecServiceInternal_h___
-#define ___TestExecServiceInternal_h___
+#ifndef VBOX_INCLUDED_SRC_TestExecServ_TestExecServiceInternal_h
+#define VBOX_INCLUDED_SRC_TestExecServ_TestExecServiceInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/getopt.h>
 #include <iprt/stream.h>
@@ -211,7 +214,9 @@ extern TXSTRANSPORT const g_FileSysTransport;
 extern TXSTRANSPORT const g_GuestPropTransport;
 extern TXSTRANSPORT const g_TestDevTransport;
 
+extern uint32_t           g_cVerbose;
+
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_TestExecServ_TestExecServiceInternal_h */
 

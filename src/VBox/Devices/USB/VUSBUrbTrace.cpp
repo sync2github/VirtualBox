@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VUSBUrbTrace.cpp 91374 2021-09-24 17:40:30Z vboxsync $ */
 /** @file
  * Virtual USB - URBs.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,7 +22,7 @@
 #define LOG_GROUP LOG_GROUP_DRV_VUSB
 #include <VBox/vmm/pdm.h>
 #include <VBox/vmm/vmapi.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/alloc.h>
 #include <VBox/log.h>
 #include <iprt/time.h>
@@ -159,7 +159,7 @@ DECLHIDDEN(void) vusbUrbTrace(PVUSBURB pUrb, const char *pszMsg, bool fComplete)
     Log(("%s: %*s: pDev=%p[%s] rc=%s a=%i e=%u d=%s t=%s cb=%#x(%d) ts=%RU64 (%RU64 ns ago) %s\n",
          pUrb->pszDesc, s_cchMaxMsg, pszMsg,
          pDev,
-         pUrb->pVUsb && pUrb->pVUsb->pDev ? pUrb->pVUsb->pDev->pUsbIns->pszName : "",
+         pUrb->pVUsb && pUrb->pVUsb->pDev && pUrb->pVUsb->pDev->pUsbIns ? pUrb->pVUsb->pDev->pUsbIns->pszName : "",
          vusbUrbStatusName(pUrb->enmStatus),
          pDev ? pDev->u8Address : -1,
          pUrb->EndPt,
@@ -219,6 +219,18 @@ DECLHIDDEN(void) vusbUrbTrace(PVUSBURB pUrb, const char *pszMsg, bool fComplete)
     {
         pSetup = pPipe->pCtrl->pMsg;
         if (pSetup->bRequest == VUSB_REQ_GET_DESCRIPTOR)
+        {
+            /* HID report (0x22) and physical (0x23) descriptors do not use standard format
+             * with descriptor length/type at the front. Don't try to dump them, we'll only
+             * misinterpret them.
+             */
+            if (    ((pSetup->bmRequestType >> 5) & 0x3) == 1   /* class */
+                && ((RT_HIBYTE(pSetup->wValue) == 0x22) || (RT_HIBYTE(pSetup->wValue) == 0x23)))
+            {
+                fDescriptors = false;
+            }
+        }
+        else
             fDescriptors = true;
     }
 
@@ -375,7 +387,7 @@ DECLHIDDEN(void) vusbUrbTrace(PVUSBURB pUrb, const char *pszMsg, bool fComplete)
                                 Log(("URB: %*s:       %04x: Length=%d String=%.*ls\n",
                                      s_cchMaxMsg, pszMsg, pb - pbData, cb - 2, cb / 2 - 1, pb + 2));
                             else
-                                Log(("URB: %*s:       %04x: Length=0!\n", s_cchMaxMsg, pszMsg, pb - pbData));
+                                Log(("URB: %*s:       %04x: Length=0\n", s_cchMaxMsg, pszMsg, pb - pbData));
                         }
                         break;
 

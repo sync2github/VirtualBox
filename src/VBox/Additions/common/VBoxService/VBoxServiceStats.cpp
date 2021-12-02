@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxServiceStats.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxStats - Guest statistics notification
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,10 +29,6 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #if defined(RT_OS_WINDOWS)
-# ifdef TARGET_NT4
-#  undef _WIN32_WINNT
-#  define _WIN32_WINNT 0x501
-# endif
 # include <iprt/win/windows.h>
 # include <psapi.h>
 # include <winternl.h>
@@ -60,7 +56,10 @@
 #include <iprt/system.h>
 #include <iprt/time.h>
 #include <iprt/thread.h>
+#include <VBox/err.h>
+#include <VBox/VMMDev.h> /* For VMMDevReportGuestStats and indirectly VbglR3StatReport. */
 #include <VBox/VBoxGuestLib.h>
+
 #include "VBoxServiceInternal.h"
 #include "VBoxServiceUtils.h"
 
@@ -68,7 +67,7 @@
 /*********************************************************************************************************************************
 *   Structures and Typedefs                                                                                                      *
 *********************************************************************************************************************************/
-typedef struct _VBOXSTATSCONTEXT
+typedef struct VBOXSTATSCONTEXT
 {
     RTMSINTERVAL    cMsStatInterval;
 
@@ -78,10 +77,11 @@ typedef struct _VBOXSTATSCONTEXT
     uint64_t        au64LastCpuLoad_Nice[VMM_MAX_CPU_COUNT];
 
 #ifdef RT_OS_WINDOWS
-    NTSTATUS (WINAPI *pfnNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS SystemInformationClass, PVOID SystemInformation,
-                                                   ULONG SystemInformationLength, PULONG ReturnLength);
-    void     (WINAPI *pfnGlobalMemoryStatusEx)(LPMEMORYSTATUSEX lpBuffer);
-    BOOL     (WINAPI *pfnGetPerformanceInfo)(PPERFORMANCE_INFORMATION pPerformanceInformation, DWORD cb);
+    DECLCALLBACKMEMBER_EX(NTSTATUS, WINAPI, pfnNtQuerySystemInformation,(SYSTEM_INFORMATION_CLASS SystemInformationClass,
+                                                                         PVOID SystemInformation, ULONG SystemInformationLength,
+                                                                         PULONG ReturnLength));
+    DECLCALLBACKMEMBER_EX(void,     WINAPI, pfnGlobalMemoryStatusEx,(LPMEMORYSTATUSEX lpBuffer));
+    DECLCALLBACKMEMBER_EX(BOOL,     WINAPI, pfnGetPerformanceInfo,(PPERFORMANCE_INFORMATION pPerformanceInformation, DWORD cb));
 #endif
 } VBOXSTATSCONTEXT;
 

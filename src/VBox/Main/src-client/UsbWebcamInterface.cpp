@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UsbWebcamInterface.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * UsbWebcamInterface - Driver Interface for USB Webcam emulation.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,12 +17,15 @@
 
 
 #define LOG_GROUP LOG_GROUP_USB_WEBCAM
+#include "LoggingNew.h"
+
 #include "UsbWebcamInterface.h"
 #include "ConsoleImpl.h"
 #include "ConsoleVRDPServer.h"
 #include "EmulatedUSBImpl.h"
 
 #include <VBox/vmm/pdmwebcaminfs.h>
+#include <VBox/err.h>
 
 
 typedef struct EMWEBCAMREMOTE
@@ -150,15 +153,11 @@ void EmWebcam::EmWebcamCbNotify(uint32_t u32Id, const void *pvData, uint32_t cbD
             uint32_t u32Version = 1;
             uint32_t fu32Capabilities = VRDE_VIDEOIN_NEGOTIATE_CAP_VOID;
 
-            if (cbData >= RT_OFFSETOF(VRDEVIDEOINNOTIFYATTACH, u32Version) + sizeof(p->u32Version))
-            {
+            if (cbData >= RT_UOFFSETOF(VRDEVIDEOINNOTIFYATTACH, u32Version) + sizeof(p->u32Version))
                 u32Version = p->u32Version;
-            }
 
-            if (cbData >= RT_OFFSETOF(VRDEVIDEOINNOTIFYATTACH, fu32Capabilities) + sizeof(p->fu32Capabilities))
-            {
+            if (cbData >= RT_UOFFSETOF(VRDEVIDEOINNOTIFYATTACH, fu32Capabilities) + sizeof(p->fu32Capabilities))
                 fu32Capabilities = p->fu32Capabilities;
-            }
 
             LogFlowFunc(("ATTACH[%d,%d] version %d, caps 0x%08X\n",
                          p->deviceHandle.u32ClientId, p->deviceHandle.u32DeviceId,

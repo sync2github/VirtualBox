@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: wuibase.py 84498 2020-05-25 13:00:24Z vboxsync $
 
 """
 Test Manager Web-UI - Base Classes.
@@ -7,7 +7,7 @@ Test Manager Web-UI - Base Classes.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 84498 $"
 
 
 # Standard python imports.
@@ -42,12 +42,17 @@ from testmanager.core.db          import TMDatabaseConnection;
 from testmanager.core.systemlog   import SystemLogLogic, SystemLogData;
 from testmanager.core.useraccount import UserAccountLogic
 
+# Python 3 hacks:
+if sys.version_info[0] >= 3:
+    unicode = str;  # pylint: disable=redefined-builtin,invalid-name
+    long = int;     # pylint: disable=redefined-builtin,invalid-name
+
 
 class WuiException(TMExceptionBase):
     """
     For exceptions raised by Web UI code.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class WuiDispatcherBase(object):
@@ -82,12 +87,17 @@ class WuiDispatcherBase(object):
     ## The name of the list-action parameter (WuiListContentWithActionBase).
     ksParamListAction    = 'ListAction';
 
+    ## One or more columns to sort by.
+    ksParamSortColumns   = 'SortBy';
+
     ## The name of the change log enabled/disabled parameter.
     ksParamChangeLogEnabled         = 'ChangeLogEnabled';
     ## The name of the parmaeter indicating the change log page number.
     ksParamChangeLogPageNo          = 'ChangeLogPageNo';
     ## The name of the parameter indicate number of change log entries per page.
     ksParamChangeLogEntriesPerPage  = 'ChangeLogEntriesPerPage';
+    ## The change log related parameters.
+    kasChangeLogParams = (ksParamChangeLogEnabled, ksParamChangeLogPageNo, ksParamChangeLogEntriesPerPage,);
 
     ## @name Dispatcher debugging parameters.
     ## {@
@@ -117,6 +127,7 @@ class WuiDispatcherBase(object):
         self._aaoMenus          = [];           # List of [sName, sLink, [ [sSideName, sLink], .. ] tuples.
         self._sPageFilter       = '';           # The filter controls (optional).
         self._sPageBody         = '$$TODO$$';   # The body text.
+        self._dSideMenuFormAttrs = {};          # key/value with attributes for the side menu <form> tag.
         self._sRedirectTo       = None;
         self._sDebug            = '';
 
@@ -124,10 +135,10 @@ class WuiDispatcherBase(object):
         self._fDbgSqlTrace      = False;
         self._fDbgSqlExplain    = False;
         self._dDbgParams        = dict();
-        for sKey, sValue in oSrvGlue.getParameters().iteritems():
+        for sKey, sValue in oSrvGlue.getParameters().items():
             if sKey in self.kasDbgParams:
                 self._dDbgParams[sKey] = sValue;
-        if len(self._dDbgParams) > 0:
+        if self._dDbgParams:
             from testmanager.webui.wuicontentbase import WuiTmLink;
             WuiTmLink.kdDbgParams = self._dDbgParams;
 
@@ -136,7 +147,7 @@ class WuiDispatcherBase(object):
 
         # Calc a couple of URL base strings for this dispatcher.
         self._sUrlBase          = sScriptName + '?';
-        if len(self._dDbgParams) > 0:
+        if self._dDbgParams:
             self._sUrlBase     += webutils.encodeUrlParams(self._dDbgParams) + '&';
         self._sActionUrlBase    = self._sUrlBase + self.ksParamAction + '=';
 
@@ -145,8 +156,7 @@ class WuiDispatcherBase(object):
         """
         Redirects the page to the URL given in self._sRedirectTo.
         """
-        assert self._sRedirectTo is not None;
-        assert len(self._sRedirectTo) > 0;
+        assert self._sRedirectTo;
         assert self._sPageBody is None;
         assert self._sPageTitle is None;
 
@@ -165,6 +175,8 @@ class WuiDispatcherBase(object):
         """
         Generates the two menus, returning them as (sTopMenuItems, sSideMenuItems).
         """
+        fReadOnly = self.isReadOnlyUser();
+
         #
         # We use the action to locate the side menu.
         #
@@ -202,14 +214,15 @@ class WuiDispatcherBase(object):
         if aasSideMenu is not None:
             for asSubItem in aasSideMenu:
                 if asSubItem[1] is not None:
-                    if self._isSideMenuMatch(asSubItem[1], sActionParam):
-                        sSideMenuItems += '<li class="current_page_item">';
-                    else:
-                        sSideMenuItems += '<li>';
-                    sSideMenuItems += '<a href="' + webutils.escapeAttr(asSubItem[1]) + '">' \
-                                    + webutils.escapeElem(asSubItem[0]) + '</a></li>\n';
+                    if not asSubItem[2] or not fReadOnly:
+                        if self._isSideMenuMatch(asSubItem[1], sActionParam):
+                            sSideMenuItems += '<li class="current_page_item">';
+                        else:
+                            sSideMenuItems += '<li>';
+                        sSideMenuItems += '<a href="' + webutils.escapeAttr(asSubItem[1]) + '">' \
+                                        + webutils.escapeElem(asSubItem[0]) + '</a></li>\n';
                 else:
-                    sSideMenuItems += '<li class="subheader_item">' + webutils.escapeElem(asSubItem[0]) + '</a></li>';
+                    sSideMenuItems += '<li class="subheader_item">' + webutils.escapeElem(asSubItem[0]) + '</li>';
         return (sTopMenuItems, sSideMenuItems);
 
     def _generatePage(self):
@@ -265,9 +278,15 @@ class WuiDispatcherBase(object):
             '@@TOP_MENU_ITEMS@@':       sTopMenuItems,
             '@@SIDE_MENU_ITEMS@@':      sSideMenuItems,
             '@@SIDE_FILTER_CONTROL@@':  self._sPageFilter,
+            '@@SIDE_MENU_FORM_ATTRS@@': '',
             '@@PAGE_BODY@@':            self._sPageBody,
             '@@DEBUG@@':                '',
         };
+
+        # Side menu form attributes.
+        if self._dSideMenuFormAttrs:
+            dReplacements['@@SIDE_MENU_FORM_ATTRS@@'] = ' '.join(['%s="%s"' % (sKey, webutils.escapeAttr(sValue))
+                                                                  for sKey, sValue in self._dSideMenuFormAttrs.items()]);
 
         # Special current user handling.
         if self._oCurUser is not None:
@@ -287,8 +306,10 @@ class WuiDispatcherBase(object):
             if config.g_kfWebUiDebugPanel:
                 self._sDebug += self._debugRenderPanel();
         if self._sDebug != '':
-            dReplacements['@@DEBUG@@'] = '<div id="debug"><br><br><hr/>' + \
-                unicode(self._sDebug, errors='ignore') if isinstance(self._sDebug, str) else self._sDebug + '</div>';
+            dReplacements['@@DEBUG@@'] = u'<div id="debug"><br><br><hr/>' \
+                                       + (utils.toUnicode(self._sDebug, errors='ignore') if isinstance(self._sDebug, str)
+                                          else self._sDebug) \
+                                       + u'</div>\n';
 
         #
         # Load the template.
@@ -327,7 +348,7 @@ class WuiDispatcherBase(object):
                 assert False, 'Unknown replacement "%s" at offset %s in %s' % (sReplacement, offAtAt, self._sTemplate );
 
         # The final chunk.
-        if offStart < offCur:
+        if offStart < len(sTmpl):
             self._oSrvGlue.write(sTmpl[offStart:]);
 
         return True;
@@ -335,6 +356,19 @@ class WuiDispatcherBase(object):
     #
     # Interface for WuiContentBase classes.
     #
+
+    def getUrlNoParams(self):
+        """
+        Returns the base URL without any parameters (no trailing '?' or &).
+        """
+        return self._sUrlBase[:self._sUrlBase.rindex('?')];
+
+    def getUrlBase(self):
+        """
+        Returns the base URL, ending with '?' or '&'.
+        This may already include some debug parameters.
+        """
+        return self._sUrlBase;
 
     def getParameters(self):
         """
@@ -390,7 +424,7 @@ class WuiDispatcherBase(object):
                                      '0' if fDefault is None else str(fDefault));
         # HACK: Checkboxes doesn't return a value when unchecked, so we always
         #       provide a default when dealing with boolean parameters.
-        return sValue == 'True' or sValue == 'true' or sValue == '1';
+        return sValue in ('True', 'true', '1',);
 
     def getIntParam(self, sName, iMin = None, iMax = None, iDefault = None):
         """
@@ -503,7 +537,7 @@ class WuiDispatcherBase(object):
 
         return asValues;
 
-    def getListOfTestCasesParam(self, sName, asDefaults = None):  # too many local vars - pylint: disable=R0914
+    def getListOfTestCasesParam(self, sName, asDefaults = None):  # too many local vars - pylint: disable=too-many-locals
         """Get list of test cases and their parameters"""
         if sName in self._dParams:
             if sName not in self._asCheckedParams:
@@ -527,7 +561,7 @@ class WuiDispatcherBase(object):
 
             oListEntryTestCaseArgs = []
             for idTestCaseArgs in aiAllTestCaseArgs:
-                fArgsChecked   = True if idTestCaseArgs in aiCheckedTestCaseArgs else False
+                fArgsChecked   = idTestCaseArgs in aiCheckedTestCaseArgs;
 
                 # Dry run
                 sPrefix = '%s[%d][%d]' % (sName, idTestCase, idTestCaseArgs,);
@@ -542,11 +576,12 @@ class WuiDispatcherBase(object):
 
             sTestCaseName = self.getStringParam('%s[%d][sName]' % (sName, idTestCase), sDefault='')
 
-            oListEntryTestCase = \
-                (idTestCase,
-                 True if idTestCase in aiSelectedTestCaseIds else False,
-                 sTestCaseName,
-                 oListEntryTestCaseArgs)
+            oListEntryTestCase = (
+                idTestCase,
+                idTestCase in aiSelectedTestCaseIds,
+                sTestCaseName,
+                oListEntryTestCaseArgs
+            );
 
             aoListOfTestCases.append(oListEntryTestCase)
 
@@ -598,7 +633,7 @@ class WuiDispatcherBase(object):
         # Relative timestamp. Validate and convert it to a fixed timestamp.
         #
         chSign = sValue[0];
-        (sValue, sError) = ModelDataBase.validateTs(sValue[1:]);
+        (sValue, sError) = ModelDataBase.validateTs(sValue[1:], fRelative = True);
         if sError is not None:
             raise WuiException('%s parameter "%s" ("%s") is invalid: %s' % (self._sAction, sName, sValue, sError));
         if sValue[-6] in ['-', '+']:
@@ -716,6 +751,15 @@ class WuiDispatcherBase(object):
         return True;
 
     #
+    # User related stuff.
+    #
+
+    def isReadOnlyUser(self):
+        """ Returns true if the logged in user is read-only or if no user is logged in. """
+        return self._oCurUser is None or self._oCurUser.fReadOnly;
+
+
+    #
     # Debugging
     #
 
@@ -741,17 +785,22 @@ class WuiDispatcherBase(object):
         """
 
         sHtml  = '<div id="debug-panel">\n' \
-                 ' <form id="debug-panel-form" type="get" action="#">\n';
+                 ' <form id="debug-panel-form" method="get" action="#">\n';
 
-        for sKey, oValue in self._dParams.iteritems():
+        for sKey, oValue in self._dParams.items():
             if sKey not in self.kasDbgParams:
-                sHtml += '  <input type="hidden" name="%s" value="%s"/>\n' \
-                       % (webutils.escapeAttr(sKey), webutils.escapeAttrToStr(oValue),);
+                if hasattr(oValue, 'startswith'):
+                    sHtml += '  <input type="hidden" name="%s" value="%s"/>\n' \
+                           % (webutils.escapeAttr(sKey), webutils.escapeAttrToStr(oValue),);
+                else:
+                    for oSubValue in oValue:
+                        sHtml += '  <input type="hidden" name="%s" value="%s"/>\n' \
+                               % (webutils.escapeAttr(sKey), webutils.escapeAttrToStr(oSubValue),);
 
         for aoCheckBox in (
                 [self.ksParamDbgSqlTrace, self._fDbgSqlTrace, 'SQL trace'],
                 [self.ksParamDbgSqlExplain, self._fDbgSqlExplain, 'SQL explain'], ):
-            sHtml += ' <input type="checkbox" name="%s" value="1"%s>%s</input>\n' \
+            sHtml += ' <input type="checkbox" name="%s" value="1"%s />%s\n' \
                 % (aoCheckBox[0], ' checked' if aoCheckBox[1] else '', aoCheckBox[2]);
 
         sHtml += '  <button type="submit">Apply</button>\n';
@@ -784,13 +833,29 @@ class WuiDispatcherBase(object):
         oListContentType is a child of WuiListContentBase.
         """
         tsEffective     = self.getEffectiveDateParam();
-        cItemsPerPage   = self.getIntParam(self.ksParamItemsPerPage, iMin = 2, iMax =   9999, iDefault = 300);
+        cItemsPerPage   = self.getIntParam(self.ksParamItemsPerPage, iMin = 2, iMax =   9999, iDefault = 384);
         iPage           = self.getIntParam(self.ksParamPageNo,       iMin = 0, iMax = 999999, iDefault = 0);
+        aiSortColumnsDup = self.getListOfIntParams(self.ksParamSortColumns,
+                                                   iMin = -getattr(oLogicType, 'kcMaxSortColumns', 0) + 1,
+                                                   iMax = getattr(oLogicType, 'kcMaxSortColumns', 0), aiDefaults = []);
+        aiSortColumns   = [];
+        for iSortColumn in aiSortColumnsDup:
+            if iSortColumn not in aiSortColumns:
+                aiSortColumns.append(iSortColumn);
         self._checkForUnknownParameters();
 
-        aoEntries  = oLogicType(self._oDb).fetchForListing(iPage * cItemsPerPage, cItemsPerPage + 1, tsEffective);
+        ## @todo fetchForListing could be made more useful if it returned a tuple
+        # that includes the total number of entries, thus making paging more user
+        # friendly (known number of pages).  So, the return should be:
+        #       (aoEntries, cAvailableEntries)
+        #
+        # In addition, we could add a new parameter to include deleted entries,
+        # making it easier to find old deleted testboxes/testcases/whatever and
+        # clone them back to life.  The temporal navigation is pretty usless here.
+        #
+        aoEntries  = oLogicType(self._oDb).fetchForListing(iPage * cItemsPerPage, cItemsPerPage + 1, tsEffective, aiSortColumns);
         oContent   = oListContentType(aoEntries, iPage, cItemsPerPage, tsEffective,
-                                      fnDPrint = self._oSrvGlue.dprint, oDisp = self);
+                                      fnDPrint = self._oSrvGlue.dprint, oDisp = self, aiSelectedSortColumns = aiSortColumns);
         (self._sPageTitle, self._sPageBody) = oContent.show();
         return True;
 
@@ -814,7 +879,7 @@ class WuiDispatcherBase(object):
         (self._sPageTitle, self._sPageBody) = oForm.showForm();
         return True
 
-    def _actionGenericFormDetails(self, oDataType, oLogicType, oFormType, sIdAttr = None, sGenIdAttr = None): # pylint: disable=R0914
+    def _actionGenericFormDetails(self, oDataType, oLogicType, oFormType, sIdAttr = None, sGenIdAttr = None): # pylint: disable=too-many-locals
         """
         Generic handler for showing a details form/page.
 
@@ -885,6 +950,8 @@ class WuiDispatcherBase(object):
         self._checkForUnknownParameters()
 
         try:
+            if self.isReadOnlyUser():
+                raise Exception('"%s" is a read only user!' % (self._oCurUser.sUsername,));
             self._sPageTitle  = None
             self._sPageBody   = None
             self._sRedirectTo = sRedirectTo;
@@ -1020,7 +1087,14 @@ class WuiDispatcherBase(object):
         else:
             enmValidateFor = oData.ksValidateFor_Edit;
         dErrors = oData.validateAndConvert(self._oDb, enmValidateFor);
-        if len(dErrors) == 0:
+
+        # Check that the user can do this.
+        sErrorMsg = None;
+        assert self._oCurUser is not None;
+        if self.isReadOnlyUser():
+            sErrorMsg = 'User %s is not allowed to modify anything!' % (self._oCurUser.sUsername,)
+
+        if not dErrors and not sErrorMsg:
             oData.convertFromParamNull();
 
             #
@@ -1044,7 +1118,7 @@ class WuiDispatcherBase(object):
         else:
             oForm = oFormType(oData, sMode, oDisp = self);
             oForm.setRedirectTo(sRedirectTo);
-            (self._sPageTitle, self._sPageBody) = oForm.showForm(dErrors = dErrors);
+            (self._sPageTitle, self._sPageBody) = oForm.showForm(dErrors = dErrors, sErrorMsg = sErrorMsg);
         return True;
 
     def _actionGenericFormAddPost(self, oDataType, oLogicType, oFormType, sRedirAction, fStrict=True):
@@ -1124,7 +1198,7 @@ class WuiDispatcherBase(object):
 
             # Take care about strings which may contain unicode characters: convert percent-encoded symbols back to unicode.
             for idxItem, _ in enumerate(dParams[sKey]):
-                dParams[sKey][idxItem] = dParams[sKey][idxItem].decode('utf-8')
+                dParams[sKey][idxItem] = utils.toUnicode(dParams[sKey][idxItem], 'utf-8');
 
             if not len(dParams[sKey]) > 1:
                 dParams[sKey] = dParams[sKey][0];

@@ -1,4 +1,4 @@
-# $Id$
+# $Id: Makefile.kmk 91768 2021-10-15 19:24:23Z vboxsync $
 ## @file
 # Sub-makefile for VBoxDTrace.
 #
@@ -6,7 +6,7 @@
 #
 
 #
-# Copyright (C) 2012-2016 Oracle Corporation
+# Copyright (C) 2012-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -64,6 +64,12 @@ if defined(VBOX_WITH_EXTPACK_VBOXDTRACE) && defined(VBOX_WITH_EXTPACK)
  TEMPLATE_VBoxR3ExtPackDTrace_EXTENDS = VBoxR3ExtPack
  TEMPLATE_VBoxR3ExtPackDTrace_INST = $(INST_EXTPACK_VBOXDTRACE)$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH)/
  TEMPLATE_VBoxR3ExtPackDTrace_DEFS = $(TEMPLATE_VBoxR3ExtPack_DEFS) VBOX_IN_DTRACE_EXTPACK
+ if "$(VBOX_VCC_TOOL_STEM)" >= "VCC140"
+  # -wd4456: declaration of 'rval' hides previous local declaration
+  # -wd4477: 'fprintf' : format string '%02lu' requires an argument of type 'unsigned long', but variadic argument 1 has type 'ulong_t'
+  # -wd4457: warning C4457: declaration of 'arg' hides function parameter
+  TEMPLATE_VBoxR3ExtPackDTrace_CFLAGS.win = $(TEMPLATE_VBoxR3ExtPack_CFLAGS.win) -wd4456 -wd4477 -wd4457
+ endif
 
  TEMPLATE_VBoxR0ExtPackDTrace = For the ring-0 context modules in the VBoxDTrace extension pack.
  TEMPLATE_VBoxR0ExtPackDTrace_EXTENDS = VBoxR0ExtPack
@@ -101,9 +107,13 @@ if defined(VBOX_WITH_EXTPACK_VBOXDTRACE) && defined(VBOX_WITH_EXTPACK)
  ifneq ($(KBUILD_TARGET),solaris) # Temporarily disabled on Solaris (not really needed)...
  DLLS += VBoxDTraceCmd
  VBoxDTraceCmd_TEMPLATE = VBoxR3ExtPackDTrace
+ ifdef VBOX_WITH_AUTOMATIC_DEFS_QUOTING
+ VBoxDTraceCmd_DEFS = RTMEM_WRAP_TO_EF_APIS VBOX_EXTPACK_VBOXDTRACE_MANGLED_NAME="$(VBOX_EXTPACK_VBOXDTRACE_MANGLED_NAME)"
+ else
  VBoxDTraceCmd_DEFS = RTMEM_WRAP_TO_EF_APIS VBOX_EXTPACK_VBOXDTRACE_MANGLED_NAME=\"$(VBOX_EXTPACK_VBOXDTRACE_MANGLED_NAME)\"
+ endif
  #VBoxDTraceCmd_DEFS += YYDEBUG
- VBoxDTraceCmd_DEFS.linux = _XOPEN_SOURCE=700
+ VBoxDTraceCmd_DEFS.linux = _XOPEN_SOURCE=700 _LARGEFILE64_SOURCE
  VBoxDTraceCmd_DEFS.win = YY_USE_PROTOS=1 YYENABLE_NLS=0 YYLTYPE_IS_TRIVIAL=0
  VBoxDTraceCmd_SDKS = VBOX_ZLIB
  ifn1of ($(KBUILD_TARGET), win)
@@ -171,6 +181,10 @@ if defined(VBOX_WITH_EXTPACK_VBOXDTRACE) && defined(VBOX_WITH_EXTPACK)
  #	$(VBOXDT_PATH_LIBDTRACE)/common/dt_pid.c
 
  # Generate sources
+ VBoxDTraceCmd_CLEAN = \
+ 	$(VBoxDTraceCmd_0_OUTDIR)/dt_errtags.c \
+ 	$(VBoxDTraceCmd_0_OUTDIR)/dt_names.c
+
  $$(VBoxDTraceCmd_0_OUTDIR)/dt_errtags.c: \
  		$(VBOXDT_PATH_LIBDTRACE)/common/dt_errtags.h \
  		$(VBOXDT_PATH_LIBDTRACE)/common/mkerrtags.sed \
@@ -211,6 +225,11 @@ if defined(VBOX_WITH_EXTPACK_VBOXDTRACE) && defined(VBOX_WITH_EXTPACK)
   VBoxDTraceCmd_SOURCES  += \
  	$(VBOXDT_PATH)/generated/dt_lex.c
  endif
+ ifeq ($(KBUILD_HOST),linux)
+  if $(VBOX_GCC_VERSION_CXX) >= 70000
+   VBoxDTraceCmd_CFLAGS += -Wno-implicit-fallthrough
+  endif
+ endif
  VBoxDTraceCmd_DEFS      += USING_FLEX
  $(call VBOX_SET_VER_INFO_DLL,VBoxDTraceCmd,VBoxDTrace Command Implementation)
 
@@ -233,7 +252,7 @@ if defined(VBOX_WITH_EXTPACK_VBOXDTRACE) && defined(VBOX_WITH_EXTPACK)
  # The ring-0 part of VBoxDTrace.
  #
  ifneq ($(KBUILD_TARGET),solaris) # disabled on solaris - neiter needed nor currently able to build it here.
-  SYSMODS += VBoxDTraceR0
+  $(if-expr defined(VBOX_WITH_VBOXR0_AS_DLL),DLLS,SYSMODS) += VBoxDTraceR0
  endif
  VBoxDTraceR0_TEMPLATE = VBoxR0ExtPackDTrace
  VBoxDTraceR0_DEFS = IN_VBOXDTRACE_R0 IN_RT_R0
@@ -248,11 +267,8 @@ if defined(VBOX_WITH_EXTPACK_VBOXDTRACE) && defined(VBOX_WITH_EXTPACK)
  	VBoxDTraceR0A.asm \
  	$(VBOXDT_PATH_UTS)/common/dtrace/dtrace.c
  VBoxDTraceR0_LIBS = \
- 	$(PATH_STAGE_LIB)/RuntimeR0$(VBOX_SUFF_LIB)
- ifneq ($(filter pe lx,$(VBOX_LDR_FMT)),)
-  VBoxDTraceR0_LIBS += \
-  	$(PATH_STAGE_LIB)/SUPR0$(VBOX_SUFF_LIB)
- endif
+ 	$(PATH_STAGE_LIB)/RuntimeR0$(VBOX_SUFF_LIB) \
+	$(VBOX_LIB_SUPR0)
  $(call VBOX_SET_VER_INFO_R0,VBoxDTraceR0,VBoxDTrace Core (ring-0))
 
 

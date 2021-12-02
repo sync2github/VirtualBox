@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIApplianceExportEditorWidget.cpp 91638 2021-10-08 12:22:29Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIApplianceExportEditorWidget class implementation.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,33 +15,23 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QTextEdit>
+#include <QTextEdit>
 
 /* GUI includes: */
-# include "QITreeView.h"
-# include "UIApplianceExportEditorWidget.h"
-# include "VBoxGlobal.h"
-# include "UIMessageCenter.h"
-
-/* COM includes: */
-# include "CAppliance.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "QITreeView.h"
+#include "UIApplianceExportEditorWidget.h"
+#include "UIMessageCenter.h"
 
 
-////////////////////////////////////////////////////////////////////////////////
-// ExportSortProxyModel
-
-class ExportSortProxyModel: public UIApplianceSortProxyModel
+/** UIApplianceSortProxyModel subclass for Export Appliance wizard. */
+class ExportSortProxyModel : public UIApplianceSortProxyModel
 {
 public:
-    ExportSortProxyModel(QObject *pParent = NULL)
-      : UIApplianceSortProxyModel(pParent)
+
+    /** Constructs proxy model passing @a pParent to the base-class. */
+    ExportSortProxyModel(QObject *pParent = 0)
+        : UIApplianceSortProxyModel(pParent)
     {
         m_aFilteredList
             << KVirtualSystemDescriptionType_OS
@@ -55,71 +45,69 @@ public:
             << KVirtualSystemDescriptionType_HardDiskControllerIDE
             << KVirtualSystemDescriptionType_HardDiskControllerSATA
             << KVirtualSystemDescriptionType_HardDiskControllerSCSI
-            << KVirtualSystemDescriptionType_HardDiskControllerSAS;
+            << KVirtualSystemDescriptionType_HardDiskControllerSAS
+            << KVirtualSystemDescriptionType_CloudProfileName;
     }
 };
 
-////////////////////////////////////////////////////////////////////////////////
-// UIApplianceExportEditorWidget
 
-UIApplianceExportEditorWidget::UIApplianceExportEditorWidget(QWidget *pParent /* = NULL */)
-  : UIApplianceEditorWidget(pParent)
+/*********************************************************************************************************************************
+*   Class UIApplianceExportEditorWidget implementation.                                                                          *
+*********************************************************************************************************************************/
+
+UIApplianceExportEditorWidget::UIApplianceExportEditorWidget(QWidget *pParent /* = 0 */)
+    : UIApplianceEditorWidget(pParent)
 {
 }
 
-CAppliance* UIApplianceExportEditorWidget::init()
+void UIApplianceExportEditorWidget::setAppliance(const CAppliance &comAppliance)
 {
-    if (m_pAppliance)
-        delete m_pAppliance;
-    CVirtualBox vbox = vboxGlobal().virtualBox();
-    /* Create a appliance object */
-    m_pAppliance = new CAppliance(vbox.CreateAppliance());
-//    bool fResult = m_pAppliance->isOk();
-    return m_pAppliance;
-}
+    /* Cleanup previous stuff: */
+    clear();
 
-void UIApplianceExportEditorWidget::populate()
-{
-    if (m_pModel)
-        delete m_pModel;
+    /* Call to base-class: */
+    UIApplianceEditorWidget::setAppliance(comAppliance);
 
-    QVector<CVirtualSystemDescription> vsds = m_pAppliance->GetVirtualSystemDescriptions();
-
+    /* Prepare model: */
+    QVector<CVirtualSystemDescription> vsds = m_comAppliance.GetVirtualSystemDescriptions();
     m_pModel = new UIApplianceModel(vsds, m_pTreeViewSettings);
-
-    ExportSortProxyModel *pProxy = new ExportSortProxyModel(this);
-    pProxy->setSourceModel(m_pModel);
-    pProxy->sort(ApplianceViewSection_Description, Qt::DescendingOrder);
-
-    UIApplianceDelegate *pDelegate = new UIApplianceDelegate(pProxy, this);
-
-    /* Set our own model */
-    m_pTreeViewSettings->setModel(pProxy);
-    /* Set our own delegate */
-    m_pTreeViewSettings->setItemDelegate(pDelegate);
-    /* For now we hide the original column. This data is displayed as tooltip
-       also. */
-    m_pTreeViewSettings->setColumnHidden(ApplianceViewSection_OriginalValue, true);
-    m_pTreeViewSettings->expandAll();
-    /* Set model root index and make it current: */
-    m_pTreeViewSettings->setRootIndex(pProxy->mapFromSource(m_pModel->root()));
-    m_pTreeViewSettings->setCurrentIndex(pProxy->mapFromSource(m_pModel->root()));
-
-    /* Check for warnings & if there are one display them. */
-    bool fWarningsEnabled = false;
-    QVector<QString> warnings = m_pAppliance->GetWarnings();
-    if (warnings.size() > 0)
+    if (m_pModel)
     {
-        foreach (const QString& text, warnings)
-            m_pTextEditWarning->append("- " + text);
-        fWarningsEnabled = true;
+        m_pModel->setVsdHints(m_listVsdHints);
+
+        /* Create proxy model: */
+        ExportSortProxyModel *pProxy = new ExportSortProxyModel(m_pModel);
+        if (pProxy)
+        {
+            pProxy->setSourceModel(m_pModel);
+            pProxy->sort(ApplianceViewSection_Description, Qt::DescendingOrder);
+
+            /* Set our own model: */
+            m_pTreeViewSettings->setModel(pProxy);
+            /* Set our own delegate: */
+            UIApplianceDelegate *pDelegate = new UIApplianceDelegate(pProxy);
+            if (pDelegate)
+                m_pTreeViewSettings->setItemDelegate(pDelegate);
+
+            /* For now we hide the original column. This data is displayed as tooltip also. */
+            m_pTreeViewSettings->setColumnHidden(ApplianceViewSection_OriginalValue, true);
+            m_pTreeViewSettings->expandAll();
+            /* Set model root index and make it current: */
+            m_pTreeViewSettings->setRootIndex(pProxy->mapFromSource(m_pModel->root()));
+            m_pTreeViewSettings->setCurrentIndex(pProxy->mapFromSource(m_pModel->root()));
+        }
     }
+
+    /* Check for warnings & if there are one display them: */
+    const QVector<QString> warnings = m_comAppliance.GetWarnings();
+    const bool fWarningsEnabled = warnings.size() > 0;
+    foreach (const QString &strText, warnings)
+        m_pTextEditWarning->append("- " + strText);
     m_pPaneWarning->setVisible(fWarningsEnabled);
 }
 
 void UIApplianceExportEditorWidget::prepareExport()
 {
-    if (m_pAppliance)
+    if (m_comAppliance.isNotNull())
         m_pModel->putBack();
 }
-

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: memsafer-generic.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Memory Allocate for Sensitive Data, generic heap-based implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,7 @@
 #include <iprt/memsafer.h>
 
 #include <iprt/assert.h>
+#include <iprt/err.h>
 #include <iprt/string.h>
 
 
@@ -148,7 +149,7 @@ RTDECL(void) RTMemSaferFree(void *pv, size_t cb) RT_NO_THROW_DEF
 {
     if (pv)
     {
-        Assert(cb);
+        Assert(cb); /* does not support openssl. */
         void *pvStart = (char *)pv - RTMEMSAFER_PAD_BEFORE;
         AssertMsg(*(size_t *)pvStart == cb, ("*pvStart=%#zx cb=%#zx\n", *(size_t *)pvStart, cb));
         RTMemWipeThoroughly(pv, RT_ALIGN_Z(cb, RTMEMSAFER_ALIGN), 3);

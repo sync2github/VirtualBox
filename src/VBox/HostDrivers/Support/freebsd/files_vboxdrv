@@ -1,11 +1,11 @@
 #!/bin/sh
-# $Id$
+# $Id: files_vboxdrv 91789 2021-10-17 18:16:11Z vboxsync $
 ## @file
-# Shared file between Makefile.kmk and export_modules
+# Shared file between Makefile.kmk and export_modules.sh.
 #
 
 #
-# Copyright (C) 2007-2015 Oracle Corporation
+# Copyright (C) 2007-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -32,12 +32,14 @@ FILES_VBOXDRV_NOBIN=" \
     ${PATH_ROOT}/include/iprt/asm-amd64-x86.h=>include/iprt/asm-amd64-x86.h \
     ${PATH_ROOT}/include/iprt/asm-math.h=>include/iprt/asm-math.h \
     ${PATH_ROOT}/include/iprt/assert.h=>include/iprt/assert.h \
+    ${PATH_ROOT}/include/iprt/assertcompile.h=>include/iprt/assertcompile.h \
     ${PATH_ROOT}/include/iprt/avl.h=>include/iprt/avl.h \
     ${PATH_ROOT}/include/iprt/cdefs.h=>include/iprt/cdefs.h \
     ${PATH_ROOT}/include/iprt/cpuset.h=>include/iprt/cpuset.h \
     ${PATH_ROOT}/include/iprt/crc.h=>include/iprt/crc.h \
     ${PATH_ROOT}/include/iprt/ctype.h=>include/iprt/ctype.h \
     ${PATH_ROOT}/include/iprt/err.h=>include/iprt/err.h \
+    ${PATH_ROOT}/include/iprt/errcore.h=>include/iprt/errcore.h \
     ${PATH_ROOT}/include/iprt/errno.h=>include/iprt/errno.h \
     ${PATH_ROOT}/include/iprt/heap.h=>include/iprt/heap.h \
     ${PATH_ROOT}/include/iprt/handletable.h=>include/iprt/handletable.h \
@@ -99,12 +101,14 @@ FILES_VBOXDRV_NOBIN=" \
     ${PATH_ROOT}/src/VBox/Runtime/common/alloc/alloc.cpp=>alloc/alloc.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/err/RTErrConvertFromErrno.cpp=>common/err/RTErrConvertFromErrno.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/err/RTErrConvertToErrno.cpp=>common/err/RTErrConvertToErrno.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/err/errinfo.cpp=>common/err/errinfo.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/log/log.cpp=>common/log/log.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/log/logellipsis.cpp=>common/log/logellipsis.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/log/logrel.cpp=>common/log/logrel.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/log/logrelellipsis.cpp=>common/log/logrelellipsis.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/log/logcom.cpp=>common/log/logcom.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/log/logformat.cpp=>common/log/logformat.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/log/RTLogCreateEx.cpp=>common/log/RTLogCreateEx.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/misc/RTAssertMsg1Weak.cpp=>common/misc/RTAssertMsg1Weak.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/misc/RTAssertMsg2.cpp=>common/misc/RTAssertMsg2.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/misc/RTAssertMsg2Add.cpp=>common/misc/RTAssertMsg2Add.c \
@@ -119,15 +123,22 @@ FILES_VBOXDRV_NOBIN=" \
     ${PATH_ROOT}/src/VBox/Runtime/common/misc/once.cpp=>common/misc/once.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/misc/term.cpp=>common/misc/term.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/misc/thread.cpp=>common/misc/thread.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/string/RTStrCat.cpp=>common/string/RTStrCat.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/RTStrCopyP.cpp=>common/string/RTStrCopyP.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/RTStrCopy.cpp=>common/string/RTStrCopy.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/RTStrCopyEx.cpp=>common/string/RTStrCopyEx.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/string/RTStrEnd.cpp=>common/string/RTStrEnd.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/RTStrNCmp.cpp=>common/string/RTStrNCmp.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/RTStrNLen.cpp=>common/string/RTStrNLen.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/strformat.cpp=>common/string/strformat.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/string/RTStrFormat.cpp=>common/string/RTStrFormat.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/string/strformatnum.cpp=>common/string/strformatnum.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/strformatrt.cpp=>common/string/strformatrt.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/strformattype.cpp=>common/string/strformattype.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/strprintf.cpp=>common/string/strprintf.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/string/strprintf-ellipsis.cpp=>common/string/strprintf-ellipsis.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/string/strprintf2.cpp=>common/string/strprintf2.c \
+    ${PATH_ROOT}/src/VBox/Runtime/common/string/strprintf2-ellipsis.cpp=>common/string/strprintf2-ellipsis.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/strtonum.cpp=>common/string/strtonum.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/memchr.cpp=>common/string/memchr.c \
     ${PATH_ROOT}/src/VBox/Runtime/common/string/stringalloc.cpp=>common/string/stringalloc.c \
@@ -159,6 +170,7 @@ FILES_VBOXDRV_NOBIN=" \
     ${PATH_ROOT}/src/VBox/Runtime/include/internal/sched.h=>include/internal/sched.h \
     ${PATH_ROOT}/src/VBox/Runtime/include/internal/process.h=>include/internal/process.h \
     ${PATH_ROOT}/src/VBox/Runtime/include/internal/time.h=>include/internal/time.h \
+    ${PATH_ROOT}/src/VBox/Runtime/generic/rtStrFormatKernelAddress-generic.cpp=>generic/rtStrFormatKernelAddress-generic.c \
     ${PATH_ROOT}/src/VBox/Runtime/generic/RTAssertShouldPanic-generic.cpp=>generic/RTAssertShouldPanic-generic.c \
     ${PATH_ROOT}/src/VBox/Runtime/generic/RTLogWriteStdErr-stub-generic.cpp=>generic/RTLogWriteStdErr-stub-generic.c \
     ${PATH_ROOT}/src/VBox/Runtime/generic/RTLogWriteStdOut-stub-generic.cpp=>generic/RTLogWriteStdOut-stub-generic.c \

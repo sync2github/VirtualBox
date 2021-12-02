@@ -1,5 +1,10 @@
+/* $Id: biosint.h 92290 2021-11-09 12:49:35Z vboxsync $ */
+/** @file
+ * PC BIOS - BIOS internal definitions.
+ */
+
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -38,6 +43,20 @@
  *
  */
 
+/*
+ * Oracle LGPL Disclaimer: For the avoidance of doubt, except that if any license choice
+ * other than GPL or LGPL is available it will apply instead, Oracle elects to use only
+ * the Lesser General Public License version 2.1 (LGPLv2) at this time for any software where
+ * a choice of LGPL license versions is made available with the language indicating
+ * that LGPLv2 or any later version may be used, or where a choice of which version
+ * of the LGPL is applied is otherwise unspecified.
+ */
+
+#ifndef VBOX_INCLUDED_SRC_PC_BIOS_biosint_h
+#define VBOX_INCLUDED_SRC_PC_BIOS_biosint_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Compile-time assertion macro. */
 #define ct_assert(a)    extern int ct_ass_arr[!!(a) == 1];
@@ -169,6 +188,7 @@ typedef struct {
     pusha_regs_t    gr;
     uint16_t        es;
     uint16_t        ds;
+    uint16_t        ifl;
     iret_addr_t     ra;
 } kbd_regs_t;
 
@@ -247,6 +267,7 @@ extern  void        put_str(uint16_t action, const char __far *s);
 extern  void        put_str_near(uint16_t action, const char __near *s);
 extern  uint8_t     inb_cmos(uint8_t cmos_reg);
 extern  void        outb_cmos(uint8_t cmos_reg, uint8_t val);
+extern  uint16_t    get_cmos_word(uint8_t idxFirst);
 extern  uint16_t    cdrom_boot(void);
 extern  void        show_logo(void);
 extern  void        delay_boot(uint16_t secs);
@@ -265,10 +286,13 @@ extern  bx_bool     set_enable_a20(bx_bool val);
 #endif
 #ifdef VBOX
 #define BX_INFO(...)    do { put_str(BIOS_PRINTF_INFO, bios_prefix_string); bios_printf(BIOS_PRINTF_INFO, __VA_ARGS__); } while (0)
+#define BX_INFO_CON(...)do { put_str(BIOS_PRINTF_INFO, bios_prefix_string); bios_printf(BIOS_PRINTF_ALL, __VA_ARGS__); } while (0)
 #else /* !VBOX */
 #define BX_INFO(...)    bios_printf(BIOS_PRINTF_INFO, __VA_ARGS__)
 #endif /* !VBOX */
 #define BX_PANIC(...)   bios_printf(BIOS_PRINTF_DEBHALT, __VA_ARGS__)
+
+uint16_t pci16_find_device(uint32_t search_item, uint16_t index, int search_class, int ignore_if);
 
 /* Because we don't tell the recompiler when guest physical memory
  * is written, it can incorrectly cache guest code overwritten by
@@ -286,3 +310,6 @@ extern  bx_bool     set_enable_a20(bx_bool val);
 #define PIC_CMD_EOI         0x20
 #define PIC_CMD_RD_ISR      0x0B
 #define PIC_CMD_INIT        0x11
+
+#endif /* !VBOX_INCLUDED_SRC_PC_BIOS_biosint_h */
+

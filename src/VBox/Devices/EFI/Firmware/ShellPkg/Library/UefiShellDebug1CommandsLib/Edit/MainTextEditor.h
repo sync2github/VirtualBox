@@ -2,13 +2,7 @@
   Declares editor interface functions.
 
   Copyright (c) 2005 - 2011, Intel Corporation. All rights reserved. <BR>
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -21,10 +15,9 @@
   The initialization function for MainEditor.
 
   @retval EFI_SUCCESS             The operation was successful.
-  @retval EFI_LOAD_ERROR          A load error occured.
+  @retval EFI_LOAD_ERROR          A load error occurred.
 **/
 EFI_STATUS
-EFIAPI
 MainEditorInit (
   VOID
   );
@@ -33,10 +26,9 @@ MainEditorInit (
   The cleanup function for MainEditor.
 
   @retval EFI_SUCCESS             The operation was successful.
-  @retval EFI_LOAD_ERROR          A load error occured.
+  @retval EFI_LOAD_ERROR          A load error occurred.
 **/
 EFI_STATUS
-EFIAPI
 MainEditorCleanup (
   VOID
   );
@@ -45,7 +37,6 @@ MainEditorCleanup (
   Refresh the main editor component.
 **/
 VOID
-EFIAPI
 MainEditorRefresh (
   VOID
   );
@@ -54,11 +45,10 @@ MainEditorRefresh (
   Handle user key input. This routes to other functions for the actions.
 
   @retval EFI_SUCCESS             The operation was successful.
-  @retval EFI_LOAD_ERROR          A load error occured.
+  @retval EFI_LOAD_ERROR          A load error occurred.
   @retval EFI_OUT_OF_RESOURCES    A memory allocation failed.
 **/
 EFI_STATUS
-EFIAPI
 MainEditorKeyInput (
   VOID
   );
@@ -69,7 +59,6 @@ MainEditorKeyInput (
   @retval EFI_SUCCESS The operation was successful.
 **/
 EFI_STATUS
-EFIAPI
 MainEditorBackup (
   VOID
   );

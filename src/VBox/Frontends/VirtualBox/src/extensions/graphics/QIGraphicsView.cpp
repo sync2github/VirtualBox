@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIGraphicsView.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * VBox Qt GUI - QIGraphicsView class implementation.
+ * VBox Qt GUI - Qt extensions: QIGraphicsView class implementation.
  */
 
 /*
- * Copyright (C) 2015-2016 Oracle Corporation
+ * Copyright (C) 2015-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,21 +15,16 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QScrollBar>
-# include <QTouchEvent>
+#include <QScrollBar>
+#include <QTouchEvent>
 
 /* GUI includes: */
-# include "QIGraphicsView.h"
+#include "QIGraphicsView.h"
 
 /* Other VBox includes: */
-# include "iprt/assert.h"
+#include "iprt/assert.h"
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
 
 QIGraphicsView::QIGraphicsView(QWidget *pParent /* = 0 */)
     : QGraphicsView(pParent)
@@ -51,11 +46,7 @@ bool QIGraphicsView::event(QEvent *pEvent)
             QTouchEvent *pTouchEvent = static_cast<QTouchEvent*>(pEvent);
             AssertPtrReturn(pTouchEvent, QGraphicsView::event(pEvent));
             /* For touch-screen event we have something special: */
-#if QT_VERSION >= 0x050000
             if (pTouchEvent->device()->type() == QTouchDevice::TouchScreen)
-#else /* QT_VERSION < 0x050000 */
-            if (pTouchEvent->deviceType() == QTouchEvent::TouchScreen)
-#endif /* QT_VERSION < 0x050000 */
             {
                 /* Remember where the scrolling was started: */
                 m_iVerticalScrollBarPosition = verticalScrollBar()->value();
@@ -72,11 +63,7 @@ bool QIGraphicsView::event(QEvent *pEvent)
             QTouchEvent *pTouchEvent = static_cast<QTouchEvent*>(pEvent);
             AssertPtrReturn(pTouchEvent, QGraphicsView::event(pEvent));
             /* For touch-screen event we have something special: */
-#if QT_VERSION >= 0x050000
             if (pTouchEvent->device()->type() == QTouchDevice::TouchScreen)
-#else /* QT_VERSION < 0x050000 */
-            if (pTouchEvent->deviceType() == QTouchEvent::TouchScreen)
-#endif /* QT_VERSION < 0x050000 */
             {
                 /* Determine vertical shift (inverted): */
                 const QTouchEvent::TouchPoint point = pTouchEvent->touchPoints().first();
@@ -99,11 +86,7 @@ bool QIGraphicsView::event(QEvent *pEvent)
             QTouchEvent *pTouchEvent = static_cast<QTouchEvent*>(pEvent);
             AssertPtrReturn(pTouchEvent, QGraphicsView::event(pEvent));
             /* For touch-screen event we have something special: */
-#if QT_VERSION >= 0x050000
             if (pTouchEvent->device()->type() == QTouchDevice::TouchScreen)
-#else /* QT_VERSION < 0x050000 */
-            if (pTouchEvent->deviceType() == QTouchEvent::TouchScreen)
-#endif /* QT_VERSION < 0x050000 */
             {
                 /* Reset the scrolling start position: */
                 m_iVerticalScrollBarPosition = 0;
@@ -118,4 +101,3 @@ bool QIGraphicsView::event(QEvent *pEvent)
     /* Call to base-class: */
     return QGraphicsView::event(pEvent);
 }
-

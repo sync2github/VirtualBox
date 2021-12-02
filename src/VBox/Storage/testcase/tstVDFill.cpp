@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,7 +16,7 @@
  */
 
 #include <VBox/vd.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 #include <iprt/asm.h>
 #include <iprt/dir.h>
@@ -59,7 +59,7 @@ static DECLCALLBACK(int) tstVDMessage(void *pvUser, const char *pszFormat, va_li
 static int tstFill(const char *pszFilename, const char *pszFormat, bool fStreamOptimized, uint64_t cbDisk, uint64_t cbFill)
 {
     int rc;
-    PVBOXHDD pVD = NULL;
+    PVDISK pVD = NULL;
     VDGEOMETRY       PCHS = { 0, 0, 0 };
     VDGEOMETRY       LCHS = { 0, 0, 0 };
     PVDINTERFACE     pVDIfs = NULL;

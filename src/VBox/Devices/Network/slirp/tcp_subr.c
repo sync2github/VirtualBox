@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tcp_subr.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT - TCP support.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -412,10 +412,15 @@ int tcp_fconnect(PNATState pData, struct socket *so)
         struct sockaddr_in addr;
 
         fd_nonblock(s);
-        opt = 1;
-        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *)&opt, sizeof(opt));
+
         opt = 1;
         setsockopt(s, SOL_SOCKET, SO_OOBINLINE, (char *)&opt, sizeof(opt));
+        opt = 1;
+        setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (char *)&opt, sizeof(opt));
+
+        ret = sobind(pData, so);
+        if (ret != 0)
+            return ret;
 
         addr.sin_family = AF_INET;
         if ((so->so_faddr.s_addr & RT_H2N_U32(pData->netmask)) == pData->special_addr.s_addr)
@@ -439,7 +444,7 @@ int tcp_fconnect(PNATState pData, struct socket *so)
                             break;
                         }
                     }
-                    /* FALLTHROUGH */
+                    RT_FALL_THRU();
                 case CTL_ALIAS:
                 default:
                     addr.sin_addr = loopback_addr;
@@ -450,9 +455,9 @@ int tcp_fconnect(PNATState pData, struct socket *so)
             addr.sin_addr = so->so_faddr;
         addr.sin_port = so->so_fport;
 
-        Log2((" connect()ing, addr.sin_port=%d, addr.sin_addr.s_addr=%.16s\n",
-             RT_N2H_U16(addr.sin_port), inet_ntoa(addr.sin_addr)));
-        /* We don't care what port we get */
+        Log2(("NAT: tcp connect to %RTnaipv4:%d\n",
+              addr.sin_addr.s_addr, RT_N2H_U16(addr.sin_port)));
+
         ret = connect(s,(struct sockaddr *)&addr,sizeof (addr));
 
         /*
@@ -547,10 +552,8 @@ tcp_connect(PNATState pData, struct socket *inso)
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR,(char *)&opt, sizeof(int));
     opt = 1;
     setsockopt(s, SOL_SOCKET, SO_OOBINLINE,(char *)&opt, sizeof(int));
-#if 0
     opt = 1;
     setsockopt(s, IPPROTO_TCP, TCP_NODELAY,(char *)&opt, sizeof(int));
-#endif
 
     optlen = sizeof(int);
     status = getsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *)&opt, &optlen);

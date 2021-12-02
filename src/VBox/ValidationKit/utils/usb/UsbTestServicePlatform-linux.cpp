@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: UsbTestServicePlatform-linux.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * UsbTestServ - Remote USB test configuration and execution server, Platform
  *               specific helpers - Linux version.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,17 +29,15 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-
 #include <iprt/asm.h>
-#include <iprt/cdefs.h>
 #include <iprt/ctype.h>
+#include <iprt/err.h>
 #include <iprt/dir.h>
 #include <iprt/env.h>
 #include <iprt/mem.h>
 #include <iprt/path.h>
 #include <iprt/process.h>
 #include <iprt/string.h>
-#include <iprt/types.h>
 
 #include <iprt/linux/sysfs.h>
 
@@ -124,14 +122,14 @@ static int utsPlatformLnxDummyHcdQueryBusses(PUTSPLATFORMLNXDUMMYHCD pHcd, const
     if (cchPath == RT_ELEMENTS(aszPath))
         return VERR_BUFFER_OVERFLOW;
 
-    PRTDIR pDir = NULL;
-    rc = RTDirOpenFiltered(&pDir, aszPath, RTDIRFILTER_WINNT, 0);
+    RTDIR hDir = NULL;
+    rc = RTDirOpenFiltered(&hDir, aszPath, RTDIRFILTER_WINNT, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         do
         {
             RTDIRENTRY DirFolderContent;
-            rc = RTDirRead(pDir, &DirFolderContent, NULL);
+            rc = RTDirRead(hDir, &DirFolderContent, NULL);
             if (RT_SUCCESS(rc))
             {
                 uint32_t uBusId = 0;
@@ -181,7 +179,7 @@ static int utsPlatformLnxDummyHcdQueryBusses(PUTSPLATFORMLNXDUMMYHCD pHcd, const
         if (rc == VERR_NO_MORE_FILES)
             rc = VINF_SUCCESS;
 
-        RTDirClose(pDir);
+        RTDirClose(hDir);
     }
 
     return rc;
@@ -204,8 +202,8 @@ static int utsPlatformLnxHcdScanByName(const char *pszHcdName, const char *pszUd
         return VERR_BUFFER_OVERFLOW;
 
     /* Enumerate the available HCD and their bus numbers. */
-    PRTDIR pDir = NULL;
-    int rc = RTDirOpenFiltered(&pDir, aszPath, RTDIRFILTER_WINNT, 0);
+    RTDIR hDir = NULL;
+    int rc = RTDirOpenFiltered(&hDir, aszPath, RTDIRFILTER_WINNT, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         unsigned idxHcdCur = g_cDummyHcd;
@@ -214,7 +212,7 @@ static int utsPlatformLnxHcdScanByName(const char *pszHcdName, const char *pszUd
         do
         {
             RTDIRENTRY DirFolderContent;
-            rc = RTDirRead(pDir, &DirFolderContent, NULL);
+            rc = RTDirRead(hDir, &DirFolderContent, NULL);
             if (RT_SUCCESS(rc))
             {
                 /*
@@ -269,7 +267,7 @@ static int utsPlatformLnxHcdScanByName(const char *pszHcdName, const char *pszUd
         if (rc == VERR_NO_MORE_FILES)
             rc = VINF_SUCCESS;
 
-        RTDirClose(pDir);
+        RTDirClose(hDir);
     }
 
     return rc;
@@ -281,7 +279,7 @@ DECLHIDDEN(int) utsPlatformInit(void)
     int rc = utsPlatformModuleLoad("libcomposite", NULL, 0);
     if (RT_SUCCESS(rc))
     {
-        const char *apszArg[] = { "num=20" }; /** @todo: Make configurable from config. */
+        const char *apszArg[] = { "num=20" }; /** @todo Make configurable from config. */
         rc = utsPlatformModuleLoad("dummy_hcd", &apszArg[0], RT_ELEMENTS(apszArg));
         if (RT_SUCCESS(rc))
             rc = utsPlatformModuleLoad("dummy_hcd_ss", &apszArg[0], RT_ELEMENTS(apszArg));

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vscsi.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox storage drivers - Virtual SCSI driver
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,11 +24,15 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vscsi_h
-#define ___VBox_vscsi_h
+#ifndef VBOX_INCLUDED_vscsi_h
+#define VBOX_INCLUDED_vscsi_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
+#include <VBox/vdmedia.h>
 #include <iprt/sg.h>
 
 RT_C_DECLS_BEGIN
@@ -80,6 +84,25 @@ typedef enum VSCSIIOREQTXDIR
 } VSCSIIOREQTXDIR;
 /** Pointer to a SCSI LUN type */
 typedef VSCSIIOREQTXDIR *PVSCSIIOREQTXDIR;
+
+/**
+ * Virtual SCSI transfer direction as seen from the initiator.
+ */
+typedef enum VSCSIXFERDIR
+{
+    /** Invalid data direction. */
+    PVSCSIXFERDIR_INVALID     = 0,
+    /** Direction is unknown. */
+    VSCSIXFERDIR_UNKNOWN,
+    /** Direction is from target to initiator (aka a read). */
+    VSCSIXFERDIR_T2I,
+    /** Direction is from initiator to device (aka a write). */
+    VSCSIXFERDIR_I2T,
+    /** No data transfer associated with this request. */
+    VSCSIXFERDIR_NONE,
+    /** 32bit hack. */
+    VSCSIXFERDIR_32BIT_HACK  = 0x7fffffff
+} VSCSIXFERDIR;
 
 /**
  * LUN types we support
@@ -154,26 +177,52 @@ typedef struct VSCSILUNIOCALLBACKS
     DECLR3CALLBACKMEMBER(int, pfnVScsiLunReqFree, (VSCSILUN hVScsiLun, void *pvScsiLunUser, VSCSIIOREQ hVScsiIoReq));
 
     /**
-     * Retrieve the size of the underlying medium.
+     * Returns the number of regions for the medium.
      *
-     * @returns VBox status status code.
+     * @returns Number of regions.
      * @param   hVScsiLun       Virtual SCSI LUN handle.
      * @param   pvScsiLunUser   Opaque user data which may be used to identify the
      *                          medium.
-     * @param   pcbSize         Where to store the size of the medium.
      */
-    DECLR3CALLBACKMEMBER(int, pfnVScsiLunMediumGetSize,(VSCSILUN hVScsiLun, void *pvScsiLunUser, uint64_t *pcbSize));
+    DECLR3CALLBACKMEMBER(uint32_t, pfnVScsiLunMediumGetRegionCount,(VSCSILUN hVScsiLun, void *pvScsiLunUser));
 
     /**
-     * Retrieve the sector size of the underlying medium.
+     * Queries the properties for the given region.
      *
-     * @returns VBox status status code.
+     * @returns VBox status code.
+     * @retval  VERR_NOT_FOUND if the region index is not known.
      * @param   hVScsiLun       Virtual SCSI LUN handle.
      * @param   pvScsiLunUser   Opaque user data which may be used to identify the
      *                          medium.
-     * @param   pcbSectorSize   Where to store the sector size of the medium.
+     * @param   uRegion         The region index to query the properties of.
+     * @param   pu64LbaStart    Where to store the starting LBA for the region on success.
+     * @param   pcBlocks        Where to store the number of blocks for the region on success.
+     * @param   pcbBlock        Where to store the size of one block in bytes on success.
+     * @param   penmDataForm    WHere to store the data form for the region on success.
      */
-    DECLR3CALLBACKMEMBER(int, pfnVScsiLunMediumGetSectorSize,(VSCSILUN hVScsiLun, void *pvScsiLunUser, uint32_t *pcbSectorSize));
+    DECLR3CALLBACKMEMBER(int, pfnVScsiLunMediumQueryRegionProperties,(VSCSILUN hVScsiLun, void *pvScsiLunUser,
+                                                                      uint32_t uRegion, uint64_t *pu64LbaStart,
+                                                                      uint64_t *pcBlocks, uint64_t *pcbBlock,
+                                                                      PVDREGIONDATAFORM penmDataForm));
+
+    /**
+     * Queries the properties for the region covering the given LBA.
+     *
+     * @returns VBox status code.
+     * @retval  VERR_NOT_FOUND if the region index is not known.
+     * @param   hVScsiLun       Virtual SCSI LUN handle.
+     * @param   pvScsiLunUser   Opaque user data which may be used to identify the
+     *                          medium.
+     * @param   u64LbaStart     Where to store the starting LBA for the region on success.
+     * @param   puRegion        Where to store the region number on success.
+     * @param   pcBlocks        Where to store the number of blocks left in this region starting from the given LBA.
+     * @param   pcbBlock        Where to store the size of one block in bytes on success.
+     * @param   penmDataForm    WHere to store the data form for the region on success.
+     */
+    DECLR3CALLBACKMEMBER(int, pfnVScsiLunMediumQueryRegionPropertiesForLba,(VSCSILUN hVScsiLun, void *pvScsiLunUser,
+                                                                            uint64_t u64LbaStart, uint32_t *puRegion,
+                                                                            uint64_t *pcBlocks, uint64_t *pcbBlock,
+                                                                            PVDREGIONDATAFORM penmDataForm));
 
     /**
      * Set the lock state of the underlying medium.
@@ -218,6 +267,21 @@ typedef struct VSCSILUNIOCALLBACKS
      */
     DECLR3CALLBACKMEMBER(int, pfnVScsiLunGetFeatureFlags,(VSCSILUN hVScsiLun, void *pvScsiLunUser, uint64_t *pfFeatures));
 
+    /**
+     * Queries the vendor and product ID and revision to report for INQUIRY commands of the given LUN.
+     *
+     * @returns VBox status status code.
+     * @retval  VERR_NOT_FOUND if the data is not available and some defaults should be sued instead.
+     * @param   hVScsiLun        Virtual SCSI LUN handle.
+     * @param   pvScsiLunUser    Opaque user data which may be used to identify the
+     *                           medium.
+     * @param   ppszVendorId     Where to store the pointer to the vendor ID string to report.
+     * @param   ppszProductId    Where to store the pointer to the product ID string to report.
+     * @param   ppszProductLevel Where to store the pointer to the product level string to report.
+     */
+    DECLR3CALLBACKMEMBER(int, pfnVScsiLunQueryInqStrings, (VSCSILUN hVScsiLun, void *pvScsiLunUser, const char **ppszVendorId,
+                                                           const char **ppszProductId, const char **ppszProductLevel));
+
 } VSCSILUNIOCALLBACKS;
 /** Pointer to a virtual SCSI LUN I/O callback table. */
 typedef VSCSILUNIOCALLBACKS *PVSCSILUNIOCALLBACKS;
@@ -225,13 +289,15 @@ typedef VSCSILUNIOCALLBACKS *PVSCSILUNIOCALLBACKS;
 /**
  * The virtual SCSI request completed callback.
  */
-typedef DECLCALLBACK(void) FNVSCSIREQCOMPLETED(VSCSIDEVICE hVScsiDevice,
-                                               void *pvVScsiDeviceUser,
-                                               void *pvVScsiReqUser,
-                                               int rcScsiCode,
-                                               bool fRedoPossible,
-                                               int rcReq,
-                                               size_t cbXfer);
+typedef DECLCALLBACKTYPE(void, FNVSCSIREQCOMPLETED,(VSCSIDEVICE hVScsiDevice,
+                                                    void *pvVScsiDeviceUser,
+                                                    void *pvVScsiReqUser,
+                                                    int rcScsiCode,
+                                                    bool fRedoPossible,
+                                                    int rcReq,
+                                                    size_t cbXfer,
+                                                    VSCSIXFERDIR enmXferDir,
+                                                    size_t cbSense));
 /** Pointer to a virtual SCSI request completed callback. */
 typedef FNVSCSIREQCOMPLETED *PFNVSCSIREQCOMPLETED;
 
@@ -408,5 +474,5 @@ VBOXDDU_DECL(int) VSCSIIoReqUnmapParamsGet(VSCSIIOREQ hVScsiIoReq, PCRTRANGE *pp
 /** @}  */
 RT_C_DECLS_END
 
-#endif /* ___VBox_vscsi_h */
+#endif /* !VBOX_INCLUDED_vscsi_h */
 

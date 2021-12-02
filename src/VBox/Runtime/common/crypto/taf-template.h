@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: taf-template.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Crypto - Trust Anchor Format (RFC-5914), Code Generator Template.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;

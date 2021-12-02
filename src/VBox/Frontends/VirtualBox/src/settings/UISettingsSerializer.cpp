@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UISettingsSerializer.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UISettingsSerializer class implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,29 +15,31 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
 /* Qt includes: */
-# include <QTimer>
-# include <QLabel>
-# include <QHBoxLayout>
-# include <QVBoxLayout>
-# include <QProgressBar>
-/* GUI includes: */
-# include "UISettingsSerializer.h"
-# include "UIMessageCenter.h"
-# include "UISettingsPage.h"
-# include "UIIconPool.h"
-# include "QILabel.h"
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QProgressBar>
+#include <QTimer>
+#include <QVBoxLayout>
 
-UISettingsSerializer::UISettingsSerializer(QObject *pParent, SerializationDirection direction,
+/* GUI includes: */
+#include "QILabel.h"
+#include "UIIconPool.h"
+#include "UIMessageCenter.h"
+#include "UISettingsPage.h"
+#include "UISettingsSerializer.h"
+
+
+/*********************************************************************************************************************************
+*   Class UISettingsSerializer implementation.                                                                                   *
+*********************************************************************************************************************************/
+
+UISettingsSerializer::UISettingsSerializer(QObject *pParent, SerializationDirection enmDirection,
                                            const QVariant &data, const UISettingsPageList &pages)
     : QThread(pParent)
-    , m_direction(direction)
+    , m_enmDirection(enmDirection)
     , m_data(data)
-    , m_fSavingComplete(m_direction == Load)
+    , m_fSavingComplete(m_enmDirection == Load)
     , m_iIdOfHighPriorityPage(-1)
 {
     /* Copy the page(s) from incoming list to our map: */
@@ -45,11 +47,11 @@ UISettingsSerializer::UISettingsSerializer(QObject *pParent, SerializationDirect
         m_pages.insert(pPage->id(), pPage);
 
     /* Handling internal signals, they are also redirected in their handlers: */
-    connect(this, SIGNAL(sigNotifyAboutPageProcessed(int)), this, SLOT(sltHandleProcessedPage(int)), Qt::QueuedConnection);
-    connect(this, SIGNAL(sigNotifyAboutPagesProcessed()), this, SLOT(sltHandleProcessedPages()), Qt::QueuedConnection);
+    connect(this, &UISettingsSerializer::sigNotifyAboutPageProcessed, this, &UISettingsSerializer::sltHandleProcessedPage, Qt::QueuedConnection);
+    connect(this, &UISettingsSerializer::sigNotifyAboutPagesProcessed, this, &UISettingsSerializer::sltHandleProcessedPages, Qt::QueuedConnection);
 
     /* Redirecting unhandled internal signals: */
-    connect(this, SIGNAL(finished()), this, SIGNAL(sigNotifyAboutProcessFinished()), Qt::QueuedConnection);
+    connect(this, &UISettingsSerializer::finished, this, &UISettingsSerializer::sigNotifyAboutProcessFinished, Qt::QueuedConnection);
 }
 
 UISettingsSerializer::~UISettingsSerializer()
@@ -75,7 +77,7 @@ void UISettingsSerializer::start(Priority priority /* = InheritPriority */)
     emit sigNotifyAboutProcessStarted();
 
     /* If serializer saves settings: */
-    if (m_direction == Save)
+    if (m_enmDirection == Save)
     {
         /* We should update internal page cache first: */
         foreach (UISettingsPage *pPage, m_pages.values())
@@ -95,7 +97,7 @@ void UISettingsSerializer::sltHandleProcessedPage(int iPageId)
     UISettingsPage *pSettingsPage = m_pages.value(iPageId);
 
     /* If serializer loads settings: */
-    if (m_direction == Load)
+    if (m_enmDirection == Load)
     {
         /* We should fetch internal page cache: */
         pSettingsPage->setValidatorBlocked(true);
@@ -114,7 +116,7 @@ void UISettingsSerializer::sltHandleProcessedPage(int iPageId)
 void UISettingsSerializer::sltHandleProcessedPages()
 {
     /* If serializer saves settings: */
-    if (m_direction == Save)
+    if (m_enmDirection == Save)
     {
         /* We should flag GUI thread to unlock itself: */
         if (!m_fSavingComplete)
@@ -152,29 +154,29 @@ void UISettingsSerializer::run()
         if (m_iIdOfHighPriorityPage != -1)
             m_iIdOfHighPriorityPage = -1;
         /* Process this page if its enabled: */
-        connect(pPage, SIGNAL(sigOperationProgressChange(ulong, QString, ulong, ulong)),
-                this, SIGNAL(sigOperationProgressChange(ulong, QString, ulong, ulong)));
-        connect(pPage, SIGNAL(sigOperationProgressError(QString)),
-                this, SIGNAL(sigOperationProgressError(QString)));
+        connect(pPage, &UISettingsPage::sigOperationProgressChange,
+                this, &UISettingsSerializer::sigOperationProgressChange);
+        connect(pPage, &UISettingsPage::sigOperationProgressError,
+                this, &UISettingsSerializer::sigOperationProgressError);
         if (pPage->isEnabled())
         {
-            if (m_direction == Load)
+            if (m_enmDirection == Load)
                 pPage->loadToCacheFrom(m_data);
-            if (m_direction == Save)
+            if (m_enmDirection == Save)
                 pPage->saveFromCacheTo(m_data);
         }
         /* Remember what page was processed: */
-        disconnect(pPage, SIGNAL(sigOperationProgressChange(ulong, QString, ulong, ulong)),
-                   this, SIGNAL(sigOperationProgressChange(ulong, QString, ulong, ulong)));
-        disconnect(pPage, SIGNAL(sigOperationProgressError(QString)),
-                   this, SIGNAL(sigOperationProgressError(QString)));
+        disconnect(pPage, &UISettingsPage::sigOperationProgressChange,
+                   this, &UISettingsSerializer::sigOperationProgressChange);
+        disconnect(pPage, &UISettingsPage::sigOperationProgressError,
+                   this, &UISettingsSerializer::sigOperationProgressError);
         pPage->setProcessed(true);
         /* Remove processed page from our map: */
         pages.remove(pPage->id());
         /* Notify listeners about page was processed: */
         emit sigNotifyAboutPageProcessed(pPage->id());
         /* If serializer saves settings => wake up GUI thread: */
-        if (m_direction == Save)
+        if (m_enmDirection == Save)
             m_condition.wakeAll();
         /* Break further processing if page had failed: */
         if (pPage->failed())
@@ -183,19 +185,26 @@ void UISettingsSerializer::run()
     /* Notify listeners about all pages were processed: */
     emit sigNotifyAboutPagesProcessed();
     /* If serializer saves settings => wake up GUI thread: */
-    if (m_direction == Save)
+    if (m_enmDirection == Save)
         m_condition.wakeAll();
 
     /* Deinitialize COM for other thread: */
     COMBase::CleanupCOM();
 }
 
-QString UISettingsSerializerProgress::m_strProgressDescriptionTemplate = QString("<compact elipsis=\"middle\">%1 (%2/%3)</compact>");
 
-UISettingsSerializerProgress::UISettingsSerializerProgress(QWidget *pParent, UISettingsSerializer::SerializationDirection direction,
-                                                           const QVariant &data, const UISettingsPageList &pages)
+/*********************************************************************************************************************************
+*   Class UISettingsSerializerProgress implementation.                                                                           *
+*********************************************************************************************************************************/
+
+QString UISettingsSerializerProgress::s_strProgressDescriptionTemplate = QString("<compact elipsis=\"middle\">%1 (%2/%3)</compact>");
+
+UISettingsSerializerProgress::UISettingsSerializerProgress(QWidget *pParent,
+                                                           UISettingsSerializer::SerializationDirection enmDirection,
+                                                           const QVariant &data,
+                                                           const UISettingsPageList &pages)
     : QIWithRetranslateUI<QIDialog>(pParent)
-    , m_direction(direction)
+    , m_enmDirection(enmDirection)
     , m_data(data)
     , m_pages(pages)
     , m_pSerializer(0)
@@ -203,6 +212,7 @@ UISettingsSerializerProgress::UISettingsSerializerProgress(QWidget *pParent, UIS
     , m_pBarOperationProgress(0)
     , m_pLabelSubOperationProgress(0)
     , m_pBarSubOperationProgress(0)
+    , m_fClean(true)
 {
     /* Prepare: */
     prepare();
@@ -219,7 +229,7 @@ int UISettingsSerializerProgress::exec()
     return QIWithRetranslateUI<QIDialog>::exec();
 }
 
-QVariant& UISettingsSerializerProgress::data()
+QVariant &UISettingsSerializerProgress::data()
 {
     AssertPtrReturn(m_pSerializer, m_data);
     return m_pSerializer->data();
@@ -230,20 +240,20 @@ void UISettingsSerializerProgress::prepare()
     /* Configure self: */
     setWindowModality(Qt::WindowModal);
     setWindowTitle(parentWidget()->windowTitle());
-    connect(this, SIGNAL(sigAskForProcessStart()),
-            this, SLOT(sltStartProcess()), Qt::QueuedConnection);
+    connect(this, &UISettingsSerializerProgress::sigAskForProcessStart,
+            this, &UISettingsSerializerProgress::sltStartProcess, Qt::QueuedConnection);
 
     /* Create serializer: */
-    m_pSerializer = new UISettingsSerializer(this, m_direction, m_data, m_pages);
+    m_pSerializer = new UISettingsSerializer(this, m_enmDirection, m_data, m_pages);
     AssertPtrReturnVoid(m_pSerializer);
     {
         /* Install progress handler: */
-        connect(m_pSerializer, SIGNAL(sigNotifyAboutProcessProgressChanged(int)),
-                this, SLOT(sltHandleProcessProgressChange(int)));
-        connect(m_pSerializer, SIGNAL(sigOperationProgressChange(ulong, QString, ulong, ulong)),
-                this, SLOT(sltHandleOperationProgressChange(ulong, QString, ulong, ulong)));
-        connect(m_pSerializer, SIGNAL(sigOperationProgressError(QString)),
-                this, SLOT(sltHandleOperationProgressError(QString)));
+        connect(m_pSerializer, &UISettingsSerializer::sigNotifyAboutProcessProgressChanged,
+                this, &UISettingsSerializerProgress::sltHandleProcessProgressChange);
+        connect(m_pSerializer, &UISettingsSerializer::sigOperationProgressChange,
+                this, &UISettingsSerializerProgress::sltHandleOperationProgressChange);
+        connect(m_pSerializer, &UISettingsSerializer::sigOperationProgressError,
+                this, &UISettingsSerializerProgress::sltHandleOperationProgressError);
     }
 
     /* Create layout: */
@@ -264,7 +274,7 @@ void UISettingsSerializerProgress::prepare()
                 {
                     /* Configure label: */
                     const QIcon icon = UIIconPool::iconSet(":/progress_settings_90px.png");
-                    pLabelPixmap->setPixmap(icon.pixmap(icon.availableSizes().first()));
+                    pLabelPixmap->setPixmap(icon.pixmap(icon.availableSizes().value(0, QSize(90, 90))));
                     /* Add label into layout: */
                     pLayoutPixmap->addWidget(pLabelPixmap);
                 }
@@ -376,13 +386,15 @@ void UISettingsSerializerProgress::sltHandleOperationProgressChange(ulong iOpera
     AssertPtrReturnVoid(m_pBarSubOperationProgress);
     m_pLabelSubOperationProgress->show();
     m_pBarSubOperationProgress->show();
-    m_pLabelSubOperationProgress->setText(m_strProgressDescriptionTemplate.arg(strOperation).arg(iOperation).arg(iOperations));
+    m_pLabelSubOperationProgress->setText(s_strProgressDescriptionTemplate.arg(strOperation).arg(iOperation).arg(iOperations));
     m_pBarSubOperationProgress->setValue(iPercent);
 }
 
 void UISettingsSerializerProgress::sltHandleOperationProgressError(QString strErrorInfo)
 {
+    /* Mark the serialization process dirty: */
+    m_fClean = false;
+
     /* Show the error message: */
     msgCenter().cannotSaveSettings(strErrorInfo, this);
 }
-

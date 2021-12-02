@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: sysfs.cpp 86579 2020-10-14 20:53:56Z vboxsync $ */
 /** @file
  * IPRT - Linux sysfs access.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -43,9 +43,9 @@
 
 #include <unistd.h>
 #include <stdio.h>
-#include <sys/sysctl.h>
 #include <sys/stat.h>
 #include <sys/fcntl.h>
+#include <sys/sysmacros.h>
 #include <errno.h>
 
 
@@ -65,24 +65,21 @@
  * @param   va         The format args.
  */
 static int rtLinuxConstructPathV(char *pszBuf, size_t cchBuf,
-                                     const char *pszPrefix,
-                                     const char *pszFormat, va_list va)
+                                 const char *pszPrefix,
+                                 const char *pszFormat, va_list va)
 {
-    size_t cchPrefix = strlen(pszPrefix);
+    size_t const cchPrefix = strlen(pszPrefix);
     AssertReturn(pszPrefix[cchPrefix - 1] == '/', VERR_INVALID_PARAMETER);
     AssertReturn(cchBuf > cchPrefix + 1, VERR_INVALID_PARAMETER);
 
-    /** @todo While RTStrPrintfV prevents overflows, it doesn't make it easy to
-     *        check for truncations. RTPath should provide some formatters and
-     *        joiners which can take over this rather common task that is
-     *        performed here. */
-    size_t cch = RTStrPrintfV(pszBuf, cchBuf, pszFormat, va);
+    ssize_t cch = RTStrPrintf2V(pszBuf, cchBuf, pszFormat, va);
+    AssertReturn(cch >= 0, VERR_BUFFER_OVERFLOW);
+
     if (*pszBuf != '/')
     {
-        AssertReturn(cchBuf >= cch + cchPrefix + 1, VERR_BUFFER_OVERFLOW);
-        memmove(pszBuf + cchPrefix, pszBuf, cch + 1);
+        AssertReturn(cchBuf >= (size_t)cch + cchPrefix + 1, VERR_BUFFER_OVERFLOW);
+        memmove(pszBuf + cchPrefix, pszBuf, (size_t)cch + 1);
         memcpy(pszBuf, pszPrefix, cchPrefix);
-        cch += cchPrefix;
     }
     return VINF_SUCCESS;
 }
@@ -127,6 +124,22 @@ DECLINLINE(int) rtLinuxConstructPath(char *pszBuf, size_t cchBuf,
 DECLINLINE(int) rtLinuxSysFsConstructPath(char *pszBuf, size_t cchBuf, const char *pszFormat, va_list va)
 {
     return rtLinuxConstructPathV(pszBuf, cchBuf, "/sys/", pszFormat, va);
+}
+
+
+RTDECL(int) RTLinuxConstructPathV(char *pszPath, size_t cbPath, const char *pszFormat, va_list va)
+{
+    return rtLinuxSysFsConstructPath(pszPath, cbPath, pszFormat, va);
+}
+
+
+RTDECL(int) RTLinuxConstructPath(char *pszPath, size_t cbPath, const char *pszFormat, ...)
+{
+    va_list va;
+    va_start(va, pszFormat);
+    int rc = rtLinuxSysFsConstructPath(pszPath, cbPath, pszFormat, va);
+    va_end(va);
+    return rc;
 }
 
 

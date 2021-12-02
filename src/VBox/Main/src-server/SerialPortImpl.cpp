@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: SerialPortImpl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_SERIALPORT
 #include "SerialPortImpl.h"
 #include "MachineImpl.h"
 #include "VirtualBoxImpl.h"
@@ -29,7 +29,7 @@
 
 #include "AutoStateDep.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 //////////////////////////////////////////////////////////////////////////////////
 //
@@ -73,6 +73,7 @@ void SerialPort::FinalRelease()
  *  Initializes the Serial Port object.
  *
  *  @param aParent  Handle of the parent object.
+ *  @param aSlot    Slot number the serial port is plugged into.
  */
 HRESULT SerialPort::init(Machine *aParent, ULONG aSlot)
 {
@@ -248,7 +249,7 @@ HRESULT SerialPort::getHostMode(PortMode_T *aHostMode)
 HRESULT SerialPort::setHostMode(PortMode_T aHostMode)
 {
     /* the machine needs to be mutable */
-    AutoMutableOrSavedStateDependency adep(m->pMachine);
+    AutoMutableOrSavedOrRunningStateDependency adep(m->pMachine);
     if (FAILED(adep.rc())) return adep.rc();
 
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
@@ -287,6 +288,10 @@ HRESULT SerialPort::setHostMode(PortMode_T aHostMode)
                 break;
             case PortMode_Disconnected:
                 break;
+#ifdef VBOX_WITH_XPCOM_CPP_ENUM_HACK
+            case PortMode_32BitHack: /* (compiler warnings) */
+                AssertFailedBreak();
+#endif
         }
 
         m->bd.backup();
@@ -422,7 +427,7 @@ HRESULT SerialPort::getPath(com::Utf8Str &aPath)
 HRESULT SerialPort::setPath(const com::Utf8Str &aPath)
 {
     /* the machine needs to be mutable */
-    AutoMutableOrSavedStateDependency adep(m->pMachine);
+    AutoMutableOrSavedOrRunningStateDependency adep(m->pMachine);
     if (FAILED(adep.rc())) return adep.rc();
 
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
@@ -461,7 +466,7 @@ HRESULT SerialPort::getServer(BOOL *aServer)
 HRESULT SerialPort::setServer(BOOL aServer)
 {
     /* the machine needs to be mutable */
-    AutoMutableOrSavedStateDependency adep(m->pMachine);
+    AutoMutableOrSavedOrRunningStateDependency adep(m->pMachine);
     if (FAILED(adep.rc())) return adep.rc();
 
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
@@ -485,6 +490,42 @@ HRESULT SerialPort::setServer(BOOL aServer)
     return S_OK;
 }
 
+HRESULT SerialPort::getUartType(UartType_T *aUartType)
+{
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    *aUartType = m->bd->uartType;
+
+    return S_OK;
+}
+
+HRESULT SerialPort::setUartType(UartType_T aUartType)
+{
+    /* the machine needs to be mutable */
+    AutoMutableOrSavedOrRunningStateDependency adep(m->pMachine);
+    if (FAILED(adep.rc())) return adep.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    if (m->bd->uartType != aUartType)
+    {
+        m->bd.backup();
+        m->bd->uartType = aUartType;
+
+        m->fModified = true;
+        // leave the lock before informing callbacks
+        alock.release();
+
+        AutoWriteLock mlock(m->pMachine COMMA_LOCKVAL_SRC_POS);
+        m->pMachine->i_setModified(Machine::IsModified_SerialPorts);
+        mlock.release();
+
+        m->pMachine->i_onSerialPortChange(this);
+    }
+
+    return S_OK;
+}
+
 // public methods only for internal purposes
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -492,7 +533,7 @@ HRESULT SerialPort::setServer(BOOL aServer)
  *  Loads settings from the given port node.
  *  May be called once right after this object creation.
  *
- *  @param aPortNode <Port> node.
+ *  @param data Configuration settings.
  *
  *  @note Locks this object for writing.
  */
@@ -515,7 +556,7 @@ HRESULT SerialPort::i_loadSettings(const settings::SerialPort &data)
  *
  *  Note that the given Port node is completely empty on input.
  *
- *  @param aPortNode <Port> node.
+ *  @param data Configuration settings.
  *
  *  @note Locks this object for reading.
  */
@@ -610,10 +651,14 @@ void SerialPort::i_copyFrom(SerialPort *aThat)
     m->bd.assignCopy(aThat->m->bd);
 }
 
+/**
+ * Applies the defaults for this serial port.
+ *
+ * @note This method currently assumes that the object is in the state after
+ * calling init(), it does not set defaults from an arbitrary state.
+ */
 void SerialPort::i_applyDefaults(GuestOSType *aOsType)
 {
-    AssertReturnVoid(aOsType != NULL);
-
     /* sanity */
     AutoCaller autoCaller(this);
     AssertComRCReturnVoid(autoCaller.rc());
@@ -652,7 +697,9 @@ void SerialPort::i_applyDefaults(GuestOSType *aOsType)
             break;
     }
 
-    uint32_t numSerialEnabled = aOsType->i_numSerialEnabled();
+    uint32_t numSerialEnabled = 0;
+    if (aOsType)
+        numSerialEnabled = aOsType->i_numSerialEnabled();
 
     /* Enable port if requested */
     if (m->bd->ulSlot < numSerialEnabled)

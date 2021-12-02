@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: Virtio-solaris.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Guest Additions: Virtio Driver for Solaris, header.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___Virtio_solaris_h
-#define ___Virtio_solaris_h
+#ifndef GA_INCLUDED_SRC_solaris_Virtio_Virtio_solaris_h
+#define GA_INCLUDED_SRC_solaris_Virtio_Virtio_solaris_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <sys/sunddi.h>
 
@@ -188,5 +191,5 @@ void VirtioRingInit(PVIRTIOQUEUE pQueue, uint_t cDescs, caddr_t virtBuf, ulong_t
 int  VirtioRingPush(PVIRTIOQUEUE pQueue, paddr_t physBuf, uint32_t cbBuf, uint16_t fFlags);
 size_t VirtioRingSize(uint64_t cElements, ulong_t Align);
 
-#endif
+#endif /* !GA_INCLUDED_SRC_solaris_Virtio_Virtio_solaris_h */
 

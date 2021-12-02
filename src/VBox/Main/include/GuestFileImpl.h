@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GuestFileImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox Main - Guest file handling implementation.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_GUESTFILEIMPL
-#define ____H_GUESTFILEIMPL
+#ifndef MAIN_INCLUDED_GuestFileImpl_h
+#define MAIN_INCLUDED_GuestFileImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VirtualBoxBase.h"
 #include "EventImpl.h"
@@ -35,7 +38,7 @@ class ATL_NO_VTABLE GuestFile :
 public:
     /** @name COM and internal init/term/mapping cruft.
      * @{ */
-    DECLARE_EMPTY_CTOR_DTOR(GuestFile)
+    DECLARE_COMMON_CLASS_METHODS(GuestFile)
 
     int     init(Console *pConsole, GuestSession *pSession, ULONG uFileID, const GuestFileOpenInfo &openInfo);
     void    uninit(void);
@@ -45,28 +48,38 @@ public:
     /** @}  */
 
 public:
-    /** @name Public internal methods.
+    /** @name Implemented virtual methods from GuestObject.
      * @{ */
     int             i_callbackDispatcher(PVBOXGUESTCTRLHOSTCBCTX pCbCtx, PVBOXGUESTCTRLHOSTCALLBACK pSvcCb);
+    int             i_onUnregister(void);
+    int             i_onSessionStatusChange(GuestSessionStatus_T enmSessionStatus);
+    /** @}  */
+
+public:
+    /** @name Public internal methods.
+     * @{ */
     int             i_closeFile(int *pGuestRc);
     EventSource    *i_getEventSource(void) { return mEventSource; }
-    static Utf8Str  i_guestErrorToString(int guestRc);
     int             i_onFileNotify(PVBOXGUESTCTRLHOSTCBCTX pCbCtx, PVBOXGUESTCTRLHOSTCALLBACK pSvcCbData);
     int             i_onGuestDisconnected(PVBOXGUESTCTRLHOSTCBCTX pCbCtx, PVBOXGUESTCTRLHOSTCALLBACK pSvcCbData);
-    int             i_onRemove(void);
     int             i_openFile(uint32_t uTimeoutMS, int *pGuestRc);
+    int             i_queryInfo(GuestFsObjData &objData, int *prcGuest);
     int             i_readData(uint32_t uSize, uint32_t uTimeoutMS, void* pvData, uint32_t cbData, uint32_t* pcbRead);
     int             i_readDataAt(uint64_t uOffset, uint32_t uSize, uint32_t uTimeoutMS,
                                  void* pvData, size_t cbData, size_t* pcbRead);
     int             i_seekAt(int64_t iOffset, GUEST_FILE_SEEKTYPE eSeekType, uint32_t uTimeoutMS, uint64_t *puOffset);
-    static HRESULT  i_setErrorExternal(VirtualBoxBase *pInterface, int guestRc);
     int             i_setFileStatus(FileStatus_T fileStatus, int fileRc);
     int             i_waitForOffsetChange(GuestWaitEvent *pEvent, uint32_t uTimeoutMS, uint64_t *puOffset);
     int             i_waitForRead(GuestWaitEvent *pEvent, uint32_t uTimeoutMS, void *pvData, size_t cbData, uint32_t *pcbRead);
     int             i_waitForStatusChange(GuestWaitEvent *pEvent, uint32_t uTimeoutMS, FileStatus_T *pFileStatus, int *pGuestRc);
     int             i_waitForWrite(GuestWaitEvent *pEvent, uint32_t uTimeoutMS, uint32_t *pcbWritten);
-    int             i_writeData(uint32_t uTimeoutMS, void *pvData, uint32_t cbData, uint32_t *pcbWritten);
-    int             i_writeDataAt(uint64_t uOffset, uint32_t uTimeoutMS, void *pvData, uint32_t cbData, uint32_t *pcbWritten);
+    int             i_writeData(uint32_t uTimeoutMS, const void *pvData, uint32_t cbData, uint32_t *pcbWritten);
+    int             i_writeDataAt(uint64_t uOffset, uint32_t uTimeoutMS, const void *pvData, uint32_t cbData, uint32_t *pcbWritten);
+    /** @}  */
+
+    /** @name Static helper methods.
+     * @{ */
+    static Utf8Str  i_guestErrorToString(int guestRc, const char *pcszWhat);
     /** @}  */
 
 private:
@@ -79,7 +92,7 @@ private:
     HRESULT getInitialSize(LONG64 *aInitialSize);
     HRESULT getOffset(LONG64 *aOffset);
     HRESULT getStatus(FileStatus_T *aStatus);
-    HRESULT getFileName(com::Utf8Str &aFileName);
+    HRESULT getFilename(com::Utf8Str &aFilename);
     HRESULT getAccessMode(FileAccessMode_T *aAccessMode);
     HRESULT getOpenAction(FileOpenAction_T *aOpenAction);
     /** @}  */
@@ -122,8 +135,6 @@ private:
         GuestFileOpenInfo       mOpenInfo;
         /** The file's initial size on open. */
         uint64_t                mInitialSize;
-        /** The file's ID. */
-        uint32_t                mID;
         /** The current file status. */
         FileStatus_T            mStatus;
         /** The last returned process status
@@ -134,5 +145,5 @@ private:
     } mData;
 };
 
-#endif /* !____H_GUESTFILEIMPL */
+#endif /* !MAIN_INCLUDED_GuestFileImpl_h */
 

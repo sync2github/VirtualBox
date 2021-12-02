@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HostImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * Implementation of IHost.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_HOSTIMPL
-#define ____H_HOSTIMPL
+#ifndef MAIN_INCLUDED_HostImpl_h
+#define MAIN_INCLUDED_HostImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "HostWrap.h"
 
@@ -25,6 +28,8 @@ class USBProxyService;
 class SessionMachine;
 class Progress;
 class PerformanceCollector;
+class HostDrive;
+class HostDrivePartition;
 
 namespace settings
 {
@@ -38,7 +43,7 @@ class ATL_NO_VTABLE Host :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(Host)
+    DECLARE_COMMON_CLASS_METHODS(Host)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -61,6 +66,8 @@ public:
     HRESULT i_loadSettings(const settings::Host &data);
     HRESULT i_saveSettings(settings::Host &data);
 
+    void    i_updateProcessorFeatures();
+
     HRESULT i_getDrives(DeviceType_T mediumType, bool fRefresh, MediaList *&pll, AutoWriteLock &treeLock);
     HRESULT i_findHostDriveById(DeviceType_T mediumType, const Guid &uuid, bool fRefresh, ComObjPtr<Medium> &pMedium);
     HRESULT i_findHostDriveByName(DeviceType_T mediumType, const Utf8Str &strLocationFull, bool fRefresh, ComObjPtr<Medium> &pMedium);
@@ -82,6 +89,12 @@ public:
 
     static void i_generateMACAddress(Utf8Str &mac);
 
+#ifdef RT_OS_WINDOWS
+    HRESULT i_updatePersistentConfigForHostOnlyAdapters(void);
+    HRESULT i_removePersistentConfig(const Bstr &bstrGuid);
+#endif /* RT_OS_WINDOWS */
+
+
 private:
 
     // wrapped IHost properties
@@ -97,6 +110,7 @@ private:
     HRESULT getProcessorOnlineCount(ULONG *aProcessorOnlineCount);
     HRESULT getProcessorCoreCount(ULONG *aProcessorCoreCount);
     HRESULT getProcessorOnlineCoreCount(ULONG *aProcessorOnlineCoreCount);
+    HRESULT getHostDrives(std::vector<ComPtr<IHostDrive> > &aHostDrives);
     HRESULT getMemorySize(ULONG *aMemorySize);
     HRESULT getMemoryAvailable(ULONG *aMemoryAvailable);
     HRESULT getOperatingSystem(com::Utf8Str &aOperatingSystem);
@@ -104,6 +118,11 @@ private:
     HRESULT getUTCTime(LONG64 *aUTCTime);
     HRESULT getAcceleration3DAvailable(BOOL *aAcceleration3DAvailable);
     HRESULT getVideoInputDevices(std::vector<ComPtr<IHostVideoInputDevice> > &aVideoInputDevices);
+    HRESULT getUpdate(ComPtr<IHostUpdate> &aUpdate);
+    HRESULT getUpdateResponse(BOOL *aUpdateNeeded);
+    HRESULT getUpdateVersion(com::Utf8Str &aUpdateVersion);
+    HRESULT getUpdateURL(com::Utf8Str &aUpdateURL);
+    HRESULT getUpdateCheckNeeded(BOOL *aUpdateCheckNeeded);
 
     // wrapped IHost methods
     HRESULT getProcessorSpeed(ULONG aCpuId,
@@ -148,6 +167,8 @@ private:
                                const std::vector<com::Utf8Str> &aPropertyNames, const std::vector<com::Utf8Str> &aPropertyValues);
 
     HRESULT removeUSBDeviceSource(const com::Utf8Str &aId);
+    HRESULT UpdateCheck(UpdateCheckType_T aCheckType,
+                        ComPtr<IProgress> &aProgress);
 
     // Internal Methods.
 
@@ -158,12 +179,14 @@ private:
 #if defined(RT_OS_SOLARIS) && defined(VBOX_USE_LIBHAL)
     bool i_getDVDInfoFromHal(std::list< ComObjPtr<Medium> > &list);
     bool i_getFloppyInfoFromHal(std::list< ComObjPtr<Medium> > &list);
+    HRESULT i_getFixedDrivesFromHal(std::list<std::pair<com::Utf8Str, com::Utf8Str> > &list) RT_NOEXCEPT;
 #endif
 
 #if defined(RT_OS_SOLARIS)
     void i_getDVDInfoFromDevTree(std::list< ComObjPtr<Medium> > &list);
     void i_parseMountTable(char *mountTable, std::list< ComObjPtr<Medium> > &list);
     bool i_validateDevice(const char *deviceNode, bool isCDROM);
+    HRESULT i_getFixedDrivesFromDevTree(std::list<std::pair<com::Utf8Str, com::Utf8Str> > &list) RT_NOEXCEPT;
 #endif
 
     HRESULT i_updateNetIfList();
@@ -180,9 +203,14 @@ private:
     void i_unregisterMetrics(PerformanceCollector *aCollector);
 #endif /* VBOX_WITH_RESOURCE_USAGE_API */
 
+#ifdef RT_OS_WINDOWS
+    HRESULT i_getFixedDrivesFromGlobalNamespace(std::list<std::pair<com::Utf8Str, com::Utf8Str> > &aDriveList) RT_NOEXCEPT;
+#endif
+    HRESULT i_getDrivesPathsList(std::list<std::pair<com::Utf8Str, com::Utf8Str> > &aDriveList) RT_NOEXCEPT;
+
     struct Data;        // opaque data structure, defined in HostImpl.cpp
     Data *m;
 };
 
-#endif // ____H_HOSTIMPL
+#endif /* !MAIN_INCLUDED_HostImpl_h */
 

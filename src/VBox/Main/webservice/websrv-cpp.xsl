@@ -11,7 +11,7 @@
         See webservice/Makefile.kmk for an overview of all the things
         generated for the webservice.
 
-    Copyright (C) 2007-2016 Oracle Corporation
+    Copyright (C) 2007-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -84,7 +84,7 @@
 
 // standard headers
 #include <map>
-#include <sstream>
+#include <iprt/sanitized/sstream>
 
 // shared strings for debug output
 const char *g_pcszCallingComMethod = "   calling COM method %s\n";
@@ -527,7 +527,7 @@ const char *g_pcszIUnknown = "IUnknown";
       <xsl:text>            break;&#10;</xsl:text>
       <xsl:text>        }&#10;</xsl:text>
       <xsl:value-of select="concat('        const WSDLT_ID &amp;idThis = ', $structprefix, $G_nameObjectRefEncoded, ';&#10;')" />
-      <xsl:value-of select="'        if ((rc = findComPtrFromId(soap, idThis, pObj, false)))&#10;'" />
+      <xsl:value-of select="'        if ((rc = findComPtrFromId(soap, idThis, pObj, false)) != S_OK)&#10;'" />
       <xsl:text>            break;&#10;</xsl:text>
     </xsl:when>
   </xsl:choose>
@@ -579,7 +579,7 @@ const char *g_pcszIUnknown = "IUnknown";
         <xsl:when test="$type='$unknown'">
           <xsl:value-of select="'    ComPtr&lt;IUnknown&gt; tmpObject;'" />
           <xsl:call-template name="emitNewlineIndent8" />
-          <xsl:value-of select="concat('    if ((rc = findComPtrFromId(soap, ', $structprefix, $name, '[i], tmpObject, true)))')" />
+          <xsl:value-of select="concat('    if ((rc = findComPtrFromId(soap, ', $structprefix, $name, '[i], tmpObject, true)) != S_OK)')" />
           <xsl:call-template name="emitNewlineIndent8" />
           <xsl:text>        break;</xsl:text>
           <xsl:call-template name="emitNewlineIndent8" />
@@ -588,7 +588,7 @@ const char *g_pcszIUnknown = "IUnknown";
         <xsl:when test="count(key('G_keyInterfacesByName', $type)) > 0">
           <xsl:value-of select="concat('    ComPtr&lt;', $type, '&gt; tmpObject;')" />
           <xsl:call-template name="emitNewlineIndent8" />
-          <xsl:value-of select="concat('    if ((rc = findComPtrFromId(soap, ', $structprefix, $name, '[i], tmpObject, true)))')" />
+          <xsl:value-of select="concat('    if ((rc = findComPtrFromId(soap, ', $structprefix, $name, '[i], tmpObject, true)) != S_OK)')" />
           <xsl:call-template name="emitNewlineIndent8" />
           <xsl:text>        break;</xsl:text>
           <xsl:call-template name="emitNewlineIndent8" />
@@ -646,7 +646,7 @@ const char *g_pcszIUnknown = "IUnknown";
         <xsl:when test="$type='$unknown'">
           <xsl:value-of select="concat(' comcall_', $name, ';')" />
           <xsl:call-template name="emitNewlineIndent8" />
-          <xsl:value-of select="concat('if ((rc = findComPtrFromId(soap, ', $structprefix, $name, ', comcall_', $name,', true)))')" />
+          <xsl:value-of select="concat('if ((rc = findComPtrFromId(soap, ', $structprefix, $name, ', comcall_', $name,', true)) != S_OK)')" />
           <xsl:call-template name="emitNewlineIndent8" />
           <xsl:text>    break</xsl:text>
         </xsl:when>
@@ -664,7 +664,7 @@ const char *g_pcszIUnknown = "IUnknown";
             <xsl:when test="($wsmap='managed')">
               <xsl:value-of select="concat(' comcall_', $name, ';')" />
               <xsl:call-template name="emitNewlineIndent8" />
-              <xsl:value-of select="concat('if ((rc = findComPtrFromId(soap, ', $structprefix, $name, ', comcall_', $name,', true)))')" />
+              <xsl:value-of select="concat('if ((rc = findComPtrFromId(soap, ', $structprefix, $name, ', comcall_', $name,', true)) != S_OK)')" />
               <xsl:call-template name="emitNewlineIndent8" />
               <xsl:text>    break</xsl:text>
             </xsl:when>
@@ -930,7 +930,7 @@ const char *g_pcszIUnknown = "IUnknown";
         </xsl:when>
         <xsl:otherwise>
           <xsl:call-template name="fatalError">
-            <xsl:with-param name="msg" select="concat('emitOutputArgBackConverter2: Type &quot;', $type, '&quot; in arg &quot;', $name, '&quot; of method &quot;', $ifname, '::', $method, '&quot; has invalid wsmap attribute value &quot;', $wsmap, '&quot; in XIDL.')" />
+            <xsl:with-param name="msg" select="concat('emitOutputArgBackConverter2: Type &quot;', $type, '&quot; in arg &quot;', $name, '&quot; of method &quot;', $thatifname, '::', $method, '&quot; has invalid wsmap attribute value &quot;', $wsmap, '&quot; in XIDL.')" />
           </xsl:call-template>
         </xsl:otherwise>
       </xsl:choose>

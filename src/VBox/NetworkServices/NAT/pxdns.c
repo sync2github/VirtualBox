@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pxdns.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT Network - DNS proxy.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -430,6 +430,8 @@ pxdns_hash_add(struct pxdns *pxdns, struct request *req)
     struct request **chain;
 
     LWIP_ASSERT1(req->pprev_hash == NULL);
+    ++pxdns->active_queries;
+
     chain = &pxdns->request_hash[HASH(req->id)];
     if ((req->next_hash = *chain) != NULL) {
         (*chain)->pprev_hash = &req->next_hash;
@@ -459,6 +461,7 @@ pxdns_timeout_add(struct pxdns *pxdns, struct request *req)
     omask = pxdns->timeout_mask;
     pxdns->timeout_mask |= 1U << req->timeout_slot;
     if (omask == 0) {
+        sys_untimeout(pxdns_timer, pxdns);
         sys_timeout(1 * 1000, pxdns_timer, pxdns);
     }
 }
@@ -510,7 +513,6 @@ pxdns_request_register(struct pxdns *pxdns, struct request *req)
 
     pxdns_hash_add(pxdns, req);
     pxdns_timeout_add(pxdns, req);
-    ++pxdns->active_queries;
 
     sys_mutex_unlock(&pxdns->lock);
 }
@@ -523,7 +525,6 @@ pxdns_request_deregister(struct pxdns *pxdns, struct request *req)
 
     pxdns_hash_del(pxdns, req);
     pxdns_timeout_del(pxdns, req);
-    --pxdns->active_queries;
 
     sys_mutex_unlock(&pxdns->lock);
 }
@@ -551,7 +552,6 @@ pxdns_request_find(struct pxdns *pxdns, u16_t id)
     if (req != NULL) {
         pxdns_hash_del(pxdns, req);
         pxdns_timeout_del(pxdns, req);
-        --pxdns->active_queries;
     }
 
     sys_mutex_unlock(&pxdns->lock);

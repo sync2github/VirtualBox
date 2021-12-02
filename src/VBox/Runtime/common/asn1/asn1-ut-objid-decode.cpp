@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: asn1-ut-objid-decode.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - ASN.1, OBJECT IDENTIFIER Type, Decoder.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -346,6 +346,8 @@ RTDECL(int) RTAsn1ObjId_DecodeAsn1(PRTASN1CURSOR pCursor, uint32_t fFlags, PRTAS
                             }
                         }
                     }
+                    RTAsn1MemFree(&pThis->Allocation, (void *)pThis->pauComponents);
+                    pThis->pauComponents = NULL;
                 }
             }
         }

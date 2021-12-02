@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tcp_input.c 92093 2021-10-27 08:18:16Z vboxsync $ */
 /** @file
  * NAT - TCP input.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -323,10 +323,16 @@ tcp_input(PNATState pData, register struct mbuf *m, int iphlen, struct socket *i
     {
         so = inso;
         Log4(("NAT: tcp_input: %R[natsock]\n", so));
+
         /* Re-set a few variables */
         tp = sototcpcb(so);
+
         m = so->so_m;
-        so->so_m = 0;
+        optp = so->so_optp;     /* points into m if set */
+        optlen = so->so_optlen;
+        so->so_m = NULL;
+        so->so_optp = 0;
+        so->so_optlen = 0;
 
         if (RT_LIKELY(so->so_ohdr != NULL))
         {
@@ -495,6 +501,18 @@ findso:
         QSOCKET_UNLOCK(tcb);
     }
     LogFlowFunc(("(leave) findso: %R[natsock]\n", so));
+
+    /*
+     * Check whether the packet is targeting CTL_ALIAS and drop it if the connection wasn't
+     * initiated by localhost (so == NULL), see @bugref{9896}.
+     */
+    if (   (RT_N2H_U32(ti->ti_dst.s_addr) & ~pData->netmask) == CTL_ALIAS
+        && !pData->fLocalhostReachable
+        && !so)
+    {
+        LogFlowFunc(("Packet for CTL_ALIAS and fLocalhostReachable=false so=NULL -> drop\n"));
+        goto drop;
+    }
 
     /*
      * If the state is CLOSED (i.e., TCB does not exist) then
@@ -721,7 +739,7 @@ findso:
 /*          sorwakeup(so); */
 
             /*
-             * If this is a short packet, then ACK now - with Nagel
+             * If this is a short packet, then ACK now - with Nagle
              *      congestion avoidance sender won't send more until
              *      he gets an ACK.
              *
@@ -825,6 +843,8 @@ findso:
                 so->so_m = m;
                 so->so_ti = ti;
                 so->so_ohdr = RTMemDup(ohdr, ohdrlen);
+                so->so_optp = optp;
+                so->so_optlen = optlen;
                 tp->t_timer[TCPT_KEEP] = TCPTV_KEEP_INIT;
                 TCP_STATE_SWITCH_TO(tp, TCPS_SYN_RECEIVED);
             }
@@ -2014,7 +2034,8 @@ tcp_mss(PNATState pData, register struct tcpcb *tp, u_int offer)
     struct socket *so = tp->t_socket;
     int mss;
 
-    LogFlowFunc(("ENTER: tcp_mss: tp = %R[tcpcb793], offer = %d\n", tp, offer));
+    LogFlowFunc(("ENTER: tcp_mss: offer=%u, t_maxseg=%u; tp=%R[natsock]\n",
+                 offer, (unsigned int)tp->t_maxseg, so));
 
     mss = min(if_mtu, if_mru) - sizeof(struct tcpiphdr);
     if (offer)
@@ -2028,7 +2049,6 @@ tcp_mss(PNATState pData, register struct tcpcb *tp, u_int offer)
     sbreserve(pData, &so->so_snd, tcp_sndspace+((tcp_sndspace%mss)?(mss-(tcp_sndspace%mss)):0));
     sbreserve(pData, &so->so_rcv, tcp_rcvspace+((tcp_rcvspace%mss)?(mss-(tcp_rcvspace%mss)):0));
 
-    Log2((" returning mss = %d\n", mss));
-
+    LogFlowFunc(("LEAVE: mss=%d\n", mss));
     return mss;
 }

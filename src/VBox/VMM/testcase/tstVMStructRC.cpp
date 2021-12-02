@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: tstVMStructRC.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * tstVMMStructRC - Generate structure member and size checks from the
  *                  RC perspective.
@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -56,7 +56,6 @@ AssertCompileSize(RTHCPHYS, 8);
 #include <VBox/vmm/mm.h>
 #include <VBox/vmm/pgm.h>
 #include <VBox/vmm/selm.h>
-#include <VBox/vmm/trpm.h>
 #include <VBox/vmm/vmm.h>
 #include <VBox/vmm/stam.h>
 #include "PDMInternal.h"
@@ -66,10 +65,8 @@ AssertCompileSize(RTHCPHYS, 8);
 #include "MMInternal.h"
 #include "PGMInternal.h"
 #include "SELMInternal.h"
-#include "TRPMInternal.h"
 #include "TMInternal.h"
 #include "IOMInternal.h"
-#include "REMInternal.h"
 #include "HMInternal.h"
 #include "APICInternal.h"
 #include "PATMInternal.h"
@@ -80,7 +77,7 @@ AssertCompileSize(RTHCPHYS, 8);
 #include "CSAMInternal.h"
 #include "EMInternal.h"
 #include "IEMInternal.h"
-#include "REMInternal.h"
+#include "NEMInternal.h"
 #include <VBox/vmm/vm.h>
 #include <VBox/vmm/hm_vmx.h>
 #include <VBox/param.h>

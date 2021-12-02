@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: StorageControllerImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 
 /** @file
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_STORAGECONTROLLERIMPL
-#define ____H_STORAGECONTROLLERIMPL
+#ifndef MAIN_INCLUDED_StorageControllerImpl_h
+#define MAIN_INCLUDED_StorageControllerImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 #include "StorageControllerWrap.h"
 
 class ATL_NO_VTABLE StorageController :
@@ -26,14 +29,14 @@ class ATL_NO_VTABLE StorageController :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(StorageController)
+    DECLARE_COMMON_CLASS_METHODS(StorageController)
 
     HRESULT FinalConstruct();
     void FinalRelease();
 
     // public initializer/uninitializer for internal purposes only
     HRESULT init(Machine *aParent,
-                 const Utf8Str &aName,
+                 const com::Utf8Str &aName,
                  StorageBus_T aBus,
                  ULONG aInstance,
                  bool fBootable);
@@ -90,5 +93,5 @@ private:
     Data *m;
 };
 
-#endif //!____H_STORAGECONTROLLERIMPL
+#endif /* !MAIN_INCLUDED_StorageControllerImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,9 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___iprt_win_intsafe_h___
-#define ___iprt_win_intsafe_h___
+#ifndef IPRT_INCLUDED_win_intsafe_h
+#define IPRT_INCLUDED_win_intsafe_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* There's a conflict between the Visual C++ 2010 stdint.h and wDK 7.1 intsafe.h
    that we must to mediate here.  Current approach is to use the stuff from
@@ -48,6 +50,9 @@
 # ifdef _MSC_VER
 #  pragma warning(push)
 #  pragma warning(disable:4668) /* intsafe.h(55) : warning C4668: '__midl' is not defined as a preprocessor macro, replacing with '0' for '#if/#elif' */
+#  if _MSC_VER >= 1800 /*RT_MSC_VER_VC120*/
+#   pragma warning(disable:4005) /* sdk/v7.1/include/sal_supp.h(57) : warning C4005: '__useHeader' : macro redefinition */
+#  endif
 # endif
 
 # include <intsafe.h>
@@ -58,5 +63,5 @@
 
 #endif /* !_INTSAFE_H_INCLUDED_ */
 
-#endif
+#endif /* !IPRT_INCLUDED_win_intsafe_h */
 

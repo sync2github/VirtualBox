@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: tstDeviceStructSize.cpp 89590 2021-06-10 08:43:08Z vboxsync $ */
 /** @file
  * tstDeviceStructSize - testcase for check structure sizes/alignment
  *                       and to verify that HC and RC uses the same
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,19 +24,40 @@
 #include <VBox/types.h>
 #include <iprt/x86.h>
 
-
 #define VBOX_WITH_HGCM                  /* grumble */
 #define VBOX_DEVICE_STRUCT_TESTCASE
+
+/* Check that important preprocessor macros does not get redefined: */
+#include <VBox/cdefs.h>
+#include <VBox/log.h>
+#ifdef DEBUG
+# define VBOX_DEVICE_STRUCT_TESTCASE_CHECK_DEBUG
+#else
+# undef  VBOX_DEVICE_STRUCT_TESTCASE_CHECK_DEBUG
+#endif
+#ifdef LOG_ENABLED
+# define VBOX_DEVICE_STRUCT_TESTCASE_CHECK_LOG_ENABLED
+#else
+# undef  VBOX_DEVICE_STRUCT_TESTCASE_CHECK_LOG_ENABLED
+#endif
+#ifdef VBOX_STRICT
+# define VBOX_DEVICE_STRUCT_TESTCASE_CHECK_VBOX_STRICT
+#else
+# undef  VBOX_DEVICE_STRUCT_TESTCASE_CHECK_VBOX_STRICT
+#endif
+#ifdef RT_STRICT
+# define VBOX_DEVICE_STRUCT_TESTCASE_CHECK_RT_STRICT
+#else
+# undef  VBOX_DEVICE_STRUCT_TESTCASE_CHECK_RT_STRICT
+#endif
+
+/* The structures we're checking: */
 #undef LOG_GROUP
 #include "../Bus/DevPciInternal.h"
 #undef LOG_GROUP
 #include "../Graphics/DevVGA.cpp"
 #undef LOG_GROUP
-#include "../Input/DevPS2.cpp"
-#undef LOG_GROUP
-#include "../Input/PS2K.cpp"
-#undef LOG_GROUP
-#include "../Input/PS2M.cpp"
+#include "../Input/DevPS2.h"
 #ifdef VBOX_WITH_E1000
 # undef LOG_GROUP
 # include "../Network/DevE1000.cpp"
@@ -58,15 +79,11 @@
 # undef LOG_GROUP
 # include "../../VMM/VMMR3/APIC.cpp"
 #undef LOG_GROUP
-#ifdef VBOX_WITH_NEW_IOAPIC
-# include "../PC/DevIoApic.cpp"
-#else
-# include "../PC/DevIoApic_Old.cpp"
-#endif
+#include "../PC/DevIoApic.cpp"
 #undef LOG_GROUP
 #include "../PC/DevHPET.cpp"
 #undef LOG_GROUP
-#include "../PC/DevLPC.cpp"
+#include "../PC/DevDMA.cpp"
 #undef LOG_GROUP
 #include "../EFI/DevSmc.cpp"
 #undef LOG_GROUP
@@ -89,6 +106,8 @@
 #include "../Parallel/DevParallel.cpp"
 #undef LOG_GROUP
 #include "../Serial/DevSerial.cpp"
+#undef LOG_GROUP
+#include "../Serial/DevOxPcie958.cpp"
 #ifdef VBOX_WITH_AHCI
 # undef LOG_GROUP
 # include "../Storage/DevAHCI.cpp"
@@ -111,12 +130,37 @@
 # include "../Bus/DevPciRaw.cpp"
 #endif
 
+#ifdef VBOX_WITH_IOMMU_AMD
+# undef LOG_GROUP
+# include "../Bus/DevIommuAmd.cpp"
+#endif
+#ifdef VBOX_WITH_IOMMU_INTEL
+# undef LOG_GROUP
+# include "../Bus/DevIommuIntel.cpp"
+#endif
+
 #include <VBox/vmm/pdmaudioifs.h>
 
-# undef LOG_GROUP
-# include "../Audio/DevIchAc97.cpp"
-# undef LOG_GROUP
-# include "../Audio/DevHDA.cpp"
+#undef LOG_GROUP
+#include "../Audio/DevIchAc97.cpp"
+#undef LOG_GROUP
+#include "../Audio/DevHda.h"
+
+
+/* Check that important preprocessor macros didn't get redefined: */
+#if defined(DEBUG)       != defined(VBOX_DEVICE_STRUCT_TESTCASE_CHECK_DEBUG)
+# error "DEBUG was modified!  This may throw off structure tests."
+#endif
+#if defined(LOG_ENABLED) != defined(VBOX_DEVICE_STRUCT_TESTCASE_CHECK_LOG_ENABLED)
+# error "LOG_ENABLED was modified!  This may throw off structure tests."
+#endif
+#if defined(RT_STRICT)   != defined(VBOX_DEVICE_STRUCT_TESTCASE_CHECK_RT_STRICT)
+# error "RT_STRICT was modified!  This may throw off structure tests."
+#endif
+#if defined(VBOX_STRICT) != defined(VBOX_DEVICE_STRUCT_TESTCASE_CHECK_VBOX_STRICT)
+# error "VBOX_STRICT was modified!  This may throw off structure tests."
+#endif
+
 
 #include <stdio.h>
 
@@ -152,7 +196,7 @@
         if (size != sizeof(type)) \
         { \
             printf("tstDeviceStructSize: Error! sizeof(%s): %#x (%d)  Size wrong by %d (should be %d -- but is %d)\n", \
-                   #type, (int)sizeof(type), (int)sizeof(type), (int)(sizeof(type) - size), (int)size, (int)sizeof(type)); \
+                   #type, (int)sizeof(type), (int)sizeof(type), (int)sizeof(type) - (int)size, (int)size, (int)sizeof(type)); \
             rc++; \
         } \
         else \
@@ -282,20 +326,20 @@ int main()
     /*
      * Misc alignment checks (keep this somewhat alphabetical).
      */
+    CHECK_MEMBER_ALIGNMENT(AC97STATE, CritSect, 8);
+
     CHECK_MEMBER_ALIGNMENT(AHCI, lock, 8);
-    CHECK_MEMBER_ALIGNMENT(AHCI, ahciPort[0], 8);
+    CHECK_MEMBER_ALIGNMENT(AHCI, aPorts[0], 8);
+    CHECK_MEMBER_ALIGNMENT(AHCIR3, aPorts[0], 8);
 
-    CHECK_MEMBER_ALIGNMENT(APICDEV, pDevInsR0, 8);
-    CHECK_MEMBER_ALIGNMENT(APICDEV, pDevInsRC, 8);
-
-    CHECK_MEMBER_ALIGNMENT(ATADevState, cTotalSectors, 8);
-    CHECK_MEMBER_ALIGNMENT(ATADevState, StatATADMA, 8);
-    CHECK_MEMBER_ALIGNMENT(ATADevState, StatReads, 8);
+    CHECK_MEMBER_ALIGNMENT(ATADEVSTATE, cTotalSectors, 8);
+    CHECK_MEMBER_ALIGNMENT(ATADEVSTATE, StatATADMA, 8);
+    CHECK_MEMBER_ALIGNMENT(ATADEVSTATE, StatReads, 8);
     CHECK_MEMBER_ALIGNMENT(ATACONTROLLER, lock, 8);
     CHECK_MEMBER_ALIGNMENT(ATACONTROLLER, StatAsyncOps, 8);
     CHECK_MEMBER_ALIGNMENT(BUSLOGIC, CritSectIntr, 8);
 #ifdef VBOX_WITH_STATISTICS
-    CHECK_MEMBER_ALIGNMENT(DEVPIC, StatSetIrqGC, 8);
+    CHECK_MEMBER_ALIGNMENT(DEVPIC, StatSetIrqRZ, 8);
 #endif
 #ifdef VBOX_WITH_E1000
     CHECK_MEMBER_ALIGNMENT(E1KSTATE, cs, 8);
@@ -309,17 +353,14 @@ int main()
 #ifdef VBOX_WITH_USB
 # ifdef VBOX_WITH_EHCI_IMPL
     CHECK_MEMBER_ALIGNMENT(EHCI, RootHub, 8);
-#  ifdef VBOX_WITH_STATISTICS
-    CHECK_MEMBER_ALIGNMENT(EHCI, StatCanceledIsocUrbs, 8);
-#  endif
 # endif
 # ifdef VBOX_WITH_XHCI_IMPL
-    CHECK_MEMBER_ALIGNMENT(XHCI, pWorkerThread, 8);
-    CHECK_MEMBER_ALIGNMENT(XHCI, IBase, 8);
-    CHECK_MEMBER_ALIGNMENT(XHCI, MMIOBase, 8);
-    CHECK_MEMBER_ALIGNMENT(XHCI, RootHub2, 8);
-    CHECK_MEMBER_ALIGNMENT(XHCI, RootHub3, 8);
+    CHECK_MEMBER_ALIGNMENT(XHCI, aPorts, 8);
+    CHECK_MEMBER_ALIGNMENT(XHCI, aInterrupters, 8);
+    CHECK_MEMBER_ALIGNMENT(XHCI, aInterrupters[0].lock, 8);
+    CHECK_MEMBER_ALIGNMENT(XHCI, aInterrupters[1].lock, 8);
     CHECK_MEMBER_ALIGNMENT(XHCI, cmdr_dqp, 8);
+    CHECK_MEMBER_ALIGNMENT(XHCI, hMmio, 8);
 #  ifdef VBOX_WITH_STATISTICS
     CHECK_MEMBER_ALIGNMENT(XHCI, StatErrorIsocUrbs, 8);
     CHECK_MEMBER_ALIGNMENT(XHCI, StatIntrsCleared, 8);
@@ -327,23 +368,14 @@ int main()
 # endif
 #endif
     CHECK_MEMBER_ALIGNMENT(E1KSTATE, StatReceiveBytes, 8);
-#ifdef VBOX_WITH_NEW_IOAPIC
     CHECK_MEMBER_ALIGNMENT(IOAPIC, au64RedirTable, 8);
 # ifdef VBOX_WITH_STATISTICS
     CHECK_MEMBER_ALIGNMENT(IOAPIC, StatMmioReadRZ, 8);
 # endif
-#else
-# ifdef VBOX_WITH_STATISTICS
-    CHECK_MEMBER_ALIGNMENT(IOAPIC, StatMMIOReadGC, 8);
-    CHECK_MEMBER_ALIGNMENT(IOAPIC, StatMMIOReadGC, 8);
-# endif
-#endif
-    CHECK_MEMBER_ALIGNMENT(LSILOGISCSI, GCPhysMMIOBase, 8);
-    CHECK_MEMBER_ALIGNMENT(LSILOGISCSI, aMessage, 8);
-    CHECK_MEMBER_ALIGNMENT(LSILOGISCSI, ReplyPostQueueCritSect, 8);
-    CHECK_MEMBER_ALIGNMENT(LSILOGISCSI, ReplyFreeQueueCritSect, 8);
-    CHECK_MEMBER_ALIGNMENT(LSILOGISCSI, uReplyFreeQueueNextEntryFreeWrite, 8);
-    CHECK_MEMBER_ALIGNMENT(LSILOGISCSI, VBoxSCSI, 8);
+    CHECK_MEMBER_ALIGNMENT(LSILOGICSCSI, aMessage, 8);
+    CHECK_MEMBER_ALIGNMENT(LSILOGICSCSI, ReplyPostQueueCritSect, 8);
+    CHECK_MEMBER_ALIGNMENT(LSILOGICSCSI, ReplyFreeQueueCritSect, 8);
+    CHECK_MEMBER_ALIGNMENT(LSILOGICSCSI, uReplyFreeQueueNextEntryFreeWrite, 8);
 #ifdef VBOX_WITH_USB
     CHECK_MEMBER_ALIGNMENT(OHCI, RootHub, 8);
 # ifdef VBOX_WITH_STATISTICS
@@ -360,19 +392,20 @@ int main()
     CHECK_MEMBER_ALIGNMENT(PCNETSTATE, StatMMIOReadRZ, 8);
 #endif
     CHECK_MEMBER_ALIGNMENT(PITSTATE, StatPITIrq, 8);
-    CHECK_MEMBER_ALIGNMENT(SerialState, CritSect, 8);
+    CHECK_MEMBER_ALIGNMENT(DEVSERIAL, UartCore, 8);
+    CHECK_MEMBER_ALIGNMENT(UARTCORE, CritSect, 8);
 #ifdef VBOX_WITH_VMSVGA
     CHECK_SIZE(VMSVGAState, RT_ALIGN_Z(sizeof(VMSVGAState), 8));
     CHECK_MEMBER_ALIGNMENT(VGASTATE, svga, 8);
-    CHECK_MEMBER_ALIGNMENT(VGASTATE, svga.u64HostWindowId, 8);
+    CHECK_MEMBER_ALIGNMENT(VGASTATE, svga.au32ScratchRegion, 8);
+    CHECK_MEMBER_ALIGNMENT(VGASTATE, svga.StatRegBitsPerPixelWr, 8);
 #endif
     CHECK_MEMBER_ALIGNMENT(VGASTATE, cMonitors, 8);
     CHECK_MEMBER_ALIGNMENT(VGASTATE, GCPhysVRAM, 8);
-    CHECK_MEMBER_ALIGNMENT(VGASTATE, Dev, 8);
     CHECK_MEMBER_ALIGNMENT(VGASTATE, CritSect, 8);
     CHECK_MEMBER_ALIGNMENT(VGASTATE, StatRZMemoryRead, 8);
     CHECK_MEMBER_ALIGNMENT(VGASTATE, CritSectIRQ, 8);
-    CHECK_MEMBER_ALIGNMENT(VMMDevState, CritSect, 8);
+    CHECK_MEMBER_ALIGNMENT(VMMDEV, CritSect, 8);
 #ifdef VBOX_WITH_VIRTIO
     CHECK_MEMBER_ALIGNMENT(VPCISTATE, cs, 8);
     CHECK_MEMBER_ALIGNMENT(VPCISTATE, led, 4);
@@ -380,6 +413,26 @@ int main()
 #endif
 #ifdef VBOX_WITH_PCI_PASSTHROUGH_IMPL
     CHECK_MEMBER_ALIGNMENT(PCIRAWSENDREQ, u.aGetRegionInfo.u64RegionSize, 8);
+#endif
+#ifdef VBOX_WITH_IOMMU_AMD
+    CHECK_MEMBER_ALIGNMENT(IOMMU, IommuBar, 8);
+    CHECK_MEMBER_ALIGNMENT(IOMMU, aDevTabBaseAddrs, 8);
+    CHECK_MEMBER_ALIGNMENT(IOMMU, CmdBufHeadPtr, 8);
+    CHECK_MEMBER_ALIGNMENT(IOMMU, Status, 8);
+# ifdef VBOX_WITH_STATISTICS
+    CHECK_MEMBER_ALIGNMENT(IOMMU, StatMmioReadR3, 8);
+# endif
+#endif
+#ifdef VBOX_WITH_IOMMU_INTEL
+    CHECK_MEMBER_ALIGNMENT(DMAR, abRegs0, 8);
+    CHECK_MEMBER_ALIGNMENT(DMAR, abRegs1, 8);
+    CHECK_MEMBER_ALIGNMENT(DMAR, uIrtaReg, 8);
+    CHECK_MEMBER_ALIGNMENT(DMAR, uRtaddrReg, 8);
+    CHECK_MEMBER_ALIGNMENT(DMAR, hEvtInvQueue, 8);
+# ifdef VBOX_WITH_STATISTICS
+    CHECK_MEMBER_ALIGNMENT(DMAR, StatMmioReadR3, 8);
+    CHECK_MEMBER_ALIGNMENT(DMAR, StatPasidDevtlbInvDsc, 8);
+# endif
 #endif
 
 #ifdef VBOX_WITH_RAW_MODE

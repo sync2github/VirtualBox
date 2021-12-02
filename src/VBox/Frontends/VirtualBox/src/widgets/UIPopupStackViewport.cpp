@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIPopupStackViewport.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIPopupStackViewport class implementation.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,17 +15,12 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
 /* GUI includes: */
-# include "UIPopupStackViewport.h"
-# include "UIPopupPane.h"
+#include "UIPopupPane.h"
+#include "UIPopupStackViewport.h"
 
 /* Other VBox includes: */
-# include <VBox/sup.h>
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include <iprt/assert.h>
 
 
 UIPopupStackViewport::UIPopupStackViewport()
@@ -34,78 +29,79 @@ UIPopupStackViewport::UIPopupStackViewport()
 {
 }
 
-bool UIPopupStackViewport::exists(const QString &strPopupPaneID) const
+bool UIPopupStackViewport::exists(const QString &strID) const
 {
     /* Is there already popup-pane with the same ID? */
-    return m_panes.contains(strPopupPaneID);
+    return m_panes.contains(strID);
 }
 
-void UIPopupStackViewport::createPopupPane(const QString &strPopupPaneID,
+void UIPopupStackViewport::createPopupPane(const QString &strID,
                                            const QString &strMessage, const QString &strDetails,
                                            const QMap<int, QString> &buttonDescriptions)
 {
     /* Make sure there is no such popup-pane already: */
-    if (m_panes.contains(strPopupPaneID))
+    if (m_panes.contains(strID))
     {
         AssertMsgFailed(("Popup-pane already exists!"));
         return;
     }
 
     /* Create new popup-pane: */
-    UIPopupPane *pPopupPane = m_panes[strPopupPaneID] = new UIPopupPane(this,
+    UIPopupPane *pPopupPane = m_panes[strID] = new UIPopupPane(this,
                                                                         strMessage, strDetails,
                                                                         buttonDescriptions);
 
     /* Attach popup-pane connection: */
-    connect(this, SIGNAL(sigProposePopupPaneWidth(int)), pPopupPane, SLOT(sltHandleProposalForWidth(int)));
-    connect(pPopupPane, SIGNAL(sigSizeHintChanged()), this, SLOT(sltAdjustGeometry()));
-    connect(pPopupPane, SIGNAL(sigDone(int)), this, SLOT(sltPopupPaneDone(int)));
+    connect(this, &UIPopupStackViewport::sigProposePopupPaneSize, pPopupPane, &UIPopupPane::sltHandleProposalForSize);
+    connect(pPopupPane, &UIPopupPane::sigSizeHintChanged, this, &UIPopupStackViewport::sltAdjustGeometry);
+    connect(pPopupPane, &UIPopupPane::sigDone, this, &UIPopupStackViewport::sltPopupPaneDone);
 
     /* Show popup-pane: */
     pPopupPane->show();
 }
 
-void UIPopupStackViewport::updatePopupPane(const QString &strPopupPaneID,
+void UIPopupStackViewport::updatePopupPane(const QString &strID,
                                            const QString &strMessage, const QString &strDetails)
 {
     /* Make sure there is such popup-pane already: */
-    if (!m_panes.contains(strPopupPaneID))
+    if (!m_panes.contains(strID))
     {
         AssertMsgFailed(("Popup-pane doesn't exists!"));
         return;
     }
 
     /* Get existing popup-pane: */
-    UIPopupPane *pPopupPane = m_panes[strPopupPaneID];
+    UIPopupPane *pPopupPane = m_panes[strID];
 
     /* Update message and details: */
     pPopupPane->setMessage(strMessage);
     pPopupPane->setDetails(strDetails);
 }
 
-void UIPopupStackViewport::recallPopupPane(const QString &strPopupPaneID)
+void UIPopupStackViewport::recallPopupPane(const QString &strID)
 {
     /* Make sure there is such popup-pane already: */
-    if (!m_panes.contains(strPopupPaneID))
+    if (!m_panes.contains(strID))
     {
         AssertMsgFailed(("Popup-pane doesn't exists!"));
         return;
     }
 
     /* Get existing popup-pane: */
-    UIPopupPane *pPopupPane = m_panes[strPopupPaneID];
+    UIPopupPane *pPopupPane = m_panes[strID];
 
     /* Recall popup-pane: */
     pPopupPane->recall();
 }
 
-void UIPopupStackViewport::sltHandleProposalForWidth(int iWidth)
+void UIPopupStackViewport::sltHandleProposalForSize(QSize newSize)
 {
     /* Subtract layout margins: */
-    iWidth -= 2 * m_iLayoutMargin;
+    newSize.setWidth(newSize.width() - 2 * m_iLayoutMargin);
+    newSize.setHeight(newSize.height() - 2 * m_iLayoutMargin);
 
-    /* Propagate resulting width to popups: */
-    emit sigProposePopupPaneWidth(iWidth);
+    /* Propagate resulting size to popups: */
+    emit sigProposePopupPaneSize(newSize);
 }
 
 void UIPopupStackViewport::sltAdjustGeometry()
@@ -131,23 +127,23 @@ void UIPopupStackViewport::sltPopupPaneDone(int iResultCode)
     }
 
     /* Make sure the popup-pane still exists: */
-    const QString strPopupPaneID(m_panes.key(pPopupPane, QString()));
-    if (strPopupPaneID.isNull())
+    const QString strID(m_panes.key(pPopupPane, QString()));
+    if (strID.isNull())
     {
         AssertMsgFailed(("Popup-pane already destroyed!"));
         return;
     }
 
     /* Notify listeners about popup-pane removal: */
-    emit sigPopupPaneDone(strPopupPaneID, iResultCode);
+    emit sigPopupPaneDone(strID, iResultCode);
 
     /* Delete popup-pane asyncronously.
      * To avoid issues with events which already posted: */
-    m_panes.remove(strPopupPaneID);
+    m_panes.remove(strID);
     pPopupPane->deleteLater();
 
     /* Notify listeners about popup-pane removed: */
-    emit sigPopupPaneRemoved(strPopupPaneID);
+    emit sigPopupPaneRemoved(strID);
 
     /* Adjust geometry: */
     sltAdjustGeometry();
@@ -212,4 +208,3 @@ void UIPopupStackViewport::layoutContent()
         iY += (iPaneHeight + m_iLayoutSpacing);
     }
 }
-

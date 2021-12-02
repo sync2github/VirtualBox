@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: proxy.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT Network - proxy setup and utilities.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,7 @@
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -359,6 +360,22 @@ proxy_create_socket(int sdom, int stype)
     }
 #endif
 
+    /*
+     * Disable the Nagle algorithm. Otherwise the host may hold back
+     * packets that the guest wants to go out, causing potentially
+     * horrible performance. The guest is already applying the Nagle
+     * algorithm (or not) the way it wants.
+     */
+    if (stype == SOCK_STREAM) {
+        int on = 1;
+        const socklen_t onlen = sizeof(on);
+
+        status = setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (char *)&on, onlen);
+        if (status < 0) {
+            DPRINTF(("TCP_NODELAY: %R[sockerr]\n", SOCKERRNO()));
+        }
+    }
+
 #if defined(RT_OS_WINDOWS)
     /*
      * lwIP only holds one packet of "refused data" for us.  Proxy
@@ -392,6 +409,37 @@ proxy_create_socket(int sdom, int stype)
 
     return s;
 }
+
+
+#ifdef RT_OS_LINUX
+/**
+ * Fixup a socket returned by accept(2).
+ *
+ * On Linux a socket returned by accept(2) does NOT inherit the socket
+ * options from the listening socket!  We need to repeat parts of the
+ * song and dance we did above to make it non-blocking.
+ */
+int
+proxy_fixup_accepted_socket(SOCKET s)
+{
+    int sflags;
+    int status;
+
+    sflags = fcntl(s, F_GETFL, 0);
+    if (sflags < 0) {
+        DPRINTF(("F_GETFL: %R[sockerr]\n", SOCKERRNO()));
+        return -1;
+    }
+
+    status = fcntl(s, F_SETFL, sflags | O_NONBLOCK);
+    if (status < 0) {
+        DPRINTF(("O_NONBLOCK: %R[sockerr]\n", SOCKERRNO()));
+        return -1;
+    }
+
+    return 0;
+}
+#endif  /* RT_OS_LINUX */
 
 
 /**

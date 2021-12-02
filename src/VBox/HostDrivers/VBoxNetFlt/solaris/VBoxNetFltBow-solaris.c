@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetFltBow-solaris.c 90873 2021-08-25 11:29:33Z vboxsync $ */
 /** @file
  * VBoxNetFlt - Network Filter Driver (Host), Solaris Specific Code.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -433,14 +433,14 @@ LOCAL int VBoxNetFltSolarisGetInfo(dev_info_t *pDip, ddi_info_cmd_t enmCmd, void
         case DDI_INFO_DEVT2DEVINFO:
         {
             *ppvResult = g_pVBoxNetFltSolarisDip;
-            return DDI_SUCCESS;
+            return *ppvResult ? DDI_SUCCESS : DDI_FAILURE;
         }
 
         case DDI_INFO_DEVT2INSTANCE:
         {
-            int instance = getminor((dev_t)pvArg);
-            *ppvResult = (void *)(uintptr_t)instance;
-            return DDI_SUCCESS;
+            /* There can only be a single-instance of this driver and thus its instance number is 0. */
+            *ppvResult = (void *)0;
+            break;
         }
     }
 
@@ -687,7 +687,7 @@ LOCAL void vboxNetFltSolarisRecv(void *pvData, mac_resource_handle_t hResource, 
     for (mblk_t *pCurMsg = pMsg; pCurMsg != NULL; pCurMsg = pCurMsg->b_next)
     {
         unsigned cSegs = vboxNetFltSolarisMBlkCalcSGSegs(pThis, pCurMsg);
-        PINTNETSG pSG = (PINTNETSG)alloca(RT_OFFSETOF(INTNETSG, aSegs[cSegs]));
+        PINTNETSG pSG = (PINTNETSG)alloca(RT_UOFFSETOF_DYN(INTNETSG, aSegs[cSegs]));
         int rc = vboxNetFltSolarisMBlkToSG(pThis, pMsg, pSG, cSegs, fSrc);
         if (RT_SUCCESS(rc))
             pThis->pSwitchPort->pfnRecv(pThis->pSwitchPort, NULL, pSG, fSrc);
@@ -721,8 +721,8 @@ LOCAL void vboxNetFltSolarisLinkNotify(void *pvArg, mac_notify_type_t Type)
     LogRel((DEVICE_NAME ":vboxNetFltSolarisLinkNotify pvArg=%p Type=%d\n", pvArg, Type));
 
     PVBOXNETFLTINS pThis = pvArg;
-    AssertReturnVoid(VALID_PTR(pThis));
-    AssertReturnVoid(pThis->u.s.hInterface);
+    AssertPtrReturnVoid(pThis);
+    AssertPtrReturnVoid(pThis->u.s.hInterface);
 
     switch (Type)
     {
@@ -1433,7 +1433,7 @@ int vboxNetFltPortOsXmit(PVBOXNETFLTINS pThis, void *pvIfData, PINTNETSG pSG, ui
      * Validate parameters.
      */
     PVBOXNETFLTVNIC pVNIC = pvIfData;
-    AssertReturn(VALID_PTR(pVNIC), VERR_INVALID_POINTER);
+    AssertPtrReturn(pVNIC, VERR_INVALID_POINTER);
     AssertMsgReturn(pVNIC->u32Magic == VBOXNETFLTVNIC_MAGIC,
                     ("Invalid magic=%#x (expected %#x)\n", pVNIC->u32Magic, VBOXNETFLTVNIC_MAGIC),
                     VERR_INVALID_MAGIC);
@@ -1474,11 +1474,11 @@ void vboxNetFltPortOsNotifyMacAddress(PVBOXNETFLTINS pThis, void *pvIfData, PCRT
      * Validate parameters.
      */
     PVBOXNETFLTVNIC pVNIC = pvIfData;
-    AssertMsgReturnVoid(VALID_PTR(pVNIC) && pVNIC->u32Magic == VBOXNETFLTVNIC_MAGIC,
-                    ("Invalid pVNIC=%p magic=%#x (expected %#x)\n", pvIfData,
-                     VALID_PTR(pVNIC) ? pVNIC->u32Magic : 0, VBOXNETFLTVNIC_MAGIC));
+    AssertPtrReturnVoid(pVNIC);
+    AssertMsgReturnVoid(pVNIC->u32Magic == VBOXNETFLTVNIC_MAGIC,
+                        ("Invalid pVNIC=%p magic=%#x (expected %#x)\n", pvIfData, pVNIC->u32Magic, VBOXNETFLTVNIC_MAGIC));
     AssertMsgReturnVoid(pVNIC->hLinkId != DATALINK_INVALID_LINKID,
-                    ("Invalid hLinkId pVNIC=%p magic=%#x\n", pVNIC, pVNIC->u32Magic));
+                        ("Invalid hLinkId pVNIC=%p magic=%#x\n", pVNIC, pVNIC->u32Magic));
 
     /*
      * Set the MAC address of the VNIC to the one used by the VM interface.

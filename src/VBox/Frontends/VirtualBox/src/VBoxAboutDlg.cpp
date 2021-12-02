@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxAboutDlg.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - VBoxAboutDlg class implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,34 +15,45 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QDir>
-# include <QDialogButtonBox>
-# include <QEvent>
-# include <QLabel>
-# include <QPainter>
-# include <QPushButton>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QEvent>
+#include <QLabel>
+#include <QPainter>
+#include <QPushButton>
+#include <QStyle>
+#include <QVBoxLayout>
 
 /* GUI includes: */
-# include "UIConverter.h"
-# include "UIExtraDataManager.h"
-# include "UIIconPool.h"
-# include "VBoxAboutDlg.h"
-# include "VBoxGlobal.h"
+#include "UIConverter.h"
+#include "UIExtraDataManager.h"
+#include "UIIconPool.h"
+#include "VBoxAboutDlg.h"
+#include "UICommon.h"
 
 /* Other VBox includes: */
-# include <iprt/path.h>
-# include <VBox/version.h> /* VBOX_VENDOR */
+#include <iprt/path.h>
+#include <VBox/version.h> /* VBOX_VENDOR */
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
 
 VBoxAboutDlg::VBoxAboutDlg(QWidget *pParent, const QString &strVersion)
+#ifdef VBOX_WS_MAC
+    // No need for About dialog parent on macOS.
+    // First of all, non of other native apps (Safari, App Store, iTunes) centers About dialog according the app itself, they do
+    // it according to screen instead, we should do it as well.  Besides that since About dialog is not modal, it will be in
+    // conflict with modal dialogs if there will be a parent passed, because the dialog will not have own event-loop in that case.
+    : QIWithRetranslateUI2<QIDialog>(0)
+    , m_pPseudoParent(pParent)
+#else
+    // On other hosts we will keep the current behavior for now.
+    // First of all it's quite difficult to find native (Metro UI) Windows app which have About dialog at all.  But non-native
+    // cross-platform apps (Qt Creator, VLC) centers About dialog according the app exactly.
     : QIWithRetranslateUI2<QIDialog>(pParent)
+    , m_pPseudoParent(0)
+#endif
     , m_strVersion(strVersion)
+    , m_pMainLayout(0)
     , m_pLabel(0)
 {
     /* Prepare: */
@@ -54,14 +65,15 @@ bool VBoxAboutDlg::event(QEvent *pEvent)
     /* Set fixed-size for dialog: */
     if (pEvent->type() == QEvent::Polish)
         setFixedSize(m_size);
+
     /* Call to base-class: */
     return QIDialog::event(pEvent);
 }
 
-void VBoxAboutDlg::paintEvent(QPaintEvent * /* pEvent */)
+void VBoxAboutDlg::paintEvent(QPaintEvent *)
 {
-    QPainter painter(this);
     /* Draw About-VirtualBox background image: */
+    QPainter painter(this);
     painter.drawPixmap(0, 0, m_pixmap);
 }
 
@@ -92,12 +104,16 @@ void VBoxAboutDlg::prepare()
     /* Delete dialog on close: */
     setAttribute(Qt::WA_DeleteOnClose);
 
+    /* Make sure the dialog is deleted on pseudo-parent destruction: */
+    if (m_pPseudoParent)
+        connect(m_pPseudoParent, &QObject::destroyed, this, &VBoxAboutDlg::close);
+
     /* Choose default image: */
     QString strPath(":/about.png");
 
     /* Branding: Use a custom about splash picture if set: */
-    const QString strSplash = vboxGlobal().brandingGetKey("UI/AboutSplash");
-    if (vboxGlobal().brandingIsActive() && !strSplash.isEmpty())
+    const QString strSplash = uiCommon().brandingGetKey("UI/AboutSplash");
+    if (uiCommon().brandingIsActive() && !strSplash.isEmpty())
     {
         char szExecPath[1024];
         RTPathExecDir(szExecPath, 1024);
@@ -107,9 +123,21 @@ void VBoxAboutDlg::prepare()
     }
 
     /* Load image: */
+    const int iIconMetric = QApplication::style()->pixelMetric(QStyle::PM_LargeIconSize);
+    const double dRatio = (double)iIconMetric / 32;
     const QIcon icon = UIIconPool::iconSet(strPath);
-    m_size = icon.availableSizes().first();
+    m_size = icon.availableSizes().value(0, QSize(640, 480));
+    m_size *= dRatio;
     m_pixmap = icon.pixmap(m_size);
+
+    // WORKAROUND:
+    // Since we don't have x3 and x4 HiDPI icons yet,
+    // and we hadn't enabled automatic up-scaling for now,
+    // we have to make sure m_pixmap is upscaled to required size.
+    const QSize actualSize = m_pixmap.size() / m_pixmap.devicePixelRatio();
+    if (   actualSize.width() < m_size.width()
+        || actualSize.height() < m_size.height())
+        m_pixmap = m_pixmap.scaled(m_size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 
     /* Prepare main-layout: */
     prepareMainLayout();
@@ -122,7 +150,7 @@ void VBoxAboutDlg::prepareMainLayout()
 {
     /* Create main-layout: */
     m_pMainLayout = new QVBoxLayout(this);
-    AssertPtrReturnVoid(m_pMainLayout);
+    if (m_pMainLayout)
     {
         /* Prepare label: */
         prepareLabel();
@@ -136,13 +164,13 @@ void VBoxAboutDlg::prepareLabel()
 {
     /* Create label for version text: */
     m_pLabel = new QLabel;
-    AssertPtrReturnVoid(m_pLabel);
+    if (m_pLabel)
     {
         /* Prepare label for version text: */
         QPalette palette;
         /* Branding: Set a different text color (because splash also could be white),
          * otherwise use white as default color: */
-        const QString strColor = vboxGlobal().brandingGetKey("UI/AboutTextColor");
+        const QString strColor = uiCommon().brandingGetKey("UI/AboutTextColor");
         if (!strColor.isEmpty())
             palette.setColor(QPalette::WindowText, QColor(strColor).name());
         else
@@ -161,16 +189,15 @@ void VBoxAboutDlg::prepareCloseButton()
 {
     /* Create button-box: */
     QDialogButtonBox *pButtonBox = new QDialogButtonBox;
-    AssertPtrReturnVoid(pButtonBox);
+    if (pButtonBox)
     {
         /* Create close-button: */
         QPushButton *pCloseButton = pButtonBox->addButton(QDialogButtonBox::Close);
         AssertPtrReturnVoid(pCloseButton);
         /* Prepare close-button: */
-        connect(pButtonBox, SIGNAL(rejected()), this, SLOT(reject()));
+        connect(pButtonBox, &QDialogButtonBox::rejected, this, &VBoxAboutDlg::reject);
 
         /* Add button-box to the main-layout: */
         m_pMainLayout->addWidget(pButtonBox);
     }
 }
-

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: timer-posix.cpp 90803 2021-08-23 19:08:38Z vboxsync $ */
 /** @file
  * IPRT - Timer, POSIX.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -378,7 +378,7 @@ static DECLCALLBACK(int) rttimerThread(RTTHREAD hThreadSelf, void *pvArg)
             {
                 PRTTIMER pTimer = (PRTTIMER)SigInfo.si_value.sival_ptr;
                 AssertPtr(pTimer);
-                if (RT_UNLIKELY(    !VALID_PTR(pTimer)
+                if (RT_UNLIKELY(    !RT_VALID_PTR(pTimer)
                                 ||  ASMAtomicUoReadU8(&pTimer->fSuspended)
                                 ||  ASMAtomicUoReadU8(&pTimer->fDestroyed)
                                 ||  pTimer->u32Magic != RTTIMER_MAGIC))
@@ -663,11 +663,13 @@ RTR3DECL(int) RTTimerDestroy(PRTTIMER pTimer)
     /*
      * Suspend the timer if it's running.
      */
-    if (pTimer->fSuspended)
+    if (!pTimer->fSuspended)
     {
         struct itimerspec TimerSpec;
         TimerSpec.it_value.tv_sec     = 0;
         TimerSpec.it_value.tv_nsec    = 0;
+        TimerSpec.it_interval.tv_sec  = 0;
+        TimerSpec.it_interval.tv_nsec = 0;
         int err = timer_settime(pTimer->NativeTimer, 0, &TimerSpec, NULL); NOREF(err);
         AssertMsg(!err, ("%d / %d\n", err, errno));
     }
@@ -812,6 +814,8 @@ RTDECL(int) RTTimerStop(PRTTIMER pTimer)
     struct itimerspec TimerSpec;
     TimerSpec.it_value.tv_sec     = 0;
     TimerSpec.it_value.tv_nsec    = 0;
+    TimerSpec.it_interval.tv_sec  = 0;
+    TimerSpec.it_interval.tv_nsec = 0;
     int err = timer_settime(pTimer->NativeTimer, 0, &TimerSpec, NULL);
     int rc = err == 0 ? VINF_SUCCESS : RTErrConvertFromErrno(errno);
 #endif /* IPRT_WITH_POSIX_TIMERS */

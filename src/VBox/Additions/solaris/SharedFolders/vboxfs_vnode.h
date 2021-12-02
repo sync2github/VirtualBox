@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vboxfs_vnode.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox File System for Solaris Guests, VNode header.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBoxFS_node_Solaris_h
-#define	___VBoxFS_node_Solaris_h
+#ifndef GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_vnode_h
+#define GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_vnode_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <sys/t_lock.h>
 #include <sys/avl.h>
@@ -83,4 +86,4 @@ extern kmutex_t sffs_lock;
 }
 #endif
 
-#endif	/* !___VBoxFS_node_Solaris_h */
+#endif /* !GA_INCLUDED_SRC_solaris_SharedFolders_vboxfs_vnode_h */

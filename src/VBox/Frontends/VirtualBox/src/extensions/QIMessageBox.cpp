@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIMessageBox.cpp 89950 2021-06-29 12:53:54Z vboxsync $ */
 /** @file
- * VBox Qt GUI - QIMessageBox class implementation.
+ * VBox Qt GUI - Qt extensions: QIMessageBox class implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,35 +15,32 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QVBoxLayout>
-# include <QHBoxLayout>
-# include <QClipboard>
-# include <QLabel>
-# include <QCheckBox>
-# include <QPushButton>
-# include <QStyle>
-# include <QMimeData>
+#include <QCheckBox>
+#include <QClipboard>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QMimeData>
+#include <QPushButton>
+#include <QStyle>
+#include <QVBoxLayout>
 
 /* GUI includes: */
-# include "QIMessageBox.h"
-# include "QILabel.h"
-# include "QIArrowSplitter.h"
-# include "QIDialogButtonBox.h"
-# include "UIIconPool.h"
+#include "QIArrowSplitter.h"
+#include "QIDialogButtonBox.h"
+#include "QIMessageBox.h"
+#include "QIRichTextLabel.h"
+#include "UICommon.h"
+#include "UIIconPool.h"
+#include "UIMessageCenter.h"
 
 /* Other VBox includes: */
-# include <iprt/assert.h>
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include <iprt/assert.h>
 
 
 QIMessageBox::QIMessageBox(const QString &strTitle, const QString &strMessage, AlertIconType iconType,
-                           int iButton1 /* = 0*/, int iButton2 /* = 0*/, int iButton3 /* = 0*/, QWidget *pParent /* = 0*/)
+                           int iButton1 /* = 0*/, int iButton2 /* = 0*/, int iButton3 /* = 0*/, QWidget *pParent /* = 0*/,
+                           const QString &strHelpKeyword /* = QString() */)
     : QIDialog(pParent)
     , m_strTitle(strTitle)
     , m_iconType(iconType)
@@ -59,7 +56,9 @@ QIMessageBox::QIMessageBox(const QString &strTitle, const QString &strMessage, A
     , m_pButton1(0)
     , m_pButton2(0)
     , m_pButton3(0)
+    , m_pButtonHelp(0)
     , m_pButtonBox(0)
+    , m_strHelpKeyword(strHelpKeyword)
     , m_fDone(false)
 {
     /* Prepare: */
@@ -123,6 +122,26 @@ void QIMessageBox::setButtonText(int iButton, const QString &strText)
     }
 }
 
+void QIMessageBox::polishEvent(QShowEvent *pPolishEvent)
+{
+    /* Call to base-class: */
+    QIDialog::polishEvent(pPolishEvent);
+
+    /* Update size finally: */
+    sltUpdateSize();
+}
+
+void QIMessageBox::closeEvent(QCloseEvent *pCloseEvent)
+{
+    if (m_fDone)
+        pCloseEvent->accept();
+    else
+    {
+        pCloseEvent->ignore();
+        reject();
+    }
+}
+
 void QIMessageBox::sltUpdateSize()
 {
     /* Fix minimum possible size: */
@@ -171,19 +190,17 @@ void QIMessageBox::prepare()
     {
         /* Configure main-layout: */
 #ifdef VBOX_WS_MAC
-        pMainLayout->setContentsMargins(40, 11, 40, 11);
+        pMainLayout->setContentsMargins(40, 20, 40, 20);
         pMainLayout->setSpacing(15);
-#else /* !VBOX_WS_MAC */
-        pMainLayout->setContentsMargins(11, 11, 11, 11);
-        pMainLayout->setSpacing(10);
-#endif /* !VBOX_WS_MAC */
+#else
+        pMainLayout->setSpacing(qApp->style()->pixelMetric(QStyle::PM_LayoutVerticalSpacing) * 2);
+#endif
         /* Create top-layout: */
         QHBoxLayout *pTopLayout = new QHBoxLayout;
         AssertPtrReturnVoid(pTopLayout);
         {
             /* Configure top-layout: */
             pTopLayout->setContentsMargins(0, 0, 0, 0);
-            pTopLayout->setSpacing(10);
             /* Create icon-label: */
             m_pLabelIcon = new QLabel;
             AssertPtrReturnVoid(m_pLabelIcon);
@@ -196,15 +213,11 @@ void QIMessageBox::prepare()
                 pTopLayout->addWidget(m_pLabelIcon);
             }
             /* Create text-label: */
-            m_pLabelText = new QILabel(m_strMessage);
+            m_pLabelText = new QIRichTextLabel;
             AssertPtrReturnVoid(m_pLabelText);
             {
                 /* Configure text-label: */
-                m_pLabelText->setWordWrap(true);
-                m_pLabelText->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-                QSizePolicy sizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
-                sizePolicy.setHeightForWidth(true);
-                m_pLabelText->setSizePolicy(sizePolicy);
+                m_pLabelText->setText(compressLongWords(m_strMessage));
                 /* Add text-label into top-layout: */
                 pTopLayout->addWidget(m_pLabelText);
             }
@@ -216,7 +229,8 @@ void QIMessageBox::prepare()
         AssertPtrReturnVoid(m_pDetailsContainer);
         {
             /* Configure container: */
-            connect(m_pDetailsContainer, SIGNAL(sigSizeHintChange()), this, SLOT(sltUpdateSize()));
+            connect(m_pDetailsContainer, &QIArrowSplitter::sigSizeHintChange,
+                    this, &QIMessageBox::sltUpdateSize);
             /* Add details-container into main-layout: */
             pMainLayout->addWidget(m_pDetailsContainer);
             /* Update details-container finally: */
@@ -241,13 +255,24 @@ void QIMessageBox::prepare()
             m_pButtonBox->setCenterButtons(true);
             m_pButton1 = createButton(m_iButton1);
             if (m_pButton1)
-                connect(m_pButton1, SIGNAL(clicked()), SLOT(sltDone1()));
+                connect(m_pButton1, &QPushButton::clicked, this, &QIMessageBox::sltDone1);
             m_pButton2 = createButton(m_iButton2);
             if (m_pButton2)
-                connect(m_pButton2, SIGNAL(clicked()), SLOT(sltDone2()));
+                connect(m_pButton2, &QPushButton::clicked, this, &QIMessageBox::sltDone2);
             m_pButton3 = createButton(m_iButton3);
             if (m_pButton3)
-                connect(m_pButton3, SIGNAL(clicked()), SLOT(sltDone3()));
+                connect(m_pButton3, &QPushButton::clicked, this, &QIMessageBox::sltDone3);
+            /* Create the help button and connect it to relevant slot in case a help word is supplied: */
+            if (!m_strHelpKeyword.isEmpty())
+            {
+                m_pButtonHelp = createButton(AlertButton_Help);
+                if (m_pButtonHelp)
+                {
+                    uiCommon().setHelpKeyword(m_pButtonHelp, m_strHelpKeyword);
+                    connect(m_pButtonHelp, &QPushButton::clicked, &msgCenter(), &UIMessageCenter::sltHandleHelpRequest);
+                }
+            }
+
             /* Make sure Escape button always set: */
             Assert(m_iButtonEsc);
             /* If this is a critical message add a "Copy to clipboard" button: */
@@ -255,7 +280,7 @@ void QIMessageBox::prepare()
             {
                 QPushButton *pCopyButton = createButton(AlertButton_Copy);
                 pCopyButton->setToolTip(tr("Copy all errors to the clipboard"));
-                connect(pCopyButton, SIGNAL(clicked()), SLOT(sltCopy()));
+                connect(pCopyButton, &QPushButton::clicked, this, &QIMessageBox::sltCopy);
             }
             /* Add button-box into main-layout: */
             pMainLayout->addWidget(m_pButtonBox);
@@ -287,7 +312,7 @@ void QIMessageBox::prepareFocus()
     }
 }
 
-QPushButton* QIMessageBox::createButton(int iButton)
+QPushButton *QIMessageBox::createButton(int iButton)
 {
     /* Not for AlertButton_NoButton: */
     if (iButton == 0)
@@ -303,6 +328,7 @@ QPushButton* QIMessageBox::createButton(int iButton)
         case AlertButton_Choice1: strText = tr("Yes");    role = QDialogButtonBox::YesRole; break;
         case AlertButton_Choice2: strText = tr("No");     role = QDialogButtonBox::NoRole; break;
         case AlertButton_Copy:    strText = tr("Copy");   role = QDialogButtonBox::ActionRole; break;
+        case AlertButton_Help:    strText = tr("Help");   role = QDialogButtonBox::HelpRole; break;
         default:
             AssertMsgFailed(("Type %d is not supported!", iButton));
             return 0;
@@ -317,30 +343,6 @@ QPushButton* QIMessageBox::createButton(int iButton)
 
     /* Return button: */
     return pButton;
-}
-
-void QIMessageBox::polishEvent(QShowEvent *pPolishEvent)
-{
-    /* Tune text-label size: */
-    m_pLabelText->useSizeHintForWidth(m_pLabelText->width());
-    m_pLabelText->updateGeometry();
-
-    /* Call to base-class: */
-    QIDialog::polishEvent(pPolishEvent);
-
-    /* Update size finally: */
-    sltUpdateSize();
-}
-
-void QIMessageBox::closeEvent(QCloseEvent *pCloseEvent)
-{
-    if (m_fDone)
-        pCloseEvent->accept();
-    else
-    {
-        pCloseEvent->ignore();
-        reject();
-    }
 }
 
 void QIMessageBox::updateDetailsContainer()
@@ -382,3 +384,25 @@ QPixmap QIMessageBox::standardPixmap(AlertIconType iconType, QWidget *pWidget /*
     return icon.pixmap(iSize, iSize);
 }
 
+/* static */
+QString QIMessageBox::compressLongWords(QString strText)
+{
+    // WORKAROUND:
+    // The idea is to compress long words of more than 100 symbols in size consisting of alphanumeric
+    // characters with ellipsiss using the following template:
+    // "[50 first symbols]...[50 last symbols]"
+    QRegExp re("[a-zA-Z0-9]{101,}");
+    int iPosition = re.indexIn(strText);
+    bool fChangeAllowed = iPosition != -1;
+    while (fChangeAllowed)
+    {
+        QString strNewText = strText;
+        const QString strFound = re.cap(0);
+        strNewText.replace(iPosition, strFound.size(), strFound.left(50) + "..." + strFound.right(50));
+        fChangeAllowed = fChangeAllowed && strText != strNewText;
+        strText = strNewText;
+        iPosition = re.indexIn(strText);
+        fChangeAllowed = fChangeAllowed && iPosition != -1;
+    }
+    return strText;
+}

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetFlt.c 85126 2020-07-08 23:04:57Z vboxsync $ */
 /** @file
  * VBoxNetFlt - Network Filter Driver (Host), Common Code.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 /** @page pg_netflt     VBoxNetFlt - Network Interface Filter
@@ -268,7 +277,7 @@
 *   Defined Constants And Macros                                                                                                 *
 *********************************************************************************************************************************/
 #define IFPORT_2_VBOXNETFLTINS(pIfPort) \
-    ( (PVBOXNETFLTINS)((uint8_t *)pIfPort - RT_OFFSETOF(VBOXNETFLTINS, MyPort)) )
+    ( (PVBOXNETFLTINS)((uint8_t *)(pIfPort) - RT_UOFFSETOF(VBOXNETFLTINS, MyPort)) )
 
 
 AssertCompileMemberSize(VBOXNETFLTINS, enmState, sizeof(uint32_t));
@@ -761,7 +770,7 @@ static DECLCALLBACK(void) vboxNetFltPortRelease(PINTNETTRUNKIFPORT pIfPort)
 /**
  * @callback_method_impl{FNINTNETTRUNKIFPORTRELEASEBUSY}
  */
-DECLHIDDEN(DECLCALLBACK(void)) vboxNetFltPortReleaseBusy(PINTNETTRUNKIFPORT pIfPort)
+DECL_HIDDEN_CALLBACK(void) vboxNetFltPortReleaseBusy(PINTNETTRUNKIFPORT pIfPort)
 {
     PVBOXNETFLTINS pThis = IFPORT_2_VBOXNETFLTINS(pIfPort);
     vboxNetFltRelease(pThis, true /*fBusy*/);
@@ -989,9 +998,10 @@ static int vboxNetFltNewInstance(PVBOXNETFLTGLOBALS pGlobals, const char *pszNam
      */
     int             rc;
     size_t const    cchName = strlen(pszName);
-    PVBOXNETFLTINS  pNew = (PVBOXNETFLTINS)RTMemAllocZ(RT_OFFSETOF(VBOXNETFLTINS, szName[cchName + 1]));
+    PVBOXNETFLTINS  pNew = (PVBOXNETFLTINS)RTMemAllocZVar(RT_UOFFSETOF_DYN(VBOXNETFLTINS, szName[cchName + 1]));
     if (!pNew)
         return VERR_INTNET_FLT_IF_FAILED;
+    AssertMsg(((uintptr_t)pNew & 7) == 0, ("%p LB %#x\n", pNew, RT_UOFFSETOF_DYN(VBOXNETFLTINS, szName[cchName + 1])));
     pNew->pNext                         = NULL;
     pNew->MyPort.u32Version             = INTNETTRUNKIFPORT_VERSION;
     pNew->MyPort.pfnRetain              = vboxNetFltPortRetain;
@@ -1229,7 +1239,7 @@ static DECLCALLBACK(int) vboxNetFltFactoryCreateAndConnect(PINTNETTRUNKFACTORY p
                                                            PINTNETTRUNKSWPORT pSwitchPort, uint32_t fFlags,
                                                            PINTNETTRUNKIFPORT *ppIfPort)
 {
-    PVBOXNETFLTGLOBALS pGlobals = (PVBOXNETFLTGLOBALS)((uint8_t *)pIfFactory - RT_OFFSETOF(VBOXNETFLTGLOBALS, TrunkFactory));
+    PVBOXNETFLTGLOBALS pGlobals = (PVBOXNETFLTGLOBALS)((uint8_t *)pIfFactory - RT_UOFFSETOF(VBOXNETFLTGLOBALS, TrunkFactory));
     PVBOXNETFLTINS pCur;
     int rc;
 
@@ -1316,7 +1326,7 @@ static DECLCALLBACK(int) vboxNetFltFactoryCreateAndConnect(PINTNETTRUNKFACTORY p
  */
 static DECLCALLBACK(void) vboxNetFltFactoryRelease(PINTNETTRUNKFACTORY pIfFactory)
 {
-    PVBOXNETFLTGLOBALS pGlobals = (PVBOXNETFLTGLOBALS)((uint8_t *)pIfFactory - RT_OFFSETOF(VBOXNETFLTGLOBALS, TrunkFactory));
+    PVBOXNETFLTGLOBALS pGlobals = (PVBOXNETFLTGLOBALS)((uint8_t *)pIfFactory - RT_UOFFSETOF(VBOXNETFLTGLOBALS, TrunkFactory));
 
     int32_t cRefs = ASMAtomicDecS32(&pGlobals->cFactoryRefs);
     Assert(cRefs >= 0); NOREF(cRefs);
@@ -1336,7 +1346,7 @@ static DECLCALLBACK(void) vboxNetFltFactoryRelease(PINTNETTRUNKFACTORY pIfFactor
 static DECLCALLBACK(void *) vboxNetFltQueryFactoryInterface(PCSUPDRVFACTORY pSupDrvFactory, PSUPDRVSESSION pSession,
                                                             const char *pszInterfaceUuid)
 {
-    PVBOXNETFLTGLOBALS pGlobals = (PVBOXNETFLTGLOBALS)((uint8_t *)pSupDrvFactory - RT_OFFSETOF(VBOXNETFLTGLOBALS, SupDrvFactory));
+    PVBOXNETFLTGLOBALS pGlobals = (PVBOXNETFLTGLOBALS)((uint8_t *)pSupDrvFactory - RT_UOFFSETOF(VBOXNETFLTGLOBALS, SupDrvFactory));
 
     /*
      * Convert the UUID strings and compare them.

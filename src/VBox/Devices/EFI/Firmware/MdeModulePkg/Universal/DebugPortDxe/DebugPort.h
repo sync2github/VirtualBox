@@ -1,14 +1,8 @@
 /** @file
   Definitions and prototypes for DebugPort driver.
 
-Copyright (c) 2006 - 2014, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -384,7 +378,7 @@ DebugPortWrite (
                               the DebugPort interface.
   @retval EFI_NOT_READY       There are no characters ready to read from the
                               DebugPort interface
-  @retval EFI_DEVICE_ERROR    A hardware failure occured... (from SerialIo)
+  @retval EFI_DEVICE_ERROR    A hardware failure occurred... (from SerialIo)
 
 **/
 EFI_STATUS

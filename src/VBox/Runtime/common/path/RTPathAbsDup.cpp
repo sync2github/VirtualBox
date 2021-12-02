@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTPathAbsDup.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTPathAbsDup
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,9 +30,6 @@
 *********************************************************************************************************************************/
 #include "internal/iprt.h"
 #include <iprt/path.h>
-#include <iprt/err.h>
-#include <iprt/param.h>
-#include <iprt/string.h>
 
 
 /**
@@ -44,10 +41,6 @@
  */
 RTDECL(char *) RTPathAbsDup(const char *pszPath)
 {
-    char szPath[RTPATH_MAX];
-    int rc = RTPathAbs(pszPath, szPath, sizeof(szPath));
-    if (RT_SUCCESS(rc))
-        return RTStrDup(szPath);
-    return NULL;
+    return RTPathAbsExDup(NULL, pszPath, RTPATH_STR_F_STYLE_HOST);
 }
 

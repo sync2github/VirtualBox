@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: AutoCaller.h 85929 2020-08-28 14:40:55Z vboxsync $ */
 /** @file
  *
  * VirtualBox object caller handling definitions
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_AUTOCALLER
-#define ____H_AUTOCALLER
+#ifndef MAIN_INCLUDED_AutoCaller_h
+#define MAIN_INCLUDED_AutoCaller_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "ObjectState.h"
 
@@ -329,6 +332,19 @@ public:
     void setLimited() { mResult = Limited; }
 
     /**
+     * Sets the initialization status to Succeeded to indicate limited
+     * (partly successful) initialization but also adds the initialization
+     * error if required for further reporting. The AutoInitSpan destructor
+     * will place the managed VirtualBoxBase object to the Limited state.
+     */
+    void setLimited(HRESULT rc)
+    {
+        mResult = Limited;
+        mFailedRC = rc;
+        mpFailedEI = new ErrorInfo();
+    }
+
+    /**
      * Sets the initialization status to Failure to indicates failed
      * initialization. The AutoInitSpan destructor will place the managed
      * VirtualBoxBase object to the InitFailed state and will automatically
@@ -475,7 +491,7 @@ class AutoUninitSpan
 {
 public:
 
-    AutoUninitSpan(VirtualBoxBase *aObj);
+    AutoUninitSpan(VirtualBoxBase *aObj, bool fTry = false);
     ~AutoUninitSpan();
 
     /** |true| when uninit() is called as a result of init() failure */
@@ -483,6 +499,9 @@ public:
 
     /** |true| when uninit() has already been called (so the object is NotReady) */
     bool uninitDone() { return mUninitDone; }
+
+    /** |true| when uninit() has failed, relevant only if it was a "try uninit" */
+    bool uninitFailed() { return mUninitFailed; }
 
     void setSucceeded();
 
@@ -494,6 +513,7 @@ private:
     VirtualBoxBase *mObj;
     bool mInitFailed : 1;
     bool mUninitDone : 1;
+    bool mUninitFailed : 1;
 };
 
-#endif // !____H_AUTOCALLER
+#endif /* !MAIN_INCLUDED_AutoCaller_h */

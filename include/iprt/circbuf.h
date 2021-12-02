@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_circbuf_h
-#define ___iprt_circbuf_h
+#ifndef IPRT_INCLUDED_circbuf_h
+#define IPRT_INCLUDED_circbuf_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -95,6 +98,20 @@ RTDECL(bool) RTCircBufIsReading(PRTCIRCBUF pBuf);
 RTDECL(bool) RTCircBufIsWriting(PRTCIRCBUF pBuf);
 
 /**
+ * Returns the current read offset (in bytes) within the buffer.
+ *
+ * @param   pBuf           The buffer to query.
+ */
+RTDECL(size_t) RTCircBufOffsetRead(PRTCIRCBUF pBuf);
+
+/**
+ * Returns the current write offset (in bytes) within the buffer.
+ *
+ * @param   pBuf           The buffer to query.
+ */
+RTDECL(size_t) RTCircBufOffsetWrite(PRTCIRCBUF pBuf);
+
+/**
  * Acquire a block of the circular buffer for reading.
  *
  * @param   pBuf           The buffer to acquire from.
@@ -134,5 +151,5 @@ RT_C_DECLS_END
 
 /** @} */
 
-#endif /* !___iprt_circbuf_h */
+#endif /* !IPRT_INCLUDED_circbuf_h */
 

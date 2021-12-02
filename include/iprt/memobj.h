@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_memobj_h
-#define ___iprt_memobj_h
+#ifndef IPRT_INCLUDED_memobj_h
+#define IPRT_INCLUDED_memobj_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -107,6 +110,23 @@ RTR0DECL(size_t) RTR0MemObjSize(RTR0MEMOBJ MemObj);
 RTR0DECL(RTHCPHYS) RTR0MemObjGetPagePhysAddr(RTR0MEMOBJ MemObj, size_t iPage);
 
 /**
+ * Checks whether the allocation was zero initialized or not.
+ *
+ * This only works on allocations.  It is not meaningful for mappings, reserved
+ * memory and entered physical address, and will return false for these.
+ *
+ * @returns true if the allocation was initialized to zero at allocation time,
+ *          false if not or query not meaningful to the object type.
+ * @param   hMemObj             The ring-0 memory object to be freed.
+ *
+ * @remarks It can be expected that memory allocated in the same fashion will
+ *          have the same initialization state.  So, if this returns true for
+ *          one allocation it will return true for all other similarly made
+ *          allocations.
+ */
+RTR0DECL(bool) RTR0MemObjWasZeroInitialized(RTR0MEMOBJ hMemObj);
+
+/**
  * Frees a ring-0 memory object.
  *
  * @returns IPRT status code.
@@ -124,7 +144,10 @@ RTR0DECL(int) RTR0MemObjFree(RTR0MEMOBJ MemObj, bool fFreeMappings);
  * @returns IPRT status code.
  * @param   pMemObj         Where to store the ring-0 memory object handle.
  * @param   cb              Number of bytes to allocate. This is rounded up to nearest page.
- * @param   fExecutable     Flag indicating whether it should be permitted to executed code in the memory object.
+ * @param   fExecutable     Flag indicating whether it should be permitted to
+ *                          executed code in the memory object.  The user must
+ *                          use RTR0MemObjProtect after initialization the
+ *                          allocation to actually make it executable.
  */
 #define RTR0MemObjAllocPage(pMemObj, cb, fExecutable) \
     RTR0MemObjAllocPageTag((pMemObj), (cb), (fExecutable), RTMEM_TAG)
@@ -137,10 +160,79 @@ RTR0DECL(int) RTR0MemObjFree(RTR0MEMOBJ MemObj, bool fFreeMappings);
  * @returns IPRT status code.
  * @param   pMemObj         Where to store the ring-0 memory object handle.
  * @param   cb              Number of bytes to allocate. This is rounded up to nearest page.
- * @param   fExecutable     Flag indicating whether it should be permitted to executed code in the memory object.
+ * @param   fExecutable     Flag indicating whether it should be permitted to
+ *                          executed code in the memory object.  The user must
+ *                          use RTR0MemObjProtect after initialization the
+ *                          allocation to actually make it executable.
  * @param   pszTag          Allocation tag used for statistics and such.
  */
 RTR0DECL(int) RTR0MemObjAllocPageTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecutable, const char *pszTag);
+
+/**
+ * Allocates large page aligned virtual kernel memory (default tag).
+ *
+ * Each large page in the allocation is backed by a contiguous chunk of physical
+ * memory aligned to the page size.  The memory is taken from a non paged (=
+ * fixed physical memory backing) pool.
+ *
+ * On some hosts we only support allocating a single large page at a time, they
+ * will return VERR_NOT_SUPPORTED if @a cb is larger than @a cbLargePage.
+ *
+ * @returns IPRT status code.
+ * @retval  VERR_TRY_AGAIN instead of VERR_NO_MEMORY when
+ *          RTMEMOBJ_ALLOC_LARGE_F_FAST is set and supported.
+ * @param   pMemObj         Where to store the ring-0 memory object handle.
+ * @param   cb              Number of bytes to allocate. This is rounded up to
+ *                          nearest large page.
+ * @param   cbLargePage     The large page size.  The allowed values varies from
+ *                          architecture to architecture and the paging mode
+ *                          used by the OS.
+ * @param   fFlags          Flags, RTMEMOBJ_ALLOC_LARGE_F_XXX.
+ *
+ * @note    The implicit kernel mapping of this allocation does not necessarily
+ *          have to be aligned on a @a cbLargePage boundrary.
+ */
+#define RTR0MemObjAllocLarge(pMemObj, cb, cbLargePage, fFlags) \
+    RTR0MemObjAllocLargeTag((pMemObj), (cb), (cbLargePage), (fFlags), RTMEM_TAG)
+
+/**
+ * Allocates large page aligned virtual kernel memory (custom tag).
+ *
+ * Each large page in the allocation is backed by a contiguous chunk of physical
+ * memory aligned to the page size.  The memory is taken from a non paged (=
+ * fixed physical memory backing) pool.
+ *
+ * On some hosts we only support allocating a single large page at a time, they
+ * will return VERR_NOT_SUPPORTED if @a cb is larger than @a cbLargePage.
+ *
+ * @returns IPRT status code.
+ * @retval  VERR_TRY_AGAIN instead of VERR_NO_MEMORY when
+ *          RTMEMOBJ_ALLOC_LARGE_F_FAST is set and supported.
+ * @param   pMemObj         Where to store the ring-0 memory object handle.
+ * @param   cb              Number of bytes to allocate. This is rounded up to
+ *                          nearest large page.
+ * @param   cbLargePage     The large page size.  The allowed values varies from
+ *                          architecture to architecture and the paging mode
+ *                          used by the OS.
+ * @param   fFlags          Flags, RTMEMOBJ_ALLOC_LARGE_F_XXX.
+ * @param   pszTag          Allocation tag used for statistics and such.
+ *
+ * @note    The implicit kernel mapping of this allocation does not necessarily
+ *          have to be aligned on a @a cbLargePage boundrary.
+ */
+RTR0DECL(int) RTR0MemObjAllocLargeTag(PRTR0MEMOBJ pMemObj, size_t cb, size_t cbLargePage, uint32_t fFlags, const char *pszTag);
+
+/** @name RTMEMOBJ_ALLOC_LARGE_F_XXX
+ * @{ */
+/** Indicates that it is okay to fail if there aren't enough large pages handy,
+ * cancelling any expensive search and reshuffling of memory (when supported).
+ * @note This flag can't be realized on all OSes.  (Those who do support it
+ *       will return VERR_TRY_AGAIN instead of VERR_NO_MEMORY if they
+ *       cannot satisfy the request.) */
+#define RTMEMOBJ_ALLOC_LARGE_F_FAST         RT_BIT_32(0)
+/** Mask with valid bits.   */
+#define RTMEMOBJ_ALLOC_LARGE_F_VALID_MASK   UINT32_C(0x00000001)
+/** @} */
 
 /**
  * Allocates page aligned virtual kernel memory with physical backing below 4GB
@@ -151,7 +243,10 @@ RTR0DECL(int) RTR0MemObjAllocPageTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecu
  * @returns IPRT status code.
  * @param   pMemObj         Where to store the ring-0 memory object handle.
  * @param   cb              Number of bytes to allocate. This is rounded up to nearest page.
- * @param   fExecutable     Flag indicating whether it should be permitted to executed code in the memory object.
+ * @param   fExecutable     Flag indicating whether it should be permitted to
+ *                          executed code in the memory object.  The user must
+ *                          use RTR0MemObjProtect after initialization the
+ *                          allocation to actually make it executable.
  */
 #define RTR0MemObjAllocLow(pMemObj, cb, fExecutable) \
     RTR0MemObjAllocLowTag((pMemObj), (cb), (fExecutable), RTMEM_TAG)
@@ -165,7 +260,10 @@ RTR0DECL(int) RTR0MemObjAllocPageTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecu
  * @returns IPRT status code.
  * @param   pMemObj         Where to store the ring-0 memory object handle.
  * @param   cb              Number of bytes to allocate. This is rounded up to nearest page.
- * @param   fExecutable     Flag indicating whether it should be permitted to executed code in the memory object.
+ * @param   fExecutable     Flag indicating whether it should be permitted to
+ *                          executed code in the memory object.  The user must
+ *                          use RTR0MemObjProtect after initialization the
+ *                          allocation to actually make it executable.
  * @param   pszTag          Allocation tag used for statistics and such.
  */
 RTR0DECL(int) RTR0MemObjAllocLowTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecutable, const char *pszTag);
@@ -179,7 +277,10 @@ RTR0DECL(int) RTR0MemObjAllocLowTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecut
  * @returns IPRT status code.
  * @param   pMemObj         Where to store the ring-0 memory object handle.
  * @param   cb              Number of bytes to allocate. This is rounded up to nearest page.
- * @param   fExecutable     Flag indicating whether it should be permitted to executed code in the memory object.
+ * @param   fExecutable     Flag indicating whether it should be permitted to
+ *                          executed code in the memory object.  The user must
+ *                          use RTR0MemObjProtect after initialization the
+ *                          allocation to actually make it executable.
  */
 #define RTR0MemObjAllocCont(pMemObj, cb, fExecutable) \
     RTR0MemObjAllocContTag((pMemObj), (cb), (fExecutable), RTMEM_TAG)
@@ -193,7 +294,10 @@ RTR0DECL(int) RTR0MemObjAllocLowTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecut
  * @returns IPRT status code.
  * @param   pMemObj         Where to store the ring-0 memory object handle.
  * @param   cb              Number of bytes to allocate. This is rounded up to nearest page.
- * @param   fExecutable     Flag indicating whether it should be permitted to executed code in the memory object.
+ * @param   fExecutable     Flag indicating whether it should be permitted to
+ *                          executed code in the memory object.  The user must
+ *                          use RTR0MemObjProtect after initialization the
+ *                          allocation to actually make it executable.
  * @param   pszTag          Allocation tag used for statistics and such.
  */
 RTR0DECL(int) RTR0MemObjAllocContTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecutable, const char *pszTag);
@@ -209,7 +313,7 @@ RTR0DECL(int) RTR0MemObjAllocContTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecu
  *                          nearest page boundary.
  * @param   fAccess         The desired access, a combination of RTMEM_PROT_READ
  *                          and RTMEM_PROT_WRITE.
- * @param   R0Process       The process to lock pages in. NIL_R0PROCESS is an
+ * @param   R0Process       The process to lock pages in. NIL_RTR0PROCESS is an
  *                          alias for the current one.
  *
  * @remarks RTR0MemGetAddressR3() and RTR0MemGetAddress() will return therounded
@@ -234,7 +338,7 @@ RTR0DECL(int) RTR0MemObjAllocContTag(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecu
  *                          nearest page boundary.
  * @param   fAccess         The desired access, a combination of RTMEM_PROT_READ
  *                          and RTMEM_PROT_WRITE.
- * @param   R0Process       The process to lock pages in. NIL_R0PROCESS is an
+ * @param   R0Process       The process to lock pages in. NIL_RTR0PROCESS is an
  *                          alias for the current one.
  * @param   pszTag          Allocation tag used for statistics and such.
  *
@@ -459,7 +563,8 @@ RTR0DECL(int) RTR0MemObjReserveKernelTag(PRTR0MEMOBJ pMemObj, void *pvFixed, siz
  * @param   cb              The number of bytes to reserve. This is rounded up to nearest PAGE_SIZE.
  * @param   uAlignment      The alignment of the reserved memory.
  *                          Supported values are 0 (alias for PAGE_SIZE), PAGE_SIZE, _2M and _4M.
- * @param   R0Process       The process to reserve the memory in. NIL_R0PROCESS is an alias for the current one.
+ * @param   R0Process       The process to reserve the memory in.
+ *                          NIL_RTR0PROCESS is an alias for the current one.
  */
 #define RTR0MemObjReserveUser(pMemObj, R3PtrFixed, cb, uAlignment, R0Process) \
     RTR0MemObjReserveUserTag((pMemObj), (R3PtrFixed), (cb), (uAlignment), (R0Process), RTMEM_TAG)
@@ -473,7 +578,8 @@ RTR0DECL(int) RTR0MemObjReserveKernelTag(PRTR0MEMOBJ pMemObj, void *pvFixed, siz
  * @param   cb              The number of bytes to reserve. This is rounded up to nearest PAGE_SIZE.
  * @param   uAlignment      The alignment of the reserved memory.
  *                          Supported values are 0 (alias for PAGE_SIZE), PAGE_SIZE, _2M and _4M.
- * @param   R0Process       The process to reserve the memory in. NIL_R0PROCESS is an alias for the current one.
+ * @param   R0Process       The process to reserve the memory in.
+ *                          NIL_RTR0PROCESS is an alias for the current one.
  * @param   pszTag          Allocation tag used for statistics and such.
  */
 RTR0DECL(int) RTR0MemObjReserveUserTag(PRTR0MEMOBJ pMemObj, RTR3PTR R3PtrFixed, size_t cb, size_t uAlignment,
@@ -580,7 +686,8 @@ RTR0DECL(int) RTR0MemObjMapKernelExTag(PRTR0MEMOBJ pMemObj, RTR0MEMOBJ MemObjToM
  * @param   uAlignment      The alignment of the reserved memory.
  *                          Supported values are 0 (alias for PAGE_SIZE), PAGE_SIZE, _2M and _4M.
  * @param   fProt           Combination of RTMEM_PROT_* flags (except RTMEM_PROT_NONE).
- * @param   R0Process       The process to map the memory into. NIL_R0PROCESS is an alias for the current one.
+ * @param   R0Process       The process to map the memory into. NIL_RTR0PROCESS
+ *                          is an alias for the current one.
  */
 #define RTR0MemObjMapUser(pMemObj, MemObjToMap, R3PtrFixed, uAlignment, fProt, R0Process) \
     RTR0MemObjMapUserTag((pMemObj), (MemObjToMap), (R3PtrFixed), (uAlignment), (fProt), (R0Process), RTMEM_TAG)
@@ -596,11 +703,60 @@ RTR0DECL(int) RTR0MemObjMapKernelExTag(PRTR0MEMOBJ pMemObj, RTR0MEMOBJ MemObjToM
  * @param   uAlignment      The alignment of the reserved memory.
  *                          Supported values are 0 (alias for PAGE_SIZE), PAGE_SIZE, _2M and _4M.
  * @param   fProt           Combination of RTMEM_PROT_* flags (except RTMEM_PROT_NONE).
- * @param   R0Process       The process to map the memory into. NIL_R0PROCESS is an alias for the current one.
+ * @param   R0Process       The process to map the memory into. NIL_RTR0PROCESS
+ *                          is an alias for the current one.
  * @param   pszTag          Allocation tag used for statistics and such.
  */
 RTR0DECL(int) RTR0MemObjMapUserTag(PRTR0MEMOBJ pMemObj, RTR0MEMOBJ MemObjToMap, RTR3PTR R3PtrFixed,
                                    size_t uAlignment, unsigned fProt, RTR0PROCESS R0Process, const char *pszTag);
+
+/**
+ * Maps a memory object into user virtual address space in the current process
+ * (default tag).
+ *
+ * @returns IPRT status code.
+ * @param   pMemObj         Where to store the ring-0 memory object handle of the mapping object.
+ * @param   MemObjToMap     The object to be map.
+ * @param   R3PtrFixed      Requested address. (RTR3PTR)-1 means any address. This must match the alignment.
+ * @param   uAlignment      The alignment of the reserved memory.
+ *                          Supported values are 0 (alias for PAGE_SIZE), PAGE_SIZE, _2M and _4M.
+ * @param   fProt           Combination of RTMEM_PROT_* flags (except RTMEM_PROT_NONE).
+ * @param   R0Process       The process to map the memory into. NIL_RTR0PROCESS
+ *                          is an alias for the current one.
+ * @param   offSub          Where in the object to start mapping. If non-zero
+ *                          the value must be page aligned and cbSub must be
+ *                          non-zero as well.
+ * @param   cbSub           The size of the part of the object to be mapped. If
+ *                          zero the entire object is mapped. The value must be
+ *                          page aligned.
+ */
+#define RTR0MemObjMapUserEx(pMemObj, MemObjToMap, R3PtrFixed, uAlignment, fProt, R0Process, offSub, cbSub) \
+    RTR0MemObjMapUserExTag((pMemObj), (MemObjToMap), (R3PtrFixed), (uAlignment), (fProt), (R0Process), \
+                           (offSub), (cbSub), RTMEM_TAG)
+
+/**
+ * Maps a memory object into user virtual address space in the current process
+ * (custom tag).
+ *
+ * @returns IPRT status code.
+ * @param   pMemObj         Where to store the ring-0 memory object handle of the mapping object.
+ * @param   MemObjToMap     The object to be map.
+ * @param   R3PtrFixed      Requested address. (RTR3PTR)-1 means any address. This must match the alignment.
+ * @param   uAlignment      The alignment of the reserved memory.
+ *                          Supported values are 0 (alias for PAGE_SIZE), PAGE_SIZE, _2M and _4M.
+ * @param   fProt           Combination of RTMEM_PROT_* flags (except RTMEM_PROT_NONE).
+ * @param   R0Process       The process to map the memory into. NIL_RTR0PROCESS
+ *                          is an alias for the current one.
+ * @param   offSub          Where in the object to start mapping. If non-zero
+ *                          the value must be page aligned and cbSub must be
+ *                          non-zero as well.
+ * @param   cbSub           The size of the part of the object to be mapped. If
+ *                          zero the entire object is mapped. The value must be
+ *                          page aligned.
+ * @param   pszTag          Allocation tag used for statistics and such.
+ */
+RTR0DECL(int) RTR0MemObjMapUserExTag(PRTR0MEMOBJ pMemObj, RTR0MEMOBJ MemObjToMap, RTR3PTR R3PtrFixed, size_t uAlignment,
+                                     unsigned fProt, RTR0PROCESS R0Process, size_t offSub, size_t cbSub, const char *pszTag);
 
 /**
  * Change the page level protection of one or more pages in a memory object.
@@ -625,5 +781,5 @@ RTR0DECL(int) RTR0MemObjProtect(RTR0MEMOBJ hMemObj, size_t offSub, size_t cbSub,
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_memobj_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: getoptargv.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Command Line Parsing, Argument Vector.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -157,13 +157,13 @@ DECLINLINE(bool) rtGetOptIsAsciiInSet(char ch, const char *pszSeparators, size_t
 {
     switch (cchSeparators)
     {
-        case 8: if (ch == pszSeparators[7]) return true;
-        case 7: if (ch == pszSeparators[6]) return true;
-        case 6: if (ch == pszSeparators[5]) return true;
-        case 5: if (ch == pszSeparators[4]) return true;
-        case 4: if (ch == pszSeparators[3]) return true;
-        case 3: if (ch == pszSeparators[2]) return true;
-        case 2: if (ch == pszSeparators[1]) return true;
+        case 8: if (ch == pszSeparators[7]) return true; RT_FALL_THRU();
+        case 7: if (ch == pszSeparators[6]) return true; RT_FALL_THRU();
+        case 6: if (ch == pszSeparators[5]) return true; RT_FALL_THRU();
+        case 5: if (ch == pszSeparators[4]) return true; RT_FALL_THRU();
+        case 4: if (ch == pszSeparators[3]) return true; RT_FALL_THRU();
+        case 3: if (ch == pszSeparators[2]) return true; RT_FALL_THRU();
+        case 2: if (ch == pszSeparators[1]) return true; RT_FALL_THRU();
         case 1: if (ch == pszSeparators[0]) return true;
             return false;
         default:
@@ -230,8 +230,10 @@ RTDECL(int) RTGetOptArgvFromString(char ***ppapszArgv, int *pcArgs, const char *
     AssertPtr(pszCmdLine);
     AssertPtr(pcArgs);
     AssertPtr(ppapszArgv);
-    AssertReturn(   fFlags == RTGETOPTARGV_CNV_QUOTE_BOURNE_SH
-                 || fFlags == RTGETOPTARGV_CNV_QUOTE_MS_CRT, VERR_INVALID_FLAGS);
+    AssertReturn(   (fFlags & RTGETOPTARGV_CNV_QUOTE_MASK) == RTGETOPTARGV_CNV_QUOTE_BOURNE_SH
+                 || (fFlags & RTGETOPTARGV_CNV_QUOTE_MASK) == RTGETOPTARGV_CNV_QUOTE_MS_CRT, VERR_INVALID_FLAGS);
+    AssertReturn(~(fFlags & ~RTGETOPTARGV_CNV_VALID_MASK), VERR_INVALID_FLAGS);
+
     if (!pszSeparators)
         pszSeparators = " \t\n\r";
     else
@@ -242,12 +244,18 @@ RTDECL(int) RTGetOptArgvFromString(char ***ppapszArgv, int *pcArgs, const char *
     /*
      * Parse the command line and chop off it into argv individual argv strings.
      */
-    int         rc        = VINF_SUCCESS;
     const char *pszSrc    = pszCmdLine;
-    char       *pszDup    = (char *)RTMemAlloc(strlen(pszSrc) + 1);
-    char       *pszDst    = pszDup;
-    if (!pszDup)
-        return VERR_NO_STR_MEMORY;
+    char       *pszDup    = NULL;
+    char       *pszDst;
+    if (fFlags & RTGETOPTARGV_CNV_MODIFY_INPUT)
+        pszDst = (char *)pszCmdLine;
+    else
+    {
+        pszDst = pszDup = (char *)RTMemAlloc(strlen(pszSrc) + 1);
+        if (!pszDup)
+            return VERR_NO_STR_MEMORY;
+    }
+    int         rc        = VINF_SUCCESS;
     char      **papszArgs = NULL;
     unsigned    iArg      = 0;
     while (*pszSrc)
@@ -275,50 +283,56 @@ RTDECL(int) RTGetOptArgvFromString(char ***ppapszArgv, int *pcArgs, const char *
         /*
          * Parse and copy the string over.
          */
-        RTUNICP Cp;
+        RTUNICP uc;
         if ((fFlags & RTGETOPTARGV_CNV_QUOTE_MASK) == RTGETOPTARGV_CNV_QUOTE_BOURNE_SH)
         {
             /*
              * Bourne shell style.
              */
-            RTUNICP CpQuote = 0;
+            RTUNICP ucQuote = 0;
             for (;;)
             {
-                rc = RTStrGetCpEx(&pszSrc, &Cp);
-                if (RT_FAILURE(rc) || !Cp)
+                rc = RTStrGetCpEx(&pszSrc, &uc);
+                if (RT_FAILURE(rc) || !uc)
                     break;
-                if (!CpQuote)
+                if (!ucQuote)
                 {
-                    if (Cp == '"' || Cp == '\'')
-                        CpQuote = Cp;
-                    else if (rtGetOptIsCpInSet(Cp, pszSeparators, cchSeparators))
+                    if (uc == '"' || uc == '\'')
+                        ucQuote = uc;
+                    else if (rtGetOptIsCpInSet(uc, pszSeparators, cchSeparators))
                         break;
-                    else if (Cp != '\\')
-                        pszDst = RTStrPutCp(pszDst, Cp);
+                    else if (uc != '\\')
+                        pszDst = RTStrPutCp(pszDst, uc);
                     else
                     {
                         /* escaped char */
-                        rc = RTStrGetCpEx(&pszSrc, &Cp);
-                        if (RT_FAILURE(rc) || !Cp)
+                        rc = RTStrGetCpEx(&pszSrc, &uc);
+                        if (RT_FAILURE(rc) || !uc)
                             break;
-                        pszDst = RTStrPutCp(pszDst, Cp);
+                        pszDst = RTStrPutCp(pszDst, uc);
                     }
                 }
-                else if (CpQuote != Cp)
+                else if (ucQuote != uc)
                 {
-                    if (Cp != '\\' || CpQuote == '\'')
-                        pszDst = RTStrPutCp(pszDst, Cp);
+                    if (uc != '\\' || ucQuote == '\'')
+                        pszDst = RTStrPutCp(pszDst, uc);
                     else
                     {
                         /* escaped char */
-                        rc = RTStrGetCpEx(&pszSrc, &Cp);
-                        if (RT_FAILURE(rc) || !Cp)
+                        rc = RTStrGetCpEx(&pszSrc, &uc);
+                        if (RT_FAILURE(rc) || !uc)
                             break;
-                        pszDst = RTStrPutCp(pszDst, Cp);
+                        if (   uc != '"'
+                            && uc != '\\'
+                            && uc != '`'
+                            && uc != '$'
+                            && uc != '\n')
+                            pszDst = RTStrPutCp(pszDst, ucQuote);
+                        pszDst = RTStrPutCp(pszDst, uc);
                     }
                 }
                 else
-                    CpQuote = 0;
+                    ucQuote = 0;
             }
         }
         else
@@ -330,10 +344,10 @@ RTDECL(int) RTGetOptArgvFromString(char ***ppapszArgv, int *pcArgs, const char *
             bool fInQuote = false;
             for (;;)
             {
-                rc = RTStrGetCpEx(&pszSrc, &Cp);
-                if (RT_FAILURE(rc) || !Cp)
+                rc = RTStrGetCpEx(&pszSrc, &uc);
+                if (RT_FAILURE(rc) || !uc)
                     break;
-                if (Cp == '"')
+                if (uc == '"')
                 {
                     /* Two double quotes insides a quoted string in an escape
                        sequence and we output one double quote char.
@@ -348,10 +362,10 @@ RTDECL(int) RTGetOptArgvFromString(char ***ppapszArgv, int *pcArgs, const char *
                         pszSrc++;
                     }
                 }
-                else if (!fInQuote && rtGetOptIsCpInSet(Cp, pszSeparators, cchSeparators))
+                else if (!fInQuote && rtGetOptIsCpInSet(uc, pszSeparators, cchSeparators))
                     break;
-                else if (Cp != '\\')
-                    pszDst = RTStrPutCp(pszDst, Cp);
+                else if (uc != '\\')
+                    pszDst = RTStrPutCp(pszDst, uc);
                 else
                 {
                     /* A backslash sequence is only relevant if followed by
@@ -386,7 +400,7 @@ RTDECL(int) RTGetOptArgvFromString(char ***ppapszArgv, int *pcArgs, const char *
         }
 
         *pszDst++ = '\0';
-        if (RT_FAILURE(rc) || !Cp)
+        if (RT_FAILURE(rc) || !uc)
             break;
     }
 
@@ -418,13 +432,21 @@ RTDECL(int) RTGetOptArgvFromString(char ***ppapszArgv, int *pcArgs, const char *
 
 RTDECL(void) RTGetOptArgvFree(char **papszArgv)
 {
+    RTGetOptArgvFreeEx(papszArgv, 0);
+}
+
+
+RTDECL(void) RTGetOptArgvFreeEx(char **papszArgv, uint32_t fFlags)
+{
+    Assert(~(fFlags & ~RTGETOPTARGV_CNV_VALID_MASK));
     if (papszArgv)
     {
         /*
          * We've really only _two_ allocations here. Check the code in
          * RTGetOptArgvFromString for the particulars.
          */
-        RTMemFree(papszArgv[0]);
+        if (!(fFlags & RTGETOPTARGV_CNV_MODIFY_INPUT))
+            RTMemFree(papszArgv[0]);
         RTMemFree(papszArgv);
     }
 }
@@ -495,7 +517,8 @@ DECLINLINE(bool) rtGetOptArgvMsCrtIsSlashQuote(const char *psz)
 
 RTDECL(int) RTGetOptArgvToString(char **ppszCmdLine, const char * const *papszArgv, uint32_t fFlags)
 {
-    AssertReturn(fFlags <= RTGETOPTARGV_CNV_UNQUOTED, VERR_INVALID_PARAMETER);
+    AssertReturn((fFlags & RTGETOPTARGV_CNV_QUOTE_MASK) <= RTGETOPTARGV_CNV_UNQUOTED, VERR_INVALID_FLAGS);
+    AssertReturn(!(fFlags & (~RTGETOPTARGV_CNV_VALID_MASK | RTGETOPTARGV_CNV_MODIFY_INPUT)), VERR_INVALID_FLAGS);
 
 #define PUT_CH(ch) \
         if (RT_UNLIKELY(off + 1 >= cbCmdLineAlloc)) { \

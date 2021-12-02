@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -86,8 +86,8 @@ static const char *tstVDDeviceType(VDTYPE enmType)
     {
         case VDTYPE_HDD:
             return "HardDisk";
-        case VDTYPE_DVD:
-            return "DVD";
+        case VDTYPE_OPTICAL_DISC:
+            return "OpticalDisc";
         case VDTYPE_FLOPPY:
             return "Floppy";
         default:

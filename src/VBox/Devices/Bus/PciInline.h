@@ -1,9 +1,10 @@
+/* $Id: PciInline.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * PCI - The PCI Controller And Devices, inline device helpers.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___Bus_PciInline_h
-#define ___Bus_PciInline_h
+#ifndef VBOX_INCLUDED_SRC_Bus_PciInline_h
+#define VBOX_INCLUDED_SRC_Bus_PciInline_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 DECLINLINE(void) pciDevSetPci2PciBridge(PPDMPCIDEV pDev)
 {
@@ -97,5 +101,5 @@ DECLINLINE(bool) pciDevIsPassthrough(PPDMPCIDEV pDev)
     return (pDev->Int.s.fFlags & PCIDEV_FLAG_PASSTHROUGH) != 0;
 }
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Bus_PciInline_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMAsyncCompletionInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * PDM - Pluggable Device Manager, Async I/O Completion internal header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___PDMAsyncCompletionInternal_h
-#define ___PDMAsyncCompletionInternal_h
+#ifndef VMM_INCLUDED_SRC_include_PDMAsyncCompletionInternal_h
+#define VMM_INCLUDED_SRC_include_PDMAsyncCompletionInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/critsect.h>
 #include <iprt/memcache.h>
@@ -274,5 +277,5 @@ RT_C_DECLS_END
 
 extern const PDMASYNCCOMPLETIONEPCLASSOPS g_PDMAsyncCompletionEndpointClassFile;
 
-#endif /* !___PDMAsyncCompletionInternal_h */
+#endif /* !VMM_INCLUDED_SRC_include_PDMAsyncCompletionInternal_h */
 

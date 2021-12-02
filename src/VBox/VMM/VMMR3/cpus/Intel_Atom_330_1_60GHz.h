@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: Intel_Atom_330_1_60GHz.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * CPU database entry "Intel Atom 330 1.60GHz".
  * Generated at 2015-11-04T12:58:59Z by VBoxCpuReport v5.0.51r103818 on linux.amd64.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOX_CPUDB_Intel_Atom_330_1_60GHz
-#define VBOX_CPUDB_Intel_Atom_330_1_60GHz
+#ifndef VBOX_CPUDB_Intel_Atom_330_1_60GHz_h
+#define VBOX_CPUDB_Intel_Atom_330_1_60GHz_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #ifndef CPUM_DB_STANDALONE
@@ -193,6 +196,7 @@ static CPUMDBENTRY const g_Entry_Intel_Atom_330_1_60GHz =
     /*.uScalableBusFreq = */ CPUM_SBUSFREQ_133MHZ,
     /*.fFlags           = */ 0,
     /*.cMaxPhysAddrWidth= */ 32,
+    /*.fMxCsrMask       = */ 0xffff,
     /*.paCpuIdLeaves    = */ NULL_ALONE(g_aCpuIdLeaves_Intel_Atom_330_1_60GHz),
     /*.cCpuIdLeaves     = */ ZERO_ALONE(RT_ELEMENTS(g_aCpuIdLeaves_Intel_Atom_330_1_60GHz)),
     /*.enmUnknownCpuId  = */ CPUMUNKNOWNCPUID_LAST_STD_LEAF,
@@ -202,5 +206,5 @@ static CPUMDBENTRY const g_Entry_Intel_Atom_330_1_60GHz =
     /*.paMsrRanges      = */ NULL_ALONE(g_aMsrRanges_Intel_Atom_330_1_60GHz),
 };
 
-#endif /* !VBOX_DB_Intel_Atom_330_1_60GHz */
+#endif /* !VBOX_CPUDB_Intel_Atom_330_1_60GHz_h */
 

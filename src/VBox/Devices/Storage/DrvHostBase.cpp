@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvHostBase.cpp 92226 2021-11-04 21:31:31Z vboxsync $ */
 /** @file
  * DrvHostBase - Host base drive access driver.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,6 +23,7 @@
 
 #include <VBox/vmm/pdmdrv.h>
 #include <VBox/vmm/pdmstorageifs.h>
+#include <VBox/err.h>
 #include <iprt/assert.h>
 #include <iprt/file.h>
 #include <iprt/path.h>
@@ -339,6 +340,97 @@ static DECLCALLBACK(bool) drvHostBaseIsVisible(PPDMIMEDIA pInterface)
 }
 
 
+/** @interface_method_impl{PDMIMEDIA,pfnGetRegionCount} */
+static DECLCALLBACK(uint32_t) drvHostBaseGetRegionCount(PPDMIMEDIA pInterface)
+{
+    PDRVHOSTBASE pThis = RT_FROM_MEMBER(pInterface, DRVHOSTBASE, IMedia);
+
+    LogFlowFunc(("\n"));
+    uint32_t cRegions = pThis->fMediaPresent ? 1 : 0;
+
+    /* For now just return one region for all devices. */
+    /** @todo Handle CD/DVD passthrough properly. */
+
+    LogFlowFunc(("returns %u\n", cRegions));
+    return cRegions;
+}
+
+/** @interface_method_impl{PDMIMEDIA,pfnQueryRegionProperties} */
+static DECLCALLBACK(int) drvHostBaseQueryRegionProperties(PPDMIMEDIA pInterface, uint32_t uRegion, uint64_t *pu64LbaStart,
+                                                          uint64_t *pcBlocks, uint64_t *pcbBlock,
+                                                          PVDREGIONDATAFORM penmDataForm)
+{
+    LogFlowFunc(("\n"));
+    int rc = VINF_SUCCESS;
+    PDRVHOSTBASE pThis = RT_FROM_MEMBER(pInterface, DRVHOSTBASE, IMedia);
+
+    if (uRegion < 1 && pThis->fMediaPresent)
+    {
+        uint64_t cbMedia;
+        rc = drvHostBaseGetMediaSizeOs(pThis, &cbMedia);
+        if (RT_SUCCESS(rc))
+        {
+            uint64_t cbBlock = 0;
+
+            if (pThis->enmType == PDMMEDIATYPE_DVD)
+                cbBlock = 2048;
+            else
+                cbBlock = 512; /* Floppy. */
+
+            if (pu64LbaStart)
+                *pu64LbaStart = 0;
+            if (pcBlocks)
+                *pcBlocks = cbMedia / cbBlock;
+            if (pcbBlock)
+                *pcbBlock = cbBlock;
+            if (penmDataForm)
+                *penmDataForm = VDREGIONDATAFORM_RAW;
+        }
+    }
+    else
+        rc = VERR_NOT_FOUND;
+
+    LogFlowFunc(("returns %Rrc\n", rc));
+    return rc;
+}
+
+/** @interface_method_impl{PDMIMEDIA,pfnQueryRegionPropertiesForLba} */
+static DECLCALLBACK(int) drvHostBaseQueryRegionPropertiesForLba(PPDMIMEDIA pInterface, uint64_t u64LbaStart,
+                                                                uint32_t *puRegion, uint64_t *pcBlocks,
+                                                                uint64_t *pcbBlock, PVDREGIONDATAFORM penmDataForm)
+{
+    LogFlowFunc(("\n"));
+    int rc = VINF_SUCCESS;
+    PDRVHOSTBASE pThis = RT_FROM_MEMBER(pInterface, DRVHOSTBASE, IMedia);
+    uint64_t cbMedia;
+    uint64_t cbBlock = 0;
+
+    if (pThis->enmType == PDMMEDIATYPE_DVD)
+        cbBlock = 2048;
+    else
+        cbBlock = 512; /* Floppy. */
+
+    rc = drvHostBaseGetMediaSizeOs(pThis, &cbMedia);
+    if (   RT_SUCCESS(rc)
+        && u64LbaStart < cbMedia / cbBlock)
+    {
+        if (puRegion)
+            *puRegion = 0;
+        if (pcBlocks)
+            *pcBlocks = cbMedia / cbBlock;
+        if (pcbBlock)
+            *pcbBlock = cbBlock;
+        if (penmDataForm)
+            *penmDataForm = VDREGIONDATAFORM_RAW;
+    }
+    else
+        rc = VERR_NOT_FOUND;
+
+    LogFlowFunc(("returns %Rrc\n", rc));
+    return rc;
+}
+
+
 
 /* -=-=-=-=- IMediaEx -=-=-=-=- */
 
@@ -403,12 +495,18 @@ static DECLCALLBACK(int) drvHostBaseQueryFeatures(PPDMIMEDIAEX pInterface, uint3
     return VINF_SUCCESS;
 }
 
+/** @interface_method_impl{PDMIMEDIAEX,pfnNotifySuspend} */
+static DECLCALLBACK(void) drvHostBaseNotifySuspend(PPDMIMEDIAEX pInterface)
+{
+    RT_NOREF(pInterface); /* Nothing to do here. */
+}
+
 /** @interface_method_impl{PDMIMEDIAEX,pfnIoReqAllocSizeSet} */
 static DECLCALLBACK(int) drvHostBaseIoReqAllocSizeSet(PPDMIMEDIAEX pInterface, size_t cbIoReqAlloc)
 {
     PDRVHOSTBASE pThis = RT_FROM_MEMBER(pInterface, DRVHOSTBASE, IMediaEx);
 
-    pThis->cbIoReqAlloc = RT_OFFSETOF(DRVHOSTBASEREQ, abAlloc[cbIoReqAlloc]);
+    pThis->cbIoReqAlloc = RT_UOFFSETOF_DYN(DRVHOSTBASEREQ, abAlloc[cbIoReqAlloc]);
     return VINF_SUCCESS;
 }
 
@@ -760,9 +858,11 @@ static DECLCALLBACK(int) drvHostBaseLock(PPDMIMOUNT pInterface)
     if (!pThis->fLocked)
     {
         if (pThis->pfnDoLock)
+        {
             rc = pThis->pfnDoLock(pThis, true);
-        if (RT_SUCCESS(rc))
-            pThis->fLocked = true;
+            if (RT_SUCCESS(rc))
+                pThis->fLocked = true;
+        }
     }
     else
         LogFlow(("%s-%d: drvHostBaseLock: already locked\n", pThis->pDrvIns->pReg->szName, pThis->pDrvIns->iInstance));
@@ -1124,7 +1224,7 @@ DECLCALLBACK(void) DRVHostBaseDestruct(PPDMDRVINS pDrvIns)
 
     if (pThis->pszDevice)
     {
-        MMR3HeapFree(pThis->pszDevice);
+        PDMDrvHlpMMHeapFree(pDrvIns, pThis->pszDevice);
         pThis->pszDevice = NULL;
     }
 
@@ -1168,7 +1268,9 @@ DECLCALLBACK(void) DRVHostBaseDestruct(PPDMDRVINS pDrvIns)
 DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *pszCfgValid, PDMMEDIATYPE enmType)
 {
     int src = VINF_SUCCESS;
-    PDRVHOSTBASE pThis = PDMINS_2_DATA(pDrvIns, PDRVHOSTBASE);
+    PDRVHOSTBASE    pThis = PDMINS_2_DATA(pDrvIns, PDRVHOSTBASE);
+    PCPDMDRVHLPR3   pHlp  = pDrvIns->pHlpR3;
+
     LogFlow(("%s-%d: DRVHostBaseInit: iInstance=%d\n", pDrvIns->pReg->szName, pDrvIns->iInstance, pDrvIns->iInstance));
 
     /*
@@ -1184,22 +1286,26 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
     pDrvIns->IBase.pfnQueryInterface        = drvHostBaseQueryInterface;
 
     /* IMedia. */
-    pThis->IMedia.pfnRead                   = drvHostBaseRead;
-    pThis->IMedia.pfnWrite                  = drvHostBaseWrite;
-    pThis->IMedia.pfnFlush                  = drvHostBaseFlush;
-    pThis->IMedia.pfnIsReadOnly             = drvHostBaseIsReadOnly;
-    pThis->IMedia.pfnIsNonRotational        = drvHostBaseIsNonRotational;
-    pThis->IMedia.pfnGetSize                = drvHostBaseGetSize;
-    pThis->IMedia.pfnGetType                = drvHostBaseGetType;
-    pThis->IMedia.pfnGetUuid                = drvHostBaseGetUuid;
-    pThis->IMedia.pfnBiosGetPCHSGeometry    = drvHostBaseGetPCHSGeometry;
-    pThis->IMedia.pfnBiosSetPCHSGeometry    = drvHostBaseSetPCHSGeometry;
-    pThis->IMedia.pfnBiosGetLCHSGeometry    = drvHostBaseGetLCHSGeometry;
-    pThis->IMedia.pfnBiosSetLCHSGeometry    = drvHostBaseSetLCHSGeometry;
-    pThis->IMedia.pfnBiosIsVisible          = drvHostBaseIsVisible;
+    pThis->IMedia.pfnRead                        = drvHostBaseRead;
+    pThis->IMedia.pfnWrite                       = drvHostBaseWrite;
+    pThis->IMedia.pfnFlush                       = drvHostBaseFlush;
+    pThis->IMedia.pfnIsReadOnly                  = drvHostBaseIsReadOnly;
+    pThis->IMedia.pfnIsNonRotational             = drvHostBaseIsNonRotational;
+    pThis->IMedia.pfnGetSize                     = drvHostBaseGetSize;
+    pThis->IMedia.pfnGetType                     = drvHostBaseGetType;
+    pThis->IMedia.pfnGetUuid                     = drvHostBaseGetUuid;
+    pThis->IMedia.pfnBiosGetPCHSGeometry         = drvHostBaseGetPCHSGeometry;
+    pThis->IMedia.pfnBiosSetPCHSGeometry         = drvHostBaseSetPCHSGeometry;
+    pThis->IMedia.pfnBiosGetLCHSGeometry         = drvHostBaseGetLCHSGeometry;
+    pThis->IMedia.pfnBiosSetLCHSGeometry         = drvHostBaseSetLCHSGeometry;
+    pThis->IMedia.pfnBiosIsVisible               = drvHostBaseIsVisible;
+    pThis->IMedia.pfnGetRegionCount              = drvHostBaseGetRegionCount;
+    pThis->IMedia.pfnQueryRegionProperties       = drvHostBaseQueryRegionProperties;
+    pThis->IMedia.pfnQueryRegionPropertiesForLba = drvHostBaseQueryRegionPropertiesForLba;
 
     /* IMediaEx */
     pThis->IMediaEx.pfnQueryFeatures            = drvHostBaseQueryFeatures;
+    pThis->IMediaEx.pfnNotifySuspend            = drvHostBaseNotifySuspend;
     pThis->IMediaEx.pfnIoReqAllocSizeSet        = drvHostBaseIoReqAllocSizeSet;
     pThis->IMediaEx.pfnIoReqAlloc               = drvHostBaseIoReqAlloc;
     pThis->IMediaEx.pfnIoReqFree                = drvHostBaseIoReqFree;
@@ -1227,7 +1333,7 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
 
     drvHostBaseInitOs(pThis);
 
-    if (!CFGMR3AreValuesValid(pCfg, pszCfgValid))
+    if (!pHlp->pfnCFGMAreValuesValid(pCfg, pszCfgValid))
     {
         pThis->fAttachFailError = true;
         return VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES;
@@ -1249,7 +1355,7 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
      * Query configuration.
      */
     /* Device */
-    int rc = CFGMR3QueryStringAlloc(pCfg, "Path", &pThis->pszDevice);
+    int rc = pHlp->pfnCFGMQueryStringAlloc(pCfg, "Path", &pThis->pszDevice);
     if (RT_FAILURE(rc))
     {
         AssertMsgFailed(("Configuration error: query for \"Path\" string returned %Rra.\n", rc));
@@ -1258,7 +1364,7 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
 
     /* Mountable */
     uint32_t u32;
-    rc = CFGMR3QueryU32Def(pCfg, "Interval", &u32, 1000);
+    rc = pHlp->pfnCFGMQueryU32Def(pCfg, "Interval", &u32, 1000);
     if (RT_SUCCESS(rc))
         pThis->cMilliesPoller = u32;
     else
@@ -1273,10 +1379,10 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
             pThis->fReadOnlyConfig = false;
     else
     {
-        rc = CFGMR3QueryBoolDef(pCfg, "ReadOnly", &pThis->fReadOnlyConfig,
-                                  enmType == PDMMEDIATYPE_DVD || enmType == PDMMEDIATYPE_CDROM
-                                ? true
-                                : false);
+        rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "ReadOnly", &pThis->fReadOnlyConfig,
+                                         enmType == PDMMEDIATYPE_DVD || enmType == PDMMEDIATYPE_CDROM
+                                       ? true
+                                       : false);
         if (RT_FAILURE(rc))
         {
             AssertMsgFailed(("Configuration error: Query \"ReadOnly\" resulted in %Rrc.\n", rc));
@@ -1285,7 +1391,7 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
     }
 
     /* Locked */
-    rc = CFGMR3QueryBoolDef(pCfg, "Locked", &pThis->fLocked, false);
+    rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "Locked", &pThis->fLocked, false);
     if (RT_FAILURE(rc))
     {
         AssertMsgFailed(("Configuration error: Query \"Locked\" resulted in %Rrc.\n", rc));
@@ -1293,7 +1399,7 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
     }
 
     /* BIOS visible */
-    rc = CFGMR3QueryBoolDef(pCfg, "BIOSVisible", &pThis->fBiosVisible, true);
+    rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "BIOSVisible", &pThis->fBiosVisible, true);
     if (RT_FAILURE(rc))
     {
         AssertMsgFailed(("Configuration error: Query \"BIOSVisible\" resulted in %Rrc.\n", rc));
@@ -1302,7 +1408,7 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
 
     /* Uuid */
     char *psz;
-    rc = CFGMR3QueryStringAlloc(pCfg, "Uuid", &psz);
+    rc = pHlp->pfnCFGMQueryStringAlloc(pCfg, "Uuid", &psz);
     if (rc == VERR_CFGM_VALUE_NOT_FOUND)
         RTUuidClear(&pThis->Uuid);
     else if (RT_SUCCESS(rc))
@@ -1311,10 +1417,10 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
         if (RT_FAILURE(rc))
         {
             AssertMsgFailed(("Configuration error: Uuid from string failed on \"%s\", rc=%Rrc.\n", psz, rc));
-            MMR3HeapFree(psz);
+            PDMDrvHlpMMHeapFree(pDrvIns, psz);
             return rc;
         }
-        MMR3HeapFree(psz);
+        PDMDrvHlpMMHeapFree(pDrvIns, psz);
     }
     else
     {
@@ -1324,7 +1430,7 @@ DECLHIDDEN(int) DRVHostBaseInit(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, const char *
 
     /* Define whether attach failure is an error (default) or not. */
     bool fAttachFailError = true;
-    rc = CFGMR3QueryBoolDef(pCfg, "AttachFailError", &fAttachFailError, true);
+    rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "AttachFailError", &fAttachFailError, true);
     pThis->fAttachFailError = fAttachFailError;
 
     /* log config summary */

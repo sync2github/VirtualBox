@@ -1,12 +1,10 @@
-/* $Id$ */
-
+/* $Id: NetworkAdapterImpl.h 91416 2021-09-28 06:15:49Z vboxsync $ */
 /** @file
- *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_NETWORKADAPTER
-#define ____H_NETWORKADAPTER
+#ifndef MAIN_INCLUDED_NetworkAdapterImpl_h
+#define MAIN_INCLUDED_NetworkAdapterImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "NetworkAdapterWrap.h"
 
@@ -37,7 +38,7 @@ class ATL_NO_VTABLE NetworkAdapter :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(NetworkAdapter)
+    DECLARE_COMMON_CLASS_METHODS(NetworkAdapter)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -57,6 +58,7 @@ public:
     void i_commit();
     void i_copyFrom(NetworkAdapter *aThat);
     void i_applyDefaults(GuestOSType *aOsType);
+    bool i_hasDefaults();
 
     ComObjPtr<NetworkAdapter> i_getPeer();
 
@@ -76,12 +78,16 @@ private:
     HRESULT setBridgedInterface(const com::Utf8Str &aBridgedInterface);
     HRESULT getHostOnlyInterface(com::Utf8Str &aHostOnlyInterface);
     HRESULT setHostOnlyInterface(const com::Utf8Str &aHostOnlyInterface);
+    HRESULT getHostOnlyNetwork(com::Utf8Str &aHostOnlyNetwork);
+    HRESULT setHostOnlyNetwork(const com::Utf8Str &aHostOnlyNetwork);
     HRESULT getInternalNetwork(com::Utf8Str &aInternalNetwork);
     HRESULT setInternalNetwork(const com::Utf8Str &aInternalNetwork);
     HRESULT getNATNetwork(com::Utf8Str &aNATNetwork);
     HRESULT setNATNetwork(const com::Utf8Str &aNATNetwork);
     HRESULT getGenericDriver(com::Utf8Str &aGenericDriver);
     HRESULT setGenericDriver(const com::Utf8Str &aGenericDriver);
+    HRESULT getCloudNetwork(com::Utf8Str &aCloudNetwork);
+    HRESULT setCloudNetwork(const com::Utf8Str &aCloudNetwork);
     HRESULT getCableConnected(BOOL *aCableConnected);
     HRESULT setCableConnected(BOOL aCableConnected);
     HRESULT getLineSpeed(ULONG *aLineSpeed);
@@ -110,7 +116,7 @@ private:
     void i_generateMACAddress();
     HRESULT i_updateMacAddress(Utf8Str aMacAddress);
     void i_updateBandwidthGroup(BandwidthGroup *aBwGroup);
-    HRESULT i_checkAndSwitchFromNatNetworking(com::Utf8Str networkName);
+    HRESULT i_switchFromNatNetworking(const com::Utf8Str &aNatnetworkName);
     HRESULT i_switchToNatNetworking(const com::Utf8Str &aNatNetworkName);
 
 
@@ -121,5 +127,5 @@ private:
     Backupable<settings::NetworkAdapter> mData;
 };
 
-#endif // ____H_NETWORKADAPTER
+#endif /* !MAIN_INCLUDED_NetworkAdapterImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

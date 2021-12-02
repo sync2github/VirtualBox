@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIComboBox.cpp 91436 2021-09-28 13:31:44Z vboxsync $ */
 /** @file
- * VBox Qt GUI - VirtualBox Qt extensions: QIComboBox class implementation.
+ * VBox Qt GUI - Qt extensions: QIComboBox class implementation.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,22 +15,17 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QAccessibleWidget>
-# include <QHBoxLayout>
-# include <QLineEdit>
+#include <QAccessibleWidget>
+#include <QHBoxLayout>
+#include <QLineEdit>
 
 /* GUI includes: */
-# include "QIComboBox.h"
+#include "QIComboBox.h"
+#include "QILineEdit.h"
 
 /* Other VBox includes: */
-# include "iprt/assert.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "iprt/assert.h"
 
 
 /** QAccessibleWidget extension used as an accessibility interface for QIComboBox. */
@@ -51,7 +46,7 @@ public:
 
     /** Constructs an accessibility interface passing @a pWidget to the base-class. */
     QIAccessibilityInterfaceForQIComboBox(QWidget *pWidget)
-        : QAccessibleWidget(pWidget, QAccessible::ToolBar)
+        : QAccessibleWidget(pWidget, QAccessible::ComboBox)
     {}
 
     /** Returns the number of children. */
@@ -60,9 +55,6 @@ public:
     virtual QAccessibleInterface *child(int iIndex) const /* override */;
     /** Returns the index of the passed @a pChild. */
     virtual int indexOfChild(const QAccessibleInterface *pChild) const /* override */;
-
-    /** Returns a text for the passed @a enmTextRole. */
-    virtual QString text(QAccessible::Text enmTextRole) const /* override */;
 
 private:
 
@@ -106,11 +98,6 @@ int QIAccessibilityInterfaceForQIComboBox::indexOfChild(const QAccessibleInterfa
     return -1;
 }
 
-QString QIAccessibilityInterfaceForQIComboBox::text(QAccessible::Text /* enmTextRole */) const
-{
-    /* Return empty string: */
-    return QString();
-}
 
 
 /*********************************************************************************************************************************
@@ -167,6 +154,11 @@ QLineEdit *QIComboBox::lineEdit() const
     return m_pComboBox->lineEdit();
 }
 
+QComboBox *QIComboBox::comboBox() const
+{
+    return m_pComboBox;
+}
+
 QAbstractItemView *QIComboBox::view() const
 {
     /* Redirect to combo-box: */
@@ -209,6 +201,34 @@ int QIComboBox::currentIndex() const
     return m_pComboBox->currentIndex();
 }
 
+QString QIComboBox::currentText() const
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturn(m_pComboBox, QString());
+    return m_pComboBox->currentText();
+}
+
+QVariant QIComboBox::currentData(int iRole /* = Qt::UserRole */) const
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturn(m_pComboBox, QVariant());
+    return m_pComboBox->currentData(iRole);
+}
+
+void QIComboBox::addItems(const QStringList &items) const
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturnVoid(m_pComboBox);
+    return m_pComboBox->addItems(items);
+}
+
+void QIComboBox::addItem(const QString &strText, const QVariant &userData /* = QVariant() */) const
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturnVoid(m_pComboBox);
+    return m_pComboBox->addItem(strText, userData);
+}
+
 void QIComboBox::insertItem(int iIndex, const QString &strText, const QVariant &userData /* = QVariant() */) const
 {
     /* Redirect to combo-box: */
@@ -244,6 +264,58 @@ QString QIComboBox::itemText(int iIndex) const
     return m_pComboBox->itemText(iIndex);
 }
 
+int QIComboBox::findData(const QVariant &data,
+                         int iRole /* = Qt::UserRole */,
+                         Qt::MatchFlags flags /* = static_cast<Qt::MatchFlags>(Qt::MatchExactly | Qt::MatchCaseSensitive) */) const
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturn(m_pComboBox, -1);
+    return m_pComboBox->findData(data, iRole, flags);
+}
+
+int QIComboBox::findText(const QString &strText,
+                         Qt::MatchFlags flags /* = static_cast<Qt::MatchFlags>(Qt::MatchExactly | Qt::MatchCaseSensitive) */) const
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturn(m_pComboBox, -1);
+    return m_pComboBox->findText(strText, flags);
+}
+
+QComboBox::SizeAdjustPolicy QIComboBox::sizeAdjustPolicy() const
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturn(m_pComboBox, QComboBox::AdjustToContentsOnFirstShow);
+    return m_pComboBox->sizeAdjustPolicy();
+}
+
+void QIComboBox::setSizeAdjustPolicy(QComboBox::SizeAdjustPolicy enmPolicy)
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturnVoid(m_pComboBox);
+    m_pComboBox->setSizeAdjustPolicy(enmPolicy);
+}
+
+void QIComboBox::mark(bool fError, const QString &strErrorMessage /* = QString() */)
+{
+    AssertPtrReturnVoid(m_pComboBox);
+    QILineEdit *pLineEdit = isEditable() ? qobject_cast<QILineEdit*>(m_pComboBox->lineEdit()) : 0;
+    if (pLineEdit)
+        pLineEdit->mark(fError, strErrorMessage);
+}
+
+void QIComboBox::insertSeparator(int iIndex)
+{
+    AssertPtrReturnVoid(m_pComboBox);
+    m_pComboBox->insertSeparator(iIndex);
+}
+
+void QIComboBox::clear()
+{
+    /* Redirect to combo-box: */
+    AssertPtrReturnVoid(m_pComboBox);
+    m_pComboBox->clear();
+}
+
 void QIComboBox::setIconSize(const QSize &size) const
 {
     /* Redirect to combo-box: */
@@ -263,6 +335,10 @@ void QIComboBox::setEditable(bool fEditable) const
     /* Redirect to combo-box: */
     AssertPtrReturnVoid(m_pComboBox);
     m_pComboBox->setEditable(fEditable);
+
+    /* Replace the line-edit so that we can mark errors: */
+    if (isEditable())
+        m_pComboBox->setLineEdit(new QILineEdit);
 }
 
 void QIComboBox::setCurrentIndex(int iIndex) const
@@ -311,17 +387,23 @@ void QIComboBox::prepare()
         AssertPtrReturnVoid(m_pComboBox);
         {
             /* Configure combo-box: */
-            connect(m_pComboBox, SIGNAL(activated(int)), this, SIGNAL(activated(int)));
-            connect(m_pComboBox, SIGNAL(activated(const QString &)), this, SIGNAL(activated(const QString &)));
-            connect(m_pComboBox, SIGNAL(currentIndexChanged(int)), this, SIGNAL(currentIndexChanged(int)));
-            connect(m_pComboBox, SIGNAL(currentIndexChanged(const QString &)), this, SIGNAL(currentIndexChanged(const QString &)));
-            connect(m_pComboBox, SIGNAL(currentTextChanged(const QString &)), this, SIGNAL(currentTextChanged(const QString &)));
-            connect(m_pComboBox, SIGNAL(editTextChanged(const QString &)), this, SIGNAL(editTextChanged(const QString &)));
-            connect(m_pComboBox, SIGNAL(highlighted(int)), this, SIGNAL(highlighted(int)));
-            connect(m_pComboBox, SIGNAL(highlighted(const QString &)), this, SIGNAL(highlighted(const QString &)));
+            setFocusProxy(m_pComboBox);
+            connect(m_pComboBox, static_cast<void(QComboBox::*)(int)>(&QComboBox::activated),
+                    this, static_cast<void(QIComboBox::*)(int)>(&QIComboBox::activated));
+            connect(m_pComboBox, static_cast<void(QComboBox::*)(const QString &)>(&QComboBox::activated),
+                    this, static_cast<void(QIComboBox::*)(const QString &)>(&QIComboBox::activated));
+            connect(m_pComboBox, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
+                    this, static_cast<void(QIComboBox::*)(int)>(&QIComboBox::currentIndexChanged));
+            connect(m_pComboBox, static_cast<void(QComboBox::*)(const QString &)>(&QComboBox::currentIndexChanged),
+                    this, static_cast<void(QIComboBox::*)(const QString &)>(&QIComboBox::currentIndexChanged));
+            connect(m_pComboBox, &QComboBox::currentTextChanged, this, &QIComboBox::currentTextChanged);
+            connect(m_pComboBox, &QComboBox::editTextChanged, this, &QIComboBox::editTextChanged);
+            connect(m_pComboBox, static_cast<void(QComboBox::*)(const QString &)>(&QComboBox::highlighted),
+                    this, static_cast<void(QIComboBox::*)(const QString &)>(&QIComboBox::highlighted));
+            connect(m_pComboBox, static_cast<void(QComboBox::*)(const QString &)>(&QComboBox::highlighted),
+                    this, static_cast<void(QIComboBox::*)(const QString &)>(&QIComboBox::highlighted));
             /* Add combo-box into layout: */
             pLayout->addWidget(m_pComboBox);
         }
     }
 }
-

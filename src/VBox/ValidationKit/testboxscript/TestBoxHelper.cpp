@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: TestBoxHelper.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Validation Kit - Testbox C Helper Utility.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,6 +30,7 @@
 *********************************************************************************************************************************/
 #include <iprt/buildconfig.h>
 #include <iprt/env.h>
+#include <iprt/err.h>
 #include <iprt/file.h>
 #include <iprt/path.h>
 #include <iprt/getopt.h>
@@ -559,6 +560,24 @@ static RTEXITCODE handlerCpuNestedPaging(int argc, char **argv)
                 }
             }
             RTFileClose(hFileCpu);
+        }
+    }
+# elif defined(RT_OS_DARWIN)
+    else if (enmHwVirt == HWVIRTTYPE_VTX)
+    {
+        /*
+         * The kern.hv_support parameter indicates support for the hypervisor API in the
+         * kernel, which in turn is documented require nested paging and unrestricted
+         * guest mode.  So, if it's there and set we've got nested paging.  Howeber, if
+         * it's there and clear we have not definite answer as it might be due to lack
+         * of unrestricted guest mode support.
+         */
+        int32_t fHvSupport = 0;
+        size_t  cbOld = sizeof(fHvSupport);
+        if (sysctlbyname("kern.hv_support", &fHvSupport, &cbOld, NULL, 0) == 0)
+        {
+            if (fHvSupport != 0)
+                fSupported = true;
         }
     }
 # endif

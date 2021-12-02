@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIGlobalSettingsInput.h 86150 2020-09-17 12:03:12Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIGlobalSettingsInput class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,83 +15,82 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIGlobalSettingsInput_h__
-#define __UIGlobalSettingsInput_h__
-
-/* Qt includes: */
-#include <QAbstractTableModel>
+#ifndef FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsInput_h
+#define FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsInput_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UISettingsPage.h"
-#include "UIGlobalSettingsInput.gen.h"
-#include "UIActionPool.h"
 
-/* Forward declartions: */
-class QTabWidget;
-class QLineEdit;
-class UISettingsCacheGlobalInput;
-class UIHotKeyTableModel;
-class UIHotKeyTable;
+/* Forward declarations: */
+class QLabel;
+class UIAutoCaptureKeyboardEditor;
+class UIShortcutConfigurationEditor;
+struct UIDataSettingsGlobalInput;
+typedef UISettingsCache<UIDataSettingsGlobalInput> UISettingsCacheGlobalInput;
 
-
-/* Global settings / Input page: */
-class UIGlobalSettingsInput : public UISettingsPageGlobal, public Ui::UIGlobalSettingsInput
+/** Global settings: Input page. */
+class SHARED_LIBRARY_STUFF UIGlobalSettingsInput : public UISettingsPageGlobal
 {
     Q_OBJECT;
 
-    /* Hot-key table indexes: */
-    enum UIHotKeyTableIndex
-    {
-        UIHotKeyTableIndex_Selector = 0,
-        UIHotKeyTableIndex_Machine = 1
-    };
-
 public:
 
-    /* Constructor: */
+    /** Constructs settings page. */
     UIGlobalSettingsInput();
+    /** Destructs settings page. */
+    virtual ~UIGlobalSettingsInput() /* override */;
 
 protected:
 
-    /* Load data to cache from corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void loadToCacheFrom(QVariant &data);
-    /* Load data to corresponding widgets from cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void getFromCache();
+    /** Loads settings from external object(s) packed inside @a data to cache.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void loadToCacheFrom(QVariant &data) /* override */;
+    /** Loads data from cache to corresponding widgets.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void getFromCache() /* override */;
 
-    /* Save data from corresponding widgets to cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void putToCache();
-    /* Save data from cache to corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void saveFromCacheTo(QVariant &data);
+    /** Saves data from corresponding widgets to cache.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void putToCache() /* override */;
+    /** Saves settings from cache to external object(s) packed inside @a data.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void saveFromCacheTo(QVariant &data) /* overrride */;
 
-    /* API: Validation stuff: */
-    bool validate(QList<UIValidationMessage> &messages);
+    /** Performs validation, updates @a messages list if something is wrong. */
+    virtual bool validate(QList<UIValidationMessage> &messages) /* override */;
 
-    /* Helper: Navigation stuff: */
-    void setOrderAfter(QWidget *pWidget);
-
-    /* Helper: Translation stuff: */
-    void retranslateUi();
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
 
 private:
 
-    /* Helper: Prepare stuff: */
-    void prepareValidation();
+    /** Prepares all. */
+    void prepare();
+    /** Prepares widgets. */
+    void prepareWidgets();
+    /** Prepares connections. */
+    void prepareConnections();
+    /** Cleanups all. */
+    void cleanup();
 
-    QTabWidget *m_pTabWidget;
-    QLineEdit *m_pSelectorFilterEditor;
-    UIHotKeyTableModel *m_pSelectorModel;
-    UIHotKeyTable *m_pSelectorTable;
-    QLineEdit *m_pMachineFilterEditor;
-    UIHotKeyTableModel *m_pMachineModel;
-    UIHotKeyTable *m_pMachineTable;
+    /** Saves existing data from cache. */
+    bool saveData();
 
-    /** Holds the cache instance. */
+    /** Holds the page data cache instance. */
     UISettingsCacheGlobalInput *m_pCache;
+
+    /** @name Widgets
+     * @{ */
+        /** Holds the 'shortcut configuration' editor instance. */
+        UIShortcutConfigurationEditor *m_pEditorShortcutConfiguration;
+        /** Holds the input extended label instance. */
+        QLabel                        *m_pLabelInputExtended;
+        /** Holds the 'auto capture keyboard' editor instance. */
+        UIAutoCaptureKeyboardEditor   *m_pEditorAutoCaptureKeyboard;
+    /** @} */
 };
 
-#endif // __UIGlobalSettingsInput_h__
-
+#endif /* !FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsInput_h */

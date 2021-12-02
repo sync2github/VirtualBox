@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFR3PlugIn.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, Plug-In Support.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -312,7 +312,7 @@ static DECLCALLBACK(int) dbgfR3PlugInLoad(PUVM pUVM, const char *pszName, const 
      * Create a module structure and we can pass around via RTPathTraverseList if needed.
      */
     size_t cbName = strlen(pszName) + 1;
-    pPlugIn = (PDBGFPLUGIN)MMR3HeapAllocZU(pUVM, MM_TAG_DBGF, RT_UOFFSETOF(DBGFPLUGIN, szName[cbName]));
+    pPlugIn = (PDBGFPLUGIN)MMR3HeapAllocZU(pUVM, MM_TAG_DBGF, RT_UOFFSETOF_DYN(DBGFPLUGIN, szName[cbName]));
     if (RT_UNLIKELY(!pPlugIn))
     {
         DBGF_PLUG_IN_WRITE_UNLOCK(pUVM);
@@ -470,15 +470,15 @@ VMMR3DECL(void) DBGFR3PlugInLoadAll(PUVM pUVM)
     AssertRCReturnVoid(rc);
     strcat(szPath, pszSuff);
 
-    PRTDIR pDir;
-    rc = RTDirOpenFiltered(&pDir, szPath, RTDIRFILTER_WINNT, 0);
+    RTDIR hDir;
+    rc = RTDirOpenFiltered(&hDir, szPath, RTDIRFILTER_WINNT, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         /*
          * Now read it and try load each of the plug-in modules.
          */
         RTDIRENTRY DirEntry;
-        while (RT_SUCCESS(RTDirRead(pDir, &DirEntry, NULL)))
+        while (RT_SUCCESS(RTDirRead(hDir, &DirEntry, NULL)))
         {
             szPath[offDir] = '\0';
             rc = RTPathAppend(szPath, sizeof(szPath), DirEntry.szName);
@@ -495,7 +495,7 @@ VMMR3DECL(void) DBGFR3PlugInLoadAll(PUVM pUVM)
             }
         }
 
-        RTDirClose(pDir);
+        RTDirClose(hDir);
     }
 }
 

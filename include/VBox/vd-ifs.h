@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vd_ifs_h
-#define ___VBox_vd_ifs_h
+#ifndef VBOX_INCLUDED_vd_ifs_h
+#define VBOX_INCLUDED_vd_ifs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/assert.h>
 #include <iprt/string.h>
@@ -37,6 +40,9 @@
 #include <VBox/err.h>
 
 RT_C_DECLS_BEGIN
+
+/** @addtogroup grp_vd
+ * @{ */
 
 /** Interface header magic. */
 #define VDINTERFACE_MAGIC UINT32_C(0x19701015)
@@ -153,9 +159,7 @@ DECLINLINE(int) VDInterfaceAdd(PVDINTERFACE pInterface, const char *pszName, VDI
                     && enmInterface < VDINTERFACETYPE_INVALID,
                     ("enmInterface=%u", enmInterface), VERR_INVALID_PARAMETER);
 
-    AssertMsgReturn(VALID_PTR(ppVDIfs),
-                    ("pInterfaceList=%#p", ppVDIfs),
-                    VERR_INVALID_PARAMETER);
+    AssertPtrReturn(ppVDIfs, VERR_INVALID_PARAMETER);
 
     /* Fill out interface descriptor. */
     pInterface->u32Magic         = VDINTERFACE_MAGIC;
@@ -183,13 +187,8 @@ DECLINLINE(int) VDInterfaceRemove(PVDINTERFACE pInterface, PVDINTERFACE *ppVDIfs
     int rc = VERR_NOT_FOUND;
 
     /* Argument checks. */
-    AssertMsgReturn(VALID_PTR(pInterface),
-                    ("pInterface=%#p", pInterface),
-                    VERR_INVALID_PARAMETER);
-
-    AssertMsgReturn(VALID_PTR(ppVDIfs),
-                    ("pInterfaceList=%#p", ppVDIfs),
-                    VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pInterface, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(ppVDIfs, VERR_INVALID_PARAMETER);
 
     if (*ppVDIfs)
     {
@@ -296,6 +295,12 @@ DECLINLINE(int) RT_IPRT_FORMAT_ATTR(6, 7) vdIfError(PVDINTERFACEERROR pIfError, 
     if (pIfError)
         pIfError->pfnError(pIfError->Core.pvUser, rc, RT_SRC_POS_ARGS, pszFormat, va);
     va_end(va);
+
+#if defined(LOG_ENABLED) && defined(Log)
+    va_start(va, pszFormat);
+    Log(("vdIfError: %N\n", pszFormat, &va));
+    va_end(va);
+#endif
     return rc;
 }
 
@@ -315,6 +320,12 @@ DECLINLINE(int) RT_IPRT_FORMAT_ATTR(2, 3) vdIfErrorMessage(PVDINTERFACEERROR pIf
     if (pIfError && pIfError->pfnMessage)
         rc = pIfError->pfnMessage(pIfError->Core.pvUser, pszFormat, va);
     va_end(va);
+
+#if defined(LOG_ENABLED) && defined(Log)
+    va_start(va, pszFormat);
+    Log(("vdIfErrorMessage: %N\n", pszFormat, &va));
+    va_end(va);
+#endif
     return rc;
 }
 
@@ -326,7 +337,7 @@ DECLINLINE(int) RT_IPRT_FORMAT_ATTR(2, 3) vdIfErrorMessage(PVDINTERFACEERROR pIf
  * @param   pvUser          Opaque user data which is passed on request submission.
  * @param   rcReq           Status code of the completed request.
  */
-typedef DECLCALLBACK(int) FNVDCOMPLETED(void *pvUser, int rcReq);
+typedef DECLCALLBACKTYPE(int, FNVDCOMPLETED,(void *pvUser, int rcReq));
 /** Pointer to FNVDCOMPLETED() */
 typedef FNVDCOMPLETED *PFNVDCOMPLETED;
 
@@ -650,6 +661,8 @@ DECLINLINE(int) vdIfIoFileFlushSync(PVDINTERFACEIO pIfIo, void *pStorage)
  */
 VBOXDDU_DECL(int) VDIfCreateVfsStream(PVDINTERFACEIO pVDIfsIo, void *pvStorage, uint32_t fFlags, PRTVFSIOSTREAM phVfsIos);
 
+struct VDINTERFACEIOINT;
+
 /**
  * Create a VFS file handle around a VD I/O interface.
  *
@@ -667,7 +680,8 @@ VBOXDDU_DECL(int) VDIfCreateVfsStream(PVDINTERFACEIO pVDIfsIo, void *pvStorage, 
  * @param   fFlags          RTFILE_O_XXX, access mask requied.
  * @param   phVfsFile       Where to return the VFS file handle on success.
  */
-VBOXDDU_DECL(int) VDIfCreateVfsFile(PVDINTERFACEIO pVDIfs, struct VDINTERFACEIOINT *pVDIfsInt, void *pvStorage, uint32_t fFlags, PRTVFSFILE phVfsFile);
+VBOXDDU_DECL(int) VDIfCreateVfsFile(PVDINTERFACEIO pVDIfs, struct VDINTERFACEIOINT *pVDIfsInt, void *pvStorage,
+                                    uint32_t fFlags, PRTVFSFILE phVfsFile);
 
 /**
  * Creates an VD I/O interface wrapper around an IPRT VFS I/O stream.
@@ -701,7 +715,7 @@ VBOXDDU_DECL(int) VDIfDestroyFromVfsStream(PVDINTERFACEIO pIoIf);
  * @param   pvUser          The opaque user data associated with this interface.
  * @param   uPercentage     Completion percentage.
  */
-typedef DECLCALLBACK(int) FNVDPROGRESS(void *pvUser, unsigned uPercentage);
+typedef DECLCALLBACKTYPE(int, FNVDPROGRESS,(void *pvUser, unsigned uPercentage));
 /** Pointer to FNVDPROGRESS() */
 typedef FNVDPROGRESS *PFNVDPROGRESS;
 
@@ -723,6 +737,9 @@ typedef struct VDINTERFACEPROGRESS
     PFNVDPROGRESS pfnProgress;
 
 } VDINTERFACEPROGRESS, *PVDINTERFACEPROGRESS;
+
+/** Initializer for VDINTERFACEPROGRESS.  */
+#define VDINTERFACEPROGRESS_INITALIZER(a_pfnProgress) { { 0, NULL, NULL, VDINTERFACETYPE_INVALID, 0, NULL }, a_pfnProgress }
 
 /**
  * Get progress interface from interface list.
@@ -818,6 +835,19 @@ typedef struct VDINTERFACECONFIG
      * @param   cbData          Length of data buffer.
      */
     DECLR3CALLBACKMEMBER(int, pfnQueryBytes, (void *pvUser, const char *pszName, void *ppvData, size_t cbData));
+
+    /**
+     * Set a named property to a specified string value, optionally creating if it doesn't exist.
+     *
+     * @return  VBox status code.
+     *          VERR_CFGM_VALUE_NOT_FOUND means that the key is not known and fCreate flag was not set.
+     * @param   pvUser          The opaque user data associated with this interface.
+     * @param   fCreate         Create property if it doesn't exist (if property exists, it is not an error)
+     * @param   pszName         Name of the key to query.
+     * @param   pszValue        String value to set the name property to.
+     */
+    DECLR3CALLBACKMEMBER(int, pfnUpdate, (void *pvUser, bool fCreate,
+            const char *pszName, const char *pszValue));
 
 } VDINTERFACECONFIG, *PVDINTERFACECONFIG;
 
@@ -1101,6 +1131,42 @@ DECLINLINE(int) VDCFGQueryBytesAlloc(PVDINTERFACECONFIG pCfgIf,
     }
     return rc;
 }
+
+/**
+ * Set property value to string (optionally create if non-existent).
+ *
+ * @return  VBox status code.
+ * @param   pCfgIf      Pointer to configuration callback table.
+ * @param   fCreate     Create the property if it doesn't exist
+ * @param   pszName     Name of property
+ * @param   pszValue    String value to assign to property
+ */
+DECLINLINE(int) VDCFGUpdate(PVDINTERFACECONFIG pCfgIf, bool fCreate, const char *pszName, const char *pszValue)
+{
+    int rc = pCfgIf->pfnUpdate(pCfgIf->Core.pvUser, fCreate, pszName, pszValue);
+    return rc;
+}
+
+/**
+ * Set property value to Unsigned Int 64-bit (optionally create if non-existent).
+ *
+ * @return  VBox status code.
+ * @param   pCfgIf      Pointer to configuration callback table.
+ * @param   fCreate     Create the property if it doesn't exist
+ * @param   pszName     Name of property
+ * @param   u64Value    64-bit unsigned value to save with property.
+ */
+
+DECLINLINE(int) VDCFGUpdateU64(PVDINTERFACECONFIG pCfgIf, bool fCreate, const char *pszName, uint64_t u64Value)
+{
+     int rc = 0;
+     char pszValue[21];
+     (void) RTStrPrintf(pszValue, sizeof(pszValue), "%RU64", u64Value);
+     rc = VDCFGUpdate(pCfgIf, fCreate, pszName, pszValue);
+     return rc;
+}
+
+
 
 /** Forward declaration of a VD socket. */
 typedef struct VDSOCKETINT *VDSOCKET;
@@ -1685,4 +1751,4 @@ RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_vd_ifs_h */

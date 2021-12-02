@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VirtualBoxImpl.cpp 92176 2021-11-02 11:28:51Z vboxsync $ */
 /** @file
  * Implementation of IVirtualBox in VBoxSVC.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_VIRTUALBOX
 #include <iprt/asm.h>
 #include <iprt/base64.h>
 #include <iprt/buildconfig.h>
@@ -28,9 +29,11 @@
 #include <iprt/sha.h>
 #include <iprt/string.h>
 #include <iprt/stream.h>
+#include <iprt/system.h>
 #include <iprt/thread.h>
 #include <iprt/uuid.h>
 #include <iprt/cpp/xml.h>
+#include <iprt/ctype.h>
 
 #include <VBox/com/com.h>
 #include <VBox/com/array.h>
@@ -41,6 +44,10 @@
 #include <VBox/param.h>
 #include <VBox/settings.h>
 #include <VBox/version.h>
+
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+# include <VBox/GuestHost/SharedClipboard-transfers.h>
+#endif
 
 #include <package-generated.h>
 
@@ -63,6 +70,12 @@
 #include "NetworkServiceRunner.h"
 #include "DHCPServerImpl.h"
 #include "NATNetworkImpl.h"
+#ifdef VBOX_WITH_VMNET
+#include "HostOnlyNetworkImpl.h"
+#endif /* VBOX_WITH_VMNET */
+#ifdef VBOX_WITH_CLOUD_NET
+#include "CloudNetworkImpl.h"
+#endif /* VBOX_WITH_CLOUD_NET */
 #ifdef VBOX_WITH_RESOURCE_USAGE_API
 # include "PerformanceImpl.h"
 #endif /* VBOX_WITH_RESOURCE_USAGE_API */
@@ -70,11 +83,16 @@
 #ifdef VBOX_WITH_EXTPACK
 # include "ExtPackManagerImpl.h"
 #endif
+#ifdef VBOX_WITH_UNATTENDED
+# include "UnattendedImpl.h"
+#endif
 #include "AutostartDb.h"
 #include "ClientWatcher.h"
-
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
+#include "CloudProviderManagerImpl.h"
+#include "ThreadTask.h"
+#include "VBoxEvents.h"
 
 #include <QMTranslator.h>
 
@@ -83,7 +101,6 @@
 # include "tchar.h"
 #endif
 
-#include "ThreadTask.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -119,6 +136,9 @@ std::map<com::Utf8Str, int> VirtualBox::sNatNetworkNameToRefCount;
 
 // static leaked (todo: find better place to free it.)
 RWLockHandle *VirtualBox::spMtxNatNetworkNameToRefCountLock;
+
+
+#if 0 /* obsoleted by AsyncEvent */
 ////////////////////////////////////////////////////////////////////////////////
 //
 // CallbackEvent class
@@ -127,9 +147,8 @@ RWLockHandle *VirtualBox::spMtxNatNetworkNameToRefCountLock;
 
 /**
  *  Abstract callback event class to asynchronously call VirtualBox callbacks
- *  on a dedicated event thread. Subclasses reimplement #handleCallback()
- *  to call appropriate IVirtualBoxCallback methods depending on the event
- *  to be dispatched.
+ *  on a dedicated event thread. Subclasses reimplement #prepareEventDesc()
+ *  to initialize the event depending on the event to be dispatched.
  *
  *  @note The VirtualBox instance passed to the constructor is strongly
  *  referenced, so that the VirtualBox singleton won't be released until the
@@ -159,6 +178,37 @@ private:
 protected:
     VBoxEventType_T     mWhat;
 };
+#endif
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// AsyncEvent class
+//
+////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * For firing off an event on asynchronously on an event thread.
+ */
+class VirtualBox::AsyncEvent : public Event
+{
+public:
+    AsyncEvent(VirtualBox *a_pVirtualBox, ComPtr<IEvent> const &a_rEvent)
+        : mVirtualBox(a_pVirtualBox), mEvent(a_rEvent)
+    {
+        Assert(a_pVirtualBox);
+    }
+
+    void *handler() RT_OVERRIDE;
+
+private:
+    /**
+     * @note This is a weak ref -- the CallbackEvent handler thread is bound to the
+     *       lifetime of the VirtualBox instance, so it's safe.
+     */
+    VirtualBox         *mVirtualBox;
+    /** The event. */
+    ComPtr<IEvent>      mEvent;
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -166,11 +216,53 @@ protected:
 //
 ////////////////////////////////////////////////////////////////////////////////
 
+#if defined(RT_OS_WINDOWS) && defined(VBOXSVC_WITH_CLIENT_WATCHER)
+/**
+ * Client process watcher data.
+ */
+class WatchedClientProcess
+{
+public:
+    WatchedClientProcess(RTPROCESS a_pid, HANDLE a_hProcess) RT_NOEXCEPT
+        : m_pid(a_pid)
+        , m_cRefs(1)
+        , m_hProcess(a_hProcess)
+    {
+    }
+
+    ~WatchedClientProcess()
+    {
+        if (m_hProcess != NULL)
+        {
+            ::CloseHandle(m_hProcess);
+            m_hProcess = NULL;
+        }
+        m_pid = NIL_RTPROCESS;
+    }
+
+    /** The client PID.   */
+    RTPROCESS           m_pid;
+    /** Number of references to this structure. */
+    uint32_t volatile   m_cRefs;
+    /** Handle of the client process.
+     * Ideally, we've got full query privileges, but we'll settle for waiting.  */
+    HANDLE              m_hProcess;
+};
+typedef std::map<RTPROCESS, WatchedClientProcess *> WatchedClientProcessMap;
+#endif
+
+
 typedef ObjectsList<Medium> MediaOList;
 typedef ObjectsList<GuestOSType> GuestOSTypesOList;
 typedef ObjectsList<SharedFolder> SharedFoldersOList;
 typedef ObjectsList<DHCPServer> DHCPServersOList;
 typedef ObjectsList<NATNetwork> NATNetworksOList;
+#ifdef VBOX_WITH_VMNET
+typedef ObjectsList<HostOnlyNetwork> HostOnlyNetworksOList;
+#endif /* VBOX_WITH_VMNET */
+#ifdef VBOX_WITH_CLOUD_NET
+typedef ObjectsList<CloudNetwork> CloudNetworksOList;
+#endif /* VBOX_WITH_CLOUD_NET */
 
 typedef std::map<Guid, ComPtr<IProgress> > ProgressMap;
 typedef std::map<Guid, ComObjPtr<Medium> > HardDiskMap;
@@ -183,30 +275,48 @@ typedef std::map<Guid, ComObjPtr<Medium> > HardDiskMap;
 struct VirtualBox::Data
 {
     Data()
-        : pMainConfigFile(NULL),
-          uuidMediaRegistry("48024e5c-fdd9-470f-93af-ec29f7ea518c"),
-          uRegistryNeedsSaving(0),
-          lockMachines(LOCKCLASS_LISTOFMACHINES),
-          allMachines(lockMachines),
-          lockGuestOSTypes(LOCKCLASS_LISTOFOTHEROBJECTS),
-          allGuestOSTypes(lockGuestOSTypes),
-          lockMedia(LOCKCLASS_LISTOFMEDIA),
-          allHardDisks(lockMedia),
-          allDVDImages(lockMedia),
-          allFloppyImages(lockMedia),
-          lockSharedFolders(LOCKCLASS_LISTOFOTHEROBJECTS),
-          allSharedFolders(lockSharedFolders),
-          lockDHCPServers(LOCKCLASS_LISTOFOTHEROBJECTS),
-          allDHCPServers(lockDHCPServers),
-          lockNATNetworks(LOCKCLASS_LISTOFOTHEROBJECTS),
-          allNATNetworks(lockNATNetworks),
-          mtxProgressOperations(LOCKCLASS_PROGRESSLIST),
-          pClientWatcher(NULL),
-          threadAsyncEvent(NIL_RTTHREAD),
-          pAsyncEventQ(NULL),
-          pAutostartDb(NULL),
-          fSettingsCipherKeySet(false)
+        : pMainConfigFile(NULL)
+        , uuidMediaRegistry("48024e5c-fdd9-470f-93af-ec29f7ea518c")
+        , uRegistryNeedsSaving(0)
+        , lockMachines(LOCKCLASS_LISTOFMACHINES)
+        , allMachines(lockMachines)
+        , lockGuestOSTypes(LOCKCLASS_LISTOFOTHEROBJECTS)
+        , allGuestOSTypes(lockGuestOSTypes)
+        , lockMedia(LOCKCLASS_LISTOFMEDIA)
+        , allHardDisks(lockMedia)
+        , allDVDImages(lockMedia)
+        , allFloppyImages(lockMedia)
+        , lockSharedFolders(LOCKCLASS_LISTOFOTHEROBJECTS)
+        , allSharedFolders(lockSharedFolders)
+        , lockDHCPServers(LOCKCLASS_LISTOFOTHEROBJECTS)
+        , allDHCPServers(lockDHCPServers)
+        , lockNATNetworks(LOCKCLASS_LISTOFOTHEROBJECTS)
+        , allNATNetworks(lockNATNetworks)
+#ifdef VBOX_WITH_VMNET
+        , lockHostOnlyNetworks(LOCKCLASS_LISTOFOTHEROBJECTS)
+        , allHostOnlyNetworks(lockHostOnlyNetworks)
+#endif /* VBOX_WITH_VMNET */
+#ifdef VBOX_WITH_CLOUD_NET
+        , lockCloudNetworks(LOCKCLASS_LISTOFOTHEROBJECTS)
+        , allCloudNetworks(lockCloudNetworks)
+#endif /* VBOX_WITH_CLOUD_NET */
+        , mtxProgressOperations(LOCKCLASS_PROGRESSLIST)
+        , pClientWatcher(NULL)
+        , threadAsyncEvent(NIL_RTTHREAD)
+        , pAsyncEventQ(NULL)
+        , pAutostartDb(NULL)
+        , fSettingsCipherKeySet(false)
+#ifdef VBOX_WITH_MAIN_NLS
+        , pVBoxTranslator(NULL)
+        , pTrComponent(NULL)
+#endif
+#if defined(RT_OS_WINDOWS) && defined(VBOXSVC_WITH_CLIENT_WATCHER)
+        , fWatcherIsReliable(RTSystemGetNtVersion() >= RTSYSTEM_MAKE_NT_VERSION(6, 0, 0))
+#endif
     {
+#if defined(RT_OS_WINDOWS) && defined(VBOXSVC_WITH_CLIENT_WATCHER)
+        RTCritSectRwInit(&WatcherCritSect);
+#endif
     }
 
     ~Data()
@@ -280,6 +390,15 @@ struct VirtualBox::Data
     RWLockHandle                        lockNATNetworks;
     NATNetworksOList                    allNATNetworks;
 
+#ifdef VBOX_WITH_VMNET
+    RWLockHandle                        lockHostOnlyNetworks;
+    HostOnlyNetworksOList               allHostOnlyNetworks;
+#endif /* VBOX_WITH_VMNET */
+#ifdef VBOX_WITH_CLOUD_NET
+    RWLockHandle                        lockCloudNetworks;
+    CloudNetworksOList                  allCloudNetworks;
+#endif /* VBOX_WITH_CLOUD_NET */
+
     RWLockHandle                        mtxProgressOperations;
     ProgressMap                         mapProgressOperations;
 
@@ -295,14 +414,30 @@ struct VirtualBox::Data
     const ComObjPtr<ExtPackManager>     ptrExtPackManager;
 #endif
 
+    /** The reference to the cloud provider manager singleton. */
+    const ComObjPtr<CloudProviderManager> pCloudProviderManager;
+
     /** The global autostart database for the user. */
     AutostartDb * const                 pAutostartDb;
 
     /** Settings secret */
     bool                                fSettingsCipherKeySet;
     uint8_t                             SettingsCipherKey[RTSHA512_HASH_SIZE];
+#ifdef VBOX_WITH_MAIN_NLS
+    VirtualBoxTranslator               *pVBoxTranslator;
+    PTRCOMPONENT                        pTrComponent;
+#endif
+#if defined(RT_OS_WINDOWS) && defined(VBOXSVC_WITH_CLIENT_WATCHER)
+    /** Critical section protecting WatchedProcesses. */
+    RTCRITSECTRW                        WatcherCritSect;
+    /** Map of processes being watched, key is the PID. */
+    WatchedClientProcessMap             WatchedProcesses;
+    /** Set if the watcher is reliable, otherwise cleared.
+     * The watcher goes unreliable when we run out of memory, fail open a client
+     * process, or if the watcher thread gets messed up. */
+    bool                                fWatcherIsReliable;
+#endif
 };
-
 
 // constructor / destructor
 /////////////////////////////////////////////////////////////////////////////
@@ -311,13 +446,14 @@ DEFINE_EMPTY_CTOR_DTOR(VirtualBox)
 
 HRESULT VirtualBox::FinalConstruct()
 {
-    LogFlowThisFunc(("\n"));
+    LogRelFlowThisFuncEnter();
     LogRel(("VirtualBox: object creation starts\n"));
-
-    HRESULT rc = init();
 
     BaseFinalConstruct();
 
+    HRESULT rc = init();
+
+    LogRelFlowThisFuncLeave();
     LogRel(("VirtualBox: object created\n"));
 
     return rc;
@@ -325,7 +461,7 @@ HRESULT VirtualBox::FinalConstruct()
 
 void VirtualBox::FinalRelease()
 {
-    LogFlowThisFunc(("\n"));
+    LogRelFlowThisFuncEnter();
     LogRel(("VirtualBox: object deletion starts\n"));
 
     uninit();
@@ -333,6 +469,7 @@ void VirtualBox::FinalRelease()
     BaseFinalRelease();
 
     LogRel(("VirtualBox: object deleted\n"));
+    LogRelFlowThisFuncLeave();
 }
 
 // public initializer/uninitializer for internal purposes only
@@ -345,6 +482,7 @@ void VirtualBox::FinalRelease()
  */
 HRESULT VirtualBox::init()
 {
+    LogRelFlowThisFuncEnter();
     /* Enclose the state transition NotReady->InInit->Ready */
     AutoInitSpan autoInitSpan(this);
     AssertReturn(autoInitSpan.isOk(), E_FAIL);
@@ -391,14 +529,21 @@ HRESULT VirtualBox::init()
     bool fCreate = false;
     try
     {
+        /* Create the event source early as we may fire async event during settings loading (media). */
+        rc = unconst(m->pEventSource).createObject();
+        if (FAILED(rc)) throw rc;
+        rc = m->pEventSource->init();
+        if (FAILED(rc)) throw rc;
+
+
         /* Get the VirtualBox home directory. */
         {
             char szHomeDir[RTPATH_MAX];
             int vrc = com::GetVBoxUserHomeDirectory(szHomeDir, sizeof(szHomeDir));
             if (RT_FAILURE(vrc))
-                throw setError(E_FAIL,
-                               tr("Could not create the VirtualBox home directory '%s' (%Rrc)"),
-                               szHomeDir, vrc);
+                throw setErrorBoth(E_FAIL, vrc,
+                                   tr("Could not create the VirtualBox home directory '%s' (%Rrc)"),
+                                   szHomeDir, vrc);
 
             unconst(m->strHomeDir) = szHomeDir;
         }
@@ -452,6 +597,72 @@ HRESULT VirtualBox::init()
          */
         unconst(m->pAutostartDb) = new AutostartDb;
 
+        /* create the system properties object, someone may need it too */
+        rc = unconst(m->pSystemProperties).createObject();
+        if (SUCCEEDED(rc))
+            rc = m->pSystemProperties->init(this);
+        ComAssertComRCThrowRC(rc);
+
+        rc = m->pSystemProperties->i_loadSettings(m->pMainConfigFile->systemProperties);
+        if (FAILED(rc)) throw rc;
+#ifdef VBOX_WITH_MAIN_NLS
+        m->pVBoxTranslator = VirtualBoxTranslator::instance();
+        /* Do not throw an exception on language errors.
+         * Just do not use translation. */
+        if (m->pVBoxTranslator)
+        {
+
+            char szNlsPath[RTPATH_MAX];
+            int vrc = RTPathAppPrivateNoArch(szNlsPath, sizeof(szNlsPath));
+            if (RT_SUCCESS(vrc))
+                vrc = RTPathAppend(szNlsPath, sizeof(szNlsPath), "nls" RTPATH_SLASH_STR "VirtualBoxAPI");
+
+            if (RT_SUCCESS(vrc))
+            {
+                vrc = m->pVBoxTranslator->registerTranslation(szNlsPath, true, &m->pTrComponent);
+                if (RT_SUCCESS(vrc))
+                {
+                    com::Utf8Str strLocale;
+                    HRESULT hrc = m->pSystemProperties->getLanguageId(strLocale);
+                    if (SUCCEEDED(hrc))
+                    {
+                        vrc = m->pVBoxTranslator->i_loadLanguage(strLocale.c_str());
+                        if (RT_FAILURE(vrc))
+                        {
+                            hrc = Global::vboxStatusCodeToCOM(vrc);
+                            LogRel(("Load language failed (%Rhrc).\n", hrc));
+                        }
+                    }
+                    else
+                    {
+                        LogRel(("Getting language settings failed (%Rhrc).\n", hrc));
+                        m->pVBoxTranslator->release();
+                        m->pVBoxTranslator = NULL;
+                        m->pTrComponent = NULL;
+                    }
+                }
+                else
+                {
+                    HRESULT hrc = Global::vboxStatusCodeToCOM(vrc);
+                    LogRel(("Register translation failed (%Rhrc).\n", hrc));
+                    m->pVBoxTranslator->release();
+                    m->pVBoxTranslator = NULL;
+                    m->pTrComponent = NULL;
+                }
+            }
+            else
+            {
+                HRESULT hrc = Global::vboxStatusCodeToCOM(vrc);
+                LogRel(("Path constructing failed (%Rhrc).\n", hrc));
+                m->pVBoxTranslator->release();
+                m->pVBoxTranslator = NULL;
+                m->pTrComponent = NULL;
+            }
+        }
+        else
+            LogRel(("Translator creation failed.\n"));
+#endif
+
 #ifdef VBOX_WITH_EXTPACK
         /*
          * Initialize extension pack manager before system properties because
@@ -463,15 +674,6 @@ HRESULT VirtualBox::init()
         if (FAILED(rc))
             throw rc;
 #endif
-
-        /* create the system properties object, someone may need it too */
-        unconst(m->pSystemProperties).createObject();
-        rc = m->pSystemProperties->init(this);
-        ComAssertComRCThrowRC(rc);
-
-        rc = m->pSystemProperties->i_loadSettings(m->pMainConfigFile->systemProperties);
-        if (FAILED(rc)) throw rc;
-
         /* guest OS type objects, needed by machines */
         for (size_t i = 0; i < Global::cOSTypes; ++i)
         {
@@ -535,9 +737,47 @@ HRESULT VirtualBox::init()
             AssertComRCThrowRC(rc);
         }
 
-        /* events */
-        if (SUCCEEDED(rc = unconst(m->pEventSource).createObject()))
-            rc = m->pEventSource->init();
+#ifdef VBOX_WITH_VMNET
+        /* host-only networks */
+        for (settings::HostOnlyNetworksList::const_iterator it = m->pMainConfigFile->llHostOnlyNetworks.begin();
+             it != m->pMainConfigFile->llHostOnlyNetworks.end();
+             ++it)
+        {
+            ComObjPtr<HostOnlyNetwork> pHostOnlyNetwork;
+            rc = pHostOnlyNetwork.createObject();
+            AssertComRCThrowRC(rc);
+            rc = pHostOnlyNetwork->init(this, "TODO???");
+            AssertComRCThrowRC(rc);
+            rc = pHostOnlyNetwork->i_loadSettings(*it);
+            AssertComRCThrowRC(rc);
+            m->allHostOnlyNetworks.addChild(pHostOnlyNetwork);
+            AssertComRCThrowRC(rc);
+        }
+#endif /* VBOX_WITH_VMNET */
+
+#ifdef VBOX_WITH_CLOUD_NET
+        /* net services - cloud networks */
+        for (settings::CloudNetworksList::const_iterator it = m->pMainConfigFile->llCloudNetworks.begin();
+             it != m->pMainConfigFile->llCloudNetworks.end();
+             ++it)
+        {
+            ComObjPtr<CloudNetwork> pCloudNetwork;
+            rc = pCloudNetwork.createObject();
+            AssertComRCThrowRC(rc);
+            rc = pCloudNetwork->init(this, "");
+            AssertComRCThrowRC(rc);
+            rc = pCloudNetwork->i_loadSettings(*it);
+            AssertComRCThrowRC(rc);
+            m->allCloudNetworks.addChild(pCloudNetwork);
+            AssertComRCThrowRC(rc);
+        }
+#endif /* VBOX_WITH_CLOUD_NET */
+
+        /* cloud provider manager */
+        rc = unconst(m->pCloudProviderManager).createObject();
+        if (SUCCEEDED(rc))
+            rc = m->pCloudProviderManager->init(this);
+        ComAssertComRCThrowRC(rc);
         if (FAILED(rc)) throw rc;
     }
     catch (HRESULT err)
@@ -665,11 +905,12 @@ HRESULT VirtualBox::initMachines()
  * global arrays of media (including the GUI's virtual media manager)
  * continue to work as before.
  *
- * @param uuidMachineRegistry The UUID of the media registry. This is either the
+ * @param uuidRegistry The UUID of the media registry. This is either the
  *       transient UUID created at VirtualBox startup for the global registry or
  *       a machine ID.
  * @param mediaRegistry The XML settings structure to load, either from VirtualBox.xml
  *       or a machine XML.
+ * @param strMachineFolder The folder of the machine.
  * @return
  */
 HRESULT VirtualBox::initMedia(const Guid &uuidRegistry,
@@ -682,6 +923,9 @@ HRESULT VirtualBox::initMedia(const Guid &uuidRegistry,
 
     AutoWriteLock treeLock(i_getMediaTreeLockHandle() COMMA_LOCKVAL_SRC_POS);
 
+    // the order of notification is critical for GUI, so use std::list<std::pair> instead of map
+    std::list<std::pair<Guid, DeviceType_T> > uIdsForNotify;
+
     HRESULT rc = S_OK;
     settings::MediaList::const_iterator it;
     for (it = mediaRegistry.llHardDisks.begin();
@@ -691,18 +935,58 @@ HRESULT VirtualBox::initMedia(const Guid &uuidRegistry,
         const settings::Medium &xmlHD = *it;
 
         ComObjPtr<Medium> pHardDisk;
-        if (SUCCEEDED(rc = pHardDisk.createObject()))
-            rc = pHardDisk->init(this,
-                                 NULL,          // parent
-                                 DeviceType_HardDisk,
-                                 uuidRegistry,
-                                 xmlHD,         // XML data; this recurses to processes the children
-                                 strMachineFolder,
-                                 treeLock);
+        rc = pHardDisk.createObject();
         if (FAILED(rc)) return rc;
+        ComObjPtr<Medium> pHardDiskActual(pHardDisk);
+        rc = pHardDisk->initFromSettings(this,
+                                         NULL,          // parent
+                                         DeviceType_HardDisk,
+                                         uuidRegistry,
+                                         xmlHD,         // XML data; this recurses to processes the children
+                                         strMachineFolder,
+                                         treeLock,
+                                         &pHardDiskActual /*never &pHardDisk!*/);
+        if (SUCCEEDED(rc))
+        {
+            /** @todo r=bird: should we really do notifications for duplicates?
+             *  ((Medium *)pHardDisk != (Medium *)pHardDiskActual)
+             * The problem with that, though, is that for the children we don't quite know
+             * which are duplicates and which aren't.   The above initFromSettings is
+             * essentially poforming a merge operation now, so in the duplicate case, we may
+             * just have added a new (grand)child.  Why don't we just pass uIdsForNotify
+             * down to initFromSettings, that'll save us this extra walking? */
 
-        rc = i_registerMedium(pHardDisk, &pHardDisk, treeLock);
+            uIdsForNotify.push_back(std::pair<Guid, DeviceType_T>(pHardDiskActual->i_getId(), DeviceType_HardDisk));
+            // Add children IDs to notification using non-recursive children enumeration.
+            std::vector<std::pair<MediaList::const_iterator, ComObjPtr<Medium> > > llEnumStack;
+            const MediaList& mediaList = pHardDiskActual->i_getChildren();
+            llEnumStack.push_back(std::pair<MediaList::const_iterator, ComObjPtr<Medium> >(mediaList.begin(), pHardDiskActual));
+            while (!llEnumStack.empty())
+            {
+                if (llEnumStack.back().first == llEnumStack.back().second->i_getChildren().end())
+                {
+                    llEnumStack.pop_back();
+                    if (!llEnumStack.empty())
+                        ++llEnumStack.back().first;
+                    continue;
+                }
+                uIdsForNotify.push_back(std::pair<Guid, DeviceType_T>((*llEnumStack.back().first)->i_getId(), DeviceType_HardDisk));
+                const MediaList& childMediaList = (*llEnumStack.back().first)->i_getChildren();
+                if (!childMediaList.empty())
+                {
+                    llEnumStack.push_back(std::pair<MediaList::const_iterator, ComObjPtr<Medium> >(childMediaList.begin(),
+                                                                                             *llEnumStack.back().first));
+                    continue;
+                }
+                ++llEnumStack.back().first;
+            }
+        }
+        // Avoid trouble with lock/refcount, before returning or not.
+        treeLock.release();
+        pHardDisk.setNull();
+        pHardDiskActual.setNull();
         if (FAILED(rc)) return rc;
+        treeLock.acquire();
     }
 
     for (it = mediaRegistry.llDvdImages.begin();
@@ -712,18 +996,27 @@ HRESULT VirtualBox::initMedia(const Guid &uuidRegistry,
         const settings::Medium &xmlDvd = *it;
 
         ComObjPtr<Medium> pImage;
-        if (SUCCEEDED(pImage.createObject()))
-            rc = pImage->init(this,
-                              NULL,
-                              DeviceType_DVD,
-                              uuidRegistry,
-                              xmlDvd,
-                              strMachineFolder,
-                              treeLock);
+        rc = pImage.createObject();
         if (FAILED(rc)) return rc;
 
-        rc = i_registerMedium(pImage, &pImage, treeLock);
+        ComObjPtr<Medium> pImageActually = pImage;
+        rc = pImage->initFromSettings(this,
+                                      NULL,
+                                      DeviceType_DVD,
+                                      uuidRegistry,
+                                      xmlDvd,
+                                      strMachineFolder,
+                                      treeLock,
+                                      &pImageActually);
+        if (SUCCEEDED(rc))
+            uIdsForNotify.push_back(std::pair<Guid, DeviceType_T>(pImageActually->i_getId(), DeviceType_DVD));
+
+        // Avoid trouble with lock/refcount, before returning or not.
+        treeLock.release();
+        pImage.setNull();
+        pImageActually.setNull();
         if (FAILED(rc)) return rc;
+        treeLock.acquire();
     }
 
     for (it = mediaRegistry.llFloppyImages.begin();
@@ -733,18 +1026,37 @@ HRESULT VirtualBox::initMedia(const Guid &uuidRegistry,
         const settings::Medium &xmlFloppy = *it;
 
         ComObjPtr<Medium> pImage;
-        if (SUCCEEDED(pImage.createObject()))
-            rc = pImage->init(this,
-                              NULL,
-                              DeviceType_Floppy,
-                              uuidRegistry,
-                              xmlFloppy,
-                              strMachineFolder,
-                              treeLock);
+        rc = pImage.createObject();
         if (FAILED(rc)) return rc;
 
-        rc = i_registerMedium(pImage, &pImage, treeLock);
+        ComObjPtr<Medium> pImageActually = pImage;
+        rc = pImage->initFromSettings(this,
+                                      NULL,
+                                      DeviceType_Floppy,
+                                      uuidRegistry,
+                                      xmlFloppy,
+                                      strMachineFolder,
+                                      treeLock,
+                                      &pImageActually);
+        if (SUCCEEDED(rc))
+            uIdsForNotify.push_back(std::pair<Guid, DeviceType_T>(pImage->i_getId(), DeviceType_Floppy));
+
+        // Avoid trouble with lock/refcount, before returning or not.
+        treeLock.release();
+        pImage.setNull();
+        pImageActually.setNull();
         if (FAILED(rc)) return rc;
+        treeLock.acquire();
+    }
+
+    if (SUCCEEDED(rc))
+    {
+        for (std::list<std::pair<Guid, DeviceType_T> >::const_iterator itItem = uIdsForNotify.begin();
+             itItem != uIdsForNotify.end();
+             ++itItem)
+        {
+            i_onMediumRegistered(itItem->first, itItem->second, TRUE);
+        }
     }
 
     LogFlow(("VirtualBox::initMedia LEAVING\n"));
@@ -799,6 +1111,12 @@ void VirtualBox::uninit()
      * some resources of the singletons which would prevent them from
      * uninitializing (as for example, mSystemProperties which owns
      * MediumFormat objects which Medium objects refer to) */
+    if (m->pCloudProviderManager)
+    {
+        m->pCloudProviderManager->uninit();
+        unconst(m->pCloudProviderManager).setNull();
+    }
+
     if (m->pSystemProperties)
     {
         m->pSystemProperties->uninit();
@@ -818,6 +1136,14 @@ void VirtualBox::uninit()
         unconst(m->pPerformanceCollector).setNull();
     }
 #endif /* VBOX_WITH_RESOURCE_USAGE_API */
+
+#ifdef VBOX_WITH_EXTPACK
+    if (m->ptrExtPackManager)
+    {
+        m->ptrExtPackManager->uninit();
+        unconst(m->ptrExtPackManager).setNull();
+    }
+#endif
 
     LogFlowThisFunc(("Terminating the async event handler...\n"));
     if (m->threadAsyncEvent != NIL_RTTHREAD)
@@ -862,7 +1188,10 @@ void VirtualBox::uninit()
     }
 
     delete m->pAutostartDb;
-
+#ifdef VBOX_WITH_MAIN_NLS
+    if (m->pVBoxTranslator)
+        m->pVBoxTranslator->release();
+#endif
     // clean up our instance data
     delete m;
     m = NULL;
@@ -911,16 +1240,14 @@ HRESULT VirtualBox::getAPIRevision(LONG64 *aAPIRevision)
     AssertCompile(VBOX_VERSION_MAJOR < 128 && VBOX_VERSION_MAJOR > 0);
     AssertCompile((uint64_t)VBOX_VERSION_MINOR < 256);
     uint64_t uRevision = ((uint64_t)VBOX_VERSION_MAJOR << 56)
-                       | ((uint64_t)VBOX_VERSION_MINOR << 48);
-
-    if (VBOX_VERSION_BUILD >= 51 && (VBOX_VERSION_BUILD & 1)) /* pre-release trunk */
-        uRevision |= (uint64_t)VBOX_VERSION_BUILD << 40;
+                       | ((uint64_t)VBOX_VERSION_MINOR << 48)
+                       | ((uint64_t)VBOX_VERSION_BUILD << 40);
 
     /** @todo This needs to be the same in OSE and non-OSE, preferrably
      *        only changing when actual API changes happens. */
-    uRevision |= 0;
+    uRevision |= 1;
 
-    *aAPIRevision = uRevision;
+    *aAPIRevision = (LONG64)uRevision;
 
     return S_OK;
 }
@@ -1042,6 +1369,8 @@ HRESULT VirtualBox::getProgressOperations(std::vector<ComPtr<IProgress> > &aProg
     /* protect mProgressOperations */
     AutoReadLock safeLock(m->mtxProgressOperations COMMA_LOCKVAL_SRC_POS);
     ProgressMap pmap(m->mapProgressOperations);
+    /* Can release lock now. The following code works on a copy of the map. */
+    safeLock.release();
     aProgressOperations.resize(pmap.size());
     size_t i = 0;
     for (ProgressMap::iterator it = pmap.begin(); it != pmap.end(); ++it, ++i)
@@ -1064,7 +1393,7 @@ HRESULT VirtualBox::getSharedFolders(std::vector<ComPtr<ISharedFolder> > &aShare
 {
     NOREF(aSharedFolders);
 
-    return setError(E_NOTIMPL, "Not yet implemented");
+    return setError(E_NOTIMPL, tr("Not yet implemented"));
 }
 
 HRESULT VirtualBox::getPerformanceCollector(ComPtr<IPerformanceCollector> &aPerformanceCollector)
@@ -1127,6 +1456,148 @@ HRESULT VirtualBox::getExtensionPackManager(ComPtr<IExtPackManager> &aExtensionP
 #endif
     return hrc;
 }
+
+/**
+ * Host Only Network
+ */
+HRESULT VirtualBox::createHostOnlyNetwork(const com::Utf8Str &aNetworkName,
+                                          ComPtr<IHostOnlyNetwork> &aNetwork)
+{
+#ifdef VBOX_WITH_VMNET
+    ComObjPtr<HostOnlyNetwork> HostOnlyNetwork;
+    HostOnlyNetwork.createObject();
+    HRESULT rc = HostOnlyNetwork->init(this, aNetworkName);
+    if (FAILED(rc)) return rc;
+
+    m->allHostOnlyNetworks.addChild(HostOnlyNetwork);
+
+    {
+        AutoWriteLock vboxLock(this COMMA_LOCKVAL_SRC_POS);
+        rc = i_saveSettings();
+        vboxLock.release();
+
+        if (FAILED(rc))
+            m->allHostOnlyNetworks.removeChild(HostOnlyNetwork);
+        else
+            HostOnlyNetwork.queryInterfaceTo(aNetwork.asOutParam());
+    }
+
+    return rc;
+#else /* !VBOX_WITH_VMNET */
+    NOREF(aNetworkName);
+    NOREF(aNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_VMNET */
+}
+
+HRESULT VirtualBox::findHostOnlyNetworkByName(const com::Utf8Str &aNetworkName,
+                                           ComPtr<IHostOnlyNetwork> &aNetwork)
+{
+#ifdef VBOX_WITH_VMNET
+    Bstr bstrNameToFind(aNetworkName);
+
+    AutoReadLock alock(m->allHostOnlyNetworks.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+
+    for (HostOnlyNetworksOList::const_iterator it = m->allHostOnlyNetworks.begin();
+         it != m->allHostOnlyNetworks.end();
+         ++it)
+    {
+        Bstr bstrHostOnlyNetworkName;
+        HRESULT hrc = (*it)->COMGETTER(NetworkName)(bstrHostOnlyNetworkName.asOutParam());
+        if (FAILED(hrc)) return hrc;
+
+        if (bstrHostOnlyNetworkName == bstrNameToFind)
+        {
+            it->queryInterfaceTo(aNetwork.asOutParam());
+            return S_OK;
+        }
+    }
+    return VBOX_E_OBJECT_NOT_FOUND;
+#else /* !VBOX_WITH_VMNET */
+    NOREF(aNetworkName);
+    NOREF(aNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_VMNET */
+}
+
+HRESULT VirtualBox::findHostOnlyNetworkById(const com::Guid &aId,
+                                           ComPtr<IHostOnlyNetwork> &aNetwork)
+{
+#ifdef VBOX_WITH_VMNET
+    ComObjPtr<HostOnlyNetwork> network;
+    AutoReadLock alock(m->allHostOnlyNetworks.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+
+    for (HostOnlyNetworksOList::const_iterator it = m->allHostOnlyNetworks.begin();
+         it != m->allHostOnlyNetworks.end();
+         ++it)
+    {
+        Bstr bstrHostOnlyNetworkId;
+        HRESULT hrc = (*it)->COMGETTER(Id)(bstrHostOnlyNetworkId.asOutParam());
+        if (FAILED(hrc)) return hrc;
+
+        if (Guid(bstrHostOnlyNetworkId) == aId)
+        {
+            it->queryInterfaceTo(aNetwork.asOutParam());;
+            return S_OK;
+        }
+    }
+    return VBOX_E_OBJECT_NOT_FOUND;
+#else /* !VBOX_WITH_VMNET */
+    NOREF(aId);
+    NOREF(aNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_VMNET */
+}
+
+HRESULT VirtualBox::removeHostOnlyNetwork(const ComPtr<IHostOnlyNetwork> &aNetwork)
+{
+#ifdef VBOX_WITH_VMNET
+    Bstr name;
+    HRESULT rc = aNetwork->COMGETTER(NetworkName)(name.asOutParam());
+    if (FAILED(rc))
+        return rc;
+    IHostOnlyNetwork *p = aNetwork;
+    HostOnlyNetwork *network = static_cast<HostOnlyNetwork *>(p);
+
+    AutoCaller autoCaller(this);
+    AssertComRCReturnRC(autoCaller.rc());
+
+    AutoCaller HostOnlyNetworkCaller(network);
+    AssertComRCReturnRC(HostOnlyNetworkCaller.rc());
+
+    m->allHostOnlyNetworks.removeChild(network);
+
+    {
+        AutoWriteLock vboxLock(this COMMA_LOCKVAL_SRC_POS);
+        rc = i_saveSettings();
+        vboxLock.release();
+
+        if (FAILED(rc))
+            m->allHostOnlyNetworks.addChild(network);
+    }
+    return rc;
+#else /* !VBOX_WITH_VMNET */
+    NOREF(aNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_VMNET */
+}
+
+HRESULT VirtualBox::getHostOnlyNetworks(std::vector<ComPtr<IHostOnlyNetwork> > &aHostOnlyNetworks)
+{
+#ifdef VBOX_WITH_VMNET
+    AutoReadLock al(m->allHostOnlyNetworks.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+    aHostOnlyNetworks.resize(m->allHostOnlyNetworks.size());
+    size_t i = 0;
+    for (HostOnlyNetworksOList::const_iterator it = m->allHostOnlyNetworks.begin();
+         it != m->allHostOnlyNetworks.end(); ++it)
+         (*it).queryInterfaceTo(aHostOnlyNetworks[i++].asOutParam());
+    return S_OK;
+#else /* !VBOX_WITH_VMNET */
+    NOREF(aHostOnlyNetworks);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_VMNET */
+}
+
 
 HRESULT VirtualBox::getInternalNetworks(std::vector<com::Utf8Str> &aInternalNetworks)
 {
@@ -1229,6 +1700,138 @@ HRESULT VirtualBox::getGenericNetworkDrivers(std::vector<com::Utf8Str> &aGeneric
     return S_OK;
 }
 
+/**
+ * Cloud Network
+ */
+#ifdef VBOX_WITH_CLOUD_NET
+HRESULT VirtualBox::i_findCloudNetworkByName(const com::Utf8Str &aNetworkName,
+                                             ComObjPtr<CloudNetwork> *aNetwork)
+{
+    HRESULT rc = VBOX_E_OBJECT_NOT_FOUND;
+    ComPtr<CloudNetwork> found;
+    Bstr bstrNameToFind(aNetworkName);
+
+    AutoReadLock alock(m->allCloudNetworks.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+
+    for (CloudNetworksOList::const_iterator it = m->allCloudNetworks.begin();
+         it != m->allCloudNetworks.end();
+         ++it)
+    {
+        Bstr bstrCloudNetworkName;
+        HRESULT hrc = (*it)->COMGETTER(NetworkName)(bstrCloudNetworkName.asOutParam());
+        if (FAILED(hrc)) return hrc;
+
+        if (bstrCloudNetworkName == bstrNameToFind)
+        {
+            *aNetwork = *it;
+            rc = S_OK;
+            break;
+        }
+    }
+    return rc;
+}
+#endif /* VBOX_WITH_CLOUD_NET */
+
+HRESULT VirtualBox::createCloudNetwork(const com::Utf8Str &aNetworkName,
+                                       ComPtr<ICloudNetwork> &aNetwork)
+{
+#ifdef VBOX_WITH_CLOUD_NET
+    ComObjPtr<CloudNetwork> cloudNetwork;
+    cloudNetwork.createObject();
+    HRESULT rc = cloudNetwork->init(this, aNetworkName);
+    if (FAILED(rc)) return rc;
+
+    m->allCloudNetworks.addChild(cloudNetwork);
+
+    cloudNetwork.queryInterfaceTo(aNetwork.asOutParam());
+
+    return rc;
+#else /* !VBOX_WITH_CLOUD_NET */
+    NOREF(aNetworkName);
+    NOREF(aNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_CLOUD_NET */
+}
+
+HRESULT VirtualBox::findCloudNetworkByName(const com::Utf8Str &aNetworkName,
+                                           ComPtr<ICloudNetwork> &aNetwork)
+{
+#ifdef VBOX_WITH_CLOUD_NET
+    ComObjPtr<CloudNetwork> network;
+    HRESULT hrc = i_findCloudNetworkByName(aNetworkName, &network);
+    if (SUCCEEDED(hrc))
+        network.queryInterfaceTo(aNetwork.asOutParam());
+    return hrc;
+#else /* !VBOX_WITH_CLOUD_NET */
+    NOREF(aNetworkName);
+    NOREF(aNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_CLOUD_NET */
+}
+
+HRESULT VirtualBox::removeCloudNetwork(const ComPtr<ICloudNetwork> &aNetwork)
+{
+#ifdef VBOX_WITH_CLOUD_NET
+    Bstr name;
+    HRESULT rc = aNetwork->COMGETTER(NetworkName)(name.asOutParam());
+    if (FAILED(rc))
+        return rc;
+    ICloudNetwork *p = aNetwork;
+    CloudNetwork *network = static_cast<CloudNetwork *>(p);
+
+    AutoCaller autoCaller(this);
+    AssertComRCReturnRC(autoCaller.rc());
+
+    AutoCaller cloudNetworkCaller(network);
+    AssertComRCReturnRC(cloudNetworkCaller.rc());
+
+    m->allCloudNetworks.removeChild(network);
+
+    {
+        AutoWriteLock vboxLock(this COMMA_LOCKVAL_SRC_POS);
+        rc = i_saveSettings();
+        vboxLock.release();
+
+        if (FAILED(rc))
+            m->allCloudNetworks.addChild(network);
+    }
+    return rc;
+#else /* !VBOX_WITH_CLOUD_NET */
+    NOREF(aNetwork);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_CLOUD_NET */
+}
+
+HRESULT VirtualBox::getCloudNetworks(std::vector<ComPtr<ICloudNetwork> > &aCloudNetworks)
+{
+#ifdef VBOX_WITH_CLOUD_NET
+    AutoReadLock al(m->allCloudNetworks.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+    aCloudNetworks.resize(m->allCloudNetworks.size());
+    size_t i = 0;
+    for (CloudNetworksOList::const_iterator it = m->allCloudNetworks.begin();
+         it != m->allCloudNetworks.end(); ++it)
+         (*it).queryInterfaceTo(aCloudNetworks[i++].asOutParam());
+    return S_OK;
+#else /* !VBOX_WITH_CLOUD_NET */
+    NOREF(aCloudNetworks);
+    return E_NOTIMPL;
+#endif /* !VBOX_WITH_CLOUD_NET */
+}
+
+#ifdef VBOX_WITH_CLOUD_NET
+HRESULT VirtualBox::i_getEventSource(ComPtr<IEventSource>& aSource)
+{
+    m->pEventSource.queryInterfaceTo(aSource.asOutParam());
+    return S_OK;
+}
+#endif /* VBOX_WITH_CLOUD_NET */
+
+HRESULT VirtualBox::getCloudProviderManager(ComPtr<ICloudProviderManager> &aCloudProviderManager)
+{
+    HRESULT hrc = m->pCloudProviderManager.queryInterfaceTo(aCloudProviderManager.asOutParam());
+    return hrc;
+}
+
 HRESULT VirtualBox::checkFirmwarePresent(FirmwareType_T aFirmwareType,
                                          const com::Utf8Str &aVersion,
                                          com::Utf8Str &aUrl,
@@ -1239,44 +1842,40 @@ HRESULT VirtualBox::checkFirmwarePresent(FirmwareType_T aFirmwareType,
 
     static const struct
     {
-        FirmwareType_T type;
-        const char*    fileName;
-        const char*    url;
+        FirmwareType_T  enmType;
+        bool            fBuiltIn;
+        const char     *pszFileName;
+        const char     *pszUrl;
     }
     firmwareDesc[] =
     {
-        {
-            /* compiled-in firmware */
-            FirmwareType_BIOS,    NULL,             NULL
-        },
-        {
-            FirmwareType_EFI32,   "VBoxEFI32.fd",   "http://virtualbox.org/firmware/VBoxEFI32.fd"
-        },
-        {
-            FirmwareType_EFI64,   "VBoxEFI64.fd",   "http://virtualbox.org/firmware/VBoxEFI64.fd"
-        },
-        {
-            FirmwareType_EFIDUAL, "VBoxEFIDual.fd", "http://virtualbox.org/firmware/VBoxEFIDual.fd"
-        }
+        {   FirmwareType_BIOS,    true,  NULL,             NULL },
+#ifdef VBOX_WITH_EFI_IN_DD2
+        {   FirmwareType_EFI32,   true,  "VBoxEFI32.fd",   NULL },
+        {   FirmwareType_EFI64,   true,  "VBoxEFI64.fd",   NULL },
+        {   FirmwareType_EFIDUAL, true,  "VBoxEFIDual.fd", NULL },
+#else
+        {   FirmwareType_EFI32,   false, "VBoxEFI32.fd",   "http://virtualbox.org/firmware/VBoxEFI32.fd" },
+        {   FirmwareType_EFI64,   false, "VBoxEFI64.fd",   "http://virtualbox.org/firmware/VBoxEFI64.fd" },
+        {   FirmwareType_EFIDUAL, false, "VBoxEFIDual.fd", "http://virtualbox.org/firmware/VBoxEFIDual.fd" },
+#endif
     };
 
     for (size_t i = 0; i < sizeof(firmwareDesc) / sizeof(firmwareDesc[0]); i++)
     {
-        if (aFirmwareType != firmwareDesc[i].type)
+        if (aFirmwareType != firmwareDesc[i].enmType)
             continue;
 
         /* compiled-in firmware */
-        if (firmwareDesc[i].fileName == NULL)
+        if (firmwareDesc[i].fBuiltIn)
         {
+            aFile = firmwareDesc[i].pszFileName;
             *aResult = TRUE;
             break;
         }
 
-        Utf8Str shortName, fullName;
-
-        shortName = Utf8StrFmt("Firmware%c%s",
-                               RTPATH_DELIMITER,
-                               firmwareDesc[i].fileName);
+        Utf8Str    fullName;
+        Utf8StrFmt shortName("Firmware%c%s", RTPATH_DELIMITER, firmwareDesc[i].pszFileName);
         int rc = i_calculateFullPath(shortName, fullName);
         AssertRCReturn(rc, VBOX_E_IPRT_ERROR);
         if (RTFileExists(fullName.c_str()))
@@ -1286,22 +1885,19 @@ HRESULT VirtualBox::checkFirmwarePresent(FirmwareType_T aFirmwareType,
             break;
         }
 
-        char pszVBoxPath[RTPATH_MAX];
-        rc = RTPathExecDir(pszVBoxPath, RTPATH_MAX);
+        char szVBoxPath[RTPATH_MAX];
+        rc = RTPathExecDir(szVBoxPath, RTPATH_MAX);
         AssertRCReturn(rc, VBOX_E_IPRT_ERROR);
-        fullName = Utf8StrFmt("%s%c%s",
-                              pszVBoxPath,
-                              RTPATH_DELIMITER,
-                              firmwareDesc[i].fileName);
-        if (RTFileExists(fullName.c_str()))
+        rc = RTPathAppend(szVBoxPath, sizeof(szVBoxPath), firmwareDesc[i].pszFileName);
+        if (RTFileExists(szVBoxPath))
         {
             *aResult = TRUE;
-            aFile = fullName;
+            aFile = szVBoxPath;
             break;
         }
 
         /** @todo account for version in the URL */
-        aUrl = firmwareDesc[i].url;
+        aUrl = firmwareDesc[i].pszUrl;
         *aResult = FALSE;
 
         /* Assume single record per firmware type */
@@ -1330,22 +1926,20 @@ HRESULT VirtualBox::composeMachineFilename(const com::Utf8Str &aName,
 
     LogFlowThisFunc(("aName=\"%s\",aBaseFolder=\"%s\"\n", strName.c_str(), strBase.c_str()));
 
-    Guid id;
+    com::Guid id;
     bool fDirectoryIncludesUUID = false;
     if (!aCreateFlags.isEmpty())
     {
         size_t uPos = 0;
-        do {
-
-            com::Utf8Str strKey, strValue;
-            uPos = aCreateFlags.parseKeyValue(strKey, strValue, uPos);
-
+        com::Utf8Str strKey;
+        com::Utf8Str strValue;
+        while ((uPos = aCreateFlags.parseKeyValue(strKey, strValue, uPos)) != com::Utf8Str::npos)
+        {
             if (strKey == "UUID")
                 id = strValue.c_str();
             else if (strKey == "directoryIncludesUUID")
                 fDirectoryIncludesUUID = (strValue == "1");
-
-        } while (uPos != com::Utf8Str::npos);
+        }
     }
 
     if (id.isZero())
@@ -1450,8 +2044,9 @@ void sanitiseMachineFilename(Utf8Str &strName)
 }
 
 #ifdef DEBUG
+typedef DECLCALLBACKTYPE(void, FNTESTPRINTF,(const char *, ...));
 /** Simple unit test/operation examples for sanitiseMachineFilename(). */
-static unsigned testSanitiseMachineFilename(DECLCALLBACKMEMBER(void, pfnPrintf)(const char *, ...))
+static unsigned testSanitiseMachineFilename(FNTESTPRINTF *pfnPrintf)
 {
     unsigned cErrors = 0;
 
@@ -1513,14 +2108,16 @@ HRESULT VirtualBox::createMachine(const com::Utf8Str &aSettingsFile,
     LogFlowThisFuncEnter();
     LogFlowThisFunc(("aSettingsFile=\"%s\", aName=\"%s\", aOsTypeId =\"%s\", aCreateFlags=\"%s\"\n",
                      aSettingsFile.c_str(), aName.c_str(), aOsTypeId.c_str(), aFlags.c_str()));
-    /** @todo tighten checks on aId? */
 
     StringsList llGroups;
     HRESULT rc = i_convertMachineGroups(aGroups, &llGroups);
     if (FAILED(rc))
         return rc;
 
-    Utf8Str strCreateFlags(aFlags);
+    /** @todo r=bird: Would be goot to rewrite this parsing using offset into
+     *        aFlags and drop all the C pointers, strchr, misguided RTStrStr and
+     *        tedious copying of substrings. */
+    Utf8Str strCreateFlags(aFlags); /** @todo r=bird: WTF is the point of this copy? */
     Guid id;
     bool fForceOverwrite = false;
     bool fDirectoryIncludesUUID = false;
@@ -1530,17 +2127,17 @@ HRESULT VirtualBox::createMachine(const com::Utf8Str &aSettingsFile,
         while (*pcszNext != '\0')
         {
             Utf8Str strFlag;
-            const char *pcszComma = RTStrStr(pcszNext, ",");
+            const char *pcszComma = strchr(pcszNext, ','); /*clueless version: RTStrStr(pcszNext, ","); */
             if (!pcszComma)
                 strFlag = pcszNext;
             else
-                strFlag = Utf8Str(pcszNext, pcszComma - pcszNext);
+                strFlag.assign(pcszNext, (size_t)(pcszComma - pcszNext));
 
-            const char *pcszEqual = RTStrStr(strFlag.c_str(), "=");
+            const char *pcszEqual = strchr(strFlag.c_str(), '='); /* more cluelessness: RTStrStr(strFlag.c_str(), "="); */
             /* skip over everything which doesn't contain '=' */
             if (pcszEqual && pcszEqual != strFlag.c_str())
             {
-                Utf8Str strKey(strFlag.c_str(), pcszEqual - strFlag.c_str());
+                Utf8Str strKey(strFlag.c_str(), (size_t)(pcszEqual - strFlag.c_str()));
                 Utf8Str strValue(strFlag.c_str() + (pcszEqual - strFlag.c_str() + 1));
 
                 if (strKey == "UUID")
@@ -1552,11 +2149,12 @@ HRESULT VirtualBox::createMachine(const com::Utf8Str &aSettingsFile,
             }
 
             if (!pcszComma)
-                pcszNext += strFlag.length();
+                pcszNext += strFlag.length();  /* you can just 'break' out here... */
             else
                 pcszNext += strFlag.length() + 1;
         }
     }
+
     /* Create UUID if none was specified. */
     if (id.isZero())
         id.create();
@@ -1569,22 +2167,20 @@ HRESULT VirtualBox::createMachine(const com::Utf8Str &aSettingsFile,
     }
 
     /* NULL settings file means compose automatically */
-    Bstr bstrSettingsFile(aSettingsFile);
-    if (bstrSettingsFile.isEmpty())
+    Utf8Str strSettingsFile(aSettingsFile);
+    if (strSettingsFile.isEmpty())
     {
         Utf8Str strNewCreateFlags(Utf8StrFmt("UUID=%RTuuid", id.raw()));
         if (fDirectoryIncludesUUID)
             strNewCreateFlags += ",directoryIncludesUUID=1";
 
-        com::Utf8Str blstr = "";
-        com::Utf8Str sf = aSettingsFile;
+        com::Utf8Str blstr;
         rc = composeMachineFilename(aName,
                                     llGroups.front(),
                                     strNewCreateFlags,
                                     blstr /* aBaseFolder */,
-                                    sf);
+                                    strSettingsFile);
         if (FAILED(rc)) return rc;
-        bstrSettingsFile = Bstr(sf).raw();
     }
 
     /* create a new object */
@@ -1592,15 +2188,16 @@ HRESULT VirtualBox::createMachine(const com::Utf8Str &aSettingsFile,
     rc = machine.createObject();
     if (FAILED(rc)) return rc;
 
-    GuestOSType *osType = NULL;
-    rc = i_findGuestOSType(Bstr(aOsTypeId), osType);
-    if (FAILED(rc)) return rc;
+    ComObjPtr<GuestOSType> osType;
+    if (!aOsTypeId.isEmpty())
+        i_findGuestOSType(aOsTypeId, osType);
 
     /* initialize the machine object */
     rc = machine->init(this,
-                       Utf8Str(bstrSettingsFile),
-                       Utf8Str(aName),
+                       strSettingsFile,
+                       aName,
                        llGroups,
+                       aOsTypeId,
                        osType,
                        id,
                        fForceOverwrite,
@@ -1683,7 +2280,7 @@ HRESULT VirtualBox::findMachine(const com::Utf8Str &aSettingsFile,
     HRESULT rc = S_OK;
     ComObjPtr<Machine> pMachineFound;
 
-    Guid id(Bstr(aSettingsFile).raw());
+    Guid id(aSettingsFile);
     Utf8Str strFile(aSettingsFile);
     if (id.isValid() && !id.isZero())
 
@@ -1797,6 +2394,25 @@ HRESULT VirtualBox::getMachineStates(const std::vector<ComPtr<IMachine> > &aMach
     return S_OK;
 }
 
+HRESULT VirtualBox::createUnattendedInstaller(ComPtr<IUnattended> &aUnattended)
+{
+#ifdef VBOX_WITH_UNATTENDED
+    ComObjPtr<Unattended> ptrUnattended;
+    HRESULT hrc = ptrUnattended.createObject();
+    if (SUCCEEDED(hrc))
+    {
+        AutoReadLock wlock(this COMMA_LOCKVAL_SRC_POS);
+        hrc = ptrUnattended->initUnattended(this);
+        if (SUCCEEDED(hrc))
+            hrc = ptrUnattended.queryInterfaceTo(aUnattended.asOutParam());
+    }
+    return hrc;
+#else
+    NOREF(aUnattended);
+    return E_NOTIMPL;
+#endif
+}
+
 HRESULT VirtualBox::createMedium(const com::Utf8Str &aFormat,
                                  const com::Utf8Str &aLocation,
                                  AccessMode_T aAccessMode,
@@ -1833,7 +2449,7 @@ HRESULT VirtualBox::createMedium(const com::Utf8Str &aFormat,
         {
 
             if (format.isEmpty())
-                return setError(E_INVALIDARG, "Format must be Valid Type%s", format.c_str());
+                return setError(E_INVALIDARG, tr("Format must be Valid Type%s"), format.c_str());
 
             // enforce read-only for DVDs even if caller specified ReadWrite
             if (aDeviceType == DeviceType_DVD)
@@ -1849,11 +2465,16 @@ HRESULT VirtualBox::createMedium(const com::Utf8Str &aFormat,
          break;
 
          default:
-             return setError(E_INVALIDARG, "Device type must be HardDisk, DVD or Floppy %d", aDeviceType);
+             return setError(E_INVALIDARG, tr("Device type must be HardDisk, DVD or Floppy %d"), aDeviceType);
     }
 
     if (SUCCEEDED(rc))
+    {
         medium.queryInterfaceTo(aMedium.asOutParam());
+        com::Guid uMediumId = medium->i_getId();
+        if (uMediumId.isValid() && !uMediumId.isZero())
+            i_onMediumRegistered(uMediumId, medium->i_getDeviceType(), TRUE);
+    }
 
     return rc;
 }
@@ -1901,9 +2522,10 @@ HRESULT VirtualBox::openMedium(const com::Utf8Str &aLocation,
         break;
 
         default:
-            return setError(E_INVALIDARG, "Device type must be HardDisk, DVD or Floppy %d", aDeviceType);
+            return setError(E_INVALIDARG, tr("Device type must be HardDisk, DVD or Floppy %d"), aDeviceType);
     }
 
+    bool fMediumRegistered = false;
     if (pMedium.isNull())
     {
         pMedium.createObject();
@@ -1930,6 +2552,10 @@ HRESULT VirtualBox::openMedium(const com::Utf8Str &aLocation,
                 pMedium->uninit();
                 rc = VBOX_E_OBJECT_NOT_FOUND;
             }
+            else
+            {
+                fMediumRegistered = true;
+            }
         }
         else
         {
@@ -1939,7 +2565,11 @@ HRESULT VirtualBox::openMedium(const com::Utf8Str &aLocation,
     }
 
     if (SUCCEEDED(rc))
+    {
         pMedium.queryInterfaceTo(aMedium.asOutParam());
+        if (fMediumRegistered)
+            i_onMediumRegistered(pMedium->i_getId(), pMedium->i_getDeviceType() ,TRUE);
+    }
 
     return rc;
 }
@@ -1949,41 +2579,31 @@ HRESULT VirtualBox::openMedium(const com::Utf8Str &aLocation,
 HRESULT VirtualBox::getGuestOSType(const com::Utf8Str &aId,
                                    ComPtr<IGuestOSType> &aType)
 {
-    aType = NULL;
-    AutoReadLock alock(m->allGuestOSTypes.getLockHandle() COMMA_LOCKVAL_SRC_POS);
-
-    for (GuestOSTypesOList::iterator it = m->allGuestOSTypes.begin();
-         it != m->allGuestOSTypes.end();
-         ++it)
-    {
-        const Bstr &typeId = (*it)->i_id();
-        AssertMsg(!typeId.isEmpty(), ("ID must not be NULL"));
-        if (typeId.compare(aId, Bstr::CaseInsensitive) == 0)
-        {
-            (*it).queryInterfaceTo(aType.asOutParam());
-            break;
-        }
-    }
-    return (aType) ? S_OK : setError(E_INVALIDARG, tr("'%s' is not a valid Guest OS type"), aId.c_str());
+    ComObjPtr<GuestOSType> pType;
+    HRESULT rc = i_findGuestOSType(aId, pType);
+    pType.queryInterfaceTo(aType.asOutParam());
+    return rc;
 }
 
 HRESULT VirtualBox::createSharedFolder(const com::Utf8Str &aName,
                                        const com::Utf8Str &aHostPath,
                                        BOOL aWritable,
-                                       BOOL aAutomount)
+                                       BOOL aAutomount,
+                                       const com::Utf8Str &aAutoMountPoint)
 {
     NOREF(aName);
     NOREF(aHostPath);
     NOREF(aWritable);
     NOREF(aAutomount);
+    NOREF(aAutoMountPoint);
 
-    return setError(E_NOTIMPL, "Not yet implemented");
+    return setError(E_NOTIMPL, tr("Not yet implemented"));
 }
 
 HRESULT VirtualBox::removeSharedFolder(const com::Utf8Str &aName)
 {
     NOREF(aName);
-    return setError(E_NOTIMPL, "Not yet implemented");
+    return setError(E_NOTIMPL, tr("Not yet implemented"));
 }
 
 /**
@@ -2026,11 +2646,22 @@ HRESULT VirtualBox::getExtraData(const com::Utf8Str &aKey,
 HRESULT VirtualBox::setExtraData(const com::Utf8Str &aKey,
                                  const com::Utf8Str &aValue)
 {
-
     Utf8Str strKey(aKey);
     Utf8Str strValue(aValue);
     Utf8Str strOldValue;            // empty
     HRESULT rc = S_OK;
+
+    /* Because control characters in aKey have caused problems in the settings
+     * they are rejected unless the key should be deleted. */
+    if (!strValue.isEmpty())
+    {
+        for (size_t i = 0; i < strKey.length(); ++i)
+        {
+            char ch = strKey[i];
+            if (RTLocCIsCntrl(ch))
+                return E_INVALIDARG;
+        }
+    }
 
     // locking note: we only hold the read lock briefly to look up the old value,
     // then release it and call the onExtraCanChange callbacks. There is a small
@@ -2058,14 +2689,13 @@ HRESULT VirtualBox::setExtraData(const com::Utf8Str &aKey,
         if (!i_onExtraDataCanChange(Guid::Empty, Bstr(aKey).raw(), Bstr(aValue).raw(), error))
         {
             const char *sep = error.isEmpty() ? "" : ": ";
-            CBSTR err = error.raw();
-            Log1WarningFunc(("Someone vetoed! Change refused%s%ls\n", sep, err));
+            Log1WarningFunc(("Someone vetoed! Change refused%s%ls\n", sep, error.raw()));
             return setError(E_ACCESSDENIED,
                             tr("Could not set extra data because someone refused the requested change of '%s' to '%s'%s%ls"),
                             strKey.c_str(),
                             strValue.c_str(),
                             sep,
-                            err);
+                            error.raw());
         }
 
         // data is changing and change not vetoed: then write it out under the lock
@@ -2085,7 +2715,7 @@ HRESULT VirtualBox::setExtraData(const com::Utf8Str &aKey,
 
     // fire notification outside the lock
     if (fChanged)
-        i_onExtraDataChange(Guid::Empty, Bstr(aKey).raw(), Bstr(aValue).raw());
+        i_onExtraDataChanged(Guid::Empty, Bstr(aKey).raw(), Bstr(aValue).raw());
 
     return rc;
 }
@@ -2141,6 +2771,15 @@ int VirtualBox::i_decryptSettings()
         int vrc = i_decryptMediumSettings(pMedium);
         if (RT_FAILURE(vrc))
             fFailure = true;
+    }
+    if (!fFailure)
+    {
+        for (MediaList::const_iterator mt = m->allHardDisks.begin();
+             mt != m->allHardDisks.end();
+             ++mt)
+        {
+            i_onMediumConfigChanged(*mt);
+        }
     }
     return fFailure ? VERR_INVALID_PARAMETER : VINF_SUCCESS;
 }
@@ -2520,7 +3159,7 @@ private:
  *
  *  If a failure happens anywhere before the user function would be normally
  *  called, it will be called anyway in special "cleanup only" mode indicated
- *  by \a aClient, \a aProgress and \aVrc arguments set to NULL. In this mode,
+ *  by \a aClient, \a aProgress and \a aVrc arguments set to NULL. In this mode,
  *  all the function is supposed to do is to cleanup its aUser argument if
  *  necessary (it's assumed that the ownership of this argument is passed to
  *  the user function once #startSVCHelperClient() returns a success, thus
@@ -2619,7 +3258,7 @@ void VirtualBox::i_SVCHelperClientThreadTask(StartSVCHelperClientData *pTask)
                                        id.raw()).c_str());
         if (RT_FAILURE(vrc))
         {
-            rc = pTask->that->setError(E_FAIL, tr("Could not create the communication channel (%Rrc)"), vrc);
+            rc = pTask->that->setErrorBoth(E_FAIL, vrc, tr("Could not create the communication channel (%Rrc)"), vrc);
             break;
         }
 
@@ -2664,9 +3303,9 @@ void VirtualBox::i_SVCHelperClientThreadTask(StartSVCHelperClientData *pTask)
                 /* hide excessive details in case of a frequent error
                  * (pressing the Cancel button to close the Run As dialog) */
                 if (vrc2 == VERR_CANCELLED)
-                    rc = pTask->that->setError(E_FAIL, tr("Operation canceled by the user"));
+                    rc = pTask->that->setErrorBoth(E_FAIL, vrc, tr("Operation canceled by the user"));
                 else
-                    rc = pTask->that->setError(E_FAIL, tr("Could not launch a privileged process '%s' (%Rrc)"), exePath, vrc2);
+                    rc = pTask->that->setErrorBoth(E_FAIL, vrc, tr("Could not launch a privileged process '%s' (%Rrc)"), exePath, vrc2);
                 break;
             }
         }
@@ -2676,7 +3315,7 @@ void VirtualBox::i_SVCHelperClientThreadTask(StartSVCHelperClientData *pTask)
             vrc = RTProcCreate(exePath, args, RTENV_DEFAULT, 0, &pid);
             if (RT_FAILURE(vrc))
             {
-                rc = pTask->that->setError(E_FAIL, tr("Could not launch a process '%s' (%Rrc)"), exePath, vrc);
+                rc = pTask->that->setErrorBoth(E_FAIL, vrc, tr("Could not launch a process '%s' (%Rrc)"), exePath, vrc);
                 break;
             }
         }
@@ -2699,7 +3338,7 @@ void VirtualBox::i_SVCHelperClientThreadTask(StartSVCHelperClientData *pTask)
 
         if (SUCCEEDED(rc) && RT_FAILURE(vrc))
         {
-            rc = pTask->that->setError(E_FAIL, tr("Could not operate the communication channel (%Rrc)"), vrc);
+            rc = pTask->that->setErrorBoth(E_FAIL, vrc, tr("Could not operate the communication channel (%Rrc)"), vrc);
             break;
         }
     }
@@ -2736,7 +3375,7 @@ void VirtualBox::i_updateClientWatcher()
 
 /**
  *  Adds the given child process ID to the list of processes to be reaped.
- *  This call should be followed by #updateClientWatcher() to take the effect.
+ *  This call should be followed by #i_updateClientWatcher() to take the effect.
  *
  *  @note Doesn't lock anything.
  */
@@ -2748,47 +3387,6 @@ void VirtualBox::i_addProcessToReap(RTPROCESS pid)
     AssertPtrReturnVoid(m->pClientWatcher);
     m->pClientWatcher->addProcess(pid);
 }
-
-/** Event for onMachineStateChange(), onMachineDataChange(), onMachineRegistered() */
-struct MachineEvent : public VirtualBox::CallbackEvent
-{
-    MachineEvent(VirtualBox *aVB, VBoxEventType_T aWhat, const Guid &aId, BOOL aBool)
-        : CallbackEvent(aVB, aWhat), id(aId.toUtf16())
-        , mBool(aBool)
-        { }
-
-    MachineEvent(VirtualBox *aVB, VBoxEventType_T aWhat, const Guid &aId, MachineState_T aState)
-        : CallbackEvent(aVB, aWhat), id(aId.toUtf16())
-        , mState(aState)
-        {}
-
-    virtual HRESULT prepareEventDesc(IEventSource* aSource, VBoxEventDesc& aEvDesc)
-    {
-        switch (mWhat)
-        {
-            case VBoxEventType_OnMachineDataChanged:
-                aEvDesc.init(aSource, mWhat, id.raw(), mBool);
-                break;
-
-            case VBoxEventType_OnMachineStateChanged:
-                aEvDesc.init(aSource, mWhat, id.raw(), mState);
-                break;
-
-            case VBoxEventType_OnMachineRegistered:
-                aEvDesc.init(aSource, mWhat, id.raw(), mBool);
-                break;
-
-            default:
-                AssertFailedReturn(S_OK);
-         }
-         return S_OK;
-    }
-
-    Bstr id;
-    MachineState_T mState;
-    BOOL mBool;
-};
-
 
 /**
  * VD plugin load
@@ -2806,90 +3404,125 @@ int VirtualBox::i_unloadVDPlugin(const char *pszPluginLibrary)
     return m->pSystemProperties->i_unloadVDPlugin(pszPluginLibrary);
 }
 
-
 /**
  *  @note Doesn't lock any object.
  */
-void VirtualBox::i_onMachineStateChange(const Guid &aId, MachineState_T aState)
+void VirtualBox::i_onMediumRegistered(const Guid &aMediumId, const DeviceType_T aDevType, const BOOL aRegistered)
 {
-    i_postEvent(new MachineEvent(this, VBoxEventType_OnMachineStateChanged, aId, aState));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateMediumRegisteredEvent(ptrEvent.asOutParam(), m->pEventSource,
+                                                aMediumId.toString(), aDevType, aRegistered);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
+}
+
+void VirtualBox::i_onMediumConfigChanged(IMedium *aMedium)
+{
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateMediumConfigChangedEvent(ptrEvent.asOutParam(), m->pEventSource, aMedium);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
+}
+
+void VirtualBox::i_onMediumChanged(IMediumAttachment *aMediumAttachment)
+{
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateMediumChangedEvent(ptrEvent.asOutParam(), m->pEventSource, aMediumAttachment);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
 
 /**
  *  @note Doesn't lock any object.
  */
-void VirtualBox::i_onMachineDataChange(const Guid &aId, BOOL aTemporary)
+void VirtualBox::i_onStorageControllerChanged(const Guid &aMachineId, const com::Utf8Str &aControllerName)
 {
-    i_postEvent(new MachineEvent(this, VBoxEventType_OnMachineDataChanged, aId, aTemporary));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateStorageControllerChangedEvent(ptrEvent.asOutParam(), m->pEventSource,
+                                                        aMachineId.toString(), aControllerName);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
+}
+
+void VirtualBox::i_onStorageDeviceChanged(IMediumAttachment *aStorageDevice, const BOOL fRemoved, const BOOL fSilent)
+{
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateStorageDeviceChangedEvent(ptrEvent.asOutParam(), m->pEventSource, aStorageDevice, fRemoved, fSilent);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
+}
+
+/**
+ *  @note Doesn't lock any object.
+ */
+void VirtualBox::i_onMachineStateChanged(const Guid &aId, MachineState_T aState)
+{
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateMachineStateChangedEvent(ptrEvent.asOutParam(), m->pEventSource, aId.toString(), aState);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
+}
+
+/**
+ *  @note Doesn't lock any object.
+ */
+void VirtualBox::i_onMachineDataChanged(const Guid &aId, BOOL aTemporary)
+{
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateMachineDataChangedEvent(ptrEvent.asOutParam(), m->pEventSource, aId.toString(), aTemporary);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
 
 /**
  *  @note Locks this object for reading.
  */
-BOOL VirtualBox::i_onExtraDataCanChange(const Guid &aId, IN_BSTR aKey, IN_BSTR aValue,
-                                        Bstr &aError)
+BOOL VirtualBox::i_onExtraDataCanChange(const Guid &aId, const Utf8Str &aKey, const Utf8Str &aValue, Bstr &aError)
 {
-    LogFlowThisFunc(("machine={%s} aKey={%ls} aValue={%ls}\n",
-                      aId.toString().c_str(), aKey, aValue));
+    LogFlowThisFunc(("machine={%RTuuid} aKey={%s} aValue={%s}\n", aId.raw(), aKey.c_str(), aValue.c_str()));
 
     AutoCaller autoCaller(this);
     AssertComRCReturn(autoCaller.rc(), FALSE);
 
-    BOOL allowChange = TRUE;
-    Bstr id = aId.toUtf16();
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateExtraDataCanChangeEvent(ptrEvent.asOutParam(), m->pEventSource, aId.toString(), aKey, aValue);
+    AssertComRCReturn(hrc, TRUE);
 
-    VBoxEventDesc evDesc;
-    evDesc.init(m->pEventSource, VBoxEventType_OnExtraDataCanChange, id.raw(), aKey, aValue);
-    BOOL fDelivered = evDesc.fire(3000); /* Wait up to 3 secs for delivery */
+    VBoxEventDesc EvtDesc(ptrEvent, m->pEventSource);
+    BOOL fDelivered = EvtDesc.fire(3000); /* Wait up to 3 secs for delivery */
     //Assert(fDelivered);
+    BOOL fAllowChange = TRUE;
     if (fDelivered)
     {
-        ComPtr<IEvent> aEvent;
-        evDesc.getEvent(aEvent.asOutParam());
-        ComPtr<IExtraDataCanChangeEvent> aCanChangeEvent = aEvent;
-        Assert(aCanChangeEvent);
-        BOOL fVetoed = FALSE;
-        aCanChangeEvent->IsVetoed(&fVetoed);
-        allowChange = !fVetoed;
+        ComPtr<IExtraDataCanChangeEvent> ptrCanChangeEvent = ptrEvent;
+        Assert(ptrCanChangeEvent);
 
-        if (!allowChange)
+        BOOL fVetoed = FALSE;
+        ptrCanChangeEvent->IsVetoed(&fVetoed);
+        fAllowChange = !fVetoed;
+
+        if (!fAllowChange)
         {
             SafeArray<BSTR> aVetos;
-            aCanChangeEvent->GetVetos(ComSafeArrayAsOutParam(aVetos));
+            ptrCanChangeEvent->GetVetos(ComSafeArrayAsOutParam(aVetos));
             if (aVetos.size() > 0)
                 aError = aVetos[0];
         }
     }
-    else
-        allowChange = TRUE;
 
-    LogFlowThisFunc(("allowChange=%RTbool\n", allowChange));
-    return allowChange;
+    LogFlowThisFunc(("fAllowChange=%RTbool\n", fAllowChange));
+    return fAllowChange;
 }
-
-/** Event for onExtraDataChange() */
-struct ExtraDataEvent : public VirtualBox::CallbackEvent
-{
-    ExtraDataEvent(VirtualBox *aVB, const Guid &aMachineId,
-                   IN_BSTR aKey, IN_BSTR aVal)
-        : CallbackEvent(aVB, VBoxEventType_OnExtraDataChanged)
-        , machineId(aMachineId.toUtf16()), key(aKey), val(aVal)
-    {}
-
-    virtual HRESULT prepareEventDesc(IEventSource* aSource, VBoxEventDesc& aEvDesc)
-    {
-        return aEvDesc.init(aSource, VBoxEventType_OnExtraDataChanged, machineId.raw(), key.raw(), val.raw());
-    }
-
-    Bstr machineId, key, val;
-};
 
 /**
  *  @note Doesn't lock any object.
  */
-void VirtualBox::i_onExtraDataChange(const Guid &aId, IN_BSTR aKey, IN_BSTR aValue)
+void VirtualBox::i_onExtraDataChanged(const Guid &aId, const Utf8Str &aKey, const Utf8Str &aValue)
 {
-    i_postEvent(new ExtraDataEvent(this, aId, aKey, aValue));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateExtraDataChangedEvent(ptrEvent.asOutParam(), m->pEventSource, aId.toString(), aKey, aValue);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
 
 /**
@@ -2897,59 +3530,33 @@ void VirtualBox::i_onExtraDataChange(const Guid &aId, IN_BSTR aKey, IN_BSTR aVal
  */
 void VirtualBox::i_onMachineRegistered(const Guid &aId, BOOL aRegistered)
 {
-    i_postEvent(new MachineEvent(this, VBoxEventType_OnMachineRegistered, aId, aRegistered));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateMachineRegisteredEvent(ptrEvent.asOutParam(), m->pEventSource, aId.toString(), aRegistered);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
-
-/** Event for onSessionStateChange() */
-struct SessionEvent : public VirtualBox::CallbackEvent
-{
-    SessionEvent(VirtualBox *aVB, const Guid &aMachineId, SessionState_T aState)
-        : CallbackEvent(aVB, VBoxEventType_OnSessionStateChanged)
-        , machineId(aMachineId.toUtf16()), sessionState(aState)
-    {}
-
-    virtual HRESULT prepareEventDesc(IEventSource* aSource, VBoxEventDesc& aEvDesc)
-    {
-        return aEvDesc.init(aSource, VBoxEventType_OnSessionStateChanged, machineId.raw(), sessionState);
-    }
-    Bstr machineId;
-    SessionState_T sessionState;
-};
 
 /**
  *  @note Doesn't lock any object.
  */
-void VirtualBox::i_onSessionStateChange(const Guid &aId, SessionState_T aState)
+void VirtualBox::i_onSessionStateChanged(const Guid &aId, SessionState_T aState)
 {
-    i_postEvent(new SessionEvent(this, aId, aState));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateSessionStateChangedEvent(ptrEvent.asOutParam(), m->pEventSource, aId.toString(), aState);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
-
-/** Event for i_onSnapshotTaken(), i_onSnapshotDeleted(), i_onSnapshotRestored() and i_onSnapshotChange() */
-struct SnapshotEvent : public VirtualBox::CallbackEvent
-{
-    SnapshotEvent(VirtualBox *aVB, const Guid &aMachineId, const Guid &aSnapshotId,
-                  VBoxEventType_T aWhat)
-        : CallbackEvent(aVB, aWhat)
-        , machineId(aMachineId), snapshotId(aSnapshotId)
-        {}
-
-    virtual HRESULT prepareEventDesc(IEventSource* aSource, VBoxEventDesc& aEvDesc)
-    {
-        return aEvDesc.init(aSource, mWhat, machineId.toUtf16().raw(),
-                            snapshotId.toUtf16().raw());
-    }
-
-    Guid machineId;
-    Guid snapshotId;
-};
 
 /**
  *  @note Doesn't lock any object.
  */
 void VirtualBox::i_onSnapshotTaken(const Guid &aMachineId, const Guid &aSnapshotId)
 {
-    i_postEvent(new SnapshotEvent(this, aMachineId, aSnapshotId,
-                                  VBoxEventType_OnSnapshotTaken));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateSnapshotTakenEvent(ptrEvent.asOutParam(), m->pEventSource,
+                                             aMachineId.toString(), aSnapshotId.toString());
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
 
 /**
@@ -2957,8 +3564,11 @@ void VirtualBox::i_onSnapshotTaken(const Guid &aMachineId, const Guid &aSnapshot
  */
 void VirtualBox::i_onSnapshotDeleted(const Guid &aMachineId, const Guid &aSnapshotId)
 {
-    i_postEvent(new SnapshotEvent(this, aMachineId, aSnapshotId,
-                                  VBoxEventType_OnSnapshotDeleted));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateSnapshotDeletedEvent(ptrEvent.asOutParam(), m->pEventSource,
+                                               aMachineId.toString(), aSnapshotId.toString());
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
 
 /**
@@ -2966,150 +3576,197 @@ void VirtualBox::i_onSnapshotDeleted(const Guid &aMachineId, const Guid &aSnapsh
  */
 void VirtualBox::i_onSnapshotRestored(const Guid &aMachineId, const Guid &aSnapshotId)
 {
-    i_postEvent(new SnapshotEvent(this, aMachineId, aSnapshotId,
-                                  VBoxEventType_OnSnapshotRestored));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateSnapshotRestoredEvent(ptrEvent.asOutParam(), m->pEventSource,
+                                                aMachineId.toString(), aSnapshotId.toString());
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
 
 /**
  *  @note Doesn't lock any object.
  */
-void VirtualBox::i_onSnapshotChange(const Guid &aMachineId, const Guid &aSnapshotId)
+void VirtualBox::i_onSnapshotChanged(const Guid &aMachineId, const Guid &aSnapshotId)
 {
-    i_postEvent(new SnapshotEvent(this, aMachineId, aSnapshotId,
-                                  VBoxEventType_OnSnapshotChanged));
-}
-
-/** Event for onGuestPropertyChange() */
-struct GuestPropertyEvent : public VirtualBox::CallbackEvent
-{
-    GuestPropertyEvent(VirtualBox *aVBox, const Guid &aMachineId,
-                       IN_BSTR aName, IN_BSTR aValue, IN_BSTR aFlags)
-        : CallbackEvent(aVBox, VBoxEventType_OnGuestPropertyChanged),
-          machineId(aMachineId),
-          name(aName),
-          value(aValue),
-          flags(aFlags)
-    {}
-
-    virtual HRESULT prepareEventDesc(IEventSource* aSource, VBoxEventDesc& aEvDesc)
-    {
-        return aEvDesc.init(aSource, VBoxEventType_OnGuestPropertyChanged,
-                            machineId.toUtf16().raw(), name.raw(), value.raw(), flags.raw());
-    }
-
-    Guid machineId;
-    Bstr name, value, flags;
-};
-
-/**
- *  @note Doesn't lock any object.
- */
-void VirtualBox::i_onGuestPropertyChange(const Guid &aMachineId, IN_BSTR aName,
-                                         IN_BSTR aValue, IN_BSTR aFlags)
-{
-    i_postEvent(new GuestPropertyEvent(this, aMachineId, aName, aValue, aFlags));
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateSnapshotChangedEvent(ptrEvent.asOutParam(), m->pEventSource,
+                                               aMachineId.toString(), aSnapshotId.toString());
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
 
 /**
  *  @note Doesn't lock any object.
  */
-void VirtualBox::i_onNatRedirectChange(const Guid &aMachineId, ULONG ulSlot, bool fRemove, IN_BSTR aName,
-                                       NATProtocol_T aProto, IN_BSTR aHostIp, uint16_t aHostPort,
-                                       IN_BSTR aGuestIp, uint16_t aGuestPort)
+void VirtualBox::i_onGuestPropertyChanged(const Guid &aMachineId, const Utf8Str &aName, const Utf8Str &aValue,
+                                          const Utf8Str &aFlags)
 {
-    fireNATRedirectEvent(m->pEventSource, aMachineId.toUtf16().raw(), ulSlot, fRemove, aName, aProto, aHostIp,
-                         aHostPort, aGuestIp, aGuestPort);
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateGuestPropertyChangedEvent(ptrEvent.asOutParam(), m->pEventSource,
+                                                    aMachineId.toString(), aName, aValue, aFlags);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
 }
 
-void VirtualBox::i_onNATNetworkChange(IN_BSTR aName)
+/**
+ *  @note Doesn't lock any object.
+ */
+void VirtualBox::i_onNatRedirectChanged(const Guid &aMachineId, ULONG ulSlot, bool fRemove, const Utf8Str &aName,
+                                        NATProtocol_T aProto, const Utf8Str &aHostIp, uint16_t aHostPort,
+                                        const Utf8Str &aGuestIp, uint16_t aGuestPort)
 {
-    fireNATNetworkChangedEvent(m->pEventSource, aName);
+    ::FireNATRedirectEvent(m->pEventSource, aMachineId.toString(), ulSlot, fRemove, aName, aProto, aHostIp,
+                           aHostPort, aGuestIp, aGuestPort);
 }
 
-void VirtualBox::i_onNATNetworkStartStop(IN_BSTR aName, BOOL fStart)
+/** @todo Unused!!  */
+void VirtualBox::i_onNATNetworkChanged(const Utf8Str &aName)
 {
-    fireNATNetworkStartStopEvent(m->pEventSource, aName, fStart);
+    ::FireNATNetworkChangedEvent(m->pEventSource, aName);
 }
 
-void VirtualBox::i_onNATNetworkSetting(IN_BSTR aNetworkName, BOOL aEnabled,
-                                       IN_BSTR aNetwork, IN_BSTR aGateway,
+void VirtualBox::i_onNATNetworkStartStop(const Utf8Str &aName, BOOL fStart)
+{
+    ::FireNATNetworkStartStopEvent(m->pEventSource, aName, fStart);
+}
+
+void VirtualBox::i_onNATNetworkSetting(const Utf8Str &aNetworkName, BOOL aEnabled,
+                                       const Utf8Str &aNetwork, const Utf8Str &aGateway,
                                        BOOL aAdvertiseDefaultIpv6RouteEnabled,
                                        BOOL fNeedDhcpServer)
 {
-    fireNATNetworkSettingEvent(m->pEventSource, aNetworkName, aEnabled,
-                               aNetwork, aGateway,
-                               aAdvertiseDefaultIpv6RouteEnabled, fNeedDhcpServer);
+    ::FireNATNetworkSettingEvent(m->pEventSource, aNetworkName, aEnabled, aNetwork, aGateway,
+                                 aAdvertiseDefaultIpv6RouteEnabled, fNeedDhcpServer);
 }
 
-void VirtualBox::i_onNATNetworkPortForward(IN_BSTR aNetworkName, BOOL create, BOOL fIpv6,
-                                           IN_BSTR aRuleName, NATProtocol_T proto,
-                                           IN_BSTR aHostIp, LONG aHostPort,
-                                           IN_BSTR aGuestIp, LONG aGuestPort)
+void VirtualBox::i_onNATNetworkPortForward(const Utf8Str &aNetworkName, BOOL create, BOOL fIpv6,
+                                           const Utf8Str &aRuleName, NATProtocol_T proto,
+                                           const Utf8Str &aHostIp, LONG aHostPort,
+                                           const Utf8Str &aGuestIp, LONG aGuestPort)
 {
-    fireNATNetworkPortForwardEvent(m->pEventSource, aNetworkName, create,
-                                   fIpv6, aRuleName, proto,
-                                   aHostIp, aHostPort,
-                                   aGuestIp, aGuestPort);
+    ::FireNATNetworkPortForwardEvent(m->pEventSource, aNetworkName, create, fIpv6, aRuleName, proto,
+                                     aHostIp, aHostPort, aGuestIp, aGuestPort);
 }
 
 
 void VirtualBox::i_onHostNameResolutionConfigurationChange()
 {
     if (m->pEventSource)
-        fireHostNameResolutionConfigurationChangeEvent(m->pEventSource);
+        ::FireHostNameResolutionConfigurationChangeEvent(m->pEventSource);
 }
 
 
-int VirtualBox::i_natNetworkRefInc(IN_BSTR aNetworkName)
+int VirtualBox::i_natNetworkRefInc(const Utf8Str &aNetworkName)
 {
     AutoWriteLock safeLock(*spMtxNatNetworkNameToRefCountLock COMMA_LOCKVAL_SRC_POS);
-    Bstr name(aNetworkName);
 
-    if (!sNatNetworkNameToRefCount[name])
+    if (!sNatNetworkNameToRefCount[aNetworkName])
     {
         ComPtr<INATNetwork> nat;
-        HRESULT rc = FindNATNetworkByName(aNetworkName, nat.asOutParam());
+        HRESULT rc = findNATNetworkByName(aNetworkName, nat);
         if (FAILED(rc)) return -1;
 
-        rc = nat->Start(Bstr("whatever").raw());
+        rc = nat->Start();
         if (SUCCEEDED(rc))
-            LogRel(("Started NAT network '%ls'\n", aNetworkName));
+            LogRel(("Started NAT network '%s'\n", aNetworkName.c_str()));
         else
-            LogRel(("Error %Rhrc starting NAT network '%ls'\n", rc, aNetworkName));
+            LogRel(("Error %Rhrc starting NAT network '%s'\n", rc, aNetworkName.c_str()));
         AssertComRCReturn(rc, -1);
     }
 
-    sNatNetworkNameToRefCount[name]++;
+    sNatNetworkNameToRefCount[aNetworkName]++;
 
-    return sNatNetworkNameToRefCount[name];
+    return sNatNetworkNameToRefCount[aNetworkName];
 }
 
 
-int VirtualBox::i_natNetworkRefDec(IN_BSTR aNetworkName)
+int VirtualBox::i_natNetworkRefDec(const Utf8Str &aNetworkName)
 {
     AutoWriteLock safeLock(*spMtxNatNetworkNameToRefCountLock COMMA_LOCKVAL_SRC_POS);
-    Bstr name(aNetworkName);
 
-    if (!sNatNetworkNameToRefCount[name])
+    if (!sNatNetworkNameToRefCount[aNetworkName])
         return 0;
 
-    sNatNetworkNameToRefCount[name]--;
+    sNatNetworkNameToRefCount[aNetworkName]--;
 
-    if (!sNatNetworkNameToRefCount[name])
+    if (!sNatNetworkNameToRefCount[aNetworkName])
     {
         ComPtr<INATNetwork> nat;
-        HRESULT rc = FindNATNetworkByName(aNetworkName, nat.asOutParam());
+        HRESULT rc = findNATNetworkByName(aNetworkName, nat);
         if (FAILED(rc)) return -1;
 
         rc = nat->Stop();
         if (SUCCEEDED(rc))
-            LogRel(("Stopped NAT network '%ls'\n", aNetworkName));
+            LogRel(("Stopped NAT network '%s'\n", aNetworkName.c_str()));
         else
-            LogRel(("Error %Rhrc stopping NAT network '%ls'\n", rc, aNetworkName));
+            LogRel(("Error %Rhrc stopping NAT network '%s'\n", rc, aNetworkName.c_str()));
         AssertComRCReturn(rc, -1);
     }
 
-    return sNatNetworkNameToRefCount[name];
+    return sNatNetworkNameToRefCount[aNetworkName];
+}
+
+
+/*
+ * Export this to NATNetwork so that its setters can refuse to change
+ * essential network settings when an VBoxNatNet instance is running.
+ */
+RWLockHandle *VirtualBox::i_getNatNetLock() const
+{
+    return spMtxNatNetworkNameToRefCountLock;
+}
+
+
+/*
+ * Export this to NATNetwork so that its setters can refuse to change
+ * essential network settings when an VBoxNatNet instance is running.
+ * The caller is expected to hold a read lock on i_getNatNetLock().
+ */
+bool VirtualBox::i_isNatNetStarted(const Utf8Str &aNetworkName) const
+{
+    return sNatNetworkNameToRefCount[aNetworkName] > 0;
+}
+
+
+void VirtualBox::i_onCloudProviderListChanged(BOOL aRegistered)
+{
+    ::FireCloudProviderListChangedEvent(m->pEventSource, aRegistered);
+}
+
+
+void VirtualBox::i_onCloudProviderRegistered(const Utf8Str &aProviderId, BOOL aRegistered)
+{
+    ::FireCloudProviderRegisteredEvent(m->pEventSource, aProviderId, aRegistered);
+}
+
+
+void VirtualBox::i_onCloudProviderUninstall(const Utf8Str &aProviderId)
+{
+    HRESULT hrc;
+
+    ComPtr<IEvent> pEvent;
+    hrc = CreateCloudProviderUninstallEvent(pEvent.asOutParam(),
+                                            m->pEventSource, aProviderId);
+    if (FAILED(hrc))
+        return;
+
+    BOOL fDelivered = FALSE;
+    hrc = m->pEventSource->FireEvent(pEvent, /* :timeout */ 10000, &fDelivered);
+    if (FAILED(hrc))
+        return;
+}
+
+void VirtualBox::i_onLanguageChanged(const Utf8Str &aLanguageId)
+{
+    ComPtr<IEvent> ptrEvent;
+    HRESULT hrc = ::CreateLanguageChangedEvent(ptrEvent.asOutParam(), m->pEventSource, aLanguageId);
+    AssertComRCReturnVoid(hrc);
+    i_postEvent(new AsyncEvent(this, ptrEvent));
+}
+
+void VirtualBox::i_onProgressCreated(const Guid &aId, BOOL aCreated)
+{
+    ::FireProgressCreatedEvent(m->pEventSource, aId.toString(), aCreated);
 }
 
 
@@ -3187,7 +3844,7 @@ VirtualBox::MachinesOList &VirtualBox::i_getMachinesList(void)
  *  of registered machines.
  *
  * @param aId Machine UUID to look for.
- * @param aPermitInaccessible If true, inaccessible machines will be found;
+ * @param fPermitInaccessible If true, inaccessible machines will be found;
  *                  if false, this will fail if the given machine is inaccessible.
  * @param aSetError If true, set errorinfo if the machine is not found.
  * @param aMachine Returned machine, if found.
@@ -3260,7 +3917,7 @@ HRESULT VirtualBox::i_findMachineByName(const Utf8Str &aName,
     {
         ComObjPtr<Machine> &pMachine = *it;
         AutoCaller machCaller(pMachine);
-        if (machCaller.rc())
+        if (!machCaller.isOk())
             continue;       // we can't ask inaccessible machines for their names
 
         AutoReadLock machLock(pMachine COMMA_LOCKVAL_SRC_POS);
@@ -3348,8 +4005,8 @@ static HRESULT i_validateMachineGroupHelper(const Utf8Str &aGroup, bool fPrimary
 /**
  * Validates a machine group.
  *
- * @param aMachineGroup     Machine group.
- * @param fPrimary          Set if this is the primary group.
+ * @param aGroup    Machine group.
+ * @param fPrimary  Set if this is the primary group.
  *
  * @return S_OK or E_INVALIDARG
  */
@@ -3451,7 +4108,7 @@ HRESULT VirtualBox::i_findHardDiskById(const Guid &aId,
  * registered hard disks. If both ID and location are specified, the first
  * object that matches either of them (not necessarily both) is returned.
  *
- * @param aLocation     Full location specification. Must not be empty.
+ * @param strLocation   Full location specification. Must not be empty.
  * @param aSetError     If @c true , the appropriate error info is set in case
  *                      when the hard disk is not found.
  * @param aHardDisk     Where to store the found hard disk object (can be NULL).
@@ -3574,10 +4231,10 @@ HRESULT VirtualBox::i_findDVDOrFloppyImage(DeviceType_T mediumType,
             {
                 if (mediumType == DeviceType_DVD)
                     return setError(E_INVALIDARG,
-                                    "Cannot mount DVD medium '%s' as floppy", strLocationFull.c_str());
+                                    tr("Cannot mount DVD medium '%s' as floppy"), strLocationFull.c_str());
                 else
                     return setError(E_INVALIDARG,
-                                    "Cannot mount floppy medium '%s' as DVD", strLocationFull.c_str());
+                                    tr("Cannot mount floppy medium '%s' as DVD"), strLocationFull.c_str());
             }
 
             if (aImage)
@@ -3622,6 +4279,7 @@ HRESULT VirtualBox::i_findDVDOrFloppyImage(DeviceType_T mediumType,
  * @param mediumType Must be DeviceType_DVD or DeviceType_Floppy.
  * @param uuid UUID to search for; must refer to a host drive or an image file or be null.
  * @param fRefresh Whether to refresh the list of host drives in IHost (see Host::getDrives())
+ * @param aSetError
  * @param pMedium out: IMedium object found.
  * @return
  */
@@ -3657,34 +4315,32 @@ HRESULT VirtualBox::i_findRemoveableMedium(DeviceType_T mediumType,
     return rc;
 }
 
-HRESULT VirtualBox::i_findGuestOSType(const Bstr &bstrOSType,
-                                      GuestOSType*& pGuestOSType)
+/* Look for a GuestOSType object */
+HRESULT VirtualBox::i_findGuestOSType(const Utf8Str &strOSType,
+                                      ComObjPtr<GuestOSType> &guestOSType)
 {
-    /* Look for a GuestOSType object */
+    guestOSType.setNull();
+
     AssertMsg(m->allGuestOSTypes.size() != 0,
               ("Guest OS types array must be filled"));
-
-    if (bstrOSType.isEmpty())
-    {
-        pGuestOSType = NULL;
-        return S_OK;
-    }
 
     AutoReadLock alock(m->allGuestOSTypes.getLockHandle() COMMA_LOCKVAL_SRC_POS);
     for (GuestOSTypesOList::const_iterator it = m->allGuestOSTypes.begin();
          it != m->allGuestOSTypes.end();
          ++it)
     {
-        if ((*it)->i_id() == bstrOSType)
+        const Utf8Str &typeId = (*it)->i_id();
+        AssertMsg(!typeId.isEmpty(), ("ID must not be NULL"));
+        if (strOSType.compare(typeId, Utf8Str::CaseInsensitive) == 0)
         {
-            pGuestOSType = *it;
+            guestOSType = *it;
             return S_OK;
         }
     }
 
     return setError(VBOX_E_OBJECT_NOT_FOUND,
-                    tr("Guest OS type '%ls' is invalid"),
-                    bstrOSType.raw());
+                    tr("'%s' is not a valid Guest OS type"),
+                    strOSType.c_str());
 }
 
 /**
@@ -3713,6 +4369,11 @@ const ComObjPtr<Host>& VirtualBox::i_host() const
 SystemProperties* VirtualBox::i_getSystemProperties() const
 {
     return m->pSystemProperties;
+}
+
+CloudProviderManager *VirtualBox::i_getCloudProviderManager() const
+{
+    return m->pCloudProviderManager;
 }
 
 #ifdef VBOX_WITH_EXTPACK
@@ -3772,7 +4433,7 @@ const Utf8Str& VirtualBox::i_homeDir() const
  * Calculates the absolute path of the given path taking the VirtualBox home
  * directory as the current directory.
  *
- * @param  aPath    Path to calculate the absolute path for.
+ * @param  strPath  Path to calculate the absolute path for.
  * @param  aResult  Where to put the result (used only on success, can be the
  *                  same Utf8Str instance as passed in @a aPath).
  * @return IPRT result.
@@ -3784,15 +4445,17 @@ int VirtualBox::i_calculateFullPath(const Utf8Str &strPath, Utf8Str &aResult)
     AutoCaller autoCaller(this);
     AssertComRCReturn(autoCaller.rc(), VERR_GENERAL_FAILURE);
 
-    /* no need to lock since mHomeDir is const */
+    /* no need to lock since strHomeDir is const */
 
-    char folder[RTPATH_MAX];
+    char szFolder[RTPATH_MAX];
+    size_t cbFolder = sizeof(szFolder);
     int vrc = RTPathAbsEx(m->strHomeDir.c_str(),
                           strPath.c_str(),
-                          folder,
-                          sizeof(folder));
+                          RTPATH_STR_F_STYLE_HOST,
+                          szFolder,
+                          &cbFolder);
     if (RT_SUCCESS(vrc))
-        aResult = folder;
+        aResult = szFolder;
 
     return vrc;
 }
@@ -3948,15 +4611,15 @@ bool VirtualBox::i_isMediaUuidInUse(const Guid &aId, DeviceType_T deviceType)
  * Called from Machine::prepareSaveSettings() when it has detected
  * that a machine has been renamed. Such renames will require
  * updating the global media registry during the
- * VirtualBox::saveSettings() that follows later.
+ * VirtualBox::i_saveSettings() that follows later.
 *
  * When a machine is renamed, there may well be media (in particular,
  * diff images for snapshots) in the global registry that will need
  * to have their paths updated. Before 3.2, Machine::saveSettings
- * used to call VirtualBox::saveSettings implicitly, which was both
+ * used to call VirtualBox::i_saveSettings implicitly, which was both
  * unintuitive and caused locking order problems. Now, we remember
  * such pending name changes with this method so that
- * VirtualBox::saveSettings() can process them properly.
+ * VirtualBox::i_saveSettings() can process them properly.
  */
 void VirtualBox::i_rememberMachineNameChangeForMedia(const Utf8Str &strOldConfigDir,
                                                      const Utf8Str &strNewConfigDir)
@@ -4039,7 +4702,7 @@ DECLCALLBACK(int) fntSaveMediaRegistries(void *pvUser)
  *
  * This gets called from two contexts:
  *
- *  -- VirtualBox::saveSettings() with the UUID of the global registry
+ *  -- VirtualBox::i_saveSettings() with the UUID of the global registry
  *     (VirtualBox::Data.uuidRegistry); this will save those media
  *     which had been loaded from the global registry or have been
  *     attached to a "legacy" machine which can't save its own registry;
@@ -4113,18 +4776,12 @@ void VirtualBox::i_saveMediaRegistry(settings::MediaRegistry &mediaRegistry,
             // levels up to whoever triggered saveSettings, as there are
             // lots of places which would need to handle saving more settings.
             pDesc->pVirtualBox = this;
-            HRESULT hr = S_OK;
-            try
-            {
-                //the function createThread() takes ownership of pDesc
-                //so there is no need to use delete operator for pDesc
-                //after calling this function
-                hr = pDesc->createThread();
-            }
-            catch(...)
-            {
-                hr = E_FAIL;
-            }
+
+            //the function createThread() takes ownership of pDesc
+            //so there is no need to use delete operator for pDesc
+            //after calling this function
+            HRESULT hr = pDesc->createThread();
+            pDesc = NULL;
 
             if (FAILED(hr))
             {
@@ -4254,6 +4911,37 @@ HRESULT VirtualBox::i_saveSettings()
         }
 #endif
 
+#ifdef VBOX_WITH_VMNET
+        m->pMainConfigFile->llHostOnlyNetworks.clear();
+        {
+            AutoReadLock hostOnlyNetworkLock(m->allHostOnlyNetworks.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+            for (HostOnlyNetworksOList::const_iterator it = m->allHostOnlyNetworks.begin();
+                 it != m->allHostOnlyNetworks.end();
+                 ++it)
+            {
+                settings::HostOnlyNetwork n;
+                rc = (*it)->i_saveSettings(n);
+                if (FAILED(rc)) throw rc;
+                m->pMainConfigFile->llHostOnlyNetworks.push_back(n);
+            }
+        }
+#endif /* VBOX_WITH_VMNET */
+
+#ifdef VBOX_WITH_CLOUD_NET
+        m->pMainConfigFile->llCloudNetworks.clear();
+        {
+            AutoReadLock cloudNetworkLock(m->allCloudNetworks.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+            for (CloudNetworksOList::const_iterator it = m->allCloudNetworks.begin();
+                 it != m->allCloudNetworks.end();
+                 ++it)
+            {
+                settings::CloudNetwork n;
+                rc = (*it)->i_saveSettings(n);
+                if (FAILED(rc)) throw rc;
+                m->pMainConfigFile->llCloudNetworks.push_back(n);
+            }
+        }
+#endif /* VBOX_WITH_CLOUD_NET */
         // leave extra data alone, it's still in the config file
 
         // host data (USB filters)
@@ -4355,11 +5043,13 @@ HRESULT VirtualBox::i_registerMachine(Machine *aMachine)
  *                  created.
  * @param mediaTreeLock Reference to the AutoWriteLock holding the media tree
  *                  lock, necessary to release it in the right spot.
+ * @param fCalledFromMediumInit Flag whether this is called from Medium::init().
  * @return
  */
 HRESULT VirtualBox::i_registerMedium(const ComObjPtr<Medium> &pMedium,
                                      ComObjPtr<Medium> *ppMedium,
-                                     AutoWriteLock &mediaTreeLock)
+                                     AutoWriteLock &mediaTreeLock,
+                                     bool fCalledFromMediumInit)
 {
     AssertReturn(pMedium != NULL, E_INVALIDARG);
     AssertReturn(ppMedium != NULL, E_INVALIDARG);
@@ -4373,12 +5063,17 @@ HRESULT VirtualBox::i_registerMedium(const ComObjPtr<Medium> &pMedium,
     AutoCaller mediumCaller(pMedium);
     AssertComRCReturnRC(mediumCaller.rc());
 
+    bool fAddToGlobalRegistry = false;
     const char *pszDevType = NULL;
+    Guid regId;
     ObjectsList<Medium> *pall = NULL;
     DeviceType_T devType;
     {
         AutoReadLock mediumLock(pMedium COMMA_LOCKVAL_SRC_POS);
         devType = pMedium->i_getDeviceType();
+
+        if (!pMedium->i_getFirstRegistryMachineId(regId))
+            fAddToGlobalRegistry = true;
     }
     switch (devType)
     {
@@ -4453,6 +5148,15 @@ HRESULT VirtualBox::i_registerMedium(const ComObjPtr<Medium> &pMedium,
         // must not hold the media tree write lock any more
         Assert(!i_getMediaTreeLockHandle().isWriteLockOnCurrentThread());
         *ppMedium = pDupMedium;
+    }
+
+    if (fAddToGlobalRegistry)
+    {
+        AutoWriteLock mediumLock(pMedium COMMA_LOCKVAL_SRC_POS);
+        if (  fCalledFromMediumInit
+            ? (*ppMedium)->i_addRegistryNoCallerCheck(m->uuidMediaRegistry)
+            : (*ppMedium)->i_addRegistry(m->uuidMediaRegistry))
+            i_markRegistryModified(m->uuidMediaRegistry);
     }
 
     // Restore the initial lock state, so that no unexpected lock changes are
@@ -4690,7 +5394,7 @@ void VirtualBox::i_markRegistryModified(const Guid &uuid)
         if (SUCCEEDED(rc))
         {
             AutoCaller machineCaller(pMachine);
-            if (SUCCEEDED(machineCaller.rc()))
+            if (SUCCEEDED(machineCaller.rc()) && pMachine->i_isAccessible())
                 ASMAtomicIncU64(&pMachine->uRegistryNeedsSaving);
         }
     }
@@ -4784,7 +5488,7 @@ void VirtualBox::i_saveModifiedRegistries()
                 if (getObjectState().getState() != ObjectState::Ready)
                     continue;
                 AutoWriteLock mlock(pMachine COMMA_LOCKVAL_SRC_POS);
-                rc = pMachine->i_saveSettings(&fNeedsGlobalSettings,
+                rc = pMachine->i_saveSettings(&fNeedsGlobalSettings, mlock,
                                               Machine::SaveS_Force);           // caller said save, so stop arguing
             }
         }
@@ -4822,8 +5526,8 @@ const com::Utf8Str &VirtualBox::i_getVersionNormalized()
  * extracted relative path will be created based on the current working
  * directory which is normally unknown.
  *
- * @param aFileName     Full file name which path is checked/created.
- * @param aCreate       Flag if the path should be created if it doesn't exist.
+ * @param strFileName   Full file name which path is checked/created.
+ * @param fCreate       Flag if the path should be created if it doesn't exist.
  *
  * @return Extended error information on failure to check/create the path.
  */
@@ -4838,15 +5542,14 @@ HRESULT VirtualBox::i_ensureFilePathExists(const Utf8Str &strFileName, bool fCre
         {
             int vrc = RTDirCreateFullPath(strDir.c_str(), 0700);
             if (RT_FAILURE(vrc))
-                return i_setErrorStatic(VBOX_E_IPRT_ERROR,
-                                        Utf8StrFmt(tr("Could not create the directory '%s' (%Rrc)"),
-                                                   strDir.c_str(),
-                                                   vrc));
+                return i_setErrorStaticBoth(VBOX_E_IPRT_ERROR, vrc,
+                                            tr("Could not create the directory '%s' (%Rrc)"),
+                                            strDir.c_str(),
+                                            vrc);
         }
         else
-            return i_setErrorStatic(VBOX_E_IPRT_ERROR,
-                                    Utf8StrFmt(tr("Directory '%s' does not exist"),
-                                               strDir.c_str()));
+            return i_setErrorStaticBoth(VBOX_E_IPRT_ERROR, VERR_FILE_NOT_FOUND,
+                                        tr("Directory '%s' does not exist"), strDir.c_str());
     }
 
     return S_OK;
@@ -4883,7 +5586,7 @@ RWLockHandle& VirtualBox::i_getMediaTreeLockHandle()
 }
 
 /**
- *  Thread function that handles custom events posted using #postEvent().
+ *  Thread function that handles custom events posted using #i_postEvent().
  */
 // static
 DECLCALLBACK(int) VirtualBox::AsyncEventHandler(RTTHREAD thread, void *pvUser)
@@ -4944,10 +5647,9 @@ DECLCALLBACK(int) VirtualBox::AsyncEventHandler(RTTHREAD thread, void *pvUser)
 
 ////////////////////////////////////////////////////////////////////////////////
 
+#if 0 /* obsoleted by AsyncEvent */
 /**
- *  Takes the current list of registered callbacks of the managed VirtualBox
- *  instance, and calls #handleCallback() for every callback item from the
- *  list, passing the item as an argument.
+ * Prepare the event using the overwritten #prepareEventDesc method and fire.
  *
  *  @note Locks the managed VirtualBox object for reading but leaves the lock
  *        before iterating over callbacks and calling their methods.
@@ -4977,6 +5679,32 @@ void *VirtualBox::CallbackEvent::handler()
     mVirtualBox = NULL; /* Not needed any longer. Still make sense to do this? */
     return NULL;
 }
+#endif
+
+/**
+ * Called on the event handler thread.
+ *
+ * @note Locks the managed VirtualBox object for reading but leaves the lock
+ *       before iterating over callbacks and calling their methods.
+ */
+void *VirtualBox::AsyncEvent::handler()
+{
+    if (mVirtualBox)
+    {
+        AutoCaller autoCaller(mVirtualBox);
+        if (autoCaller.isOk())
+        {
+            VBoxEventDesc EvtDesc(mEvent, mVirtualBox->m->pEventSource);
+            EvtDesc.fire(/* don't wait for delivery */0);
+        }
+        else
+            Log1WarningFunc(("VirtualBox has been uninitialized (state=%d), the callback event is discarded!\n",
+                             mVirtualBox->getObjectState().getState()));
+        mVirtualBox = NULL; /* Old code did this, not really necessary, but whatever. */
+    }
+    mEvent.setNull();
+    return NULL;
+}
 
 //STDMETHODIMP VirtualBox::CreateDHCPServerForInterface(/*IHostNetworkInterface * aIinterface,*/ IDHCPServer ** aServer)
 //{
@@ -4988,7 +5716,7 @@ HRESULT VirtualBox::createDHCPServer(const com::Utf8Str &aName,
 {
     ComObjPtr<DHCPServer> dhcpServer;
     dhcpServer.createObject();
-    HRESULT rc = dhcpServer->init(this, Bstr(aName).raw());
+    HRESULT rc = dhcpServer->init(this, aName);
     if (FAILED(rc)) return rc;
 
     rc = i_registerDHCPServer(dhcpServer, true);
@@ -5011,11 +5739,11 @@ HRESULT VirtualBox::findDHCPServerByNetworkName(const com::Utf8Str &aName,
          it != m->allDHCPServers.end();
          ++it)
     {
-        Bstr bstr;
-        rc = (*it)->COMGETTER(NetworkName)(bstr.asOutParam());
+        Bstr bstrNetworkName;
+        rc = (*it)->COMGETTER(NetworkName)(bstrNetworkName.asOutParam());
         if (FAILED(rc)) return rc;
 
-        if (bstr == Bstr(aName).raw())
+        if (Utf8Str(bstrNetworkName) == aName)
         {
             found = *it;
             break;
@@ -5046,7 +5774,7 @@ HRESULT VirtualBox::removeDHCPServer(const ComPtr<IDHCPServer> &aServer)
  * @param aSaveSettings @c true to save settings to disk (default).
  *
  * When @a aSaveSettings is @c true, this operation may fail because of the
- * failed #saveSettings() method it calls. In this case, the dhcp server object
+ * failed #i_saveSettings() method it calls. In this case, the dhcp server object
  * will not be remembered. It is therefore the responsibility of the caller to
  * call this method as the last step of some action that requires registration
  * in order to make sure that only fully functional dhcp server objects get
@@ -5073,15 +5801,13 @@ HRESULT VirtualBox::i_registerDHCPServer(DHCPServer *aDHCPServer,
     AutoCaller dhcpServerCaller(aDHCPServer);
     AssertComRCReturnRC(dhcpServerCaller.rc());
 
-    Bstr name;
-    com::Utf8Str uname;
+    Bstr bstrNetworkName;
     HRESULT rc = S_OK;
-    rc = aDHCPServer->COMGETTER(NetworkName)(name.asOutParam());
+    rc = aDHCPServer->COMGETTER(NetworkName)(bstrNetworkName.asOutParam());
     if (FAILED(rc)) return rc;
-    uname = Utf8Str(name);
 
     ComPtr<IDHCPServer> existing;
-    rc = findDHCPServerByNetworkName(uname, existing);
+    rc = findDHCPServerByNetworkName(Utf8Str(bstrNetworkName), existing);
     if (SUCCEEDED(rc))
         return E_INVALIDARG;
     rc = S_OK;
@@ -5111,7 +5837,7 @@ HRESULT VirtualBox::i_registerDHCPServer(DHCPServer *aDHCPServer,
  *
  * @param aDHCPServer   DHCP server object to remove.
  *
- * This operation may fail because of the failed #saveSettings() method it
+ * This operation may fail because of the failed #i_saveSettings() method it
  * calls. In this case, the DHCP server will NOT be removed from the settings
  * when this method returns.
  *
@@ -5156,7 +5882,7 @@ HRESULT VirtualBox::createNATNetwork(const com::Utf8Str &aNetworkName,
 #ifdef VBOX_WITH_NAT_SERVICE
     ComObjPtr<NATNetwork> natNetwork;
     natNetwork.createObject();
-    HRESULT rc = natNetwork->init(this, Bstr(aNetworkName).raw());
+    HRESULT rc = natNetwork->init(this, aNetworkName);
     if (FAILED(rc)) return rc;
 
     rc = i_registerNATNetwork(natNetwork, true);
@@ -5164,12 +5890,12 @@ HRESULT VirtualBox::createNATNetwork(const com::Utf8Str &aNetworkName,
 
     natNetwork.queryInterfaceTo(aNetwork.asOutParam());
 
-    fireNATNetworkCreationDeletionEvent(m->pEventSource, Bstr(aNetworkName).raw(), TRUE);
+    ::FireNATNetworkCreationDeletionEvent(m->pEventSource, aNetworkName, TRUE);
 
     return rc;
 #else
-    NOREF(aName);
-    NOREF(aNatNetwork);
+    NOREF(aNetworkName);
+    NOREF(aNetwork);
     return E_NOTIMPL;
 #endif
 }
@@ -5188,11 +5914,11 @@ HRESULT VirtualBox::findNATNetworkByName(const com::Utf8Str &aNetworkName,
          it != m->allNATNetworks.end();
          ++it)
     {
-        Bstr bstr;
-        rc = (*it)->COMGETTER(NetworkName)(bstr.asOutParam());
+        Bstr bstrNATNetworkName;
+        rc = (*it)->COMGETTER(NetworkName)(bstrNATNetworkName.asOutParam());
         if (FAILED(rc)) return rc;
 
-        if (bstr == Bstr(aNetworkName).raw())
+        if (Utf8Str(bstrNATNetworkName) == aNetworkName)
         {
             found = *it;
             break;
@@ -5204,8 +5930,8 @@ HRESULT VirtualBox::findNATNetworkByName(const com::Utf8Str &aNetworkName,
     found.queryInterfaceTo(aNetwork.asOutParam());
     return rc;
 #else
-    NOREF(aName);
     NOREF(aNetworkName);
+    NOREF(aNetwork);
     return E_NOTIMPL;
 #endif
 }
@@ -5214,12 +5940,13 @@ HRESULT VirtualBox::removeNATNetwork(const ComPtr<INATNetwork> &aNetwork)
 {
 #ifdef VBOX_WITH_NAT_SERVICE
     Bstr name;
-    HRESULT rc = S_OK;
-    INATNetwork *iNw = aNetwork;
-    NATNetwork *network = static_cast<NATNetwork *>(iNw);
-    rc = network->COMGETTER(NetworkName)(name.asOutParam());
+    HRESULT rc = aNetwork->COMGETTER(NetworkName)(name.asOutParam());
+    if (FAILED(rc))
+        return rc;
+    INATNetwork *p = aNetwork;
+    NATNetwork *network = static_cast<NATNetwork *>(p);
     rc = i_unregisterNATNetwork(network, true);
-    fireNATNetworkCreationDeletionEvent(m->pEventSource, name.raw(), FALSE);
+    ::FireNATNetworkCreationDeletionEvent(m->pEventSource, name.raw(), FALSE);
     return rc;
 #else
     NOREF(aNetwork);
@@ -5292,7 +6019,7 @@ HRESULT VirtualBox::i_registerNATNetwork(NATNetwork *aNATNetwork,
  * @param aSaveSettings @c true to save settings to disk (default).
  *
  * When @a aSaveSettings is @c true, this operation may fail because of the
- * failed #saveSettings() method it calls. In this case, the DHCP server
+ * failed #i_saveSettings() method it calls. In this case, the DHCP server
  * will NOT be removed from the settingsi when this method returns.
  *
  * @note Locks this object for writing.
@@ -5336,6 +6063,27 @@ HRESULT VirtualBox::i_unregisterNATNetwork(NATNetwork *aNATNetwork,
 }
 
 
+HRESULT VirtualBox::findProgressById(const com::Guid &aId,
+                                     ComPtr<IProgress> &aProgressObject)
+{
+    if (!aId.isValid())
+        return setError(E_INVALIDARG,
+                        tr("The provided progress object GUID is invalid"));
+
+    /* protect mProgressOperations */
+    AutoReadLock safeLock(m->mtxProgressOperations COMMA_LOCKVAL_SRC_POS);
+
+    ProgressMap::const_iterator it = m->mapProgressOperations.find(aId);
+    if (it != m->mapProgressOperations.end())
+    {
+        aProgressObject = it->second;
+        return S_OK;
+    }
+    return setError(E_INVALIDARG,
+                    tr("The progress object with the given GUID could not be found"));
+}
+
+
 #ifdef RT_OS_WINDOWS
 #include <psapi.h>
 
@@ -5344,6 +6092,12 @@ HRESULT VirtualBox::i_unregisterNATNetwork(NATNetwork *aNATNetwork,
  */
 void VirtualBox::i_reportDriverVersions()
 {
+    /** @todo r=klaus this code is very confusing, as it uses TCHAR (and
+     * randomly also _TCHAR, which sounds to me like asking for trouble),
+     * the "sz" variable prefix but "%ls" for the format string - so the whole
+     * thing is better compiled with UNICODE and _UNICODE defined. Would be
+     * far easier to read if it would be coded explicitly for the unicode
+     * case, as it won't work otherwise. */
     DWORD   err;
     HRESULT hrc;
     LPVOID  aDrivers[1024];
@@ -5479,5 +6233,172 @@ void VirtualBox::i_reportDriverVersions(void)
 {
 }
 #endif /* !RT_OS_WINDOWS */
+
+#if defined(RT_OS_WINDOWS) && defined(VBOXSVC_WITH_CLIENT_WATCHER)
+
+# include <psapi.h> /* for GetProcessImageFileNameW */
+
+/**
+ * Callout from the wrapper.
+ */
+void VirtualBox::i_callHook(const char *a_pszFunction)
+{
+    RT_NOREF(a_pszFunction);
+
+    /*
+     * Let'see figure out who is calling.
+     * Note! Requires Vista+, so skip this entirely on older systems.
+     */
+    if (RTSystemGetNtVersion() >= RTSYSTEM_MAKE_NT_VERSION(6, 0, 0))
+    {
+        RPC_CALL_ATTRIBUTES_V2_W CallAttribs = { RPC_CALL_ATTRIBUTES_VERSION, RPC_QUERY_CLIENT_PID | RPC_QUERY_IS_CLIENT_LOCAL };
+        RPC_STATUS rcRpc = RpcServerInqCallAttributesW(NULL, &CallAttribs);
+        if (   rcRpc == RPC_S_OK
+            && CallAttribs.ClientPID != 0)
+        {
+            RTPROCESS const pidClient = (RTPROCESS)(uintptr_t)CallAttribs.ClientPID;
+            if (pidClient != RTProcSelf())
+            {
+                /** @todo LogRel2 later: */
+                LogRel(("i_callHook: %Rfn [ClientPID=%#zx/%zu IsClientLocal=%d ProtocolSequence=%#x CallStatus=%#x CallType=%#x OpNum=%#x InterfaceUuid=%RTuuid]\n",
+                        a_pszFunction, CallAttribs.ClientPID, CallAttribs.ClientPID, CallAttribs.IsClientLocal,
+                        CallAttribs.ProtocolSequence, CallAttribs.CallStatus, CallAttribs.CallType, CallAttribs.OpNum,
+                        &CallAttribs.InterfaceUuid));
+
+                /*
+                 * Do we know this client PID already?
+                 */
+                RTCritSectRwEnterShared(&m->WatcherCritSect);
+                WatchedClientProcessMap::iterator It = m->WatchedProcesses.find(pidClient);
+                if (It != m->WatchedProcesses.end())
+                    RTCritSectRwLeaveShared(&m->WatcherCritSect); /* Known process, nothing to do. */
+                else
+                {
+                    /* This is a new client process, start watching it. */
+                    RTCritSectRwLeaveShared(&m->WatcherCritSect);
+                    i_watchClientProcess(pidClient, a_pszFunction);
+                }
+            }
+        }
+        else
+            LogRel(("i_callHook: %Rfn - rcRpc=%#x ClientPID=%#zx/%zu !! [IsClientLocal=%d ProtocolSequence=%#x CallStatus=%#x CallType=%#x OpNum=%#x InterfaceUuid=%RTuuid]\n",
+                    a_pszFunction, rcRpc, CallAttribs.ClientPID, CallAttribs.ClientPID, CallAttribs.IsClientLocal,
+                    CallAttribs.ProtocolSequence, CallAttribs.CallStatus, CallAttribs.CallType, CallAttribs.OpNum,
+                    &CallAttribs.InterfaceUuid));
+    }
+}
+
+
+/**
+ * Watches @a a_pidClient for termination.
+ *
+ * @returns true if successfully enabled watching of it, false if not.
+ * @param   a_pidClient     The PID to watch.
+ * @param   a_pszFunction   The function we which we detected the client in.
+ */
+bool VirtualBox::i_watchClientProcess(RTPROCESS a_pidClient, const char *a_pszFunction)
+{
+    RT_NOREF_PV(a_pszFunction);
+
+    /*
+     * Open the client process.
+     */
+    HANDLE hClient = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE /*fInherit*/, a_pidClient);
+    if (hClient == NULL)
+        hClient = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE , a_pidClient);
+    if (hClient == NULL)
+        hClient = OpenProcess(SYNCHRONIZE, FALSE , a_pidClient);
+    AssertLogRelMsgReturn(hClient != NULL, ("pidClient=%d (%#x) err=%d\n", a_pidClient, a_pidClient, GetLastError()),
+                          m->fWatcherIsReliable = false);
+
+    /*
+     * Create a new watcher structure and try add it to the map.
+     */
+    bool fRet = true;
+    WatchedClientProcess *pWatched = new (std::nothrow) WatchedClientProcess(a_pidClient, hClient);
+    if (pWatched)
+    {
+        RTCritSectRwEnterExcl(&m->WatcherCritSect);
+
+        WatchedClientProcessMap::iterator It = m->WatchedProcesses.find(a_pidClient);
+        if (It == m->WatchedProcesses.end())
+        {
+            try
+            {
+                m->WatchedProcesses.insert(WatchedClientProcessMap::value_type(a_pidClient, pWatched));
+            }
+            catch (std::bad_alloc &)
+            {
+                fRet = false;
+            }
+            if (fRet)
+            {
+                /*
+                 * Schedule it on a watcher thread.
+                 */
+                /** @todo later. */
+                RTCritSectRwLeaveExcl(&m->WatcherCritSect);
+            }
+            else
+            {
+                RTCritSectRwLeaveExcl(&m->WatcherCritSect);
+                delete pWatched;
+                LogRel(("VirtualBox::i_watchClientProcess: out of memory inserting into client map!\n"));
+            }
+        }
+        else
+        {
+            /*
+             * Someone raced us here, we lost.
+             */
+            RTCritSectRwLeaveExcl(&m->WatcherCritSect);
+            delete pWatched;
+        }
+    }
+    else
+    {
+        LogRel(("VirtualBox::i_watchClientProcess: out of memory!\n"));
+        CloseHandle(hClient);
+        m->fWatcherIsReliable = fRet = false;
+    }
+    return fRet;
+}
+
+
+/** Logs the RPC caller info to the release log. */
+/*static*/ void VirtualBox::i_logCaller(const char *a_pszFormat, ...)
+{
+    if (RTSystemGetNtVersion() >= RTSYSTEM_MAKE_NT_VERSION(6, 0, 0))
+    {
+        char szTmp[80];
+        va_list va;
+        va_start(va, a_pszFormat);
+        RTStrPrintfV(szTmp, sizeof(szTmp), a_pszFormat, va);
+        va_end(va);
+
+        RPC_CALL_ATTRIBUTES_V2_W CallAttribs = { RPC_CALL_ATTRIBUTES_VERSION, RPC_QUERY_CLIENT_PID | RPC_QUERY_IS_CLIENT_LOCAL };
+        RPC_STATUS rcRpc = RpcServerInqCallAttributesW(NULL, &CallAttribs);
+
+        RTUTF16 wszProcName[256];
+        wszProcName[0] = '\0';
+        if (rcRpc == 0 && CallAttribs.ClientPID != 0)
+        {
+            HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)(uintptr_t)CallAttribs.ClientPID);
+            if (hProcess)
+            {
+                RT_ZERO(wszProcName);
+                GetProcessImageFileNameW(hProcess, wszProcName, RT_ELEMENTS(wszProcName) - 1);
+                CloseHandle(hProcess);
+            }
+        }
+        LogRel(("%s [rcRpc=%#x ClientPID=%#zx/%zu (%ls) IsClientLocal=%d ProtocolSequence=%#x CallStatus=%#x CallType=%#x OpNum=%#x InterfaceUuid=%RTuuid]\n",
+                szTmp, rcRpc, CallAttribs.ClientPID, CallAttribs.ClientPID, wszProcName, CallAttribs.IsClientLocal,
+                CallAttribs.ProtocolSequence, CallAttribs.CallStatus, CallAttribs.CallType, CallAttribs.OpNum,
+                &CallAttribs.InterfaceUuid));
+    }
+}
+
+#endif /* RT_OS_WINDOWS && VBOXSVC_WITH_CLIENT_WATCHER */
+
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

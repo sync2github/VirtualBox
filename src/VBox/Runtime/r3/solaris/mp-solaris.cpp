@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: mp-solaris.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Multiprocessor, Solaris.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -38,11 +38,12 @@
 #include <iprt/mp.h>
 #include <iprt/cpuset.h>
 #include <iprt/assert.h>
-#include <iprt/string.h>
-#include <iprt/alloc.h>
+#include <iprt/critsect.h>
+#include <iprt/err.h>
+#include <iprt/mem.h>
 #include <iprt/log.h>
 #include <iprt/once.h>
-#include <iprt/critsect.h>
+#include <iprt/string.h>
 
 
 /*********************************************************************************************************************************

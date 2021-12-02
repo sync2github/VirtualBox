@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIDnDHandler.cpp 85681 2020-08-11 09:36:37Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIDnDHandler class implementation.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,52 +15,44 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
 #include <QApplication>
+#include <QDrag>
 #include <QKeyEvent>
 #include <QStringList>
 #include <QTimer>
-#include <QDrag>
 #include <QUrl>
+#include <QWidget>
 
 /* VirtualBox interface declarations: */
-#ifndef VBOX_WITH_XPCOM
-# include "VirtualBox.h"
-#else
-# include "VirtualBox_XPCOM.h"
-#endif
+#include <VBox/com/VirtualBox.h>
 
 /* GUI includes: */
-# include "UIDnDHandler.h"
+#include "UIDnDHandler.h"
 #ifdef VBOX_WITH_DRAG_AND_DROP_GH
-# include "CDnDSource.h"
-# ifdef RT_OS_WINDOWS
-#  include "UIDnDDataObject_win.h"
-#  include "UIDnDDropSource_win.h"
-# endif
-# include "UIDnDMIMEData.h"
+#include "CDnDSource.h"
+#ifdef RT_OS_WINDOWS
+# include "UIDnDDataObject_win.h"
+# include "UIDnDDropSource_win.h"
+#endif
+#include "UIDnDMIMEData.h"
 #endif /* VBOX_WITH_DRAG_AND_DROP_GH */
 #include "UIMessageCenter.h"
 #include "UISession.h"
 
 /* COM includes: */
-# include "CConsole.h"
-# include "CGuest.h"
-# include "CGuestDnDSource.h"
-# include "CGuestDnDTarget.h"
-# include "CSession.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "CConsole.h"
+#include "CGuest.h"
+#include "CGuestDnDSource.h"
+#include "CGuestDnDTarget.h"
+#include "CSession.h"
 
 #ifdef LOG_GROUP
  #undef LOG_GROUP
 #endif
 #define LOG_GROUP LOG_GROUP_GUEST_DND
 #include <VBox/log.h>
+#include <iprt/err.h>
 
 #if 0
 # ifdef DEBUG
@@ -175,8 +167,17 @@ Qt::DropAction UIDnDHandler::dragDrop(ulong screenID, int x, int y,
     if (   m_dndTarget.isOk()
         && enmResult != KDnDAction_Ignore)
     {
-        LogFlowFunc(("strFormat=%s ...\n", strFormat.toUtf8().constData()));
+        LogRel2(("DnD: Guest requested format '%s'\n", strFormat.toUtf8().constData()));
+        LogRel2(("DnD: The host offered %d formats:\n", pMimeData->formats().size()));
 
+#if 0
+        QStringList::const_iterator itFmt = pMimeData->formats().constBegin();
+        while (itFmt != pMimeData->formats().constEnd())
+        {
+            LogRel2(("DnD:\t'%s'\n", (*itFmt).toUtf8().constData()));
+            itFmt++;
+        }
+#endif
         QByteArray arrBytes;
 
         /*
@@ -200,25 +201,15 @@ Qt::DropAction UIDnDHandler::dragDrop(ulong screenID, int x, int y,
          **/
         else
         {
-            LogRel3(("DnD: Guest requested a different format '%s'\n", strFormat.toUtf8().constData()));
-            LogRel3(("DnD: The host offered:\n"));
-#if 0
-            for (QStringList::iterator itFmt  = pMimeData->formats().begin();
-                                       itFmt != pMimeData->formats().end(); itFmt++)
-            {
-                QString strTemp = *itFmt;
-                LogRel3(("DnD: \t%s\n", strTemp.toUtf8().constData()));
-            }
-#endif
             if (pMimeData->hasText())
             {
-                LogRel3(("DnD: Converting data to text ...\n"));
+                LogRel2(("DnD: Converting data to text ...\n"));
                 arrBytes  = pMimeData->text().toUtf8();
                 strFormat = "text/plain;charset=utf-8";
             }
             else
             {
-                LogRel(("DnD: Error: Could not convert host format to guest format\n"));
+                LogRel(("DnD: Host formats did not offer a matching format for the guest, skipping\n"));
                 enmResult = KDnDAction_Ignore;
             }
         }
@@ -231,7 +222,7 @@ Qt::DropAction UIDnDHandler::dragDrop(ulong screenID, int x, int y,
             memcpy(vecData.data(), arrBytes.constData(), arrBytes.size());
 
             /* Send data to the guest. */
-            LogRel3(("DnD: Host is sending %d bytes of data as '%s'\n", vecData.size(), strFormat.toUtf8().constData()));
+            LogRel2(("DnD: Host is sending %d bytes of data as '%s'\n", vecData.size(), strFormat.toUtf8().constData()));
             CProgress progress = m_dndTarget.SendData(screenID, strFormat, vecData);
 
             if (m_dndTarget.isOk())
@@ -286,7 +277,6 @@ void UIDnDHandler::dragLeave(ulong screenID)
 #ifdef DEBUG_DND_QT
 QTextStream *g_pStrmLogQt = NULL; /* Output stream for Qt debug logging. */
 
-# if QT_VERSION >= 0x050000
 /* static */
 void UIDnDHandler::debugOutputQt(QtMsgType type, const QMessageLogContext &context, const QString &strMessage)
 {
@@ -311,34 +301,6 @@ void UIDnDHandler::debugOutputQt(QtMsgType type, const QMessageLogContext &conte
     if (g_pStrmLogQt)
         (*g_pStrmLogQt) << strMsg << " " << strMessage << endl;
 }
-# else /* QT_VERSION < 0x050000 */
-/* static */
-void UIDnDHandler::debugOutputQt(QtMsgType type, const char *pszMsg)
-{
-    AssertPtr(pszMsg);
-
-    QString strMsg;
-    switch (type)
-    {
-    case QtWarningMsg:
-        strMsg += "[W]";
-        break;
-    case QtCriticalMsg:
-        strMsg += "[C]";
-        break;
-    case QtFatalMsg:
-        strMsg += "[F]";
-        break;
-    case QtDebugMsg:
-    default:
-        strMsg += "[D]";
-        break;
-    }
-
-    if (g_pStrmLogQt)
-        (*g_pStrmLogQt) << strMsg << " " << pszMsg << endl;
-}
-# endif /* QT_VERSION < 0x050000 */
 #endif /* DEBUG_DND_QT */
 
 /*
@@ -366,11 +328,7 @@ int UIDnDHandler::dragStartInternal(const QStringList &lstFormats,
     {
         g_pStrmLogQt = new QTextStream(pFileDebugQt);
 
-#if QT_VERSION >= 0x050000
         qInstallMessageHandler(UIDnDHandler::debugOutputQt);
-#else /* QT_VERSION < 0x050000 */
-        qInstallMsgHandler(UIDnDHandler::debugOutputQt);
-#endif /* QT_VERSION < 0x050000 */
         qDebug("========================================================================");
     }
 # endif
@@ -420,12 +378,12 @@ int UIDnDHandler::dragStartInternal(const QStringList &lstFormats,
     }
 
     /* Inform the MIME data object of any changes in the current action. */
-    connect(pDrag, SIGNAL(actionChanged(Qt::DropAction)),
-            m_pMIMEData, SLOT(sltDropActionChanged(Qt::DropAction)));
+    connect(pDrag, &QDrag::actionChanged,
+            m_pMIMEData, &UIDnDMIMEData::sltDropActionChanged);
 
     /* Invoke this handler as data needs to be retrieved by our derived QMimeData class. */
-    connect(m_pMIMEData, SIGNAL(sigGetData(Qt::DropAction, const QString&, QVariant::Type, QVariant&)),
-            this, SLOT(sltGetData(Qt::DropAction, const QString&, QVariant::Type, QVariant&)));
+    connect(m_pMIMEData, &UIDnDMIMEData::sigGetData,
+            this, &UIDnDHandler::sltGetData);
 
     /*
      * Set MIME data object and start the (modal) drag'n drop operation on the host.
@@ -437,11 +395,7 @@ int UIDnDHandler::dragStartInternal(const QStringList &lstFormats,
     Qt::DropAction dropAction;
 #  ifdef RT_OS_DARWIN
 #    ifdef VBOX_WITH_DRAG_AND_DROP_PROMISES
-#     if QT_VERSION < 0x050000
-        dropAction = pDrag->exec(actions, defAction, true /* fUsePromises */);
-#     else /* QT_VERSION >= 0x050000 */
         dropAction = pDrag->exec(actions, defAction);
-#     endif /* QT_VERSION >= 0x050000 */
 #    else
         /* Without having VBOX_WITH_DRAG_AND_DROP_PROMISES enabled drag and drop
          * will not work on OS X! It also requires some handcrafted patches within Qt
@@ -646,6 +600,8 @@ int UIDnDHandler::retrieveData(Qt::DropAction          dropAction,
                                const QString          &strMIMEType,
                                      QVector<uint8_t> &vecData)
 {
+    /** @todo r=andy Locking required? */
+
     if (!strMIMEType.compare("application/x-qt-mime-type-name", Qt::CaseInsensitive))
         return VINF_SUCCESS;
 
@@ -758,9 +714,19 @@ int UIDnDHandler::retrieveDataInternal(      Qt::DropAction    dropAction,
     return rc;
 }
 
+/**
+ * Sets the current DnD operation mode.
+ *
+ * Note: Only one mode (guest->host *or* host->guest) can be active at the same time.
+ *
+ * @param   enmMode             Current operation mode to set.
+ */
 void UIDnDHandler::setOpMode(DNDOPMODE enmMode)
 {
     QMutexLocker AutoWriteLock(&m_WriteLock);
+
+    /** @todo r=andy Check for old (current) mode and refuse new mode? */
+
     m_enmOpMode = enmMode;
     LogFunc(("Operation mode is now: %RU32\n", m_enmOpMode));
 }
@@ -779,6 +745,12 @@ int UIDnDHandler::sltGetData(      Qt::DropAction  dropAction,
  * Drag and Drop helper methods
  */
 
+/**
+ * Static helper function to convert a Qt drop action to an internal DnD drop action.
+ *
+ * @returns Converted internal drop action.
+ * @param   action              Qt drop action to convert.
+ */
 /* static */
 KDnDAction UIDnDHandler::toVBoxDnDAction(Qt::DropAction action)
 {
@@ -792,6 +764,12 @@ KDnDAction UIDnDHandler::toVBoxDnDAction(Qt::DropAction action)
     return KDnDAction_Ignore;
 }
 
+/**
+ * Static helper function to convert Qt drop actions to internal DnD drop actions.
+ *
+ * @returns Vector of converted internal drop actions.
+ * @param   actions             Qt drop actions to convert.
+ */
 /* static */
 QVector<KDnDAction> UIDnDHandler::toVBoxDnDActions(Qt::DropActions actions)
 {
@@ -808,6 +786,12 @@ QVector<KDnDAction> UIDnDHandler::toVBoxDnDActions(Qt::DropActions actions)
     return vbActions;
 }
 
+/**
+ * Static helper function to convert an internal drop action to a Qt drop action.
+ *
+ * @returns Converted Qt drop action.
+ * @param   actions             Internal drop action to convert.
+ */
 /* static */
 Qt::DropAction UIDnDHandler::toQtDnDAction(KDnDAction action)
 {
@@ -823,6 +807,12 @@ Qt::DropAction UIDnDHandler::toQtDnDAction(KDnDAction action)
     return dropAct;
 }
 
+/**
+ * Static helper function to convert a vector of internal drop actions to Qt drop actions.
+ *
+ * @returns Converted Qt drop actions.
+ * @param   vecActions          Internal drop actions to convert.
+ */
 /* static */
 Qt::DropActions UIDnDHandler::toQtDnDActions(const QVector<KDnDAction> &vecActions)
 {
@@ -851,4 +841,3 @@ Qt::DropActions UIDnDHandler::toQtDnDActions(const QVector<KDnDAction> &vecActio
     LogFlowFunc(("dropActions=0x%x\n", int(dropActs)));
     return dropActs;
 }
-

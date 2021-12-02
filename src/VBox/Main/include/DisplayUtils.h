@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DisplayUtils.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Display helper declarations
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+#ifndef MAIN_INCLUDED_DisplayUtils_h
+#define MAIN_INCLUDED_DisplayUtils_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VBox/com/string.h"
 
@@ -32,4 +38,6 @@ int readSavedGuestScreenInfo(const Utf8Str &strStateFilePath, uint32_t u32Screen
 
 int readSavedDisplayScreenshot(const Utf8Str &strStateFilePath, uint32_t u32Type, uint8_t **ppu8Data, uint32_t *pcbData, uint32_t *pu32Width, uint32_t *pu32Height);
 void freeSavedDisplayScreenshot(uint8_t *pu8Data);
+
+#endif /* !MAIN_INCLUDED_DisplayUtils_h */
 

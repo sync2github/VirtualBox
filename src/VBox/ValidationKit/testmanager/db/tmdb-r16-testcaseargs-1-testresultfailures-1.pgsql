@@ -1,11 +1,11 @@
--- $Id$
+-- $Id: tmdb-r16-testcaseargs-1-testresultfailures-1.pgsql 82968 2020-02-04 10:35:17Z vboxsync $
 --- @file
 -- VBox Test Manager Database - Adds sName to TestCaseArgs, idTestSet
 -- to TestResultFailures and add some indexes to the latter as well.
 --
 
 --
--- Copyright (C) 2013-2016 Oracle Corporation
+-- Copyright (C) 2013-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;
@@ -90,12 +90,12 @@ INSERT INTO TestResultFailures ( idTestResult, tsEffective, tsExpire, uidAuthor,
     FROM   OldTestResultFailures o,
            TestResults tr
     WHERE  o.idTestResult = tr.idTestResult;
-   
+
 -- Add unique constraint to TestResult for our new foreign key.
 ALTER TABLE TestResults ADD CONSTRAINT TestResults_idTestResult_idTestSet_key UNIQUE (idTestResult, idTestSet);
 
 -- Restore foreign key.
-ALTER TABLE TestResultFailures ADD CONSTRAINT TestResultFailures_idTestResult_idTestSet_fkey 
+ALTER TABLE TestResultFailures ADD CONSTRAINT TestResultFailures_idTestResult_idTestSet_fkey
     FOREIGN KEY (idTestResult, idTestSet) REFERENCES TestResults(idTestResult, idTestSet) MATCH FULL;
 
 -- Add new indexes.

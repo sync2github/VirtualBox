@@ -1,12 +1,10 @@
-/* $Id$ */
-
+/* $Id: tstCollector.cpp 86441 2020-10-04 12:05:24Z vboxsync $ */
 /** @file
- *
- * Collector classes test cases.
+ * VirtualBox Main - Performance collector classes test cases.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -144,7 +142,7 @@ void measurePerformance(pm::CollectorHAL *collector, const char *pszName, int cV
         /* Process RAM usage */
         N_CALLS(cVMs, getProcessMemoryUsage(processes[call], &tmp));
     }
-    printf("\n%d VMs -- %.2f%% of CPU time\n", cVMs, (RTTimeNanoTS() - start) / 10000000. / times);
+    RTPrintf("\n%d VMs -- %.2f%% of CPU time\n", cVMs, (RTTimeNanoTS() - start) / 10000000. / times);
 
     /* Shut down fake VMs */
     shutdownProcessList(processes);
@@ -229,9 +227,9 @@ int testFsUsage(pm::CollectorHAL *collector)
             RTPrintf("tstCollector: getHostFilesystemUsage() -> %Rrc\n", rc);
             return 1;
         }
-        RTPrintf("tstCollector: host root fs total     = %lu mB\n", total);
-        RTPrintf("tstCollector: host root fs used      = %lu mB\n", used);
-        RTPrintf("tstCollector: host root fs available = %lu mB\n\n", available);
+        RTPrintf("tstCollector: host root fs total     = %lu MB\n", total);
+        RTPrintf("tstCollector: host root fs used      = %lu MB\n", used);
+        RTPrintf("tstCollector: host root fs available = %lu MB\n\n", available);
     }
     return 0;
 }
@@ -573,8 +571,8 @@ int main(int argc, char *argv[])
 
     delete collector;
 
-    printf ("\ntstCollector FINISHED.\n");
+    RTPrintf("\ntstCollector FINISHED.\n");
 
-    return rc;
+    return RTEXITCODE_SUCCESS;
 }
 

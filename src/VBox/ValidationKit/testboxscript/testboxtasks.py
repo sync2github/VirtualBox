@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: testboxtasks.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 TestBox Script - Async Tasks.
@@ -7,7 +7,7 @@ TestBox Script - Async Tasks.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard python imports.
@@ -194,7 +194,7 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
         self._oBackLogLock.release();
 
         # If there is anything to flush, flush it.
-        if len(asBackLog) > 0:
+        if asBackLog:
             sBody = '';
             for sLine in asBackLog:
                 sBody += sLine + '\n';
@@ -207,7 +207,7 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
                     oConnection.close();
                 else:
                     oGivenConnection.postRequest(constants.tbreq.LOG_MAIN, {constants.tbreq.LOG_PARAM_BODY: sBody});
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 testboxcommons.log('_logFlush error: %s' % (oXcpt,));
                 if len(sBody) < self.kcchMaxBackLog * 4:
                     self._oBackLogLock.acquire();
@@ -241,7 +241,7 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
             try:
                 oNow = datetime.utcnow();
                 sTs = '%02u:%02u:%02u.%06u ' % (oNow.hour, oNow.minute, oNow.second, oNow.microsecond);
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 sTs = 'oXcpt=%s ' % (oXcpt);
             sFullMsg = sTs + sMessage;
         else:
@@ -293,7 +293,7 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
                 oConnection = self._oTestBoxScript.openTestManagerConnection();
                 oConnection.postRequest(constants.tbreq.EXEC_COMPLETED, {constants.tbreq.EXEC_COMPLETED_PARAM_RESULT: sResult});
                 oConnection.close();
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 if utils.timestampSecond() - secStart < self.ksecTestManagerTimeout:
                     self._log('_reportDone exception (%s) - retrying...' % (oXcpt,));
                     time.sleep(2);
@@ -356,7 +356,7 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
             asArgs[0] = os.path.join(self._oTestBoxScript.getPathScripts(), asArgs[0]);
 
         if asArgs[0].endswith('.py') and fWithInterpreter:
-            if sys.executable is not None  and  len(sys.executable) > 0:
+            if sys.executable:
                 asArgs.insert(0, sys.executable);
             else:
                 asArgs.insert(0, 'python');
@@ -374,12 +374,12 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
             # Get a line.
             try:
                 sLine = oStdOut.readline();
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 self._log('child (%s) pipe I/O error: %s' % (sAction, oXcpt,));
                 break;
 
             # EOF?
-            if len(sLine) == 0:
+            if not sLine:
                 break;
 
             # Strip trailing new line (DOS and UNIX).
@@ -395,7 +395,7 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
         # Close the stdout pipe in case we were told to get lost.
         try:
             oStdOut.close();
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             self._log('warning: Exception closing stdout pipe of "%s" child: %s' % (sAction, oXcpt,));
 
         # This is a bit hacky, but try reap the child so it won't hang as
@@ -422,17 +422,17 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
 
         # Spawn child.
         try:
-            oChild = subprocess.Popen(asArgs,
-                                      shell      = False,
-                                      bufsize    = -1,
-                                      stdout     = subprocess.PIPE,
-                                      stderr     = subprocess.STDOUT,
-                                      cwd        = self._oTestBoxScript.getPathSpill(),
-                                      universal_newlines = True,
-                                      close_fds  = (False if utils.getHostOs() == 'win' else True),
-                                      preexec_fn = (None if utils.getHostOs() in ['win', 'os2']
-                                                    else os.setsid)); # pylint: disable=E1101
-        except Exception, oXcpt:
+            oChild = utils.processPopenSafe(asArgs,
+                                            shell      = False,
+                                            bufsize    = -1,
+                                            stdout     = subprocess.PIPE,
+                                            stderr     = subprocess.STDOUT,
+                                            cwd        = self._oTestBoxScript.getPathSpill(),
+                                            universal_newlines = True,
+                                            close_fds  = utils.getHostOs() != 'win',
+                                            preexec_fn = (None if utils.getHostOs() in ['win', 'os2']
+                                                          else os.setsid)); # pylint: disable=no-member
+        except Exception as oXcpt:
             self._log('Error creating child process %s: %s' % (asArgs, oXcpt));
             return (False, None);
 
@@ -475,11 +475,13 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
                 if oChild is self._oChild:
                     self._oChild = None;
 
+                if iRc == constants.rtexitcode.SUCCESS:
+                    return (True, constants.result.PASSED);
                 if iRc == constants.rtexitcode.SKIPPED:
                     return (True, constants.result.SKIPPED);
-                if iRc != constants.rtexitcode.SUCCESS:
-                    return (False, constants.result.FAILED);
-                return (True, constants.result.PASSED);
+                if iRc == constants.rtexitcode.BAD_TESTBOX:
+                    return (False, constants.result.BAD_TESTBOX);
+                return (False, constants.result.FAILED);
 
             # Check for abort first, since that has less of a stigma.
             if self._shouldTerminate() is True:
@@ -517,14 +519,14 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
 
             if iProcGroup > 0:
                 try:
-                    os.killpg(iProcGroup, signal.SIGTERM); # pylint: disable=E1101
-                except Exception, oXcpt:
+                    os.killpg(iProcGroup, signal.SIGTERM); # pylint: disable=no-member
+                except Exception as oXcpt:
                     self._log('killpg() failed: %s' % (oXcpt,));
 
             try:
                 self._oChild.terminate();
                 oChild.oOutputThread.join(self.kcSecTerminateOutputTimeout);
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 self._log('terminate() failed: %s' % (oXcpt,));
 
         #
@@ -533,8 +535,8 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
         #
         if iProcGroup > 0:
             try:
-                os.killpg(iProcGroup, signal.SIGKILL); # pylint: disable=E1101
-            except Exception, oXcpt:
+                os.killpg(iProcGroup, signal.SIGKILL); # pylint: disable=no-member
+            except Exception as oXcpt:
                 self._log('killpg() failed: %s' % (oXcpt,));
 
         if oChild.poll() is None:
@@ -542,7 +544,7 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
             try:
                 self._oChild.kill();
                 oChild.oOutputThread.join(self.kcSecKillOutputTimeout);
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 self._log('kill() failed: %s' % (oXcpt,));
 
         #
@@ -582,7 +584,7 @@ class TestBoxTestDriverTask(TestBoxBaseTask):
         #
         # Tell the script to clean up.
         #
-        if len(self._sScriptCmdLine) > 0: # can be empty if cleanup crashed.
+        if self._sScriptCmdLine: # can be empty if cleanup crashed.
             (fRc, self._oChild) = self._spawnChild('cleanup-after');
             if fRc is True:
                 (fRc, _) = self._monitorChild(self.kcSecCleanupTimeout, False);
@@ -641,9 +643,10 @@ class TestBoxCleanupTask(TestBoxTestDriverTask):
         try:
             oFile = open(sPath, "rb");
             sStr = oFile.read();
+            sStr = sStr.decode('utf-8');
             oFile.close();
             return sStr.strip();
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             raise Exception('Failed to read "%s": %s' % (sPath, oXcpt));
 
     def _threadProc(self):
@@ -660,7 +663,7 @@ class TestBoxCleanupTask(TestBoxTestDriverTask):
             os.remove(sScriptCmdLine);
             oFile = open(sScriptCmdLine, 'wb');
             oFile.close();
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             self._log('Error truncating "%s": %s' % (sScriptCmdLine, oXcpt));
 
         #
@@ -697,7 +700,7 @@ class TestBoxCleanupTask(TestBoxTestDriverTask):
         # Retriev the info.
         try:
             sRawInfo = utils.processOutputChecked(['nvram', 'aapl,panic-info']);
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             return 'exception running nvram: %s' % (oXcpt,);
 
         # Decode (%xx) and decompact it (7-bit -> 8-bit).
@@ -778,14 +781,32 @@ class TestBoxExecTask(TestBoxTestDriverTask):
         """
         try:
             oFile = open(sPath, "wb");
-            oFile.write(sContent);
+            oFile.write(sContent.encode('utf-8'));
             oFile.flush();
             try:     os.fsync(oFile.fileno());
             except:  pass;
             oFile.close();
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             raise Exception('Failed to write "%s": %s' % (sPath, oXcpt));
         return True;
+
+    @staticmethod
+    def _environTxtContent():
+        """
+        Collects environment variables and values for the environ.txt stat file
+        (for external monitoring tool).
+        """
+        sText = '';
+        for sVar in [ 'TESTBOX_PATH_BUILDS',   'TESTBOX_PATH_RESOURCES', 'TESTBOX_PATH_SCRATCH',      'TESTBOX_PATH_SCRIPTS',
+                      'TESTBOX_PATH_UPLOAD',   'TESTBOX_HAS_HW_VIRT',    'TESTBOX_HAS_NESTED_PAGING', 'TESTBOX_HAS_IOMMU',
+                      'TESTBOX_SCRIPT_REV',    'TESTBOX_CPU_COUNT',      'TESTBOX_MEM_SIZE',          'TESTBOX_SCRATCH_SIZE',
+                      'TESTBOX_WITH_RAW_MODE', 'TESTBOX_WITH_RAW_MODE',  'TESTBOX_MANAGER_URL',       'TESTBOX_UUID',
+                      'TESTBOX_REPORTER',      'TESTBOX_NAME',           'TESTBOX_ID',                'TESTBOX_TEST_SET_ID',
+                      'TESTBOX_TIMEOUT',       'TESTBOX_TIMEOUT_ABS', ]:
+            sValue = os.environ.get(sVar);
+            if sValue:
+                sText += sVar + '=' + sValue + '\n';
+        return sText;
 
     def _saveState(self):
         """
@@ -800,7 +821,8 @@ class TestBoxExecTask(TestBoxTestDriverTask):
             self._writeStateFile(os.path.join(sScriptState, 'result-id.txt'),      str(self._idResult));
             self._writeStateFile(os.path.join(sScriptState, 'testbox-id.txt'),     str(self._oTestBoxScript.getTestBoxId()));
             self._writeStateFile(os.path.join(sScriptState, 'testbox-name.txt'),   self._oTestBoxScript.getTestBoxName());
-        except Exception, oXcpt:
+            self._writeStateFile(os.path.join(sScriptState, 'environ.txt'),        self._environTxtContent());
+        except Exception as oXcpt:
             self._log('Failed to write state: %s' % (oXcpt,));
             return False;
         return True;
@@ -816,12 +838,12 @@ class TestBoxExecTask(TestBoxTestDriverTask):
         asArchives = self._sScriptZips.split(',');
         for sArchive in asArchives:
             sArchive = sArchive.strip();
-            if len(sArchive) == 0:
+            if not sArchive:
                 continue;
 
             # Figure the destination name (in scripts).
             sDstFile = webutils.getFilename(sArchive);
-            if   len(sDstFile) < 1 \
+            if   not sDstFile \
               or re.search('[^a-zA-Z0-9 !#$%&\'()@^_`{}~.-]', sDstFile) is not None: # FAT charset sans 128-255 + '.'.
                 self._log('Malformed script zip filename: %s' % (sArchive,));
                 return False;
@@ -890,11 +912,14 @@ class TestBoxExecTask(TestBoxTestDriverTask):
                 (fRc, sResult) = self._monitorChild(self._cSecTimeout);
                 testboxcommons.log2('_threadProc: _monitorChild -> %s' % (fRc,));
 
-                # If the run failed, do explicit cleanup.
+                # If the run failed, do explicit cleanup unless its a BAD_TESTBOX, since BAD_TESTBOX is
+                # intended for pre-cleanup problems caused by previous test failures.  Do a cleanup on
+                # a BAD_TESTBOX could easily trigger an uninstallation error and change status to FAILED.
                 if fRc is not True:
-                    testboxcommons.log2('_threadProc: explicit cleanups...');
-                    self._terminateChild();
-                    self._cleanupAfter();
+                    if sResult != constants.result.BAD_TESTBOX:
+                        testboxcommons.log2('_threadProc: explicit cleanups...');
+                        self._terminateChild();
+                        self._cleanupAfter();
                     fNeedCleanUp = False;
             assert self._oChild is None;
 

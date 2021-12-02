@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,13 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_param_h
-#define ___iprt_param_h
+#ifndef IPRT_INCLUDED_param_h
+#define IPRT_INCLUDED_param_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
+#include <iprt/cdefs.h>
 
 /** @todo Much of the PAGE_* stuff here is obsolete and highly risky to have around.
  * As for component configs (MM_*), either we gather all in here or we move those bits away! */
@@ -48,6 +53,8 @@
  */
 #if defined(RT_ARCH_SPARC64)
 # define PAGE_SIZE          8192
+#elif defined(RT_ARCH_ARM64)
+# define PAGE_SIZE          16384
 #else
 # define PAGE_SIZE          4096
 #endif
@@ -58,6 +65,8 @@
  */
 #if defined(RT_ARCH_SPARC64)
 # define PAGE_SHIFT         13
+#elif defined(RT_ARCH_ARM64)
+# define PAGE_SHIFT         14
 #else
 # define PAGE_SHIFT         12
 #endif
@@ -70,6 +79,8 @@
  */
 #if defined(RT_ARCH_SPARC64)
 # define PAGE_OFFSET_MASK    0x1fff
+#elif defined(RT_ARCH_ARM64)
+# define PAGE_OFFSET_MASK    0x3fff
 #else
 # define PAGE_OFFSET_MASK    0xfff
 #endif
@@ -118,14 +129,11 @@
  * Host max path (the reasonable value).
  * @remarks defined both by iprt/param.h and iprt/path.h.
  */
-#if !defined(___iprt_path_h) || defined(DOXYGEN_RUNNING)
+#if !defined(IPRT_INCLUDED_path_h) || defined(DOXYGEN_RUNNING)
 # define RTPATH_MAX         (4096 + 4)    /* (PATH_MAX + 1) on linux w/ some alignment */
 #endif
 
 /** @} */
 
-
-/** @} */
-
-#endif
+#endif /* !IPRT_INCLUDED_param_h */
 

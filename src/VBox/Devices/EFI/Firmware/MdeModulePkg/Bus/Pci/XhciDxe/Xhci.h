@@ -2,14 +2,9 @@
 
   Provides some data structure definitions used by the XHCI host controller driver.
 
-Copyright (c) 2011 - 2014, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2011 - 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) Microsoft Corporation.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -47,29 +42,29 @@ typedef struct _USB_DEV_CONTEXT      USB_DEV_CONTEXT;
 //
 #define XHC_1_MICROSECOND            (1)
 //
-// Convert millisecond to microsecond.
+// The unit is microsecond, setting it as 1ms.
 //
 #define XHC_1_MILLISECOND            (1000)
 //
 // XHC generic timeout experience values.
-// The unit is microsecond, setting it as 10ms.
+// The unit is millisecond, setting it as 10s.
 //
 #define XHC_GENERIC_TIMEOUT          (10 * 1000)
 //
 // XHC reset timeout experience values.
-// The unit is microsecond, setting it as 1s.
+// The unit is millisecond, setting it as 1s.
 //
-#define XHC_RESET_TIMEOUT            (1000 * 1000)
+#define XHC_RESET_TIMEOUT            (1000)
 //
-// XHC delay experience value for polling operation.
-// The unit is microsecond, set it as 1ms.
+// TRSTRCY delay requirement in usb 2.0 spec chapter 7.1.7.5.
+// The unit is microsecond, setting it as 10ms.
 //
-#define XHC_POLL_DELAY               (1000)
+#define XHC_RESET_RECOVERY_DELAY     (10 * 1000)
 //
 // XHC async transfer timer interval, set by experience.
-// The unit is 100us, takes 50ms as interval.
+// The unit is 100us, takes 1ms as interval.
 //
-#define XHC_ASYNC_TIMER_INTERVAL     EFI_TIMER_PERIOD_MILLISECONDS(50)
+#define XHC_ASYNC_TIMER_INTERVAL     EFI_TIMER_PERIOD_MILLISECONDS(1)
 
 //
 // XHC raises TPL to TPL_NOTIFY to serialize all its operations
@@ -87,14 +82,6 @@ typedef struct _USB_DEV_CONTEXT      USB_DEV_CONTEXT;
 #define BULK_INTER                   2
 #define INT_INTER                    3
 #define INT_INTER_ASYNC              4
-
-//
-// Iterate through the doule linked list. This is delete-safe.
-// Don't touch NextEntry
-//
-#define EFI_LIST_FOR_EACH_SAFE(Entry, NextEntry, ListHead) \
-  for (Entry = (ListHead)->ForwardLink, NextEntry = Entry->ForwardLink;\
-      Entry != (ListHead); Entry = NextEntry, NextEntry = Entry->ForwardLink)
 
 #define EFI_LIST_CONTAINER(Entry, Type, Field) BASE_CR(Entry, Type, Field)
 
@@ -243,6 +230,7 @@ struct _USB_XHCI_INSTANCE {
   UINT64                    *DCBAA;
   VOID                      *DCBAAMap;
   UINT32                    MaxSlotsEn;
+  URB                       *PendingUrb;
   //
   // Cmd Transfer Ring
   //
@@ -261,6 +249,8 @@ struct _USB_XHCI_INSTANCE {
   // The array supports up to 255 devices, entry 0 is reserved and should not be used.
   //
   USB_DEV_CONTEXT           UsbDevContext[256];
+
+  BOOLEAN                   Support64BitDma; // Whether 64 bit DMA may be used with this device
 };
 
 
@@ -311,7 +301,7 @@ XhcDriverBindingStart (
   );
 
 /**
-  Stop this driver on ControllerHandle. Support stoping any child handles
+  Stop this driver on ControllerHandle. Support stopping any child handles
   created by this driver.
 
   @param  This                 Protocol instance pointer.

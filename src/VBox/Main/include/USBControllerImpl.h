@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: USBControllerImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 
 /** @file
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_USBCONTROLLERIMPL
-#define ____H_USBCONTROLLERIMPL
+#ifndef MAIN_INCLUDED_USBControllerImpl_h
+#define MAIN_INCLUDED_USBControllerImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "USBControllerWrap.h"
 
@@ -35,13 +38,13 @@ class ATL_NO_VTABLE USBController :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(USBController)
+    DECLARE_COMMON_CLASS_METHODS(USBController)
 
     HRESULT FinalConstruct();
     void FinalRelease();
 
     // public initializer/uninitializer for internal purposes only
-    HRESULT init(Machine *aParent, const Utf8Str &aName, USBControllerType_T enmType);
+    HRESULT init(Machine *aParent, const com::Utf8Str &aName, USBControllerType_T enmType);
     HRESULT init(Machine *aParent, USBController *aThat, bool fReshare = false);
     HRESULT initCopy(Machine *aParent, USBController *aThat);
     void uninit();
@@ -71,5 +74,5 @@ private:
     Data *m;
 };
 
-#endif //!____H_USBCONTROLLERIMPL
+#endif /* !MAIN_INCLUDED_USBControllerImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

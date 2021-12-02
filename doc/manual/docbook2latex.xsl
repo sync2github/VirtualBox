@@ -18,7 +18,7 @@
         pretty quotes for English in the LaTeX output generated
         by this XSLT (see below).
 
-    Copyright (C) 2006-2012 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -83,6 +83,10 @@
     </xsl:choose>
   </xsl:variable>
 
+  <!-- command synopsis -->
+  <xsl:variable name="arg.rep.repeat.str.tex">\ldots{}</xsl:variable>
+  <xsl:variable name="arg.or.sep.tex"> |~</xsl:variable>
+
   <xsl:output method="text"/>
 
   <xsl:strip-space elements="*"/>
@@ -114,7 +118,6 @@
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{fancybox}
-\usepackage{fancyvrb}
 \usepackage{alltt}
 \usepackage{color}
 \usepackage{scrextend}
@@ -188,6 +191,7 @@
   <xsl:apply-templates />
 
   <xsl:text>
+\end{sloppypar}
 \end{document}
   </xsl:text>
 
@@ -218,6 +222,9 @@
 \hyphenation{VirtualBox}
 
 \begin{document}
+% bird/2018-05-14: Use sloppypar so we don't push path names and other long words
+%                  thru the right margin.  TODO: Find better solution? microtype?
+\begin{sloppypar}
 % \maketitle
 %\begin{titlepage}
 \thispagestyle{empty}
@@ -279,6 +286,38 @@
     </xsl:choose>
   </xsl:template>
 
+  <!-- Determins the section depth, returning a number 1,2,3,4,5,6,7,... -->
+  <xsl:template name="get-section-level">
+    <xsl:param name="a_Node" select=".."/>
+    <xsl:for-each select="$a_Node"> <!-- makes it current -->
+      <xsl:choose>
+        <xsl:when test="self::sect1"><xsl:text>1</xsl:text></xsl:when>
+        <xsl:when test="self::sect2"><xsl:text>2</xsl:text></xsl:when>
+        <xsl:when test="self::sect3"><xsl:text>3</xsl:text></xsl:when>
+        <xsl:when test="self::sect4"><xsl:text>4</xsl:text></xsl:when>
+        <xsl:when test="self::sect5"><xsl:text>5</xsl:text></xsl:when>
+        <xsl:when test="self::section">
+          <xsl:value-of select="count(ancestor::section) + 1"/>
+        </xsl:when>
+        <xsl:when test="self::simplesect">
+          <xsl:variable name="tmp">
+            <xsl:call-template name="get-section-level">
+              <xsl:with-param name="a_Node" select="parent::*"/>
+            </xsl:call-template>
+          </xsl:variable>
+          <xsl:value-of select="$tmp + 1"/>
+        </xsl:when>
+        <xsl:when test="self::preface"><xsl:text>0</xsl:text></xsl:when>
+        <xsl:when test="self::chapter"><xsl:text>0</xsl:text></xsl:when>
+        <xsl:when test="self::appendix"><xsl:text>0</xsl:text></xsl:when>
+        <xsl:when test="self::article"><xsl:text>0</xsl:text></xsl:when>
+        <xsl:otherwise>
+          <xsl:message terminate="yes">get-section-level was called on non-section element: <xsl:value-of select="."/> </xsl:message>
+        </xsl:otherwise>
+      </xsl:choose>
+    </xsl:for-each>
+  </xsl:template>
+
   <!--
     Inserts \hypertarget{@id} that can be referenced via the /A "nameddest=@id"
     command line or #nameddest=@id URL parameter.
@@ -288,8 +327,15 @@
   <xsl:template name="title-wrapper">
     <xsl:param name="texcmd" select="concat('\',name(..))"/>
     <xsl:param name="refid" select="../@id"/>
+    <xsl:param name="role" select="../@role"/>
 
     <xsl:call-template name="xsltprocNewlineOutputHack"/>
+    <xsl:if test="$texcmd='\chapter' and $role='frontmatter'">
+      <xsl:text>\frontmatter&#x0a;</xsl:text>
+    </xsl:if>
+    <xsl:if test="$texcmd='\chapter' and ../preceding-sibling::*[1][@role='frontmatter']">
+      <xsl:text>\mainmatter&#x0a;</xsl:text>
+    </xsl:if>
     <xsl:choose>
       <xsl:when test="$refid">
         <xsl:text>&#x0a;</xsl:text>
@@ -324,6 +370,16 @@
       </xsl:when>
       <xsl:when test="name(..)='chapter'">
         <xsl:call-template name="title-wrapper"/>
+      </xsl:when>
+      <xsl:when test="name(..)='preface'">
+        <xsl:call-template name="title-wrapper">
+          <xsl:with-param name="texcmd">\chapter</xsl:with-param>
+        </xsl:call-template>
+      </xsl:when>
+      <xsl:when test="name(..)='sect1' and ../../@role='frontmatter'">
+        <xsl:call-template name="title-wrapper">
+          <xsl:with-param name="texcmd">\section*</xsl:with-param>
+        </xsl:call-template>
       </xsl:when>
       <xsl:when test="name(..)='sect1'">
         <xsl:call-template name="title-wrapper">
@@ -380,6 +436,38 @@
           <xsl:with-param name="texcmd">\section*</xsl:with-param>
         </xsl:call-template>
       </xsl:when>
+
+      <xsl:when test="parent::simplesect">
+        <xsl:if test="../@role">
+          <xsl:message terminate="yes">Role not allowed with simplesect: <xsl:value-of select="../@role"/></xsl:message>
+        </xsl:if>
+        <xsl:variable name="level">
+          <xsl:call-template name="get-section-level">
+            <xsl:with-param name="a_Node" select=".."/>
+          </xsl:call-template>
+        </xsl:variable>
+        <xsl:choose>
+          <xsl:when test="$level = 1">
+            <xsl:call-template name="title-wrapper"><xsl:with-param name="texcmd">\section*</xsl:with-param></xsl:call-template>
+          </xsl:when>
+          <xsl:when test="$level = 2">
+            <xsl:call-template name="title-wrapper"><xsl:with-param name="texcmd">\subsection*</xsl:with-param></xsl:call-template>
+          </xsl:when>
+          <xsl:when test="$level = 3">
+            <xsl:call-template name="title-wrapper"><xsl:with-param name="texcmd">\subsubsection*</xsl:with-param></xsl:call-template>
+          </xsl:when>
+          <xsl:when test="$level = 4">
+            <xsl:call-template name="title-wrapper"><xsl:with-param name="texcmd">\paragraph*</xsl:with-param></xsl:call-template>
+          </xsl:when>
+          <xsl:when test="$level = 5">
+            <xsl:call-template name="title-wrapper"><xsl:with-param name="texcmd">\subparagraph*</xsl:with-param></xsl:call-template>
+          </xsl:when>
+          <xsl:otherwise>
+            <xsl:message terminate="yes">Unsupported simplesect/title depth: <xsl:value-of select="$level"/></xsl:message>
+          </xsl:otherwise>
+        </xsl:choose>
+      </xsl:when>
+
     </xsl:choose>
     <xsl:if test="$refid">
       <xsl:value-of select="concat('&#x0a;\label{', $refid, '}')" />
@@ -473,7 +561,7 @@
   </xsl:template>
 
   <xsl:template match="para">
-    <xsl:if test="not(name(..)='footnote' or name(..)='note' or name(..)='warning' or (name(../..)='varlistentry' and position()=1))">
+    <xsl:if test="not(name(..)='footnote' or name(..)='note' or name(..)='warning' or name(..)='entry' or (name(../..)='varlistentry' and position()=1))">
       <xsl:text>&#x0a;&#x0a;</xsl:text>
     </xsl:if>
     <xsl:apply-templates />
@@ -492,9 +580,9 @@
   </xsl:template>
 
   <xsl:template match="screen">
-    <xsl:text>&#x0a;&#x0a;\begin{Verbatim}[fontsize=\footnotesize]&#x0a;</xsl:text>
+    <xsl:text>&#x0a;&#x0a;{\footnotesize\begin{alltt}&#x0a;</xsl:text>
     <xsl:apply-templates />
-    <xsl:text>&#x0a;\end{Verbatim}&#x0a;</xsl:text>
+    <xsl:text>&#x0a;\end{alltt}}&#x0a;</xsl:text>
   </xsl:template>
 
   <xsl:template match="programlisting">
@@ -562,6 +650,13 @@
   <xsl:template match="itemizedlist">
     <xsl:call-template name="xsltprocNewlineOutputHack"/>
     <xsl:text>&#x0a;\begin{itemize}&#x0a;</xsl:text>
+    <xsl:if test="@spacing = 'compact'">
+      <xsl:text> \setlength{\parskip}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\itemsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\topsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\parsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\partopsep}{0pt}&#x0a;</xsl:text>
+    </xsl:if>
     <xsl:apply-templates />
     <xsl:text>&#x0a;\end{itemize}&#x0a;</xsl:text>
   </xsl:template>
@@ -569,6 +664,13 @@
   <xsl:template match="orderedlist">
     <xsl:call-template name="xsltprocNewlineOutputHack"/>
     <xsl:text>&#x0a;\begin{enumerate}&#x0a;</xsl:text>
+    <xsl:if test="@spacing = 'compact'">
+      <xsl:text> \setlength{\parskip}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\itemsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\topsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\parsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\partopsep}{0pt}&#x0a;</xsl:text>
+    </xsl:if>
     <xsl:apply-templates />
     <xsl:text>&#x0a;\end{enumerate}&#x0a;</xsl:text>
   </xsl:template>
@@ -576,17 +678,28 @@
   <xsl:template match="variablelist">
     <xsl:call-template name="xsltprocNewlineOutputHack"/>
     <xsl:text>&#x0a;\begin{description}&#x0a;</xsl:text>
+    <xsl:if test="@spacing = 'compact'">
+      <xsl:text> \setlength{\parskip}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\itemsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\topsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\parsep}{0pt}&#x0a;</xsl:text>
+      <xsl:text> \setlength{\partopsep}{0pt}&#x0a;</xsl:text>
+    </xsl:if>
     <xsl:apply-templates />
     <xsl:text>&#x0a;\end{description}&#x0a;</xsl:text>
   </xsl:template>
 
   <xsl:template match="varlistentry">
-    <xsl:if test="not(./term) or not(./listitem) or count(*) != 2">
-      <xsl:message terminate="yes">Expected exactly one term and one listitem element in the varlistentry.</xsl:message>
+    <xsl:if test="not(./term) or not(./listitem) or count(./listitem) != 1">
+      <xsl:message terminate="yes">Expected at least one term and one listitem element in the varlistentry.</xsl:message>
     </xsl:if>
-    <xsl:text>&#x0a;&#x0a;\item[</xsl:text>
-    <xsl:apply-templates select="term"/>
-    <xsl:text>] \hfill \\&#x0a;</xsl:text>
+    <xsl:text>&#x0a;&#x0a;\item[{\parbox[t]{\linewidth}{\raggedright </xsl:text>
+    <xsl:apply-templates select="./term[1]"/>
+    <xsl:for-each select="./term[position() > 1]">
+      <xsl:text>\\&#x0a; </xsl:text>
+      <xsl:apply-templates select="."/>
+    </xsl:for-each>
+    <xsl:text>}}]\hfill\\</xsl:text>
     <xsl:apply-templates select="listitem/*"/>
   </xsl:template>
 
@@ -638,7 +751,39 @@
     <xsl:text>}</xsl:text>
   </xsl:template>
 
-  <xsl:template match="ulink">
+  <xsl:template match="literal | filename">
+    <xsl:text>\texttt{</xsl:text>
+    <xsl:apply-templates />
+    <xsl:text>}</xsl:text>
+  </xsl:template>
+
+  <xsl:template match="citetitle">
+    <xsl:text>\textit{</xsl:text>
+    <xsl:apply-templates />
+    <xsl:text>}</xsl:text>
+  </xsl:template>
+
+  <xsl:template match="lineannotation">
+    <xsl:text>\textit{</xsl:text>
+    <xsl:apply-templates />
+    <xsl:text>}</xsl:text>
+  </xsl:template>
+
+  <xsl:template match="ulink[@url!='' and not(text())]">
+    <xsl:text>\url{</xsl:text>
+    <xsl:value-of select="@url"/>
+    <xsl:text>}</xsl:text>
+  </xsl:template>
+
+  <xsl:template match="ulink[@url!='' and text()]">
+    <xsl:text>\href{</xsl:text>
+    <xsl:value-of select="@url"/>
+    <xsl:text>}{</xsl:text>
+    <xsl:apply-templates />
+    <xsl:text>}</xsl:text>
+  </xsl:template>
+
+  <xsl:template match="ulink[(@url='' or not(@url)) and text()]">
     <xsl:text>\url{</xsl:text>
     <xsl:apply-templates />
     <xsl:text>}</xsl:text>
@@ -671,6 +816,11 @@
     </xsl:choose>
   </xsl:template>
 
+  <xsl:template match="trademark">
+    <xsl:apply-templates />
+    <xsl:text>\textsuperscript{\textregistered}</xsl:text>
+  </xsl:template>
+
   <!-- for some reason, DocBook insists of having image data nested this way always:
        mediaobject -> imageobject -> imagedata
        but only imagedata is interesting  -->
@@ -692,11 +842,7 @@
     <xsl:if test="name(*[1]) != 'cmdsynopsis'"><xsl:message terminate="yes">Expected refsynopsisdiv to start with cmdsynopsis</xsl:message></xsl:if>
     <xsl:if test="title"><xsl:message terminate="yes">No title element supported in refsynopsisdiv</xsl:message></xsl:if>
     <xsl:call-template name="xsltprocNewlineOutputHack"/>
-    <xsl:text>&#x0a;\subsection*{Synopsis}</xsl:text>
-    <xsl:if test="name(*[1]) != 'cmdsynopsis'"> <!-- just in case -->
-      <xsl:text>\hfill \\&#x0a;</xsl:text>
-    </xsl:if>
-    <xsl:text>&#x0a;</xsl:text>
+    <xsl:text>&#x0a;\subsection*{Synopsis}&#x0a;</xsl:text>
     <xsl:apply-templates />
   </xsl:template>
 
@@ -747,7 +893,7 @@
     <xsl:if test="not(ancestor::cmdsynopsis)">
       <xsl:message terminate="yes">sbr only supported inside cmdsynopsis (because of hangindent)</xsl:message>
     </xsl:if>
-    <xsl:text>\linebreak</xsl:text>
+    <xsl:text>\newline</xsl:text>
   </xsl:template>
 
   <xsl:template match="refentry|refnamediv|refentryinfo|refmeta|refsect3|refsect4|refsect5|synopfragment|synopfragmentref|cmdsynopsis/info">
@@ -756,9 +902,10 @@
 
   <xsl:template match="cmdsynopsis">
     <xsl:if test="preceding-sibling::cmdsynopsis">
-      <xsl:text>\par%cmdsynopsis</xsl:text>
+      <xsl:text>%cmdsynopsis</xsl:text>
     </xsl:if>
     <xsl:text>&#x0a;</xsl:text>
+    <xsl:text>\begin{flushleft}</xsl:text>
     <xsl:if test="parent::remark[@role='VBoxManage-overview']">
       <!-- Overview fontsize trick -->
       <xsl:text>{\footnotesize</xsl:text>
@@ -776,14 +923,15 @@
     </xsl:if>
     <!-- Special overview trick for the current VBoxManage command overview. -->
     <xsl:if test="parent::remark[@role='VBoxManage-overview']">
-      <xsl:text>}\vspace{1em}</xsl:text>
+      <xsl:text>\par}</xsl:text>
     </xsl:if>
+    <xsl:text>\end{flushleft}</xsl:text>
   </xsl:template>
 
   <xsl:template match="command">
     <xsl:choose>
       <xsl:when test="ancestor::cmdsynopsis">
-        <!-- Trigger a line break if this isn't the first command in a the synopsis -->
+        <!-- Trigger a line break if this isn't the first command in a synopsis -->
         <xsl:if test="preceding-sibling::command">
           <xsl:text>}\par%command&#x0a;</xsl:text>
           <xsl:text>\noindent\hspace{1em}</xsl:text>
@@ -812,45 +960,57 @@
     </xsl:choose>
   </xsl:template>
 
-  <!-- duplicated in docbook2latex.xsl -->
+  <!-- duplicated in docbook-refentry-to-C-help.xsl -->
   <xsl:template match="arg|group">
     <!-- separator char if we're not the first child -->
     <xsl:if test="position() > 1">
       <xsl:choose>
-        <xsl:when test="parent::group"><xsl:value-of select="$arg.or.sep"/></xsl:when>
+        <xsl:when test="parent::group"><xsl:text>\textrm{</xsl:text><xsl:value-of select="$arg.or.sep.tex"/><xsl:text>}</xsl:text></xsl:when>
         <xsl:when test="ancestor-or-self::*/@sepchar"><xsl:value-of select="ancestor-or-self::*/@sepchar"/></xsl:when>
         <xsl:otherwise><xsl:text> </xsl:text></xsl:otherwise>
       </xsl:choose>
     </xsl:if>
+
     <!-- open wrapping -->
     <xsl:choose>
-      <xsl:when test="not(@choice) or @choice = ''">  <xsl:value-of select="$arg.choice.def.open.str"/></xsl:when>
-      <xsl:when test="@choice = 'opt'">               <xsl:value-of select="$arg.choice.opt.open.str"/></xsl:when>
-      <xsl:when test="@choice = 'req'">               <xsl:value-of select="$arg.choice.req.open.str"/></xsl:when>
+      <xsl:when test="not(@choice) or @choice = ''">  <xsl:text>\textrm{</xsl:text><xsl:value-of select="$arg.choice.def.open.str"/><xsl:text>}</xsl:text></xsl:when>
+      <xsl:when test="@choice = 'opt'">               <xsl:text>\textrm{</xsl:text><xsl:value-of select="$arg.choice.opt.open.str"/><xsl:text>}</xsl:text></xsl:when>
+      <xsl:when test="@choice = 'req'">               <xsl:text>\textrm{</xsl:text><xsl:value-of select="$arg.choice.req.open.str"/><xsl:text>}</xsl:text></xsl:when>
       <xsl:when test="@choice = 'plain'"/>
-      <xsl:otherwise><xsl:message terminate="yes">Invalid arg choice: "<xsl:value-of select="@choice"/>"</xsl:message></xsl:otherwise>
+      <xsl:otherwise><xsl:message terminate="yes"><xsl:call-template name="error-prefix"/>Invalid arg choice: "<xsl:value-of select="@choice"/>"</xsl:message></xsl:otherwise>
     </xsl:choose>
 
-    <!-- render the arg (TODO: may need to do more work here) -->
     <xsl:apply-templates />
 
-    <!-- repeat wrapping -->
+    <!-- repeat indication -->
     <xsl:choose>
       <xsl:when test="@rep = 'norepeat' or not(@rep) or @rep = ''"/>
-      <xsl:when test="@rep = 'repeat'">               <xsl:value-of select="$arg.rep.repeat.str"/></xsl:when>
-      <xsl:otherwise><xsl:message terminate="yes">Invalid rep choice: "<xsl:value-of select="@rep"/>"</xsl:message></xsl:otherwise>
+      <xsl:when test="@rep = 'repeat'">
+        <!-- add space padding if we're in a repeating group -->
+        <xsl:if test="self::group">
+          <xsl:text> </xsl:text>
+        </xsl:if>
+        <xsl:text>\textrm{</xsl:text><xsl:value-of select="$arg.rep.repeat.str.tex"/><xsl:text>}</xsl:text>
+      </xsl:when>
+      <xsl:otherwise><xsl:message terminate="yes"><xsl:call-template name="error-prefix"/>Invalid rep choice: "<xsl:value-of select="@rep"/>"</xsl:message></xsl:otherwise>
     </xsl:choose>
+
     <!-- close wrapping -->
     <xsl:choose>
-      <xsl:when test="not(@choice) or @choice = ''">  <xsl:value-of select="$arg.choice.def.close.str"/></xsl:when>
-      <xsl:when test="@choice = 'opt'">               <xsl:value-of select="$arg.choice.opt.close.str"/></xsl:when>
-      <xsl:when test="@choice = 'req'">               <xsl:value-of select="$arg.choice.req.close.str"/></xsl:when>
+      <xsl:when test="not(@choice) or @choice = ''">  <xsl:text>\textrm{</xsl:text><xsl:value-of select="$arg.choice.def.close.str"/><xsl:text>}</xsl:text></xsl:when>
+      <xsl:when test="@choice = 'opt'">               <xsl:text>\textrm{</xsl:text><xsl:value-of select="$arg.choice.opt.close.str"/><xsl:text>}</xsl:text></xsl:when>
+      <xsl:when test="@choice = 'req'">               <xsl:text>\textrm{</xsl:text><xsl:value-of select="$arg.choice.req.close.str"/><xsl:text>}</xsl:text></xsl:when>
     </xsl:choose>
+
+    <!-- add space padding if we're the last element in a nested arg -->
+    <xsl:if test="parent::arg and not(following-sibling)">
+      <xsl:text> </xsl:text>
+    </xsl:if>
   </xsl:template>
 
   <xsl:template match="replaceable">
     <xsl:choose>
-      <xsl:when test="not(ancestor::cmdsynopsis) or ancestor::arg">
+      <xsl:when test="(not(ancestor::cmdsynopsis) and not(ancestor::option) and not(ancestor::screen)) or ancestor::arg">
         <xsl:text>\texttt{\textit{</xsl:text>
         <xsl:apply-templates />
         <xsl:text>}}</xsl:text>
@@ -869,20 +1029,42 @@
     -->
   <xsl:template match="//text()">
 
+    <!-- Do the translation of \ into \textbackslash{} in two steps, to avoid
+         running into replacing {} as well which would be very wrong. -->
     <xsl:variable name="subst1">
       <xsl:call-template name="str:subst">
         <xsl:with-param name="text" select="." />
         <xsl:with-param name="replace" select="'\'" />
+        <xsl:with-param name="with" select="'\textbackslash'" />
+        <xsl:with-param name="disable-output-escaping" select="no" />
+      </xsl:call-template>
+    </xsl:variable>
+    <xsl:variable name="subst2">
+      <xsl:call-template name="str:subst">
+        <xsl:with-param name="text" select="$subst1" />
+        <xsl:with-param name="replace" select="'{'" />
+        <xsl:with-param name="with" select="'\{'" />
+        <xsl:with-param name="disable-output-escaping" select="no" />
+      </xsl:call-template>
+    </xsl:variable>
+    <xsl:variable name="subst3">
+      <xsl:call-template name="str:subst">
+        <xsl:with-param name="text" select="$subst2" />
+        <xsl:with-param name="replace" select="'}'" />
+        <xsl:with-param name="with" select="'\}'" />
+        <xsl:with-param name="disable-output-escaping" select="no" />
+      </xsl:call-template>
+    </xsl:variable>
+    <xsl:variable name="subst4">
+      <xsl:call-template name="str:subst">
+        <xsl:with-param name="text" select="$subst3" />
+        <xsl:with-param name="replace" select="'\textbackslash'" />
         <xsl:with-param name="with" select="'\textbackslash{}'" />
         <xsl:with-param name="disable-output-escaping" select="no" />
       </xsl:call-template>
     </xsl:variable>
 
     <xsl:choose>
-      <xsl:when test="(name(..)='screen') or (name(../..)='screen')">
-        <xsl:value-of select="." />
-      </xsl:when>
-
       <xsl:when test="(name(..) = 'computeroutput') or (name(../..) = 'computeroutput')
                    or (name(..) = 'code')           or (name(../..) = 'code')
                    or (name(..) = 'arg')            or (name(../..) = 'arg')
@@ -890,58 +1072,59 @@
                    or (name(..) = 'command')        or (name(../..) = 'command')
                    or (name(..) = 'cmdsynopsis')    or (name(../..) = 'cmdsynopsis')
                    or (name(..) = 'replaceable')    or (name(../..) = 'replaceable')
+                   or (name(..) = 'entry')          or (name(../..) = 'entry')
                      ">
-        <xsl:variable name="subst2">
-          <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst1" />
-            <xsl:with-param name="replace" select="'--'" />
-            <xsl:with-param name="with" select="'-{}-'" />
-            <xsl:with-param name="disable-output-escaping" select="no" />
-          </xsl:call-template>
-        </xsl:variable>
-        <xsl:variable name="subst3">
-          <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst2" />
-            <xsl:with-param name="replace" select="'_'" />
-            <xsl:with-param name="with" select="'\_'" />
-            <xsl:with-param name="disable-output-escaping" select="no" />
-          </xsl:call-template>
-        </xsl:variable>
-        <xsl:variable name="subst4">
-          <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst3" />
-            <xsl:with-param name="replace" select="'$'" />
-            <xsl:with-param name="with" select="'\$'" />
-            <xsl:with-param name="disable-output-escaping" select="no" />
-          </xsl:call-template>
-        </xsl:variable>
         <xsl:variable name="subst5">
           <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst4" />
-            <xsl:with-param name="replace" select="'%'" />
-            <xsl:with-param name="with" select="'\%'" />
+            <xsl:with-param name="text" select="translate(normalize-space(concat('&#x7f;',$subst4,'&#x7f;')),'&#x7f;','')" />
+            <xsl:with-param name="replace" select="'--'" />
+            <xsl:with-param name="with" select="'-{}-'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
           </xsl:call-template>
         </xsl:variable>
         <xsl:variable name="subst6">
           <xsl:call-template name="str:subst">
             <xsl:with-param name="text" select="$subst5" />
-            <xsl:with-param name="replace" select="'#'" />
-            <xsl:with-param name="with" select="'\#'" />
+            <xsl:with-param name="replace" select="'_'" />
+            <xsl:with-param name="with" select="'\_'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
           </xsl:call-template>
         </xsl:variable>
         <xsl:variable name="subst7">
           <xsl:call-template name="str:subst">
             <xsl:with-param name="text" select="$subst6" />
-            <xsl:with-param name="replace" select="'~'" />
-            <xsl:with-param name="with" select="'\textasciitilde '" />
+            <xsl:with-param name="replace" select="'$'" />
+            <xsl:with-param name="with" select="'\$'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
           </xsl:call-template>
         </xsl:variable>
         <xsl:variable name="subst8">
           <xsl:call-template name="str:subst">
             <xsl:with-param name="text" select="$subst7" />
+            <xsl:with-param name="replace" select="'%'" />
+            <xsl:with-param name="with" select="'\%'" />
+            <xsl:with-param name="disable-output-escaping" select="no" />
+          </xsl:call-template>
+        </xsl:variable>
+        <xsl:variable name="subst9">
+          <xsl:call-template name="str:subst">
+            <xsl:with-param name="text" select="$subst8" />
+            <xsl:with-param name="replace" select="'#'" />
+            <xsl:with-param name="with" select="'\#'" />
+            <xsl:with-param name="disable-output-escaping" select="no" />
+          </xsl:call-template>
+        </xsl:variable>
+        <xsl:variable name="subst10">
+          <xsl:call-template name="str:subst">
+            <xsl:with-param name="text" select="$subst9" />
+            <xsl:with-param name="replace" select="'~'" />
+            <xsl:with-param name="with" select="'\textasciitilde{}'" />
+            <xsl:with-param name="disable-output-escaping" select="no" />
+          </xsl:call-template>
+        </xsl:variable>
+        <xsl:variable name="subst11">
+          <xsl:call-template name="str:subst">
+            <xsl:with-param name="text" select="$subst10" />
             <xsl:with-param name="replace" select="'&amp;'" />
             <xsl:with-param name="with" select="'\&amp;'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
@@ -949,78 +1132,79 @@
         </xsl:variable>
         <xsl:choose>
           <xsl:when test="parent::arg or parent::command">
-            <xsl:variable name="subst9">
+            <xsl:variable name="subst12">
               <xsl:call-template name="str:subst">
-                <xsl:with-param name="text" select="$subst8" />
+                <xsl:with-param name="text" select="$subst10" />
                 <xsl:with-param name="replace" select="' '" />
                 <xsl:with-param name="with" select="'~'" />
                 <xsl:with-param name="disable-output-escaping" select="no" />
               </xsl:call-template>
             </xsl:variable>
-            <xsl:value-of select="$subst9" />
+            <xsl:value-of select="$subst12" />
           </xsl:when>
           <xsl:otherwise>
-            <xsl:value-of select="$subst8" />
+            <xsl:value-of select="$subst11" />
           </xsl:otherwise>
         </xsl:choose>
       </xsl:when>
 
       <xsl:when test="(name(..)='address') or (name(../..)='address')">
-        <xsl:variable name="subst2">
+        <xsl:variable name="subst5">
           <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst1" />
+            <xsl:with-param name="text" select="$subst4" />
             <xsl:with-param name="replace" select="'&#x0a;'" />
             <xsl:with-param name="with" select="' \\'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
           </xsl:call-template>
         </xsl:variable>
-        <xsl:value-of select="$subst2" />
+        <xsl:value-of select="$subst5" />
       </xsl:when>
 
+      <!-- <screen> and <programlisting>, which work with alltt environment. -->
       <xsl:otherwise>
-        <xsl:variable name="subst2">
-          <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst1" />
-            <xsl:with-param name="replace" select="'_'" />
-            <xsl:with-param name="with" select="'\_'" />
-            <xsl:with-param name="disable-output-escaping" select="no" />
-          </xsl:call-template>
-        </xsl:variable>
-        <xsl:variable name="subst3">
-          <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst2" />
-            <xsl:with-param name="replace" select="'$'" />
-            <xsl:with-param name="with" select="'\$'" />
-            <xsl:with-param name="disable-output-escaping" select="no" />
-          </xsl:call-template>
-        </xsl:variable>
-        <xsl:variable name="subst4">
-          <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst3" />
-            <xsl:with-param name="replace" select="'%'" />
-            <xsl:with-param name="with" select="'\%'" />
-            <xsl:with-param name="disable-output-escaping" select="no" />
-          </xsl:call-template>
-        </xsl:variable>
         <xsl:variable name="subst5">
           <xsl:call-template name="str:subst">
             <xsl:with-param name="text" select="$subst4" />
-            <xsl:with-param name="replace" select="'#'" />
-            <xsl:with-param name="with" select="'\#'" />
+            <xsl:with-param name="replace" select="'_'" />
+            <xsl:with-param name="with" select="'\_'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
           </xsl:call-template>
         </xsl:variable>
         <xsl:variable name="subst6">
           <xsl:call-template name="str:subst">
             <xsl:with-param name="text" select="$subst5" />
-            <xsl:with-param name="replace" select="'µ'" />
-            <xsl:with-param name="with" select="'$\mu$'" />
+            <xsl:with-param name="replace" select="'$'" />
+            <xsl:with-param name="with" select="'\$'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
           </xsl:call-template>
         </xsl:variable>
         <xsl:variable name="subst7">
           <xsl:call-template name="str:subst">
             <xsl:with-param name="text" select="$subst6" />
+            <xsl:with-param name="replace" select="'%'" />
+            <xsl:with-param name="with" select="'\%'" />
+            <xsl:with-param name="disable-output-escaping" select="no" />
+          </xsl:call-template>
+        </xsl:variable>
+        <xsl:variable name="subst8">
+          <xsl:call-template name="str:subst">
+            <xsl:with-param name="text" select="$subst7" />
+            <xsl:with-param name="replace" select="'#'" />
+            <xsl:with-param name="with" select="'\#'" />
+            <xsl:with-param name="disable-output-escaping" select="no" />
+          </xsl:call-template>
+        </xsl:variable>
+        <xsl:variable name="subst9">
+          <xsl:call-template name="str:subst">
+            <xsl:with-param name="text" select="$subst8" />
+            <xsl:with-param name="replace" select="'µ'" />
+            <xsl:with-param name="with" select="'$\mu$'" />
+            <xsl:with-param name="disable-output-escaping" select="no" />
+          </xsl:call-template>
+        </xsl:variable>
+        <xsl:variable name="subst10">
+          <xsl:call-template name="str:subst">
+            <xsl:with-param name="text" select="$subst9" />
             <xsl:with-param name="replace" select="'®'" />
             <xsl:with-param name="with" select="'\texorpdfstring{\textregistered}{}'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
@@ -1031,31 +1215,40 @@
              sections with "\QUOTE{}" strings, which the makefile will then replace
              with pretty quotes by invoking sed a few times. Unfortunately there are
              no regular expressions in XSLT so there's no other way. -->
-        <xsl:variable name="subst8">
-          <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst7" />
-            <xsl:with-param name="replace" select="$quote" />
-            <xsl:with-param name="with" select="'\QUOTE{}'" />
-            <xsl:with-param name="disable-output-escaping" select="no" />
-          </xsl:call-template>
+        <xsl:variable name="subst11">
+          <xsl:choose>
+            <xsl:when test="(name(..)='screen') or (name(../..)='screen')
+                         or (name(..)='programlisting') or (name(../..)='programlisting')
+                           ">
+              <xsl:value-of select="$subst10" />
+            </xsl:when>
+            <xsl:otherwise>
+              <xsl:call-template name="str:subst">
+                <xsl:with-param name="text" select="$subst10" />
+                <xsl:with-param name="replace" select="$quote" />
+                <xsl:with-param name="with" select="'\QUOTE{}'" />
+                <xsl:with-param name="disable-output-escaping" select="no" />
+              </xsl:call-template>
+            </xsl:otherwise>
+          </xsl:choose>
         </xsl:variable>
-        <xsl:variable name="subst9">
+        <xsl:variable name="subst12">
           <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst8" />
+            <xsl:with-param name="text" select="$subst11" />
             <xsl:with-param name="replace" select="'~'" />
-            <xsl:with-param name="with" select="'\textasciitilde '" />
+            <xsl:with-param name="with" select="'\textasciitilde{}'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
           </xsl:call-template>
         </xsl:variable>
-        <xsl:variable name="subst10">
+        <xsl:variable name="subst13">
           <xsl:call-template name="str:subst">
-            <xsl:with-param name="text" select="$subst9" />
+            <xsl:with-param name="text" select="$subst12" />
             <xsl:with-param name="replace" select="'&amp;'" />
             <xsl:with-param name="with" select="'\&amp;'" />
             <xsl:with-param name="disable-output-escaping" select="no" />
           </xsl:call-template>
         </xsl:variable>
-        <xsl:value-of select="$subst10" />
+        <xsl:value-of select="$subst13" />
       </xsl:otherwise>
     </xsl:choose>
   </xsl:template>

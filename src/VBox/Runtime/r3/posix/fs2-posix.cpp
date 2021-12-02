@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fs2-posix.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - File System Helpers, POSIX, Part 2.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -64,9 +64,9 @@ void rtFsConvertStatToObjInfo(PRTFSOBJINFO pObjInfo, const struct stat *pStat, c
     RTTimeSpecAddNano(RTTimeSpecSetSeconds(&pObjInfo->AccessTime,       pStat->st_atime),     pStat->st_atimensec);
     RTTimeSpecAddNano(RTTimeSpecSetSeconds(&pObjInfo->ModificationTime, pStat->st_mtime),     pStat->st_mtimensec);
     RTTimeSpecAddNano(RTTimeSpecSetSeconds(&pObjInfo->ChangeTime,       pStat->st_ctime),     pStat->st_ctimensec);
-#ifdef HAVE_STAT_BIRTHTIME
+# ifdef HAVE_STAT_BIRTHTIME
     RTTimeSpecAddNano(RTTimeSpecSetSeconds(&pObjInfo->BirthTime,        pStat->st_birthtime), pStat->st_birthtimensec);
-#endif
+# endif
 
 #elif defined(HAVE_STAT_TIMESPEC_BRIEF)
     RTTimeSpecSetTimespec(&pObjInfo->AccessTime,       &pStat->st_atim);
@@ -95,7 +95,6 @@ void rtFsConvertStatToObjInfo(PRTFSOBJINFO pObjInfo, const struct stat *pStat, c
 #ifndef HAVE_STAT_BIRTHTIME
     pObjInfo->BirthTime = pObjInfo->ChangeTime;
 #endif
-
 
     /* the file mode */
     RTFMODE fMode = pStat->st_mode & RTFS_UNIX_MASK;
@@ -132,7 +131,7 @@ void rtFsConvertStatToObjInfo(PRTFSOBJINFO pObjInfo, const struct stat *pStat, c
 #endif
     Assert(RTFS_TYPE_MASK == S_IFMT);
 
-    pObjInfo->Attr.fMode  = rtFsModeFromUnix(fMode, pszName, cbName);
+    pObjInfo->Attr.fMode  = rtFsModeFromUnix(fMode, pszName, cbName, 0);
 
     /* additional unix attribs */
     pObjInfo->Attr.enmAdditional          = RTFSOBJATTRADD_UNIX;

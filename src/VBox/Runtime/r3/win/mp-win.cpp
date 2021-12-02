@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: mp-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Multiprocessor, Windows.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -118,7 +118,7 @@ static uint32_t     g_cRtMpWinMaxCpuGroups;
 /** The number of active CPUs the last time we checked. */
 static uint32_t volatile g_cRtMpWinActiveCpus;
 /** Static per group info.
- * @remarks  With RTCPUSET_MAX_CPUS as 256, this takes up 33KB.
+ * @remarks  With 256 entries this takes up 33KB.
  * @sa g_aRtMpNtCpuGroups */
 static struct
 {
@@ -128,7 +128,7 @@ static struct
     uint16_t    cActiveCpus;
     /** CPU set indexes for each CPU in the group. */
     int16_t     aidxCpuSetMembers[64];
-}                   g_aRtMpWinCpuGroups[RTCPUSET_MAX_CPUS];
+}                   g_aRtMpWinCpuGroups[256];
 /** Maps CPU set indexes to RTCPUID.
  * @sa g_aidRtMpNtByCpuSetIdx  */
 RTCPUID             g_aidRtMpWinByCpuSetIdx[RTCPUSET_MAX_CPUS];
@@ -192,7 +192,7 @@ static DECLCALLBACK(int32_t) rtMpWinInitOnce(void *pvUser)
         SYSTEM_INFO                                 SysInfo;
         SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX     Info;
         uint8_t                                     abPaddingG[  sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)
-                                                               + sizeof(PROCESSOR_GROUP_INFO) * RTCPUSET_MAX_CPUS];
+                                                               + sizeof(PROCESSOR_GROUP_INFO) * 256];
         uint8_t                                     abPaddingC[  sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)
                                                                +   (sizeof(PROCESSOR_RELATIONSHIP) + sizeof(GROUP_AFFINITY))
                                                                  * RTCPUSET_MAX_CPUS];
@@ -418,16 +418,16 @@ static DECLCALLBACK(int32_t) rtMpWinInitOnceGip(void *pvUser)
             g_aidRtMpWinByCpuSetIdx[i] = NIL_RTCPUID;
 
         unsigned const cbGip = pGip->cPages * PAGE_SIZE;
-        for (uint32_t idxGroup = 0; idxGroup < g_cRtMpWinMaxCpus; idxGroup++)
+        for (uint32_t idxGroup = 0; idxGroup < g_cRtMpWinMaxCpuGroups; idxGroup++)
         {
             uint32_t idxMember;
-            unsigned offCpuGroup = pGip->aoffCpuGroup[idxGroup];
+            uint32_t offCpuGroup = pGip->aoffCpuGroup[idxGroup];
             if (offCpuGroup < cbGip)
             {
                 PSUPGIPCPUGROUP pGipCpuGrp  = (PSUPGIPCPUGROUP)((uintptr_t)pGip + offCpuGroup);
                 uint32_t        cMaxMembers = pGipCpuGrp->cMaxMembers;
-                AssertStmt(cMaxMembers < RT_ELEMENTS(g_aRtMpWinCpuGroups[0].aidxCpuSetMembers),
-                           cMaxMembers = RT_ELEMENTS(g_aRtMpWinCpuGroups[0].aidxCpuSetMembers));
+                AssertStmt(cMaxMembers <= RT_ELEMENTS(g_aRtMpWinCpuGroups[0].aidxCpuSetMembers),
+                           cMaxMembers  = RT_ELEMENTS(g_aRtMpWinCpuGroups[0].aidxCpuSetMembers));
                 g_aRtMpWinCpuGroups[idxGroup].cMaxCpus     = cMaxMembers;
                 g_aRtMpWinCpuGroups[idxGroup].cActiveCpus  = RT_MIN(pGipCpuGrp->cMembers, cMaxMembers);
 
@@ -477,15 +477,15 @@ static void rtMpWinRefreshGip(void)
             uint32_t const cMyActiveCpus  = ASMAtomicReadU32(&g_cRtMpWinActiveCpus);
             ASMCompilerBarrier();
 
-            for (uint32_t idxGroup = 0; idxGroup < g_cRtMpWinMaxCpus; idxGroup++)
+            for (uint32_t idxGroup = 0; idxGroup < g_cRtMpWinMaxCpuGroups; idxGroup++)
             {
-                unsigned offCpuGroup = pGip->aoffCpuGroup[idxGroup];
+                uint32_t offCpuGroup = pGip->aoffCpuGroup[idxGroup];
                 if (offCpuGroup < cbGip)
                 {
                     PSUPGIPCPUGROUP pGipCpuGrp  = (PSUPGIPCPUGROUP)((uintptr_t)pGip + offCpuGroup);
                     uint32_t        cMaxMembers = pGipCpuGrp->cMaxMembers;
-                    AssertStmt(cMaxMembers < RT_ELEMENTS(g_aRtMpWinCpuGroups[0].aidxCpuSetMembers),
-                               cMaxMembers = RT_ELEMENTS(g_aRtMpWinCpuGroups[0].aidxCpuSetMembers));
+                    AssertStmt(cMaxMembers <= RT_ELEMENTS(g_aRtMpWinCpuGroups[0].aidxCpuSetMembers),
+                               cMaxMembers  = RT_ELEMENTS(g_aRtMpWinCpuGroups[0].aidxCpuSetMembers));
                     for (uint32_t idxMember = g_aRtMpWinCpuGroups[idxGroup].cActiveCpus; idxMember < cMaxMembers; idxMember++)
                     {
                         int16_t idxSet = pGipCpuGrp->aiCpuSetIdxs[idxMember];

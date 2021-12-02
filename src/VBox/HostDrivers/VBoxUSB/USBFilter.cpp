@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBFilter.cpp 90804 2021-08-23 19:08:53Z vboxsync $ */
 /** @file
  * VirtualBox USB filter abstraction.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -298,7 +307,7 @@ static int usbfilterValidateStringPattern(const char *psz)
  */
 USBLIB_DECL(int) USBFilterValidate(PCUSBFILTER pFilter)
 {
-    if (!VALID_PTR(pFilter))
+    if (!RT_VALID_PTR(pFilter))
         return VERR_INVALID_POINTER;
 
     if (pFilter->u32Magic != USBFILTER_MAGIC)
@@ -315,6 +324,17 @@ USBLIB_DECL(int) USBFilterValidate(PCUSBFILTER pFilter)
     {
         Log(("USBFilter: %p - offCurEnd=%#x!\n", pFilter, pFilter->offCurEnd));
         return VERR_INVALID_PARAMETER;
+    }
+
+    /* Validate that string value offsets are inside the string table. */
+    for (uint32_t i = 0; i < RT_ELEMENTS(pFilter->aFields); i++)
+    {
+        if (    USBFilterIsMethodUsingStringValue((USBFILTERMATCH)pFilter->aFields[i].enmMatch)
+            &&  pFilter->aFields[i].u16Value > pFilter->offCurEnd)
+        {
+            Log(("USBFilter: %p - bad offset=%#x\n", pFilter, pFilter->aFields[i].u16Value));
+            return VERR_INVALID_PARAMETER;
+        }
     }
 
     /*
@@ -340,7 +360,7 @@ USBLIB_DECL(int) USBFilterValidate(PCUSBFILTER pFilter)
         uint16_t off = (uint16_t)(uintptr_t)(psz - &pFilter->achStrTab[0]);
         unsigned i;
         for (i = 0; i < RT_ELEMENTS(pFilter->aFields); i++)
-            if (    USBFilterIsMethodString((USBFILTERMATCH)pFilter->aFields[i].enmMatch)
+            if (    USBFilterIsMethodUsingStringValue((USBFILTERMATCH)pFilter->aFields[i].enmMatch)
                 &&  pFilter->aFields[i].u16Value == off)
                 break;
         if (i >= RT_ELEMENTS(pFilter->aFields))
@@ -1680,6 +1700,7 @@ USBLIB_DECL(bool) USBFilterIsNumericField(USBFILTERIDX enmFieldIdx)
 
         default:
             AssertMsgFailed(("%d\n", enmFieldIdx));
+            RT_FALL_THRU();
         case USBFILTERIDX_MANUFACTURER_STR:
         case USBFILTERIDX_PRODUCT_STR:
         case USBFILTERIDX_SERIAL_NUMBER_STR:
@@ -1700,6 +1721,7 @@ USBLIB_DECL(bool) USBFilterIsStringField(USBFILTERIDX enmFieldIdx)
     {
         default:
             AssertMsgFailed(("%d\n", enmFieldIdx));
+            RT_FALL_THRU();
         case USBFILTERIDX_VENDOR_ID:
         case USBFILTERIDX_PRODUCT_ID:
         case USBFILTERIDX_DEVICE:
@@ -1730,6 +1752,7 @@ USBLIB_DECL(bool) USBFilterIsMethodUsingNumericValue(USBFILTERMATCH enmMatchingM
     {
         default:
             AssertMsgFailed(("%d\n", enmMatchingMethod));
+            RT_FALL_THRU();
         case USBFILTERMATCH_IGNORE:
         case USBFILTERMATCH_PRESENT:
         case USBFILTERMATCH_NUM_EXPRESSION:
@@ -1759,6 +1782,7 @@ USBLIB_DECL(bool) USBFilterIsMethodUsingStringValue(USBFILTERMATCH enmMatchingMe
     {
         default:
             AssertMsgFailed(("%d\n", enmMatchingMethod));
+            RT_FALL_THRU();
         case USBFILTERMATCH_IGNORE:
         case USBFILTERMATCH_PRESENT:
         case USBFILTERMATCH_NUM_EXACT:
@@ -1777,7 +1801,7 @@ USBLIB_DECL(bool) USBFilterIsMethodUsingStringValue(USBFILTERMATCH enmMatchingMe
 
 
 /**
- * Checks if a matching method is for string fields or not.
+ * Checks if a matching method is for numeric fields or not.
  *
  * @returns true / false.
  * @param   enmMatchingMethod   The matching method.

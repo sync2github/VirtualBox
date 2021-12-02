@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: circbuf.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Lock Free Circular Buffer
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include <iprt/mem.h>
 #include <iprt/assert.h>
 #include <iprt/asm.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 
 /*********************************************************************************************************************************
@@ -145,6 +145,22 @@ RTDECL(bool) RTCircBufIsWriting(PRTCIRCBUF pBuf)
     AssertPtrReturn(pBuf, 0);
 
     return ASMAtomicReadBool(&pBuf->fWriting);
+}
+
+RTDECL(size_t) RTCircBufOffsetRead(PRTCIRCBUF pBuf)
+{
+    /* Validate input. */
+    AssertPtrReturn(pBuf, 0);
+
+    return ASMAtomicReadZ(&pBuf->offRead);
+}
+
+RTDECL(size_t) RTCircBufOffsetWrite(PRTCIRCBUF pBuf)
+{
+    /* Validate input. */
+    AssertPtrReturn(pBuf, 0);
+
+    return ASMAtomicReadZ(&pBuf->offWrite);
 }
 
 RTDECL(void) RTCircBufAcquireReadBlock(PRTCIRCBUF pBuf, size_t cbReqSize, void **ppvStart, size_t *pcbSize)

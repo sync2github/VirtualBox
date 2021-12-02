@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: NetIf-solaris.cpp 88297 2021-03-26 12:29:59Z vboxsync $ */
 /** @file
  * Main - NetIfList, Solaris implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,22 +20,22 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#define LOG_GROUP LOG_GROUP_MAIN
+#define LOG_GROUP LOG_GROUP_MAIN_HOST
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/ctype.h>
 #include <iprt/mem.h>
 #include <iprt/path.h>
 #include <list>
 
-#include "Logging.h"
+#include "LoggingNew.h"
 #include "HostNetworkInterfaceImpl.h"
 #include "netif.h"
 
 #ifdef VBOX_WITH_HOSTNETIF_API
 
 #include <map>
-#include <string>
+#include <iprt/sanitized/string>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stropts.h>
@@ -62,9 +62,9 @@ static uint32_t getInstance(const char *pszIfaceName, char *pszDevName)
      * Get the instance number from the interface name, then clip it off.
      */
     int cbInstance = 0;
-    int cbIface = strlen(pszIfaceName);
+    size_t cbIface = strlen(pszIfaceName);
     const char *pszEnd = pszIfaceName + cbIface - 1;
-    for (int i = 0; i < cbIface - 1; i++)
+    for (size_t i = 0; i < cbIface - 1; i++)
     {
         if (!RT_C_IS_DIGIT(*pszEnd))
             break;
@@ -297,7 +297,7 @@ static void vboxSolarisAddHostIface(char *pszIface, int Instance, void *pvHostNe
     queryIfaceSpeed(&Info);
     ComObjPtr<HostNetworkInterface> IfObj;
     IfObj.createObject();
-    if (SUCCEEDED(IfObj->init(Bstr(szNICDesc), enmType, &Info)))
+    if (SUCCEEDED(IfObj->init(szNICDesc, enmType, &Info)))
         pList->push_back(IfObj);
 }
 
@@ -332,9 +332,9 @@ static boolean_t vboxSolarisAddLinkHostIface(const char *pszIface, void *pvHostN
      * Get the instance number from the interface name, then clip it off.
      */
     int cbInstance = 0;
-    int cbIface = strlen(szIfaceName);
+    size_t cbIface = strlen(szIfaceName);
     const char *pszEnd = pszIface + cbIface - 1;
-    for (int i = 0; i < cbIface - 1; i++)
+    for (size_t i = 0; i < cbIface - 1; i++)
     {
         if (!RT_C_IS_DIGIT(*pszEnd))
             break;

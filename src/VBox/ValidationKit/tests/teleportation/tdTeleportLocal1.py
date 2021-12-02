@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: tdTeleportLocal1.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 VirtualBox Validation Kit - Local teleportation testdriver.
@@ -8,7 +8,7 @@ VirtualBox Validation Kit - Local teleportation testdriver.
 
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,7 +27,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard Python imports.
@@ -114,7 +114,7 @@ class tdTeleportLocal1(vbox.TestDriver):
         elif asArgs[iArg] == '--test-vms':
             iArg += 1;
             if iArg >= len(asArgs): raise base.InvalidOption('The "--test-vms" takes colon separated list');
-            if len(asArgs[iArg]) > 0:
+            if asArgs[iArg]:
                 self.asTestVMs = asArgs[iArg].split(':');
                 for s in self.asTestVMs:
                     if s not in self.asTestVMsDef:
@@ -389,7 +389,6 @@ class tdTeleportLocal1(vbox.TestDriver):
                             self.terminateVmBySession(oSessionSrc, oProgressSrc);
 
                             # Return with the source and destination swapped.
-                            self.addTask(oSessionDst);
                             return oVmDst, oSessionDst, oVmSrc;
 
                         # Failure / bail out.
@@ -440,8 +439,6 @@ class tdTeleportLocal1(vbox.TestDriver):
             # Start the source VM.
             oSessionSrc = self.startVm(oVmSrc);
             if oSessionSrc is not None:
-                self.addTask(oSessionSrc);
-
                 # Simple back and forth to test the ice...
                 cTeleportations = 0;
                 oVmSrc, oSessionSrc, oVmDst = self.test2Teleport(oVmSrc, oSessionSrc, oVmDst);
@@ -766,7 +763,7 @@ class tdTeleportLocal1(vbox.TestDriver):
 
         try:
             oSession.o.machine.teleporterPort = uPort;
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             if not fInvalid or vbox.ComError.notEqual(oXcpt, vbox.ComError.E_INVALIDARG):
                 return reporter.testFailureXcpt('machine.teleporterPort=%u' % (uPort,));
         else:
@@ -877,14 +874,14 @@ class tdTeleportLocal1(vbox.TestDriver):
         fRc = False;
         try:
             oProgress = oSession.o.console.teleport(sHostname, uPort, sPassword, cMsMaxDowntime);
-        except vbox.ComException, oXcpt:
+        except vbox.ComException as oXcpt:
             if vbox.ComError.equal(oXcpt, hrcExpected):
                 fRc = True;
             else:
                 reporter.testFailure('hresult %s, expected %s' \
                                      % (vbox.ComError.toString(oXcpt.hresult),
                                         vbox.ComError.toString(hrcExpected)));
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             reporter.testFailure('Unexpected exception %s' % (oXcpt));
         else:
             reporter.testFailure('Unpexected success');

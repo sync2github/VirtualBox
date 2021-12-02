@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_usblib_win_h
-#define ___VBox_usblib_win_h
+#ifndef VBOX_INCLUDED_usblib_win_h
+#define VBOX_INCLUDED_usblib_win_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -75,13 +78,10 @@ DEFINE_GUID(GUID_CLASS_VBOXUSB, 0x873fdf, 0xCAFE, 0x80EE, 0xaa, 0x5e, 0x0, 0xc0,
 # define FILE_DEVICE_UNKNOWN    0x00000022
 #endif
 
-#define USBFLT_MAJOR_VERSION              1
-#define USBFLT_MINOR_VERSION              3
-
 #define USBMON_MAJOR_VERSION              5
 #define USBMON_MINOR_VERSION              0
 
-#define USBDRV_MAJOR_VERSION              4
+#define USBDRV_MAJOR_VERSION              5
 #define USBDRV_MINOR_VERSION              0
 
 #define SUPUSB_IOCTL_TEST                 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x601, METHOD_BUFFERED, FILE_WRITE_ACCESS)
@@ -108,7 +108,7 @@ DEFINE_GUID(GUID_CLASS_VBOXUSB, 0x873fdf, 0xCAFE, 0x80EE, 0xaa, 0x5e, 0x0, 0xc0,
 #define SUPUSBFLT_IOCTL_CAPTURE_DEVICE    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x613, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 #define SUPUSBFLT_IOCTL_RELEASE_DEVICE    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x614, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 #define SUPUSBFLT_IOCTL_RUN_FILTERS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x615, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define SUPUSBFLT_IOCTL_SET_NOTIFY_EVENT  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x616, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+/* Used to be SUPUSBFLT_IOCTL_SET_NOTIFY_EVENT, 0x616 */
 #define SUPUSBFLT_IOCTL_GET_DEVICE        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x617, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 #pragma pack(4)
@@ -123,8 +123,6 @@ typedef void* HVBOXUSBDEVUSR;
 typedef struct
 {
     HVBOXUSBDEVUSR  hDevice;
-    uint8_t         fAttached;
-    uint8_t         fHiSpeed;
 } USBSUP_GETDEV, *PUSBSUP_GETDEV;
 
 typedef struct
@@ -264,21 +262,6 @@ typedef struct
     char            DrvKeyName[512];
 } USBSUP_DEVID, *PUSBSUP_DEVID;
 
-typedef struct
-{
-    USBSUP_DEVID    DevId;
-    char            szName[512];
-    USBDEVICESTATE  enmState;
-    bool            fHiSpeed;
-} USBSUP_DEVINFO, *PUSBSUP_DEVINFO;
-
-typedef struct
-{
-    int             rc;
-    uint32_t        cDevices;
-    USBSUP_DEVINFO  aDevices[1];
-} USBSUP_GET_DEVICES, *PUSBSUP_GET_DEVICES;
-
 #pragma pack()                          /* paranoia */
 
 
@@ -301,9 +284,9 @@ USBLIB_DECL(int) USBLibGetDevices(PUSBDEVICE *ppDevices, uint32_t *pcbNumDevices
 
 USBLIB_DECL(int) USBLibWaitChange(RTMSINTERVAL cMillies);
 
-USBLIB_DECL(int) USBLibInterruptWaitChange();
+USBLIB_DECL(int) USBLibInterruptWaitChange(void);
 
-USBLIB_DECL(int) USBLibRunFilters();
+USBLIB_DECL(int) USBLibRunFilters(void);
 
 /** @} */
 #endif
@@ -312,5 +295,5 @@ USBLIB_DECL(int) USBLibRunFilters();
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_usblib_win_h */
 

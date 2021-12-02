@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDebugLib.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxDebugLib.c - Debug logging and assertions support routines using DevEFI.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,10 +24,12 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <Base.h>
+#include <Library/BaseLib.h>
 #include <Library/PrintLib.h>
 #include <Library/DebugLib.h>
 
@@ -37,10 +39,7 @@
 #include <Uefi/UefiSpec.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include "DevEFI.h"
-
-#if 0
-static EFI_DEVICE_PATH_TO_TEXT_PROTOCOL *g_DevPath2Txt;
-#endif
+#include "iprt/asm.h"
 
 
 VOID EFIAPI
@@ -49,7 +48,7 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
     CHAR8       szBuf[256];
     VA_LIST     va;
     UINTN       cch;
-    RTCCUINTREG SavedFlags;
+    BOOLEAN     InterruptState;
 
     /* No pool noise, please. */
     if (ErrorLevel == DEBUG_POOL)
@@ -66,16 +65,16 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
         cch--;
     szBuf[cch] = '\0';
 
-    /* Output the log string. */
-    SavedFlags = ASMIntDisableFlags();
+    InterruptState = SaveAndDisableInterrupts();
 
+    /* Output the log string. */
     VBoxPrintString("dbg/");
     VBoxPrintHex(ErrorLevel, sizeof(ErrorLevel));
     VBoxPrintChar(' ');
     VBoxPrintString(szBuf);
     VBoxPrintChar('\n');
 
-    ASMSetFlags(SavedFlags);
+    SetInterruptState(InterruptState);
 }
 
 /**
@@ -90,7 +89,7 @@ VBoxLogWorker(const char *pszFormat, ...)
 {
     CHAR8       szBuf[384];
     VA_LIST     va;
-    RTCCUINTREG SavedFlags;
+    BOOLEAN     InterruptState;
 
     /* Format it. */
     VA_START(va, pszFormat);
@@ -98,13 +97,13 @@ VBoxLogWorker(const char *pszFormat, ...)
     VA_END(va);
     szBuf[sizeof(szBuf) - 1] = '\0';
 
-    /* Output the log string. */
-    SavedFlags = ASMIntDisableFlags();
+    InterruptState = SaveAndDisableInterrupts();
 
+    /* Output the log string. */
     VBoxPrintString(szBuf);
     VBoxPrintChar('\n');
 
-    ASMSetFlags(SavedFlags);
+    SetInterruptState(InterruptState);
 }
 
 /**
@@ -156,7 +155,7 @@ VBoxPanicMsgDecimalU32(uint32_t uValue)
 VOID EFIAPI
 DebugAssert(IN CONST CHAR8 *FileName, IN UINTN LineNumber, IN CONST CHAR8 *Description)
 {
-    RTCCUINTREG SavedFlags = ASMIntDisableFlags();
+    BOOLEAN InterruptState = SaveAndDisableInterrupts();
 
     ASMOutU8(EFI_PANIC_PORT, EFI_PANIC_CMD_START_MSG);
     VBoxPanicMsgString("EFI Assertion failed!"
@@ -164,76 +163,11 @@ DebugAssert(IN CONST CHAR8 *FileName, IN UINTN LineNumber, IN CONST CHAR8 *Descr
     VBoxPanicMsgString(FileName ? FileName : "<NULL>");
     VBoxPanicMsgString("\nLine:  ");
     VBoxPanicMsgDecimalU32((uint32_t)LineNumber);
-    VBoxPanicMsgString("\nEDescription: ");
+    VBoxPanicMsgString("\nDescription: ");
     VBoxPanicMsgString(Description ? Description : "<NULL>");
     ASMOutU8(EFI_PANIC_PORT, EFI_PANIC_CMD_END_MSG);
 
-    ASMSetFlags(SavedFlags);
-}
-
-CHAR16 *VBoxDebugDevicePath2Str(IN EFI_DEVICE_PATH_PROTOCOL  *pDevicePath)
-{
-#if 0
-    EFI_STATUS rc;
-    if (!g_DevPath2Txt)
-    {
-        rc = gBS->LocateProtocol(&gEfiDevicePathToTextProtocolGuid, NULL, (VOID **)&g_DevPath2Txt);
-        if (EFI_ERROR(rc))
-        {
-            DEBUG((DEBUG_INFO, "gEfiDevicePathToTextProtocolGuid:%g isn't instantied\n", gEfiDevicePathToTextProtocolGuid));
-            return NULL;
-        }
-    }
-    return g_DevPath2Txt->ConvertDevicePathToText(pDevicePath, TRUE, FALSE);
-#else
-    return NULL;
-#endif
-}
-
-CHAR16 *VBoxDebugHandleDevicePath2Str(IN EFI_HANDLE hHandle)
-{
-#if 0
-    EFI_STATUS rc;
-    EFI_DEVICE_PATH_PROTOCOL *pDevicePath = NULL;
-    CHAR16 *psz16TxtDevicePath;
-    rc = gBS->OpenProtocol(hHandle,
-                           &gEfiDevicePathProtocolGuid,
-                           (VOID **)pDevicePath,
-                           NULL,
-                           hHandle,
-                           EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
-    if (EFI_ERROR(rc))
-    {
-        DEBUG((DEBUG_INFO, "%a:%d failed(%r) to open Device Path Protocol for Handle %p\n",
-                __FUNCTION__,
-                __LINE__,
-                rc,
-                hHandle));
-        return NULL;
-    }
-    psz16TxtDevicePath = VBoxDebugHandleDevicePath2Str(pDevicePath);
-    return psz16TxtDevicePath;
-#else
-    return NULL;
-#endif
-}
-CHAR16 *VBoxDebugPrintDevicePath(IN EFI_DEVICE_PATH_PROTOCOL  *pDevicePath)
-{
-#if 0
-    EFI_STATUS rc;
-    if (!g_DevPath2Txt)
-    {
-        rc = gBS->LocateProtocol(&gEfiDevicePathToTextProtocolGuid, NULL, (VOID **)&g_DevPath2Txt);
-        if (EFI_ERROR(rc))
-        {
-            DEBUG((DEBUG_INFO, "gEfiDevicePathToTextProtocolGuid:%g isn't instantied\n", gEfiDevicePathToTextProtocolGuid));
-            return NULL;
-        }
-    }
-    return g_DevPath2Txt->ConvertDevicePathToText(pDevicePath, TRUE, FALSE);
-#else
-    return NULL;
-#endif
+    SetInterruptState(InterruptState);
 }
 
 

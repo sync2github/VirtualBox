@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: HostPowerDarwin.cpp 85259 2020-07-11 23:58:17Z vboxsync $ */
 /** @file
- *
- * VirtualBox interface to host's power notification service
+ * VirtualBox interface to host's power notification service, darwin specifics.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +15,10 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_HOST
 #include "HostPower.h"
-#include "Logging.h"
+#include "LoggingNew.h"
+#include <iprt/errcore.h>
 
 #include <IOKit/IOMessage.h>
 #include <IOKit/ps/IOPowerSources.h>
@@ -199,28 +200,29 @@ void HostPowerServiceDarwin::checkBatteryCriticalLevel(bool *pfCriticalChanged)
                          CFStringCompare((CFStringRef)psValue, CFSTR(kIOPSBatteryPowerValue), 0) == kCFCompareEqualTo)
                     powerSource = POWER_SOURCE_BATTERY;
 
-                int curCapacity = 0;
-                int maxCapacity = 1;
-                float remCapacity = 0.0f;
 
                 /* Fetch the current capacity value of the power source */
+                int curCapacity = 0;
                 result = CFDictionaryGetValueIfPresent(pSource, CFSTR(kIOPSCurrentCapacityKey), &psValue);
                 if (result)
                     CFNumberGetValue((CFNumberRef)psValue, kCFNumberSInt32Type, &curCapacity);
+
                 /* Fetch the maximum capacity value of the power source */
+                int maxCapacity = 1;
                 result = CFDictionaryGetValueIfPresent(pSource, CFSTR(kIOPSMaxCapacityKey), &psValue);
                 if (result)
                     CFNumberGetValue((CFNumberRef)psValue, kCFNumberSInt32Type, &maxCapacity);
 
                 /* Calculate the remaining capacity in percent */
-                remCapacity = ((float)curCapacity/(float)maxCapacity * 100.0);
+                float remCapacity = ((float)curCapacity/(float)maxCapacity * 100.0f);
 
                 /* Check for critical. 5 percent is default. */
                 int criticalValue = 5;
                 result = CFDictionaryGetValueIfPresent(pSource, CFSTR(kIOPSDeadWarnLevelKey), &psValue);
                 if (result)
                     CFNumberGetValue((CFNumberRef)psValue, kCFNumberSInt32Type, &criticalValue);
-                critical = (remCapacity < criticalValue);
+                critical = remCapacity < criticalValue;
+
                 /* We have to take action only if we are on battery, the
                  * previous state wasn't critical, the state has changed & the
                  * user requested that info. */

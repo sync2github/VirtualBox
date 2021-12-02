@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxUtils-darwin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Utility Classes and Functions specific to Darwin.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,9 +29,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QContextMenuEvent>
-#if QT_VERSION >= 0x050000
-# include <QtMac>
-#endif /* QT_VERSION >= 0x050000 */
+#include <QtMac>
 
 #include <Carbon/Carbon.h>
 
@@ -179,11 +177,6 @@ bool darwinOpenFile(const QString& strFile)
     return ::darwinOpenFile(darwinToNativeString(strFile.toUtf8().constData()));
 }
 
-double darwinBackingScaleFactor(QWidget *pWidget)
-{
-    return ::darwinBackingScaleFactor(::darwinToNativeWindow(pWidget));
-}
-
 QString darwinSystemLanguage(void)
 {
     /* Get the locales supported by our bundle */
@@ -328,11 +321,7 @@ CGImageRef darwinToCGImageRef(const QPixmap *pPixmap)
                                               cs,
                                               kCGImageAlphaPremultipliedFirst);
     /* Get the CGImageRef from Qt */
-#if QT_VERSION < 0x050000
-    CGImageRef qtPixmap = pPixmap->toMacCGImageRef();
-#else /* QT_VERSION >= 0x050000 */
     CGImageRef qtPixmap = QtMac::toCGImageRef(*pPixmap);
-#endif /* QT_VERSION >= 0x050000 */
     /* Draw the image from Qt & convert the context back to a new CGImageRef. */
     CGContextDrawImage(ctx, CGRectMake(0, 0, pPixmap->width(), pPixmap->height()), qtPixmap);
     CGImageRef newImage = CGBitmapContextCreateImage(ctx);

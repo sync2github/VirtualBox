@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: testboxscript_real.py 84946 2020-06-25 10:25:18Z vboxsync $
 
 """
 TestBox Script - main().
@@ -8,7 +8,7 @@ TestBox Script - main().
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,14 +27,13 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 84946 $"
 
 
 # Standard python imports.
 import math
-import multiprocessing
 import os
-from optparse import OptionParser
+from optparse import OptionParser       # pylint: disable=deprecated-module
 import platform
 import random
 import shutil
@@ -59,10 +58,14 @@ from testboxcommand     import TestBoxCommand;
 from testboxconnection  import TestBoxConnection;
 from testboxscript      import TBS_EXITCODE_SYNTAX, TBS_EXITCODE_FAILURE;
 
+# Python 3 hacks:
+if sys.version_info[0] >= 3:
+    long = int;     # pylint: disable=redefined-builtin,invalid-name
+
 
 class TestBoxScriptException(Exception):
     """ For raising exceptions during TestBoxScript.__init__. """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class TestBoxScript(object):
@@ -91,7 +94,7 @@ class TestBoxScript(object):
 
     # Keys for config params
     VALUE = 'value'
-    FN = 'fn'                           # pylint: disable=C0103
+    FN = 'fn'                           # pylint: disable=invalid-name
 
     ## @}
 
@@ -131,7 +134,7 @@ class TestBoxScript(object):
                 self._oOptions.sScratchRoot = '/var/tmp';
             sSubDir = 'testbox';
             try:
-                sSubDir = '%s-%u' % (sSubDir, os.getuid()); # pylint: disable=E1101
+                sSubDir = '%s-%u' % (sSubDir, os.getuid()); # pylint: disable=no-member
             except:
                 pass;
             self._oOptions.sScratchRoot = os.path.join(self._oOptions.sScratchRoot, sSubDir);
@@ -142,7 +145,7 @@ class TestBoxScript(object):
 
         for sDir in [self._oOptions.sScratchRoot, self._sScratchSpill, self._sScratchScripts, self._sScratchState]:
             if not os.path.isdir(sDir):
-                os.makedirs(sDir, 0700);
+                os.makedirs(sDir, 0o700);
 
         # We count consecutive reinitScratch failures and will reboot the
         # testbox after a while in the hope that it will correct the issue.
@@ -174,7 +177,7 @@ class TestBoxScript(object):
             constants.tbreq.SIGNON_PARAM_SCRIPT_REV:       { self.VALUE: self._getScriptRev(),         self.FN: None },
             constants.tbreq.SIGNON_PARAM_REPORT:           { self.VALUE: self._getHostReport(),        self.FN: None },
             constants.tbreq.SIGNON_PARAM_PYTHON_VERSION:   { self.VALUE: self._getPythonHexVersion(),  self.FN: None },
-            constants.tbreq.SIGNON_PARAM_CPU_COUNT:        { self.VALUE: None,     self.FN: multiprocessing.cpu_count },
+            constants.tbreq.SIGNON_PARAM_CPU_COUNT:        { self.VALUE: None,     self.FN: utils.getPresentCpuCount },
             constants.tbreq.SIGNON_PARAM_MEM_SIZE:         { self.VALUE: None,     self.FN: self._getHostMemSize },
             constants.tbreq.SIGNON_PARAM_SCRATCH_SIZE:     { self.VALUE: None,     self.FN: self._getFreeScratchSpace },
         }
@@ -232,7 +235,7 @@ class TestBoxScript(object):
         os.environ['TESTBOX_TIMEOUT']           = '0';
         os.environ['TESTBOX_TIMEOUT_ABS']       = '0';
 
-        if utils.getHostOs() is 'win':
+        if utils.getHostOs() == 'win':
             os.environ['COMSPEC']            = os.path.join(os.environ['SystemRoot'], 'System32', 'cmd.exe');
         # Currently omitting any kBuild tools.
 
@@ -243,13 +246,15 @@ class TestBoxScript(object):
         """
         self._mountShare(self._oOptions.sBuildsPath, self._oOptions.sBuildsServerType, self._oOptions.sBuildsServerName,
                          self._oOptions.sBuildsServerShare,
-                         self._oOptions.sBuildsServerUser, self._oOptions.sBuildsServerPasswd, 'builds');
+                         self._oOptions.sBuildsServerUser, self._oOptions.sBuildsServerPasswd,
+                         self._oOptions.sBuildsServerMountOpt, 'builds');
         self._mountShare(self._oOptions.sTestRsrcPath, self._oOptions.sTestRsrcServerType, self._oOptions.sTestRsrcServerName,
                          self._oOptions.sTestRsrcServerShare,
-                         self._oOptions.sTestRsrcServerUser, self._oOptions.sTestRsrcServerPasswd, 'testrsrc');
+                         self._oOptions.sTestRsrcServerUser, self._oOptions.sTestRsrcServerPasswd,
+                         self._oOptions.sTestRsrcServerMountOpt, 'testrsrc');
         return True;
 
-    def _mountShare(self, sMountPoint, sType, sServer, sShare, sUser, sPassword, sWhat):
+    def _mountShare(self, sMountPoint, sType, sServer, sShare, sUser, sPassword, sMountOpt, sWhat):
         """
         Mounts the specified share if needed.
         Raises exception on failure.
@@ -259,7 +264,7 @@ class TestBoxScript(object):
             return True;
 
         # Test if already mounted.
-        sTestFile = os.path.join(sMountPoint + os.path.sep, sShare + '.txt');
+        sTestFile = os.path.join(sMountPoint + os.path.sep, os.path.basename(sShare) + '-new.txt');
         if os.path.isfile(sTestFile):
             return True;
 
@@ -268,12 +273,16 @@ class TestBoxScript(object):
         #
         sHostOs = utils.getHostOs()
         if sHostOs in ('darwin', 'freebsd'):
+            if sMountOpt != '':
+                sMountOpt = ',' + sMountOpt
             utils.sudoProcessCall(['/sbin/umount', sMountPoint]);
             utils.sudoProcessCall(['/bin/mkdir', '-p', sMountPoint]);
-            utils.sudoProcessCall(['/usr/sbin/chown', str(os.getuid()), sMountPoint]); # pylint: disable=E1101
+            utils.sudoProcessCall(['/usr/sbin/chown', str(os.getuid()), sMountPoint]); # pylint: disable=no-member
             if sType == 'cifs':
                 # Note! no smb://server/share stuff here, 10.6.8 didn't like it.
-                utils.processOutputChecked(['/sbin/mount_smbfs', '-o', 'automounted,nostreams,soft,noowners,noatime,rdonly',
+                utils.processOutputChecked(['/sbin/mount_smbfs',
+                                            '-o',
+                                            'automounted,nostreams,soft,noowners,noatime,rdonly' + sMountOpt,
                                             '-f', '0555', '-d', '0555',
                                             '//%s:%s@%s/%s' % (sUser, sPassword, sServer, sShare),
                                             sMountPoint]);
@@ -281,6 +290,8 @@ class TestBoxScript(object):
                 raise TestBoxScriptException('Unsupported server type %s.' % (sType,));
 
         elif sHostOs == 'linux':
+            if sMountOpt != '':
+                sMountOpt = ',' + sMountOpt
             utils.sudoProcessCall(['/bin/umount', sMountPoint]);
             utils.sudoProcessCall(['/bin/mkdir', '-p', sMountPoint]);
             if sType == 'cifs':
@@ -289,14 +300,15 @@ class TestBoxScript(object):
                                                 'user=' + sUser
                                                 + ',password=' + sPassword
                                                 + ',sec=ntlmv2'
-                                                + ',uid=' + str(os.getuid()) # pylint: disable=E1101
-                                                + ',gid=' + str(os.getgid()) # pylint: disable=E1101
-                                                + ',nounix,file_mode=0555,dir_mode=0555,soft,ro',
+                                                + ',uid=' + str(os.getuid()) # pylint: disable=no-member
+                                                + ',gid=' + str(os.getgid()) # pylint: disable=no-member
+                                                + ',nounix,file_mode=0555,dir_mode=0555,soft,ro'
+                                                + sMountOpt,
                                                 '//%s/%s' % (sServer, sShare),
                                                 sMountPoint]);
             elif sType == 'nfs':
                 utils.sudoProcessOutputChecked(['/bin/mount', '-t', 'nfs',
-                                                '-o', 'soft,ro',
+                                                '-o', 'soft,ro' + sMountOpt,
                                                 '%s:%s' % (sServer, sShare if sShare.find('/') >= 0 else ('/export/' + sShare)),
                                                 sMountPoint]);
 
@@ -304,6 +316,8 @@ class TestBoxScript(object):
                 raise TestBoxScriptException('Unsupported server type %s.' % (sType,));
 
         elif sHostOs == 'solaris':
+            if sMountOpt != '':
+                sMountOpt = ',' + sMountOpt
             utils.sudoProcessCall(['/sbin/umount', sMountPoint]);
             utils.sudoProcessCall(['/bin/mkdir', '-p', sMountPoint]);
             if sType == 'cifs':
@@ -314,16 +328,17 @@ class TestBoxScript(object):
                 utils.sudoProcessOutputChecked(['/sbin/mount', '-F', 'smbfs',
                                                 '-o',
                                                 'user=' + sUser
-                                                + ',uid=' + str(os.getuid()) # pylint: disable=E1101
-                                                + ',gid=' + str(os.getgid()) # pylint: disable=E1101
-                                                + ',fileperms=0555,dirperms=0555,noxattr,ro',
+                                                + ',uid=' + str(os.getuid()) # pylint: disable=no-member
+                                                + ',gid=' + str(os.getgid()) # pylint: disable=no-member
+                                                + ',fileperms=0555,dirperms=0555,noxattr,ro'
+                                                + sMountOpt,
                                                 '//%s/%s' % (sServer, sShare),
                                                 sMountPoint],
                                                stdin = oPasswdFile);
                 oPasswdFile.close();
             elif sType == 'nfs':
                 utils.sudoProcessOutputChecked(['/sbin/mount', '-F', 'nfs',
-                                                '-o', 'noxattr,ro',
+                                                '-o', 'noxattr,ro' + sMountOpt,
                                                 '%s:%s' % (sServer, sShare if sShare.find('/') >= 0 else ('/export/' + sShare)),
                                                 sMountPoint]);
 
@@ -364,7 +379,7 @@ class TestBoxScript(object):
                 self._sTestBoxHelper = os.path.join(g_ksValidationKitDir, utils.getHostOs(), utils.getHostArch(), \
                                                     'TestBoxHelper');
             else: # Only for in-tree testing, so don't bother be too accurate right now.
-                sType = os.environ.get('KBUILD_TYPE', os.environ.get('BUILD_TYPE', 'debug'));
+                sType = os.environ.get('KBUILD_TYPE', 'debug');
                 self._sTestBoxHelper = os.path.join(g_ksValidationKitDir, os.pardir, os.pardir, os.pardir, 'out', \
                                                     utils.getHostOsDotArch(), sType, 'testboxscript', \
                                                     utils.getHostOs(), utils.getHostArch(), \
@@ -384,7 +399,7 @@ class TestBoxScript(object):
             return True;
         if sValue == 'false':
             return False;
-        if sValue != 'dunno' and sValue != 'none':
+        if sValue not in  ('dunno', 'none',):
             raise TestBoxException('Unexpected response "%s" to helper command "%s"' % (sValue, sCmd));
         return fDunnoValue;
 
@@ -432,11 +447,11 @@ class TestBoxScript(object):
         elif utils.getHostOs() == 'win':
             # Windows: WMI
             try:
-                import win32com.client;  # pylint: disable=F0401
+                import win32com.client;  # pylint: disable=import-error
                 oWmi  = win32com.client.Dispatch('WbemScripting.SWbemLocator');
                 oWebm = oWmi.ConnectServer('.', 'root\\cimv2');
                 for oItem in oWebm.ExecQuery('SELECT * FROM Win32_ComputerSystemProduct'):
-                    if oItem.UUID != None:
+                    if oItem.UUID is not None:
                         sUuid = str(uuid.UUID(oItem.UUID));
             except:
                 pass;
@@ -575,7 +590,7 @@ class TestBoxScript(object):
                                                        ctypes.pointer(cTypeMbFreeSpace))
             cMbFreeSpace = cTypeMbFreeSpace.value
         else:
-            stats = os.statvfs(self._oOptions.sScratchRoot); # pylint: disable=E1101
+            stats = os.statvfs(self._oOptions.sScratchRoot); # pylint: disable=no-member
             cMbFreeSpace = stats.f_frsize * stats.f_bfree
 
         # Convert to MB
@@ -670,7 +685,7 @@ class TestBoxScript(object):
         if fUseTheForce is None:
             fUseTheForce = self._fFirstSignOn;
 
-        class ErrorCallback(object): # pylint: disable=R0903
+        class ErrorCallback(object): # pylint: disable=too-few-public-methods
             """
             Callbacks + state for the cleanup.
             """
@@ -694,7 +709,7 @@ class TestBoxScript(object):
                     os.remove(sFullName);
                 if os.path.exists(sFullName):
                     raise Exception('Still exists after deletion, weird.');
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 if    fUseTheForce is True \
                   and utils.getHostOs() not in ['win', 'os2'] \
                   and len(sFullName) >= 8 \
@@ -730,8 +745,8 @@ class TestBoxScript(object):
         for sDir in [self._oOptions.sScratchRoot, self._sScratchSpill, self._sScratchScripts, self._sScratchState]:
             if not os.path.isdir(sDir):
                 try:
-                    os.makedirs(sDir, 0700);
-                except Exception, oXcpt:
+                    os.makedirs(sDir, 0o700);
+                except Exception as oXcpt:
                     fnLog('Error creating "%s": %s' % (sDir, oXcpt));
                     oRc.fRc = False;
 
@@ -791,7 +806,7 @@ class TestBoxScript(object):
             oResponse.checkParameterCount(3);
             idTestBox    = oResponse.getIntChecked(constants.tbresp.SIGNON_PARAM_ID, 1, 0x7ffffffe);
             sTestBoxName = oResponse.getStringChecked(constants.tbresp.SIGNON_PARAM_NAME);
-        except TestBoxException, err:
+        except TestBoxException as err:
             testboxcommons.log('Failed to sign-on: %s' % (str(err),))
             testboxcommons.log('Server response: %s' % (oResponse.toString(),));
             return False;
@@ -831,7 +846,7 @@ class TestBoxScript(object):
             return None;
 
         # Refresh sign-on parameters, changes triggers sign-on.
-        fNeedSignOn = (True if not self._fSignedOn or self._fNeedReSignOn else False)
+        fNeedSignOn = not self._fSignedOn or self._fNeedReSignOn;
         for item in self._ddSignOnParams:
             if self._ddSignOnParams[item][self.FN] is None:
                 continue
@@ -879,10 +894,10 @@ class TestBoxScript(object):
                 oConnection.close();
 
             # Automatically reboot if scratch init fails.
-            if self._cReinitScratchErrors > 8 and self.reinitScratch(cRetries = 3) is False:
-                testboxcommons.log('Scratch does not initialize cleanly after %d attempts, rebooting...'
-                                   % ( self._cReinitScratchErrors, ));
-                self._oCommand.doReboot();
+            #if self._cReinitScratchErrors > 8 and self.reinitScratch(cRetries = 3) is False:
+            #    testboxcommons.log('Scratch does not initialize cleanly after %d attempts, rebooting...'
+            #                       % ( self._cReinitScratchErrors, ));
+            #    self._oCommand.doReboot();
 
             # delay a wee bit before looping.
             ## @todo We shouldn't bother the server too frequently.  We should try combine the test reporting done elsewhere
@@ -904,15 +919,16 @@ class TestBoxScript(object):
         #
         # Parse arguments.
         #
+        sDefShareType = 'nfs' if utils.getHostOs() == 'solaris' else 'cifs';
         if utils.getHostOs() in ('win', 'os2'):
-            sDefTestRsrc = 'T:';
-            sDefBuilds   = 'U:';
+            sDefTestRsrc  = 'T:';
+            sDefBuilds    = 'U:';
         elif utils.getHostOs() == 'darwin':
-            sDefTestRsrc = '/Volumes/testrsrc';
-            sDefBuilds   = '/Volumes/builds';
+            sDefTestRsrc  = '/Volumes/testrsrc';
+            sDefBuilds    = '/Volumes/builds';
         else:
-            sDefTestRsrc = '/mnt/testrsrc';
-            sDefBuilds   = '/mnt/builds';
+            sDefTestRsrc  = '/mnt/testrsrc';
+            sDefBuilds    = '/mnt/builds';
 
         class MyOptionParser(OptionParser):
             """ We need to override the exit code on --help, error and so on. """
@@ -929,10 +945,11 @@ class TestBoxScript(object):
                               dest=sPrefix + 'Path',         metavar='<abs-path>', default=sDefault,
                               help='Where ' + sDesc + ' can be found');
             parser.add_option('--' + sLower + '-server-type',
-                              dest=sPrefix + 'ServerType',   metavar='<nfs|cifs>', default=None,
-                              help='The type of server, cifs or nfs. If empty (default), we won\'t try mount anything.');
+                              dest=sPrefix + 'ServerType',   metavar='<nfs|cifs>', default=sDefShareType,
+                              help='The type of server, cifs (default) or nfs. If empty, we won\'t try mount anything.');
             parser.add_option('--' + sLower + '-server-name',
-                              dest=sPrefix + 'ServerName',   metavar='<server>',   default='solserv.de.oracle.com',
+                              dest=sPrefix + 'ServerName',   metavar='<server>',
+                              default='vboxstor.de.oracle.com' if sLower == 'builds' else 'teststor.de.oracle.com',
                               help='The name of the server with the builds.');
             parser.add_option('--' + sLower + '-server-share',
                               dest=sPrefix + 'ServerShare',  metavar='<share>',    default=sLower,
@@ -943,6 +960,9 @@ class TestBoxScript(object):
             parser.add_option('--' + sLower + '-server-passwd', '--' + sLower + '-server-password',
                               dest=sPrefix + 'ServerPasswd', metavar='<password>', default='guestr',
                               help='The password to use when accessing the ' + sDesc + ' share.');
+            parser.add_option('--' + sLower + '-server-mountopt',
+                              dest=sPrefix + 'ServerMountOpt', metavar='<mountopt>', default='',
+                              help='The mount options to use when accessing the ' + sDesc + ' share.');
 
         parser.add_option("--test-manager", metavar="<url>",
                           dest="sTestManagerUrl",
@@ -992,6 +1012,14 @@ class TestBoxScript(object):
         parser.add_option("-E", "--putenv", metavar = "<variable>=<value>", action = "append",
                           dest = "asEnvVars", default = [],
                           help = "Sets an environment variable. Can be repeated.");
+        def sbp_callback(option, opt_str, value, parser):
+            _, _, _ = opt_str, value, option
+            parser.values.sTestManagerUrl = 'http://10.162.100.8/testmanager/'
+            parser.values.sBuildsServerName = 'vbox-st02.ru.oracle.com'
+            parser.values.sTestRsrcServerName = 'vbox-st02.ru.oracle.com'
+            parser.values.sTestRsrcServerShare = 'scratch/data/testrsrc'
+        parser.add_option("--spb", "--load-sbp-defaults", action="callback", callback=sbp_callback,
+                          help="Load defaults for the sbp setup.")
 
         (oOptions, args) = parser.parse_args()
         # Check command line
@@ -1008,7 +1036,7 @@ class TestBoxScript(object):
 
         for sPrefix in ['sBuilds', 'sTestRsrc']:
             sType = getattr(oOptions, sPrefix + 'ServerType');
-            if sType is None or len(sType.strip()) == 0:
+            if sType is None or not sType.strip():
                 setattr(oOptions, sPrefix + 'ServerType', None);
             elif sType not in ['cifs', 'nfs']:
                 print('Syntax error: Invalid server type "%s"' % (sType,));
@@ -1020,7 +1048,7 @@ class TestBoxScript(object):
         #
         try:
             oTestBoxScript = TestBoxScript(oOptions);
-        except TestBoxScriptException, oXcpt:
+        except TestBoxScriptException as oXcpt:
             print('Error: %s' % (oXcpt,));
             return TBS_EXITCODE_SYNTAX;
         oTestBoxScript.dispatch();

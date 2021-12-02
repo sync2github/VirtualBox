@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: file.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Internal RTFile header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_file_h
-#define ___internal_file_h
+#ifndef IPRT_INCLUDED_INTERNAL_file_h
+#define IPRT_INCLUDED_INTERNAL_file_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/file.h>
 
@@ -55,7 +58,26 @@ int rtFileRecalcAndValidateFlags(uint64_t *pfOpen);
  */
 RTFILE rtFileGetStandard(RTHANDLESTD enmStdHandle);
 
-RT_C_DECLS_END
+#ifdef RT_OS_WINDOWS
+/**
+ * Helper for converting RTFILE_O_XXX to the various NtCreateFile flags.
+ *
+ * @returns IPRT status code
+ * @param   fOpen               The RTFILE_O_XXX flags to convert.
+ * @param   pfDesiredAccess     Where to return the desired access mask.
+ * @param   pfObjAttribs        Where to return the NT object attributes.
+ * @param   pfFileAttribs       Where to return the file attributes (create).
+ * @param   pfShareAccess       Where to return the file sharing access mask.
+ * @param   pfCreateDisposition Where to return the file create disposition.
+ * @param   pfCreateOptions     Where to return the file open/create options.
+ */
+DECLHIDDEN(int) rtFileNtValidateAndConvertFlags(uint64_t fOpen, uint32_t *pfDesiredAccess, uint32_t *pfObjAttribs,
+                                                uint32_t *pfFileAttribs, uint32_t *pfShareAccess, uint32_t *pfCreateDisposition,
+                                                uint32_t *pfCreateOptions);
 
 #endif
+
+RT_C_DECLS_END
+
+#endif /* !IPRT_INCLUDED_INTERNAL_file_h */
 

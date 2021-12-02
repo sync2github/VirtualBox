@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: initterm-r0drv-solaris.c 88215 2021-03-19 18:42:55Z vboxsync $ */
 /** @file
  * IPRT - Initialization & Termination, Ring-0 Driver, Solaris.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include "internal/iprt.h"
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
 # include <iprt/asm-amd64-x86.h>
 #endif
@@ -84,6 +84,10 @@ size_t                          g_offrtSolThreadProc;
 size_t                          g_offrtSolCpuPreempt;
 /** Host scheduler force preemption offset. */
 size_t                          g_offrtSolCpuForceKernelPreempt;
+/** Whether to use the old-style map_addr() routine. */
+bool                            g_frtSolOldMapAddr = false;
+/** The map_addr() hooks callout table structure. */
+RTR0FNSOLMAPADDR                g_rtSolMapAddr;
 /* Resolve using dl_lookup (remove if no longer relevant for supported S10 versions) */
 extern void contig_free(void *addr, size_t size);
 #pragma weak contig_free
@@ -219,6 +223,20 @@ DECLHIDDEN(int) rtR0InitNative(void)
             g_frtSolOldThreadCtx = true;
             g_rtSolThreadCtx.Install.pfnSol_installctx_old = (void *)installctx;
             g_rtSolThreadCtx.Remove.pfnSol_removectx_old   = (void *)removectx;
+        }
+
+        /*
+         * Mandatory: map_addr() hooks.
+         */
+        rc = RTR0DbgKrnlInfoQuerySymbol(g_hKrnlDbgInfo, NULL /* pszModule */, "plat_map_align_amount",  NULL /* ppvSymbol */);
+        if (RT_SUCCESS(rc))
+        {
+            g_rtSolMapAddr.u.pfnSol_map_addr    = (void *)map_addr;
+        }
+        else
+        {
+            g_frtSolOldMapAddr = true;
+            g_rtSolMapAddr.u.pfnSol_map_addr_old    = (void *)map_addr;
         }
 
         /*

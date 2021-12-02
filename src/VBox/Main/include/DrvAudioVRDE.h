@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvAudioVRDE.h 88885 2021-05-05 18:28:38Z vboxsync $ */
 /** @file
  * VirtualBox driver interface to VRDE backend.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,17 +15,27 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_DRVAUDIOVRDE
-#define ____H_DRVAUDIOVRDE
+#ifndef MAIN_INCLUDED_DrvAudioVRDE_h
+#define MAIN_INCLUDED_DrvAudioVRDE_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/com/ptr.h>
+#include <VBox/com/string.h>
+
 #include <VBox/RemoteDesktop/VRDE.h>
+
 #include <VBox/vmm/pdmdrv.h>
 #include <VBox/vmm/pdmifs.h>
 
+#include "AudioDriver.h"
+
+using namespace com;
+
 class Console;
 
-class AudioVRDE
+class AudioVRDE : public AudioDriver
 {
 
 public:
@@ -37,10 +47,10 @@ public:
 
     static const PDMDRVREG DrvReg;
 
-    Console *getParent(void) { return mParent; }
-
 public:
 
+    void onVRDEClientConnect(uint32_t uClientID);
+    void onVRDEClientDisconnect(uint32_t uClientID);
     int onVRDEControl(bool fEnable, uint32_t uFlags);
     int onVRDEInputBegin(void *pvContext, PVRDEAUDIOINBEGIN pVRDEAudioBegin);
     int onVRDEInputData(void *pvContext, const void *pvData, uint32_t cbData);
@@ -51,14 +61,17 @@ public:
 
     static DECLCALLBACK(int) drvConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint32_t fFlags);
     static DECLCALLBACK(void) drvDestruct(PPDMDRVINS pDrvIns);
+    static DECLCALLBACK(void) drvPowerOff(PPDMDRVINS pDrvIns);
 
 private:
 
+    int configureDriver(PCFGMNODE pLunCfg);
+
     /** Pointer to the associated VRDE audio driver. */
     struct DRVAUDIOVRDE *mpDrv;
-    /** Pointer to parent. */
-    Console * const mParent;
+    /** Protects accesses to mpDrv from racing driver destruction. */
+    RTCRITSECT mCritSect;
 };
 
-#endif /* !____H_DRVAUDIOVRDE */
+#endif /* !MAIN_INCLUDED_DrvAudioVRDE_h */
 

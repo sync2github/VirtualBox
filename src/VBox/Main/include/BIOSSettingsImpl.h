@@ -1,12 +1,12 @@
-/* $Id$ */
+/* $Id: BIOSSettingsImpl.h 91326 2021-09-22 15:10:38Z vboxsync $ */
 
 /** @file
  *
- * VirtualBox COM class implementation
+ * VirtualBox COM class implementation - Machine BIOS settings.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_BIOSSETTINGS
-#define ____H_BIOSSETTINGS
+#ifndef MAIN_INCLUDED_BIOSSettingsImpl_h
+#define MAIN_INCLUDED_BIOSSettingsImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "BIOSSettingsWrap.h"
 
@@ -34,7 +37,7 @@ class ATL_NO_VTABLE BIOSSettings :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(BIOSSettings)
+    DECLARE_COMMON_CLASS_METHODS(BIOSSettings)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -45,7 +48,7 @@ public:
     HRESULT initCopy(Machine *parent, BIOSSettings *that);
     void uninit();
 
-    // public methods only for internal purposes
+    // public methods for internal purposes only
     HRESULT i_loadSettings(const settings::BIOSSettings &data);
     HRESULT i_saveSettings(settings::BIOSSettings &data);
 
@@ -77,12 +80,13 @@ private:
     HRESULT setTimeOffset(LONG64 offset);
     HRESULT getPXEDebugEnabled(BOOL *enabled);
     HRESULT setPXEDebugEnabled(BOOL enable);
-    HRESULT getNonVolatileStorageFile(com::Utf8Str &aNonVolatileStorageFile);
+    HRESULT getSMBIOSUuidLittleEndian(BOOL *enabled);
+    HRESULT setSMBIOSUuidLittleEndian(BOOL enable);
 
     struct Data;
     Data *m;
 };
 
-#endif // ____H_BIOSSETTINGS
+#endif /* !MAIN_INCLUDED_BIOSSettingsImpl_h */
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

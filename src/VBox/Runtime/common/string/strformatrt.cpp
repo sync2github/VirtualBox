@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: strformatrt.cpp 90821 2021-08-23 22:04:06Z vboxsync $ */
 /** @file
  * IPRT - IPRT String Formatter Extensions.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -41,8 +41,9 @@
 #include <iprt/string.h>
 #include <iprt/stdarg.h>
 #ifdef IN_RING3
+# include <iprt/errcore.h>
 # include <iprt/thread.h>
-# include <iprt/err.h>
+# include <iprt/utf16.h>
 #endif
 #include <iprt/ctype.h>
 #include <iprt/time.h>
@@ -60,6 +61,9 @@
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
 static char g_szHexDigits[17] = "0123456789abcdef";
+#ifdef IN_RING3
+static char g_szHexDigitsUpper[17] = "0123456789ABCDEF";
+#endif
 
 
 /**
@@ -82,9 +86,9 @@ static size_t rtstrFormatIPv6HexWord(char *pszDst, uint16_t uWord)
     off = 0;
     switch (cDigits)
     {
-        case 4: pszDst[off++] = g_szHexDigits[(uWord >> 12) & 0xf];
-        case 3: pszDst[off++] = g_szHexDigits[(uWord >>  8) & 0xf];
-        case 2: pszDst[off++] = g_szHexDigits[(uWord >>  4) & 0xf];
+        case 4: pszDst[off++] = g_szHexDigits[(uWord >> 12) & 0xf]; RT_FALL_THRU();
+        case 3: pszDst[off++] = g_szHexDigits[(uWord >>  8) & 0xf]; RT_FALL_THRU();
+        case 2: pszDst[off++] = g_szHexDigits[(uWord >>  4) & 0xf]; RT_FALL_THRU();
         case 1: pszDst[off++] = g_szHexDigits[(uWord >>  0) & 0xf];
             break;
     }
@@ -251,6 +255,7 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
             case 'I':
             case 'X':
             case 'U':
+            case 'K':
             {
                 /*
                  * Interpret the type.
@@ -267,7 +272,9 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     RTSF_IPV6,
                     RTSF_MAC,
                     RTSF_NETADDR,
-                    RTSF_UUID
+                    RTSF_UUID,
+                    RTSF_ERRINFO,
+                    RTSF_ERRINFO_MSG_ONLY
                 } RTSF;
                 static const struct
                 {
@@ -304,8 +311,11 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     { STRMEM("I32"),     sizeof(int32_t),        10, RTSF_INT,   RTSTR_F_VALSIGNED },
                     { STRMEM("I64"),     sizeof(int64_t),        10, RTSF_INT,   RTSTR_F_VALSIGNED },
                     { STRMEM("I8"),      sizeof(int8_t),         10, RTSF_INT,   RTSTR_F_VALSIGNED },
+                    { STRMEM("Kv"),      sizeof(RTHCPTR),        16, RTSF_INT,   RTSTR_F_OBFUSCATE_PTR },
                     { STRMEM("Rv"),      sizeof(RTRCPTR),        16, RTSF_INTW,  0 },
                     { STRMEM("Tbool"),   sizeof(bool),           10, RTSF_BOOL,  0 },
+                    { STRMEM("Teic"),    sizeof(PCRTERRINFO),    16, RTSF_ERRINFO, 0 },
+                    { STRMEM("Teim"),    sizeof(PCRTERRINFO),    16, RTSF_ERRINFO_MSG_ONLY, 0 },
                     { STRMEM("Tfile"),   sizeof(RTFILE),         10, RTSF_INT,   0 },
                     { STRMEM("Tfmode"),  sizeof(RTFMODE),        16, RTSF_INTW,  0 },
                     { STRMEM("Tfoff"),   sizeof(RTFOFF),         10, RTSF_INT,   RTSTR_F_VALSIGNED },
@@ -345,7 +355,6 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     { STRMEM("X8"),      sizeof(uint8_t),        16, RTSF_INT,   0 },
 #undef STRMEM
                 };
-                static const char s_szNull[] = "<NULL>";
 
                 const char *pszType = *ppszFormat - 1;
                 int         iStart  = 0;
@@ -362,6 +371,7 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     int16_t             i16;
                     int32_t             i32;
                     int64_t             i64;
+                    RTR0INTPTR          uR0Ptr;
                     RTFAR16             fp16;
                     RTFAR32             fp32;
                     RTFAR64             fp64;
@@ -371,6 +381,7 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     PCRTNETADDRIPV6     pIpv6Addr;
                     PCRTNETADDR         pNetAddr;
                     PCRTUUID            pUuid;
+                    PCRTERRINFO         pErrInfo;
                 } u;
 
                 AssertMsg(!chArgSize, ("Not argument size '%c' for RT types! '%.10s'\n", chArgSize, pszFormatOrg));
@@ -469,6 +480,17 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     }
                 }
 
+#ifndef DEBUG
+                /*
+                 * For now don't show the address.
+                 */
+                if (fFlags & RTSTR_F_OBFUSCATE_PTR)
+                {
+                    cch = rtStrFormatKernelAddress(szBuf, sizeof(szBuf), u.uR0Ptr, cchWidth, cchPrecision, fFlags);
+                    return pfnOutput(pvArgOutput, szBuf, cch);
+                }
+#endif
+
                 /*
                  * Format the output.
                  */
@@ -497,8 +519,8 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     {
                         static const char s_szTrue[]  = "true ";
                         static const char s_szFalse[] = "false";
-                        if (u.u64 == 1)
-                            return pfnOutput(pvArgOutput, s_szTrue,  sizeof(s_szTrue) - 1);
+                        if (u.u64 == 1) /* 2021-03-19: Only trailing space for %#RTbool. */
+                            return pfnOutput(pvArgOutput, s_szTrue, sizeof(s_szTrue) - (fFlags & RTSTR_F_SPECIAL ? 1 : 2));
                         if (u.u64 == 0)
                             return pfnOutput(pvArgOutput, s_szFalse, sizeof(s_szFalse) - 1);
                         /* invalid boolean value */
@@ -548,15 +570,13 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                                            u.Ipv4Addr.au8[3]);
 
                     case RTSF_IPV6:
-                    {
-                        if (VALID_PTR(u.pIpv6Addr))
+                        if (RT_VALID_PTR(u.pIpv6Addr))
                             return rtstrFormatIPv6(pfnOutput, pvArgOutput, u.pIpv6Addr);
-                        return pfnOutput(pvArgOutput, s_szNull, sizeof(s_szNull) - 1);
-                    }
+                        return rtStrFormatBadPointer(0, pfnOutput, pvArgOutput, cchWidth, fFlags, u.pIpv6Addr,
+                                                     szBuf, RT_STR_TUPLE("!BadIPv6"));
 
                     case RTSF_MAC:
-                    {
-                        if (VALID_PTR(u.pMac))
+                        if (RT_VALID_PTR(u.pMac))
                             return RTStrFormat(pfnOutput, pvArgOutput, NULL, 0,
                                                "%02x:%02x:%02x:%02x:%02x:%02x",
                                                u.pMac->au8[0],
@@ -565,12 +585,11 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                                                u.pMac->au8[3],
                                                u.pMac->au8[4],
                                                u.pMac->au8[5]);
-                        return pfnOutput(pvArgOutput, s_szNull, sizeof(s_szNull) - 1);
-                    }
+                        return rtStrFormatBadPointer(0, pfnOutput, pvArgOutput, cchWidth, fFlags, u.pMac,
+                                                     szBuf, RT_STR_TUPLE("!BadMac"));
 
                     case RTSF_NETADDR:
-                    {
-                        if (VALID_PTR(u.pNetAddr))
+                        if (RT_VALID_PTR(u.pNetAddr))
                         {
                             switch (u.pNetAddr->enmType)
                             {
@@ -615,13 +634,11 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
 
                             }
                         }
-                        return pfnOutput(pvArgOutput, s_szNull, sizeof(s_szNull) - 1);
-                    }
+                        return rtStrFormatBadPointer(0, pfnOutput, pvArgOutput, cchWidth, fFlags, u.pNetAddr,
+                                                     szBuf, RT_STR_TUPLE("!BadNetAddr"));
 
                     case RTSF_UUID:
-                    {
-                        if (VALID_PTR(u.pUuid))
-                        {
+                        if (RT_VALID_PTR(u.pUuid))
                             /* cannot call RTUuidToStr because of GC/R0. */
                             return RTStrFormat(pfnOutput, pvArgOutput, NULL, 0,
                                                "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
@@ -636,9 +653,34 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                                                u.pUuid->Gen.au8Node[3],
                                                u.pUuid->Gen.au8Node[4],
                                                u.pUuid->Gen.au8Node[5]);
+                        return rtStrFormatBadPointer(0, pfnOutput, pvArgOutput, cchWidth, fFlags, u.pUuid,
+                                                     szBuf, RT_STR_TUPLE("!BadUuid"));
+
+                    case RTSF_ERRINFO:
+                    case RTSF_ERRINFO_MSG_ONLY:
+                        if (RT_VALID_PTR(u.pErrInfo) && RTErrInfoIsSet(u.pErrInfo))
+                        {
+                            cch = 0;
+                            if (s_aTypes[i].enmFormat == RTSF_ERRINFO)
+                            {
+#ifdef IN_RING3 /* we don't want this anywhere else yet. */
+                                cch += RTErrFormatMsgShort(u.pErrInfo->rc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
+#else
+                                cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%d", u.pErrInfo->rc);
+#endif
+                            }
+
+                            if (u.pErrInfo->cbMsg > 0)
+                            {
+                                if (fFlags & RTSTR_F_SPECIAL)
+                                    cch = pfnOutput(pvArgOutput, RT_STR_TUPLE(" - "));
+                                else
+                                    cch = pfnOutput(pvArgOutput, RT_STR_TUPLE(": "));
+                                cch += pfnOutput(pvArgOutput, u.pErrInfo->pszMsg, u.pErrInfo->cbMsg);
+                            }
+                            return cch;
                         }
-                        return pfnOutput(pvArgOutput, s_szNull, sizeof(s_szNull) - 1);
-                    }
+                        return 0;
 
                     default:
                         AssertMsgFailed(("Internal error %d\n", s_aTypes[i].enmFormat));
@@ -655,7 +697,7 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
             /* Group 3 */
 
             /*
-             * Base name printing.
+             * Base name printing, big endian UTF-16.
              */
             case 'b':
             {
@@ -665,8 +707,9 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     {
                         const char *pszLastSep;
                         const char *psz = pszLastSep = va_arg(*pArgs, const char *);
-                        if (!VALID_PTR(psz))
-                            return pfnOutput(pvArgOutput, RT_STR_TUPLE("<null>"));
+                        if (!RT_VALID_PTR(psz))
+                            return rtStrFormatBadPointer(0, pfnOutput, pvArgOutput, cchWidth, fFlags, psz,
+                                                         szBuf, RT_STR_TUPLE("!BadBaseName"));
 
                         while ((ch = *psz) != '\0')
                         {
@@ -684,6 +727,56 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
 
                         return pfnOutput(pvArgOutput, pszLastSep, psz - pszLastSep);
                     }
+
+                    /* %lRbs */
+                    case 's':
+                        if (chArgSize == 'l')
+                        {
+                            /* utf-16BE -> utf-8 */
+                            int         cchStr;
+                            PCRTUTF16   pwszStr = va_arg(*pArgs, PRTUTF16);
+
+                            if (RT_VALID_PTR(pwszStr))
+                            {
+                                cchStr = 0;
+                                while (cchStr < cchPrecision && pwszStr[cchStr] != '\0')
+                                    cchStr++;
+                            }
+                            else
+                            {
+                                static RTUTF16  s_wszBigNull[] =
+                                {
+                                    RT_H2BE_U16_C((uint16_t)'<'), RT_H2BE_U16_C((uint16_t)'N'), RT_H2BE_U16_C((uint16_t)'U'),
+                                    RT_H2BE_U16_C((uint16_t)'L'), RT_H2BE_U16_C((uint16_t)'L'), RT_H2BE_U16_C((uint16_t)'>'), '\0'
+                                };
+                                pwszStr = s_wszBigNull;
+                                cchStr  = RT_ELEMENTS(s_wszBigNull) - 1;
+                            }
+
+                            cch = 0;
+                            if (!(fFlags & RTSTR_F_LEFT))
+                                while (--cchWidth >= cchStr)
+                                    cch += pfnOutput(pvArgOutput, " ", 1);
+                            cchWidth -= cchStr;
+                            while (cchStr-- > 0)
+                            {
+/** @todo \#ifndef IN_RC*/
+#ifdef IN_RING3
+                                RTUNICP Cp = 0;
+                                RTUtf16BigGetCpEx(&pwszStr, &Cp);
+                                char *pszEnd = RTStrPutCp(szBuf, Cp);
+                                *pszEnd = '\0';
+                                cch += pfnOutput(pvArgOutput, szBuf, pszEnd - szBuf);
+#else
+                                szBuf[0] = (char)(*pwszStr++ >> 8);
+                                cch += pfnOutput(pvArgOutput, szBuf, 1);
+#endif
+                            }
+                            while (--cchWidth >= 0)
+                                cch += pfnOutput(pvArgOutput, " ", 1);
+                            return cch;
+                        }
+                    RT_FALL_THRU();
 
                     default:
                         AssertMsgFailed(("Invalid status code format type '%.10s'!\n", pszFormatOrg));
@@ -711,8 +804,9 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                         const char *psz = pszStart = va_arg(*pArgs, const char *);
                         int cAngle = 0;
 
-                        if (!VALID_PTR(psz))
-                            return pfnOutput(pvArgOutput, RT_STR_TUPLE("<null>"));
+                        if (!RT_VALID_PTR(psz))
+                            return rtStrFormatBadPointer(0, pfnOutput, pvArgOutput, cchWidth, fFlags, psz,
+                                                         szBuf, RT_STR_TUPLE("!BadFnNm"));
 
                         while ((ch = *psz) != '\0' && ch != '(')
                         {
@@ -752,20 +846,37 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
 
 
             /*
-             * hex dumping and COM/XPCOM.
+             * hex dumping, COM/XPCOM, human readable sizes.
              */
             case 'h':
             {
-                switch (*(*ppszFormat)++)
+                ch = *(*ppszFormat)++;
+                switch (ch)
                 {
                     /*
                      * Hex stuff.
                      */
                     case 'x':
+                    case 'X':
                     {
                         uint8_t *pu8 = va_arg(*pArgs, uint8_t *);
+                        uint64_t uMemAddr;
+                        int      cchMemAddrWidth;
+
                         if (cchPrecision < 0)
                             cchPrecision = 16;
+
+                        if (ch == 'x')
+                        {
+                            uMemAddr = (uintptr_t)pu8;
+                            cchMemAddrWidth = sizeof(pu8) * 2;
+                        }
+                        else
+                        {
+                            uMemAddr = va_arg(*pArgs, uint64_t);
+                            cchMemAddrWidth = uMemAddr > UINT32_MAX || uMemAddr + cchPrecision > UINT32_MAX ? 16 : 8;
+                        }
+
                         if (pu8)
                         {
                             switch (*(*ppszFormat)++)
@@ -784,10 +895,12 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                                     while (off < cchPrecision)
                                     {
                                         int i;
-                                        cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%s%0*p %04x:", off ? "\n" : "", sizeof(pu8) * 2, (uintptr_t)pu8, off);
+                                        cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%s%0*llx/%04x:",
+                                                           off ? "\n" : "", cchMemAddrWidth, uMemAddr + off, off);
                                         for (i = 0; i < cchWidth && off + i < cchPrecision ; i++)
                                             cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0,
-                                                               off + i < cchPrecision ? !(i & 7) && i ? "-%02x" : " %02x" : "   ", pu8[i]);
+                                                               off + i < cchPrecision ? !(i & 7) && i ? "-%02x" : " %02x" : "   ",
+                                                               pu8[i]);
                                         while (i++ < cchWidth)
                                             cch += pfnOutput(pvArgOutput, "   ", 3);
 
@@ -807,15 +920,87 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                                 }
 
                                 /*
+                                 * Regular hex dump with dittoing.
+                                 */
+                                case 'D':
+                                {
+                                    int offEndDupCheck;
+                                    int cDuplicates = 0;
+                                    int off = 0;
+                                    cch = 0;
+
+                                    if (cchWidth <= 0)
+                                        cchWidth = 16;
+                                    offEndDupCheck = cchPrecision - cchWidth;
+
+                                    while (off < cchPrecision)
+                                    {
+                                        int i;
+                                        if (   off >= offEndDupCheck
+                                            || off <= 0
+                                            || memcmp(pu8, pu8 - cchWidth, cchWidth) != 0
+                                            || (   cDuplicates == 0
+                                                && (   off + cchWidth >= offEndDupCheck
+                                                    || memcmp(pu8 + cchWidth, pu8, cchWidth) != 0)) )
+                                        {
+                                            if (cDuplicates > 0)
+                                            {
+                                                cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "\n%.*s ****  <ditto x %u>",
+                                                                   cchMemAddrWidth, "****************", cDuplicates);
+                                                cDuplicates = 0;
+                                            }
+
+                                            cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%s%0*llx/%04x:",
+                                                               off ? "\n" : "", cchMemAddrWidth, uMemAddr + off, off);
+                                            for (i = 0; i < cchWidth && off + i < cchPrecision ; i++)
+                                                cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0,
+                                                                     off + i < cchPrecision ? !(i & 7) && i
+                                                                   ? "-%02x" : " %02x" : "   ",
+                                                                   pu8[i]);
+                                            while (i++ < cchWidth)
+                                                cch += pfnOutput(pvArgOutput, "   ", 3);
+
+                                            cch += pfnOutput(pvArgOutput, " ", 1);
+
+                                            for (i = 0; i < cchWidth && off + i < cchPrecision; i++)
+                                            {
+                                                uint8_t u8 = pu8[i];
+                                                cch += pfnOutput(pvArgOutput, u8 < 127 && u8 >= 32 ? (const char *)&u8 : ".", 1);
+                                            }
+                                        }
+                                        else
+                                            cDuplicates++;
+
+                                        /* next */
+                                        pu8 += cchWidth;
+                                        off += cchWidth;
+                                    }
+                                    return cch;
+                                }
+
+                                /*
                                  * Hex string.
+                                 * The default separator is ' ', RTSTR_F_THOUSAND_SEP changes it to ':',
+                                 * and RTSTR_F_SPECIAL removes it.
                                  */
                                 case 's':
                                 {
                                     if (cchPrecision-- > 0)
                                     {
-                                        cch = RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%02x", *pu8++);
-                                        for (; cchPrecision > 0; cchPrecision--, pu8++)
-                                            cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, " %02x", *pu8);
+                                        if (ch == 'x')
+                                            cch = RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%02x", *pu8++);
+                                        else
+                                            cch = RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%0*llx: %02x",
+                                                              cchMemAddrWidth, uMemAddr, *pu8++);
+                                        if (!(fFlags & (RTSTR_F_SPECIAL | RTSTR_F_THOUSAND_SEP)))
+                                            for (; cchPrecision > 0; cchPrecision--, pu8++)
+                                                cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, " %02x", *pu8);
+                                        else if (fFlags & RTSTR_F_SPECIAL)
+                                            for (; cchPrecision > 0; cchPrecision--, pu8++)
+                                                cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%02x", *pu8);
+                                        else
+                                            for (; cchPrecision > 0; cchPrecision--, pu8++)
+                                                cch += RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, ":%02x", *pu8);
                                         return cch;
                                     }
                                     break;
@@ -840,15 +1025,26 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                     case 'r':
                     {
                         uint32_t hrc = va_arg(*pArgs, uint32_t);
+# ifndef RT_OS_WINDOWS
                         PCRTCOMERRMSG pMsg = RTErrCOMGet(hrc);
+# endif
                         switch (*(*ppszFormat)++)
                         {
+# ifdef RT_OS_WINDOWS
+                            case 'c':
+                                return RTErrWinFormatDefine(hrc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
+                            case 'f':
+                                return RTErrWinFormatMsg(hrc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
+                            case 'a':
+                                return RTErrWinFormatMsgAll(hrc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
+# else  /* !RT_OS_WINDOWS */
                             case 'c':
                                 return pfnOutput(pvArgOutput, pMsg->pszDefine, strlen(pMsg->pszDefine));
                             case 'f':
-                                return pfnOutput(pvArgOutput, pMsg->pszMsgFull,strlen(pMsg->pszMsgFull));
+                                return pfnOutput(pvArgOutput, pMsg->pszMsgFull, strlen(pMsg->pszMsgFull));
                             case 'a':
                                 return RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%s (0x%08X) - %s", pMsg->pszDefine, hrc, pMsg->pszMsgFull);
+# endif /* !RT_OS_WINDOWS */
                             default:
                                 AssertMsgFailed(("Invalid status code format type '%.10s'!\n", pszFormatOrg));
                                 return 0;
@@ -856,6 +1052,127 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                         break;
                     }
 #endif /* IN_RING3 */
+
+                    /*
+                     * Human readable sizes.
+                     */
+                    case 'c':
+                    case 'u':
+                    {
+                        unsigned    i;
+                        ssize_t     cchBuf;
+                        uint64_t    uValue;
+                        uint64_t    uFraction = 0;
+                        const char *pszPrefix = NULL;
+                        char        ch2 = *(*ppszFormat)++;
+                        AssertMsgReturn(ch2 == 'b' || ch2 == 'B' || ch2 == 'i', ("invalid type '%.10s'!\n", pszFormatOrg), 0);
+                        uValue = va_arg(*pArgs, uint64_t);
+
+                        if (!(fFlags & RTSTR_F_PRECISION))
+                            cchPrecision = 1; /** @todo default to flexible decimal point. */
+                        else if (cchPrecision > 3)
+                            cchPrecision = 3;
+                        else if (cchPrecision < 0)
+                            cchPrecision = 0;
+
+                        if (ch2 == 'b' || ch2 == 'B')
+                        {
+                            static const struct
+                            {
+                                const char *pszPrefix;
+                                uint8_t     cShift;
+                                uint64_t    cbMin;
+                                uint64_t    cbMinZeroPrecision;
+                            } s_aUnits[] =
+                            {
+                                {  "Ei", 60, _1E,  _1E*2 },
+                                {  "Pi", 50, _1P,  _1P*2 },
+                                {  "Ti", 40, _1T,  _1T*2 },
+                                {  "Gi", 30, _1G,  _1G64*2 },
+                                {  "Mi", 20, _1M,  _1M*2 },
+                                {  "Ki", 10, _1K,  _1K*2 },
+                            };
+                            for (i = 0; i < RT_ELEMENTS(s_aUnits); i++)
+                                if (   uValue >= s_aUnits[i].cbMin
+                                    && (cchPrecision > 0 || uValue >= s_aUnits[i].cbMinZeroPrecision))
+                                {
+                                    if (cchPrecision != 0)
+                                    {
+                                        uFraction   = uValue & (RT_BIT_64(s_aUnits[i].cShift) - 1);
+                                        uFraction  *= cchPrecision == 1 ? 10 : cchPrecision == 2 ? 100 : 1000;
+                                        uFraction >>= s_aUnits[i].cShift;
+                                    }
+                                    uValue  >>= s_aUnits[i].cShift;
+                                    pszPrefix = s_aUnits[i].pszPrefix;
+                                    break;
+                                }
+                        }
+                        else
+                        {
+                            static const struct
+                            {
+                                const char *pszPrefix;
+                                uint64_t    cbFactor;
+                                uint64_t    cbMinZeroPrecision;
+                            } s_aUnits[] =
+                            {
+                                {  "E", UINT64_C(1000000000000000000), UINT64_C(1010000000000000000),  },
+                                {  "P", UINT64_C(1000000000000000),    UINT64_C(1010000000000000),     },
+                                {  "T", UINT64_C(1000000000000),       UINT64_C(1010000000000),        },
+                                {  "G", UINT64_C(1000000000),          UINT64_C(1010000000),           },
+                                {  "M", UINT64_C(1000000),             UINT64_C(1010000),              },
+                                {  "k", UINT64_C(1000),                UINT64_C(1010),                 },
+                            };
+                            for (i = 0; i < RT_ELEMENTS(s_aUnits); i++)
+                                if (   uValue >= s_aUnits[i].cbFactor
+                                    && (cchPrecision > 0 || uValue >= s_aUnits[i].cbMinZeroPrecision))
+                                {
+                                    if (cchPrecision == 0)
+                                        uValue /= s_aUnits[i].cbFactor;
+                                    else
+                                    {
+                                        uFraction   = uValue % s_aUnits[i].cbFactor;
+                                        uValue      = uValue / s_aUnits[i].cbFactor;
+                                        uFraction  *= cchPrecision == 1 ? 10 : cchPrecision == 2 ? 100 : 1000;
+                                        uFraction  += s_aUnits[i].cbFactor >> 1;
+                                        uFraction  /= s_aUnits[i].cbFactor;
+                                    }
+                                    pszPrefix = s_aUnits[i].pszPrefix;
+                                    break;
+                                }
+                        }
+
+                        cchBuf = RTStrFormatU64(szBuf, sizeof(szBuf), uValue, 10, 0, 0, 0);
+                        if (pszPrefix)
+                        {
+                            if (cchPrecision)
+                            {
+                                szBuf[cchBuf++] = '.';
+                                cchBuf += RTStrFormatU64(&szBuf[cchBuf], sizeof(szBuf) - cchBuf, uFraction, 10, cchPrecision, 0,
+                                                         RTSTR_F_ZEROPAD | RTSTR_F_WIDTH);
+                            }
+                            if (fFlags & RTSTR_F_BLANK)
+                                szBuf[cchBuf++] = ' ';
+                            szBuf[cchBuf++] = *pszPrefix++;
+                            if (*pszPrefix && ch2 != 'B')
+                                szBuf[cchBuf++] = *pszPrefix;
+                        }
+                        else if (fFlags & RTSTR_F_BLANK)
+                            szBuf[cchBuf++] = ' ';
+                        if (ch == 'c')
+                            szBuf[cchBuf++] = 'B';
+                        szBuf[cchBuf] = '\0';
+
+                        cch = 0;
+                        if ((fFlags & RTSTR_F_WIDTH) && !(fFlags & RTSTR_F_LEFT))
+                            while (cchBuf < cchWidth)
+                            {
+                                cch += pfnOutput(pvArgOutput, fFlags & RTSTR_F_ZEROPAD ? "0" : " ", 1);
+                                cchWidth--;
+                            }
+                        cch += pfnOutput(pvArgOutput, szBuf, cchBuf);
+                        return cch;
+                    }
 
                     default:
                         AssertMsgFailed(("Invalid status code format type '%.10s'!\n", pszFormatOrg));
@@ -872,17 +1189,16 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
             {
                 int rc = va_arg(*pArgs, int);
 #ifdef IN_RING3                         /* we don't want this anywhere else yet. */
-                PCRTSTATUSMSG pMsg = RTErrGet(rc);
                 switch (*(*ppszFormat)++)
                 {
                     case 'c':
-                        return pfnOutput(pvArgOutput, pMsg->pszDefine,    strlen(pMsg->pszDefine));
+                        return RTErrFormatDefine(rc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
                     case 's':
-                        return pfnOutput(pvArgOutput, pMsg->pszMsgShort,  strlen(pMsg->pszMsgShort));
+                        return RTErrFormatMsgShort(rc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
                     case 'f':
-                        return pfnOutput(pvArgOutput, pMsg->pszMsgFull,   strlen(pMsg->pszMsgFull));
+                        return RTErrFormatMsgFull(rc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
                     case 'a':
-                        return RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%s (%d) - %s", pMsg->pszDefine, rc, pMsg->pszMsgFull);
+                        return RTErrFormatMsgAll(rc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
                     default:
                         AssertMsgFailed(("Invalid status code format type '%.10s'!\n", pszFormatOrg));
                         return 0;
@@ -910,24 +1226,21 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
             case 'w':
             {
                 long rc = va_arg(*pArgs, long);
-# if defined(RT_OS_WINDOWS)
-                PCRTWINERRMSG pMsg = RTErrWinGet(rc);
-# endif
                 switch (*(*ppszFormat)++)
                 {
 # if defined(RT_OS_WINDOWS)
                     case 'c':
-                        return pfnOutput(pvArgOutput, pMsg->pszDefine, strlen(pMsg->pszDefine));
+                        return RTErrWinFormatDefine(rc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
                     case 'f':
-                        return pfnOutput(pvArgOutput, pMsg->pszMsgFull,strlen(pMsg->pszMsgFull));
+                        return RTErrWinFormatMsg(rc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
                     case 'a':
-                        return RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "%s (0x%08X) - %s", pMsg->pszDefine, rc, pMsg->pszMsgFull);
-# else
+                        return RTErrWinFormatMsgAll(rc, pfnOutput, pvArgOutput, szBuf, sizeof(szBuf));
+# else  /* !RT_OS_WINDOWS */
                     case 'c':
                     case 'f':
                     case 'a':
-                        return RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "0x%08X", rc);
-# endif
+                        return RTStrFormat(pfnOutput, pvArgOutput, NULL, 0, "0x%08x", rc);
+# endif /* !RT_OS_WINDOWS */
                     default:
                         AssertMsgFailed(("Invalid status code format type '%.10s'!\n", pszFormatOrg));
                         return 0;
@@ -1022,8 +1335,9 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
                 /*
                  * If it's a pointer, we'll check if it's valid before going on.
                  */
-                if ((s_aTypes[i].fFlags & RTST_FLAGS_POINTER) && !VALID_PTR(u.pv))
-                    return pfnOutput(pvArgOutput, RT_STR_TUPLE("<null>"));
+                if ((s_aTypes[i].fFlags & RTST_FLAGS_POINTER) && !RT_VALID_PTR(u.pv))
+                    return rtStrFormatBadPointer(0, pfnOutput, pvArgOutput, cchWidth, fFlags, u.pv,
+                                                 szBuf, RT_STR_TUPLE("!BadRD"));
 
                 /*
                  * Format the output.
@@ -1041,80 +1355,226 @@ DECLHIDDEN(size_t) rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, co
             }
 
 #ifdef IN_RING3
+
             /*
-             * Group 5, XML / HTML escapers.
+             * Group 5, XML / HTML, JSON and URI escapers.
              */
             case 'M':
             {
                 char chWhat = (*ppszFormat)[0];
-                bool fAttr  = chWhat == 'a';
-                char chType = (*ppszFormat)[1];
-                AssertMsgBreak(chWhat == 'a' || chWhat == 'e', ("Invalid IPRT format type '%.10s'!\n", pszFormatOrg));
-                *ppszFormat += 2;
-                switch (chType)
+                if (chWhat == 'a' || chWhat == 'e')
                 {
-                    case 's':
+                    /* XML attributes and element values. */
+                    bool fAttr  = chWhat == 'a';
+                    char chType = (*ppszFormat)[1];
+                    *ppszFormat += 2;
+                    switch (chType)
                     {
-                        static const char   s_szElemEscape[] = "<>&\"'";
-                        static const char   s_szAttrEscape[] = "<>&\"\n\r"; /* more? */
-                        const char * const  pszEscape =  fAttr ?             s_szAttrEscape  :             s_szElemEscape;
-                        size_t       const  cchEscape = (fAttr ? RT_ELEMENTS(s_szAttrEscape) : RT_ELEMENTS(s_szElemEscape)) - 1;
-                        size_t      cchOutput = 0;
-                        const char *pszStr    = va_arg(*pArgs, char *);
-                        ssize_t     cchStr;
-                        ssize_t     offCur;
-                        ssize_t     offLast;
+                        case 's':
+                        {
+                            static const char   s_szElemEscape[] = "<>&\"'";
+                            static const char   s_szAttrEscape[] = "<>&\"\n\r"; /* more? */
+                            const char * const  pszEscape =  fAttr ?             s_szAttrEscape  :             s_szElemEscape;
+                            size_t       const  cchEscape = (fAttr ? RT_ELEMENTS(s_szAttrEscape) : RT_ELEMENTS(s_szElemEscape)) - 1;
+                            size_t      cchOutput = 0;
+                            const char *pszStr    = va_arg(*pArgs, char *);
+                            ssize_t     cchStr;
+                            ssize_t     offCur;
+                            ssize_t     offLast;
 
-                        if (!VALID_PTR(pszStr))
-                            pszStr = "<NULL>";
-                        cchStr = RTStrNLen(pszStr, (unsigned)cchPrecision);
+                            if (!RT_VALID_PTR(pszStr))
+                                pszStr = "<NULL>";
+                            cchStr = RTStrNLen(pszStr, (unsigned)cchPrecision);
 
-                        if (fAttr)
-                            cchOutput += pfnOutput(pvArgOutput, "\"", 1);
-                        if (!(fFlags & RTSTR_F_LEFT))
+                            if (fAttr)
+                                cchOutput += pfnOutput(pvArgOutput, "\"", 1);
+                            if (!(fFlags & RTSTR_F_LEFT))
+                                while (--cchWidth >= cchStr)
+                                    cchOutput += pfnOutput(pvArgOutput, " ", 1);
+
+                            offLast = offCur = 0;
+                            while (offCur < cchStr)
+                            {
+                                if (memchr(pszEscape, pszStr[offCur], cchEscape))
+                                {
+                                    if (offLast < offCur)
+                                        cchOutput += pfnOutput(pvArgOutput, &pszStr[offLast], offCur - offLast);
+                                    switch (pszStr[offCur])
+                                    {
+                                        case '<':   cchOutput += pfnOutput(pvArgOutput, "&lt;", 4); break;
+                                        case '>':   cchOutput += pfnOutput(pvArgOutput, "&gt;", 4); break;
+                                        case '&':   cchOutput += pfnOutput(pvArgOutput, "&amp;", 5); break;
+                                        case '\'':  cchOutput += pfnOutput(pvArgOutput, "&apos;", 6); break;
+                                        case '"':   cchOutput += pfnOutput(pvArgOutput, "&quot;", 6); break;
+                                        case '\n':  cchOutput += pfnOutput(pvArgOutput, "&#xA;", 5); break;
+                                        case '\r':  cchOutput += pfnOutput(pvArgOutput, "&#xD;", 5); break;
+                                        default:
+                                            AssertFailed();
+                                    }
+                                    offLast = offCur + 1;
+                                }
+                                offCur++;
+                            }
+                            if (offLast < offCur)
+                                cchOutput += pfnOutput(pvArgOutput, &pszStr[offLast], offCur - offLast);
+
                             while (--cchWidth >= cchStr)
                                 cchOutput += pfnOutput(pvArgOutput, " ", 1);
-
-                        offLast = offCur = 0;
-                        while (offCur < cchStr)
-                        {
-                            if (memchr(pszEscape, pszStr[offCur], cchEscape))
-                            {
-                                if (offLast < offCur)
-                                    cchOutput += pfnOutput(pvArgOutput, &pszStr[offLast], offCur - offLast);
-                                switch (pszStr[offCur])
-                                {
-                                    case '<':   cchOutput += pfnOutput(pvArgOutput, "&lt;", 4); break;
-                                    case '>':   cchOutput += pfnOutput(pvArgOutput, "&gt;", 4); break;
-                                    case '&':   cchOutput += pfnOutput(pvArgOutput, "&amp;", 5); break;
-                                    case '\'':  cchOutput += pfnOutput(pvArgOutput, "&apos;", 6); break;
-                                    case '"':   cchOutput += pfnOutput(pvArgOutput, "&quot;", 6); break;
-                                    case '\n':  cchOutput += pfnOutput(pvArgOutput, "&#xA;", 5); break;
-                                    case '\r':  cchOutput += pfnOutput(pvArgOutput, "&#xD;", 5); break;
-                                    default:
-                                        AssertFailed();
-                                }
-                                offLast = offCur + 1;
-                            }
-                            offCur++;
+                            if (fAttr)
+                                cchOutput += pfnOutput(pvArgOutput, "\"", 1);
+                            return cchOutput;
                         }
-                        if (offLast < offCur)
-                            cchOutput += pfnOutput(pvArgOutput, &pszStr[offLast], offCur - offLast);
 
-                        while (--cchWidth >= cchStr)
-                            cchOutput += pfnOutput(pvArgOutput, " ", 1);
-                        if (fAttr)
-                            cchOutput += pfnOutput(pvArgOutput, "\"", 1);
-                        return cchOutput;
+                        default:
+                            AssertMsgFailed(("Invalid IPRT format type '%.10s'!\n", pszFormatOrg));
                     }
-
-                    default:
-                        AssertMsgFailed(("Invalid IPRT format type '%.10s'!\n", pszFormatOrg));
                 }
+                else if (chWhat == 'j')
+                {
+                    /* JSON string escaping. */
+                    char const chType = (*ppszFormat)[1];
+                    *ppszFormat += 2;
+                    switch (chType)
+                    {
+                        case 's':
+                        {
+                            const char *pszStr = va_arg(*pArgs, char *);
+                            size_t      cchOutput;
+                            ssize_t     cchStr;
+                            ssize_t     offCur;
+                            ssize_t     offLast;
+
+                            if (!RT_VALID_PTR(pszStr))
+                                pszStr = "<NULL>";
+                            cchStr = RTStrNLen(pszStr, (unsigned)cchPrecision);
+
+                            cchOutput = pfnOutput(pvArgOutput, "\"", 1);
+                            if (!(fFlags & RTSTR_F_LEFT))
+                                while (--cchWidth >= cchStr)
+                                    cchOutput += pfnOutput(pvArgOutput, " ", 1);
+
+                            offLast = offCur = 0;
+                            while (offCur < cchStr)
+                            {
+                                unsigned int const uch = pszStr[offCur];
+                                if (   uch >= 0x5d
+                                    || (uch >= 0x20 && uch != 0x22 && uch != 0x5c))
+                                    offCur++;
+                                else
+                                {
+                                    if (offLast < offCur)
+                                        cchOutput += pfnOutput(pvArgOutput, &pszStr[offLast], offCur - offLast);
+                                    switch ((char)uch)
+                                    {
+                                        case '"':   cchOutput += pfnOutput(pvArgOutput, "\\\"", 2); break;
+                                        case '\\':  cchOutput += pfnOutput(pvArgOutput, "\\\\", 2); break;
+                                        case '/':   cchOutput += pfnOutput(pvArgOutput, "\\/", 2); break;
+                                        case '\b':  cchOutput += pfnOutput(pvArgOutput, "\\b", 2); break;
+                                        case '\f':  cchOutput += pfnOutput(pvArgOutput, "\\f", 2); break;
+                                        case '\n':  cchOutput += pfnOutput(pvArgOutput, "\\n", 2); break;
+                                        case '\t':  cchOutput += pfnOutput(pvArgOutput, "\\t", 2); break;
+                                        default:
+                                        {
+                                            RTUNICP     uc     = 0xfffd; /* replacement character */
+                                            const char *pszCur = &pszStr[offCur];
+                                            int rc = RTStrGetCpEx(&pszCur, &uc);
+                                            if (RT_SUCCESS(rc))
+                                                offCur += pszCur - &pszStr[offCur] - 1;
+                                            if (uc >= 0xfffe)
+                                                uc = 0xfffd;             /* replacement character */
+                                            szBuf[0] = '\\';
+                                            szBuf[1] = 'u';
+                                            szBuf[2] = g_szHexDigits[(uc >> 12) & 0xf];
+                                            szBuf[3] = g_szHexDigits[(uc >>  8) & 0xf];
+                                            szBuf[4] = g_szHexDigits[(uc >>  4) & 0xf];
+                                            szBuf[5] = g_szHexDigits[ uc        & 0xf];
+                                            szBuf[6] = '\0';
+                                            cchOutput += pfnOutput(pvArgOutput, szBuf, 6);
+                                            break;
+                                        }
+                                    }
+                                    offLast = ++offCur;
+                                }
+                            }
+                            if (offLast < offCur)
+                                cchOutput += pfnOutput(pvArgOutput, &pszStr[offLast], offCur - offLast);
+
+                            while (--cchWidth >= cchStr)
+                                cchOutput += pfnOutput(pvArgOutput, " ", 1);
+                            cchOutput += pfnOutput(pvArgOutput, "\"", 1);
+                            return cchOutput;
+                        }
+
+                        default:
+                            AssertMsgFailed(("Invalid IPRT format type '%.10s'!\n", pszFormatOrg));
+                    }
+                }
+                else if (chWhat == 'p')
+                {
+                    /* Percent encoded string (RTC-3986). */
+                    char const  chVariant = (*ppszFormat)[1];
+                    char const  chAddSafe = chVariant == 'p' ? '/'
+                                          : chVariant == 'q' ? '+' /* '+' in queries is problematic, so no escape. */
+                                          :                    '~' /* whatever */;
+                    size_t      cchOutput = 0;
+                    const char *pszStr    = va_arg(*pArgs, char *);
+                    ssize_t     cchStr;
+                    ssize_t     offCur;
+                    ssize_t     offLast;
+
+                    *ppszFormat += 2;
+                    AssertMsgBreak(chVariant == 'a' || chVariant == 'p' || chVariant == 'q' || chVariant == 'f',
+                                   ("Invalid IPRT format type '%.10s'!\n", pszFormatOrg));
+
+                    if (!RT_VALID_PTR(pszStr))
+                        pszStr = "<NULL>";
+                    cchStr = RTStrNLen(pszStr, (unsigned)cchPrecision);
+
+                    if (!(fFlags & RTSTR_F_LEFT))
+                        while (--cchWidth >= cchStr)
+                            cchOutput += pfnOutput(pvArgOutput, "%20", 3);
+
+                    offLast = offCur = 0;
+                    while (offCur < cchStr)
+                    {
+                        ch = pszStr[offCur];
+                        if (   RT_C_IS_ALPHA(ch)
+                            || RT_C_IS_DIGIT(ch)
+                            || ch == '-'
+                            || ch == '.'
+                            || ch == '_'
+                            || ch == '~'
+                            || ch == chAddSafe)
+                            offCur++;
+                        else
+                        {
+                            if (offLast < offCur)
+                                cchOutput += pfnOutput(pvArgOutput, &pszStr[offLast], offCur - offLast);
+                            if (ch != ' ' || chVariant != 'f')
+                            {
+                                szBuf[0] = '%';
+                                szBuf[1] = g_szHexDigitsUpper[((uint8_t)ch >> 4) & 0xf];
+                                szBuf[2] = g_szHexDigitsUpper[(uint8_t)ch & 0xf];
+                                szBuf[3] = '\0';
+                                cchOutput += pfnOutput(pvArgOutput, szBuf, 3);
+                            }
+                            else
+                                cchOutput += pfnOutput(pvArgOutput, "+", 1);
+                            offLast = ++offCur;
+                        }
+                    }
+                    if (offLast < offCur)
+                        cchOutput += pfnOutput(pvArgOutput, &pszStr[offLast], offCur - offLast);
+
+                    while (--cchWidth >= cchStr)
+                        cchOutput += pfnOutput(pvArgOutput, "%20", 3);
+                }
+                else
+                    AssertMsgFailed(("Invalid IPRT format type '%.10s'!\n", pszFormatOrg));
                 break;
             }
-#endif /* IN_RING3 */
 
+#endif /* IN_RING3 */
 
             /*
              * Groups 6 - CPU Architecture Register Formatters.

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: NetIf-win.cpp 91503 2021-10-01 08:57:59Z vboxsync $ */
 /** @file
  * Main - NetIfList, Windows implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,12 +20,11 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#define LOG_GROUP LOG_GROUP_MAIN
+#define LOG_GROUP LOG_GROUP_MAIN_HOST
 
 #define NETIF_WITHOUT_NETCFG
 
-#include <iprt/asm.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <list>
 
 #define _WIN32_DCOM
@@ -40,30 +39,34 @@
 #endif
 
 #include <iprt/win/iphlpapi.h>
+#include <iprt/win/ntddndis.h>
 
-#include "Logging.h"
+#include "LoggingNew.h"
 #include "HostNetworkInterfaceImpl.h"
 #include "ProgressImpl.h"
 #include "VirtualBoxImpl.h"
+#include "VBoxNls.h"
+#include "Global.h"
 #include "netif.h"
 #include "ThreadTask.h"
 
+DECLARE_TRANSLATION_CONTEXT(NetIfWin);
+
 #ifdef VBOX_WITH_NETFLT
-#include <Wbemidl.h>
-#include <comdef.h>
+# include <Wbemidl.h>
 
-#include "svchlp.h"
+# include "svchlp.h"
 
-#include <shellapi.h>
-#define INITGUID
-#include <guiddef.h>
-#include <devguid.h>
-#include <iprt/win/objbase.h>
-#include <iprt/win/setupapi.h>
-#include <iprt/win/shlobj.h>
-#include <cfgmgr32.h>
+# include <shellapi.h>
+# define INITGUID
+# include <guiddef.h>
+# include <devguid.h>
+# include <iprt/win/objbase.h>
+# include <iprt/win/setupapi.h>
+# include <iprt/win/shlobj.h>
+# include <cfgmgr32.h>
 
-#define VBOX_APP_NAME L"VirtualBox"
+# define VBOX_APP_NAME L"VirtualBox"
 
 static int getDefaultInterfaceIndex()
 {
@@ -167,11 +170,11 @@ static int collectNetIfInfo(Bstr &strName, Guid &guid, PNETIFINFO pInfo, int iDe
                                     if (pPrefix->PrefixLength <= sizeof(pInfo->IPNetMask) * 8)
                                     {
                                         fIPFound = true;
-                                        ASMBitSetRange(&pInfo->IPNetMask, 0, pPrefix->PrefixLength);
+                                        RTNetPrefixToMaskIPv4(pPrefix->PrefixLength, &pInfo->IPNetMask);
                                     }
                                     else
-                                        Log(("collectNetIfInfo: Unexpected IPv4 prefix length of %d\n",
-                                             pPrefix->PrefixLength));
+                                        LogFunc(("Unexpected IPv4 prefix length of %d\n",
+                                                 pPrefix->PrefixLength));
                                 }
                                 break;
                             case AF_INET6:
@@ -180,22 +183,22 @@ static int collectNetIfInfo(Bstr &strName, Guid &guid, PNETIFINFO pInfo, int iDe
                                     if (pPrefix->PrefixLength <= sizeof(pInfo->IPv6NetMask) * 8)
                                     {
                                         fIPv6Found = true;
-                                        ASMBitSetRange(&pInfo->IPv6NetMask, 0, pPrefix->PrefixLength);
+                                        RTNetPrefixToMaskIPv6(pPrefix->PrefixLength, &pInfo->IPv6NetMask);
                                     }
                                     else
-                                        Log(("collectNetIfInfo: Unexpected IPv6 prefix length of %d\n",
-                                             pPrefix->PrefixLength));
+                                        LogFunc(("Unexpected IPv6 prefix length of %d\n",
+                                                pPrefix->PrefixLength));
                                 }
                                 break;
                         }
                     }
                     if (sizeof(pInfo->MACAddress) != pAdapter->PhysicalAddressLength)
-                        Log(("collectNetIfInfo: Unexpected physical address length: %u\n", pAdapter->PhysicalAddressLength));
+                        LogFunc(("Unexpected physical address length: %u\n", pAdapter->PhysicalAddressLength));
                     else
                         memcpy(pInfo->MACAddress.au8, pAdapter->PhysicalAddress, sizeof(pInfo->MACAddress));
                     pInfo->enmMediumType = NETIF_T_ETHERNET;
                     pInfo->enmStatus = pAdapter->OperStatus == IfOperStatusUp ? NETIF_S_UP : NETIF_S_DOWN;
-                    pInfo->bIsDefault = (pAdapter->IfIndex == (DWORD)iDefault);
+                    pInfo->fIsDefault = (pAdapter->IfIndex == (DWORD)iDefault);
                     RTStrFree(pszUuid);
                     break;
                 }
@@ -212,11 +215,11 @@ static int collectNetIfInfo(Bstr &strName, Guid &guid, PNETIFINFO pInfo, int iDe
                 pInfo->IPAddress.u = Settings.ip;
                 pInfo->IPNetMask.u = Settings.mask;
             }
-            pInfo->bDhcpEnabled = Settings.bDhcp;
+            pInfo->fDhcpEnabled = Settings.bDhcp;
         }
         else
         {
-            pInfo->bDhcpEnabled = false;
+            pInfo->fDhcpEnabled = false;
         }
     }
     RTMemFree(pAddresses);
@@ -234,7 +237,7 @@ struct StaticIpConfig
 
 struct StaticIpV6Config
 {
-    BSTR           IPV6Address;
+    char *         IPV6Address;
     ULONG          IPV6NetMaskLength;
 };
 
@@ -242,13 +245,20 @@ class NetworkInterfaceHelperClientData : public ThreadVoidData
 {
 public:
     NetworkInterfaceHelperClientData(){};
-    ~NetworkInterfaceHelperClientData(){};
+    ~NetworkInterfaceHelperClientData()
+    {
+        if (msgCode == SVCHlpMsg::EnableStaticIpConfigV6 && u.StaticIPV6.IPV6Address)
+        {
+            RTStrFree(u.StaticIPV6.IPV6Address);
+            u.StaticIPV6.IPV6Address = NULL;
+        }
+    };
 
     SVCHlpMsg::Code msgCode;
     /* for SVCHlpMsg::CreateHostOnlyNetworkInterface */
     Bstr name;
     ComObjPtr<HostNetworkInterface> iface;
-    ComObjPtr<VirtualBox> vBox;
+    ComObjPtr<VirtualBox> ptrVBox;
     /* for SVCHlpMsg::RemoveHostOnlyNetworkInterface */
     Guid guid;
 
@@ -294,8 +304,8 @@ static HRESULT netIfNetworkInterfaceHelperClient(SVCHlpClient *aClient,
             /* write message and parameters */
             vrc = aClient->write(d->msgCode);
             if (RT_FAILURE(vrc)) break;
-//            vrc = aClient->write(Utf8Str(d->name));
-//            if (RT_FAILURE(vrc)) break;
+            vrc = aClient->write(Utf8Str(d->name));
+            if (RT_FAILURE(vrc)) break;
 
             /* wait for a reply */
             bool endLoop = false;
@@ -325,10 +335,12 @@ static HRESULT netIfNetworkInterfaceHelperClient(SVCHlpClient *aClient,
                         rc = d->iface->init(Bstr(name), Bstr(name), guid, HostNetworkInterfaceType_HostOnly);
                         if (SUCCEEDED(rc))
                         {
-                            rc = d->iface->i_setVirtualBox(d->vBox);
+                            rc = d->iface->i_setVirtualBox(d->ptrVBox);
                             if (SUCCEEDED(rc))
                             {
                                 rc = d->iface->updateConfig();
+                                if (SUCCEEDED(rc))
+                                    rc = d->iface->i_updatePersistentConfig();
                             }
                         }
                         endLoop = true;
@@ -535,7 +547,7 @@ static HRESULT netIfNetworkInterfaceHelperClient(SVCHlpClient *aClient,
             if (RT_FAILURE(vrc)) break;
             vrc = aClient->write(d->guid);
             if (RT_FAILURE(vrc)) break;
-            vrc = aClient->write(Utf8Str(d->u.StaticIPV6.IPV6Address));
+            vrc = aClient->write(d->u.StaticIPV6.IPV6Address);
             if (RT_FAILURE(vrc)) break;
             vrc = aClient->write(d->u.StaticIPV6.IPV6NetMaskLength);
             if (RT_FAILURE(vrc)) break;
@@ -670,9 +682,9 @@ int netIfNetworkInterfaceHelperServer(SVCHlpClient *aClient,
         {
             LogFlowFunc(("CreateHostOnlyNetworkInterface:\n"));
 
-//            Utf8Str name;
-//            vrc = aClient->read(name);
-//            if (RT_FAILURE(vrc)) break;
+            Utf8Str desiredName;
+            vrc = aClient->read(desiredName);
+            if (RT_FAILURE(vrc)) break;
 
             Guid guid;
             Utf8Str errMsg;
@@ -681,10 +693,10 @@ int netIfNetworkInterfaceHelperServer(SVCHlpClient *aClient,
 
 #ifdef VBOXNETCFG_DELAYEDRENAME
             Bstr devId;
-            hrc = VBoxNetCfgWinCreateHostOnlyNetworkInterface(NULL, false, guid.asOutParam(), devId.asOutParam(),
+            hrc = VBoxNetCfgWinCreateHostOnlyNetworkInterface(NULL, false, Bstr(desiredName).raw(), guid.asOutParam(), devId.asOutParam(),
                                                               bstrErr.asOutParam());
 #else /* !VBOXNETCFG_DELAYEDRENAME */
-            hrc = VBoxNetCfgWinCreateHostOnlyNetworkInterface(NULL, false, guid.asOutParam(), name.asOutParam(),
+            hrc = VBoxNetCfgWinCreateHostOnlyNetworkInterface(NULL, false, Bstr(desiredName).raw(), guid.asOutParam(), name.asOutParam(),
                                                               bstrErr.asOutParam());
 #endif /* !VBOXNETCFG_DELAYEDRENAME */
 
@@ -986,8 +998,8 @@ static int vboxNetWinAddComponent(std::list<ComObjPtr<HostNetworkInterface> > * 
             Info.Uuid = *guidIfCopy.raw();
             rc = collectNetIfInfo(name, guidIfCopy, &Info, iDefaultInterface);
             if (RT_FAILURE(rc))
-                LogRel(("vboxNetWinAddComponent: collectNetIfInfo() -> %Rrc\n", rc));
-            Log(("vboxNetWinAddComponent: adding %ls\n", lpszName));
+                LogRelFunc(("collectNetIfInfo() -> %Rrc\n", rc));
+            LogFunc(("adding %ls\n", lpszName));
             /* create a new object and add it to the list */
             ComObjPtr<HostNetworkInterface> iface;
             iface.createObject();
@@ -995,23 +1007,23 @@ static int vboxNetWinAddComponent(std::list<ComObjPtr<HostNetworkInterface> > * 
             rc = iface->init(name, enmType, &Info);
             if (SUCCEEDED(rc))
             {
-                if (Info.bIsDefault)
+                if (Info.fIsDefault)
                     pPist->push_front(iface);
                 else
                     pPist->push_back(iface);
             }
             else
             {
-                LogRel(("vboxNetWinAddComponent: HostNetworkInterface::init() -> %Rrc\n", rc));
-                Assert(0);
+                LogRelFunc(("HostNetworkInterface::init() -> %Rrc\n", rc));
+                AssertComRC(rc);
             }
         }
         else
-            LogRel(("vboxNetWinAddComponent: failed to get device instance GUID (0x%x)\n", hr));
+            LogRelFunc(("failed to get device instance GUID (0x%x)\n", hr));
         CoTaskMemFree(lpszName);
     }
     else
-        LogRel(("vboxNetWinAddComponent: failed to get device display name (0x%x)\n", hr));
+        LogRelFunc(("failed to get device display name (0x%x)\n", hr));
 
     return rc;
 }
@@ -1038,9 +1050,9 @@ static int netIfListHostAdapters(INetCfg *pNc, std::list<ComObjPtr<HostNetworkIn
             ULONG uComponentStatus;
             hr = pMpNcc->GetDisplayName(&pwszName);
             if (hr == S_OK)
-                Log(("netIfListHostAdapters: %ls\n", pwszName));
+                LogFunc(("%ls\n", pwszName));
             else
-                LogRel(("netIfListHostAdapters: failed to get device display name (0x%x)\n", hr));
+                LogRelFunc(("failed to get device display name (0x%x)\n", hr));
             hr = pMpNcc->GetDeviceStatus(&uComponentStatus);
             if (hr == S_OK)
             {
@@ -1051,7 +1063,7 @@ static int netIfListHostAdapters(INetCfg *pNc, std::list<ComObjPtr<HostNetworkIn
                     Assert(hr == S_OK);
                     if (hr == S_OK)
                     {
-                        Log(("netIfListHostAdapters: id = %ls\n", pId));
+                        LogFunc(("id = %ls\n", pId));
                         if (!_wcsnicmp(pId, L"sun_VBoxNetAdp", sizeof(L"sun_VBoxNetAdp")/2))
                         {
                             vboxNetWinAddComponent(&list, pMpNcc, HostNetworkInterfaceType_HostOnly, -1);
@@ -1059,11 +1071,11 @@ static int netIfListHostAdapters(INetCfg *pNc, std::list<ComObjPtr<HostNetworkIn
                         CoTaskMemFree(pId);
                     }
                     else
-                        LogRel(("netIfListHostAdapters: failed to get device id (0x%x)\n", hr));
+                        LogRelFunc(("failed to get device id (0x%x)\n", hr));
                 }
             }
             else
-                LogRel(("netIfListHostAdapters: failed to get device status (0x%x)\n", hr));
+                LogRelFunc(("failed to get device status (0x%x)\n", hr));
             pMpNcc->Release();
         }
         Assert(hr == S_OK || hr == S_FALSE);
@@ -1071,7 +1083,7 @@ static int netIfListHostAdapters(INetCfg *pNc, std::list<ComObjPtr<HostNetworkIn
         pEnumComponent->Release();
     }
     else
-        LogRel(("netIfListHostAdapters: EnumComponents error (0x%x)\n", hr));
+        LogRelFunc(("EnumComponents error (0x%x)\n", hr));
 #endif /* #  if defined VBOX_WITH_NETFLT */
     return VINF_SUCCESS;
 }
@@ -1111,12 +1123,12 @@ int NetIfGetConfigByName(PNETIFINFO)
  *
  * @returns VBox status code.
  *
- * @param   pszIfName   Interface name.
+ * @param   pcszIfName  Interface name.
  * @param   penmState   Where to store the retrieved state.
  */
-int NetIfGetState(const char *pszIfName, NETIFSTATUS *penmState)
+int NetIfGetState(const char *pcszIfName, NETIFSTATUS *penmState)
 {
-    RT_NOREF(pszIfName, penmState);
+    RT_NOREF(pcszIfName, penmState);
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -1126,38 +1138,37 @@ int NetIfGetState(const char *pszIfName, NETIFSTATUS *penmState)
  *
  * @returns VBox status code.
  *
- * @param   pszIfName  Interface name.
+ * @param   pcszIfName  Interface name.
  * @param   puMbits     Where to store the link speed.
  */
-int NetIfGetLinkSpeed(const char *pszIfName, uint32_t *puMbits)
+int NetIfGetLinkSpeed(const char *pcszIfName, uint32_t *puMbits)
 {
-    RT_NOREF(pszIfName, puMbits);
+    RT_NOREF(pcszIfName, puMbits);
     return VERR_NOT_IMPLEMENTED;
 }
 
 int NetIfCreateHostOnlyNetworkInterface(VirtualBox *pVirtualBox,
                                         IHostNetworkInterface **aHostNetworkInterface,
                                         IProgress **aProgress,
-                                        const char *pszName)
+                                        IN_BSTR aName)
 {
-    RT_NOREF(pszName);
 #ifndef VBOX_WITH_NETFLT
     return VERR_NOT_IMPLEMENTED;
 #else
     /* create a progress object */
     ComObjPtr<Progress> progress;
-    progress.createObject();
+    HRESULT hrc = progress.createObject();
+    AssertComRCReturn(hrc, Global::vboxStatusCodeFromCOM(hrc));
 
     ComPtr<IHost> host;
-    HRESULT rc = pVirtualBox->COMGETTER(Host)(host.asOutParam());
-    if (SUCCEEDED(rc))
+    hrc = pVirtualBox->COMGETTER(Host)(host.asOutParam());
+    if (SUCCEEDED(hrc))
     {
-        rc = progress->init(pVirtualBox, host,
-                            Bstr(_T("Creating host only network interface")).raw(),
-                            FALSE /* aCancelable */);
-        if (SUCCEEDED(rc))
+        hrc = progress->init(pVirtualBox, host,
+                             Bstr(NetIfWin::tr("Creating host only network interface")).raw(),
+                             FALSE /* aCancelable */);
+        if (SUCCEEDED(hrc))
         {
-            if (FAILED(rc)) return rc;
             progress.queryInterfaceTo(aProgress);
 
             /* create a new uninitialized host interface object */
@@ -1169,24 +1180,24 @@ int NetIfCreateHostOnlyNetworkInterface(VirtualBox *pVirtualBox,
             NetworkInterfaceHelperClientData* d = new NetworkInterfaceHelperClientData();
 
             d->msgCode = SVCHlpMsg::CreateHostOnlyNetworkInterface;
-//            d->name = aName;
+            d->name = aName;
             d->iface = iface;
-            d->vBox = pVirtualBox;
+            d->ptrVBox = pVirtualBox;
 
-            rc = pVirtualBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
-                                                     netIfNetworkInterfaceHelperClient,
-                                                     static_cast<void *>(d),
-                                                     progress);
+            hrc = pVirtualBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
+                                                      netIfNetworkInterfaceHelperClient,
+                                                      static_cast<void *>(d),
+                                                      progress);
             /* d is now owned by netIfNetworkInterfaceHelperClient(), no need to delete one here */
 
         }
     }
 
-    return SUCCEEDED(rc) ? VINF_SUCCESS : VERR_GENERAL_FAILURE;
+    return Global::vboxStatusCodeFromCOM(hrc);
 #endif
 }
 
-int NetIfRemoveHostOnlyNetworkInterface(VirtualBox *pVirtualBox, IN_GUID aId,
+int NetIfRemoveHostOnlyNetworkInterface(VirtualBox *pVirtualBox, const Guid &aId,
                                         IProgress **aProgress)
 {
 #ifndef VBOX_WITH_NETFLT
@@ -1194,17 +1205,18 @@ int NetIfRemoveHostOnlyNetworkInterface(VirtualBox *pVirtualBox, IN_GUID aId,
 #else
     /* create a progress object */
     ComObjPtr<Progress> progress;
-    progress.createObject();
+    HRESULT hrc = progress.createObject();
+    AssertComRCReturn(hrc, Global::vboxStatusCodeFromCOM(hrc));
+
     ComPtr<IHost> host;
-    HRESULT rc = pVirtualBox->COMGETTER(Host)(host.asOutParam());
-    if (SUCCEEDED(rc))
+    hrc = pVirtualBox->COMGETTER(Host)(host.asOutParam());
+    if (SUCCEEDED(hrc))
     {
-        rc = progress->init(pVirtualBox, host,
-                           Bstr(_T("Removing host network interface")).raw(),
-                           FALSE /* aCancelable */);
-        if (SUCCEEDED(rc))
+        hrc = progress->init(pVirtualBox, host,
+                             Bstr(NetIfWin::tr("Removing host network interface")).raw(),
+                             FALSE /* aCancelable */);
+        if (SUCCEEDED(hrc))
         {
-            if (FAILED(rc)) return rc;
             progress.queryInterfaceTo(aProgress);
 
             /* create the networkInterfaceHelperClient() argument */
@@ -1213,20 +1225,20 @@ int NetIfRemoveHostOnlyNetworkInterface(VirtualBox *pVirtualBox, IN_GUID aId,
             d->msgCode = SVCHlpMsg::RemoveHostOnlyNetworkInterface;
             d->guid = aId;
 
-            rc = pVirtualBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
-                                                     netIfNetworkInterfaceHelperClient,
-                                                     static_cast<void *>(d),
-                                                     progress);
+            hrc = pVirtualBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
+                                                      netIfNetworkInterfaceHelperClient,
+                                                      static_cast<void *>(d),
+                                                      progress);
             /* d is now owned by netIfNetworkInterfaceHelperClient(), no need to delete one here */
 
         }
     }
 
-    return SUCCEEDED(rc) ? VINF_SUCCESS : VERR_GENERAL_FAILURE;
+    return Global::vboxStatusCodeFromCOM(hrc);
 #endif
 }
 
-int NetIfEnableStaticIpConfig(VirtualBox *vBox, HostNetworkInterface * pIf, ULONG aOldIp, ULONG ip, ULONG mask)
+int NetIfEnableStaticIpConfig(VirtualBox *pVBox, HostNetworkInterface * pIf, ULONG aOldIp, ULONG ip, ULONG mask)
 {
     RT_NOREF(aOldIp);
 #ifndef VBOX_WITH_NETFLT
@@ -1236,19 +1248,19 @@ int NetIfEnableStaticIpConfig(VirtualBox *vBox, HostNetworkInterface * pIf, ULON
     HRESULT rc = pIf->COMGETTER(Id)(guid.asOutParam());
     if (SUCCEEDED(rc))
     {
-//        ComPtr<VirtualBox> vBox;
-//        rc = pIf->getVirtualBox(vBox.asOutParam());
+//        ComPtr<VirtualBox> pVBox;
+//        rc = pIf->getVirtualBox(pVBox.asOutParam());
 //        if (SUCCEEDED(rc))
         {
             /* create a progress object */
             ComObjPtr<Progress> progress;
             progress.createObject();
 //            ComPtr<IHost> host;
-//            HRESULT rc = vBox->COMGETTER(Host)(host.asOutParam());
+//            HRESULT rc = pVBox->COMGETTER(Host)(host.asOutParam());
 //            if (SUCCEEDED(rc))
             {
-                rc = progress->init(vBox, (IHostNetworkInterface*)pIf,
-                                    Bstr("Enabling Dynamic Ip Configuration").raw(),
+                rc = progress->init(pVBox, (IHostNetworkInterface*)pIf,
+                                    Bstr(NetIfWin::tr("Enabling Dynamic Ip Configuration")).raw(),
                                     FALSE /* aCancelable */);
                 if (SUCCEEDED(rc))
                 {
@@ -1264,10 +1276,10 @@ int NetIfEnableStaticIpConfig(VirtualBox *vBox, HostNetworkInterface * pIf, ULON
                     d->u.StaticIP.IPAddress = ip;
                     d->u.StaticIP.IPNetMask = mask;
 
-                    rc = vBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
-                                                      netIfNetworkInterfaceHelperClient,
-                                                      static_cast<void *>(d),
-                                                      progress);
+                    rc = pVBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
+                                                       netIfNetworkInterfaceHelperClient,
+                                                       static_cast<void *>(d),
+                                                       progress);
                     /* d is now owned by netIfNetworkInterfaceHelperClient(), no need to delete one here */
 
                     if (SUCCEEDED(rc))
@@ -1283,8 +1295,8 @@ int NetIfEnableStaticIpConfig(VirtualBox *vBox, HostNetworkInterface * pIf, ULON
 #endif
 }
 
-int NetIfEnableStaticIpConfigV6(VirtualBox *vBox, HostNetworkInterface * pIf, IN_BSTR aOldIPV6Address,
-                                IN_BSTR aIPV6Address, ULONG aIPV6MaskPrefixLength)
+int NetIfEnableStaticIpConfigV6(VirtualBox *pVBox, HostNetworkInterface * pIf, const Utf8Str &aOldIPV6Address,
+                                const Utf8Str &aIPV6Address, ULONG aIPV6MaskPrefixLength)
 {
     RT_NOREF(aOldIPV6Address);
 #ifndef VBOX_WITH_NETFLT
@@ -1294,19 +1306,19 @@ int NetIfEnableStaticIpConfigV6(VirtualBox *vBox, HostNetworkInterface * pIf, IN
     HRESULT rc = pIf->COMGETTER(Id)(guid.asOutParam());
     if (SUCCEEDED(rc))
     {
-//        ComPtr<VirtualBox> vBox;
-//        rc = pIf->getVirtualBox(vBox.asOutParam());
+//        ComPtr<VirtualBox> pVBox;
+//        rc = pIf->getVirtualBox(pVBox.asOutParam());
 //        if (SUCCEEDED(rc))
         {
             /* create a progress object */
             ComObjPtr<Progress> progress;
             progress.createObject();
 //            ComPtr<IHost> host;
-//            HRESULT rc = vBox->COMGETTER(Host)(host.asOutParam());
+//            HRESULT rc = pVBox->COMGETTER(Host)(host.asOutParam());
 //            if (SUCCEEDED(rc))
             {
-                rc = progress->init(vBox, (IHostNetworkInterface*)pIf,
-                                    Bstr("Enabling Dynamic Ip Configuration").raw(),
+                rc = progress->init(pVBox, (IHostNetworkInterface*)pIf,
+                                    Bstr(NetIfWin::tr("Enabling Dynamic Ip Configuration")).raw(),
                                     FALSE /* aCancelable */);
                 if (SUCCEEDED(rc))
                 {
@@ -1319,13 +1331,13 @@ int NetIfEnableStaticIpConfigV6(VirtualBox *vBox, HostNetworkInterface * pIf, IN
                     d->msgCode = SVCHlpMsg::EnableStaticIpConfigV6;
                     d->guid = guid;
                     d->iface = pIf;
-                    d->u.StaticIPV6.IPV6Address = aIPV6Address;
+                    d->u.StaticIPV6.IPV6Address = RTStrDup(aIPV6Address.c_str());
                     d->u.StaticIPV6.IPV6NetMaskLength = aIPV6MaskPrefixLength;
 
-                    rc = vBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
-                                                      netIfNetworkInterfaceHelperClient,
-                                                      static_cast<void *>(d),
-                                                      progress);
+                    rc = pVBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
+                                                       netIfNetworkInterfaceHelperClient,
+                                                       static_cast<void *>(d),
+                                                       progress);
                     /* d is now owned by netIfNetworkInterfaceHelperClient(), no need to delete one here */
 
                     if (SUCCEEDED(rc))
@@ -1341,7 +1353,7 @@ int NetIfEnableStaticIpConfigV6(VirtualBox *vBox, HostNetworkInterface * pIf, IN
 #endif
 }
 
-int NetIfEnableDynamicIpConfig(VirtualBox *vBox, HostNetworkInterface * pIf)
+int NetIfEnableDynamicIpConfig(VirtualBox *pVBox, HostNetworkInterface * pIf)
 {
 #ifndef VBOX_WITH_NETFLT
     return VERR_NOT_IMPLEMENTED;
@@ -1351,19 +1363,19 @@ int NetIfEnableDynamicIpConfig(VirtualBox *vBox, HostNetworkInterface * pIf)
     rc = pIf->COMGETTER(Id)(guid.asOutParam());
     if (SUCCEEDED(rc))
     {
-//        ComPtr<VirtualBox> vBox;
-//        rc = pIf->getVirtualBox(vBox.asOutParam());
+//        ComPtr<VirtualBox> pVBox;
+//        rc = pIf->getVirtualBox(pVBox.asOutParam());
 //        if (SUCCEEDED(rc))
         {
             /* create a progress object */
             ComObjPtr<Progress> progress;
             progress.createObject();
 //            ComPtr<IHost> host;
-//            HRESULT rc = vBox->COMGETTER(Host)(host.asOutParam());
+//            HRESULT rc = pVBox->COMGETTER(Host)(host.asOutParam());
 //            if (SUCCEEDED(rc))
             {
-                rc = progress->init(vBox, (IHostNetworkInterface*)pIf,
-                                    Bstr("Enabling Dynamic Ip Configuration").raw(),
+                rc = progress->init(pVBox, (IHostNetworkInterface*)pIf,
+                                    Bstr(NetIfWin::tr("Enabling Dynamic Ip Configuration")).raw(),
                                     FALSE /* aCancelable */);
                 if (SUCCEEDED(rc))
                 {
@@ -1377,10 +1389,10 @@ int NetIfEnableDynamicIpConfig(VirtualBox *vBox, HostNetworkInterface * pIf)
                     d->guid = guid;
                     d->iface = pIf;
 
-                    rc = vBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
-                                                      netIfNetworkInterfaceHelperClient,
-                                                      static_cast<void *>(d),
-                                                      progress);
+                    rc = pVBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
+                                                       netIfNetworkInterfaceHelperClient,
+                                                       static_cast<void *>(d),
+                                                       progress);
                     /* d is now owned by netIfNetworkInterfaceHelperClient(), no need to delete one here */
 
                     if (SUCCEEDED(rc))
@@ -1396,7 +1408,7 @@ int NetIfEnableDynamicIpConfig(VirtualBox *vBox, HostNetworkInterface * pIf)
 #endif
 }
 
-int NetIfDhcpRediscover(VirtualBox *vBox, HostNetworkInterface * pIf)
+int NetIfDhcpRediscover(VirtualBox *pVBox, HostNetworkInterface * pIf)
 {
 #ifndef VBOX_WITH_NETFLT
     return VERR_NOT_IMPLEMENTED;
@@ -1406,19 +1418,19 @@ int NetIfDhcpRediscover(VirtualBox *vBox, HostNetworkInterface * pIf)
     rc = pIf->COMGETTER(Id)(guid.asOutParam());
     if (SUCCEEDED(rc))
     {
-//        ComPtr<VirtualBox> vBox;
-//        rc = pIf->getVirtualBox(vBox.asOutParam());
+//        ComPtr<VirtualBox> pVBox;
+//        rc = pIf->getVirtualBox(pVBox.asOutParam());
 //        if (SUCCEEDED(rc))
         {
             /* create a progress object */
             ComObjPtr<Progress> progress;
             progress.createObject();
 //            ComPtr<IHost> host;
-//            HRESULT rc = vBox->COMGETTER(Host)(host.asOutParam());
+//            HRESULT rc = pVBox->COMGETTER(Host)(host.asOutParam());
 //            if (SUCCEEDED(rc))
             {
-                rc = progress->init(vBox, (IHostNetworkInterface*)pIf,
-                                    Bstr("Enabling Dynamic Ip Configuration").raw(),
+                rc = progress->init(pVBox, (IHostNetworkInterface*)pIf,
+                                    Bstr(NetIfWin::tr("Enabling Dynamic Ip Configuration")).raw(),
                                     FALSE /* aCancelable */);
                 if (SUCCEEDED(rc))
                 {
@@ -1432,10 +1444,10 @@ int NetIfDhcpRediscover(VirtualBox *vBox, HostNetworkInterface * pIf)
                     d->guid = guid;
                     d->iface = pIf;
 
-                    rc = vBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
-                                                      netIfNetworkInterfaceHelperClient,
-                                                      static_cast<void *>(d),
-                                                      progress);
+                    rc = pVBox->i_startSVCHelperClient(IsUACEnabled() == TRUE /* aPrivileged */,
+                                                       netIfNetworkInterfaceHelperClient,
+                                                       static_cast<void *>(d),
+                                                       progress);
                     /* d is now owned by netIfNetworkInterfaceHelperClient(), no need to delete one here */
 
                     if (SUCCEEDED(rc))
@@ -1452,7 +1464,7 @@ int NetIfDhcpRediscover(VirtualBox *vBox, HostNetworkInterface * pIf)
 }
 
 
-#define netIfLog Log
+#define netIfLog LogFunc
 
 struct BoundAdapter
 {
@@ -1460,6 +1472,7 @@ struct BoundAdapter
     LPWSTR                pHwId;
     RTUUID                guid;
     PIP_ADAPTER_ADDRESSES pAdapter;
+    BOOL                  fWireless;
 };
 
 static int netIfGetUnboundHostOnlyAdapters(INetCfg *pNetCfg, std::list<BoundAdapter> &adapters)
@@ -1469,7 +1482,7 @@ static int netIfGetUnboundHostOnlyAdapters(INetCfg *pNetCfg, std::list<BoundAdap
     IEnumNetCfgComponent  *pEnumComponent;
 
     if ((hr = pNetCfg->EnumComponents(&GUID_DEVCLASS_NET, &pEnumComponent)) != S_OK)
-        LogRel(("netIfGetUnboundHostOnlyAdapters: failed to enumerate network adapter components (0x%x)\n", hr));
+        LogRelFunc(("failed to enumerate network adapter components (0x%x)\n", hr));
     else
     {
         while ((hr = pEnumComponent->Next(1, &pMiniport, NULL)) == S_OK)
@@ -1479,21 +1492,21 @@ static int netIfGetUnboundHostOnlyAdapters(INetCfg *pNetCfg, std::list<BoundAdap
             struct BoundAdapter adapter;
             memset(&adapter, 0, sizeof(adapter));
             if ((hr = pMiniport->GetDisplayName(&adapter.pName)) != S_OK)
-                LogRel(("netIfGetUnboundHostOnlyAdapters: failed to get device display name (0x%x)\n", hr));
+                LogRelFunc(("failed to get device display name (0x%x)\n", hr));
             else if ((hr = pMiniport->GetDeviceStatus(&uComponentStatus)) != S_OK)
-                netIfLog(("netIfGetUnboundHostOnlyAdapters: failed to get device status (0x%x)\n", hr));
+                netIfLog(("failed to get device status (0x%x)\n", hr));
             else if (uComponentStatus != 0)
-                netIfLog(("netIfGetUnboundHostOnlyAdapters: wrong device status (0x%x)\n", uComponentStatus));
+                netIfLog(("wrong device status (0x%x)\n", uComponentStatus));
             else if ((hr = pMiniport->GetId(&adapter.pHwId)) != S_OK)
-                LogRel(("netIfGetUnboundHostOnlyAdapters: failed to get device id (0x%x)\n", hr));
+                LogRelFunc(("failed to get device id (0x%x)\n", hr));
             else if (_wcsnicmp(adapter.pHwId, L"sun_VBoxNetAdp", sizeof(L"sun_VBoxNetAdp")/2))
-                netIfLog(("netIfGetUnboundHostOnlyAdapters: not host-only id = %ls, ignored\n", adapter.pHwId));
+                netIfLog(("not host-only id = %ls, ignored\n", adapter.pHwId));
             else if ((hr = pMiniport->GetInstanceGuid(&guid)) != S_OK)
-                LogRel(("netIfGetUnboundHostOnlyAdapters: failed to get instance id (0x%x)\n", hr));
+                LogRelFunc(("failed to get instance id (0x%x)\n", hr));
             else
             {
                 adapter.guid = *(Guid(guid).raw());
-                netIfLog(("netIfGetUnboundHostOnlyAdapters: guid=%RTuuid, name=%ls id = %ls\n", &adapter.guid, adapter.pName, adapter.pHwId));
+                netIfLog(("guid=%RTuuid, name=%ls id = %ls\n", &adapter.guid, adapter.pName, adapter.pHwId));
                 adapters.push_back(adapter);
                 adapter.pName = adapter.pHwId = NULL; /* do not free, will be done later */
             }
@@ -1507,8 +1520,82 @@ static int netIfGetUnboundHostOnlyAdapters(INetCfg *pNetCfg, std::list<BoundAdap
 
         pEnumComponent->Release();
     }
-    netIfLog(("netIfGetUnboundHostOnlyAdapters: return\n"));
+    netIfLog(("return\n"));
     return VINF_SUCCESS;
+}
+
+#define DEVNAME_PREFIX L"\\\\.\\"
+
+static BOOL netIfIsWireless(INetCfgComponent *pAdapter)
+{
+    bool fWireless = false;
+
+    /* Construct a device name. */
+    LPWSTR  pwszBindName = NULL;
+    HRESULT hrc = pAdapter->GetBindName(&pwszBindName);
+    if (SUCCEEDED(hrc) && pwszBindName)
+    {
+        WCHAR wszFileName[MAX_PATH];
+        int vrc = RTUtf16Copy(wszFileName, MAX_PATH, DEVNAME_PREFIX);
+        if (RT_SUCCESS(vrc))
+            vrc = RTUtf16Cat(wszFileName, MAX_PATH, pwszBindName);
+        if (RT_SUCCESS(vrc))
+        {
+            /* open the device */
+            HANDLE hDevice = CreateFileW(wszFileName,
+                                         GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                         NULL,
+                                         OPEN_EXISTING,
+                                         FILE_ATTRIBUTE_NORMAL,
+                                         NULL);
+            if (hDevice != INVALID_HANDLE_VALUE)
+            {
+                /* now issue the OID_GEN_PHYSICAL_MEDIUM query */
+                DWORD Oid = OID_GEN_PHYSICAL_MEDIUM;
+                NDIS_PHYSICAL_MEDIUM PhMedium = NdisPhysicalMediumUnspecified;
+                DWORD cbResultIgn = 0;
+                if (DeviceIoControl(hDevice,
+                                    IOCTL_NDIS_QUERY_GLOBAL_STATS,
+                                    &Oid,
+                                    sizeof(Oid),
+                                    &PhMedium,
+                                    sizeof(PhMedium),
+                                    &cbResultIgn,
+                                    NULL))
+                {
+                    /* that was simple, now examine PhMedium */
+                    fWireless = PhMedium == NdisPhysicalMediumWirelessWan
+                             || PhMedium == NdisPhysicalMediumWirelessLan
+                             || PhMedium == NdisPhysicalMediumNative802_11
+                             || PhMedium == NdisPhysicalMediumBluetooth;
+                }
+                else
+                {
+                    DWORD rcWin = GetLastError();
+                    LogRel(("netIfIsWireless: DeviceIoControl to '%ls' failed with rcWin=%u (%#x) - ignoring\n",
+                            wszFileName, rcWin, rcWin));
+                    Assert(rcWin == ERROR_INVALID_PARAMETER || rcWin == ERROR_NOT_SUPPORTED || rcWin == ERROR_BAD_COMMAND);
+                }
+                CloseHandle(hDevice);
+            }
+            else
+            {
+                DWORD rcWin = GetLastError();
+#if 0 /* bird: Triggers on each VBoxSVC startup so, disabled.  Whoever want it, can enable using DEBUG_xxxx. */
+                AssertLogRelMsgFailed(("netIfIsWireless: CreateFile on '%ls' failed with rcWin=%u (%#x) - ignoring\n",
+                                       wszFileName, rcWin, rcWin));
+#else
+                LogRel(("netIfIsWireless: CreateFile on '%ls' failed with rcWin=%u (%#x) - ignoring\n",
+                        wszFileName, rcWin, rcWin));
+#endif
+            }
+        }
+        CoTaskMemFree(pwszBindName);
+    }
+    else
+        LogRel(("netIfIsWireless: GetBindName failed hrc=%Rhrc\n", hrc));
+
+    return fWireless;
 }
 
 static HRESULT netIfGetBoundAdapters(std::list<BoundAdapter> &boundAdapters)
@@ -1518,7 +1605,7 @@ static HRESULT netIfGetBoundAdapters(std::list<BoundAdapter> &boundAdapters)
     LPWSTR               lpszApp;
     HRESULT              hr;
 
-    netIfLog(("netIfGetBoundAdapters: building the list of interfaces\n"));
+    netIfLog(("building the list of interfaces\n"));
     /* we are using the INetCfg API for getting the list of miniports */
     hr = VBoxNetCfgWinQueryINetCfg(&pNetCfg, FALSE,
                        VBOX_APP_NAME,
@@ -1527,25 +1614,25 @@ static HRESULT netIfGetBoundAdapters(std::list<BoundAdapter> &boundAdapters)
     Assert(hr == S_OK);
     if (hr != S_OK)
     {
-        LogRel(("netIfGetBoundAdapters: failed to query INetCfg (0x%x)\n", hr));
+        LogRelFunc(("failed to query INetCfg (0x%x)\n", hr));
         return hr;
     }
 
     if ((hr = pNetCfg->FindComponent(L"oracle_VBoxNetLwf", &pFilter)) != S_OK
         /* fall back to NDIS5 miniport lookup */
         && (hr = pNetCfg->FindComponent(L"sun_VBoxNetFlt", &pFilter)))
-        LogRel(("netIfGetBoundAdapters: could not find either 'oracle_VBoxNetLwf' or 'sun_VBoxNetFlt' components (0x%x)\n", hr));
+        LogRelFunc(("could not find either 'oracle_VBoxNetLwf' or 'sun_VBoxNetFlt' components (0x%x)\n", hr));
     else
     {
         INetCfgComponentBindings *pFilterBindings;
         if ((pFilter->QueryInterface(IID_INetCfgComponentBindings, (PVOID*)&pFilterBindings)) != S_OK)
-            LogRel(("netIfGetBoundAdapters: failed to query INetCfgComponentBindings (0x%x)\n", hr));
+            LogRelFunc(("failed to query INetCfgComponentBindings (0x%x)\n", hr));
         else
         {
             IEnumNetCfgBindingPath *pEnumBp;
             INetCfgBindingPath     *pBp;
             if ((pFilterBindings->EnumBindingPaths(EBP_BELOW, &pEnumBp)) != S_OK)
-                LogRel(("netIfGetBoundAdapters: failed to enumerate binding paths (0x%x)\n", hr));
+                LogRelFunc(("failed to enumerate binding paths (0x%x)\n", hr));
             else
             {
                 pEnumBp->Reset();
@@ -1556,12 +1643,12 @@ static HRESULT netIfGetBoundAdapters(std::list<BoundAdapter> &boundAdapters)
                     if (pBp->IsEnabled() != S_OK)
                     {
                         /** @todo some id of disabled path could be useful. */
-                        netIfLog(("netIfGetBoundAdapters: INetCfgBindingPath is disabled (0x%x)\n", hr));
+                        netIfLog(("INetCfgBindingPath is disabled (0x%x)\n", hr));
                         pBp->Release();
                         continue;
                     }
                     if ((pBp->EnumBindingInterfaces(&pEnumBi)) != S_OK)
-                        LogRel(("netIfGetBoundAdapters: failed to enumerate binding interfaces (0x%x)\n", hr));
+                        LogRelFunc(("failed to enumerate binding interfaces (0x%x)\n", hr));
                     else
                     {
                         hr = pEnumBi->Reset();
@@ -1569,39 +1656,39 @@ static HRESULT netIfGetBoundAdapters(std::list<BoundAdapter> &boundAdapters)
                         {
                             INetCfgComponent *pAdapter;
                             if ((hr = pBi->GetLowerComponent(&pAdapter)) != S_OK)
-                                LogRel(("netIfGetBoundAdapters: failed to get lower component (0x%x)\n", hr));
+                                LogRelFunc(("failed to get lower component (0x%x)\n", hr));
                             else
                             {
                                 LPWSTR pwszName = NULL;
                                 if ((hr = pAdapter->GetDisplayName(&pwszName)) != S_OK)
-                                    LogRel(("netIfGetBoundAdapters: failed to get display name (0x%x)\n", hr));
+                                    LogRelFunc(("failed to get display name (0x%x)\n", hr));
                                 else
                                 {
                                     ULONG uStatus;
                                     DWORD dwChars;
                                     if ((hr = pAdapter->GetDeviceStatus(&uStatus)) != S_OK)
-                                        netIfLog(("netIfGetBoundAdapters: %ls: failed to get device status (0x%x)\n",
+                                        netIfLog(("%ls: failed to get device status (0x%x)\n",
                                                   pwszName, hr));
                                     else if ((hr = pAdapter->GetCharacteristics(&dwChars)) != S_OK)
-                                        netIfLog(("netIfGetBoundAdapters: %ls: failed to get device characteristics (0x%x)\n",
+                                        netIfLog(("%ls: failed to get device characteristics (0x%x)\n",
                                                   pwszName, hr));
                                     else if (uStatus != 0)
-                                        netIfLog(("netIfGetBoundAdapters: %ls: wrong status 0x%x\n",
+                                        netIfLog(("%ls: wrong status 0x%x\n",
                                                   pwszName, uStatus));
                                     else if (dwChars & NCF_HIDDEN)
-                                        netIfLog(("netIfGetBoundAdapters: %ls: wrong characteristics 0x%x\n",
+                                        netIfLog(("%ls: wrong characteristics 0x%x\n",
                                                   pwszName, dwChars));
                                     else
                                     {
                                         GUID guid;
                                         LPWSTR pwszHwId = NULL;
                                         if ((hr = pAdapter->GetId(&pwszHwId)) != S_OK)
-                                            LogRel(("netIfGetBoundAdapters: %ls: failed to get hardware id (0x%x)\n",
+                                            LogRelFunc(("%ls: failed to get hardware id (0x%x)\n",
                                                       pwszName, hr));
                                         else if (!_wcsnicmp(pwszHwId, L"sun_VBoxNetAdp", sizeof(L"sun_VBoxNetAdp")/2))
-                                            netIfLog(("netIfGetBoundAdapters: host-only adapter %ls, ignored\n", pwszName));
+                                            netIfLog(("host-only adapter %ls, ignored\n", pwszName));
                                         else if ((hr = pAdapter->GetInstanceGuid(&guid)) != S_OK)
-                                            LogRel(("netIfGetBoundAdapters: %ls: failed to get instance GUID (0x%x)\n",
+                                            LogRelFunc(("%ls: failed to get instance GUID (0x%x)\n",
                                                       pwszName, hr));
                                         else
                                         {
@@ -1610,7 +1697,8 @@ static HRESULT netIfGetBoundAdapters(std::list<BoundAdapter> &boundAdapters)
                                             adapter.pHwId    = pwszHwId;
                                             adapter.guid     = *(Guid(guid).raw());
                                             adapter.pAdapter = NULL;
-                                            netIfLog(("netIfGetBoundAdapters: guid=%RTuuid, name=%ls, hwid=%ls, status=%x, chars=%x\n",
+                                            adapter.fWireless = netIfIsWireless(pAdapter);
+                                            netIfLog(("guid=%RTuuid, name=%ls, hwid=%ls, status=%x, chars=%x\n",
                                                       &adapter.guid, pwszName, pwszHwId, uStatus, dwChars));
                                             boundAdapters.push_back(adapter);
                                             pwszName = pwszHwId = NULL; /* do not free, will be done later */
@@ -1650,6 +1738,10 @@ static HRESULT netIfGetBoundAdaptersFallback(std::list<BoundAdapter> &boundAdapt
 }
 #endif
 
+/**
+ * Walk through the list of adpater addresses and extract the required
+ * information. XP and older don't not have the OnLinkPrefixLength field.
+ */
 static void netIfFillInfoWithAddressesXp(PNETIFINFO pInfo, PIP_ADAPTER_ADDRESSES pAdapter)
 {
     PIP_ADAPTER_UNICAST_ADDRESS pAddr;
@@ -1690,16 +1782,16 @@ static void netIfFillInfoWithAddressesXp(PNETIFINFO pInfo, PIP_ADAPTER_ADDRESSES
                 if (!uPrefixLenV4)
                 {
                     ULONG ip = ((PSOCKADDR_IN)(pPrefix->Address.lpSockaddr))->sin_addr.s_addr;
-                    netIfLog(("netIfFillInfoWithAddressesXp: prefix=%RTnaipv4 len=%u\n", ip, pPrefix->PrefixLength));
+                    netIfLog(("prefix=%RTnaipv4 len=%u\n", ip, pPrefix->PrefixLength));
                     if (   pPrefix->PrefixLength < sizeof(pInfo->IPNetMask) * 8
                         && pPrefix->PrefixLength > 0
                         && (ip & 0xF0) < 224)
                     {
                         uPrefixLenV4 = pPrefix->PrefixLength;
-                        ASMBitSetRange(&pInfo->IPNetMask, 0, pPrefix->PrefixLength);
+                        RTNetPrefixToMaskIPv4(pPrefix->PrefixLength, &pInfo->IPNetMask);
                     }
                     else
-                        netIfLog(("netIfFillInfoWithAddressesXp: Unexpected IPv4 prefix length of %d\n",
+                        netIfLog(("Unexpected IPv4 prefix length of %d\n",
                              pPrefix->PrefixLength));
                 }
                 break;
@@ -1707,34 +1799,34 @@ static void netIfFillInfoWithAddressesXp(PNETIFINFO pInfo, PIP_ADAPTER_ADDRESSES
                 if (!uPrefixLenV6)
                 {
                     PBYTE ipv6 = ((PSOCKADDR_IN6)(pPrefix->Address.lpSockaddr))->sin6_addr.s6_addr;
-                    netIfLog(("netIfFillInfoWithAddressesXp: prefix=%RTnaipv6 len=%u\n",
-                              ipv6, pPrefix->PrefixLength));
+                    netIfLog(("prefix=%RTnaipv6 len=%u\n", ipv6, pPrefix->PrefixLength));
                     if (   pPrefix->PrefixLength < sizeof(pInfo->IPv6NetMask) * 8
                         && pPrefix->PrefixLength > 0
                         && ipv6[0] != 0xFF)
                     {
                         uPrefixLenV6 = pPrefix->PrefixLength;
-                        ASMBitSetRange(&pInfo->IPv6NetMask, 0, pPrefix->PrefixLength);
+                        RTNetPrefixToMaskIPv6(pPrefix->PrefixLength, &pInfo->IPv6NetMask);
                     }
                     else
-                        netIfLog(("netIfFillInfoWithAddressesXp: Unexpected IPv6 prefix length of %d\n",
-                             pPrefix->PrefixLength));
+                        netIfLog(("Unexpected IPv6 prefix length of %d\n", pPrefix->PrefixLength));
                 }
                 break;
         }
     }
-    netIfLog(("netIfFillInfoWithAddressesXp: %RTnaipv4/%u\n",
-              pInfo->IPAddress, uPrefixLenV4));
-    netIfLog(("netIfFillInfoWithAddressesXp: %RTnaipv6/%u\n",
-              &pInfo->IPv6Address, uPrefixLenV6));
+    netIfLog(("%RTnaipv4/%u\n", pInfo->IPAddress, uPrefixLenV4));
+    netIfLog(("%RTnaipv6/%u\n", &pInfo->IPv6Address, uPrefixLenV6));
 }
 
-static void netIfFillInfoWithAddresses(PNETIFINFO pInfo, PIP_ADAPTER_ADDRESSES pAdapter)
+/**
+ * Walk through the list of adpater addresses and extract the required
+ * information. XP and older don't not have the OnLinkPrefixLength field.
+ */
+static void netIfFillInfoWithAddressesVista(PNETIFINFO pInfo, PIP_ADAPTER_ADDRESSES pAdapter)
 {
     PIP_ADAPTER_UNICAST_ADDRESS pAddr;
 
     if (sizeof(pInfo->MACAddress) != pAdapter->PhysicalAddressLength)
-        netIfLog(("netIfFillInfoWithAddresses: Unexpected physical address length: %u\n", pAdapter->PhysicalAddressLength));
+        netIfLog(("Unexpected physical address length: %u\n", pAdapter->PhysicalAddressLength));
     else
         memcpy(pInfo->MACAddress.au8, pAdapter->PhysicalAddress, sizeof(pInfo->MACAddress));
 
@@ -1742,12 +1834,6 @@ static void netIfFillInfoWithAddresses(PNETIFINFO pInfo, PIP_ADAPTER_ADDRESSES p
     bool fIPv6Found = false;
     for (pAddr = pAdapter->FirstUnicastAddress; pAddr; pAddr = pAddr->Next)
     {
-        if (pAddr->Length < sizeof(IP_ADAPTER_UNICAST_ADDRESS_LH))
-        {
-            netIfLog(("netIfFillInfoWithAddresses: unicast address is too small (%u < %u), fall back to XP implementation\n",
-                      pAddr->Length, sizeof(IP_ADAPTER_UNICAST_ADDRESS_LH)));
-            return netIfFillInfoWithAddressesXp(pInfo, pAdapter);
-        }
         PIP_ADAPTER_UNICAST_ADDRESS_LH pAddrLh = (PIP_ADAPTER_UNICAST_ADDRESS_LH)pAddr;
         switch (pAddrLh->Address.lpSockaddr->sa_family)
         {
@@ -1759,9 +1845,9 @@ static void netIfFillInfoWithAddresses(PNETIFINFO pInfo, PIP_ADAPTER_ADDRESSES p
                            &((struct sockaddr_in *)pAddrLh->Address.lpSockaddr)->sin_addr.s_addr,
                            sizeof(pInfo->IPAddress));
                     if (pAddrLh->OnLinkPrefixLength > 32)
-                        netIfLog(("netIfFillInfoWithAddresses: Invalid IPv4 prefix length of %d\n", pAddrLh->OnLinkPrefixLength));
+                        netIfLog(("Invalid IPv4 prefix length of %d\n", pAddrLh->OnLinkPrefixLength));
                     else
-                        ASMBitSetRange(&pInfo->IPNetMask, 0, pAddrLh->OnLinkPrefixLength);
+                        RTNetPrefixToMaskIPv4(pAddrLh->OnLinkPrefixLength, &pInfo->IPNetMask);
                 }
                 break;
             case AF_INET6:
@@ -1772,17 +1858,26 @@ static void netIfFillInfoWithAddresses(PNETIFINFO pInfo, PIP_ADAPTER_ADDRESSES p
                            ((struct sockaddr_in6 *)pAddrLh->Address.lpSockaddr)->sin6_addr.s6_addr,
                            sizeof(pInfo->IPv6Address));
                     if (pAddrLh->OnLinkPrefixLength > 128)
-                        netIfLog(("netIfFillInfoWithAddresses: Invalid IPv6 prefix length of %d\n", pAddrLh->OnLinkPrefixLength));
+                        netIfLog(("Invalid IPv6 prefix length of %d\n", pAddrLh->OnLinkPrefixLength));
                     else
-                        ASMBitSetRange(&pInfo->IPv6NetMask, 0, pAddrLh->OnLinkPrefixLength);
+                        RTNetPrefixToMaskIPv6(pAddrLh->OnLinkPrefixLength, &pInfo->IPv6NetMask);
                 }
                 break;
         }
     }
-    netIfLog(("netIfFillInfoWithAddresses: %RTnaipv4/%u\n",
-              pInfo->IPAddress, ASMBitFirstClear(&pInfo->IPNetMask, sizeof(RTNETADDRIPV4)*8)));
-    netIfLog(("netIfFillInfoWithAddresses: %RTnaipv6/%u\n",
-              &pInfo->IPv6Address, composeIPv6PrefixLenghFromAddress(&pInfo->IPv6NetMask)));
+
+    if (fIPFound)
+    {
+        int iPrefixIPv4 = -1;
+        RTNetMaskToPrefixIPv4(&pInfo->IPNetMask, &iPrefixIPv4);
+        netIfLog(("%RTnaipv4/%u\n", pInfo->IPAddress, iPrefixIPv4));
+    }
+    if (fIPv6Found)
+    {
+        int iPrefixIPv6 = -1;
+        RTNetMaskToPrefixIPv6(&pInfo->IPv6NetMask, &iPrefixIPv6);
+        netIfLog(("%RTnaipv6/%u\n", &pInfo->IPv6Address, iPrefixIPv6));
+    }
 }
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
@@ -1804,7 +1899,7 @@ int NetIfList(std::list<ComObjPtr<HostNetworkInterface> > &list)
     for (int tries = 0; tries < 3 && dwRc == ERROR_BUFFER_OVERFLOW; ++tries)
     {
         /* Get more memory and try again. */
-        free(pAddresses);
+        RTMemFree(pAddresses);
         pAddresses = (PIP_ADAPTER_ADDRESSES)RTMemAlloc(uBufLen);
         if (!pAddresses)
             return HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY);
@@ -1812,19 +1907,19 @@ int NetIfList(std::list<ComObjPtr<HostNetworkInterface> > &list)
     }
     if (dwRc != NO_ERROR)
     {
-        LogRel(("NetIfList: GetAdaptersAddresses failed (0x%x)\n", dwRc));
+        LogRelFunc(("GetAdaptersAddresses failed (0x%x)\n", dwRc));
         hr = HRESULT_FROM_WIN32(dwRc);
     }
     else
     {
         std::list<BoundAdapter> boundAdapters;
-        HRESULT hr = netIfGetBoundAdapters(boundAdapters);
+        hr = netIfGetBoundAdapters(boundAdapters);
 #if 0
         if (hr != S_OK)
             hr = netIfGetBoundAdaptersFallback(boundAdapters);
 #endif
         if (hr != S_OK)
-            LogRel(("NetIfList: netIfGetBoundAdapters failed (0x%x)\n", hr));
+            LogRelFunc(("netIfGetBoundAdapters failed (0x%x)\n", hr));
         else
         {
             PIP_ADAPTER_ADDRESSES pAdapter;
@@ -1834,12 +1929,12 @@ int NetIfList(std::list<ComObjPtr<HostNetworkInterface> > &list)
                 char *pszUuid = RTStrDup(pAdapter->AdapterName);
                 if (!pszUuid)
                 {
-                    LogRel(("NetIfList: out of memory\n"));
+                    LogRelFunc(("out of memory\n"));
                     break;
                 }
                 size_t len = strlen(pszUuid) - 1;
                 if (pszUuid[0] != '{' || pszUuid[len] != '}')
-                    LogRel(("NetIfList: ignoring invalid GUID %s\n", pAdapter->AdapterName));
+                    LogRelFunc(("ignoring invalid GUID %s\n", pAdapter->AdapterName));
                 else
                 {
                     std::list<BoundAdapter>::iterator it;
@@ -1862,13 +1957,21 @@ int NetIfList(std::list<ComObjPtr<HostNetworkInterface> > &list)
                 memset(&info, 0, sizeof(info));
                 info.Uuid = (*it).guid;
                 info.enmMediumType = NETIF_T_ETHERNET;
+                info.fWireless = (*it).fWireless;
                 pAdapter = (*it).pAdapter;
                 if (pAdapter)
                 {
                     info.enmStatus = pAdapter->OperStatus == IfOperStatusUp ? NETIF_S_UP : NETIF_S_DOWN;
-                    info.bIsDefault = (pAdapter->IfIndex == (DWORD)iDefault);
-                    info.bDhcpEnabled = pAdapter->Flags & IP_ADAPTER_DHCP_ENABLED;
-                    netIfFillInfoWithAddresses(&info, pAdapter);
+                    info.fIsDefault = (pAdapter->IfIndex == (DWORD)iDefault);
+                    info.fDhcpEnabled = pAdapter->Flags & IP_ADAPTER_DHCP_ENABLED;
+                    OSVERSIONINFOEX OSInfoEx;
+                    RT_ZERO(OSInfoEx);
+                    OSInfoEx.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
+                    if (   GetVersionEx((LPOSVERSIONINFO)&OSInfoEx)
+                        && OSInfoEx.dwMajorVersion < 6)
+                        netIfFillInfoWithAddressesXp(&info, pAdapter);
+                    else
+                        netIfFillInfoWithAddressesVista(&info, pAdapter);
                 }
                 else
                     info.enmStatus = NETIF_S_DOWN;
@@ -1883,10 +1986,10 @@ int NetIfList(std::list<ComObjPtr<HostNetworkInterface> > &list)
                         enmType == HostNetworkInterfaceType_HostOnly ? "host-only" : "unknown"));
                 int rc = iface->init((*it).pName, enmType, &info);
                 if (FAILED(rc))
-                    LogRel(("NetIfList: HostNetworkInterface::init() -> %Rrc\n", rc));
+                    LogRelFunc(("HostNetworkInterface::init() -> %Rrc\n", rc));
                 else
                 {
-                    if (info.bIsDefault)
+                    if (info.fIsDefault)
                         list.push_front(iface);
                     else
                         list.push_back(iface);

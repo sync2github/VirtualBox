@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: DevEFI.h 85950 2020-08-31 11:40:19Z vboxsync $ */
 /** @file
  * EFI for VirtualBox Common Definitions.
  *
@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,17 +28,18 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___EFI_VBoxEFI_h
-#define ___EFI_VBoxEFI_h
-
-#include <iprt/assert.h>
+#ifndef VBOX_INCLUDED_SRC_EFI_DevEFI_h
+#define VBOX_INCLUDED_SRC_EFI_DevEFI_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /** @defgroup grp_devefi    DevEFI <-> Firmware Interfaces
  * @{
  */
 
 /** The base of the I/O ports used for interaction between the EFI firmware and DevEFI. */
-#define EFI_PORT_BASE           0xEF10
+#define EFI_PORT_BASE           0xEF10  /**< @todo r=klaus stupid choice which causes trouble with PCI resource allocation in complex bridge setups, change to 0x0400 with appropriate saved state and reset handling */
 /** The number of ports. */
 #define EFI_PORT_COUNT          0x0008
 
@@ -65,11 +66,21 @@ typedef enum
     EFI_INFO_INDEX_FSB_FREQUENCY,
     EFI_INFO_INDEX_CPU_FREQUENCY,
     EFI_INFO_INDEX_TSC_FREQUENCY,
-    EFI_INFO_INDEX_GOP_MODE,
-    EFI_INFO_INDEX_UGA_HORIZONTAL_RESOLUTION,
-    EFI_INFO_INDEX_UGA_VERTICAL_RESOLUTION,
+    EFI_INFO_INDEX_GRAPHICS_MODE,
+    EFI_INFO_INDEX_HORIZONTAL_RESOLUTION,
+    EFI_INFO_INDEX_VERTICAL_RESOLUTION,
+    EFI_INFO_INDEX_MCFG_BASE,
+    EFI_INFO_INDEX_MCFG_SIZE,
+    EFI_INFO_INDEX_APIC_MODE,
     EFI_INFO_INDEX_END
 } EfiInfoIndex;
+
+/** @name APIC mode defines as returned by EFI_INFO_INDEX_APIC_MODE
+ * @{ */
+#define EFI_APIC_MODE_DISABLED          0
+#define EFI_APIC_MODE_APIC              1
+#define EFI_APIC_MODE_X2APIC            2
+/** @} */
 
 /** Panic port.
  * Write causes action to be taken according to the value written,
@@ -127,7 +138,7 @@ typedef enum
 #define EFI_VARIABLE_OP_STATUS_OK         0xcafe0000
 #define EFI_VARIABLE_OP_STATUS_ERROR      0xcafe0001
 #define EFI_VARIABLE_OP_STATUS_NOT_FOUND  0xcafe0002
-#define EFI_VARIABLE_OP_STATUS_NOT_WP     0xcafe0003
+#define EFI_VARIABLE_OP_STATUS_WP         0xcafe0003
 #define EFI_VARIABLE_OP_STATUS_BSY        0xcafe0010
 
 /** The max number of variables allowed. */
@@ -140,7 +151,7 @@ typedef enum
 typedef enum
 {
     EFI_VM_VARIABLE_OP_START = 0,
-    EFI_VM_VARIABLE_OP_END, /**< @todo r=bird: What's the point of this one? */
+    EFI_VM_VARIABLE_OP_RESERVED_USED_TO_BE_END,
     EFI_VM_VARIABLE_OP_RESERVED_USED_TO_BE_INDEX,
     EFI_VM_VARIABLE_OP_GUID,
     EFI_VM_VARIABLE_OP_ATTRIBUTE,
@@ -223,6 +234,10 @@ typedef enum EFIDBGPOINT
 #define EFI_IMAGE_EVT_CMD_START_UNLOAD32        UINT32_C(0x00000004)
 /** Starts a 64-bit unload event. Requires name and address. */
 #define EFI_IMAGE_EVT_CMD_START_UNLOAD64        UINT32_C(0x00000005)
+/** Starts a 32-bit relocation event. RRequires new and old base address. */
+#define EFI_IMAGE_EVT_CMD_START_RELOC32         UINT32_C(0x0000000A)
+/** Starts a 64-bit relocation event. Requires new and old base address. */
+#define EFI_IMAGE_EVT_CMD_START_RELOC64         UINT32_C(0x0000000B)
 
 /** The command for writing to the second address register (64-bit).
  * Takes a 16-bit payload value.  The register value is shifted 16-bits
@@ -246,4 +261,4 @@ typedef enum EFIDBGPOINT
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_EFI_DevEFI_h */

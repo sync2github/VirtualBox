@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VMMAll.cpp 90598 2021-08-10 13:12:43Z vboxsync $ */
 /** @file
  * VMM All Contexts.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,7 +22,10 @@
 #define LOG_GROUP LOG_GROUP_VMM
 #include <VBox/vmm/vmm.h>
 #include "VMMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
+#ifdef IN_RING0
+# include <VBox/vmm/gvm.h>
+#endif
 #include <VBox/vmm/hm.h>
 #include <VBox/vmm/vmcpuset.h>
 #include <VBox/param.h>
@@ -159,7 +162,6 @@ int vmmInitFormatTypes(void)
 }
 
 
-#ifndef IN_RC
 /**
  * Counterpart to vmmInitFormatTypes, called by VMMR3Term and VMMR0Term.
  */
@@ -167,22 +169,6 @@ void vmmTermFormatTypes(void)
 {
     if (ASMAtomicDecU32(&g_cFormatTypeUsers) == 0)
         RTStrFormatTypeDeregister("vmcpuset");
-}
-#endif
-
-
-/**
- * Gets the bottom of the hypervisor stack - RC Ptr.
- *
- * (The returned address is not actually writable, only after it's decremented
- * by a push/ret/whatever does it become writable.)
- *
- * @returns bottom of the stack.
- * @param   pVCpu       The cross context virtual CPU structure.
- */
-VMM_INT_DECL(RTRCPTR) VMMGetStackRC(PVMCPU pVCpu)
-{
-    return (RTRCPTR)pVCpu->vmm.s.pbEMTStackBottomRC;
 }
 
 
@@ -194,47 +180,14 @@ VMM_INT_DECL(RTRCPTR) VMMGetStackRC(PVMCPU pVCpu)
  * @param   pVM         The cross context VM structure.
  * @internal
  */
-VMMDECL(VMCPUID) VMMGetCpuId(PVM pVM)
+VMMDECL(VMCPUID) VMMGetCpuId(PVMCC pVM)
 {
 #if defined(IN_RING3)
     return VMR3GetVMCPUId(pVM);
 
 #elif defined(IN_RING0)
-    if (pVM->cCpus == 1)
-        return 0;
-
-    /* Search first by host cpu id (most common case)
-     * and then by native thread id (page fusion case).
-     */
-    if (!RTThreadPreemptIsEnabled(NIL_RTTHREAD))
-    {
-        /** @todo r=ramshankar: This doesn't buy us anything in terms of performance
-         *        leaving it here for hysterical raisins and as a reference if we
-         *        implemented a hashing approach in the future. */
-        RTCPUID idHostCpu = RTMpCpuId();
-
-        /** @todo optimize for large number of VCPUs when that becomes more common. */
-        for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
-        {
-            PVMCPU pVCpu = &pVM->aCpus[idCpu];
-
-            if (pVCpu->idHostCpu == idHostCpu)
-                return pVCpu->idCpu;
-        }
-    }
-
-    /* RTThreadGetNativeSelf had better be cheap. */
-    RTNATIVETHREAD hThread = RTThreadNativeSelf();
-
-    /** @todo optimize for large number of VCPUs when that becomes more common. */
-    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
-    {
-        PVMCPU pVCpu = &pVM->aCpus[idCpu];
-
-        if (pVCpu->hNativeThreadR0 == hThread)
-            return pVCpu->idCpu;
-    }
-    return NIL_VMCPUID;
+    PVMCPUCC pVCpu = GVMMR0GetGVCpuByGVMandEMT(pVM, NIL_RTNATIVETHREAD);
+    return pVCpu ? pVCpu->idCpu : NIL_VMCPUID;
 
 #else /* RC: Always EMT(0) */
     NOREF(pVM);
@@ -251,56 +204,21 @@ VMMDECL(VMCPUID) VMMGetCpuId(PVM pVM)
  * @param   pVM         The cross context VM structure.
  * @internal
  */
-VMMDECL(PVMCPU) VMMGetCpu(PVM pVM)
+VMMDECL(PVMCPUCC) VMMGetCpu(PVMCC pVM)
 {
 #ifdef IN_RING3
     VMCPUID idCpu = VMR3GetVMCPUId(pVM);
     if (idCpu == NIL_VMCPUID)
         return NULL;
     Assert(idCpu < pVM->cCpus);
-    return &pVM->aCpus[idCpu];
+    return VMCC_GET_CPU(pVM, idCpu);
 
 #elif defined(IN_RING0)
-    if (pVM->cCpus == 1)
-        return &pVM->aCpus[0];
-
-    /*
-     * Search first by host cpu id (most common case)
-     * and then by native thread id (page fusion case).
-     */
-    if (!RTThreadPreemptIsEnabled(NIL_RTTHREAD))
-    {
-        /** @todo r=ramshankar: This doesn't buy us anything in terms of performance
-         *        leaving it here for hysterical raisins and as a reference if we
-         *        implemented a hashing approach in the future. */
-        RTCPUID idHostCpu = RTMpCpuId();
-
-        /** @todo optimize for large number of VCPUs when that becomes more common. */
-        for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
-        {
-            PVMCPU pVCpu = &pVM->aCpus[idCpu];
-
-            if (pVCpu->idHostCpu == idHostCpu)
-                return pVCpu;
-        }
-    }
-
-    /* RTThreadGetNativeSelf had better be cheap. */
-    RTNATIVETHREAD hThread = RTThreadNativeSelf();
-
-    /** @todo optimize for large number of VCPUs when that becomes more common.
-     * Use a map like GIP does that's indexed by the host CPU index.  */
-    for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
-    {
-        PVMCPU pVCpu = &pVM->aCpus[idCpu];
-
-        if (pVCpu->hNativeThreadR0 == hThread)
-            return pVCpu;
-    }
-    return NULL;
+    return GVMMR0GetGVCpuByGVMandEMT(pVM, NIL_RTNATIVETHREAD);
 
 #else /* RC: Always EMT(0) */
-    return &pVM->aCpus[0];
+    RT_NOREF(pVM);
+    return &g_VCpu0;
 #endif /* IN_RING0 */
 }
 
@@ -312,10 +230,10 @@ VMMDECL(PVMCPU) VMMGetCpu(PVM pVM)
  * @param   pVM         The cross context VM structure.
  * @internal
  */
-VMMDECL(PVMCPU) VMMGetCpu0(PVM pVM)
+VMMDECL(PVMCPUCC) VMMGetCpu0(PVMCC pVM)
 {
     Assert(pVM->cCpus == 1);
-    return &pVM->aCpus[0];
+    return VMCC_GET_CPU_0(pVM);
 }
 
 
@@ -328,10 +246,10 @@ VMMDECL(PVMCPU) VMMGetCpu0(PVM pVM)
  * @param   idCpu       The ID of the virtual CPU.
  * @internal
  */
-VMMDECL(PVMCPU) VMMGetCpuById(PVM pVM, RTCPUID idCpu)
+VMMDECL(PVMCPUCC) VMMGetCpuById(PVMCC pVM, RTCPUID idCpu)
 {
     AssertReturn(idCpu < pVM->cCpus, NULL);
-    return &pVM->aCpus[idCpu];
+    return VMCC_GET_CPU(pVM, idCpu);
 }
 
 
@@ -346,18 +264,6 @@ VMMDECL(PVMCPU) VMMGetCpuById(PVM pVM, RTCPUID idCpu)
 VMM_INT_DECL(uint32_t) VMMGetSvnRev(void)
 {
     return VBOX_SVN_REV;
-}
-
-
-/**
- * Queries the current switcher
- *
- * @returns active switcher
- * @param   pVM             The cross context VM structure.
- */
-VMM_INT_DECL(VMMSWITCHER) VMMGetSwitcher(PVM pVM)
-{
-    return pVM->vmm.s.enmSwitcher;
 }
 
 
@@ -393,91 +299,5 @@ uint32_t vmmGetBuildType(void)
     uRet |= RT_BIT_32(1);
 #endif
     return uRet;
-}
-
-
-/**
- * Patches the instructions necessary for making a hypercall to the hypervisor.
- * Used by GIM.
- *
- * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
- * @param   pvBuf       The buffer in the hypercall page(s) to be patched.
- * @param   cbBuf       The size of the buffer.
- * @param   pcbWritten  Where to store the number of bytes patched. This
- *                      is reliably updated only when this function returns
- *                      VINF_SUCCESS.
- */
-VMM_INT_DECL(int) VMMPatchHypercall(PVM pVM, void *pvBuf, size_t cbBuf, size_t *pcbWritten)
-{
-    AssertReturn(pvBuf, VERR_INVALID_POINTER);
-    AssertReturn(pcbWritten, VERR_INVALID_POINTER);
-
-    CPUMCPUVENDOR enmHostCpu = CPUMGetHostCpuVendor(pVM);
-    switch (enmHostCpu)
-    {
-        case CPUMCPUVENDOR_AMD:
-        {
-            uint8_t abHypercall[] = { 0x0F, 0x01, 0xD9 };   /* VMMCALL */
-            if (RT_LIKELY(cbBuf >= sizeof(abHypercall)))
-            {
-                memcpy(pvBuf, abHypercall, sizeof(abHypercall));
-                *pcbWritten = sizeof(abHypercall);
-                return VINF_SUCCESS;
-            }
-            return VERR_BUFFER_OVERFLOW;
-        }
-
-        case CPUMCPUVENDOR_INTEL:
-        case CPUMCPUVENDOR_VIA:
-        {
-            uint8_t abHypercall[] = { 0x0F, 0x01, 0xC1 };   /* VMCALL */
-            if (RT_LIKELY(cbBuf >= sizeof(abHypercall)))
-            {
-                memcpy(pvBuf, abHypercall, sizeof(abHypercall));
-                *pcbWritten = sizeof(abHypercall);
-                return VINF_SUCCESS;
-            }
-            return VERR_BUFFER_OVERFLOW;
-        }
-
-        default:
-            AssertFailed();
-            return VERR_UNSUPPORTED_CPU;
-    }
-}
-
-
-/**
- * Notifies VMM that paravirtualized hypercalls are now enabled.
- *
- * @param   pVCpu   The cross context virtual CPU structure.
- */
-VMM_INT_DECL(void) VMMHypercallsEnable(PVMCPU pVCpu)
-{
-    /* If there is anything to do for raw-mode, do it here. */
-#ifndef IN_RC
-    if (HMIsEnabled(pVCpu->CTX_SUFF(pVM)))
-        HMHypercallsEnable(pVCpu);
-#else
-    RT_NOREF_PV(pVCpu);
-#endif
-}
-
-
-/**
- * Notifies VMM that paravirtualized hypercalls are now disabled.
- *
- * @param   pVCpu   The cross context virtual CPU structure.
- */
-VMM_INT_DECL(void) VMMHypercallsDisable(PVMCPU pVCpu)
-{
-    /* If there is anything to do for raw-mode, do it here. */
-#ifndef IN_RC
-    if (HMIsEnabled(pVCpu->CTX_SUFF(pVM)))
-        HMHypercallsDisable(pVCpu);
-#else
-    RT_NOREF_PV(pVCpu);
-#endif
 }
 

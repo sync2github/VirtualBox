@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxVideoIOCTL.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox Miniport IOCTL related header
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,13 +15,16 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOXVIDEOIOCTL_H
-#define VBOXVIDEOIOCTL_H
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_common_xpdm_VBoxVideoIOCTL_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_common_xpdm_VBoxVideoIOCTL_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-#include <VBox/VMMDev.h>
-#include <VBox/HGSMI/HGSMI.h>
+#include <VBox/VMMDev.h> /* VBVAMEMORY */
+#include <HGSMI.h>
 
-/* ==================== Virtual Box specific VRP's ==================== */
+/* ==================== VirtualBox specific VRP's ==================== */
 
 /* Called by the display driver when it is ready to
  * switch to VBVA operation mode.
@@ -62,19 +64,21 @@
 #define IOCTL_VIDEO_QUERY_VBOXVIDEO_INFO \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x436, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-/* ==================== Data structures used by Virtual Box VRPS's ==================== */
+/* ==================== Data structures used by VirtualBox VRPS's ==================== */
 typedef void* HVBOXVIDEOHGSMI;
 
-/* Complete host commands addressed to the display */
-typedef DECLCALLBACK(void) FNVBOXVIDEOHGSMICOMPLETION(HVBOXVIDEOHGSMI hHGSMI, struct VBVAHOSTCMD * pCmd);
+/** Complete host commands addressed to the display */
+typedef DECLCALLBACKTYPE(void, FNVBOXVIDEOHGSMICOMPLETION,(HVBOXVIDEOHGSMI hHGSMI,
+                                                           struct VBVAHOSTCMD RT_UNTRUSTED_VOLATILE_HOST * pCmd));
 typedef FNVBOXVIDEOHGSMICOMPLETION *PFNVBOXVIDEOHGSMICOMPLETION;
 
-/* request the host commands addressed to the display */
-typedef DECLCALLBACK(int) FNVBOXVIDEOHGSMICOMMANDS(HVBOXVIDEOHGSMI hHGSMI, uint8_t u8Channel, uint32_t iDevice, struct VBVAHOSTCMD ** ppCmd);
+/** request the host commands addressed to the display */
+typedef DECLCALLBACKTYPE(int, FNVBOXVIDEOHGSMICOMMANDS,(HVBOXVIDEOHGSMI hHGSMI, uint8_t u8Channel, uint32_t iDevice,
+                                                        struct VBVAHOSTCMD RT_UNTRUSTED_VOLATILE_HOST ** ppCmd));
 typedef FNVBOXVIDEOHGSMICOMMANDS *PFNVBOXVIDEOHGSMICOMMANDS;
 
-/* post guest command (offset) to the host */
-typedef DECLCALLBACK(void) FNVBOXVIDEOHGSMIPOSTCOMMAND(HVBOXVIDEOHGSMI hHGSMI, HGSMIOFFSET offCmd);
+/** post guest command (offset) to the host */
+typedef DECLCALLBACKTYPE(void, FNVBOXVIDEOHGSMIPOSTCOMMAND,(HVBOXVIDEOHGSMI hHGSMI, HGSMIOFFSET offCmd));
 typedef FNVBOXVIDEOHGSMIPOSTCOMMAND *PFNVBOXVIDEOHGSMIPOSTCOMMAND;
 
 #pragma pack(1)
@@ -105,7 +109,7 @@ typedef struct _HGSMIQUERYCPORTPROCS
     VBOXVIDEOPORTPROCS VideoPortProcs;
 } HGSMIQUERYCPORTPROCS;
 
-/* Data returned by IOCTL_VIDEO_HGSMI_QUERY_CALLBACKS. */
+/** Data returned by IOCTL_VIDEO_HGSMI_QUERY_CALLBACKS. */
 typedef struct _HGSMIQUERYCALLBACKS
 {
     HVBOXVIDEOHGSMI hContext;
@@ -155,4 +159,4 @@ typedef struct _VHWAQUERYINFO
 
 #define VBOXVIDEO_REGISTRY_FLAGS_DISABLE_BITMAP_CACHE 0x00000001
 
-#endif /*VBOXVIDEOIOCTL_H*/
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_common_xpdm_VBoxVideoIOCTL_h */

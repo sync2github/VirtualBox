@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIThreadPool.cpp 82998 2020-02-05 19:14:36Z vboxsync $ */
 /** @file
- * VBox Qt GUI - UIThreadPool and UITask classes implementation.
+ * VBox Qt GUI - UIThreadPool class implementation.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,22 +15,18 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QThread>
+#include <QThread>
 
 /* GUI includes: */
-# include "COMDefs.h"
-# include "UIThreadPool.h"
-# include "UIDefs.h"
+#include "COMDefs.h"
+#include "UIDefs.h"
+#include "UITask.h"
+#include "UIThreadPool.h"
 
 /* Other VBox includes: */
 #include <iprt/assert.h>
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
 
 /** QThread extension used as worker-thread.
   * Capable of executing COM-related tasks. */
@@ -46,7 +42,7 @@ signals:
 public:
 
     /** Constructs worker-thread for parent worker-thread @a pPool.
-      * @param iIndex defines worker-thread index within the worker-thread pool registry. */
+      * @param  iIndex  Brings worker-thread index within the worker-thread pool registry. */
     UIThreadWorker(UIThreadPool *pPool, int iIndex);
 
     /** Returns worker-thread index within the worker-thread pool registry. */
@@ -64,11 +60,16 @@ private:
     UIThreadPool *m_pPool;
 
     /** Holds the worker-thread index within the worker-thread pool registry. */
-    int m_iIndex;
+    int  m_iIndex;
 
     /** Holds whether sigFinished signal should be emitted or not. */
-    bool m_fNoFinishedSignal;
+    bool  m_fNoFinishedSignal;
 };
+
+
+/*********************************************************************************************************************************
+*   Class UIThreadPool implementation.                                                                                           *
+*********************************************************************************************************************************/
 
 UIThreadPool::UIThreadPool(ulong cMaxWorkers /* = 3 */, ulong cMsWorkerIdleTimeout /* = 5000 */)
     : m_cMsIdleTimeout(cMsWorkerIdleTimeout)
@@ -165,8 +166,8 @@ void UIThreadPool::enqueueTask(UITask *pTask)
     AssertReturnVoid(!isTerminating());
 
     /* Prepare task: */
-    connect(pTask, SIGNAL(sigComplete(UITask*)),
-            this, SLOT(sltHandleTaskComplete(UITask*)), Qt::QueuedConnection);
+    connect(pTask, &UITask::sigComplete,
+            this, &UIThreadPool::sltHandleTaskComplete, Qt::QueuedConnection);
 
     /* Lock initially: */
     m_everythingLocker.lock();
@@ -189,8 +190,8 @@ void UIThreadPool::enqueueTask(UITask *pTask)
             {
                 /* Prepare the new worker: */
                 UIThreadWorker *pWorker = new UIThreadWorker(this, idxFirstUnused);
-                connect(pWorker, SIGNAL(sigFinished(UIThreadWorker*)),
-                        this, SLOT(sltHandleWorkerFinished(UIThreadWorker*)), Qt::QueuedConnection);
+                connect(pWorker, &UIThreadWorker::sigFinished,
+                        this, &UIThreadPool::sltHandleWorkerFinished, Qt::QueuedConnection);
                 m_workers[idxFirstUnused] = pWorker;
                 ++m_cWorkers;
 
@@ -206,7 +207,7 @@ void UIThreadPool::enqueueTask(UITask *pTask)
     m_everythingLocker.unlock();
 }
 
-UITask* UIThreadPool::dequeueTask(UIThreadWorker *pWorker)
+UITask *UIThreadPool::dequeueTask(UIThreadWorker *pWorker)
 {
     /* Lock initially: */
     m_everythingLocker.lock();
@@ -292,13 +293,10 @@ void UIThreadPool::sltHandleWorkerFinished(UIThreadWorker *pWorker)
     delete pWorker;
 }
 
-void UITask::start()
-{
-    /* Run task: */
-    run();
-    /* Notify listeners: */
-    emit sigComplete(this);
-}
+
+/*********************************************************************************************************************************
+*   Class UIThreadWorker implementation.                                                                                         *
+*********************************************************************************************************************************/
 
 UIThreadWorker::UIThreadWorker(UIThreadPool *pPool, int iIndex)
     : m_pPool(pPool)
@@ -331,5 +329,5 @@ void UIThreadWorker::run()
         emit sigFinished(this);
 }
 
-#include "UIThreadPool.moc"
 
+#include "UIThreadPool.moc"

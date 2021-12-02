@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_list_h
-#define ___iprt_list_h
+#ifndef IPRT_INCLUDED_list_h
+#define IPRT_INCLUDED_list_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -70,15 +73,26 @@ typedef RTLISTANCHOR *PRTLISTANCHOR;
 typedef RTLISTANCHOR const *PCRTLISTANCHOR;
 
 /** Version of RTLISTNODE for holding a ring-3 only list in data which gets
- * shared between multiple contexts */
-#if defined(IN_RING3)
+ * shared between multiple contexts. */
+#ifdef IN_RING3
 typedef RTLISTNODE RTLISTNODER3;
 #else
 typedef struct { RTR3PTR aOffLimits[2]; } RTLISTNODER3;
 #endif
 /** Version of RTLISTANCHOR for holding a ring-3 only list in data which gets
- * shared between multiple contexts */
+ * shared between multiple contexts. */
 typedef RTLISTNODER3 RTLISTANCHORR3;
+
+/** Version of RTLISTNODE for holding a ring-0 only list in data which gets
+ * shared between multiple contexts. */
+#ifdef IN_RING0
+typedef RTLISTNODE RTLISTNODER0;
+#else
+typedef struct { RTR0PTR aOffLimits[2]; } RTLISTNODER0;
+#endif
+/** Version of RTLISTANCHOR for holding a ring-0 only list in data which gets
+ * shared between multiple contexts. */
+typedef RTLISTNODER0 RTLISTANCHORR0;
 
 
 /**
@@ -501,6 +515,8 @@ DECLINLINE(void) RTListMove(PRTLISTNODE pListDst, PRTLISTNODE pListSrc)
         /* Finally remove the elements from the source list */
         RTListInit(pListSrc);
     }
+    else
+        RTListInit(pListDst);
 }
 
 /**
@@ -531,4 +547,4 @@ RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !IPRT_INCLUDED_list_h */

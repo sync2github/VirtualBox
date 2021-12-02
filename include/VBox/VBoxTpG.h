@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxTpG.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Tracepoint Generator Structures.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___VBox_VTG_h___
-#define ___VBox_VTG_h___
+#ifndef VBOX_INCLUDED_VBoxTpG_h
+#define VBOX_INCLUDED_VBoxTpG_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 #include <iprt/assert.h>
@@ -430,14 +432,14 @@ extern VTGOBJHDR            g_VTGObjHeader;
 # define VTG_VMCPU_TO_R0(a_pVCpu)                (a_pVCpu)
 # define VTG_CPUMCTX_TO_R0(a_pVCpu, a_pCtx)      (a_pCtx)
 #else
-# define VTG_VM_TO_R0(a_pVM)                     ((a_pVM)   ? (a_pVM)->pVMR0                                : NIL_RTR0PTR)
-# define VTG_VMCPU_TO_R0(a_pVCpu)                ((a_pVCpu) ? VM_R0_ADDR((a_pVCpu)->CTX_SUFF(pVM), a_pVCpu) : NIL_RTR0PTR)
-# define VTG_CPUMCTX_TO_R0(a_pVCpu, a_pCtx)      ((a_pVCpu) ? VM_R0_ADDR((a_pVCpu)->CTX_SUFF(pVM), a_pCtx)  : NIL_RTR0PTR)
+# define VTG_VM_TO_R0(a_pVM)                     ((a_pVM)   ? (a_pVM)->pVMR0ForCall  : NIL_RTR0PTR)
+# define VTG_VMCPU_TO_R0(a_pVCpu)                ((a_pVCpu) ? (a_pVCpu)->pVCpuR0ForVtg : NIL_RTR0PTR)
+# define VTG_CPUMCTX_TO_R0(a_pVCpu, a_pCtx)      ((a_pVCpu) ? (a_pVCpu)->pVCpuR0ForVtg + ((uintptr_t)(a_pCtx) - (uintptr_t)(a_pVCpu)) : NIL_RTR0PTR)
 #endif
 /** @} */
 
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_VBoxTpG_h */
 

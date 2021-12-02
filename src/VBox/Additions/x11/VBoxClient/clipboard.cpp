@@ -1,10 +1,10 @@
-/** $Id$ */
+/** $Id: clipboard.cpp 91621 2021-10-07 20:40:03Z vboxsync $ */
 /** @file
  * Guest Additions - X11 Shared Clipboard.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -22,9 +22,13 @@
 #include <iprt/alloc.h>
 #include <iprt/asm.h>
 #include <iprt/assert.h>
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_FUSE
+# include <iprt/dir.h>
+#endif
 #include <iprt/initterm.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
+#include <iprt/path.h>
 #include <iprt/process.h>
 #include <iprt/semaphore.h>
 
@@ -32,179 +36,169 @@
 #include <VBox/VBoxGuestLib.h>
 #include <VBox/HostServices/VBoxClipboardSvc.h>
 #include <VBox/GuestHost/SharedClipboard.h>
+#include <VBox/GuestHost/SharedClipboard-x11.h>
 
 #include "VBoxClient.h"
+
+#include "clipboard.h"
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_FUSE
+# include "clipboard-fuse.h"
+#endif
 
 
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
 
-/**
- * Global clipboard context information.
- */
-struct _VBOXCLIPBOARDCONTEXT
+/** Only one context is supported at a time for now. */
+SHCLCONTEXT g_Ctx;
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_FUSE
+SHCLFUSECTX g_FuseCtx;
+#endif
+
+
+DECLCALLBACK(int) ShClX11RequestDataForX11Callback(PSHCLCONTEXT pCtx, SHCLFORMAT uFmt, void **ppv, uint32_t *pcb)
 {
-    /** Client ID for the clipboard subsystem */
-    uint32_t client;
+    LogFlowFunc(("pCtx=%p, uFmt=%#x\n", pCtx, uFmt));
 
-    /** Pointer to the X11 clipboard backend */
-    CLIPBACKEND *pBackend;
-};
-
-/** Only one client is supported. There seems to be no need for more clients. */
-static VBOXCLIPBOARDCONTEXT g_ctx;
-
-
-/**
- * Transfer clipboard data from the guest to the host.
- *
- * @returns VBox result code
- * @param   u32Format The format of the data being sent
- * @param   pv        Pointer to the data being sent
- * @param   cb        Size of the data being sent in bytes
- */
-static int vboxClipboardSendData(uint32_t u32Format, void *pv, uint32_t cb)
-{
-    int rc;
-    LogRelFlowFunc(("u32Format=%d, pv=%p, cb=%d\n", u32Format, pv, cb));
-    rc = VbglR3ClipboardWriteData(g_ctx.client, u32Format, pv, cb);
-    LogRelFlowFunc(("rc=%Rrc\n", rc));
-    return rc;
-}
-
-
-/**
- * Get clipboard data from the host.
- *
- * @returns VBox result code
- * @param   u32Format The format of the data being requested
- * @retval  ppv       On success and if pcb > 0, this will point to a buffer
- *                    to be freed with RTMemFree containing the data read.
- * @retval  pcb       On success, this contains the number of bytes of data
- *                    returned
- */
-int ClipRequestDataForX11(VBOXCLIPBOARDCONTEXT *pCtx, uint32_t u32Format, void **ppv, uint32_t *pcb)
-{
-    RT_NOREF1(pCtx);
     int rc = VINF_SUCCESS;
-    uint32_t cb = 1024;
-    void *pv = RTMemAlloc(cb);
 
-    *ppv = 0;
-    LogRelFlowFunc(("u32Format=%u\n", u32Format));
-    if (RT_UNLIKELY(!pv))
-        rc = VERR_NO_MEMORY;
-    if (RT_SUCCESS(rc))
-        rc = VbglR3ClipboardReadData(g_ctx.client, u32Format, pv, cb, pcb);
-    if (RT_SUCCESS(rc) && (rc != VINF_BUFFER_OVERFLOW))
-        *ppv = pv;
-    /* A return value of VINF_BUFFER_OVERFLOW tells us to try again with a
-     * larger buffer.  The size of the buffer needed is placed in *pcb.
-     * So we start all over again. */
-    if (rc == VINF_BUFFER_OVERFLOW)
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+    if (uFmt == VBOX_SHCL_FMT_URI_LIST)
     {
-        cb = *pcb;
-        RTMemFree(pv);
-        pv = RTMemAlloc(cb);
-        if (RT_UNLIKELY(!pv))
+        //rc = VbglR3ClipboardRootListRead()
+        rc = VERR_NO_DATA;
+    }
+    else
+#endif
+    {
+        uint32_t cbRead = 0;
+
+        uint32_t cbData = _4K; /** @todo Make this dynamic. */
+        void    *pvData = RTMemAlloc(cbData);
+        if (pvData)
+        {
+            rc = VbglR3ClipboardReadDataEx(&pCtx->CmdCtx, uFmt, pvData, cbData, &cbRead);
+        }
+        else
             rc = VERR_NO_MEMORY;
+
+        /*
+         * A return value of VINF_BUFFER_OVERFLOW tells us to try again with a
+         * larger buffer.  The size of the buffer needed is placed in *pcb.
+         * So we start all over again.
+         */
+        if (rc == VINF_BUFFER_OVERFLOW)
+        {
+            /* cbRead contains the size required. */
+
+            cbData = cbRead;
+            pvData = RTMemRealloc(pvData, cbRead);
+            if (pvData)
+            {
+                rc = VbglR3ClipboardReadDataEx(&pCtx->CmdCtx, uFmt, pvData, cbData, &cbRead);
+                if (rc == VINF_BUFFER_OVERFLOW)
+                    rc = VERR_BUFFER_OVERFLOW;
+            }
+            else
+                rc = VERR_NO_MEMORY;
+        }
+
+        if (!cbRead)
+            rc = VERR_NO_DATA;
+
         if (RT_SUCCESS(rc))
-            rc = VbglR3ClipboardReadData(g_ctx.client, u32Format, pv, cb, pcb);
-        if (RT_SUCCESS(rc) && (rc != VINF_BUFFER_OVERFLOW))
-            *ppv = pv;
+        {
+            *pcb = cbRead; /* Actual bytes read. */
+            *ppv = pvData;
+        }
+        else
+        {
+            /*
+             * Catch other errors. This also catches the case in which the buffer was
+             * too small a second time, possibly because the clipboard contents
+             * changed half-way through the operation.  Since we can't say whether or
+             * not this is actually an error, we just return size 0.
+             */
+            RTMemFree(pvData);
+        }
     }
-    /* Catch other errors. This also catches the case in which the buffer was
-     * too small a second time, possibly because the clipboard contents
-     * changed half-way through the operation.  Since we can't say whether or
-     * not this is actually an error, we just return size 0.
-     */
-    if (RT_FAILURE(rc) || (VINF_BUFFER_OVERFLOW == rc))
-    {
-        *pcb = 0;
-        if (pv != NULL)
-            RTMemFree(pv);
-    }
-    LogRelFlowFunc(("returning %Rrc\n", rc));
-    if (RT_SUCCESS(rc))
-        LogRelFlow(("    *pcb=%d\n", *pcb));
+
+    if (RT_FAILURE(rc))
+        LogRel(("Requesting data in format %#x from host failed with %Rrc\n", uFmt, rc));
+
+    LogFlowFuncLeaveRC(rc);
     return rc;
 }
 
-/** Opaque data structure describing a request from the host for clipboard
+/**
+ * Opaque data structure describing a request from the host for clipboard
  * data, passed in when the request is forwarded to the X11 backend so that
- * it can be completed correctly. */
-struct _CLIPREADCBREQ
+ * it can be completed correctly.
+ */
+struct CLIPREADCBREQ
 {
     /** The data format that was requested. */
-    uint32_t u32Format;
+    SHCLFORMAT Format;
 };
 
-/**
- * Tell the host that new clipboard formats are available.
- *
- * @param u32Formats      The formats to advertise
- */
-void ClipReportX11Formats(VBOXCLIPBOARDCONTEXT *pCtx, uint32_t u32Formats)
+DECLCALLBACK(void) ShClX11ReportFormatsCallback(PSHCLCONTEXT pCtx, SHCLFORMATS fFormats)
 {
-    RT_NOREF1(pCtx);
-    LogRelFlowFunc(("u32Formats=%d\n", u32Formats));
-    int rc = VbglR3ClipboardReportFormats(g_ctx.client, u32Formats);
-    LogRelFlowFunc(("rc=%Rrc\n", rc));
+    RT_NOREF(pCtx);
+
+    LogFlowFunc(("fFormats=%#x\n", fFormats));
+
+    int rc2 = VbglR3ClipboardReportFormats(pCtx->CmdCtx.idClient, fFormats);
+    RT_NOREF(rc2);
+    LogFlowFuncLeaveRC(rc2);
 }
 
-/** This is called by the backend to tell us that a request for data from
- * X11 has completed.
- * @param  pCtx      Our context information
- * @param  rc        the iprt result code of the request
- * @param  pReq      the request structure that we passed in when we started
- *                   the request.  We RTMemFree() this in this function.
- * @param  pv        the clipboard data returned from X11 if the request
- *                   succeeded (see @a rc)
- * @param  cb        the size of the data in @a pv
- */
-void ClipCompleteDataRequestFromX11(VBOXCLIPBOARDCONTEXT *pCtx, int rc, CLIPREADCBREQ *pReq, void *pv, uint32_t cb)
+DECLCALLBACK(void) ShClX11RequestFromX11CompleteCallback(PSHCLCONTEXT pCtx, int rcCompletion,
+                                                         CLIPREADCBREQ *pReq, void *pv, uint32_t cb)
 {
-    RT_NOREF1(pCtx);
-    if (RT_SUCCESS(rc))
-        vboxClipboardSendData(pReq->u32Format, pv, cb);
-    else
-        vboxClipboardSendData(0, NULL, 0);
+    LogFlowFunc(("rcCompletion=%Rrc, Format=0x%x, pv=%p, cb=%RU32\n", rcCompletion, pReq->Format, pv, cb));
+    RT_NOREF(rcCompletion);
+
+    Assert((cb == 0 && pv == NULL) || (cb != 0 && pv != NULL));
+    rcCompletion = VbglR3ClipboardWriteDataEx(&pCtx->CmdCtx, pReq->Format, pv, cb);
+
     RTMemFree(pReq);
+
+    LogFlowFuncLeaveRC(rcCompletion);
 }
 
 /**
  * Connect the guest clipboard to the host.
  *
- * @returns VBox status code
+ * @returns VBox status code.
  */
-int vboxClipboardConnect(void)
+static int vboxClipboardConnect(void)
 {
-    int rc = VINF_SUCCESS;
-    LogRelFlowFunc(("\n"));
+    LogFlowFuncEnter();
 
-    /* Sanity */
-    AssertReturn(g_ctx.client == 0, VERR_WRONG_ORDER);
-    g_ctx.pBackend = ClipConstructX11(&g_ctx, false);
-    if (!g_ctx.pBackend)
-        rc = VERR_NO_MEMORY;
-    if (RT_SUCCESS(rc))
-        rc = ClipStartX11(g_ctx.pBackend);
+    int rc = ShClX11Init(&g_Ctx.X11, &g_Ctx, false /* fHeadless */);
     if (RT_SUCCESS(rc))
     {
-        rc = VbglR3ClipboardConnect(&g_ctx.client);
-        if (RT_FAILURE(rc))
-            LogRel(("Error connecting to host. rc=%Rrc\n", rc));
-        else if (!g_ctx.client)
+        rc = ShClX11ThreadStart(&g_Ctx.X11, false /* grab */);
+        if (RT_SUCCESS(rc))
         {
-            LogRel(("Invalid client ID of 0\n"));
-            rc = VERR_NOT_SUPPORTED;
+            rc = VbglR3ClipboardConnectEx(&g_Ctx.CmdCtx, VBOX_SHCL_GF_0_CONTEXT_ID);
+            if (RT_FAILURE(rc))
+                ShClX11ThreadStop(&g_Ctx.X11);
         }
     }
+    else
+        rc = VERR_NO_MEMORY;
 
-    if (rc != VINF_SUCCESS && g_ctx.pBackend)
-        ClipDestructX11(g_ctx.pBackend);
-    LogRelFlowFunc(("g_ctx.client=%u rc=%Rrc\n", g_ctx.client, rc));
+    if (RT_FAILURE(rc))
+    {
+        VBClLogError("Error connecting to host service, rc=%Rrc\n", rc);
+
+        VbglR3ClipboardDisconnectEx(&g_Ctx.CmdCtx);
+        ShClX11Destroy(&g_Ctx.X11);
+    }
+
+    LogFlowFuncLeaveRC(rc);
     return rc;
 }
 
@@ -214,120 +208,210 @@ int vboxClipboardConnect(void)
 int vboxClipboardMain(void)
 {
     int rc;
-    LogRelFlowFunc(("Starting guest clipboard service\n"));
-    bool fExiting = false;
 
-    while (!fExiting)
+    PSHCLCONTEXT pCtx = &g_Ctx;
+
+    bool fShutdown = false;
+
+    /* The thread waits for incoming messages from the host. */
+    for (;;)
     {
-        uint32_t Msg;
-        uint32_t fFormats;
-        rc = VbglR3ClipboardGetHostMsg(g_ctx.client, &Msg, &fFormats);
+        PVBGLR3CLIPBOARDEVENT pEvent = (PVBGLR3CLIPBOARDEVENT)RTMemAllocZ(sizeof(VBGLR3CLIPBOARDEVENT));
+        AssertPtrBreakStmt(pEvent, rc = VERR_NO_MEMORY);
+
+        LogFlowFunc(("Waiting for host message (fUseLegacyProtocol=%RTbool, fHostFeatures=%#RX64) ...\n",
+                     pCtx->CmdCtx.fUseLegacyProtocol, pCtx->CmdCtx.fHostFeatures));
+
+        uint32_t idMsg  = 0;
+        uint32_t cParms = 0;
+        rc = VbglR3ClipboardMsgPeekWait(&pCtx->CmdCtx, &idMsg, &cParms, NULL /* pidRestoreCheck */);
         if (RT_SUCCESS(rc))
         {
-            switch (Msg)
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+            rc = VbglR3ClipboardEventGetNextEx(idMsg, cParms, &pCtx->CmdCtx, &pCtx->TransferCtx, pEvent);
+#else
+            rc = VbglR3ClipboardEventGetNext(idMsg, cParms, &pCtx->CmdCtx, pEvent);
+#endif
+        }
+
+        if (RT_FAILURE(rc))
+        {
+            LogFlowFunc(("Getting next event failed with %Rrc\n", rc));
+
+            VbglR3ClipboardEventFree(pEvent);
+            pEvent = NULL;
+
+            if (fShutdown)
+                break;
+
+            /* Wait a bit before retrying. */
+            RTThreadSleep(1000);
+            continue;
+        }
+        else
+        {
+            AssertPtr(pEvent);
+            LogFlowFunc(("Event uType=%RU32\n", pEvent->enmType));
+
+            switch (pEvent->enmType)
             {
-                case VBOX_SHARED_CLIPBOARD_HOST_MSG_FORMATS:
+                case VBGLR3CLIPBOARDEVENTTYPE_REPORT_FORMATS:
                 {
-                    /* The host has announced available clipboard formats.
-                     * Save the information so that it is available for
-                     * future requests from guest applications.
-                     */
-                    LogRelFlowFunc(("VBOX_SHARED_CLIPBOARD_HOST_MSG_FORMATS fFormats=%x\n", fFormats));
-                    ClipAnnounceFormatToX11(g_ctx.pBackend, fFormats);
+                    ShClX11ReportFormatsToX11(&g_Ctx.X11, pEvent->u.fReportedFormats);
                     break;
                 }
 
-                case VBOX_SHARED_CLIPBOARD_HOST_MSG_READ_DATA:
+                case VBGLR3CLIPBOARDEVENTTYPE_READ_DATA:
                 {
                     /* The host needs data in the specified format. */
-                    LogRelFlowFunc(("VBOX_SHARED_CLIPBOARD_HOST_MSG_READ_DATA fFormats=%x\n", fFormats));
                     CLIPREADCBREQ *pReq;
-                    pReq = (CLIPREADCBREQ *)RTMemAllocZ(sizeof(*pReq));
-                    if (!pReq)
+                    pReq = (CLIPREADCBREQ *)RTMemAllocZ(sizeof(CLIPREADCBREQ));
+                    if (pReq)
                     {
-                        rc = VERR_NO_MEMORY;
-                        fExiting = true;
+                        pReq->Format = pEvent->u.fReadData;
+                        ShClX11ReadDataFromX11(&g_Ctx.X11, pReq->Format, pReq);
                     }
                     else
-                    {
-                        pReq->u32Format = fFormats;
-                        ClipRequestDataFromX11(g_ctx.pBackend, fFormats,
-                                               pReq);
-                    }
+                        rc = VERR_NO_MEMORY;
                     break;
                 }
 
-                case VBOX_SHARED_CLIPBOARD_HOST_MSG_QUIT:
+                case VBGLR3CLIPBOARDEVENTTYPE_QUIT:
                 {
-                    /* The host is terminating. */
-                    LogRelFlowFunc(("VBOX_SHARED_CLIPBOARD_HOST_MSG_QUIT\n"));
-                    if (RT_SUCCESS(ClipStopX11(g_ctx.pBackend)))
-                        ClipDestructX11(g_ctx.pBackend);
-                    fExiting = true;
+                    VBClLogVerbose(2, "Host requested termination\n");
+                    fShutdown = true;
+                    break;
+                }
+
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+                case VBGLR3CLIPBOARDEVENTTYPE_TRANSFER_STATUS:
+                {
+                    /* Nothing to do here. */
+                    rc = VINF_SUCCESS;
+                    break;
+                }
+#endif
+                case VBGLR3CLIPBOARDEVENTTYPE_NONE:
+                {
+                    /* Nothing to do here. */
+                    rc = VINF_SUCCESS;
                     break;
                 }
 
                 default:
-                    LogRel2(("Unsupported message from host!!!\n"));
+                {
+                    AssertMsgFailedBreakStmt(("Event type %RU32 not implemented\n", pEvent->enmType), rc = VERR_NOT_SUPPORTED);
+                }
+            }
+
+            if (pEvent)
+            {
+                VbglR3ClipboardEventFree(pEvent);
+                pEvent = NULL;
             }
         }
 
-        LogRelFlow(("processed host event rc = %d\n", rc));
+        if (fShutdown)
+            break;
     }
-    LogRelFlowFunc(("rc=%d\n", rc));
+
+    LogFlowFuncLeaveRC(rc);
     return rc;
 }
 
-static const char *getPidFilePath()
+/**
+ * @interface_method_impl{VBCLSERVICE,pfnInit}
+ */
+static DECLCALLBACK(int) vbclShClInit(void)
 {
-    return ".vboxclient-clipboard.pid";
+    int rc;
+
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+    rc = ShClTransferCtxInit(&g_Ctx.TransferCtx);
+#else
+    rc = VINF_SUCCESS;
+#endif
+
+    LogFlowFuncLeaveRC(rc);
+    return rc;
 }
 
-static int run(struct VBCLSERVICE **ppInterface, bool fDaemonised)
+/**
+ * @interface_method_impl{VBCLSERVICE,pfnWorker}
+ */
+static DECLCALLBACK(int) vbclShClWorker(bool volatile *pfShutdown)
 {
-    RT_NOREF2(ppInterface, fDaemonised);
+    RT_NOREF(pfShutdown);
 
     /* Initialise the guest library. */
-    int rc = VbglR3InitUser();
+    int rc = vboxClipboardConnect();
+    if (RT_SUCCESS(rc))
+    {
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_FUSE
+        rc = VbClShClFUSEInit(&g_FuseCtx, &g_Ctx);
+        if (RT_SUCCESS(rc))
+        {
+            rc = VbClShClFUSEStart(&g_FuseCtx);
+            if (RT_SUCCESS(rc))
+            {
+#endif
+                /* Let the main thread know that it can continue spawning services. */
+                RTThreadUserSignal(RTThreadSelf());
+
+                rc = vboxClipboardMain();
+
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_FUSE
+                int rc2 = VbClShClFUSEStop(&g_FuseCtx);
+                if (RT_SUCCESS(rc))
+                    rc = rc2;
+            }
+        }
+#endif
+    }
+
     if (RT_FAILURE(rc))
-        VBClFatalError(("Failed to connect to the VirtualBox kernel service, rc=%Rrc\n", rc));
-    rc = vboxClipboardConnect();
-    /* Not RT_SUCCESS: VINF_PERMISSION_DENIED is host service not present. */
-    if (rc == VINF_SUCCESS)
-        rc = vboxClipboardMain();
-    if (rc == VERR_NOT_SUPPORTED)
-        rc = VINF_SUCCESS;  /* Prevent automatic restart. */
-    if (RT_FAILURE(rc))
-        LogRelFunc(("guest clipboard service terminated abnormally: return code %Rrc\n", rc));
+        VBClLogError("Service terminated abnormally with %Rrc\n", rc);
+
+    if (rc == VERR_HGCM_SERVICE_NOT_FOUND)
+        rc = VINF_SUCCESS; /* Prevent automatic restart by daemon script if host service not available. */
+
     return rc;
 }
 
-static void cleanup(struct VBCLSERVICE **ppInterface)
+/**
+ * @interface_method_impl{VBCLSERVICE,pfnStop}
+ */
+static DECLCALLBACK(void) vbclShClStop(void)
 {
-    NOREF(ppInterface);
-    VbglR3Term();
+    /* Disconnect from the host service.
+     * This will also send a VBOX_SHCL_HOST_MSG_QUIT from the host so that we can break out from our message worker. */
+    VbglR3ClipboardDisconnect(g_Ctx.CmdCtx.idClient);
+    g_Ctx.CmdCtx.idClient = 0;
 }
 
-struct VBCLSERVICE vbclClipboardInterface =
+/**
+ * @interface_method_impl{VBCLSERVICE,pfnTerm}
+ */
+static DECLCALLBACK(int) vbclShClTerm(void)
 {
-    getPidFilePath,
-    VBClServiceDefaultHandler, /* init */
-    run,
-    cleanup
-};
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+    ShClTransferCtxDestroy(&g_Ctx.TransferCtx);
+#endif
 
-struct CLIPBOARDSERVICE
-{
-    struct VBCLSERVICE *pInterface;
-};
-
-struct VBCLSERVICE **VBClGetClipboardService()
-{
-    struct CLIPBOARDSERVICE *pService =
-        (struct CLIPBOARDSERVICE *)RTMemAlloc(sizeof(*pService));
-
-    if (!pService)
-        VBClFatalError(("Out of memory\n"));
-    pService->pInterface = &vbclClipboardInterface;
-    return &pService->pInterface;
+    return VINF_SUCCESS;
 }
+
+VBCLSERVICE g_SvcClipboard =
+{
+    "shcl",                      /* szName */
+    "Shared Clipboard",          /* pszDescription */
+    ".vboxclient-clipboard.pid", /* pszPidFilePath */
+    NULL,                        /* pszUsage */
+    NULL,                        /* pszOptions */
+    NULL,                        /* pfnOption */
+    vbclShClInit,                /* pfnInit */
+    vbclShClWorker,              /* pfnWorker */
+    vbclShClStop,                /* pfnStop*/
+    vbclShClTerm                 /* pfnTerm */
+};
+

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBDeviceFiltersImpl.cpp 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * Implementation of IUSBDeviceFilters.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_USBDEVICEFILTERS
 #include "USBDeviceFiltersImpl.h"
 
 #include "Global.h"
@@ -31,7 +32,7 @@
 #include <iprt/string.h>
 #include <iprt/cpp/utils.h>
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/settings.h>
 #include <VBox/com/array.h>
 
@@ -39,7 +40,7 @@
 
 #include "AutoStateDep.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 // defines
 /////////////////////////////////////////////////////////////////////////////
@@ -263,7 +264,7 @@ public:
         VBOX_TWEAK_INTERFACE_ENTRY(IUSBDeviceFilter)
     END_COM_MAP()
 
-    DECLARE_EMPTY_CTOR_DTOR(USBDeviceFilter)
+    DECLARE_COMMON_CLASS_METHODS(USBDeviceFilter)
 
     // IUSBDeviceFilter properties
     STDMETHOD(COMGETTER(Name))(BSTR *aName);
@@ -479,7 +480,7 @@ HRESULT USBDeviceFilters::removeDeviceFilter(ULONG aPosition,
  *  Loads settings from the given machine node.
  *  May be called once right after this object creation.
  *
- *  @param aMachineNode <Machine> node.
+ *  @param data Configuration settings.
  *
  *  @note Does not lock "this" as Machine::loadHardware, which calls this, does not lock either.
  */
@@ -514,6 +515,8 @@ HRESULT USBDeviceFilters::i_loadSettings(const settings::USB &data)
         m->llDeviceFilters->push_back(pFilter);
         pFilter->mInList = true;
     }
+#else
+    RT_NOREF(data);
 #endif /* VBOX_WITH_USB */
 
     return S_OK;
@@ -522,7 +525,7 @@ HRESULT USBDeviceFilters::i_loadSettings(const settings::USB &data)
 /**
  *  Saves settings to the given machine node.
  *
- *  @param aMachineNode <Machine> node.
+ *  @param data Configuration settings.
  *
  *  @note Locks this object for reading.
  */
@@ -567,6 +570,8 @@ HRESULT USBDeviceFilters::i_saveSettings(settings::USB &data)
 
         data.llDeviceFilters.push_back(f);
     }
+#else
+    RT_NOREF(data);
 #endif /* VBOX_WITH_USB */
 
     return S_OK;

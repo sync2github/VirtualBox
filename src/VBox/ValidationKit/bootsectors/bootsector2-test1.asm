@@ -1,4 +1,4 @@
-; $Id$
+; $Id: bootsector2-test1.asm 87744 2021-02-12 21:00:51Z vboxsync $
 ;; @file
 ; Bootsector that benchmarks I/O and MMIO roundtrip time.
 ;   VBoxManage setextradata bs-test1 VBoxInternal/Devices/VMMDev/0/Config/TestingEnabled  1
@@ -6,7 +6,7 @@
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -33,6 +33,9 @@
 
 ;; The number of instructions to test.
 %define TEST_INSTRUCTION_COUNT_IO       2000000
+
+;; The number of CPUID instructions to test.
+%define TEST_INSTRUCTION_COUNT_CPUID    8000000
 
 ;; The number of RDTSC instructions to test.
 %define TEST_INSTRUCTION_COUNT_RDTSC    4000000
@@ -69,6 +72,20 @@ BEGINPROC main
         call    TestInit_r86
         call    Bs2EnableA20_r86
         call    Bs2PanicIfVMMDevTestingIsMissing_r86
+
+%if 0
+        ;
+        ; IA32_FLUSH_CMD.
+        ;
+        mov     ax, .s_szTstFlushCmd
+        call    TestSub_r86
+        call    BenchmarkFlushCmd_rm_pp32
+        call    BenchmarkFlushCmd_rm_pae32
+        call    BenchmarkFlushCmd_rm_lm64
+        call    BenchmarkFlushCmd_rm_pe16
+        call    BenchmarkFlushCmd_rm_pe32
+        call    BenchmarkFlushCmd_rm_rm
+%endif
 
         ;
         ; CPUID.
@@ -140,6 +157,8 @@ BEGINPROC main
         db      'tstIOIntr', 0
 .s_szTstCpuId:
         db      'CPUID EAX=1', 0
+.s_szTstFlushCmd:
+        db      'IA32_FLUSH_CMD', 0
 .s_szTstRdTsc:
         db      'RDTSC', 0
 .s_szTstRdCr4:

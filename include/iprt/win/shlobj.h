@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,13 +23,28 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___iprt_win_shlobj_h___
-#define ___iprt_win_shlobj_h___
+#ifndef IPRT_INCLUDED_win_shlobj_h
+#define IPRT_INCLUDED_win_shlobj_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifdef _MSC_VER
 # pragma warning(push)
 # pragma warning(disable:4668) /* warning C4668: 'USE_SP_ALTPLATFORM_INFO_V1' is not defined as a preprocessor macro, replacing with '0' for '#if/#elif' */
+# if _MSC_VER >= 1800 /*RT_MSC_VER_VC120*/
+#  pragma warning(disable:4005) /* sdk/v7.1/include/sal_supp.h(57) : warning C4005: '__useHeader' : macro redefinition */
+#  pragma warning(disable:4255) /* windef.h(227) : warning C4255: 'NEARPROC' : no function prototype given: converting '()' to '(void)' */
+# endif
+# if _MSC_VER >= 1900 /*RT_MSC_VER_VC140*/
+#  pragma warning(disable:4091) /* sdk/v7.1/include/shlobj.h(1151): warning C4091: 'typedef ': ignored on left of 'tagGPFIDL_FLAGS' when no variable is declared */
+#  ifdef __cplusplus
+#   pragma warning(disable:5039) /* commctrl.h(8323): warning C5039: 'DSA_DestroyCallback': pointer or reference to potentially throwing function passed to 'extern "C"' function under -EHc. Undefined behavior may occur if this function throws an exception. */
+#  endif
+# endif
+# if _MSC_VER >= 1910 /*RT_MSC_VER_VC141*/
+#  pragma warning(disable:4768) /* sdk/v7.1/include/shlobj.h(1065): warning C4768: __declspec attributes before linkage specification are ignored */
+# endif
 #endif
 
 #include <shlobj.h>
@@ -38,5 +53,5 @@
 # pragma warning(pop)
 #endif
 
-#endif
+#endif /* !IPRT_INCLUDED_win_shlobj_h */
 

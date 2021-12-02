@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: alloc-ef-cpp.cpp 83546 2020-04-04 10:46:18Z vboxsync $ */
 /** @file
  * IPRT - Memory Allocation, C++ electric fence.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -90,7 +90,7 @@ void *RT_EF_CDECL operator new(RT_EF_SIZE_T cb, const std::nothrow_t &) RT_EF_NO
 
 void RT_EF_CDECL operator delete(void *pv) RT_EF_NOTHROW
 {
-    rtR3MemFree("delete", RTMEMTYPE_DELETE, pv, ASMReturnAddress(), NULL, 0, NULL);
+    rtR3MemFree("delete", RTMEMTYPE_DELETE, pv, 0, ASMReturnAddress(), NULL, 0, NULL);
 }
 
 
@@ -99,14 +99,14 @@ void RT_EF_CDECL operator delete(void *pv, RT_EF_SIZE_T cb) RT_EF_NOTHROW
 {
     NOREF(cb);
     AssertMsgFailed(("cb ignored!\n"));
-    rtR3MemFree("delete", RTMEMTYPE_DELETE, pv, ASMReturnAddress(), NULL, 0, NULL);
+    rtR3MemFree("delete", RTMEMTYPE_DELETE, pv, 0, ASMReturnAddress(), NULL, 0, NULL);
 }
 #endif
 
 
 void RT_EF_CDECL operator delete(void * pv, const std::nothrow_t &) RT_EF_NOTHROW
 {
-    rtR3MemFree("delete nothrow", RTMEMTYPE_DELETE, pv, ASMReturnAddress(), NULL, 0, NULL);
+    rtR3MemFree("delete nothrow", RTMEMTYPE_DELETE, pv, 0, ASMReturnAddress(), NULL, 0, NULL);
 }
 
 
@@ -136,7 +136,7 @@ void * RT_EF_CDECL operator new[](RT_EF_SIZE_T cb, const std::nothrow_t &) RT_EF
 
 void RT_EF_CDECL operator delete[](void * pv) RT_EF_NOTHROW
 {
-    rtR3MemFree("delete[]", RTMEMTYPE_DELETE_ARRAY, pv, ASMReturnAddress(), NULL, 0, NULL);
+    rtR3MemFree("delete[]", RTMEMTYPE_DELETE_ARRAY, pv, 0, ASMReturnAddress(), NULL, 0, NULL);
 }
 
 
@@ -145,13 +145,13 @@ void RT_EF_CDECL operator delete[](void * pv, RT_EF_SIZE_T cb) RT_EF_NOTHROW
 {
     NOREF(cb);
     AssertMsgFailed(("cb ignored!\n"));
-    rtR3MemFree("delete[]", RTMEMTYPE_DELETE_ARRAY, pv, ASMReturnAddress(), NULL, 0, NULL);
+    rtR3MemFree("delete[]", RTMEMTYPE_DELETE_ARRAY, pv, 0, ASMReturnAddress(), NULL, 0, NULL);
 }
 #endif
 
 
 void RT_EF_CDECL operator delete[](void *pv, const std::nothrow_t &) RT_EF_NOTHROW
 {
-    rtR3MemFree("delete[] nothrow", RTMEMTYPE_DELETE_ARRAY, pv, ASMReturnAddress(), NULL, 0, NULL);
+    rtR3MemFree("delete[] nothrow", RTMEMTYPE_DELETE_ARRAY, pv, 0, ASMReturnAddress(), NULL, 0, NULL);
 }
 

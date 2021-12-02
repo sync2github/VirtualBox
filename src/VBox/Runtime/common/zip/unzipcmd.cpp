@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: unzipcmd.cpp 84760 2020-06-10 14:28:10Z vboxsync $ */
 /** @file
  * IPRT - A mini UNZIP Command.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,17 +32,13 @@
 #include <iprt/asm.h>
 #include <iprt/getopt.h>
 #include <iprt/file.h>
+#include <iprt/err.h>
 #include <iprt/mem.h>
 #include <iprt/message.h>
 #include <iprt/path.h>
 #include <iprt/string.h>
 #include <iprt/vfs.h>
 #include <iprt/stream.h>
-
-
-/*********************************************************************************************************************************
-*   Defined Constants And Macros                                                                                                 *
-*********************************************************************************************************************************/
 
 
 /*********************************************************************************************************************************
@@ -255,23 +251,13 @@ static RTEXITCODE rtZipUnzipCmdOpenInputArchive(PRTZIPUNZIPCMDOPS pOpts, PRTVFSF
     /*
      * Open the input file.
      */
-    RTVFSIOSTREAM hVfsIos;
-    const char    *pszError;
-    int rc = RTVfsChainOpenIoStream(pOpts->pszFile,
-                                    RTFILE_O_READ | RTFILE_O_DENY_WRITE | RTFILE_O_OPEN,
-                                    &hVfsIos,
-                                    &pszError);
+    RTVFSIOSTREAM   hVfsIos;
+    uint32_t        offError = 0;
+    RTERRINFOSTATIC ErrInfo;
+    int rc = RTVfsChainOpenIoStream(pOpts->pszFile, RTFILE_O_READ | RTFILE_O_DENY_WRITE | RTFILE_O_OPEN,
+                                    &hVfsIos, &offError, RTErrInfoInitStatic(&ErrInfo));
     if (RT_FAILURE(rc))
-    {
-        if (pszError && *pszError)
-            return RTMsgErrorExit(RTEXITCODE_FAILURE,
-                                  "RTVfsChainOpenIoStream failed with rc=%Rrc:\n"
-                                  "    '%s'\n"
-                                  "     %*s^\n",
-                                  rc, pOpts->pszFile, pszError - pOpts->pszFile, "");
-        return RTMsgErrorExit(RTEXITCODE_FAILURE,
-                              "Failed with %Rrc opening the input archive '%s'", rc, pOpts->pszFile);
-    }
+        return RTVfsChainMsgErrorExitFailure("RTVfsChainOpenIoStream", pOpts->pszFile, rc, offError, &ErrInfo.Core);
 
     rc = RTZipPkzipFsStreamFromIoStream(hVfsIos, 0 /*fFlags*/, phVfsFss);
     RTVfsIoStrmRelease(hVfsIos);
@@ -434,7 +420,7 @@ RTDECL(RTEXITCODE) RTZipUnzipCmd(unsigned cArgs, char **papszArgs)
                     return RTMsgErrorExit(RTEXITCODE_SYNTAX,
                                           "Conflicting unzip operation (%s already set, now %s)",
                                           Opts.pszOperation, ValueUnion.pDef->pszLong);
-                Opts.iOperation   = rc;
+                Opts.iOperation   = 'l';
                 Opts.pszOperation = ValueUnion.pDef->pszLong;
                 break;
 
@@ -458,6 +444,9 @@ RTDECL(RTEXITCODE) RTZipUnzipCmd(unsigned cArgs, char **papszArgs)
             Opts.cFiles     = cArgs - GetState.iNext;
         }
     }
+
+    if (!Opts.pszFile)
+        return RTMsgErrorExit(RTEXITCODE_FAILURE, "No input archive specified");
 
     RTFOFF cBytes = 0;
     uint32_t cFiles = 0;

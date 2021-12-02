@@ -14,29 +14,20 @@
   There are no restrictions on the use of FeaturePcd(), FixedPcdGetXX(),
   PatchPcdGetXX(), and PatchPcdSetXX().
 
-Copyright (c) 2006 - 2014, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
 #ifndef __PCD_LIB_H__
 #define __PCD_LIB_H__
 
-#define PCD_MAX_SKU_ID           0x100
-
 
 /**
   Retrieves a token number based on a token name.
 
- Returns the token number associated with the PCD token specified by TokenName.
+  Returns the token number associated with the PCD token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve the token number for.
 
@@ -51,7 +42,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the Boolean value for the PCD feature flag specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a feature flag PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -66,7 +57,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the 8-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a fixed at build PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -81,7 +72,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the 16-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a fixed at build PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -96,7 +87,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the 32-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a fixed at build PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -111,7 +102,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the 64-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a fixed at build PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -126,7 +117,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the Boolean value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a fixed at build PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -141,7 +132,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns a pointer to the buffer for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a fixed at build PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -156,7 +147,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the 8-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -170,7 +161,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the 16-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -185,7 +176,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the 32-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -200,7 +191,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the 64-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -215,7 +206,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns the Boolean value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -230,7 +221,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Returns a pointer to the buffer for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the PCD token to retrieve a current value for.
 
@@ -245,7 +236,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Sets the 8-bit value for the token specified by TokenName. Value is returned.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the binary patchable PCD token to set the current value for.
   @param   Value      The 8-bit value to set.
@@ -261,7 +252,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Sets the 16-bit value for the token specified by TokenName. Value is returned.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the binary patchable PCD token to set the current value for.
   @param   Value      The 16-bit value to set.
@@ -277,7 +268,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Sets the 32-bit value for the token specified by TokenName. Value is returned.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the binary patchable PCD token to set the current value for.
   @param   Value      The 32-bit value to set.
@@ -293,7 +284,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Sets the 64-bit value for the token specified by TokenName. Value is returned.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the binary patchable PCD token to set the current value for.
   @param   Value      The 64-bit value to set.
@@ -309,7 +300,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   Sets the Boolean value for the token specified by TokenName. Value is returned.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   @param   TokenName  The name of the binary patchable PCD token to set the current value for.
   @param   Value      The boolean value to set.
@@ -329,7 +320,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
   was not actually performed.  If SizeOfBuffer is set to MAX_ADDRESS, then SizeOfBuffer must be
   set to the maximum size supported by TokenName and NULL must be returned.
   If TokenName is not a valid token in the token space, then the module will not build.
-  If TokenName is not a feature flag, then the module will not build.
+  If TokenName is not a patchable in module PCD, then the module will not build.
 
   If SizeOfBuffer is NULL, then ASSERT().
   If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
@@ -342,13 +333,13 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 **/
 #define PatchPcdSetPtr(TokenName, Size, Buffer) \
-                                            LibPatchPcdSetPtr (                        \
-                                              _gPcd_BinaryPatch_##TokenName,           \
+                                            LibPatchPcdSetPtrAndSize (                 \
+                                              (VOID *)_gPcd_BinaryPatch_##TokenName,   \
+                                              &_gPcd_BinaryPatch_Size_##TokenName,     \
                                               (UINTN)_PCD_PATCHABLE_##TokenName##_SIZE, \
                                               (Size),                                  \
                                               (Buffer)                                 \
                                               )
-
 /**
   Retrieves an 8-bit PCD token value based on a token name.
 
@@ -434,116 +425,163 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 
 /**
-  Sets an 8-bit PCD token value based on a token name.
+  Retrieves the size of a fixed PCD token based on a token name.
 
-  Sets the 8-bit value for the token specified by TokenName. Value is returned.
+  Returns the size of the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param[in]  TokenName  The name of the PCD token to retrieve a current value size for.
 
-  @param   TokenName  The name of the PCD token to retrieve a current value for.
-  @param   Value      The 8-bit value to set.
-
-  @return Return the Value that was set.
+  @return     Return the size
 
 **/
-#define PcdSet8(TokenName, Value)           _PCD_SET_MODE_8_##TokenName     ((Value))
+#define FixedPcdGetSize(TokenName)    _PCD_SIZE_##TokenName
 
+
+/**
+  Retrieves the size of a binary patchable PCD token based on a token name.
+
+  Returns the size of the token specified by TokenName.
+  If TokenName is not a valid token in the token space, then the module will not build.
+
+  @param[in]  TokenName  The name of the PCD token to retrieve a current value size for.
+
+  @return     Return the size
+
+**/
+#define PatchPcdGetSize(TokenName)    _gPcd_BinaryPatch_Size_##TokenName
+
+
+/**
+  Retrieves the size of the PCD token based on a token name.
+
+  Returns the size of the token specified by TokenName.
+  If TokenName is not a valid token in the token space, then the module will not build.
+
+  @param[in]   TokenName  The name of the PCD token to retrieve a current value size for.
+
+  @return      Return the size
+
+**/
+#define PcdGetSize(TokenName)         _PCD_GET_MODE_SIZE_##TokenName
+
+
+/**
+  Retrieve the size of a given PCD token.
+
+  Returns the size of the token specified by TokenNumber and Guid.
+  If Guid is NULL, then ASSERT().
+
+  @param[in]  Guid          Pointer to a 128-bit unique value that designates
+                            which namespace to retrieve a value from.
+  @param[in]  TokenNumber   The PCD token number to retrieve a current value size for.
+
+  @return     Return the size.
+
+**/
+#define PcdGetExSize(Guid, TokenName) LibPcdGetExSize ((Guid), PcdTokenEx(Guid,TokenName))
+
+/**
+  Sets a 8-bit PCD token value based on a token name.
+
+  Sets the 8-bit value for the token specified by TokenName.
+  If TokenName is not a valid token in the token space, then the module will not build.
+
+  @param TokenName  The name of the PCD token to retrieve a current value for.
+  @param Value      The 8-bit value to set.
+
+  @return The status of the set operation.
+
+**/
+#define PcdSet8S(TokenName, Value)          _PCD_SET_MODE_8_S_##TokenName    ((Value))
 
 /**
   Sets a 16-bit PCD token value based on a token name.
 
-  Sets the 16-bit value for the token specified by TokenName. Value is returned.
+  Sets the 16-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param TokenName  The name of the PCD token to retrieve a current value for.
+  @param Value      The 16-bit value to set.
 
-  @param   TokenName  The name of the PCD token to retrieve a current value for.
-  @param   Value      The 16-bit value to set.
-
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSet16(TokenName, Value)          _PCD_SET_MODE_16_##TokenName    ((Value))
-
+#define PcdSet16S(TokenName, Value)         _PCD_SET_MODE_16_S_##TokenName    ((Value))
 
 /**
   Sets a 32-bit PCD token value based on a token name.
 
-  Sets the 32-bit value for the token specified by TokenName. Value is returned.
+  Sets the 32-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param TokenName  The name of the PCD token to retrieve a current value for.
+  @param Value      The 32-bit value to set.
 
-  @param   TokenName  The name of the PCD token to retrieve a current value for.
-  @param   Value      The 32-bit value to set.
-
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSet32(TokenName, Value)          _PCD_SET_MODE_32_##TokenName    ((Value))
-
+#define PcdSet32S(TokenName, Value)         _PCD_SET_MODE_32_S_##TokenName    ((Value))
 
 /**
   Sets a 64-bit PCD token value based on a token name.
 
-  Sets the 64-bit value for the token specified by TokenName. Value is returned.
+  Sets the 64-bit value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
 
-  @param   TokenName  The name of the PCD token to retrieve a current value for.
-  @param   Value      The 64-bit value to set.
+  @param TokenName  The name of the PCD token to retrieve a current value for.
+  @param Value      The 64-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSet64(TokenName, Value)          _PCD_SET_MODE_64_##TokenName    ((Value))
-
+#define PcdSet64S(TokenName, Value)         _PCD_SET_MODE_64_S_##TokenName    ((Value))
 
 /**
   Sets a pointer to a PCD token buffer based on a token name.
 
-  Sets the buffer for the token specified by TokenName. Buffer is returned.
+  Sets the buffer for the token specified by TokenName.
   If SizeOfBuffer is greater than the maximum size supported by TokenName,
-  then set SizeOfBuffer to the maximum size supported by TokenName and return NULL
-  to indicate that the set operation was not actually performed.  If SizeOfBuffer
-  is set to MAX_ADDRESS, then SizeOfBuffer must be set to the maximum size supported
-  by TokenName and NULL must be returned, or ASSERT() if the set operation was not corretly performed.
+  then set SizeOfBuffer to the maximum size supported by TokenName and return
+  RETURN_INVALID_PARAMETER to indicate that the set operation was not actually performed.
+  If SizeOfBuffer is set to MAX_ADDRESS, then SizeOfBuffer must be set to the maximum size
+  supported by TokenName and RETURN_INVALID_PARAMETER must be returned.
   If TokenName is not a valid token in the token space, then the module will not build.
 
   If SizeOfBuffer is NULL, then ASSERT().
   If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
 
-  @param   TokenName      The name of the PCD token to set the current value for.
-  @param   SizeOfBuffer   A pointer to the size, in bytes, of Buffer.
-  @param   Buffer         A pointer to the buffer to set.
+  @param TokenName      The name of the PCD token to set the current value for.
+  @param SizeOfBuffer   A pointer to the size, in bytes, of Buffer.
+  @param Buffer         A pointer to the buffer to set.
 
-  @return Return the pointer to the Buffer that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSetPtr(TokenName, SizeOfBuffer, Buffer) \
-                                            _PCD_SET_MODE_PTR_##TokenName   ((SizeOfBuffer), (Buffer))
+#define PcdSetPtrS(TokenName, SizeOfBuffer, Buffer) \
+                                            _PCD_SET_MODE_PTR_S_##TokenName   ((SizeOfBuffer), (Buffer))
+
+
 
 /**
-  Sets a Boolean PCD token value based on a token name.
+  Sets a boolean PCD token value based on a token name.
 
-  Sets the Boolean value for the token specified by TokenName. Value is returned.
+  Sets the boolean value for the token specified by TokenName.
   If TokenName is not a valid token in the token space, then the module will not build.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param TokenName  The name of the PCD token to retrieve a current value for.
+  @param Value      The boolean value to set.
 
-  @param   TokenName      The name of the PCD token to set the current value for.
-  @param   Buffer         The Boolean value to set.
-
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSetBool(TokenName, Value)        _PCD_SET_MODE_BOOL_##TokenName  ((Value))
-
+#define PcdSetBoolS(TokenName, Value)       _PCD_SET_MODE_BOOL_S_##TokenName    ((Value))
 
 /**
   Retrieves a token number based on a GUID and a token name.
 
   Returns the token number for the token specified by Guid and TokenName.
+  If TokenName is not a valid token in the token space, then the module will not build.
 
   @param   Guid        Pointer to a 128-bit unique value that designates
                        which namespace to retrieve a value from.
@@ -667,99 +705,92 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #define PcdGetExBool(Guid, TokenName)       LibPcdGetExBool  ((Guid), PcdTokenEx(Guid,TokenName))
 
 
+
 /**
   Sets an 8-bit PCD token value based on a GUID and a token name.
 
-  Sets the 8-bit value for the token specified by Guid and TokenName. Value is returned.
+  Sets the 8-bit value for the token specified by Guid and TokenName.
   If TokenName is not a valid token in the token space specified by Guid,
   then the module will not build.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param   Guid        Pointer to a 128-bit unique value that designates
-                       which namespace to retrieve a value from.
-  @param   TokenName   The name of the PCD token to set the current value for.
-  @param   Value       The 8-bit value to set.
+  @param Guid       Pointer to a 128-bit unique value that designates
+                    which namespace to retrieve a value from.
+  @param TokenName  The name of the PCD token to set the current value for.
+  @param Value      The 8-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSetEx8(Guid, TokenName, Value)   LibPcdSetEx8   ((Guid), PcdTokenEx(Guid,TokenName), (Value))
-
+#define PcdSetEx8S(Guid, TokenName, Value)     LibPcdSetEx8S ((Guid), PcdTokenEx(Guid,TokenName), (Value))
 
 /**
-  Sets a 16-bit PCD token value based on a GUID and a token name.
+  Sets an 16-bit PCD token value based on a GUID and a token name.
 
-  Sets the 16-bit value for the token specified by Guid and TokenName. Value is returned.
+  Sets the 16-bit value for the token specified by Guid and TokenName.
   If TokenName is not a valid token in the token space specified by Guid,
   then the module will not build.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param   Guid        Pointer to a 128-bit unique value that designates
-                       which namespace to retrieve a value from.
-  @param   TokenName   The name of the PCD token to set the current value for.
-  @param   Value       The 16-bit value to set.
+  @param Guid       Pointer to a 128-bit unique value that designates
+                    which namespace to retrieve a value from.
+  @param TokenName  The name of the PCD token to set the current value for.
+  @param Value      The 16-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSetEx16(Guid, TokenName, Value)  LibPcdSetEx16  ((Guid), PcdTokenEx(Guid,TokenName), (Value))
-
+#define PcdSetEx16S(Guid, TokenName, Value)    LibPcdSetEx16S ((Guid), PcdTokenEx(Guid,TokenName), (Value))
 
 /**
-  Sets a 32-bit PCD token value based on a GUID and a token name.
+  Sets an 32-bit PCD token value based on a GUID and a token name.
 
-  Sets the 32-bit value for the token specified by Guid and TokenName. Value is returned.
+  Sets the 32-bit value for the token specified by Guid and TokenName.
   If TokenName is not a valid token in the token space specified by Guid,
   then the module will not build.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param   Guid        Pointer to a 128-bit unique value that designates
-                       which namespace to retrieve a value from.
-  @param   TokenName   The name of the PCD token to set the current value for.
-  @param   Value       The 32-bit value to set.
+  @param Guid       Pointer to a 128-bit unique value that designates
+                    which namespace to retrieve a value from.
+  @param TokenName  The name of the PCD token to set the current value for.
+  @param Value      The 32-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSetEx32(Guid, TokenName, Value)  LibPcdSetEx32  ((Guid), PcdTokenEx(Guid,TokenName), (Value))
-
+#define PcdSetEx32S(Guid, TokenName, Value)    LibPcdSetEx32S ((Guid), PcdTokenEx(Guid,TokenName), (Value))
 
 /**
-  Sets a 64-bit PCD token value based on a GUID and a token name.
+  Sets an 64-bit PCD token value based on a GUID and a token name.
 
-  Sets the 64-bit value for the token specified by Guid and TokenName. Value is returned.
+  Sets the 64-bit value for the token specified by Guid and TokenName.
   If TokenName is not a valid token in the token space specified by Guid,
   then the module will not build.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param   Guid        Pointer to a 128-bit unique value that designates
-  which namespace to retrieve a value from.
-  @param   TokenName   The name of the PCD token to set the current value for.
-  @param   Value       The 64-bit value to set.
+  @param Guid       Pointer to a 128-bit unique value that designates
+                    which namespace to retrieve a value from.
+  @param TokenName  The name of the PCD token to set the current value for.
+  @param Value      The 64-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSetEx64(Guid, TokenName, Value)  LibPcdSetEx64  ((Guid), PcdTokenEx(Guid,TokenName), (Value))
-
+#define PcdSetEx64S(Guid, TokenName, Value)    LibPcdSetEx64S ((Guid), PcdTokenEx(Guid,TokenName), (Value))
 
 /**
   Sets a pointer to a PCD token buffer based on a GUID and a token name.
 
-  Sets the buffer for the token specified by Guid and TokenName. Buffer is returned.
+  Sets the buffer for the token specified by Guid and TokenName.
   If SizeOfBuffer is greater than the maximum size supported by Guid and TokenName,
   then set SizeOfBuffer to the maximum size supported by Guid and TokenName and return
-  NULL to indicate that the set operation was not actually performed. If SizeOfBuffer
-  is set to MAX_ADDRESS, then SizeOfBuffer must be set to the maximum size supported by
-  Guid and TokenName and NULL must be returned, or ASSERT() if the set operation was not corretly performed.
+  RETURN_INVALID_PARAMETER to indicate that the set operation was not actually performed.
+  If SizeOfBuffer is set to MAX_ADDRESS, then SizeOfBuffer must be set to the maximum size
+  supported by Guid and TokenName and RETURN_INVALID_PARAMETER must be returned.
   If TokenName is not a valid token in the token space specified by Guid,
   then the module will not build.
 
@@ -767,46 +798,43 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
   If SizeOfBuffer is NULL, then ASSERT().
   If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
 
-  @param   Guid           Pointer to a 128-bit unique value that designates
-                          which namespace to retrieve a value from.
-  @param   TokenName      The name of the PCD token to set the current value for.
-  @param   SizeOfBuffer   A pointer to the size, in bytes, of Buffer.
-  @param   Buffer         Pointer to the buffer to set.
+  @param Guid           Pointer to a 128-bit unique value that designates
+                        which namespace to retrieve a value from.
+  @param TokenName      The name of the PCD token to set the current value for.
+  @param SizeOfBuffer   A pointer to the size, in bytes, of Buffer.
+  @param Buffer         Pointer to the buffer to set.
 
-  @return Return the pointer to the Buffer that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSetExPtr(Guid, TokenName, SizeOfBuffer, Buffer) \
-                                            LibPcdSetExPtr ((Guid), PcdTokenEx(Guid,TokenName), (SizeOfBuffer), (Buffer))
+#define PcdSetExPtrS(Guid, TokenName, SizeOfBuffer, Buffer) \
+                                            LibPcdSetExPtrS ((Guid), PcdTokenEx(Guid,TokenName), (SizeOfBuffer), (Buffer))
 
 
 /**
-  Sets a Boolean PCD token value based on a GUID and a token name.
+  Sets an boolean PCD token value based on a GUID and a token name.
 
-  Sets the Boolean value for the token specified by Guid and TokenName. Value is returned.
+  Sets the boolean value for the token specified by Guid and TokenName.
   If TokenName is not a valid token in the token space specified by Guid,
   then the module will not build.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param   Guid           Pointer to a 128-bit unique value that designates
-                          which namespace to retrieve a value from.
-  @param   TokenName      The name of the PCD token to set the current value for.
-  @param   Value          The Boolean value to set.
+  @param Guid       Pointer to a 128-bit unique value that designates
+                    which namespace to retrieve a value from.
+  @param TokenName  The name of the PCD token to set the current value for.
+  @param Value      The boolean value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-#define PcdSetExBool(Guid, TokenName, Value) \
-                                            LibPcdSetExBool((Guid), PcdTokenEx(Guid,TokenName), (Value))
-
+#define PcdSetExBoolS(Guid, TokenName, Value) \
+                                            LibPcdSetExBoolS ((Guid), PcdTokenEx(Guid,TokenName), (Value))
 
 /**
   This function provides a means by which SKU support can be established in the PCD infrastructure.
 
   Sets the current SKU in the PCD database to the value specified by SkuId.  SkuId is returned.
-  If SkuId >= PCD_MAX_SKU_ID, then ASSERT().
 
   @param  SkuId   The SKU value that will be used when the PCD service retrieves and sets values
                   associated with a PCD token.
@@ -1093,102 +1121,89 @@ LibPcdGetExSize (
   This function provides a means by which to set a value for a given PCD token.
 
   Sets the 8-bit value for the token specified by TokenNumber
-  to the value specified by Value.  Value is returned.
+  to the value specified by Value.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The 8-bit value to set.
 
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The 8-bit value to set.
-
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-UINT8
+RETURN_STATUS
 EFIAPI
-LibPcdSet8 (
-  IN UINTN             TokenNumber,
-  IN UINT8             Value
+LibPcdSet8S (
+  IN UINTN          TokenNumber,
+  IN UINT8          Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
   Sets the 16-bit value for the token specified by TokenNumber
-  to the value specified by Value.  Value is returned.
+  to the value specified by Value.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The 16-bit value to set.
 
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The 16-bit value to set.
-
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-UINT16
+RETURN_STATUS
 EFIAPI
-LibPcdSet16 (
-  IN UINTN             TokenNumber,
-  IN UINT16            Value
+LibPcdSet16S (
+  IN UINTN          TokenNumber,
+  IN UINT16         Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
   Sets the 32-bit value for the token specified by TokenNumber
-  to the value specified by Value.  Value is returned.
+  to the value specified by Value.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The 32-bit value to set.
 
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The 32-bit value to set.
-
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-UINT32
+RETURN_STATUS
 EFIAPI
-LibPcdSet32 (
-  IN UINTN             TokenNumber,
-  IN UINT32            Value
+LibPcdSet32S (
+  IN UINTN          TokenNumber,
+  IN UINT32         Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
   Sets the 64-bit value for the token specified by TokenNumber
-  to the value specified by Value.  Value is returned.
+  to the value specified by Value.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The 64-bit value to set.
 
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The 64-bit value to set.
-
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-UINT64
+RETURN_STATUS
 EFIAPI
-LibPcdSet64 (
-  IN UINTN             TokenNumber,
-  IN UINT64            Value
+LibPcdSet64S (
+  IN UINTN          TokenNumber,
+  IN UINT64         Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
-  Sets a buffer for the token specified by TokenNumber to the value
-  specified by Buffer and SizeOfBuffer.  Buffer is returned.
-  If SizeOfBuffer is greater than the maximum size support by TokenNumber,
-  then set SizeOfBuffer to the maximum size supported by TokenNumber and
-  return NULL to indicate that the set operation was not actually performed,
-  or ASSERT() if the set operation was not corretly performed.
+  Sets a buffer for the token specified by TokenNumber to the value specified
+  by Buffer and SizeOfBuffer. If SizeOfBuffer is greater than the maximum size
+  support by TokenNumber, then set SizeOfBuffer to the maximum size supported by
+  TokenNumber and return RETURN_INVALID_PARAMETER to indicate that the set operation
+  was not actually performed.
 
   If SizeOfBuffer is set to MAX_ADDRESS, then SizeOfBuffer must be set to the
-  maximum size supported by TokenName and NULL must be returned.
+  maximum size supported by TokenName and RETURN_INVALID_PARAMETER must be returned.
 
   If SizeOfBuffer is NULL, then ASSERT().
   If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
@@ -1197,201 +1212,186 @@ LibPcdSet64 (
   @param[in, out] SizeOfBuffer  The size, in bytes, of Buffer.
   @param[in]      Buffer        A pointer to the buffer to set.
 
-  @return Return the pointer for the Buffer that was set.
+  @return The status of the set operation.
 
 **/
-VOID *
+RETURN_STATUS
 EFIAPI
-LibPcdSetPtr (
-  IN        UINTN             TokenNumber,
-  IN OUT    UINTN             *SizeOfBuffer,
-  IN CONST  VOID              *Buffer
+LibPcdSetPtrS (
+  IN       UINTN    TokenNumber,
+  IN OUT   UINTN    *SizeOfBuffer,
+  IN CONST VOID     *Buffer
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
-  Sets the Boolean value for the token specified by TokenNumber
-  to the value specified by Value.  Value is returned.
+  Sets the boolean value for the token specified by TokenNumber
+  to the value specified by Value.
 
-  If the set operation was not correctly performed, then ASSERT().
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The boolean value to set.
 
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The boolean value to set.
-
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-BOOLEAN
+RETURN_STATUS
 EFIAPI
-LibPcdSetBool (
-  IN UINTN             TokenNumber,
-  IN BOOLEAN           Value
+LibPcdSetBoolS (
+  IN UINTN          TokenNumber,
+  IN BOOLEAN        Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
-  Sets the 8-bit value for the token specified by TokenNumber and
-  Guid to the value specified by Value. Value is returned.
+  Sets the 8-bit value for the token specified by TokenNumber
+  to the value specified by Value.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param[in]  Guid          Pointer to a 128-bit unique value that
+  @param[in] Guid           The pointer to a 128-bit unique value that
                             designates which namespace to set a value from.
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The 8-bit value to set.
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The 8-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-UINT8
+RETURN_STATUS
 EFIAPI
-LibPcdSetEx8 (
-  IN CONST GUID        *Guid,
-  IN UINTN             TokenNumber,
-  IN UINT8             Value
+LibPcdSetEx8S (
+  IN CONST GUID     *Guid,
+  IN UINTN          TokenNumber,
+  IN UINT8          Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
-  Sets the 16-bit value for the token specified by TokenNumber and
-  Guid to the value specified by Value. Value is returned.
+  Sets the 16-bit value for the token specified by TokenNumber
+  to the value specified by Value.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param[in]  Guid          Pointer to a 128-bit unique value that
+  @param[in] Guid           The pointer to a 128-bit unique value that
                             designates which namespace to set a value from.
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The 16-bit value to set.
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The 16-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-UINT16
+RETURN_STATUS
 EFIAPI
-LibPcdSetEx16 (
-  IN CONST GUID        *Guid,
-  IN UINTN             TokenNumber,
-  IN UINT16            Value
+LibPcdSetEx16S (
+  IN CONST GUID     *Guid,
+  IN UINTN          TokenNumber,
+  IN UINT16         Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
-  Sets the 32-bit value for the token specified by TokenNumber and
-  Guid to the value specified by Value. Value is returned.
+  Sets the 32-bit value for the token specified by TokenNumber
+  to the value specified by Value.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param[in]  Guid          Pointer to a 128-bit unique value that
+  @param[in] Guid           The pointer to a 128-bit unique value that
                             designates which namespace to set a value from.
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The 32-bit value to set.
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The 32-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-UINT32
+RETURN_STATUS
 EFIAPI
-LibPcdSetEx32 (
-  IN CONST GUID        *Guid,
-  IN UINTN             TokenNumber,
-  IN UINT32            Value
+LibPcdSetEx32S (
+  IN CONST GUID     *Guid,
+  IN UINTN          TokenNumber,
+  IN UINT32         Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
-  Sets the 64-bit value for the token specified by TokenNumber and
-  Guid to the value specified by Value. Value is returned.
+  Sets the 64-bit value for the token specified by TokenNumber
+  to the value specified by Value.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param[in]  Guid          Pointer to a 128-bit unique value that
+  @param[in] Guid           The pointer to a 128-bit unique value that
                             designates which namespace to set a value from.
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The 64-bit value to set.
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The 64-bit value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-UINT64
+RETURN_STATUS
 EFIAPI
-LibPcdSetEx64 (
-  IN CONST GUID        *Guid,
-  IN UINTN             TokenNumber,
-  IN UINT64            Value
+LibPcdSetEx64S (
+  IN CONST GUID     *Guid,
+  IN UINTN          TokenNumber,
+  IN UINT64         Value
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
   Sets a buffer for the token specified by TokenNumber to the value specified by
-  Buffer and SizeOfBuffer.  Buffer is returned.  If SizeOfBuffer is greater than
-  the maximum size support by TokenNumber, then set SizeOfBuffer to the maximum size
-  supported by TokenNumber and return NULL to indicate that the set operation
-  was not actually performed, or ASSERT() if the set operation was not corretly performed.
+  Buffer and SizeOfBuffer. If SizeOfBuffer is greater than the maximum size
+  support by TokenNumber, then set SizeOfBuffer to the maximum size supported by
+  TokenNumber and return RETURN_INVALID_PARAMETER to indicate that the set operation
+  was not actually performed.
 
   If Guid is NULL, then ASSERT().
   If SizeOfBuffer is NULL, then ASSERT().
   If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
 
-  @param[in]  Guid              Pointer to a 128-bit unique value that
+  @param[in]      Guid          Pointer to a 128-bit unique value that
                                 designates which namespace to set a value from.
-  @param[in]  TokenNumber       The PCD token number to set a current value for.
+  @param[in]      TokenNumber   The PCD token number to set a current value for.
   @param[in, out] SizeOfBuffer  The size, in bytes, of Buffer.
-  @param[in]  Buffer            A pointer to the buffer to set.
+  @param[in]      Buffer        A pointer to the buffer to set.
 
-  @return Return the pointer to the Buffer that was set.
+  @return The status of the set operation.
 
 **/
-VOID *
+RETURN_STATUS
 EFIAPI
-LibPcdSetExPtr (
-  IN      CONST GUID        *Guid,
-  IN      UINTN             TokenNumber,
-  IN OUT  UINTN             *SizeOfBuffer,
-  IN      VOID              *Buffer
+LibPcdSetExPtrS (
+  IN CONST GUID     *Guid,
+  IN       UINTN    TokenNumber,
+  IN OUT   UINTN    *SizeOfBuffer,
+  IN       VOID     *Buffer
   );
-
 
 /**
   This function provides a means by which to set a value for a given PCD token.
 
-  Sets the Boolean value for the token specified by TokenNumber and
-  Guid to the value specified by Value. Value is returned.
+  Sets the boolean value for the token specified by TokenNumber
+  to the value specified by Value.
 
   If Guid is NULL, then ASSERT().
-  If the set operation was not correctly performed, then ASSERT().
 
-  @param[in]  Guid          Pointer to a 128-bit unique value that
+  @param[in] Guid           The pointer to a 128-bit unique value that
                             designates which namespace to set a value from.
-  @param[in]  TokenNumber   The PCD token number to set a current value for.
-  @param[in]  Value         The Boolean value to set.
+  @param[in] TokenNumber    The PCD token number to set a current value for.
+  @param[in] Value          The boolean value to set.
 
-  @return Return the Value that was set.
+  @return The status of the set operation.
 
 **/
-BOOLEAN
+RETURN_STATUS
 EFIAPI
-LibPcdSetExBool (
-  IN CONST GUID        *Guid,
-  IN UINTN             TokenNumber,
-  IN BOOLEAN           Value
+LibPcdSetExBoolS (
+  IN CONST GUID     *Guid,
+  IN UINTN          TokenNumber,
+  IN BOOLEAN        Value
   );
-
 
 /**
   This notification function serves two purposes.
@@ -1528,7 +1528,7 @@ LibPcdGetNextTokenSpace (
   If SizeOfBuffer is NULL, then ASSERT().
   If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
 
-  @param[in] PatchVariable      A pointer to the global variable in a module that is
+  @param[out] PatchVariable     A pointer to the global variable in a module that is
                                 the target of the set operation.
   @param[in] MaximumDatumSize   The maximum size allowed for the PCD entry specified by PatchVariable.
   @param[in, out] SizeOfBuffer  A pointer to the size, in bytes, of Buffer.
@@ -1540,10 +1540,112 @@ LibPcdGetNextTokenSpace (
 VOID *
 EFIAPI
 LibPatchPcdSetPtr (
-  IN        VOID        *PatchVariable,
+  OUT        VOID       *PatchVariable,
   IN        UINTN       MaximumDatumSize,
   IN OUT    UINTN       *SizeOfBuffer,
   IN CONST  VOID        *Buffer
+  );
+
+/**
+  Sets a value of a patchable PCD entry that is type pointer.
+
+  Sets the PCD entry specified by PatchVariable to the value specified
+  by Buffer and SizeOfBuffer. If SizeOfBuffer is greater than MaximumDatumSize,
+  then set SizeOfBuffer to MaximumDatumSize and return RETURN_INVALID_PARAMETER
+  to indicate that the set operation was not actually performed.
+  If SizeOfBuffer is set to MAX_ADDRESS, then SizeOfBuffer must be set to
+  MaximumDatumSize and RETURN_INVALID_PARAMETER must be returned.
+
+  If PatchVariable is NULL, then ASSERT().
+  If SizeOfBuffer is NULL, then ASSERT().
+  If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
+
+  @param[out] PatchVariable     A pointer to the global variable in a module that is
+                                the target of the set operation.
+  @param[in] MaximumDatumSize   The maximum size allowed for the PCD entry specified by PatchVariable.
+  @param[in, out] SizeOfBuffer  A pointer to the size, in bytes, of Buffer.
+  @param[in] Buffer             A pointer to the buffer to used to set the target variable.
+
+  @return The status of the set operation.
+
+**/
+RETURN_STATUS
+EFIAPI
+LibPatchPcdSetPtrS (
+  OUT      VOID     *PatchVariable,
+  IN       UINTN    MaximumDatumSize,
+  IN OUT   UINTN    *SizeOfBuffer,
+  IN CONST VOID     *Buffer
+  );
+
+/**
+  Sets a value and size of a patchable PCD entry that is type pointer.
+
+  Sets the PCD entry specified by PatchVariable to the value specified by Buffer
+  and SizeOfBuffer. Buffer is returned.  If SizeOfBuffer is greater than
+  MaximumDatumSize, then set SizeOfBuffer to MaximumDatumSize and return
+  NULL to indicate that the set operation was not actually performed.
+  If SizeOfBuffer is set to MAX_ADDRESS, then SizeOfBuffer must be set to
+  MaximumDatumSize and NULL must be returned.
+
+  If PatchVariable is NULL, then ASSERT().
+  If SizeOfPatchVariable is NULL, then ASSERT().
+  If SizeOfBuffer is NULL, then ASSERT().
+  If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
+
+  @param[out] PatchVariable     A pointer to the global variable in a module that is
+                                the target of the set operation.
+  @param[out] SizeOfPatchVariable A pointer to the size, in bytes, of PatchVariable.
+  @param[in] MaximumDatumSize   The maximum size allowed for the PCD entry specified by PatchVariable.
+  @param[in, out] SizeOfBuffer  A pointer to the size, in bytes, of Buffer.
+  @param[in] Buffer             A pointer to the buffer to used to set the target variable.
+
+  @return Return the pointer to the Buffer that was set.
+
+**/
+VOID *
+EFIAPI
+LibPatchPcdSetPtrAndSize (
+  OUT       VOID        *PatchVariable,
+  OUT       UINTN       *SizeOfPatchVariable,
+  IN        UINTN       MaximumDatumSize,
+  IN OUT    UINTN       *SizeOfBuffer,
+  IN CONST  VOID        *Buffer
+  );
+
+/**
+  Sets a value and size of a patchable PCD entry that is type pointer.
+
+  Sets the PCD entry specified by PatchVariable to the value specified
+  by Buffer and SizeOfBuffer. If SizeOfBuffer is greater than MaximumDatumSize,
+  then set SizeOfBuffer to MaximumDatumSize and return RETURN_INVALID_PARAMETER
+  to indicate that the set operation was not actually performed.
+  If SizeOfBuffer is set to MAX_ADDRESS, then SizeOfBuffer must be set to
+  MaximumDatumSize and RETURN_INVALID_PARAMETER must be returned.
+
+  If PatchVariable is NULL, then ASSERT().
+  If SizeOfPatchVariable is NULL, then ASSERT().
+  If SizeOfBuffer is NULL, then ASSERT().
+  If SizeOfBuffer > 0 and Buffer is NULL, then ASSERT().
+
+  @param[out] PatchVariable     A pointer to the global variable in a module that is
+                                the target of the set operation.
+  @param[out] SizeOfPatchVariable A pointer to the size, in bytes, of PatchVariable.
+  @param[in] MaximumDatumSize   The maximum size allowed for the PCD entry specified by PatchVariable.
+  @param[in, out] SizeOfBuffer  A pointer to the size, in bytes, of Buffer.
+  @param[in] Buffer             A pointer to the buffer to used to set the target variable.
+
+  @return The status of the set operation.
+
+**/
+RETURN_STATUS
+EFIAPI
+LibPatchPcdSetPtrAndSizeS (
+  OUT      VOID     *PatchVariable,
+  OUT      UINTN    *SizeOfPatchVariable,
+  IN       UINTN    MaximumDatumSize,
+  IN OUT   UINTN    *SizeOfBuffer,
+  IN CONST VOID     *Buffer
   );
 
 typedef enum {
@@ -1618,8 +1720,6 @@ LibPcdGetInfoEx (
 
 /**
   Retrieve the currently set SKU Id.
-
-  If the sku id got >= PCD_MAX_SKU_ID, then ASSERT().
 
   @return   The currently set SKU Id. If the platform has not set at a SKU Id, then the
             default SKU Id value of 0 is returned. If the platform has set a SKU Id, then the currently set SKU

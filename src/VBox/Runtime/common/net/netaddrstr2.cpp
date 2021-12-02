@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: netaddrstr2.cpp 91918 2021-10-21 01:09:34Z vboxsync $ */
 /** @file
  * IPRT - Network Address String Handling.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,6 +32,7 @@
 #include <iprt/net.h>
 
 #include <iprt/asm.h>
+#include <iprt/errcore.h>
 #include <iprt/mem.h>
 #include <iprt/string.h>
 #include <iprt/stream.h>
@@ -71,7 +72,7 @@ DECLHIDDEN(int) rtNetStrToIPv4AddrEx(const char *pcszAddr, PRTNETADDRIPV4 pAddr,
 
     if (ppszNext != NULL)
         *ppszNext = pszNext;
-    return VINF_SUCCESS;
+    return rc;
 }
 
 
@@ -93,11 +94,7 @@ RTDECL(int) RTNetStrToIPv4Addr(const char *pcszAddr, PRTNETADDRIPV4 pAddr)
 
     pcszAddr = RTStrStripL(pcszAddr);
     rc = rtNetStrToIPv4AddrEx(pcszAddr, pAddr, &pszNext);
-    if (rc != VINF_SUCCESS)
-        return VERR_INVALID_PARAMETER;
-
-    pszNext = RTStrStripL(pszNext);
-    if (*pszNext != '\0')
+    if (RT_FAILURE(rc) || rc == VWRN_TRAILING_CHARS)
         return VERR_INVALID_PARAMETER;
 
     return VINF_SUCCESS;
@@ -137,11 +134,7 @@ RTDECL(bool) RTNetStrIsIPv4AddrAny(const char *pcszAddr)
 
     pcszAddr = RTStrStripL(pcszAddr);
     rc = rtNetStrToIPv4AddrEx(pcszAddr, &addrIPv4, &pszNext);
-    if (rc != VINF_SUCCESS)
-        return false;
-
-    pszNext = RTStrStripL(pszNext);
-    if (*pszNext != '\0')
+    if (RT_FAILURE(rc) || rc == VWRN_TRAILING_CHARS)
         return false;
 
     if (addrIPv4.u != 0u)       /* INADDR_ANY? */
@@ -150,6 +143,161 @@ RTDECL(bool) RTNetStrIsIPv4AddrAny(const char *pcszAddr)
     return true;
 }
 RT_EXPORT_SYMBOL(RTNetStrIsIPv4AddrAny);
+
+
+RTDECL(int) RTNetMaskToPrefixIPv4(PCRTNETADDRIPV4 pMask, int *piPrefix)
+{
+    AssertReturn(pMask != NULL, VERR_INVALID_PARAMETER);
+
+    if (pMask->u == 0)
+    {
+        if (piPrefix != NULL)
+            *piPrefix = 0;
+        return VINF_SUCCESS;
+    }
+
+    const uint32_t uMask = RT_N2H_U32(pMask->u);
+
+    uint32_t uPrefixMask = UINT32_C(0xffffffff);
+    int iPrefixLen = 32;
+
+    while (iPrefixLen > 0)
+    {
+        if (uMask == uPrefixMask)
+        {
+            if (piPrefix != NULL)
+                *piPrefix = iPrefixLen;
+            return VINF_SUCCESS;
+        }
+
+        --iPrefixLen;
+        uPrefixMask <<= 1;
+    }
+
+    return VERR_INVALID_PARAMETER;
+}
+RT_EXPORT_SYMBOL(RTNetMaskToPrefixIPv4);
+
+
+RTDECL(int) RTNetPrefixToMaskIPv4(int iPrefix, PRTNETADDRIPV4 pMask)
+{
+    AssertReturn(pMask != NULL, VERR_INVALID_PARAMETER);
+
+    if (RT_UNLIKELY(iPrefix < 0 || 32 < iPrefix))
+        return VERR_INVALID_PARAMETER;
+
+    if (RT_LIKELY(iPrefix != 0))
+        pMask->u = RT_H2N_U32(UINT32_C(0xffffffff) << (32 - iPrefix));
+    else /* avoid UB in the shift */
+        pMask->u = 0;
+
+    return VINF_SUCCESS;
+}
+RT_EXPORT_SYMBOL(RTNetPrefixToMaskIPv4);
+
+
+RTDECL(int) RTNetStrToIPv4Cidr(const char *pcszAddr, PRTNETADDRIPV4 pAddr, int *piPrefix)
+{
+    RTNETADDRIPV4 Addr, Mask;
+    uint8_t u8Prefix;
+    char *pszNext;
+    int rc;
+
+    AssertPtrReturn(pcszAddr, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pAddr, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(piPrefix, VERR_INVALID_PARAMETER);
+
+    pcszAddr = RTStrStripL(pcszAddr);
+    rc = rtNetStrToIPv4AddrEx(pcszAddr, &Addr, &pszNext);
+    if (RT_FAILURE(rc))
+        return rc;
+
+    /*
+     * If the prefix is missing, treat is as exact (/32) address
+     * specification.
+     */
+    if (*pszNext == '\0' || rc == VWRN_TRAILING_SPACES)
+    {
+        *pAddr = Addr;
+        *piPrefix = 32;
+        return VINF_SUCCESS;
+    }
+
+    /*
+     * Be flexible about the way the prefix is specified after the
+     * slash: accept both the prefix length and the netmask, and for
+     * the latter accept both dotted-decimal and hex.  The inputs we
+     * convert here are likely coming from a user and people have
+     * different preferences.  Sometimes they just remember specific
+     * different networks in specific formats!
+     */
+    if (*pszNext == '/')
+        ++pszNext;
+    else
+        return VERR_INVALID_PARAMETER;
+
+    /* .../0x... is a hex mask */
+    if (pszNext[0] == '0' && (pszNext[1] == 'x' || pszNext[1] == 'X'))
+    {
+        rc = RTStrToUInt32Ex(pszNext, &pszNext, 16, &Mask.u);
+        if (rc == VINF_SUCCESS || rc == VWRN_TRAILING_SPACES)
+            Mask.u = RT_H2N_U32(Mask.u);
+        else
+            return VERR_INVALID_PARAMETER;
+
+        int iPrefix;
+        rc = RTNetMaskToPrefixIPv4(&Mask, &iPrefix);
+        if (RT_SUCCESS(rc))
+            u8Prefix = (uint8_t)iPrefix;
+        else
+            return VERR_INVALID_PARAMETER;
+    }
+    else
+    {
+        char *pszLookAhead;
+        uint32_t u32;
+        rc = RTStrToUInt32Ex(pszNext, &pszLookAhead, 10, &u32);
+
+        /* single number after the slash is prefix length */
+        if (rc == VINF_SUCCESS || rc == VWRN_TRAILING_SPACES)
+        {
+            if (u32 <= 32)
+                u8Prefix = (uint8_t)u32;
+            else
+                return VERR_INVALID_PARAMETER;
+        }
+        /* a number followed by more stuff, may be a dotted-decimal */
+        else if (rc == VWRN_TRAILING_CHARS)
+        {
+            if (*pszLookAhead != '.') /* don't even bother checking */
+                return VERR_INVALID_PARAMETER;
+
+            rc = rtNetStrToIPv4AddrEx(pszNext, &Mask, &pszNext);
+            if (rc == VINF_SUCCESS || rc == VWRN_TRAILING_SPACES)
+            {
+                int iPrefix;
+                rc = RTNetMaskToPrefixIPv4(&Mask, &iPrefix);
+                if (RT_SUCCESS(rc))
+                    u8Prefix = (uint8_t)iPrefix;
+                else
+                    return VERR_INVALID_PARAMETER;
+            }
+            else
+                return VERR_INVALID_PARAMETER;
+        }
+        /* failed to convert to number */
+        else
+            return VERR_INVALID_PARAMETER;
+    }
+
+    if (u8Prefix > 32)
+        return VERR_INVALID_PARAMETER;
+
+    *pAddr = Addr;
+    *piPrefix = u8Prefix;
+    return VINF_SUCCESS;
+}
+RT_EXPORT_SYMBOL(RTNetStrToIPv4Cidr);
 
 
 static int rtNetStrToHexGroup(const char *pcszValue, char **ppszNext,
@@ -204,7 +352,7 @@ DECLHIDDEN(int) rtNetStrToIPv6AddrBase(const char *pcszAddr, PRTNETADDRIPV6 pAdd
     uint16_t u16;
     int rc;
 
-    memset(&ipv6, 0, sizeof(ipv6));
+    RT_ZERO(ipv6);
 
     pcszPos = pcszAddr;
 
@@ -275,7 +423,7 @@ DECLHIDDEN(int) rtNetStrToIPv6AddrBase(const char *pcszAddr, PRTNETADDRIPV6 pAdd
         const int iMaybeStart = iGroup;
         int j;
 
-        memset(&ipv6Tail, 0, sizeof(ipv6Tail));
+        RT_ZERO(ipv6Tail);
 
         /*
          * We try to accept longest match; we'll shift if necessary.
@@ -459,3 +607,121 @@ RTDECL(bool) RTNetStrIsIPv6AddrAny(const char *pcszAddr)
     return true;
 }
 RT_EXPORT_SYMBOL(RTNetStrIsIPv6AddrAny);
+
+
+RTDECL(int) RTNetMaskToPrefixIPv6(PCRTNETADDRIPV6 pMask, int *piPrefix)
+{
+    AssertReturn(pMask != NULL, VERR_INVALID_PARAMETER);
+
+    int iPrefix = 0;
+    unsigned int i;
+
+    for (i = 0; i < RT_ELEMENTS(pMask->au8); ++i)
+    {
+        int iBits;
+        switch (pMask->au8[i])
+        {
+            case 0x00: iBits = 0; break;
+            case 0x80: iBits = 1; break;
+            case 0xc0: iBits = 2; break;
+            case 0xe0: iBits = 3; break;
+            case 0xf0: iBits = 4; break;
+            case 0xf8: iBits = 5; break;
+            case 0xfc: iBits = 6; break;
+            case 0xfe: iBits = 7; break;
+            case 0xff: iBits = 8; break;
+            default:                /* non-contiguous mask */
+                return VERR_INVALID_PARAMETER;
+        }
+
+        iPrefix += iBits;
+        if (iBits != 8)
+            break;
+    }
+
+    for (++i; i < RT_ELEMENTS(pMask->au8); ++i)
+        if (pMask->au8[i] != 0)
+            return VERR_INVALID_PARAMETER;
+
+    if (piPrefix != NULL)
+        *piPrefix = iPrefix;
+    return VINF_SUCCESS;
+}
+RT_EXPORT_SYMBOL(RTNetMaskToPrefixIPv6);
+
+
+RTDECL(int) RTNetPrefixToMaskIPv6(int iPrefix, PRTNETADDRIPV6 pMask)
+{
+    AssertReturn(pMask != NULL, VERR_INVALID_PARAMETER);
+
+    if (RT_UNLIKELY(iPrefix < 0 || 128 < iPrefix))
+        return VERR_INVALID_PARAMETER;
+
+    for (unsigned int i = 0; i < RT_ELEMENTS(pMask->au32); ++i)
+    {
+        if (iPrefix == 0)
+        {
+            pMask->au32[i] = 0;
+        }
+        else if (iPrefix >= 32)
+        {
+            pMask->au32[i] = UINT32_C(0xffffffff);
+            iPrefix -= 32;
+        }
+        else
+        {
+            pMask->au32[i] = RT_H2N_U32(UINT32_C(0xffffffff) << (32 - iPrefix));
+            iPrefix = 0;
+        }
+    }
+
+    return VINF_SUCCESS;
+}
+RT_EXPORT_SYMBOL(RTNetPrefixToMaskIPv6);
+
+
+RTDECL(int) RTNetStrToIPv6Cidr(const char *pcszAddr, PRTNETADDRIPV6 pAddr, int *piPrefix)
+{
+    RTNETADDRIPV6 Addr;
+    uint8_t u8Prefix;
+    char *pszZone, *pszNext;
+    int rc;
+
+    AssertPtrReturn(pcszAddr, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pAddr, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(piPrefix, VERR_INVALID_PARAMETER);
+
+    pcszAddr = RTStrStripL(pcszAddr);
+    rc = rtNetStrToIPv6AddrEx(pcszAddr, &Addr, &pszZone, &pszNext);
+    if (RT_FAILURE(rc))
+        return rc;
+
+    RT_NOREF(pszZone);
+
+    /*
+     * If the prefix is missing, treat is as exact (/128) address
+     * specification.
+     */
+    if (*pszNext == '\0' || rc == VWRN_TRAILING_SPACES)
+    {
+        *pAddr = Addr;
+        *piPrefix = 128;
+        return VINF_SUCCESS;
+    }
+
+    if (*pszNext != '/')
+        return VERR_INVALID_PARAMETER;
+
+    ++pszNext;
+    rc = RTStrToUInt8Ex(pszNext, &pszNext, 10, &u8Prefix);
+    if (rc != VINF_SUCCESS && rc != VWRN_TRAILING_SPACES)
+        return VERR_INVALID_PARAMETER;
+
+    if (u8Prefix > 128)
+        return VERR_INVALID_PARAMETER;
+
+    *pAddr = Addr;
+    *piPrefix = u8Prefix;
+    return VINF_SUCCESS;
+}
+RT_EXPORT_SYMBOL(RTNetStrToIPv6Cidr);

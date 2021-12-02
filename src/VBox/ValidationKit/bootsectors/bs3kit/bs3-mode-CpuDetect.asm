@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-mode-CpuDetect.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - Bs3CpuDetect
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -293,11 +293,16 @@ CPU 586
         pop     xAX                     ; restore PAE+PProOrNewer
         test    edx, X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
         jz      .no_long_mode
-        or      ax, BS3CPU_F_CPUID_EXT_LEAVES | BS3CPU_F_LONG_MODE
-        jmp     .return
+        or      ah, ((BS3CPU_F_CPUID_EXT_LEAVES | BS3CPU_F_LONG_MODE) >> 8)
+        jmp     .no_check_for_nx
 .no_long_mode:
-        or      ax, BS3CPU_F_CPUID_EXT_LEAVES
+        or      ah, (BS3CPU_F_CPUID_EXT_LEAVES >> 8)
+.no_check_for_nx:
+        test    edx, X86_CPUID_EXT_FEATURE_EDX_NX
+        jz      .return
+        or      ax, BS3CPU_F_NX
         jmp     .return
+
 .no_ext_leaves:
         pop     xAX                     ; restore PAE+PProOrNewer
 

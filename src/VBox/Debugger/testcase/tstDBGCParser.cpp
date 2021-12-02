@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstDBGCParser.cpp 86365 2020-09-30 20:56:22Z vboxsync $ */
 /** @file
  * DBGC Testcase - Command Parser.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,10 +30,10 @@
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
 *********************************************************************************************************************************/
-static DECLCALLBACK(bool) tstDBGCBackInput(PDBGCBACK pBack, uint32_t cMillies);
-static DECLCALLBACK(int)  tstDBGCBackRead(PDBGCBACK pBack, void *pvBuf, size_t cbBuf, size_t *pcbRead);
-static DECLCALLBACK(int)  tstDBGCBackWrite(PDBGCBACK pBack, const void *pvBuf, size_t cbBuf, size_t *pcbWritten);
-static DECLCALLBACK(void) tstDBGCBackSetReady(PDBGCBACK pBack, bool fReady);
+static DECLCALLBACK(bool) tstDBGCBackInput(PCDBGCIO pBack, uint32_t cMillies);
+static DECLCALLBACK(int)  tstDBGCBackRead(PCDBGCIO pBack, void *pvBuf, size_t cbBuf, size_t *pcbRead);
+static DECLCALLBACK(int)  tstDBGCBackWrite(PCDBGCIO pBack, const void *pvBuf, size_t cbBuf, size_t *pcbWritten);
+static DECLCALLBACK(void) tstDBGCBackSetReady(PCDBGCIO pBack, bool fReady);
 
 
 /*********************************************************************************************************************************
@@ -42,9 +42,10 @@ static DECLCALLBACK(void) tstDBGCBackSetReady(PDBGCBACK pBack, bool fReady);
 /** The test handle. */
 static RTTEST g_hTest = NIL_RTTEST;
 
-/** The DBGC backend structure for use in this testcase. */
-static DBGCBACK g_tstBack =
+/** The DBGC I/O structure for use in this testcase. */
+static DBGCIO g_tstBack =
 {
+    NULL, /**pfnDestroy*/
     tstDBGCBackInput,
     tstDBGCBackRead,
     tstDBGCBackWrite,
@@ -70,7 +71,7 @@ static size_t   g_offOutput = 0;
  *                      it's instance data.
  * @param   cMillies    Number of milliseconds to wait on input data.
  */
-static DECLCALLBACK(bool) tstDBGCBackInput(PDBGCBACK pBack, uint32_t cMillies)
+static DECLCALLBACK(bool) tstDBGCBackInput(PCDBGCIO pBack, uint32_t cMillies)
 {
     return g_pszInput != NULL
        && *g_pszInput != '\0';
@@ -90,7 +91,7 @@ static DECLCALLBACK(bool) tstDBGCBackInput(PDBGCBACK pBack, uint32_t cMillies)
  *                      If NULL the entire buffer must be filled for a
  *                      successful return.
  */
-static DECLCALLBACK(int) tstDBGCBackRead(PDBGCBACK pBack, void *pvBuf, size_t cbBuf, size_t *pcbRead)
+static DECLCALLBACK(int) tstDBGCBackRead(PCDBGCIO pBack, void *pvBuf, size_t cbBuf, size_t *pcbRead)
 {
     if (g_pszInput && *g_pszInput)
     {
@@ -119,7 +120,7 @@ static DECLCALLBACK(int) tstDBGCBackRead(PDBGCBACK pBack, void *pvBuf, size_t cb
  * @param   pcbWritten  Where to store the number of bytes actually written.
  *                      If NULL the entire buffer must be successfully written.
  */
-static DECLCALLBACK(int) tstDBGCBackWrite(PDBGCBACK pBack, const void *pvBuf, size_t cbBuf, size_t *pcbWritten)
+static DECLCALLBACK(int) tstDBGCBackWrite(PCDBGCIO pBack, const void *pvBuf, size_t cbBuf, size_t *pcbWritten)
 {
     const char *pch = (const char *)pvBuf;
     if (pcbWritten)
@@ -158,7 +159,7 @@ static DECLCALLBACK(int) tstDBGCBackWrite(PDBGCBACK pBack, const void *pvBuf, si
  *                      it's instance data.
  * @param   fReady      Whether it's ready (true) or busy (false).
  */
-static DECLCALLBACK(void) tstDBGCBackSetReady(PDBGCBACK pBack, bool fReady)
+static DECLCALLBACK(void) tstDBGCBackSetReady(PCDBGCIO pBack, bool fReady)
 {
 }
 
@@ -1166,6 +1167,7 @@ int main()
     if (RT_SUCCESS(rc))
     {
         pDbgc->pVM = (PVM)pDbgc;
+        pDbgc->pUVM = (PUVM)pDbgc;
         rc = dbgcProcessInput(pDbgc, true /* fNoExecute */);
         tstCompleteOutput();
         if (RT_SUCCESS(rc))

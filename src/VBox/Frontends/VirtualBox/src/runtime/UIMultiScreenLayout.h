@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMultiScreenLayout.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMultiScreenLayout class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIMultiScreenLayout_h__
-#define __UIMultiScreenLayout_h__
+#ifndef FEQT_INCLUDED_SRC_runtime_UIMultiScreenLayout_h
+#define FEQT_INCLUDED_SRC_runtime_UIMultiScreenLayout_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QObject>
@@ -34,8 +37,6 @@ class UIMultiScreenLayout : public QObject
 
 signals:
 
-    /** Notifies about layout update. */
-    void sigScreenLayoutUpdate();
     /** Notifies about layout change. */
     void sigScreenLayoutChange();
 
@@ -65,6 +66,7 @@ private:
     /* Helpers: Prepare stuff: */
     void calculateHostMonitorCount();
     void calculateGuestScreenCount();
+    void prepareConnections();
 
     /* Other helpers: */
     void saveScreenMapping();
@@ -74,10 +76,11 @@ private:
     UIMachineLogic *m_pMachineLogic;
     QList<int> m_guestScreens;
     QList<int> m_disabledGuestScreens;
+    const uint m_cGuestScreens;
     int m_cHostScreens;
     QMap<int, int> m_screenMap;
     QList<QMenu*> m_screenMenuList;
 };
 
-#endif /* __UIMultiScreenLayout_h__ */
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIMultiScreenLayout_h */
 

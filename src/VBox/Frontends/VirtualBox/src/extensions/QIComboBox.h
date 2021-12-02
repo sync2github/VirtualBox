@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QIComboBox.h 91523 2021-10-01 15:13:10Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Qt extensions: QIComboBox class declaration.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,15 +15,20 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___QIComboBox_h___
-#define ___QIComboBox_h___
+#ifndef FEQT_INCLUDED_SRC_extensions_QIComboBox_h
+#define FEQT_INCLUDED_SRC_extensions_QIComboBox_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QComboBox>
 
+/* GUI includes: */
+#include "UILibraryDefs.h"
 
 /** QWidget subclass extending standard functionality of QComboBox. */
-class QIComboBox : public QWidget
+class SHARED_LIBRARY_STUFF QIComboBox : public QWidget
 {
     Q_OBJECT;
 
@@ -80,7 +85,15 @@ public:
     int count() const;
     /** Returns the index of the current item in the combo-box. */
     int currentIndex() const;
+    /** Returns the text of the current item in the combo-box. */
+    QString currentText() const;
+    /** Returns the data of the current item in the combo-box. */
+    QVariant currentData(int iRole = Qt::UserRole) const;
 
+    /** Adds the @a items into the combo-box. */
+    void addItems(const QStringList &items) const;
+    /** Adds the @a strText and userData (stored in the Qt::UserRole) into the combo-box. */
+    void addItem(const QString &strText, const QVariant &userData = QVariant()) const;
     /** Inserts the @a strText and userData (stored in the Qt::UserRole) into the combo-box at the given @a iIndex. */
     void insertItem(int iIndex, const QString &strText, const QVariant &userData = QVariant()) const;
     /** Removes the item from the combo-box at the given @a iIndex. */
@@ -93,7 +106,28 @@ public:
     /** Returns the text for the item with the given @a iIndex. */
     QString itemText(int iIndex) const;
 
+    /** Returns the index of the item containing the given @a data for the given @a iRole; otherwise returns -1.
+      * @param  flags  Specifies how the items in the combobox are searched. */
+    int findData(const QVariant &data, int iRole = Qt::UserRole,
+                 Qt::MatchFlags flags = static_cast<Qt::MatchFlags>(Qt::MatchExactly | Qt::MatchCaseSensitive)) const;
+    /** Returns the index of the item containing the given @a strText; otherwise returns -1.
+      * @param  flags  Specifies how the items in the combobox are searched. */
+    int findText(const QString &strText, Qt::MatchFlags flags = static_cast<Qt::MatchFlags>(Qt::MatchExactly | Qt::MatchCaseSensitive)) const;
+
+    /** Returns size adjust policy. */
+    QComboBox::SizeAdjustPolicy sizeAdjustPolicy() const;
+    /** Defines size adjust @a enmPolicy. */
+    void setSizeAdjustPolicy(QComboBox::SizeAdjustPolicy enmPolicy);
+    /** Marks the line edit of the combobox. Refer to QILineEdit::mark(..). */
+    void mark(bool fError, const QString &strErrorMessage = QString());
+
+    /** Inserts separator at position with specified @a iIndex. */
+    void insertSeparator(int iIndex);
+
 public slots:
+
+    /** Clears the combobox, removing all items. */
+    void clear();
 
     /** Defines the @a size of the icons shown in the combo-box. */
     void setIconSize(const QSize &size) const;
@@ -112,6 +146,11 @@ public slots:
     /** Defines the @a strText for the item with the given @a iIndex. */
     void setItemText(int iIndex, const QString &strText) const;
 
+protected:
+
+    /** Returns the embedded combo-box reference. */
+    QComboBox *comboBox() const;
+
 private:
 
     /** Prepares all. */
@@ -121,5 +160,4 @@ private:
     QComboBox *m_pComboBox;
 };
 
-#endif /* !___QIComboBox_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_extensions_QIComboBox_h */

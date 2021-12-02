@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 86908 2020-11-18 10:56:12Z vboxsync $
 ## @file
 # Sub-Makefile for the Shared Clipboard Host Service testcases.
 #
 
 #
-# Copyright (C) 2011-2016 Oracle Corporation
+# Copyright (C) 2011-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -20,14 +20,53 @@ include $(KBUILD_PATH)/subheader.kmk
 
 if defined(VBOX_WITH_TESTCASES) && !defined(VBOX_ONLY_ADDITIONS) && !defined(VBOX_ONLY_SDK)
 
+ #
+ #
+ #
  PROGRAMS += tstClipboardServiceHost
-
  tstClipboardServiceHost_TEMPLATE = VBOXR3TSTEXE
  tstClipboardServiceHost_DEFS     = VBOX_WITH_HGCM UNIT_TEST
  tstClipboardServiceHost_SOURCES  = \
-	../service.cpp \
+	../VBoxSharedClipboardSvc.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-common.cpp \
+	$(PATH_ROOT)/src/VBox/HostServices/common/message.cpp \
 	tstClipboardServiceHost.cpp
+ tstClipboardServiceHost_LIBS     = $(LIB_RUNTIME)
+ tstClipboardServiceHost_CLEAN    = $(tstClipboardServiceHost_0_OUTDIR)/tstClipboardServiceHost.run
 
+ if defined(VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS)
+  tstClipboardServiceHost_DEFS    += VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+  tstClipboardServiceHost_SOURCES += \
+	../VBoxSharedClipboardSvc-transfers.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-transfers.cpp
+ endif
+
+ #
+ #
+ #
+ PROGRAMS += tstClipboardServiceImpl
+ tstClipboardServiceImpl_TEMPLATE = VBOXR3TSTEXE
+ tstClipboardServiceImpl_DEFS     = VBOX_WITH_HGCM UNIT_TEST
+ tstClipboardServiceImpl_SOURCES  = \
+	../VBoxSharedClipboardSvc.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-common.cpp \
+	$(PATH_ROOT)/src/VBox/HostServices/common/message.cpp \
+	tstClipboardServiceImpl.cpp
+ tstClipboardServiceImpl_LIBS     = $(LIB_RUNTIME)
+ tstClipboardServiceImpl_CLEAN    = $(tstClipboardServiceImpl_0_OUTDIR)/tstClipboardServiceImpl.run
+
+ if defined(VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS)
+  #
+  #
+  #
+  PROGRAMS += tstClipboardTransfers
+  tstClipboardTransfers_TEMPLATE = VBOXR3TSTEXE
+  tstClipboardTransfers_DEFS     = VBOX_WITH_HGCM UNIT_TEST VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+  tstClipboardTransfers_SOURCES  = \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-common.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-transfers.cpp \
+	tstClipboardTransfers.cpp
+ endif
 endif
 
 include $(FILE_KBUILD_SUB_FOOTER)

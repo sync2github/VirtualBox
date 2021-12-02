@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: tdNetBenchmark1.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 VirtualBox Validation Kit - Networking benchmark #1.
@@ -8,7 +8,7 @@ VirtualBox Validation Kit - Networking benchmark #1.
 
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,7 +27,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard Python imports.
@@ -48,7 +48,7 @@ from testdriver import vbox;
 from testdriver import vboxcon;
 
 
-class tdNetBenchmark1(vbox.TestDriver):                                         # pylint: disable=R0902
+class tdNetBenchmark1(vbox.TestDriver):                                         # pylint: disable=too-many-instance-attributes
     """
     Networking benchmark #1.
     """
@@ -129,7 +129,7 @@ class tdNetBenchmark1(vbox.TestDriver):                                         
         reporter.log('                     --throughput-sizes 8192 --test-vms tst-rhel5:tst-win2k3ent:tst-sol10');
         return rc;
 
-    def parseOption(self, asArgs, iArg):                                        # pylint: disable=R0912,R0915
+    def parseOption(self, asArgs, iArg):                                        # pylint: disable=too-many-branches,too-many-statements
         if asArgs[iArg] == '--remote-host':
             iArg += 1;
             if iArg >= len(asArgs): raise base.InvalidOption('The "--remote-host" takes an IP address or a hostname');
@@ -498,7 +498,7 @@ class tdNetBenchmark1(vbox.TestDriver):                                         
             self.logVmInfo(oVM);
             oSession, oTxsSession = self.startVmAndConnectToTxsViaTcp(sVmName, fCdWait = True);
             if oSession is not None:
-                self.addTask(oSession);
+                self.addTask(oTxsSession);
 
                 # Fudge factor - Allow the guest to finish starting up.
                 self.sleep(5);

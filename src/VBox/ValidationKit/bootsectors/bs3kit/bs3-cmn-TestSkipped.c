@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-TestSkipped.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - Bs3TestSkipped
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,7 +37,7 @@
  * Equivalent to RTTestSkippedV.
  */
 #undef Bs3TestSkippedV
-BS3_CMN_DEF(void, Bs3TestSkippedV,(const char *pszFormat, va_list va))
+BS3_CMN_DEF(void, Bs3TestSkippedV,(const char *pszFormat, va_list BS3_FAR va))
 {
     if (g_cusBs3TestErrors == g_cusBs3SubTestAtErrors)
     {

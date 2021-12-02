@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTSignTool.cpp 89018 2021-05-12 16:28:56Z vboxsync $ */
 /** @file
  * IPRT - Signing Tool.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,9 +25,9 @@
  */
 
 
-/*******************************************************************************
-*   Header Files                                                               *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #include <iprt/assert.h>
 #include <iprt/buildconfig.h>
 #include <iprt/err.h>
@@ -45,6 +45,7 @@
 #ifndef RT_OS_WINDOWS
 # include <iprt/formats/pecoff.h>
 #endif
+#include <iprt/crypto/applecodesign.h>
 #include <iprt/crypto/digest.h>
 #include <iprt/crypto/x509.h>
 #include <iprt/crypto/pkcs7.h>
@@ -55,13 +56,13 @@
 #endif
 #ifdef RT_OS_WINDOWS
 # include <iprt/win/windows.h>
-# include <ImageHlp.h>
+# include <iprt/win/imagehlp.h>
 #endif
 
 
-/*******************************************************************************
-*   Structures and Typedefs                                                    *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Structures and Typedefs                                                                                                      *
+*********************************************************************************************************************************/
 /** Help detail levels. */
 typedef enum RTSIGNTOOLHELP
 {
@@ -85,8 +86,6 @@ typedef struct SIGNTOOLPKCS7
     RTCRPKCS7CONTENTINFO        ContentInfo;
     /** Pointer to the decoded SignedData inside the ContentInfo member. */
     PRTCRPKCS7SIGNEDDATA        pSignedData;
-    /** Pointer to the indirect data content. */
-    PRTCRSPCINDIRECTDATACONTENT pIndData;
 
     /** Newly encoded raw signature.
      * @sa SignToolPkcs7_Encode()  */
@@ -124,9 +123,9 @@ typedef struct SHOWEXEPKCS7 : public SIGNTOOLPKCS7EXE
 typedef SHOWEXEPKCS7 *PSHOWEXEPKCS7;
 
 
-/*******************************************************************************
-*   Internal Functions                                                         *
-*******************************************************************************/
+/*********************************************************************************************************************************
+*   Internal Functions                                                                                                           *
+*********************************************************************************************************************************/
 static RTEXITCODE HandleHelp(int cArgs, char **papszArgs);
 static RTEXITCODE HelpHelp(PRTSTREAM pStrm, RTSIGNTOOLHELP enmLevel);
 static RTEXITCODE HandleVersion(int cArgs, char **papszArgs);
@@ -142,9 +141,7 @@ static int HandleShowExeWorkerPkcs7Display(PSHOWEXEPKCS7 pThis, PRTCRPKCS7SIGNED
 static void SignToolPkcs7_Delete(PSIGNTOOLPKCS7 pThis)
 {
     RTCrPkcs7ContentInfo_Delete(&pThis->ContentInfo);
-    pThis->pIndData    = NULL;
     pThis->pSignedData = NULL;
-    pThis->pIndData    = NULL;
     RTMemFree(pThis->pbBuf);
     pThis->pbBuf       = NULL;
     pThis->cbBuf       = 0;
@@ -198,8 +195,8 @@ static int SignToolPkcs7_Decode(PSIGNTOOLPKCS7 pThis, bool fCatalog)
              */
             if (!strcmp(pThis->pSignedData->ContentInfo.ContentType.szObjId, RTCRSPCINDIRECTDATACONTENT_OID))
             {
-                pThis->pIndData = pThis->pSignedData->ContentInfo.u.pIndirectDataContent;
-                Assert(pThis->pIndData);
+                PRTCRSPCINDIRECTDATACONTENT pIndData = pThis->pSignedData->ContentInfo.u.pIndirectDataContent;
+                Assert(pIndData);
 
                 /*
                  * Check that things add up.
@@ -211,7 +208,7 @@ static int SignToolPkcs7_Decode(PSIGNTOOLPKCS7 pThis, bool fCatalog)
                                                      RTErrInfoInitStatic(&ErrInfo), "SD");
                 if (RT_SUCCESS(rc))
                 {
-                    rc = RTCrSpcIndirectDataContent_CheckSanityEx(pThis->pIndData,
+                    rc = RTCrSpcIndirectDataContent_CheckSanityEx(pIndData,
                                                                   pThis->pSignedData,
                                                                   RTCRSPCINDIRECTDATACONTENT_SANITY_F_ONLY_KNOWN_HASH,
                                                                   RTErrInfoInitStatic(&ErrInfo));
@@ -222,6 +219,8 @@ static int SignToolPkcs7_Decode(PSIGNTOOLPKCS7 pThis, bool fCatalog)
                 else
                     RTMsgError("PKCS#7 sanity check failed for '%s': %Rrc - %s\n", pThis->pszFilename, rc, ErrInfo.szMsg);
             }
+            else if (!strcmp(pThis->pSignedData->ContentInfo.ContentType.szObjId, RTCR_PKCS7_DATA_OID))
+            { /* apple code signing */ }
             else if (!fCatalog)
                 RTMsgError("Unexpected the signed content in '%s': %s (expected %s)", pThis->pszFilename,
                            pThis->pSignedData->ContentInfo.ContentType.szObjId, RTCRSPCINDIRECTDATACONTENT_OID);
@@ -341,8 +340,11 @@ static RTEXITCODE SignToolPkcs7_Encode(PSIGNTOOLPKCS7 pThis, unsigned cVerbosity
  * @param   pThis               The signature to modify.
  * @param   pSrc                The signature to add as nested.
  * @param   cVerbosity          The verbosity.
+ * @param   fPrepend            Whether to prepend (true) or append (false) the
+ *                              source signature to the nested attribute.
  */
-static RTEXITCODE SignToolPkcs7_AddNestedSignature(PSIGNTOOLPKCS7 pThis, PSIGNTOOLPKCS7 pSrc, unsigned cVerbosity)
+static RTEXITCODE SignToolPkcs7_AddNestedSignature(PSIGNTOOLPKCS7 pThis, PSIGNTOOLPKCS7 pSrc,
+                                                   unsigned cVerbosity, bool fPrepend)
 {
     PRTCRPKCS7SIGNERINFO pSignerInfo = pThis->pSignedData->SignerInfos.papItems[0];
     int rc;
@@ -369,64 +371,78 @@ static RTEXITCODE SignToolPkcs7_AddNestedSignature(PSIGNTOOLPKCS7 pThis, PSIGNTO
                                      sizeof(**pSignerInfo->UnauthenticatedAttributes.papItems));
     }
 
-    int32_t iPos = RTCrPkcs7Attributes_Append(&pSignerInfo->UnauthenticatedAttributes);
-    if (iPos >= 0)
-    {
-        if (cVerbosity >= 3)
-            RTMsgInfo("Adding UnauthenticatedAttribute #%u...", iPos);
-        Assert((uint32_t)iPos < pSignerInfo->UnauthenticatedAttributes.cItems);
-
-        PRTCRPKCS7ATTRIBUTE pAttr = pSignerInfo->UnauthenticatedAttributes.papItems[iPos];
-        rc = RTAsn1ObjId_InitFromString(&pAttr->Type, RTCR_PKCS9_ID_MS_NESTED_SIGNATURE, pAttr->Allocation.pAllocator);
-        if (RT_SUCCESS(rc))
+    /*
+     * Find or add an unauthenticated attribute for nested signatures.
+     */
+    rc = VERR_NOT_FOUND;
+    PRTCRPKCS7ATTRIBUTE pAttr = NULL;
+    int32_t iPos = pSignerInfo->UnauthenticatedAttributes.cItems;
+    while (iPos-- > 0)
+        if (pSignerInfo->UnauthenticatedAttributes.papItems[iPos]->enmType == RTCRPKCS7ATTRIBUTETYPE_MS_NESTED_SIGNATURE)
         {
-            /** @todo Generalize the Type + enmType DYN stuff and generate setters. */
-            Assert(pAttr->enmType == RTCRPKCS7ATTRIBUTETYPE_NOT_PRESENT);
-            Assert(pAttr->uValues.pContentInfos == NULL);
-            pAttr->enmType = RTCRPKCS7ATTRIBUTETYPE_MS_NESTED_SIGNATURE;
-            rc = RTAsn1MemAllocZ(&pAttr->Allocation, (void **)&pAttr->uValues.pContentInfos,
-                                 sizeof(*pAttr->uValues.pContentInfos));
+            pAttr = pSignerInfo->UnauthenticatedAttributes.papItems[iPos];
+            rc = VINF_SUCCESS;
+            break;
+        }
+    if (iPos < 0)
+    {
+        iPos = RTCrPkcs7Attributes_Append(&pSignerInfo->UnauthenticatedAttributes);
+        if (iPos >= 0)
+        {
+            if (cVerbosity >= 3)
+                RTMsgInfo("Adding UnauthenticatedAttribute #%u...", iPos);
+            Assert((uint32_t)iPos < pSignerInfo->UnauthenticatedAttributes.cItems);
+
+            pAttr = pSignerInfo->UnauthenticatedAttributes.papItems[iPos];
+            rc = RTAsn1ObjId_InitFromString(&pAttr->Type, RTCR_PKCS9_ID_MS_NESTED_SIGNATURE, pAttr->Allocation.pAllocator);
             if (RT_SUCCESS(rc))
             {
-                rc = RTCrPkcs7SetOfContentInfos_Init(pAttr->uValues.pContentInfos, pAttr->Allocation.pAllocator);
+                /** @todo Generalize the Type + enmType DYN stuff and generate setters. */
+                Assert(pAttr->enmType == RTCRPKCS7ATTRIBUTETYPE_NOT_PRESENT);
+                Assert(pAttr->uValues.pContentInfos == NULL);
+                pAttr->enmType = RTCRPKCS7ATTRIBUTETYPE_MS_NESTED_SIGNATURE;
+                rc = RTAsn1MemAllocZ(&pAttr->Allocation, (void **)&pAttr->uValues.pContentInfos,
+                                     sizeof(*pAttr->uValues.pContentInfos));
                 if (RT_SUCCESS(rc))
                 {
-                    iPos = RTCrPkcs7SetOfContentInfos_Append(pAttr->uValues.pContentInfos);
-                    Assert(iPos == 0);
-                    if (iPos >= 0)
-                    {
-                        PRTCRPKCS7CONTENTINFO pCntInfo = pAttr->uValues.pContentInfos->papItems[iPos];
-                        rc = RTCrPkcs7ContentInfo_Clone(pCntInfo, &pSrc->ContentInfo, pAttr->Allocation.pAllocator);
-                        if (RT_SUCCESS(rc))
-                        {
-                            if (cVerbosity > 0)
-                                RTMsgInfo("Added nested signature");
-                            if (cVerbosity >= 3)
-                            {
-                                RTMsgInfo("SingerInfo dump after change:");
-                                RTAsn1Dump(RTCrPkcs7SignerInfo_GetAsn1Core(pSignerInfo), 0, 2, RTStrmDumpPrintfV, g_pStdOut);
-                            }
-
-                            return RTEXITCODE_SUCCESS;
-                        }
-
-                        RTMsgError("RTCrPkcs7ContentInfo_Clone failed: %Rrc", iPos);
-                    }
-                    else
-                        RTMsgError("RTCrPkcs7ContentInfos_Append failed: %Rrc", iPos);
+                    rc = RTCrPkcs7SetOfContentInfos_Init(pAttr->uValues.pContentInfos, pAttr->Allocation.pAllocator);
+                    if (!RT_SUCCESS(rc))
+                        RTMsgError("RTCrPkcs7ContentInfos_Init failed: %Rrc", rc);
                 }
                 else
-                    RTMsgError("RTCrPkcs7ContentInfos_Init failed: %Rrc", rc);
+                    RTMsgError("RTAsn1MemAllocZ failed: %Rrc", rc);
             }
             else
-                RTMsgError("RTAsn1MemAllocZ failed: %Rrc", rc);
+                RTMsgError("RTAsn1ObjId_InitFromString failed: %Rrc", rc);
         }
         else
-            RTMsgError("RTAsn1ObjId_InitFromString failed: %Rrc", rc);
+            RTMsgError("RTCrPkcs7Attributes_Append failed: %Rrc", iPos);
     }
-    else
-        RTMsgError("RTCrPkcs7Attributes_Append failed: %Rrc", iPos);
-    NOREF(cVerbosity);
+    else if (cVerbosity >= 2)
+        RTMsgInfo("Found UnauthenticatedAttribute #%u...", iPos);
+    if (RT_SUCCESS(rc))
+    {
+        /*
+         * Append/prepend the signature.
+         */
+        uint32_t iActualPos = UINT32_MAX;
+        iPos = fPrepend ? 0 : pAttr->uValues.pContentInfos->cItems;
+        rc = RTCrPkcs7SetOfContentInfos_InsertEx(pAttr->uValues.pContentInfos, iPos, &pSrc->ContentInfo,
+                                                 pAttr->Allocation.pAllocator, &iActualPos);
+        if (RT_SUCCESS(rc))
+        {
+            if (cVerbosity > 0)
+                RTMsgInfo("Added nested signature (#%u)", iActualPos);
+            if (cVerbosity >= 3)
+            {
+                RTMsgInfo("SingerInfo dump after change:");
+                RTAsn1Dump(RTCrPkcs7SignerInfo_GetAsn1Core(pSignerInfo), 0, 2, RTStrmDumpPrintfV, g_pStdOut);
+            }
+            return RTEXITCODE_SUCCESS;
+        }
+
+        RTMsgError("RTCrPkcs7ContentInfos_InsertEx failed: %Rrc", rc);
+    }
     return RTEXITCODE_FAILURE;
 }
 
@@ -611,6 +627,8 @@ static RTEXITCODE SignToolPkcs7Exe_InitFromFile(PSIGNTOOLPKCS7EXE pThis, const c
             {
                 if (cVerbosity > 2)
                     RTPrintf("PKCS#7 signature: %u bytes\n", cbActual);
+                if (cVerbosity > 3)
+                    RTPrintf("%.*Rhxd\n", cbActual, pvBuf);
 
                 /*
                  * Decode it.
@@ -760,9 +778,9 @@ static RTEXITCODE SignToolPkcs7Exe_WriteSignatureToFile(PSIGNTOOLPKCS7EXE pThis,
                             /*
                              * Sector align the signature portion.
                              */
-                            uint32_t const  cbWinCert = RT_OFFSETOF(WIN_CERTIFICATE, bCertificate);
+                            uint32_t const  cbWinCert = RT_UOFFSETOF(WIN_CERTIFICATE, bCertificate);
                             uint64_t        offCur    = 0;
-                            rc = RTFileGetSize(hFile, &offCur);
+                            rc = RTFileQuerySize(hFile, &offCur);
                             if (   RT_SUCCESS(rc)
                                 && offCur < _2G)
                             {
@@ -841,7 +859,7 @@ static RTEXITCODE SignToolPkcs7Exe_WriteSignatureToFile(PSIGNTOOLPKCS7EXE pThis,
                             else if (RT_SUCCESS(rc))
                                 RTMsgError("File to big: %'RU64 bytes", offCur);
                             else
-                                RTMsgError("RTFileGetSize failed: %Rrc", rc);
+                                RTMsgError("RTFileQuerySize failed: %Rrc", rc);
                         }
                     }
                     else if (RT_SUCCESS(rc))
@@ -1002,12 +1020,17 @@ static RTEXITCODE HandleExtractExeSignerCert(int cArgs, char **papszArgs)
 static RTEXITCODE HelpAddNestedExeSignature(PRTSTREAM pStrm, RTSIGNTOOLHELP enmLevel)
 {
     RT_NOREF_PV(enmLevel);
-    RTStrmPrintf(pStrm, "add-nested-exe-signature [-v|--verbose] [-d|--debug] <destination-exe> <source-exe>\n");
+    RTStrmPrintf(pStrm, "add-nested-exe-signature [-v|--verbose] [-d|--debug] [-p|--prepend] <destination-exe> <source-exe>\n");
     if (enmLevel == RTSIGNTOOLHELP_FULL)
         RTStrmPrintf(pStrm,
                      "\n"
                      "The --debug option allows the source-exe to be omitted in order to test the\n"
-                     "encoding and PE file modification.\n");
+                     "encoding and PE file modification.\n"
+                     "\n"
+                     "The --prepend option puts the nested signature first rather than appending it\n"
+                     "to the end of of the nested signature set.  Windows reads nested signatures in\n"
+                     "reverse order, so --prepend will logically putting it last.\n"
+                     );
     return RTEXITCODE_SUCCESS;
 }
 
@@ -1019,6 +1042,7 @@ static RTEXITCODE HandleAddNestedExeSignature(int cArgs, char **papszArgs)
      */
     static const RTGETOPTDEF s_aOptions[] =
     {
+        { "--prepend", 'p', RTGETOPT_REQ_NOTHING },
         { "--verbose", 'v', RTGETOPT_REQ_NOTHING },
         { "--debug",   'd', RTGETOPT_REQ_NOTHING },
     };
@@ -1027,6 +1051,7 @@ static RTEXITCODE HandleAddNestedExeSignature(int cArgs, char **papszArgs)
     const char *pszSrc     = NULL;
     unsigned    cVerbosity = 0;
     bool        fDebug     = false;
+    bool        fPrepend   = false;
 
     RTGETOPTSTATE GetState;
     int rc = RTGetOptInit(&GetState, cArgs, papszArgs, s_aOptions, RT_ELEMENTS(s_aOptions), 1, RTGETOPTINIT_FLAGS_OPTS_FIRST);
@@ -1039,6 +1064,7 @@ static RTEXITCODE HandleAddNestedExeSignature(int cArgs, char **papszArgs)
         {
             case 'v':   cVerbosity++; break;
             case 'd':   fDebug = pszSrc == NULL; break;
+            case 'p':   fPrepend = true; break;
             case 'V':   return HandleVersion(cArgs, papszArgs);
             case 'h':   return HelpAddNestedExeSignature(g_pStdOut, RTSIGNTOOLHELP_FULL);
 
@@ -1078,7 +1104,7 @@ static RTEXITCODE HandleAddNestedExeSignature(int cArgs, char **papszArgs)
         {
             /* Do the signature manipulation. */
             if (pszSrc)
-                rcExit = SignToolPkcs7_AddNestedSignature(&Dst, &Src, cVerbosity);
+                rcExit = SignToolPkcs7_AddNestedSignature(&Dst, &Src, cVerbosity, fPrepend);
             if (rcExit == RTEXITCODE_SUCCESS)
                 rcExit = SignToolPkcs7_Encode(&Dst, cVerbosity);
 
@@ -1102,12 +1128,17 @@ static RTEXITCODE HandleAddNestedExeSignature(int cArgs, char **papszArgs)
 static RTEXITCODE HelpAddNestedCatSignature(PRTSTREAM pStrm, RTSIGNTOOLHELP enmLevel)
 {
     RT_NOREF_PV(enmLevel);
-    RTStrmPrintf(pStrm, "add-nested-cat-signature [-v|--verbose] <destination-cat> <source-cat>\n");
+    RTStrmPrintf(pStrm, "add-nested-cat-signature [-v|--verbose] [-d|--debug] [-p|--prepend] <destination-cat> <source-cat>\n");
     if (enmLevel == RTSIGNTOOLHELP_FULL)
         RTStrmPrintf(pStrm,
                      "\n"
                      "The --debug option allows the source-cat to be omitted in order to test the\n"
-                     "ASN.1 re-encoding of the destination catalog file.\n");
+                     "ASN.1 re-encoding of the destination catalog file.\n"
+                     "\n"
+                     "The --prepend option puts the nested signature first rather than appending it\n"
+                     "to the end of of the nested signature set.  Windows reads nested signatures in\n"
+                     "reverse order, so --prepend will logically putting it last.\n"
+                     );
     return RTEXITCODE_SUCCESS;
 }
 
@@ -1119,6 +1150,7 @@ static RTEXITCODE HandleAddNestedCatSignature(int cArgs, char **papszArgs)
      */
     static const RTGETOPTDEF s_aOptions[] =
     {
+        { "--prepend", 'p', RTGETOPT_REQ_NOTHING },
         { "--verbose", 'v', RTGETOPT_REQ_NOTHING },
         { "--debug",   'd', RTGETOPT_REQ_NOTHING },
     };
@@ -1127,6 +1159,7 @@ static RTEXITCODE HandleAddNestedCatSignature(int cArgs, char **papszArgs)
     const char *pszSrc     = NULL;
     unsigned    cVerbosity = 0;
     bool        fDebug     = false;
+    bool        fPrepend   = false;
 
     RTGETOPTSTATE GetState;
     int rc = RTGetOptInit(&GetState, cArgs, papszArgs, s_aOptions, RT_ELEMENTS(s_aOptions), 1, RTGETOPTINIT_FLAGS_OPTS_FIRST);
@@ -1139,6 +1172,7 @@ static RTEXITCODE HandleAddNestedCatSignature(int cArgs, char **papszArgs)
         {
             case 'v':   cVerbosity++; break;
             case 'd':   fDebug = pszSrc == NULL; break;
+            case 'p':   fPrepend = true;  break;
             case 'V':   return HandleVersion(cArgs, papszArgs);
             case 'h':   return HelpAddNestedCatSignature(g_pStdOut, RTSIGNTOOLHELP_FULL);
 
@@ -1178,7 +1212,7 @@ static RTEXITCODE HandleAddNestedCatSignature(int cArgs, char **papszArgs)
         {
             /* Do the signature manipulation. */
             if (pszSrc)
-                rcExit = SignToolPkcs7_AddNestedSignature(&Dst, &Src, cVerbosity);
+                rcExit = SignToolPkcs7_AddNestedSignature(&Dst, &Src, cVerbosity, fPrepend);
             if (rcExit == RTEXITCODE_SUCCESS)
                 rcExit = SignToolPkcs7_Encode(&Dst, cVerbosity);
 
@@ -1217,8 +1251,10 @@ typedef struct VERIFYEXESTATE
     bool        fKernel;
     int         cVerbose;
     enum { kSignType_Windows, kSignType_OSX } enmSignType;
-    uint64_t    uTimestamp;
     RTLDRARCH   enmLdrArch;
+    uint32_t    cBad;
+    uint32_t    cOkay;
+    const char *pszFilename;
 } VERIFYEXESTATE;
 
 # ifdef VBOX
@@ -1240,7 +1276,7 @@ static DECLCALLBACK(int) VerifyExecCertVerifyCallback(PCRTCRX509CERTIFICATE pCer
                                                       void *pvUser, PRTERRINFO pErrInfo)
 {
     VERIFYEXESTATE *pState = (VERIFYEXESTATE *)pvUser;
-    uint32_t        cPaths = hCertPaths != NIL_RTCRX509CERTPATHS ? RTCrX509CertPathsGetPathCount(hCertPaths) : 0;
+    uint32_t        cPaths = RTCrX509CertPathsGetPathCount(hCertPaths);
 
     /*
      * Dump all the paths.
@@ -1278,11 +1314,13 @@ static DECLCALLBACK(int) VerifyExecCertVerifyCallback(PCRTCRX509CERTIFICATE pCer
         && (fFlags & RTCRPKCS7VCC_F_SIGNED_DATA))
     {
         /*
-         * If kernel signing, a valid certificate path must be anchored by the
-         * microsoft kernel signing root certificate.  The only alternative is
-         * test signing.
+         * If windows kernel signing, a valid certificate path must be anchored
+         * by the microsoft kernel signing root certificate.  The only
+         * alternative is test signing.
          */
-        if (pState->fKernel && hCertPaths != NIL_RTCRX509CERTPATHS)
+        if (   pState->fKernel
+            && hCertPaths != NIL_RTCRX509CERTPATHS
+            && pState->enmSignType == VERIFYEXESTATE::kSignType_Windows)
         {
             uint32_t cFound = 0;
             uint32_t cValid = 0;
@@ -1328,54 +1366,168 @@ static DECLCALLBACK(int) VerifyExecCertVerifyCallback(PCRTCRX509CERTIFICATE pCer
             if (RT_SUCCESS(rc) && cValid != 2)
                 RTMsgWarning("%u valid paths, expected 2", cValid);
         }
+        /*
+         * For Mac OS X signing, check for special developer ID attributes.
+         */
+        else if (pState->enmSignType == VERIFYEXESTATE::kSignType_OSX)
+        {
+            uint32_t cDevIdApp    = 0;
+            uint32_t cDevIdKext   = 0;
+            uint32_t cDevIdMacDev = 0;
+            for (uint32_t i = 0; i < pCert->TbsCertificate.T3.Extensions.cItems; i++)
+            {
+                PCRTCRX509EXTENSION pExt = pCert->TbsCertificate.T3.Extensions.papItems[i];
+                if (RTAsn1ObjId_CompareWithString(&pExt->ExtnId, RTCR_APPLE_CS_DEVID_APPLICATION_OID) == 0)
+                {
+                    cDevIdApp++;
+                    if (!pExt->Critical.fValue)
+                        rc = RTErrInfoSetF(pErrInfo, VERR_GENERAL_FAILURE,
+                                           "Dev ID Application certificate extension is not flagged critical");
+                }
+                else if (RTAsn1ObjId_CompareWithString(&pExt->ExtnId, RTCR_APPLE_CS_DEVID_KEXT_OID) == 0)
+                {
+                    cDevIdKext++;
+                    if (!pExt->Critical.fValue)
+                        rc = RTErrInfoSetF(pErrInfo, VERR_GENERAL_FAILURE,
+                                           "Dev ID kext certificate extension is not flagged critical");
+                }
+                else if (RTAsn1ObjId_CompareWithString(&pExt->ExtnId, RTCR_APPLE_CS_DEVID_MAC_SW_DEV_OID) == 0)
+                {
+                    cDevIdMacDev++;
+                    if (!pExt->Critical.fValue)
+                        rc = RTErrInfoSetF(pErrInfo, VERR_GENERAL_FAILURE,
+                                           "Dev ID Mac SW dev certificate extension is not flagged critical");
+                }
+            }
+            if (cDevIdApp == 0)
+            {
+                if (cDevIdMacDev == 0)
+                    rc = RTErrInfoSetF(pErrInfo, VERR_GENERAL_FAILURE,
+                                       "Certificate is missing the 'Dev ID Application' extension");
+                else
+                    RTMsgWarning("Mac SW dev certificate used to sign code.");
+            }
+            if (cDevIdKext == 0 && pState->fKernel)
+            {
+                if (cDevIdMacDev == 0)
+                    rc = RTErrInfoSetF(pErrInfo, VERR_GENERAL_FAILURE,
+                                       "Certificate is missing the 'Dev ID kext' extension");
+                else
+                    RTMsgWarning("Mac SW dev certificate used to sign kernel code.");
+            }
+        }
     }
 
     return rc;
 }
 
-
 /** @callback_method_impl{FNRTLDRVALIDATESIGNEDDATA}  */
-static DECLCALLBACK(int) VerifyExeCallback(RTLDRMOD hLdrMod, RTLDRSIGNATURETYPE enmSignature,
-                                           void const *pvSignature, size_t cbSignature,
-                                           PRTERRINFO pErrInfo, void *pvUser)
+static DECLCALLBACK(int) VerifyExeCallback(RTLDRMOD hLdrMod, PCRTLDRSIGNATUREINFO pInfo, PRTERRINFO pErrInfo, void *pvUser)
 {
     VERIFYEXESTATE *pState = (VERIFYEXESTATE *)pvUser;
-    RT_NOREF_PV(hLdrMod); RT_NOREF_PV(cbSignature);
+    RT_NOREF_PV(hLdrMod);
 
-    switch (enmSignature)
+    switch (pInfo->enmType)
     {
         case RTLDRSIGNATURETYPE_PKCS7_SIGNED_DATA:
         {
-            PCRTCRPKCS7CONTENTINFO pContentInfo = (PCRTCRPKCS7CONTENTINFO)pvSignature;
-
-            RTTIMESPEC ValidationTime;
-            RTTimeSpecSetSeconds(&ValidationTime, pState->uTimestamp);
+            PCRTCRPKCS7CONTENTINFO pContentInfo = (PCRTCRPKCS7CONTENTINFO)pInfo->pvSignature;
 
             /*
-             * Dump the signed data if so requested.
+             * Dump the signed data if so requested and it's the first one, assuming that
+             * additional signatures in contained wihtin the same ContentInfo structure.
              */
-            if (pState->cVerbose)
+            if (pState->cVerbose && pInfo->iSignature == 0)
                 RTAsn1Dump(&pContentInfo->SeqCore.Asn1Core, 0, 0, RTStrmDumpPrintfV, g_pStdOut);
 
+            /*
+             * We'll try different alternative timestamps here.
+             */
+            struct { RTTIMESPEC TimeSpec; const char *pszDesc; } aTimes[2];
+            unsigned cTimes = 0;
+
+            /* Linking timestamp: */
+            uint64_t uLinkingTime = 0;
+            int rc = RTLdrQueryProp(hLdrMod, RTLDRPROP_TIMESTAMP_SECONDS, &uLinkingTime, sizeof(uLinkingTime));
+            if (RT_SUCCESS(rc))
+            {
+                RTTimeSpecSetSeconds(&aTimes[0].TimeSpec, uLinkingTime);
+                aTimes[0].pszDesc = "at link time";
+                cTimes++;
+            }
+            else if (rc != VERR_NOT_FOUND)
+                RTMsgError("RTLdrQueryProp/RTLDRPROP_TIMESTAMP_SECONDS failed on '%s': %Rrc\n", pState->pszFilename, rc);
+
+            /* Now: */
+            RTTimeNow(&aTimes[cTimes].TimeSpec);
+            aTimes[cTimes].pszDesc = "now";
+            cTimes++;
 
             /*
-             * Do the actual verification.  Will have to modify this so it takes
-             * the authenticode policies into account.
+             * Do the actual verification.
              */
-            return RTCrPkcs7VerifySignedData(pContentInfo,
-                                             RTCRPKCS7VERIFY_SD_F_COUNTER_SIGNATURE_SIGNING_TIME_ONLY
-                                             | RTCRPKCS7VERIFY_SD_F_ALWAYS_USE_SIGNING_TIME_IF_PRESENT
-                                             | RTCRPKCS7VERIFY_SD_F_ALWAYS_USE_MS_TIMESTAMP_IF_PRESENT,
-                                             pState->hAdditionalStore, pState->hRootStore, &ValidationTime,
-                                             VerifyExecCertVerifyCallback, pState, pErrInfo);
+            for (unsigned iTime = 0; iTime < cTimes; iTime++)
+            {
+                if (pInfo->pvExternalData)
+                    rc = RTCrPkcs7VerifySignedDataWithExternalData(pContentInfo,
+                                                                   RTCRPKCS7VERIFY_SD_F_COUNTER_SIGNATURE_SIGNING_TIME_ONLY
+                                                                   | RTCRPKCS7VERIFY_SD_F_ALWAYS_USE_SIGNING_TIME_IF_PRESENT
+                                                                   | RTCRPKCS7VERIFY_SD_F_ALWAYS_USE_MS_TIMESTAMP_IF_PRESENT
+                                                                   | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS,
+                                                                   pState->hAdditionalStore, pState->hRootStore,
+                                                                   &aTimes[iTime].TimeSpec,
+                                                                   VerifyExecCertVerifyCallback, pState,
+                                                                   pInfo->pvExternalData, pInfo->cbExternalData, pErrInfo);
+                else
+                    rc = RTCrPkcs7VerifySignedData(pContentInfo,
+                                                   RTCRPKCS7VERIFY_SD_F_COUNTER_SIGNATURE_SIGNING_TIME_ONLY
+                                                   | RTCRPKCS7VERIFY_SD_F_ALWAYS_USE_SIGNING_TIME_IF_PRESENT
+                                                   | RTCRPKCS7VERIFY_SD_F_ALWAYS_USE_MS_TIMESTAMP_IF_PRESENT
+                                                   | RTCRPKCS7VERIFY_SD_F_CHECK_TRUST_ANCHORS,
+                                                   pState->hAdditionalStore, pState->hRootStore,
+                                                   &aTimes[iTime].TimeSpec,
+                                                   VerifyExecCertVerifyCallback, pState, pErrInfo);
+                if (RT_SUCCESS(rc))
+                {
+                    Assert(rc == VINF_SUCCESS || rc == VINF_CR_DIGEST_DEPRECATED);
+                    const char *pszNote = rc == VINF_CR_DIGEST_DEPRECATED ? " (deprecated digest)" : "";
+                    if (pInfo->cSignatures == 1)
+                        RTMsgInfo("'%s' is valid %s%s.\n", pState->pszFilename, aTimes[iTime].pszDesc, pszNote);
+                    else
+                        RTMsgInfo("'%s' signature #%u is valid %s%s.\n",
+                                  pState->pszFilename, pInfo->iSignature + 1, aTimes[iTime].pszDesc, pszNote);
+                    pState->cOkay++;
+                    return VINF_SUCCESS;
+                }
+                if (rc != VERR_CR_X509_CPV_NOT_VALID_AT_TIME)
+                {
+                    if (pInfo->cSignatures == 1)
+                        RTMsgError("%s: Failed to verify signature: %Rrc%#RTeim\n", pState->pszFilename, rc, pErrInfo);
+                    else
+                        RTMsgError("%s: Failed to verify signature #%u: %Rrc%#RTeim\n",
+                                   pState->pszFilename, pInfo->iSignature + 1, rc, pErrInfo);
+                    pState->cBad++;
+                    return VINF_SUCCESS;
+                }
+            }
+
+            if (pInfo->cSignatures == 1)
+                RTMsgError("%s: Signature is not valid at present or link time.\n", pState->pszFilename);
+            else
+                RTMsgError("%s: Signature #%u is not valid at present or link time.\n",
+                           pState->pszFilename, pInfo->iSignature + 1);
+            pState->cBad++;
+            return VINF_SUCCESS;
         }
 
         default:
-            return RTErrInfoSetF(pErrInfo, VERR_NOT_SUPPORTED, "Unsupported signature type: %d", enmSignature);
+            return RTErrInfoSetF(pErrInfo, VERR_NOT_SUPPORTED, "Unsupported signature type: %d", pInfo->enmType);
     }
 }
 
-/** Worker for HandleVerifyExe. */
+/**
+ * Worker for HandleVerifyExe.
+ */
 static RTEXITCODE HandleVerifyExeWorker(VERIFYEXESTATE *pState, const char *pszFilename, PRTERRINFOSTATIC pStaticErrInfo)
 {
     /*
@@ -1386,26 +1538,14 @@ static RTEXITCODE HandleVerifyExeWorker(VERIFYEXESTATE *pState, const char *pszF
     if (RT_FAILURE(rc))
         return RTMsgErrorExit(RTEXITCODE_FAILURE, "Error opening executable image '%s': %Rrc", pszFilename, rc);
 
+    /* Reset the state. */
+    pState->cBad        = 0;
+    pState->cOkay       = 0;
+    pState->pszFilename = pszFilename;
 
-    rc = RTLdrQueryProp(hLdrMod, RTLDRPROP_TIMESTAMP_SECONDS, &pState->uTimestamp, sizeof(pState->uTimestamp));
-    if (RT_SUCCESS(rc))
-    {
-        rc = RTLdrVerifySignature(hLdrMod, VerifyExeCallback, pState, RTErrInfoInitStatic(pStaticErrInfo));
-        if (RT_SUCCESS(rc))
-            RTMsgInfo("'%s' is valid.\n", pszFilename);
-        else if (rc == VERR_CR_X509_CPV_NOT_VALID_AT_TIME)
-        {
-            RTTIMESPEC Now;
-            pState->uTimestamp = RTTimeSpecGetSeconds(RTTimeNow(&Now));
-            rc = RTLdrVerifySignature(hLdrMod, VerifyExeCallback, pState, RTErrInfoInitStatic(pStaticErrInfo));
-            if (RT_SUCCESS(rc))
-                RTMsgInfo("'%s' is valid now, but not at link time.\n", pszFilename);
-        }
-        if (RT_FAILURE(rc))
-            RTMsgError("RTLdrVerifySignature failed on '%s': %Rrc - %s\n", pszFilename, rc, pStaticErrInfo->szMsg);
-    }
-    else
-        RTMsgError("RTLdrQueryProp/RTLDRPROP_TIMESTAMP_SECONDS failed on '%s': %Rrc\n", pszFilename, rc);
+    rc = RTLdrVerifySignature(hLdrMod, VerifyExeCallback, pState, RTErrInfoInitStatic(pStaticErrInfo));
+    if (RT_FAILURE(rc))
+        RTMsgError("RTLdrVerifySignature failed on '%s': %Rrc - %s\n", pszFilename, rc, pStaticErrInfo->szMsg);
 
     int rc2 = RTLdrClose(hLdrMod);
     if (RT_FAILURE(rc2))
@@ -1413,7 +1553,7 @@ static RTEXITCODE HandleVerifyExeWorker(VERIFYEXESTATE *pState, const char *pszF
     if (RT_FAILURE(rc))
         return rc != VERR_LDRVI_NOT_SIGNED ? RTEXITCODE_FAILURE : RTEXITCODE_SKIPPED;
 
-    return RTEXITCODE_SUCCESS;
+    return pState->cOkay > 0 ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
 }
 
 
@@ -1442,8 +1582,9 @@ static RTEXITCODE HandleVerifyExe(int cArgs, char **papszArgs)
 
     VERIFYEXESTATE State =
     {
-        NIL_RTCRSTORE, NIL_RTCRSTORE, NIL_RTCRSTORE, false, false,
-        VERIFYEXESTATE::kSignType_Windows, 0, RTLDRARCH_WHATEVER
+        NIL_RTCRSTORE, NIL_RTCRSTORE, NIL_RTCRSTORE, false, 0,
+        VERIFYEXESTATE::kSignType_Windows, RTLDRARCH_WHATEVER,
+        0, 0, NULL
     };
     int rc = RTCrStoreCreateInMem(&State.hRootStore, 0);
     if (RT_SUCCESS(rc))
@@ -1496,15 +1637,12 @@ static RTEXITCODE HandleVerifyExe(int cArgs, char **papszArgs)
     /*
      * Populate the certificate stores according to the signing type.
      */
-#ifdef VBOX
+# ifdef VBOX
     unsigned          cSets = 0;
     struct STSTORESET aSets[6];
-#endif
-
     switch (State.enmSignType)
     {
         case VERIFYEXESTATE::kSignType_Windows:
-#ifdef VBOX
             aSets[cSets].hStore  = State.hRootStore;
             aSets[cSets].paTAs   = g_aSUPTimestampTAs;
             aSets[cSets].cTAs    = g_cSUPTimestampTAs;
@@ -1521,14 +1659,15 @@ static RTEXITCODE HandleVerifyExe(int cArgs, char **papszArgs)
             aSets[cSets].paTAs   = g_aSUPNtKernelRootTAs;
             aSets[cSets].cTAs    = g_cSUPNtKernelRootTAs;
             cSets++;
-#endif
             break;
 
         case VERIFYEXESTATE::kSignType_OSX:
-            return RTMsgErrorExit(RTEXITCODE_FAILURE, "Mac OS X executable signing is not implemented.");
+            aSets[cSets].hStore  = State.hRootStore;
+            aSets[cSets].paTAs   = g_aSUPAppleRootTAs;
+            aSets[cSets].cTAs    = g_cSUPAppleRootTAs;
+            cSets++;
+            break;
     }
-
-#ifdef VBOX
     for (unsigned i = 0; i < cSets; i++)
         for (unsigned j = 0; j < aSets[i].cTAs; j++)
         {
@@ -1538,7 +1677,7 @@ static RTEXITCODE HandleVerifyExe(int cArgs, char **papszArgs)
                 return RTMsgErrorExit(RTEXITCODE_FAILURE, "RTCrStoreCertAddEncoded failed (%u/%u): %s",
                                       i, j, StaticErrInfo.szMsg);
         }
-#endif
+# endif /* VBOX */
 
     /*
      * Do it.
@@ -1718,8 +1857,16 @@ static int HandleShowExeWorkerPkcs7DisplayAttrib(PSHOWEXEPKCS7 pThis, size_t off
 
         /* Signing time (PKCS \#9), use pSigningTime. */
         case RTCRPKCS7ATTRIBUTETYPE_SIGNING_TIME:
-            RTPrintf("%sTODO: RTCRPKCS7ATTRIBUTETYPE_SIGNING_TIME! %u bytes\n",
-                     pThis->szPrefix, pAttr->uValues.pSigningTime->SetCore.Asn1Core.cb);
+            for (uint32_t i = 0; i < pAttr->uValues.pSigningTime->cItems; i++)
+            {
+                PCRTASN1TIME pTime = pAttr->uValues.pSigningTime->papItems[i];
+                char szTS[RTTIME_STR_LEN];
+                RTTimeToString(&pTime->Time, szTS, sizeof(szTS));
+                if (pAttr->uValues.pSigningTime->cItems == 1)
+                    RTPrintf("%s %s (%.*s)\n", pThis->szPrefix, szTS, pTime->Asn1Core.cb, pTime->Asn1Core.uData.pch);
+                else
+                    RTPrintf("%s #%u: %s (%.*s)\n", pThis->szPrefix, i, szTS, pTime->Asn1Core.cb, pTime->Asn1Core.uData.pch);
+            }
             break;
 
         /* Microsoft timestamp info (RFC-3161) signed data, use pContentInfo. */
@@ -1745,6 +1892,49 @@ static int HandleShowExeWorkerPkcs7DisplayAttrib(PSHOWEXEPKCS7 pThis, size_t off
                                        pThis->szPrefix, pContentInfo->ContentType.szObjId);
                 if (RT_FAILURE(rc2) && RT_SUCCESS(rc))
                     rc = rc2;
+            }
+            break;
+
+        case RTCRPKCS7ATTRIBUTETYPE_APPLE_MULTI_CD_PLIST:
+            if (pAttr->uValues.pContentInfos->cItems != 1)
+                RTPrintf("%s%u plists, expected only 1.\n", pThis->szPrefix, pAttr->uValues.pOctetStrings->cItems);
+            for (unsigned i = 0; i < pAttr->uValues.pOctetStrings->cItems; i++)
+            {
+                PCRTASN1OCTETSTRING pOctetString = pAttr->uValues.pOctetStrings->papItems[i];
+                size_t              cbContent    = pOctetString->Asn1Core.cb;
+                char  const        *pchContent   = pOctetString->Asn1Core.uData.pch;
+                rc = RTStrValidateEncodingEx(pchContent, cbContent, RTSTR_VALIDATE_ENCODING_EXACT_LENGTH);
+                if (RT_SUCCESS(rc))
+                {
+                    while (cbContent > 0)
+                    {
+                        const char *pchNewLine = (const char *)memchr(pchContent, '\n', cbContent);
+                        size_t      cchToWrite = pchNewLine ? pchNewLine - pchContent : cbContent;
+                        if (pAttr->uValues.pOctetStrings->cItems == 1)
+                            RTPrintf("%s %.*s\n", pThis->szPrefix, cchToWrite, pchContent);
+                        else
+                            RTPrintf("%s plist[%u]: %.*s\n", pThis->szPrefix, i, cchToWrite, pchContent);
+                        if (!pchNewLine)
+                            break;
+                        pchContent = pchNewLine + 1;
+                        cbContent -= cchToWrite + 1;
+                    }
+                }
+                else
+                {
+                    if (pAttr->uValues.pContentInfos->cItems != 1)
+                        RTPrintf("%s: plist[%u]: Invalid UTF-8: %Rrc\n", pThis->szPrefix, i, rc);
+                    else
+                        RTPrintf("%s: Invalid UTF-8: %Rrc\n", pThis->szPrefix, rc);
+                    for (uint32_t off = 0; off < cbContent; off += 16)
+                    {
+                        size_t cbNow = RT_MIN(cbContent - off, 16);
+                        if (pAttr->uValues.pOctetStrings->cItems == 1)
+                            RTPrintf("%s %#06x: %.*Rhxs\n", pThis->szPrefix, off, cbNow, &pchContent[off]);
+                        else
+                            RTPrintf("%s plist[%u]: %#06x: %.*Rhxs\n", pThis->szPrefix, i, off, cbNow, &pchContent[off]);
+                    }
+                }
             }
             break;
 
@@ -2591,5 +2781,4 @@ int main(int argc, char **argv)
 
     return RTEXITCODE_SYNTAX;
 }
-
 

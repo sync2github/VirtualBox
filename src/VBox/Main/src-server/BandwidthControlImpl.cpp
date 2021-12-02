@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: BandwidthControlImpl.cpp 85243 2020-07-11 23:06:35Z vboxsync $ */
 /** @file
- *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_BANDWIDTHCONTROL
 #include "BandwidthControlImpl.h"
 #include "BandwidthGroupImpl.h"
 #include "MachineImpl.h"
@@ -23,7 +23,7 @@
 
 #include "AutoStateDep.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <iprt/cpp/utils.h>
 #include <VBox/com/array.h>
@@ -500,7 +500,7 @@ HRESULT BandwidthControl::i_loadSettings(const settings::IOSettings &data)
          ++it)
     {
         const settings::BandwidthGroup &gr = *it;
-        rc = createBandwidthGroup(gr.strName, gr.enmType, gr.cMaxBytesPerSec);
+        rc = createBandwidthGroup(gr.strName, gr.enmType, (LONG64)gr.cMaxBytesPerSec);
         if (FAILED(rc)) break;
     }
 
@@ -524,7 +524,7 @@ HRESULT BandwidthControl::i_saveSettings(settings::IOSettings &data)
 
         group.strName      = (*it)->i_getName();
         group.enmType      = (*it)->i_getType();
-        group.cMaxBytesPerSec = (*it)->i_getMaxBytesPerSec();
+        group.cMaxBytesPerSec = (uint64_t)(*it)->i_getMaxBytesPerSec();
 
         data.llBandwidthGroups.push_back(group);
     }

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: string.cpp 85314 2020-07-13 17:24:18Z vboxsync $ */
 /** @file
  * MS COM / XPCOM Abstraction Layer - UTF-8 and UTF-16 string classes.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -18,8 +18,8 @@
 #include "VBox/com/string.h"
 
 #include <iprt/err.h>
-#include <iprt/path.h>
 #include <iprt/log.h>
+#include <iprt/path.h>
 #include <iprt/string.h>
 #include <iprt/uni.h>
 
@@ -34,6 +34,119 @@ const BSTR g_bstrEmpty = (BSTR)&g_achEmptyBstr[2];
 
 /* static */
 const Bstr Bstr::Empty; /* default ctor is OK */
+
+
+Bstr &Bstr::printf(const char *pszFormat, ...)
+{
+    va_list va;
+    va_start(va, pszFormat);
+    HRESULT hrc = printfVNoThrow(pszFormat, va);
+    va_end(va);
+    if (hrc == S_OK)
+    { /* likely */ }
+    else
+        throw std::bad_alloc();
+    return *this;
+}
+
+HRESULT Bstr::printfNoThrow(const char *pszFormat, ...) RT_NOEXCEPT
+{
+    va_list va;
+    va_start(va, pszFormat);
+    HRESULT hrc = printfVNoThrow(pszFormat, va);
+    va_end(va);
+    return hrc;
+}
+
+
+Bstr &Bstr::printfV(const char *pszFormat, va_list va)
+{
+    HRESULT hrc = printfVNoThrow(pszFormat, va);
+    if (hrc == S_OK)
+    { /* likely */ }
+    else
+        throw std::bad_alloc();
+    return *this;
+}
+
+struct BSTRNOTHROW
+{
+    Bstr   *pThis;
+    size_t  cwcAlloc;
+    size_t  offDst;
+    HRESULT hrc;
+};
+
+/**
+ * Callback used with RTStrFormatV by Bstr::printfVNoThrow.
+ *
+ * @returns The number of bytes added (not used).
+ *
+ * @param   pvArg           Pointer to a BSTRNOTHROW structure.
+ * @param   pachChars       The characters to append.
+ * @param   cbChars         The number of characters.  0 on the final callback.
+ */
+/*static*/ DECLCALLBACK(size_t)
+Bstr::printfOutputCallbackNoThrow(void *pvArg, const char *pachChars, size_t cbChars) RT_NOEXCEPT
+{
+    BSTRNOTHROW *pArgs = (BSTRNOTHROW *)pvArg;
+    if (cbChars)
+    {
+        size_t cwcAppend;
+        int rc = ::RTStrCalcUtf16LenEx(pachChars, cbChars, &cwcAppend);
+        AssertRCReturnStmt(rc, pArgs->hrc = E_UNEXPECTED, 0);
+
+        /*
+         * Ensure we've got sufficient memory.
+         */
+        Bstr *pThis = pArgs->pThis;
+        size_t const cwcBoth = pArgs->offDst + cwcAppend;
+        if (cwcBoth >= pArgs->cwcAlloc)
+        {
+            if (pArgs->hrc == S_OK)
+            {
+                /* Double the buffer size, if it's less that _1M. Align sizes like
+                   for append. */
+                size_t cwcAlloc = RT_ALIGN_Z(pArgs->cwcAlloc, 128);
+                cwcAlloc += RT_MIN(cwcAlloc, _1M);
+                if (cwcAlloc <= cwcBoth)
+                    cwcAlloc = RT_ALIGN_Z(cwcBoth + 1, 512);
+                pArgs->hrc = pThis->reserveNoThrow(cwcAlloc, true /*fForce*/);
+                AssertMsgReturn(pArgs->hrc == S_OK, ("cwcAlloc=%#zx\n", cwcAlloc), 0);
+                pArgs->cwcAlloc = cwcAlloc;
+            }
+            else
+                return 0;
+        }
+
+        /*
+         * Do the conversion.
+         */
+        PRTUTF16 pwszDst = pThis->m_bstr + pArgs->offDst;
+        Assert(pArgs->cwcAlloc > pArgs->offDst);
+        rc = ::RTStrToUtf16Ex(pachChars, cbChars, &pwszDst, pArgs->cwcAlloc - pArgs->offDst, &cwcAppend);
+        AssertRCReturnStmt(rc, pArgs->hrc = E_UNEXPECTED, 0);
+        pArgs->offDst += cwcAppend;
+    }
+    return cbChars;
+}
+
+HRESULT Bstr::printfVNoThrow(const char *pszFormat, va_list va) RT_NOEXCEPT
+{
+    cleanup();
+
+    BSTRNOTHROW Args = { this, 0, 0, S_OK };
+    RTStrFormatV(printfOutputCallbackNoThrow, &Args, NULL, NULL, pszFormat, va);
+    if (Args.hrc == S_OK)
+    {
+        Args.hrc = joltNoThrow(Args.offDst);
+        if (Args.hrc == S_OK)
+            return S_OK;
+    }
+
+    cleanup();
+    return Args.hrc;
+}
 
 void Bstr::copyFromN(const char *a_pszSrc, size_t a_cchMax)
 {
@@ -71,6 +184,50 @@ void Bstr::copyFromN(const char *a_pszSrc, size_t a_cchMax)
         AssertLogRelMsgFailed(("%Rrc %.*Rhxs\n", vrc, RTStrNLen(a_pszSrc, a_cchMax), a_pszSrc));
     throw std::bad_alloc();
 }
+
+HRESULT Bstr::cleanupAndCopyFromNoThrow(const char *a_pszSrc, size_t a_cchMax) RT_NOEXCEPT
+{
+    /*
+     * Check for empty input (m_bstr == NULL means empty, there are no NULL strings).
+     */
+    cleanup();
+    if (!a_cchMax || !a_pszSrc || !*a_pszSrc)
+        return S_OK;
+
+    /*
+     * Calculate the length and allocate a BSTR string buffer of the right
+     * size, i.e. optimize heap usage.
+     */
+    HRESULT hrc;
+    size_t cwc;
+    int vrc = ::RTStrCalcUtf16LenEx(a_pszSrc, a_cchMax, &cwc);
+    if (RT_SUCCESS(vrc))
+    {
+        m_bstr = ::SysAllocStringByteLen(NULL, (unsigned)(cwc * sizeof(OLECHAR)));
+        if (RT_LIKELY(m_bstr))
+        {
+            PRTUTF16 pwsz = (PRTUTF16)m_bstr;
+            vrc = ::RTStrToUtf16Ex(a_pszSrc, a_cchMax, &pwsz, cwc + 1, NULL);
+            if (RT_SUCCESS(vrc))
+                return S_OK;
+
+            /* This should not happen! */
+            AssertRC(vrc);
+            cleanup();
+            hrc = E_UNEXPECTED;
+        }
+        else
+            hrc = E_OUTOFMEMORY;
+    }
+    else
+    {
+        /* Unexpected: Invalid UTF-8 input. */
+        AssertLogRelMsgFailed(("%Rrc %.*Rhxs\n", vrc, RTStrNLen(a_pszSrc, a_cchMax), a_pszSrc));
+        hrc = E_UNEXPECTED;
+    }
+    return hrc;
+}
+
 
 int Bstr::compareUtf8(const char *a_pszRight, CaseSensitivity a_enmCase /*= CaseSensitive*/) const
 {
@@ -117,6 +274,435 @@ int Bstr::compareUtf8(const char *a_pszRight, CaseSensitivity a_enmCase /*= Case
 }
 
 
+#ifndef VBOX_WITH_XPCOM
+
+HRESULT Bstr::joltNoThrow(ssize_t cwcNew /* = -1*/) RT_NOEXCEPT
+{
+    if (m_bstr)
+    {
+        size_t const cwcAlloc  = ::SysStringLen(m_bstr);
+        size_t const cwcActual = cwcNew < 0 ? ::RTUtf16Len(m_bstr) : (size_t)cwcNew;
+        Assert(cwcNew < 0 || cwcActual == ::RTUtf16Len(m_bstr));
+        if (cwcActual != cwcAlloc)
+        {
+            Assert(cwcActual <= cwcAlloc);
+            Assert((unsigned int)cwcActual == cwcActual);
+
+            /* Official way: Reallocate the string.   We could of course just update the size-prefix if we dared... */
+            if (!::SysReAllocStringLen(&m_bstr, NULL, (unsigned int)cwcActual))
+            {
+                AssertFailed();
+                return E_OUTOFMEMORY;
+            }
+        }
+    }
+    else
+        Assert(cwcNew <= 0);
+    return S_OK;
+}
+
+
+void Bstr::jolt(ssize_t cwcNew /* = -1*/)
+{
+    HRESULT hrc = joltNoThrow(cwcNew);
+    if (hrc != S_OK)
+        throw std::bad_alloc();
+}
+
+#endif /* !VBOX_WITH_XPCOM */
+
+
+HRESULT Bstr::reserveNoThrow(size_t cwcMin, bool fForce /*= false*/) RT_NOEXCEPT
+{
+    /* If not forcing the string to the cwcMin length, check cwcMin against the
+       current string length: */
+    if (!fForce)
+    {
+        size_t cwcCur = m_bstr ? ::SysStringLen(m_bstr) : 0;
+        if (cwcCur >= cwcMin)
+            return S_OK;
+    }
+
+    /* The documentation for SysReAllocStringLen hints about it being allergic
+       to NULL in some way or another, so we call SysAllocStringLen directly
+       when appropriate: */
+    if (m_bstr)
+        AssertReturn(::SysReAllocStringLen(&m_bstr, NULL, (unsigned int)cwcMin) != FALSE, E_OUTOFMEMORY);
+    else if (cwcMin > 0)
+    {
+        m_bstr = ::SysAllocStringLen(NULL, (unsigned int)cwcMin);
+        AssertReturn(m_bstr, E_OUTOFMEMORY);
+    }
+
+    return S_OK;
+}
+
+
+void Bstr::reserve(size_t cwcMin, bool fForce /*= false*/)
+{
+    HRESULT hrc = reserveNoThrow(cwcMin, fForce);
+    if (hrc != S_OK)
+        throw std::bad_alloc();
+}
+
+
+Bstr &Bstr::append(const Bstr &rThat)
+{
+    if (rThat.isNotEmpty())
+        return appendWorkerUtf16(rThat.m_bstr, rThat.length());
+    return *this;
+}
+
+
+HRESULT Bstr::appendNoThrow(const Bstr &rThat) RT_NOEXCEPT
+{
+    if (rThat.isNotEmpty())
+        return appendWorkerUtf16NoThrow(rThat.m_bstr, rThat.length());
+    return S_OK;
+}
+
+
+Bstr &Bstr::append(const RTCString &rThat)
+{
+    if (rThat.isNotEmpty())
+        return appendWorkerUtf8(rThat.c_str(), rThat.length());
+    return *this;
+}
+
+
+HRESULT Bstr::appendNoThrow(const RTCString &rThat) RT_NOEXCEPT
+{
+    if (rThat.isNotEmpty())
+        return appendWorkerUtf8NoThrow(rThat.c_str(), rThat.length());
+    return S_OK;
+}
+
+
+Bstr &Bstr::append(CBSTR pwszSrc)
+{
+    if (pwszSrc && *pwszSrc)
+        return appendWorkerUtf16(pwszSrc, RTUtf16Len(pwszSrc));
+    return *this;
+}
+
+
+HRESULT Bstr::appendNoThrow(CBSTR pwszSrc) RT_NOEXCEPT
+{
+    if (pwszSrc && *pwszSrc)
+        return appendWorkerUtf16NoThrow(pwszSrc, RTUtf16Len(pwszSrc));
+    return S_OK;
+}
+
+
+Bstr &Bstr::append(const char *pszSrc)
+{
+    if (pszSrc && *pszSrc)
+        return appendWorkerUtf8(pszSrc, strlen(pszSrc));
+    return *this;
+}
+
+
+HRESULT Bstr::appendNoThrow(const char *pszSrc) RT_NOEXCEPT
+{
+    if (pszSrc && *pszSrc)
+        return appendWorkerUtf8NoThrow(pszSrc, strlen(pszSrc));
+    return S_OK;
+}
+
+
+Bstr &Bstr::append(const Bstr &rThat, size_t offStart, size_t cwcMax /*= RTSTR_MAX*/)
+{
+    size_t cwcSrc = rThat.length();
+    if (offStart < cwcSrc)
+        return appendWorkerUtf16(rThat.raw() + offStart, RT_MIN(cwcSrc - offStart, cwcMax));
+    return *this;
+}
+
+
+HRESULT Bstr::appendNoThrow(const Bstr &rThat, size_t offStart, size_t cwcMax /*= RTSTR_MAX*/) RT_NOEXCEPT
+{
+    size_t cwcSrc = rThat.length();
+    if (offStart < cwcSrc)
+        return appendWorkerUtf16NoThrow(rThat.raw() + offStart, RT_MIN(cwcSrc - offStart, cwcMax));
+    return S_OK;
+}
+
+
+Bstr &Bstr::append(const RTCString &rThat, size_t offStart, size_t cchMax /*= RTSTR_MAX*/)
+{
+    if (offStart < rThat.length())
+        return appendWorkerUtf8(rThat.c_str() + offStart, RT_MIN(rThat.length() - offStart, cchMax));
+    return *this;
+}
+
+
+HRESULT Bstr::appendNoThrow(const RTCString &rThat, size_t offStart, size_t cchMax /*= RTSTR_MAX*/) RT_NOEXCEPT
+{
+    if (offStart < rThat.length())
+        return appendWorkerUtf8NoThrow(rThat.c_str() + offStart, RT_MIN(rThat.length() - offStart, cchMax));
+    return S_OK;
+}
+
+
+Bstr &Bstr::append(CBSTR pwszThat, size_t cchMax)
+{
+    return appendWorkerUtf16(pwszThat, RTUtf16NLen(pwszThat, cchMax));
+}
+
+
+HRESULT Bstr::appendNoThrow(CBSTR pwszThat, size_t cchMax) RT_NOEXCEPT
+{
+    return appendWorkerUtf16NoThrow(pwszThat, RTUtf16NLen(pwszThat, cchMax));
+}
+
+
+Bstr &Bstr::append(const char *pszThat, size_t cchMax)
+{
+    return appendWorkerUtf8(pszThat, RTStrNLen(pszThat, cchMax));
+}
+
+
+HRESULT Bstr::appendNoThrow(const char *pszThat, size_t cchMax) RT_NOEXCEPT
+{
+    return appendWorkerUtf8NoThrow(pszThat, RTStrNLen(pszThat, cchMax));
+}
+
+
+Bstr &Bstr::append(char ch)
+{
+    AssertMsg(ch > 0 && ch < 127, ("%#x\n", ch));
+    return appendWorkerUtf8(&ch, 1);
+}
+
+
+HRESULT Bstr::appendNoThrow(char ch) RT_NOEXCEPT
+{
+    AssertMsg(ch > 0 && ch < 127, ("%#x\n", ch));
+    return appendWorkerUtf8NoThrow(&ch, 1);
+}
+
+
+Bstr &Bstr::appendCodePoint(RTUNICP uc)
+{
+    RTUTF16 wszTmp[3];
+    PRTUTF16 pwszEnd = RTUtf16PutCp(wszTmp, uc);
+    *pwszEnd = '\0';
+    return appendWorkerUtf16(&wszTmp[0], pwszEnd - &wszTmp[0]);
+}
+
+
+HRESULT Bstr::appendCodePointNoThrow(RTUNICP uc) RT_NOEXCEPT
+{
+    RTUTF16 wszTmp[3];
+    PRTUTF16 pwszEnd = RTUtf16PutCp(wszTmp, uc);
+    *pwszEnd = '\0';
+    return appendWorkerUtf16NoThrow(&wszTmp[0], pwszEnd - &wszTmp[0]);
+}
+
+
+Bstr &Bstr::appendWorkerUtf16(PCRTUTF16 pwszSrc, size_t cwcSrc)
+{
+    size_t cwcOld = length();
+    size_t cwcTotal = cwcOld + cwcSrc;
+    reserve(cwcTotal, true /*fForce*/);
+    if (cwcSrc)
+        memcpy(&m_bstr[cwcOld], pwszSrc, cwcSrc * sizeof(RTUTF16));
+    m_bstr[cwcTotal] = '\0';
+    return *this;
+}
+
+
+HRESULT Bstr::appendWorkerUtf16NoThrow(PCRTUTF16 pwszSrc, size_t cwcSrc) RT_NOEXCEPT
+{
+    size_t cwcOld = length();
+    size_t cwcTotal = cwcOld + cwcSrc;
+    HRESULT hrc = reserveNoThrow(cwcTotal, true /*fForce*/);
+    if (hrc == S_OK)
+    {
+        if (cwcSrc)
+            memcpy(&m_bstr[cwcOld], pwszSrc, cwcSrc * sizeof(RTUTF16));
+        m_bstr[cwcTotal] = '\0';
+    }
+    return hrc;
+}
+
+
+Bstr &Bstr::appendWorkerUtf8(const char *pszSrc, size_t cchSrc)
+{
+    size_t cwcSrc;
+    int rc = RTStrCalcUtf16LenEx(pszSrc, cchSrc, &cwcSrc);
+    AssertRCStmt(rc, throw std::bad_alloc());
+
+    size_t cwcOld = length();
+    size_t cwcTotal = cwcOld + cwcSrc;
+    reserve(cwcTotal, true /*fForce*/);
+    if (cwcSrc)
+    {
+        PRTUTF16 pwszDst = &m_bstr[cwcOld];
+        rc = RTStrToUtf16Ex(pszSrc, cchSrc, &pwszDst, cwcSrc + 1, NULL);
+        AssertRCStmt(rc, throw std::bad_alloc());
+    }
+    m_bstr[cwcTotal] = '\0';
+    return *this;
+}
+
+
+HRESULT Bstr::appendWorkerUtf8NoThrow(const char *pszSrc, size_t cchSrc) RT_NOEXCEPT
+{
+    size_t cwcSrc;
+    int rc = RTStrCalcUtf16LenEx(pszSrc, cchSrc, &cwcSrc);
+    AssertRCStmt(rc, E_INVALIDARG);
+
+    size_t cwcOld = length();
+    size_t cwcTotal = cwcOld + cwcSrc;
+    HRESULT hrc = reserveNoThrow(cwcTotal, true /*fForce*/);
+    AssertReturn(hrc == S_OK, hrc);
+    if (cwcSrc)
+    {
+        PRTUTF16 pwszDst = &m_bstr[cwcOld];
+        rc = RTStrToUtf16Ex(pszSrc, cchSrc, &pwszDst, cwcSrc + 1, NULL);
+        AssertRCStmt(rc, E_INVALIDARG);
+    }
+    m_bstr[cwcTotal] = '\0';
+    return S_OK;
+}
+
+
+Bstr &Bstr::appendPrintf(const char *pszFormat, ...)
+{
+    va_list va;
+    va_start(va, pszFormat);
+    HRESULT hrc = appendPrintfVNoThrow(pszFormat, va);
+    va_end(va);
+    if (hrc != S_OK)
+        throw std::bad_alloc();
+    return *this;
+}
+
+
+HRESULT Bstr::appendPrintfNoThrow(const char *pszFormat, ...) RT_NOEXCEPT
+{
+    va_list va;
+    va_start(va, pszFormat);
+    HRESULT hrc = appendPrintfVNoThrow(pszFormat, va);
+    va_end(va);
+    return hrc;
+}
+
+
+Bstr &Bstr::appendPrintfV(const char *pszFormat, va_list va)
+{
+    HRESULT hrc = appendPrintfVNoThrow(pszFormat, va);
+    if (hrc != S_OK)
+        throw std::bad_alloc();
+    return *this;
+}
+
+
+HRESULT Bstr::appendPrintfVNoThrow(const char *pszFormat, va_list va) RT_NOEXCEPT
+{
+    size_t const cwcOld = length();
+    BSTRNOTHROW Args = { this, cwcOld, cwcOld, S_OK };
+
+    RTStrFormatV(printfOutputCallbackNoThrow, &Args, NULL, NULL, pszFormat, va);
+    if (Args.hrc == S_OK)
+    {
+        Args.hrc = joltNoThrow(Args.offDst);
+        if (Args.hrc == S_OK)
+            return S_OK;
+    }
+
+    if (m_bstr)
+        m_bstr[cwcOld] = '\0';
+    return Args.hrc;
+}
+
+
+Bstr &Bstr::erase(size_t offStart /*= 0*/, size_t cwcLength /*= RTSTR_MAX*/) RT_NOEXCEPT
+{
+    size_t cwc = length();
+    if (offStart < cwc)
+    {
+        if (cwcLength >= cwc - offStart)
+        {
+            if (!offStart)
+                cleanup();
+            else
+            {
+                /* Trail removal, nothing to move.  */
+                m_bstr[offStart] = '\0';
+                joltNoThrow(offStart); /* not entirely optimal... */
+            }
+        }
+        else if (cwcLength > 0)
+        {
+            /* Pull up the tail to offStart. */
+            size_t cwcAfter = cwc - offStart - cwcLength;
+            memmove(&m_bstr[offStart], &m_bstr[offStart + cwcLength], cwcAfter * sizeof(*m_bstr));
+            cwc -= cwcLength;
+            m_bstr[cwc] = '\0';
+            joltNoThrow(cwc); /* not entirely optimal... */
+        }
+    }
+    return *this;
+}
+
+
+void Bstr::cleanup()
+{
+    if (m_bstr)
+    {
+        ::SysFreeString(m_bstr);
+        m_bstr = NULL;
+    }
+}
+
+
+void Bstr::copyFrom(const OLECHAR *a_bstrSrc)
+{
+    if (a_bstrSrc && *a_bstrSrc)
+    {
+        m_bstr = ::SysAllocString(a_bstrSrc);
+        if (RT_LIKELY(m_bstr))
+        { /* likely */ }
+        else
+            throw std::bad_alloc();
+    }
+    else
+        m_bstr = NULL;
+}
+
+
+void Bstr::cleanupAndCopyFrom(const OLECHAR *a_bstrSrc)
+{
+    cleanup();
+    copyFrom(a_bstrSrc);
+}
+
+
+HRESULT Bstr::cleanupAndCopyFromEx(const OLECHAR *a_bstrSrc) RT_NOEXCEPT
+{
+    cleanup();
+
+    if (a_bstrSrc && *a_bstrSrc)
+    {
+        m_bstr = ::SysAllocString(a_bstrSrc);
+        if (RT_LIKELY(m_bstr))
+        { /* likely */ }
+        else
+            return E_OUTOFMEMORY;
+    }
+    else
+        m_bstr = NULL;
+    return S_OK;
+}
+
+
+
+/*********************************************************************************************************************************
+*   Utf8Str Implementation                                                                                                       *
+*********************************************************************************************************************************/
+
 /* static */
 const Utf8Str Utf8Str::Empty; /* default ctor is OK */
 
@@ -143,6 +729,17 @@ HRESULT Utf8Str::cloneToEx(char **pstr) const
     return E_OUTOFMEMORY;
 }
 #endif
+
+HRESULT Utf8Str::cloneToEx(BSTR *pbstr) const RT_NOEXCEPT
+{
+    if (!pbstr)
+        return S_OK;
+    Bstr bstr;
+    HRESULT hrc = bstr.assignEx(*this);
+    if (SUCCEEDED(hrc))
+        hrc = bstr.detachToEx(pbstr);
+    return hrc;
+}
 
 Utf8Str& Utf8Str::stripTrailingSlash()
 {
@@ -191,23 +788,35 @@ Utf8Str& Utf8Str::stripSuffix()
     return *this;
 }
 
-size_t Utf8Str::parseKeyValue(Utf8Str &key, Utf8Str &value, size_t pos, const Utf8Str &pairSeparator, const Utf8Str &keyValueSeparator) const
+size_t Utf8Str::parseKeyValue(Utf8Str &a_rKey, Utf8Str &a_rValue, size_t a_offStart /* = 0*/,
+                              const Utf8Str &a_rPairSeparator /*= ","*/, const Utf8Str &a_rKeyValueSeparator /*= "="*/) const
 {
-    size_t start = pos;
-    while(start == (pos = find(pairSeparator.c_str(), pos)))
-        start = ++pos;
+    /* Find the end of the next pair, skipping empty pairs.
+       Note! The skipping allows us to pass the return value of a parseKeyValue()
+             call as offStart to the next call. */
+    size_t offEnd;
+    while (   a_offStart == (offEnd = find(&a_rPairSeparator, a_offStart))
+           && offEnd != npos)
+        a_offStart++;
 
-    size_t kvSepPos = find(keyValueSeparator.c_str(), start);
-    if (kvSepPos < pos)
+    /* Look for a key/value separator before the end of the pair.
+       ASSUMES npos value returned by find when the substring is not found is
+       really high. */
+    size_t offKeyValueSep = find(&a_rKeyValueSeparator, a_offStart);
+    if (offKeyValueSep < offEnd)
     {
-        key = substr(start, kvSepPos - start);
-        value = substr(kvSepPos + 1, pos - kvSepPos - 1);
+        a_rKey = substr(a_offStart, offKeyValueSep - a_offStart);
+        if (offEnd == npos)
+            offEnd = m_cch; /* No confusing npos when returning strings. */
+        a_rValue = substr(offKeyValueSep + 1, offEnd - offKeyValueSep - 1);
     }
     else
     {
-        key = value = "";
+        a_rKey.setNull();
+        a_rValue.setNull();
     }
-    return pos;
+
+    return offEnd;
 }
 
 /**
@@ -315,7 +924,7 @@ HRESULT Utf8Str::copyFromEx(CBSTR a_pbstr)
  *
  * @param   a_pcszSrc   The source string.
  * @param   a_offSrc    Start offset to copy from.
- * @param   a_cchSrc    The source string.
+ * @param   a_cchSrc    How much to copy
  * @returns S_OK or E_OUTOFMEMORY.
  *
  * @remarks This calls cleanup() first, so the caller doesn't have to. (Saves
@@ -323,6 +932,7 @@ HRESULT Utf8Str::copyFromEx(CBSTR a_pbstr)
  */
 HRESULT Utf8Str::copyFromExNComRC(const char *a_pcszSrc, size_t a_offSrc, size_t a_cchSrc)
 {
+    Assert(!a_cchSrc || !m_psz || (uintptr_t)&a_pcszSrc[a_offSrc] - (uintptr_t)m_psz >= (uintptr_t)m_cbAllocated);
     cleanup();
     if (a_cchSrc)
     {

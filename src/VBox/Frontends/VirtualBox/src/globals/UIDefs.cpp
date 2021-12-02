@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIDefs.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Global definitions.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,21 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* GUI includes: */
-# include "UIDefs.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "UIDefs.h"
 
 
-/* Extension-pack definitions: */
+/* File name definitions: */
+const char* UIDefs::GUI_GuestAdditionsName = "VBoxGuestAdditions";
 const char* UIDefs::GUI_ExtPackName = "Oracle VM VirtualBox Extension Pack";
 
 /* File extensions definitions: */
 QStringList UIDefs::VBoxFileExts = QStringList() << "xml" << "vbox";
 QStringList UIDefs::VBoxExtPackFileExts = QStringList() << "vbox-extpack";
 QStringList UIDefs::OVFFileExts = QStringList() << "ovf" << "ova";
-

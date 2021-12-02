@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxLA.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxLA - VBox Location Awareness notifications.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,6 +14,7 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
 #define _WIN32_WINNT 0x0501
 #include <iprt/win/windows.h>
 
@@ -24,6 +25,7 @@
 #include <iprt/alloc.h>
 #include <iprt/list.h>
 #include <iprt/ldr.h>
+#include <iprt/utf16.h>
 
 #ifdef DEBUG
 # define LOG_ENABLED

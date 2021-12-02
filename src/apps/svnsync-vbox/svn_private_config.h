@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: svn_private_config.h 76544 2018-12-30 06:40:15Z vboxsync $ */
 /** @file
  *
  */
@@ -27,6 +27,9 @@
 
 #ifndef SVN_PRIVATE_CONFIG_H
 #define SVN_PRIVATE_CONFIG_H
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* The version of Berkeley DB we want */
 #define SVN_FS_WANT_DB_MAJOR    4

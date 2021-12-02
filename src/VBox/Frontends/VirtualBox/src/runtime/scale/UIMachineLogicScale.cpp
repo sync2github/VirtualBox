@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineLogicScale.cpp 84700 2020-06-05 15:36:38Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineLogicScale class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,31 +15,28 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# ifndef VBOX_WS_MAC
-#  include <QTimer>
-# endif /* !VBOX_WS_MAC */
+#ifndef VBOX_WS_MAC
+# include <QTimer>
+#endif
 
 /* GUI includes: */
-# include "VBoxGlobal.h"
-# include "UIDesktopWidgetWatchdog.h"
-# include "UIMessageCenter.h"
-# include "UISession.h"
-# include "UIActionPoolRuntime.h"
-# include "UIMachineLogicScale.h"
-# include "UIMachineWindow.h"
-# include "UIShortcutPool.h"
-# ifndef VBOX_WS_MAC
-#  include "QIMenu.h"
-# else  /* VBOX_WS_MAC */
-#  include "VBoxUtils.h"
-# endif /* VBOX_WS_MAC */
+#include "UICommon.h"
+#include "UIDesktopWidgetWatchdog.h"
+#include "UIMessageCenter.h"
+#include "UISession.h"
+#include "UIActionPoolRuntime.h"
+#include "UIMachineLogicScale.h"
+#include "UIMachineWindow.h"
+#include "UIShortcutPool.h"
+#ifndef VBOX_WS_MAC
+# include "QIMenu.h"
+#else
+# include "VBoxUtils.h"
+#endif
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+/* COM includes: */
+#include "CGraphicsAdapter.h"
 
 
 UIMachineLogicScale::UIMachineLogicScale(QObject *pParent, UISession *pSession)
@@ -56,7 +53,7 @@ bool UIMachineLogicScale::checkAvailability()
     const UIShortcut &shortcut =
             gShortcutPool->shortcut(actionPool()->shortcutsExtraDataID(),
                                     actionPool()->action(UIActionIndexRT_M_View_T_Scale)->shortcutExtraDataID());
-    const QString strHotKey = QString("Host+%1").arg(shortcut.toString());
+    const QString strHotKey = QString("Host+%1").arg(shortcut.primaryToPortableText());
     if (!msgCenter().confirmGoingScale(strHotKey))
         return false;
 
@@ -77,7 +74,7 @@ void UIMachineLogicScale::sltInvokePopupMenu()
 
 void UIMachineLogicScale::sltHostScreenAvailableAreaChange()
 {
-#if defined(VBOX_WS_X11) && QT_VERSION >= 0x050000
+#ifdef VBOX_WS_X11
     /* Prevent handling if fake screen detected: */
     if (gpDesktop->isFakeScreenDetected())
         return;
@@ -85,7 +82,7 @@ void UIMachineLogicScale::sltHostScreenAvailableAreaChange()
     /* Make sure all machine-window(s) have previous but normalized geometry: */
     foreach (UIMachineWindow *pMachineWindow, machineWindows())
         pMachineWindow->restoreCachedGeometry();
-#endif /* VBOX_WS_X11 && QT_VERSION >= 0x050000 */
+#endif /* VBOX_WS_X11 */
 
     /* Call to base-class: */
     UIMachineLogic::sltHostScreenAvailableAreaChange();
@@ -96,7 +93,7 @@ void UIMachineLogicScale::prepareActionGroups()
     /* Call to base-class: */
     UIMachineLogic::prepareActionGroups();
 
-    /* Restrict 'Adjust Window', 'Guest Autoresize', 'Status Bar' and 'Resize' actions for 'View' menu: */
+    /* Restrict 'Adjust Window', 'Guest Autoresize', 'Status Bar', 'Resize' and 'Rescale' actions for 'View' menu: */
     actionPool()->toRuntime()->setRestrictionForMenuView(UIActionRestrictionLevel_Logic,
                                                          (UIExtraDataMetaDefs::RuntimeMenuViewActionType)
                                                          (UIExtraDataMetaDefs::RuntimeMenuViewActionType_AdjustWindow |
@@ -104,7 +101,7 @@ void UIMachineLogicScale::prepareActionGroups()
                                                           UIExtraDataMetaDefs::RuntimeMenuViewActionType_MenuBar |
                                                           UIExtraDataMetaDefs::RuntimeMenuViewActionType_StatusBar |
                                                           UIExtraDataMetaDefs::RuntimeMenuViewActionType_Resize |
-                                                          UIExtraDataMetaDefs::RuntimeMenuViewActionType_ScaleFactor));
+                                                          UIExtraDataMetaDefs::RuntimeMenuViewActionType_Rescale));
 
     /* Take care of view-action toggle state: */
     UIAction *pActionScale = actionPool()->action(UIActionIndexRT_M_View_T_Scale);
@@ -122,12 +119,12 @@ void UIMachineLogicScale::prepareActionConnections()
     UIMachineLogic::prepareActionConnections();
 
     /* Prepare 'View' actions connections: */
-    connect(actionPool()->action(UIActionIndexRT_M_View_T_Scale), SIGNAL(triggered(bool)),
-            this, SLOT(sltChangeVisualStateToNormal()));
-    connect(actionPool()->action(UIActionIndexRT_M_View_T_Fullscreen), SIGNAL(triggered(bool)),
-            this, SLOT(sltChangeVisualStateToFullscreen()));
-    connect(actionPool()->action(UIActionIndexRT_M_View_T_Seamless), SIGNAL(triggered(bool)),
-            this, SLOT(sltChangeVisualStateToSeamless()));
+    connect(actionPool()->action(UIActionIndexRT_M_View_T_Scale), &QAction::triggered,
+            this, &UIMachineLogicScale::sltChangeVisualStateToNormal);
+    connect(actionPool()->action(UIActionIndexRT_M_View_T_Fullscreen), &QAction::triggered,
+            this, &UIMachineLogicScale::sltChangeVisualStateToFullscreen);
+    connect(actionPool()->action(UIActionIndexRT_M_View_T_Seamless), &QAction::triggered,
+            this, &UIMachineLogicScale::sltChangeVisualStateToSeamless);
 }
 
 void UIMachineLogicScale::prepareMachineWindows()
@@ -143,7 +140,7 @@ void UIMachineLogicScale::prepareMachineWindows()
 #endif /* VBOX_WS_MAC */
 
     /* Get monitors count: */
-    ulong uMonitorCount = machine().GetMonitorCount();
+    ulong uMonitorCount = machine().GetGraphicsAdapter().GetMonitorCount();
     /* Create machine window(s): */
     for (ulong uScreenId = 0; uScreenId < uMonitorCount; ++ uScreenId)
         addMachineWindow(UIMachineWindow::create(this, uScreenId));
@@ -153,8 +150,8 @@ void UIMachineLogicScale::prepareMachineWindows()
 
     /* Listen for frame-buffer resize: */
     foreach (UIMachineWindow *pMachineWindow, machineWindows())
-        connect(pMachineWindow, SIGNAL(sigFrameBufferResize()),
-                this, SIGNAL(sigFrameBufferResize()));
+        connect(pMachineWindow, &UIMachineWindow::sigFrameBufferResize,
+                this, &UIMachineLogicScale::sigFrameBufferResize);
     emit sigFrameBufferResize();
 
     /* Mark machine-window(s) created: */
@@ -201,12 +198,12 @@ void UIMachineLogicScale::cleanupMachineWindows()
 void UIMachineLogicScale::cleanupActionConnections()
 {
     /* "View" actions disconnections: */
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Scale), SIGNAL(triggered(bool)),
-               this, SLOT(sltChangeVisualStateToNormal()));
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Fullscreen), SIGNAL(triggered(bool)),
-               this, SLOT(sltChangeVisualStateToFullscreen()));
-    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Seamless), SIGNAL(triggered(bool)),
-               this, SLOT(sltChangeVisualStateToSeamless()));
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Scale), &QAction::triggered,
+               this, &UIMachineLogicScale::sltChangeVisualStateToNormal);
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Fullscreen), &QAction::triggered,
+               this, &UIMachineLogicScale::sltChangeVisualStateToFullscreen);
+    disconnect(actionPool()->action(UIActionIndexRT_M_View_T_Seamless), &QAction::triggered,
+               this, &UIMachineLogicScale::sltChangeVisualStateToSeamless);
 
     /* Call to base-class: */
     UIMachineLogic::cleanupActionConnections();
@@ -231,4 +228,3 @@ void UIMachineLogicScale::cleanupActionGroups()
     /* Call to base-class: */
     UIMachineLogic::cleanupActionGroups();
 }
-

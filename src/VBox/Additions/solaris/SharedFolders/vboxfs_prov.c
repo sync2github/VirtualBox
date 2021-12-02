@@ -1,10 +1,11 @@
+/* $Id: vboxfs_prov.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox File System for Solaris Guests, provider implementation.
  * Portions contributed by: Ronald.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -41,10 +42,10 @@
 #include <sys/sunddi.h>
 #include <sys/dirent.h>
 #include <sys/file.h>
+#undef u /* /usr/include/sys/user.h:249:1 is where this is defined to (curproc->p_user). very cool. */
+
 #include "vboxfs_prov.h"
-#ifdef u
-#undef u
-#endif
+#include <iprt/err.h>
 
 #define	SFPROV_VERSION	1
 
@@ -923,7 +924,7 @@ sfprov_readdir(
 	int error;
 	char *cp;
 	int len;
-	SHFLSTRING *mask_str = NULL;	/* must be path with "/*" appended */
+	SHFLSTRING *mask_str = NULL;	/* must be path with "/ *" appended */
 	int mask_size;
 	sfp_file_t *fp;
 	uint32_t infobuff_alloc = 16384;

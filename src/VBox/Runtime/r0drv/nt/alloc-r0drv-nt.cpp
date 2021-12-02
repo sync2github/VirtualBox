@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: alloc-r0drv-nt.cpp 90794 2021-08-23 13:16:11Z vboxsync $ */
 /** @file
  * IPRT - Memory Allocation, Ring-0 Driver, NT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,8 +33,9 @@
 #include <iprt/mem.h>
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include "r0drv/alloc-r0drv.h"
+#include "internal-r0drv-nt.h"
 
 
 /**
@@ -42,19 +43,33 @@
  */
 DECLHIDDEN(int) rtR0MemAllocEx(size_t cb, uint32_t fFlags, PRTMEMHDR *ppHdr)
 {
-    if (fFlags & RTMEMHDR_FLAG_ANY_CTX)
-        return VERR_NOT_SUPPORTED;
-
-    PRTMEMHDR pHdr = (PRTMEMHDR)ExAllocatePoolWithTag(NonPagedPool, cb + sizeof(*pHdr), IPRT_NT_POOL_TAG);
-    if (RT_UNLIKELY(!pHdr))
+    if (!(fFlags & RTMEMHDR_FLAG_ANY_CTX))
+    {
+        PRTMEMHDR pHdr;
+        if (g_pfnrtExAllocatePoolWithTag)
+        {
+            if (!(fFlags & RTMEMHDR_FLAG_EXEC) && g_uRtNtVersion >= RTNT_MAKE_VERSION(8,0))
+                pHdr = (PRTMEMHDR)g_pfnrtExAllocatePoolWithTag(NonPagedPoolNx, cb + sizeof(*pHdr), IPRT_NT_POOL_TAG);
+            else
+                pHdr = (PRTMEMHDR)g_pfnrtExAllocatePoolWithTag(NonPagedPool, cb + sizeof(*pHdr), IPRT_NT_POOL_TAG);
+        }
+        else
+        {
+            fFlags |= RTMEMHDR_FLAG_UNTAGGED;
+            pHdr = (PRTMEMHDR)ExAllocatePool(NonPagedPool, cb + sizeof(*pHdr));
+        }
+        if (pHdr)
+        {
+            pHdr->u32Magic  = RTMEMHDR_MAGIC;
+            pHdr->fFlags    = fFlags;
+            pHdr->cb        = (uint32_t)cb; Assert(pHdr->cb == cb);
+            pHdr->cbReq     = (uint32_t)cb;
+            *ppHdr = pHdr;
+            return VINF_SUCCESS;
+        }
         return VERR_NO_MEMORY;
-
-    pHdr->u32Magic  = RTMEMHDR_MAGIC;
-    pHdr->fFlags    = fFlags;
-    pHdr->cb        = (uint32_t)cb; Assert(pHdr->cb == cb);
-    pHdr->cbReq     = (uint32_t)cb;
-    *ppHdr = pHdr;
-    return VINF_SUCCESS;
+    }
+    return VERR_NOT_SUPPORTED;
 }
 
 
@@ -63,8 +78,11 @@ DECLHIDDEN(int) rtR0MemAllocEx(size_t cb, uint32_t fFlags, PRTMEMHDR *ppHdr)
  */
 DECLHIDDEN(void) rtR0MemFree(PRTMEMHDR pHdr)
 {
-    pHdr->u32Magic += 1;
-    ExFreePool(pHdr);
+    pHdr->u32Magic = RTMEMHDR_MAGIC_DEAD;
+    if (g_pfnrtExFreePoolWithTag && !(pHdr->fFlags & RTMEMHDR_FLAG_UNTAGGED))
+        g_pfnrtExFreePoolWithTag(pHdr, IPRT_NT_POOL_TAG);
+    else
+        ExFreePool(pHdr);
 }
 
 
@@ -82,7 +100,7 @@ RTR0DECL(void *) RTMemContAlloc(PRTCCPHYS pPhys, size_t cb)
     /*
      * validate input.
      */
-    Assert(VALID_PTR(pPhys));
+    AssertPtr(pPhys);
     Assert(cb > 0);
 
     /*

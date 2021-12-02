@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vboxmouse.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox X11 Guest Additions, mouse driver for X.Org server 1.5
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -44,9 +44,9 @@
  *      Adam Jackson (ajax@redhat.com)
  */
 
-#include <VBox/VMMDev.h>
+#include <VBox/VMMDev.h> /* for VMMDEV_MOUSE_XXX */
 #include <VBox/VBoxGuestLib.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <xf86.h>
 #include <xf86Xinput.h>
 #include <mipointer.h>

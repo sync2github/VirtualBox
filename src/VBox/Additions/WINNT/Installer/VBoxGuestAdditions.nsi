@@ -1,10 +1,10 @@
-; $Id$
+; $Id: VBoxGuestAdditions.nsi 84945 2020-06-25 10:22:05Z vboxsync $
 ; @file
 ; VBoxGuestAdditions.nsi - Main file for Windows Guest Additions installation.
 ;
 
 ;
-; Copyright (C) 2012-2016 Oracle Corporation
+; Copyright (C) 2012-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -15,7 +15,7 @@
 ; hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 ;
 
-!if $%BUILD_TYPE% == "debug"
+!if $%KBUILD_TYPE% == "debug"
   !define _DEBUG     ; Turn this on to get extra output
 !endif
 
@@ -23,6 +23,12 @@
   ; Scratch directory for plugin tests
   !addincludedir .\PluginTest
   !addplugindir .\PluginTest
+!endif
+
+!if $%VBOX_WITH_GUEST_INSTALLER_UNICODE% == "1"
+  ; Whether to use the Unicode version of NSIS
+  ; Note: Using Unicode will result in the installer not working on a Windows 95/98/ME guest
+  Unicode true
 !endif
 
 ; Defines for special functions
@@ -38,7 +44,7 @@
 !define PRODUCT_VERSION             "$%VBOX_VERSION_MAJOR%.$%VBOX_VERSION_MINOR%.$%VBOX_VERSION_BUILD%.0"
 !define PRODUCT_PUBLISHER           "$%VBOX_VENDOR%"
 !define PRODUCT_COPYRIGHT           "(C) $%VBOX_C_YEAR% $%VBOX_VENDOR%"
-!define PRODUCT_OUTPUT              "VBoxWindowsAdditions-$%BUILD_TARGET_ARCH%.exe"
+!define PRODUCT_OUTPUT              "VBoxWindowsAdditions-$%KBUILD_TARGET_ARCH%.exe"
 !define PRODUCT_WEB_SITE            "http://www.virtualbox.org"
 !define PRODUCT_INSTALL_KEY         "${VENDOR_ROOT_KEY}\VirtualBox Guest Additions"
 !define PRODUCT_UNINST_KEY          "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
@@ -84,9 +90,8 @@ VIAddVersionKey "InternalName"      "${PRODUCT_OUTPUT}"
 !include "winver.nsh"         ; Function for determining Windows version
 !define REPLACEDLL_NOREGISTER ; Replace in use DLL function
 !include "ReplaceDLL.nsh"
-!include "dumplog.nsh"        ; Dump log to file function
 
-!if $%BUILD_TARGET_ARCH% == "amd64"
+!if $%KBUILD_TARGET_ARCH% == "amd64"
   !include "x64.nsh"
 !endif
 
@@ -106,7 +111,7 @@ VIAddVersionKey "InternalName"      "${PRODUCT_OUTPUT}"
   !define SM_CLEANBOOT 67
 
   ; Icons
-  !if $%BUILD_TARGET_ARCH% == "x86"       ; 32-bit
+  !if $%KBUILD_TARGET_ARCH% == "x86"       ; 32-bit
     !define MUI_ICON "$%VBOX_NSIS_ICON_FILE%"
     !define MUI_UNICON "$%VBOX_NSIS_ICON_FILE%"
   !else   ; 64-bit
@@ -176,6 +181,9 @@ VIAddVersionKey "InternalName"      "${PRODUCT_OUTPUT}"
     Page instfiles
 !endif
 
+; Must come after MUI includes to have certain defines set for DumpLog
+!include "dumplog.nsh"        ; Dump log to file function
+
 ; Language files
 !include "Languages\English.nsh"
 !include "Languages\French.nsh"
@@ -185,13 +193,13 @@ VIAddVersionKey "InternalName"      "${PRODUCT_OUTPUT}"
 Name "${PRODUCT_NAME} $%VBOX_VERSION_STRING%"
 !ifdef UNINSTALLER_ONLY
   !echo "Uninstaller only!"
-  OutFile "$%PATH_TARGET%\VBoxWindowsAdditions-$%BUILD_TARGET_ARCH%-uninst.exe"
+  OutFile "$%PATH_TARGET%\VBoxWindowsAdditions-$%KBUILD_TARGET_ARCH%-uninst.exe"
 !else
-  OutFile "VBoxWindowsAdditions-$%BUILD_TARGET_ARCH%.exe"
+  OutFile "VBoxWindowsAdditions-$%KBUILD_TARGET_ARCH%.exe"
 !endif ; UNINSTALLER_ONLY
 
 ; Define default installation directory
-!if $%BUILD_TARGET_ARCH% == "x86" ; 32-bit
+!if $%KBUILD_TARGET_ARCH% == "x86" ; 32-bit
   InstallDir  "$PROGRAMFILES32\$%VBOX_VENDOR_SHORT%\VirtualBox Guest Additions"
 !else       ; 64-bit
   InstallDir  "$PROGRAMFILES64\$%VBOX_VENDOR_SHORT%\VirtualBox Guest Additions"
@@ -213,8 +221,8 @@ Var g_strAddVerBuild                    ; Installed Guest Additions: Build numbe
 Var g_strAddVerRev                      ; Installed Guest Additions: SVN revision
 Var g_strWinVersion                     ; Current Windows version we're running on
 Var g_bLogEnable                        ; Do logging when installing? "true" or "false"
-Var g_bWithWDDM                         ; Install the WDDM graphics driver instead of the XPDM one
 Var g_bCapDllCache                      ; Capability: Does the (Windows) guest have have a DLL cache which needs to be taken care of?
+Var g_bCapXPDM                          ; Capability: Is the guest able to handle/use our XPDM driver?
 Var g_bCapWDDM                          ; Capability: Is the guest able to handle/use our WDDM driver?
 
 ; Command line parameters - these can be set/modified
@@ -235,7 +243,7 @@ Var g_bNoGuestDrv                       ; Cmd line: Do not install the VBoxGuest
 Var g_bNoMouseDrv                       ; Cmd line: Do not install the VBoxMouse driver
 Var g_bNoStartMenuEntries               ; Cmd line: Do not create start menu entries
 Var g_bWithAutoLogon                    ; Cmd line: Install VBoxGINA / VBoxCredProv for auto logon support
-Var g_bWithD3D                          ; Cmd line: Install Direct3D support
+Var g_bWithWDDM                         ; Cmd line: Install the WDDM graphics driver instead of the XPDM one
 Var g_bOnlyExtract                      ; Cmd line: Only extract all files, do *not* install them. Only valid with param "/D" (target directory)
 Var g_bPostInstallStatus                ; Cmd line: Post the overall installation status to some external program (VBoxTray)
 
@@ -243,7 +251,7 @@ Var g_bPostInstallStatus                ; Cmd line: Post the overall installatio
 !include "VBoxGuestAdditionsLog.nsh"
 !include "VBoxGuestAdditionsExternal.nsh"
 !include "VBoxGuestAdditionsCommon.nsh"
-!if $%BUILD_TARGET_ARCH% == "x86"       ; 32-bit only
+!if $%KBUILD_TARGET_ARCH% == "x86"       ; 32-bit only
   !include "VBoxGuestAdditionsNT4.nsh"
 !endif
 !include "VBoxGuestAdditionsW2KXP.nsh"
@@ -386,13 +394,6 @@ Function HandleCommandLine
         StrCpy $g_bWithAutoLogon "true"
         ${Break}
 
-!if $%VBOX_WITH_CROGL% == "1"
-      ${Case} '/with_d3d'
-      ${Case} '/with_direct3d'
-        StrCpy $g_bWithD3D "true"
-        ${Break}
-!endif
-
 !if $%VBOX_WITH_WDDM% == "1"
       ${Case} '/with_wddm'
         StrCpy $g_bWithWDDM "true"
@@ -434,7 +435,7 @@ usage:
     Goto next_param
   ${EndIf}
   MessageBox MB_OK "${PRODUCT_NAME} Installer$\r$\n$\r$\n \
-                    Usage: VBoxWindowsAdditions-$%BUILD_TARGET_ARCH% [OPTIONS] [/l] [/S] [/D=<PATH>]$\r$\n$\r$\n \
+                    Usage: VBoxWindowsAdditions-$%KBUILD_TARGET_ARCH% [OPTIONS] [/l] [/S] [/D=<PATH>]$\r$\n$\r$\n \
                     Options:$\r$\n \
                     /depth=BPP$\tSets the guest's display color depth (bits per pixel)$\r$\n \
                     /extract$\t$\tOnly extract installation files$\r$\n \
@@ -451,7 +452,7 @@ usage:
                     /S$\t$\tSilent install$\r$\n \
                     /D=<PATH>$\tSets the default install path$\r$\n \
                     $\r$\n \
-                    Note: Order of options and installer parameters are mandatory." /SD IDOK
+                    Note: Order of options and installer parameters is fixed, options first." /SD IDOK
 
   ; No stack restore needed, we're about to quit
   Quit
@@ -620,7 +621,7 @@ Section $(VBOX_COMPONENT_MAIN) SEC01
   ${Else}
     ${LogVerbose} "No previous version of ${PRODUCT_NAME} detected"
   ${EndIf}
-!if $%BUILD_TARGET_ARCH% == "amd64"
+!if $%KBUILD_TARGET_ARCH% == "amd64"
   ${LogVerbose} "Detected OS: Windows $g_strWinVersion (64-bit)"
 !else
   ${LogVerbose} "Detected OS: Windows $g_strWinVersion (32-bit)"
@@ -637,7 +638,7 @@ Section $(VBOX_COMPONENT_MAIN) SEC01
 
   ; Which OS are we using?
   ; @todo Use logic lib here
-!if $%BUILD_TARGET_ARCH% == "x86"       ; 32-bit
+!if $%KBUILD_TARGET_ARCH% == "x86"       ; 32-bit
   StrCmp $g_strWinVersion "NT4" nt4     ; Windows NT 4.0
 !endif
   StrCmp $g_strWinVersion "2000" w2k    ; Windows 2000
@@ -655,7 +656,7 @@ Section $(VBOX_COMPONENT_MAIN) SEC01
 
   Goto notsupported
 
-!if $%BUILD_TARGET_ARCH% == "x86"       ; 32-bit
+!if $%KBUILD_TARGET_ARCH% == "x86"       ; 32-bit
 nt4: ; Windows NT4
 
   Call GetServicePack
@@ -774,137 +775,7 @@ SectionEnd
 ; Direct3D support
 Section /o $(VBOX_COMPONENT_D3D) SEC03
 
-!if $%VBOX_WITH_WDDM% == "1"
-  ${If} $g_bWithWDDM == "true"
-    ${LogVerbose} "Installing WDDM Direct3D support ..."
-
-    ; Do we need to restore the original d3d8.dll/d3d9.dll files because the guest
-    ; installation was upgraded from XPDM to WDDM driver? In a XPDM installation
-    ; those DLLs were replaced by our own stub files.
-    Call RestoreFilesDirect3D
-    Return
-  ${EndIf}
-!endif
-
-  Call SetAppMode64
-  SetOverwrite on
-
-  ${If} $g_strSystemDir == ''
-    StrCpy $g_strSystemDir "$SYSDIR"
-  ${EndIf}
-
-  SetOutPath $g_strSystemDir
-  ${LogVerbose} "Installing XPDM Direct3D support ..."
-  FILE "$%PATH_OUT%\bin\additions\VBoxD3D8.dll"
-  FILE "$%PATH_OUT%\bin\additions\VBoxD3D9.dll"
-  FILE "$%PATH_OUT%\bin\additions\wined3d.dll"
-
-  ;
-  ; Update DLL cache
-  ;
-  ${If} $g_bCapDllCache == "true"
-    ${If} ${FileExists} "$g_strSystemDir\dllcache"
-      SetOutPath "$g_strSystemDir\dllcache"
-      ${CopyFileEx} "" "$g_strSystemDir\dllcache\d3d8.dll" "$g_strSystemDir\dllcache\msd3d8.dll" "Microsoft Corporation" "$%BUILD_TARGET_ARCH%"
-      ${CopyFileEx} "" "$g_strSystemDir\dllcache\d3d9.dll" "$g_strSystemDir\dllcache\msd3d9.dll" "Microsoft Corporation" "$%BUILD_TARGET_ARCH%"
-
-      ; Exchange DLLs
-      ${PrepareWRPFileEx} "" "$g_strSystemDir\dllcache\d3d8.dll"
-      ${InstallFileEx} "" "$%PATH_OUT%\bin\additions\d3d8.dll" "$g_strSystemDir\dllcache\d3d8.dll" "$TEMP"
-      ${PrepareWRPFileEx} "" "$g_strSystemDir\dllcache\d3d9.dll"
-      ${InstallFileEx} "" "$%PATH_OUT%\bin\additions\d3d9.dll" "$g_strSystemDir\dllcache\d3d9.dll" "$TEMP"
-    ${Else}
-        ${LogVerbose} "DLL cache does not exist, skipping"
-    ${EndIf}
-  ${EndIf}
-
-  ;
-  ; Save original DLLs (only if msd3d*.dll does not exist) ...
-  ;
-  SetOutPath $g_strSystemDir
-  ${CopyFileEx} "" "$g_strSystemDir\d3d8.dll" "$g_strSystemDir\msd3d8.dll" "Microsoft Corporation" "$%BUILD_TARGET_ARCH%"
-  ${CopyFileEx} "" "$g_strSystemDir\d3d9.dll" "$g_strSystemDir\msd3d9.dll" "Microsoft Corporation" "$%BUILD_TARGET_ARCH%"
-
-  ; Exchange DLLs
-  ${PrepareWRPFileEx} "" "$g_strSystemDir\d3d8.dll"
-  ${InstallFileEx} "" "$%PATH_OUT%\bin\additions\d3d8.dll" "$g_strSystemDir\d3d8.dll" "$TEMP"
-  ${PrepareWRPFileEx} "" "$g_strSystemDir\d3d9.dll"
-  ${InstallFileEx} "" "$%PATH_OUT%\bin\additions\d3d9.dll" "$g_strSystemDir\d3d9.dll" "$TEMP"
-
-!if $%BUILD_TARGET_ARCH% == "amd64"
-    ; Only 64-bit installer:
-    ; Also copy 32-bit DLLs on 64-bit Windows in SysWOW64 node
-    SetOutPath $g_strSysWow64
-    ${LogVerbose} "Installing Direct3D support for 32-bit applications (SysWOW64: $g_strSysWow64) ..."
-    FILE "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxD3D8.dll"
-    FILE "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxD3D9.dll"
-    FILE "$%VBOX_PATH_ADDITIONS_WIN_X86%\wined3d.dll"
-
-    ;
-    ; Update DLL cache
-    ;
-    ${If} $g_bCapDllCache == "true"
-      ${If} ${FileExists} "$g_strSysWow64\dllcache"
-        SetOutPath "$g_strSysWow64\dllcache"
-        ${CopyFileEx} "" "$g_strSysWow64\dllcache\d3d8.dll" "$g_strSysWow64\dllcache\msd3d8.dll" "Microsoft Corporation" "x86"
-        ${CopyFileEx} "" "$g_strSysWow64\dllcache\d3d9.dll" "$g_strSysWow64\dllcache\msd3d9.dll" "Microsoft Corporation" "x86"
-
-        ; Exchange DLLs
-        ${PrepareWRPFileEx} "" "$g_strSysWow64\dllcache\d3d8.dll"
-        ${InstallFileEx} "" "$%VBOX_PATH_ADDITIONS_WIN_X86%\d3d8.dll" "$g_strSysWow64\dllcache\d3d8.dll" "$TEMP"
-        ${PrepareWRPFileEx} "" "$g_strSysWow64\dllcache\d3d9.dll"
-        ${InstallFileEx} "" "$%VBOX_PATH_ADDITIONS_WIN_X86%\d3d9.dll" "$g_strSysWow64\dllcache\d3d9.dll" "$TEMP"
-      ${Else}
-        ${LogVerbose} "DLL cache does not exist, skipping"
-      ${EndIf}
-    ${EndIf}
-
-    ;
-    ; Update original DLLs
-    ;
-
-    ; Save original DLLs (only if msd3d*.dll does not exist) ...
-    ${CopyFileEx} "" "$g_strSysWow64\d3d8.dll" "$g_strSysWow64\msd3d8.dll" "Microsoft Corporation" "x86"
-    ${CopyFileEx} "" "$g_strSysWow64\d3d9.dll" "$g_strSysWow64\msd3d9.dll" "Microsoft Corporation" "x86"
-
-    ${PrepareWRPFileEx} "" "$g_strSysWow64\d3d8.dll"
-    ${InstallFileEx} "" "$%VBOX_PATH_ADDITIONS_WIN_X86%\d3d8.dll" "$g_strSysWow64\d3d8.dll" "$TEMP"
-    ${PrepareWRPFileEx} "" "$g_strSysWow64\d3d9.dll"
-    ${InstallFileEx} "" "$%VBOX_PATH_ADDITIONS_WIN_X86%\d3d9.dll" "$g_strSysWow64\d3d9.dll" "$TEMP"
-
-!endif ; amd64
-  Goto done
-
-error:
-  ; @todo
-  Goto exit
-
-done:
-
-!ifndef WFP_FILE_EXCEPTION
-  MessageBox MB_ICONINFORMATION|MB_OK $(VBOX_WFP_WARN_REPLACE) /SD IDOK
-!endif
-  Goto exit
-
-exit:
-
-SectionEnd
-
-!ifdef USE_MUI
-  ;Assign language strings to sections
-  !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-    !insertmacro MUI_DESCRIPTION_TEXT   ${SEC01} $(VBOX_COMPONENT_MAIN_DESC)
-    !insertmacro MUI_DESCRIPTION_TEXT   ${SEC02} $(VBOX_COMPONENT_AUTOLOGON_DESC)
-    !if $%VBOX_WITH_CROGL% == "1"
-      !insertmacro MUI_DESCRIPTION_TEXT ${SEC03} $(VBOX_COMPONENT_D3D_DESC)
-    !endif
-    !insertmacro MUI_DESCRIPTION_TEXT   ${SEC04} $(VBOX_COMPONENT_STARTMENU_DESC)
-  !insertmacro MUI_FUNCTION_DESCRIPTION_END
-!endif ; USE_MUI
-
-Section -Content
-
-  WriteIniStr "$INSTDIR\${PRODUCT_NAME}.url" "InternetShortcut" "URL" "${PRODUCT_WEB_SITE}"
+  ; Nothing to do in here right now.
 
 SectionEnd
 
@@ -914,6 +785,22 @@ Section /o $(VBOX_COMPONENT_STARTMENU) SEC04
   CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
   CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\Website.lnk" "$INSTDIR\${PRODUCT_NAME}.url" "" "$INSTDIR\iexplore.ico"
   CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall.lnk" "$INSTDIR\uninst.exe"
+
+SectionEnd
+
+!ifdef USE_MUI
+  ;Assign language strings to sections
+  !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+    !insertmacro MUI_DESCRIPTION_TEXT   ${SEC01} $(VBOX_COMPONENT_MAIN_DESC)
+    !insertmacro MUI_DESCRIPTION_TEXT   ${SEC02} $(VBOX_COMPONENT_AUTOLOGON_DESC)
+    !insertmacro MUI_DESCRIPTION_TEXT   ${SEC03} $(VBOX_COMPONENT_D3D_DESC)
+    !insertmacro MUI_DESCRIPTION_TEXT   ${SEC04} $(VBOX_COMPONENT_STARTMENU_DESC)
+  !insertmacro MUI_FUNCTION_DESCRIPTION_END
+!endif ; USE_MUI
+
+Section -Content
+
+  WriteIniStr "$INSTDIR\${PRODUCT_NAME}.url" "InternetShortcut" "URL" "${PRODUCT_WEB_SITE}"
 
 SectionEnd
 
@@ -948,7 +835,7 @@ Section -Post
 
   ; Add Sun Ray  client info keys
   ; Note: We only need 32-bit keys (HKLM\Software / HKLM\Software\Wow6432Node)
-!if $%BUILD_TARGET_ARCH% == "amd64"
+!if $%KBUILD_TARGET_ARCH% == "amd64"
   WriteRegStr HKLM "SOFTWARE\Wow6432Node\Oracle\Sun Ray\ClientInfoAgent\ReconnectActions" "" ""
   WriteRegStr HKLM "SOFTWARE\Wow6432Node\Oracle\Sun Ray\ClientInfoAgent\DisconnectActions" "" ""
 !else
@@ -966,54 +853,20 @@ Function .onSelChange
 
   Push $0
 
-  ; Handle selection of D3D component
+  ; Handle selection of WDDM component
   SectionGetFlags ${SEC03} $0
   ${If} $0 == ${SF_SELECTED}
 
-    StrCpy $g_bWithD3D "true"
-
 !if $%VBOX_WITH_WDDM% == "1"
-    ; If we're able to use the WDDM driver just use it instead of the replaced
-    ; D3D components below
+    ; If we're able to use the WDDM driver just use it.
     ${If} $g_bCapWDDM == "true"
-      ;
-      ; Temporary solution: Since WDDM is marked as experimental yet we notify the user
-      ; that WDDM (Aero) support is available but not recommended for production use. He now
-      ; can opt-in for installing WDDM or still go for the old (XPDM) way -- safe mode still required!
-      ;
-      MessageBox MB_ICONQUESTION|MB_YESNO $(VBOX_COMPONENT_D3D_OR_WDDM) /SD IDNO IDYES d3d_install
-      ; Display an unconditional hint about needed VRAM sizes
-      ; Note: We also could use the PCI configuration space (WMI: Win32_SystemSlot Class) for querying
-      ;       the current VRAM size, but let's keep it simple for now
-      MessageBox MB_ICONINFORMATION|MB_OK $(VBOX_COMPONENT_D3D_HINT_VRAM) /SD IDOK
       StrCpy $g_bWithWDDM "true"
       Goto exit
     ${EndIf}
 
-d3d_install:
-
 !endif ; $%VBOX_WITH_WDDM% == "1"
 
-    ${If} $g_bForceInstall != "true"
-      ; Do not install on < XP
-      ${If}   $g_strWinVersion == "NT4"
-      ${OrIf} $g_strWinVersion == "2000"
-      ${OrIf} $g_strWinVersion == ""
-        MessageBox MB_ICONINFORMATION|MB_OK $(VBOX_COMPONENT_D3D_NOT_SUPPORTED) /SD IDOK
-        Goto d3d_disable
-      ${EndIf}
-    ${EndIf}
-
-    ; If force flag is set skip the safe mode check
-    ${If} $g_bForceInstall != "true"
-      ; If we're not in safe mode, print a warning and don't install D3D support
-      ${If} $g_iSystemMode == '0'
-        MessageBox MB_ICONINFORMATION|MB_OK $(VBOX_COMPONENT_D3D_NO_SM) /SD IDOK
-        Goto d3d_disable
-      ${EndIf}
-    ${EndIf}
-
-  ${Else} ; D3D unselected again
+  ${Else} ; WDDM unselected again
 
     ${If}   $g_strWinVersion != "8"   ; On Windows 8 WDDM is mandatory
     ${AndIf} $g_strWinVersion != "8_1" ; ... also on Windows 8.1 / Windows 2012 Server R2
@@ -1022,13 +875,6 @@ d3d_install:
     ${EndIf}
 
   ${EndIf}
-  Goto exit
-
-d3d_disable:
-
-  StrCpy $g_bWithD3D "false"
-  IntOp $0 $0 & ${SECTION_OFF} ; Unselect section again
-  SectionSetFlags ${SEC03} $0
   Goto exit
 
 exit:
@@ -1096,10 +942,10 @@ Function .onInit
   StrCpy $g_bNoMouseDrv "false"
   StrCpy $g_bNoStartMenuEntries "false"
   StrCpy $g_bWithAutoLogon "false"
-  StrCpy $g_bWithD3D "false"
   StrCpy $g_bOnlyExtract "false"
   StrCpy $g_bWithWDDM "false"
   StrCpy $g_bCapDllCache "false"
+  StrCpy $g_bCapXPDM "false"
   StrCpy $g_bCapWDDM "false"
   StrCpy $g_bPostInstallStatus "false"
 
@@ -1158,7 +1004,7 @@ Function .onInit
   Call CheckArchitecture
   Pop $0
   ${If} $0 <> 0 ; Wrong architecture? Tell the world
-!if $%BUILD_TARGET_ARCH% == "amd64"
+!if $%KBUILD_TARGET_ARCH% == "amd64"
     MessageBox MB_ICONSTOP $(VBOX_NOTICE_ARCH_AMD64) /SD IDOK
 !else
     MessageBox MB_ICONSTOP $(VBOX_NOTICE_ARCH_X86) /SD IDOK
@@ -1194,11 +1040,6 @@ Function .onInit
   ;
   ; Section 03
   ;
-!if $%VBOX_WITH_CROGL% == "1"
-  ${If} $g_bWithD3D == "true" ; D3D support
-    !insertmacro SelectSection ${SEC03}
-  ${EndIf}
-!endif
   ${If} $g_bWithWDDM == "true" ; D3D / WDDM support
     !insertmacro SelectSection ${SEC03}
   ${EndIf}
@@ -1209,6 +1050,10 @@ Function .onInit
   ${OrIf} $g_strWinVersion == "10"
     IntOp $0 ${SF_SELECTED} | ${SF_RO}
     SectionSetFlags ${SEC03} $0
+  ${EndIf}
+  ; If the guest is not able to handle/use our WDDM driver, then 3D is not available
+  ${If} $g_bCapWDDM != "true"
+    SectionSetFlags ${SEC03} ${SF_RO}
   ${EndIf}
 
   ;

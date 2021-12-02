@@ -1,15 +1,8 @@
 /** @file
 
-  Copyright (c) 2006 - 2010, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2006 - 2020, Intel Corporation. All rights reserved.<BR>
 
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions
-  of the BSD License which accompanies this distribution.  The
-  full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -106,7 +99,8 @@ ConstructBaseMemoryRange (
   gDS->GetMemorySpaceMap (&NumberOfDescriptors, &MemorySpaceMap);
 
   for (Index = 0; Index < NumberOfDescriptors; Index++) {
-    if (MemorySpaceMap[Index].GcdMemoryType == EfiGcdMemoryTypeSystemMemory) {
+    if ((MemorySpaceMap[Index].GcdMemoryType == EfiGcdMemoryTypeSystemMemory) ||
+        (MemorySpaceMap[Index].GcdMemoryType == EfiGcdMemoryTypeMoreReliable)) {
       Private->BaseMemorySize += MemorySpaceMap[Index].Length;
     }
   }
@@ -139,6 +133,41 @@ DestroyLinkList (
 }
 
 /**
+  Convert the memory range to tested.
+
+  @param BaseAddress  Base address of the memory range.
+  @param Length       Length of the memory range.
+  @param Capabilities Capabilities of the memory range.
+
+  @retval EFI_SUCCESS The memory range is converted to tested.
+  @retval others      Error happens.
+**/
+EFI_STATUS
+ConvertToTestedMemory (
+  IN UINT64           BaseAddress,
+  IN UINT64           Length,
+  IN UINT64           Capabilities
+  )
+{
+  EFI_STATUS Status;
+  Status = gDS->RemoveMemorySpace (
+                  BaseAddress,
+                  Length
+                  );
+  if (!EFI_ERROR (Status)) {
+    Status = gDS->AddMemorySpace (
+                    ((Capabilities & EFI_MEMORY_MORE_RELIABLE) == EFI_MEMORY_MORE_RELIABLE) ?
+                    EfiGcdMemoryTypeMoreReliable : EfiGcdMemoryTypeSystemMemory,
+                    BaseAddress,
+                    Length,
+                    Capabilities &~
+                    (EFI_MEMORY_PRESENT | EFI_MEMORY_INITIALIZED | EFI_MEMORY_TESTED | EFI_MEMORY_RUNTIME)
+                    );
+  }
+  return Status;
+}
+
+/**
   Add the extened memory to whole system memory map.
 
   @param[in] Private  Point to generic memory test driver's private data.
@@ -160,18 +189,12 @@ UpdateMemoryMap (
   while (Link != &Private->NonTestedMemRanList) {
     Range = NONTESTED_MEMORY_RANGE_FROM_LINK (Link);
 
-    gDS->RemoveMemorySpace (
-          Range->StartAddress,
-          Range->Length
-          );
-
-    gDS->AddMemorySpace (
-          EfiGcdMemoryTypeSystemMemory,
-          Range->StartAddress,
-          Range->Length,
-          Range->Capabilities &~(EFI_MEMORY_PRESENT | EFI_MEMORY_INITIALIZED | EFI_MEMORY_TESTED | EFI_MEMORY_RUNTIME)
-          );
-
+    ConvertToTestedMemory (
+      Range->StartAddress,
+      Range->Length,
+      Range->Capabilities &~
+      (EFI_MEMORY_PRESENT | EFI_MEMORY_INITIALIZED | EFI_MEMORY_TESTED | EFI_MEMORY_RUNTIME)
+      );
     Link = Link->ForwardLink;
   }
 
@@ -215,17 +238,12 @@ DirectRangeTest (
   //
   // Add the tested compatible memory to system memory using GCD service
   //
-  gDS->RemoveMemorySpace (
-        StartAddress,
-        Length
-        );
-
-  gDS->AddMemorySpace (
-        EfiGcdMemoryTypeSystemMemory,
-        StartAddress,
-        Length,
-        Capabilities &~(EFI_MEMORY_PRESENT | EFI_MEMORY_INITIALIZED | EFI_MEMORY_TESTED | EFI_MEMORY_RUNTIME)
-        );
+  ConvertToTestedMemory (
+      StartAddress,
+      Length,
+      Capabilities &~
+      (EFI_MEMORY_PRESENT | EFI_MEMORY_INITIALIZED | EFI_MEMORY_TESTED | EFI_MEMORY_RUNTIME)
+      );
 
   return EFI_SUCCESS;
 }
@@ -521,12 +539,12 @@ InitializeMemoryTest (
   @param[out] TestedMemorySize  Return the tested extended memory size.
   @param[out] TotalMemorySize   Return the whole system physical memory size.
                                 The total memory size does not include memory in a slot with a disabled DIMM.
-  @param[out] ErrorOut          TRUE if the memory error occured.
+  @param[out] ErrorOut          TRUE if the memory error occurred.
   @param[in]  IfTestAbort       Indicates that the user pressed "ESC" to skip the memory test.
 
   @retval EFI_SUCCESS         One block of memory passed the test.
   @retval EFI_NOT_FOUND       All memory blocks have already been tested.
-  @retval EFI_DEVICE_ERROR    Memory device error occured, and no agent can handle it.
+  @retval EFI_DEVICE_ERROR    Memory device error occurred, and no agent can handle it.
 
 **/
 EFI_STATUS
@@ -551,7 +569,7 @@ GenPerformMemoryTest (
 
   //
   // In extensive mode the boundary of "mCurrentRange->Length" may will lost
-  // some range that is not Private->BdsBlockSize size boundry, so need
+  // some range that is not Private->BdsBlockSize size boundary, so need
   // the software mechanism to confirm all memory location be covered.
   //
   if (mCurrentAddress < (mCurrentRange->StartAddress + mCurrentRange->Length)) {
@@ -659,10 +677,12 @@ GenMemoryTestFinished (
   Private = GENERIC_MEMORY_TEST_PRIVATE_FROM_THIS (This);
 
   //
-  // Perform Data and Address line test
+  // Perform Data and Address line test only if not ignore memory test
   //
-  Status = PerformAddressDataLineTest (Private);
-  ASSERT_EFI_ERROR (Status);
+  if (Private->CoverLevel != IGNORE) {
+    Status = PerformAddressDataLineTest (Private);
+    ASSERT_EFI_ERROR (Status);
+  }
 
   //
   // Add the non tested memory range to system memory map through GCD service

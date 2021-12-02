@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxVideoTools.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Video tooling
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +14,12 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
-#ifndef ___VBoxVideoTools_h__
-#define ___VBoxVideoTools_h__
+
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_common_VBoxVideoTools_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_common_VBoxVideoTools_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/assert.h>
@@ -363,4 +366,4 @@ DECLINLINE(void) vboxWddmDirtyRegionClear(PVBOXWDDM_DIRTYREGION pInfo)
     pInfo->fFlags = 0;
 }
 
-#endif /* #ifndef ___VBoxVideoTools_h__ */
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_common_VBoxVideoTools_h */

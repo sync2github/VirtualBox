@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: SUPDrv-freebsd.c 91789 2021-10-17 18:16:11Z vboxsync $ */
 /** @file
  * VBoxDrv - The VirtualBox Support Driver - FreeBSD specifics.
  */
@@ -44,6 +44,7 @@
 #include <sys/fcntl.h>
 #include <sys/conf.h>
 #include <sys/uio.h>
+#include <vm/pmap.h> /* for pmap_map() */
 
 #include "../SUPDrvInternal.h"
 #include <VBox/version.h>
@@ -314,11 +315,10 @@ static int VBoxDrvFreeBSDIOCtl(struct cdev *pDev, u_long ulCmd, caddr_t pvData, 
     /*
      * Deal with the fast ioctl path first.
      */
-    if (   (   ulCmd == SUP_IOCTL_FAST_DO_RAW_RUN
-            || ulCmd == SUP_IOCTL_FAST_DO_HM_RUN
-            || ulCmd == SUP_IOCTL_FAST_DO_NOP)
-        && pSession->fUnrestricted == true)
-        return supdrvIOCtlFast(ulCmd, *(uint32_t *)pvData, &g_VBoxDrvFreeBSDDevExt, pSession);
+    AssertCompile((SUP_IOCTL_FAST_DO_FIRST & 0xff) == (SUP_IOCTL_FLAG | 64));
+    if (   (uintptr_t)(ulCmd - SUP_IOCTL_FAST_DO_FIRST) < (uintptr_t)32
+        && pSession->fUnrestricted)
+        return supdrvIOCtlFast(ulCmd - SUP_IOCTL_FAST_DO_FIRST, *(uint32_t *)pvData, &g_VBoxDrvFreeBSDDevExt, pSession);
 
     return VBoxDrvFreeBSDIOCtlSlow(pSession, ulCmd, pvData, pTd);
 }
@@ -476,13 +476,13 @@ int VBOXCALL SUPDrvFreeBSDIDC(uint32_t uReq, PSUPDRVIDCREQHDR pReq)
     /*
      * Some quick validations.
      */
-    if (RT_UNLIKELY(!VALID_PTR(pReq)))
+    if (RT_UNLIKELY(!RT_VALID_PTR(pReq)))
         return VERR_INVALID_POINTER;
 
     pSession = pReq->pSession;
     if (pSession)
     {
-        if (RT_UNLIKELY(!VALID_PTR(pReq->pSession)))
+        if (RT_UNLIKELY(!RT_VALID_PTR(pReq->pSession)))
             return VERR_INVALID_PARAMETER;
         if (RT_UNLIKELY(pSession->pDevExt != &g_VBoxDrvFreeBSDDevExt))
             return VERR_INVALID_PARAMETER;
@@ -559,9 +559,10 @@ int  VBOXCALL   supdrvOSLdrOpen(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
 }
 
 
-int  VBOXCALL   supdrvOSLdrValidatePointer(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, void *pv, const uint8_t *pbImageBits)
+int  VBOXCALL   supdrvOSLdrValidatePointer(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, void *pv,
+                                           const uint8_t *pbImageBits, const char *pszSymbol)
 {
-    NOREF(pDevExt); NOREF(pImage); NOREF(pv); NOREF(pbImageBits);
+    NOREF(pDevExt); NOREF(pImage); NOREF(pv); NOREF(pbImageBits); NOREF(pszSymbol);
     return VERR_NOT_SUPPORTED;
 }
 
@@ -591,6 +592,27 @@ void VBOXCALL   supdrvOSLdrNotifyUnloaded(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE
 }
 
 
+int  VBOXCALL   supdrvOSLdrQuerySymbol(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage,
+                                       const char *pszSymbol, size_t cchSymbol, void **ppvSymbol)
+{
+    RT_NOREF(pDevExt, pImage, pszSymbol, cchSymbol, ppvSymbol);
+    return VERR_WRONG_ORDER;
+}
+
+
+void VBOXCALL   supdrvOSLdrRetainWrapperModule(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
+{
+    RT_NOREF(pDevExt, pImage);
+    AssertFailed();
+}
+
+
+void VBOXCALL   supdrvOSLdrReleaseWrapperModule(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
+{
+    RT_NOREF(pDevExt, pImage);
+    AssertFailed();
+}
+
 #ifdef SUPDRV_WITH_MSR_PROBER
 
 int VBOXCALL    supdrvOSMsrProberRead(uint32_t uMsr, RTCPUID idCpu, uint64_t *puValue)
@@ -616,19 +638,25 @@ int VBOXCALL    supdrvOSMsrProberModify(RTCPUID idCpu, PSUPMSRPROBER pReq)
 #endif /* SUPDRV_WITH_MSR_PROBER */
 
 
-SUPR0DECL(int) SUPR0Printf(const char *pszFormat, ...)
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_ARM64)
+SUPR0DECL(int) SUPR0HCPhysToVirt(RTHCPHYS HCPhys, void **ppv)
 {
-    va_list va;
-    char szMsg[256];
-    int cch;
+    AssertReturn(!(HCPhys & PAGE_OFFSET_MASK), VERR_INVALID_POINTER);
+    AssertReturn(HCPhys != NIL_RTHCPHYS, VERR_INVALID_POINTER);
+    *ppv = (void *)(uintptr_t)pmap_map(NULL, HCPhys, (HCPhys | PAGE_OFFSET_MASK) + 1, VM_PROT_WRITE | VM_PROT_READ);
+    return VINF_SUCCESS;
+}
+#endif
 
-    va_start(va, pszFormat);
-    cch = RTStrPrintfV(szMsg, sizeof(szMsg), pszFormat, va);
-    va_end(va);
+
+SUPR0DECL(int) SUPR0PrintfV(const char *pszFormat, va_list va)
+{
+    char szMsg[256];
+    RTStrPrintfV(szMsg, sizeof(szMsg), pszFormat, va);
+    szMsg[sizeof(szMsg) - 1] = '\0';
 
     printf("%s", szMsg);
-
-    return cch;
+    return 0;
 }
 
 

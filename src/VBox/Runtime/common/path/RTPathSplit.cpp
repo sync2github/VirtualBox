@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTPathSplit.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTPathSplit
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -72,7 +72,7 @@ RTDECL(int) RTPathSplit(const char *pszPath, PRTPATHSPLIT pSplit, size_t cbSplit
     uint16_t const  fProps    = pParsedVolatile->fProps;
     uint16_t const  cchPath   = pParsedVolatile->cchPath;
     uint16_t const  offSuffix = pParsedVolatile->offSuffix;
-    uint32_t        cbNeeded  = RT_OFFSETOF(RTPATHSPLIT, apszComps[cComps])
+    uint32_t        cbNeeded  = RT_UOFFSETOF_DYN(RTPATHSPLIT, apszComps[cComps])
                               + cchPath
                               + RTPATH_PROP_FIRST_NEEDS_NO_SLASH(fProps) /* zero terminator for root spec. */
                               - RT_BOOL(fProps & RTPATH_PROP_DIR_SLASH) /* counted by cchPath, not included in the comp str. */

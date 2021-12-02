@@ -3,13 +3,7 @@
 
   Copyright (c) 2009 - 2010, Intel Corporation. All rights reserved.<BR>
 
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php.
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -18,7 +12,7 @@
 /**
   Validate the IP6 option format for both the packets we received
   and that we will transmit. It will compute the ICMPv6 error message fields
-  if the option is malformated.
+  if the option is malformatted.
 
   @param[in]  IpSb              The IP6 service data.
   @param[in]  Packet            The to be validated packet.
@@ -29,7 +23,7 @@
 
 
   @retval TRUE     The option is properly formatted.
-  @retval FALSE    The option is malformated.
+  @retval FALSE    The option is malformatted.
 
 **/
 BOOLEAN
@@ -126,7 +120,7 @@ Ip6IsOptionValid (
   @param[in]  OptionLen         The length of the whole option.
 
   @retval TRUE     The option is properly formatted.
-  @retval FALSE    The option is malformated.
+  @retval FALSE    The option is malformatted.
 
 **/
 BOOLEAN
@@ -135,45 +129,74 @@ Ip6IsNDOptionValid (
   IN UINT16                 OptionLen
   )
 {
-  UINT16                    Offset;
-  UINT8                     OptionType;
+  UINT32                    Offset;
   UINT16                    Length;
+  IP6_OPTION_HEADER         *OptionHeader;
+
+  if (Option == NULL) {
+    ASSERT (Option != NULL);
+    return FALSE;
+  }
 
   Offset = 0;
 
-  while (Offset < OptionLen) {
-    OptionType = *(Option + Offset);
-     Length    = (UINT16) (*(Option + Offset + 1) * 8);
+  //
+  // RFC 4861 states that Neighbor Discovery packet can contain zero or more
+  // options. Start processing the options if at least Type + Length fields
+  // fit within the input buffer.
+  //
+  while (Offset + sizeof (IP6_OPTION_HEADER) - 1 < OptionLen) {
+    OptionHeader  = (IP6_OPTION_HEADER*) (Option + Offset);
+    Length        = (UINT16) OptionHeader->Length * 8;
 
-    switch (OptionType) {
+    switch (OptionHeader->Type) {
     case Ip6OptionPrefixInfo:
       if (Length != 32) {
         return FALSE;
       }
-
       break;
 
     case Ip6OptionMtu:
       if (Length != 8) {
         return FALSE;
       }
+      break;
 
+    default:
+      // RFC 4861 states that Length field cannot be 0.
+      if (Length == 0) {
+        return FALSE;
+      }
+      break;
+    }
+
+    //
+    // Check whether recognized options are within the input buffer's scope.
+    //
+    switch (OptionHeader->Type) {
+    case Ip6OptionEtherSource:
+    case Ip6OptionEtherTarget:
+    case Ip6OptionPrefixInfo:
+    case Ip6OptionRedirected:
+    case Ip6OptionMtu:
+      if (Offset + Length > (UINT32) OptionLen) {
+        return FALSE;
+      }
       break;
 
     default:
       //
-      // Check the length of Ip6OptionEtherSource, Ip6OptionEtherTarget, and
-      // Ip6OptionRedirected here. For unrecognized options, silently ignore
-      // and continue processsing the message.
+      // Unrecognized options can be either valid (but unused) or invalid
+      // (garbage in between or right after valid options). Silently ignore.
       //
-      if (Length == 0) {
-        return FALSE;
-      }
-
       break;
     }
 
-    Offset = (UINT16) (Offset + Length);
+    //
+    // Advance to the next option.
+    // Length already considers option header's Type + Length.
+    //
+    Offset += Length;
   }
 
   return TRUE;
@@ -231,7 +254,7 @@ Ip6IsValidProtocol (
 /**
   Validate the IP6 extension header format for both the packets we received
   and that we will transmit. It will compute the ICMPv6 error message fields
-  if the option is mal-formated.
+  if the option is mal-formatted.
 
   @param[in]  IpSb          The IP6 service instance. This is an optional parameter.
   @param[in]  Packet        The data of the packet. Ignored if NULL.
@@ -252,8 +275,8 @@ Ip6IsValidProtocol (
   @param[out] Fragmented    Indicate whether the packet is fragmented.
                             This is an optional parameter that may be NULL.
 
-  @retval     TRUE          The option is properly formated.
-  @retval     FALSE         The option is malformated.
+  @retval     TRUE          The option is properly formatted.
+  @retval     FALSE         The option is malformatted.
 
 **/
 BOOLEAN
@@ -436,7 +459,7 @@ Ip6IsExtsValid (
 
       //
       // RFC2460, ICMP Parameter Problem message with code 0 should be sent
-      // if the length of a fragment is not a multiple of 8 octects and the M
+      // if the length of a fragment is not a multiple of 8 octets and the M
       // flag of that fragment is 1, pointing to the Payload length field of the
       // fragment packet.
       //
@@ -606,7 +629,7 @@ Ip6FillHopByHop (
   @param[in]  ExtHdrsLen       The length of the extension headers.
   @param[in]  FragmentOffset   The fragment offset of the data following the header.
   @param[out] UpdatedExtHdrs   The updated ExtHdrs with Fragment header inserted.
-                               It's caller's responsiblity to free this buffer.
+                               It's caller's responsibility to free this buffer.
 
   @retval EFI_OUT_OF_RESOURCES Failed to finish the operation due to lake of
                                resource.

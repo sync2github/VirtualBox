@@ -1,10 +1,10 @@
-﻿/* $Id$ */
+﻿/* $Id: ntBldSymDb.cpp 83738 2020-04-17 08:50:54Z vboxsync $ */
 /** @file
  * IPRT - RTDirCreateUniqueNumbered, generic implementation.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,11 +29,12 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include <iprt/win/windows.h>
-#include <Dbghelp.h>
+#include <iprt/win/dbghelp.h>
 
 #include <iprt/alloca.h>
 #include <iprt/dir.h>
 #include <iprt/file.h>
+#include <iprt/err.h>
 #include <iprt/getopt.h>
 #include <iprt/initterm.h>
 #include <iprt/list.h>
@@ -42,7 +43,7 @@
 #include <iprt/path.h>
 #include <iprt/stream.h>
 #include <iprt/string.h>
-#include <iprt/err.h>
+#include <iprt/utf16.h>
 
 #include "r0drv/nt/symdb.h"
 
@@ -196,7 +197,7 @@ static void generateHeader(PRTSTREAM pOut)
                  " */\n"
                  "\n"
                  "/*\n"
-                 " * Copyright (C) 2013-2016 Oracle Corporation \n"
+                 " * Copyright (C) 2013-2020 Oracle Corporation \n"
                  " *\n"
                  " * This file is part of VirtualBox Open Source Edition (OSE), as\n"
                  " * available from http://www.virtualbox.org. This file is free software;\n"
@@ -217,8 +218,8 @@ static void generateHeader(PRTSTREAM pOut)
                  " */\n"
                  "\n"
                  "\n"
-                 "#ifndef ___r0drv_nt_symdbdata_h\n"
-                 "#define ___r0drv_nt_symdbdata_h\n"
+                 "#ifndef IPRT_INCLUDED_SRC_nt_symdbdata_h\n"
+                 "#define IPRT_INCLUDED_SRC_nt_symdbdata_h\n"
                  "\n"
                  "#include \"r0drv/nt/symdb.h\"\n"
                  "\n"
@@ -349,7 +350,7 @@ static RTEXITCODE saveStructures(PRTNTSDBOSVER pOsVerInfo, MYARCH enmArch, const
     static size_t s_cbNeeded = 0;
     if (s_cbNeeded == 0)
     {
-        s_cbNeeded = RT_OFFSETOF(MYSET, aStructs[RT_ELEMENTS(g_aStructs)]);
+        s_cbNeeded = RT_UOFFSETOF(MYSET, aStructs[RT_ELEMENTS(g_aStructs)]);
         for (uint32_t i = 0; i < RT_ELEMENTS(g_aStructs); i++)
             s_cbNeeded += sizeof(MYMEMBER) * g_aStructs[i].cMembers;
     }
@@ -521,7 +522,7 @@ static RTEXITCODE findMembers(HANDLE hFake, uint64_t uModAddr, uint32_t idxType,
 
     MyDbgPrintf(" %s: cChildren=%u (%#x)\n", pszStructNm, cChildren);
     TI_FINDCHILDREN_PARAMS *pChildren;
-    pChildren = (TI_FINDCHILDREN_PARAMS *)alloca(RT_OFFSETOF(TI_FINDCHILDREN_PARAMS, ChildId[cChildren]));
+    pChildren = (TI_FINDCHILDREN_PARAMS *)alloca(RT_UOFFSETOF_DYN(TI_FINDCHILDREN_PARAMS, ChildId[cChildren]));
     pChildren->Start = 0;
     pChildren->Count = cChildren;
     if (!SymGetTypeInfo(hFake, uModAddr, idxType, TI_FINDCHILDREN, pChildren))
@@ -796,6 +797,8 @@ static RTEXITCODE FigurePdbVersionInfo(const char *pszPdb, PRTNTSDBOSVER pVerInf
             { RT_STR_TUPLE("Windows_Win8.9200"),                6, 2, 0, 9200 }, /* RTM */
             { RT_STR_TUPLE("en_windows_8_1"),                   6, 3, 0, 9600 }, /* RTM */
             { RT_STR_TUPLE("en_windows_10_symbols_"),          10, 0, 0,10240 }, /* RTM */
+            { RT_STR_TUPLE("en_windows_10_symbols_"),          10, 0, 0,10240 }, /* RTM */
+            { RT_STR_TUPLE("en_windows_10_17134_"),            10, 0, 0,17134 }, /* 1803 */
         };
 
         const char *pszComp  = u.Split.apszComps[i];
@@ -1002,8 +1005,8 @@ static RTEXITCODE processDirSub(char *pszDir, size_t cchDir, PRTDIRENTRYEX pDirE
         return RTMsgErrorExit(RTEXITCODE_FAILURE, "Path too long: '%s'\n", pszDir);
 
     /* Open directory. */
-    PRTDIR pDir;
-    int rc = RTDirOpen(&pDir, pszDir);
+    RTDIR hDir;
+    int rc = RTDirOpen(&hDir, pszDir);
     if (RT_FAILURE(rc))
         return RTMsgErrorExit(RTEXITCODE_FAILURE, "RTDirOpen failed on '%s': %Rrc\n", pszDir, rc);
 
@@ -1022,13 +1025,12 @@ static RTEXITCODE processDirSub(char *pszDir, size_t cchDir, PRTDIRENTRYEX pDirE
     {
         /* Get the next directory. */
         size_t cbDirEntry = MY_DIRENTRY_BUF_SIZE;
-        rc = RTDirReadEx(pDir, pDirEntry, &cbDirEntry, RTFSOBJATTRADD_UNIX, RTPATH_F_ON_LINK);
+        rc = RTDirReadEx(hDir, pDirEntry, &cbDirEntry, RTFSOBJATTRADD_UNIX, RTPATH_F_ON_LINK);
         if (RT_FAILURE(rc))
             break;
 
         /* Skip the dot and dot-dot links. */
-        if (   (pDirEntry->cbName == 1 && pDirEntry->szName[0] == '.')
-            || (pDirEntry->cbName == 2 && pDirEntry->szName[0] == '.' && pDirEntry->szName[1] == '.'))
+        if (RTDirEntryExIsStdDotLink(pDirEntry))
             continue;
 
         /* Check length. */
@@ -1076,7 +1078,7 @@ static RTEXITCODE processDirSub(char *pszDir, size_t cchDir, PRTDIRENTRYEX pDirE
     if (rc != VERR_NO_MORE_FILES)
         rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "RTDirReadEx failed: %Rrc\npszDir=%.*s", rc, cchDir, pszDir);
 
-    rc = RTDirClose(pDir);
+    rc = RTDirClose(hDir);
     if (RT_FAILURE(rc))
         rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "RTDirClose failed: %Rrc\npszDir=%.*s", rc, cchDir, pszDir);
     return rcExit;
@@ -1153,7 +1155,7 @@ int main(int argc, char **argv)
                 break;
 
             case 'V':
-                RTPrintf("$Revision$");
+                RTPrintf("$Revision: 83738 $");
                 break;
 
             case 'h':

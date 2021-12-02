@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: AudioAdapterImpl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_AUDIOADAPTER
 #include "AudioAdapterImpl.h"
 #include "MachineImpl.h"
 
@@ -25,7 +25,7 @@
 
 #include "AutoStateDep.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 
 // constructor / destructor
@@ -85,6 +85,8 @@ HRESULT AudioAdapter::init(Machine *aParent)
 
     mData.allocate();
     mData->driverType = defaultAudioDriver;
+    mData->fEnabledIn = false;
+    mData->fEnabledOut = false;
 
     /* Confirm a successful initialization */
     autoInitSpan.setSucceeded();
@@ -128,7 +130,7 @@ HRESULT AudioAdapter::init(Machine *aParent, AudioAdapter *aThat)
 }
 
 /**
- *  Initializes the guest object given another guest object
+ *  Initializes the audio adapter object given another audio adapter object
  *  (a kind of copy constructor). This object makes a private copy of data
  *  of the original object passed as an argument.
  *
@@ -213,26 +215,70 @@ HRESULT AudioAdapter::setEnabled(BOOL aEnabled)
 
 HRESULT AudioAdapter::getEnabledIn(BOOL *aEnabled)
 {
-    NOREF(aEnabled);
-    return E_NOTIMPL;
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    *aEnabled = mData->fEnabledIn;
+
+    return S_OK;
 }
 
 HRESULT AudioAdapter::setEnabledIn(BOOL aEnabled)
 {
-    NOREF(aEnabled);
-    return E_NOTIMPL;
+    /* the machine needs to be mutable */
+    AutoMutableOrSavedOrRunningStateDependency adep(mParent);
+    if (FAILED(adep.rc())) return adep.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+    if (RT_BOOL(aEnabled) != mData->fEnabledIn)
+    {
+        mData.backup();
+        mData->fEnabledIn = RT_BOOL(aEnabled);
+
+        // leave the lock before informing callbacks
+        alock.release();
+
+        AutoWriteLock mlock(mParent COMMA_LOCKVAL_SRC_POS);
+        mParent->i_setModified(Machine::IsModified_AudioAdapter);
+        mlock.release();
+
+        mParent->i_onAudioAdapterChange(this);
+    }
+
+    return S_OK;
 }
 
 HRESULT AudioAdapter::getEnabledOut(BOOL *aEnabled)
 {
-    NOREF(aEnabled);
-    return E_NOTIMPL;
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    *aEnabled = mData->fEnabledOut;
+
+    return S_OK;
 }
 
 HRESULT AudioAdapter::setEnabledOut(BOOL aEnabled)
 {
-    NOREF(aEnabled);
-    return E_NOTIMPL;
+    /* the machine needs to be mutable */
+    AutoMutableOrSavedOrRunningStateDependency adep(mParent);
+    if (FAILED(adep.rc())) return adep.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+    if (RT_BOOL(aEnabled) != mData->fEnabledOut)
+    {
+        mData.backup();
+        mData->fEnabledOut = RT_BOOL(aEnabled);
+
+        // leave the lock before informing callbacks
+        alock.release();
+
+        AutoWriteLock mlock(mParent COMMA_LOCKVAL_SRC_POS);
+        mParent->i_setModified(Machine::IsModified_AudioAdapter);
+        mlock.release();
+
+        mParent->i_onAudioAdapterChange(this);
+    }
+
+    return S_OK;
 }
 
 HRESULT AudioAdapter::getAudioDriver(AudioDriverType_T *aAudioDriver)
@@ -467,7 +513,7 @@ HRESULT AudioAdapter::setProperty(const com::Utf8Str &aKey, const com::Utf8Str &
  *  Loads settings from the given machine node.
  *  May be called once right after this object creation.
  *
- *  @param aMachineNode <Machine> node.
+ *  @param data Configuration settings.
  *
  *  @note Locks this object for writing.
  */
@@ -496,7 +542,7 @@ HRESULT AudioAdapter::i_loadSettings(const settings::AudioAdapter &data)
 /**
  *  Saves settings to the given machine node.
  *
- *  @param aMachineNode <Machine> node.
+ *  @param data Configuration settings.
  *
  *  @note Locks this object for reading.
  */

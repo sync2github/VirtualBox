@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: vboxshell.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 VirtualBox Python Shell.
@@ -23,7 +23,7 @@ from __future__ import print_function
 
 __copyright__ = \
 """
-Copyright (C) 2009-2016 Oracle Corporation
+Copyright (C) 2009-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -33,7 +33,7 @@ Foundation, in version 2 as it comes in the "COPYING" file of the
 VirtualBox OSE distribution. VirtualBox OSE is distributed in the
 hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 import gc
@@ -266,8 +266,9 @@ def removeVm(ctx, mach):
 def startVm(ctx, mach, vmtype):
     vbox = ctx['vb']
     perf = ctx['perf']
-    session = ctx['global'].getSessionObject(vbox)
-    progress = mach.launchVMProcess(session, vmtype, "")
+    session = ctx['global'].getSessionObject()
+    asEnv = []
+    progress = mach.launchVMProcess(session, vmtype, asEnv)
     if progressBar(ctx, progress, 100) and int(progress.resultCode) == 0:
         # we ignore exceptions to allow starting VM even if
         # perf collector cannot be started
@@ -699,8 +700,7 @@ def cmdExistingVm(ctx, mach, cmd, args):
     session = None
     try:
         vbox = ctx['vb']
-        session = ctx['global'].getSessionObject(vbox)
-        mach.lockMachine(session, ctx['global'].constants.LockType_Shared)
+        session = ctx['global'].openMachineSession(mach, fPermitSharing=True)
     except Exception as e:
         printErr(ctx, "Session to '%s' not open: %s" % (mach.name, str(e)))
         if g_fVerbose:
@@ -746,7 +746,7 @@ def cmdExistingVm(ctx, mach, cmd, args):
 
 
 def cmdClosedVm(ctx, mach, cmd, args=[], save=True):
-    session = ctx['global'].openMachineSession(mach, True)
+    session = ctx['global'].openMachineSession(mach, fPermitSharing=True)
     mach = session.machine
     try:
         cmd(ctx, mach, args)
@@ -766,7 +766,7 @@ def cmdClosedVm(ctx, mach, cmd, args=[], save=True):
 
 
 def cmdAnyVm(ctx, mach, cmd, args=[], save=False):
-    session = ctx['global'].openMachineSession(mach)
+    session = ctx['global'].openMachineSession(mach, fPermitSharing=True)
     mach = session.machine
     try:
         cmd(ctx, mach, session.console, args)
@@ -962,18 +962,21 @@ def infoCmd(ctx, args):
     mach = argsToMach(ctx, args)
     if mach == None:
         return 0
-    vmos = ctx['vb'].getGuestOSType(mach.OSTypeId)
+    try:
+        vmos = ctx['vb'].getGuestOSType(mach.OSTypeId)
+    except:
+        vmos = None
     print(" One can use setvar <mach> <var> <value> to change variable, using name in [].")
     print("  Name [name]: %s" % (colVm(ctx, mach.name)))
     print("  Description [description]: %s" % (mach.description))
     print("  ID [n/a]: %s" % (mach.id))
-    print("  OS Type [via OSTypeId]: %s" % (vmos.description))
+    print("  OS Type [via OSTypeId]: %s" % (vmos.description if vmos is not None else mach.OSTypeId))
     print("  Firmware [firmwareType]: %s (%s)" % (asEnumElem(ctx, "FirmwareType", mach.firmwareType), mach.firmwareType))
     print()
     print("  CPUs [CPUCount]: %d" % (mach.CPUCount))
     print("  RAM [memorySize]: %dM" % (mach.memorySize))
-    print("  VRAM [VRAMSize]: %dM" % (mach.VRAMSize))
-    print("  Monitors [monitorCount]: %d" % (mach.monitorCount))
+    print("  VRAM [VRAMSize]: %dM" % (mach.graphicsAdapter.VRAMSize))
+    print("  Monitors [monitorCount]: %d" % (mach.graphicsAdapter.monitorCount))
     print("  Chipset [chipsetType]: %s (%s)" % (asEnumElem(ctx, "ChipsetType", mach.chipsetType), mach.chipsetType))
     print()
     print("  Clipboard mode [clipboardMode]: %s (%s)" % (asEnumElem(ctx, "ClipboardMode", mach.clipboardMode), mach.clipboardMode))
@@ -992,8 +995,8 @@ def infoCmd(ctx, args):
     hwVirtNestedPaging = mach.getHWVirtExProperty(ctx['const'].HWVirtExPropertyType_NestedPaging)
     print("  Nested paging [guest win machine.setHWVirtExProperty(ctx[\\'const\\'].HWVirtExPropertyType_NestedPaging, value)]: " + asState(hwVirtNestedPaging))
 
-    print("  Hardware 3d acceleration [accelerate3DEnabled]: " + asState(mach.accelerate3DEnabled))
-    print("  Hardware 2d video acceleration [accelerate2DVideoEnabled]: " + asState(mach.accelerate2DVideoEnabled))
+    print("  Hardware 3d acceleration [accelerate3DEnabled]: " + asState(mach.graphicsAdapter.accelerate3DEnabled))
+    print("  Hardware 2d video acceleration [accelerate2DVideoEnabled]: " + asState(mach.graphicsAdapter.accelerate2DVideoEnabled))
 
     print("  Use universal time [RTCUseUTC]: %s" % (asState(mach.RTCUseUTC)))
     print("  HPET [HPETEnabled]: %s" % (asState(mach.HPETEnabled)))
@@ -1003,7 +1006,7 @@ def infoCmd(ctx, args):
 
     print("  Keyboard [keyboardHIDType]: %s (%s)" % (asEnumElem(ctx, "KeyboardHIDType", mach.keyboardHIDType), mach.keyboardHIDType))
     print("  Pointing device [pointingHIDType]: %s (%s)" % (asEnumElem(ctx, "PointingHIDType", mach.pointingHIDType), mach.pointingHIDType))
-    print("  Last changed [n/a]: " + time.asctime(time.localtime(mach.lastStateChange/1000)))
+    print("  Last changed [n/a]: " + time.asctime(time.localtime(int(mach.lastStateChange)/1000)))
     # OSE has no VRDE
     try:
         print("  VRDE server [VRDEServer.enabled]: %s" % (asState(mach.VRDEServer.enabled)))
@@ -1644,7 +1647,8 @@ def monitorVBoxCmd(ctx, args):
 
 def getAdapterType(ctx, natype):
     if (natype == ctx['global'].constants.NetworkAdapterType_Am79C970A or
-        natype == ctx['global'].constants.NetworkAdapterType_Am79C973):
+        natype == ctx['global'].constants.NetworkAdapterType_Am79C973 or
+        natype == ctx['global'].constants.NetworkAdapterType_Am79C960):
         return "pcnet"
     elif (natype == ctx['global'].constants.NetworkAdapterType_I82540EM or
           natype == ctx['global'].constants.NetworkAdapterType_I82545EM or
@@ -1652,6 +1656,8 @@ def getAdapterType(ctx, natype):
         return "e1000"
     elif (natype == ctx['global'].constants.NetworkAdapterType_Virtio):
         return "virtio"
+    elif (natype == ctx['global'].constants.NetworkAdapterType_Virtio_1_0):
+        return "virtio_1.0"
     elif (natype == ctx['global'].constants.NetworkAdapterType_Null):
         return None
     else:
@@ -1669,7 +1675,7 @@ def portForwardCmd(ctx, args):
     hostPort = int(args[3])
     guestPort = int(args[4])
     proto = "TCP"
-    session = ctx['global'].openMachineSession(mach)
+    session = ctx['global'].openMachineSession(mach, fPermitSharing=True)
     mach = session.machine
 
     adapter = mach.getNetworkAdapter(adapterNum)
@@ -1878,10 +1884,9 @@ def connectCmd(ctx, args):
         passwd = ""
 
     ctx['wsinfo'] = [url, user, passwd]
-    vbox = ctx['global'].platform.connect(url, user, passwd)
-    ctx['vb'] = vbox
+    ctx['vb'] = ctx['global'].platform.connect(url, user, passwd)
     try:
-        print("Running VirtualBox version %s" % (vbox.version))
+        print("Running VirtualBox version %s" % (ctx['vb'].version))
     except Exception as e:
         printErr(ctx, e)
         if g_fVerbose:
@@ -1925,6 +1930,7 @@ def reconnectCmd(ctx, args):
         printErr(ctx, e)
         if g_fVerbose:
             traceback.print_exc()
+    ctx['perf'] = ctx['global'].getPerfCollector(ctx['vb'])
     return 0
 
 def exportVMCmd(ctx, args):
@@ -2213,7 +2219,7 @@ def createHddCmd(ctx, args):
     else:
         fmt = "vdi"
 
-    hdd = ctx['vb'].createMedium(format, loc, ctx['global'].constants.AccessMode_ReadWrite, ctx['global'].constants.DeviceType_HardDisk)
+    hdd = ctx['vb'].createMedium(fmt, loc, ctx['global'].constants.AccessMode_ReadWrite, ctx['global'].constants.DeviceType_HardDisk)
     progress = hdd.createBaseStorage(size, (ctx['global'].constants.MediumVariant_Standard, ))
     if progressBar(ctx,progress) and hdd.id:
         print("created HDD at %s as %s" % (colPath(ctx,hdd.location), hdd.id))
@@ -2905,7 +2911,7 @@ def natCmd(ctx, args):
     session = None
     if len(cmdargs) > 1:
         rosession = 0
-        session = ctx['global'].openMachineSession(mach, False)
+        session = ctx['global'].openMachineSession(mach, fPermitSharing=False)
         mach = session.machine
 
     adapter = mach.getNetworkAdapter(nicnum)
@@ -3083,7 +3089,7 @@ def nicCmd(ctx, args):
     cmdargs = args[3:]
     func = args[3]
     session = None
-    session = ctx['global'].openMachineSession(vm)
+    session = ctx['global'].openMachineSession(vm, fPermitSharing=True)
     vm = session.machine
     adapter = vm.getNetworkAdapter(nicnum)
     (rc, report) = niccomand[func](ctx, vm, nicnum, adapter, cmdargs)
@@ -3279,7 +3285,7 @@ commands = {'help':['Prints help information', helpCmd, 0],
             'monitorGuestKbd':['Monitor guest keyboard for some time: monitorGuestKbd Win32 10', monitorGuestKbdCmd, 0],
             'monitorGuestMouse':['Monitor guest mouse for some time: monitorGuestMouse Win32 10', monitorGuestMouseCmd, 0],
             'monitorGuestMultiTouch':['Monitor guest touch screen for some time: monitorGuestMultiTouch Win32 10', monitorGuestMultiTouchCmd, 0],
-            'monitorVBox':['Monitor what happens with Virtual Box for some time: monitorVBox 10', monitorVBoxCmd, 0],
+            'monitorVBox':['Monitor what happens with VirtualBox for some time: monitorVBox 10', monitorVBoxCmd, 0],
             'portForward':['Setup permanent port forwarding for a VM, takes adapter number host port and guest port: portForward Win32 0 8080 80', portForwardCmd, 0],
             'showLog':['Show log file of the VM, : showLog Win32', showLogCmd, 0],
             'findLog':['Show entries matching pattern in log file of the VM, : findLog Win32 PDM|CPUM', findLogCmd, 0],
@@ -3539,7 +3545,7 @@ def main(argv):
     if options.autopath:
         asLocations = [ os.getcwd(), ]
         try:    sScriptDir = os.path.dirname(os.path.abspath(__file__))
-        except: pass; # In case __file__ isn't there.
+        except: pass # In case __file__ isn't there.
         else:
             if platform.system() in [ 'SunOS', ]:
                 asLocations.append(os.path.join(sScriptDir, 'amd64'))
@@ -3583,7 +3589,7 @@ def main(argv):
     oVBoxMgr = VirtualBoxManager(style, params)
     ctx = {
         'global':       oVBoxMgr,
-        'vb':           oVBoxMgr.vbox,
+        'vb':           oVBoxMgr.getVirtualBox(),
         'const':        oVBoxMgr.constants,
         'remote':       oVBoxMgr.remote,
         'type':         oVBoxMgr.type,
@@ -3604,9 +3610,9 @@ def main(argv):
     # Release the interfaces references in ctx before cleaning up.
     #
     for sKey in list(ctx.keys()):
-        del ctx[sKey];
-    ctx = None;
-    gc.collect();
+        del ctx[sKey]
+    ctx = None
+    gc.collect()
 
     oVBoxMgr.deinit()
     del oVBoxMgr

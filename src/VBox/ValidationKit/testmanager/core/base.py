@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0302
+# $Id: base.py 84603 2020-05-29 09:05:10Z vboxsync $
+# pylint: disable=too-many-lines
 
 """
 Test Manager Core - Base Class(es).
@@ -8,7 +8,7 @@ Test Manager Core - Base Class(es).
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,11 +27,13 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 84603 $"
 
 
 # Standard python imports.
 import copy;
+import datetime;
+import json;
 import re;
 import socket;
 import sys;
@@ -43,14 +45,14 @@ from common import utils;
 
 # Python 3 hacks:
 if sys.version_info[0] >= 3:
-    long = int      # pylint: disable=W0622,C0103
+    long = int      # pylint: disable=redefined-builtin,invalid-name
 
 
 class TMExceptionBase(Exception):
     """
     For exceptions raised by any TestManager component.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class TMTooManyRows(TMExceptionBase):
@@ -58,7 +60,7 @@ class TMTooManyRows(TMExceptionBase):
     Too many rows in the result.
     Used by ModelLogicBase decendants.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class TMRowNotFound(TMExceptionBase):
@@ -66,7 +68,7 @@ class TMRowNotFound(TMExceptionBase):
     Database row not found.
     Used by ModelLogicBase decendants.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class TMRowAlreadyExists(TMExceptionBase):
@@ -74,7 +76,7 @@ class TMRowAlreadyExists(TMExceptionBase):
     Database row already exists (typically raised by addEntry).
     Used by ModelLogicBase decendants.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class TMInvalidData(TMExceptionBase):
@@ -82,7 +84,7 @@ class TMInvalidData(TMExceptionBase):
     Data validation failed.
     Used by ModelLogicBase decendants.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class TMRowInUse(TMExceptionBase):
@@ -90,7 +92,7 @@ class TMRowInUse(TMExceptionBase):
     Database row is in use and cannot be deleted.
     Used by ModelLogicBase decendants.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
 class TMInFligthCollision(TMExceptionBase):
@@ -99,10 +101,10 @@ class TMInFligthCollision(TMExceptionBase):
     the data there.
     Used by ModelLogicBase decendants.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
-class ModelBase(object): # pylint: disable=R0903
+class ModelBase(object): # pylint: disable=too-few-public-methods
     """
     Something all classes in the logical model inherits from.
 
@@ -114,7 +116,7 @@ class ModelBase(object): # pylint: disable=R0903
         pass;
 
 
-class ModelDataBase(ModelBase): # pylint: disable=R0903
+class ModelDataBase(ModelBase): # pylint: disable=too-few-public-methods
     """
     Something all classes in the data classes in the logical model inherits from.
     """
@@ -197,15 +199,15 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
         sPrefix = self.getHungarianPrefix(sAttr);
         if sPrefix in ['id', 'uid', 'i', 'off', 'pct']:
             return [-1, '', '-1',];
-        elif sPrefix in ['l', 'c',]:
+        if sPrefix in ['l', 'c',]:
             return [long(-1), '', '-1',];
-        elif sPrefix == 'f':
+        if sPrefix == 'f':
             return ['',];
-        elif sPrefix in ['enm', 'ip', 's', 'ts', 'uuid']:
+        if sPrefix in ['enm', 'ip', 's', 'ts', 'uuid']:
             return ['',];
-        elif sPrefix in ['ai', 'aid', 'al', 'as']:
+        if sPrefix in ['ai', 'aid', 'al', 'as']:
             return [[], '', None]; ## @todo ??
-        elif sPrefix == 'bm':
+        if sPrefix == 'bm':
             return ['', [],]; ## @todo bitmaps.
         raise TMExceptionBase('Unable to classify "%s" (prefix %s)' % (sAttr, sPrefix));
 
@@ -232,7 +234,7 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
         #
         # Perform deep conversion on ModelDataBase object and lists of them.
         #
-        elif isinstance(oValue, list) and len(oValue) > 0 and isinstance(oValue[0], ModelDataBase):
+        elif isinstance(oValue, list) and oValue and isinstance(oValue[0], ModelDataBase):
             oValue = copy.copy(oValue);
             for i, _ in enumerate(oValue):
                 assert isinstance(oValue[i], ModelDataBase);
@@ -268,7 +270,7 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
         #
         # Perform deep conversion on ModelDataBase object and lists of them.
         #
-        elif isinstance(oValue, list) and len(oValue) > 0 and isinstance(oValue[0], ModelDataBase):
+        elif isinstance(oValue, list) and oValue and isinstance(oValue[0], ModelDataBase):
             oValue = copy.copy(oValue);
             for i, _ in enumerate(oValue):
                 assert isinstance(oValue[i], ModelDataBase);
@@ -315,7 +317,7 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
                                                     lMin = getattr(self, 'klMin_' + sAttr, 0),
                                                     lMax = getattr(self, 'klMax_' + sAttr, None));
         elif sPrefix == 'f':
-            if oValue is '' and not fAllowNull: oValue = '0'; # HACK ALERT! Checkboxes are only added when checked.
+            if not oValue and not fAllowNull: oValue = '0'; # HACK ALERT! Checkboxes are only added when checked.
             (oNewValue, sError) = self.validateBool(oValue, aoNilValues = aoNilValues, fAllowNull = fAllowNull);
         elif sPrefix == 'ts':
             (oNewValue, sError) = self.validateTs(  oValue, aoNilValues = aoNilValues, fAllowNull = fAllowNull);
@@ -369,9 +371,9 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
                 dErrors[sParam] = sError;
 
         # Check the NULL requirements of the primary ID(s) for the 'add' and 'edit' actions.
-        if   enmValidateFor == ModelDataBase.ksValidateFor_Add \
-          or enmValidateFor == ModelDataBase.ksValidateFor_AddForeignId \
-          or enmValidateFor == ModelDataBase.ksValidateFor_Edit:
+        if enmValidateFor in (ModelDataBase.ksValidateFor_Add,
+                              ModelDataBase.ksValidateFor_AddForeignId,
+                              ModelDataBase.ksValidateFor_Edit,):
             fMustBeNull = enmValidateFor == ModelDataBase.ksValidateFor_Add;
             sAttr = getattr(self, 'ksIdAttr', None);
             if sAttr is not None:
@@ -402,6 +404,12 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
         """
         return self._validateAndConvertWorker(getattr(self, 'kasAllowNullAttributes', list()), oDb,
                                               enmValidateFor = enmValidateFor);
+
+    def validateAndConvertEx(self, asAllowNullAttributes, oDb, enmValidateFor = ksValidateFor_Other):
+        """
+        Same as validateAndConvert but with custom allow-null list.
+        """
+        return self._validateAndConvertWorker(asAllowNullAttributes, oDb, enmValidateFor = enmValidateFor);
 
     def convertParamToAttribute(self, sAttr, sParam, oValue, oDisp, fStrict):
         """
@@ -571,7 +579,7 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
 
         if iValue < iMin:
             return (iValue, 'Value too small (min %d)' % (iMin,));
-        elif iValue > iMax:
+        if iValue > iMax:
             return (iValue, 'Value too high (max %d)' % (iMax,));
         return (iValue, None);
 
@@ -595,60 +603,71 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
 
         if lMin is not None and lValue < lMin:
             return (lValue, 'Value too small (min %d)' % (lMin,));
-        elif lMax is not None and lValue > lMax:
+        if lMax is not None and lValue > lMax:
             return (lValue, 'Value too high (max %d)' % (lMax,));
         return (lValue, None);
 
+    kdTimestampRegex = {
+        len('2012-10-08 01:54:06'):           r'(\d{4})-([01]\d)-([0123]\d)[ Tt]([012]\d):[0-5]\d:([0-6]\d)$',
+        len('2012-10-08 01:54:06.00'):        r'(\d{4})-([01]\d)-([0123]\d)[ Tt]([012]\d):[0-5]\d:([0-6]\d).\d{2}$',
+        len('2012-10-08 01:54:06.000'):       r'(\d{4})-([01]\d)-([0123]\d)[ Tt]([012]\d):[0-5]\d:([0-6]\d).\d{3}$',
+        len('999999-12-31 00:00:00.00'):      r'(\d{6})-([01]\d)-([0123]\d)[ Tt]([012]\d):[0-5]\d:([0-6]\d).\d{2}$',
+        len('9999-12-31 23:59:59.999999'):    r'(\d{4})-([01]\d)-([0123]\d)[ Tt]([012]\d):[0-5]\d:([0-6]\d).\d{6}$',
+        len('9999-12-31T23:59:59.999999999'): r'(\d{4})-([01]\d)-([0123]\d)[ Tt]([012]\d):[0-5]\d:([0-6]\d).\d{9}$',
+    };
+
     @staticmethod
-    def validateTs(sValue, aoNilValues = tuple([None, '']), fAllowNull = True):
+    def validateTs(sValue, aoNilValues = tuple([None, '']), fAllowNull = True, fRelative = False):
         """ Validates a timestamp field. """
         if sValue in aoNilValues:
             return (sValue, None if fAllowNull else 'Mandatory.');
         if not utils.isString(sValue):
             return (sValue, None);
 
-        sError = None;
-        if len(sValue) == len('2012-10-08 01:54:06.364207+02:00'):
-            oRes = re.match(r'(\d{4})-([01]\d)-([0123])\d ([012]\d):[0-5]\d:([0-6]\d).\d{6}[+-](\d\d):(\d\d)', sValue);
-            if    oRes is not None \
-              and (   int(oRes.group(6)) >  12 \
-                   or int(oRes.group(7)) >= 60):
-                sError = 'Invalid timezone offset.';
-        elif len(sValue) == len('2012-10-08 01:54:06.00'):
-            oRes = re.match(r'(\d{4})-([01]\d)-([0123])\d ([012]\d):[0-5]\d:([0-6]\d).\d{2}', sValue);
-        elif len(sValue) == len('9999-12-31 23:59:59.999999'):
-            oRes = re.match(r'(\d{4})-([01]\d)-([0123])\d ([012]\d):[0-5]\d:([0-6]\d).\d{6}', sValue);
-        elif len(sValue) == len('999999-12-31 00:00:00.00'):
-            oRes = re.match(r'(\d{6})-([01]\d)-([0123])\d ([012]\d):[0-5]\d:([0-6]\d).\d{2}', sValue);
-        elif len(sValue) == len('9999-12-31T23:59:59.999999Z'):
-            oRes = re.match(r'(\d{4})-([01]\d)-([0123])\d[Tt]([012]\d):[0-5]\d:([0-6]\d).\d{6}[Zz]', sValue);
-        elif len(sValue) == len('9999-12-31T23:59:59.999999999Z'):
-            oRes = re.match(r'(\d{4})-([01]\d)-([0123])\d[Tt]([012]\d):[0-5]\d:([0-6]\d).\d{9}[Zz]', sValue);
-        else:
-            return (sValue, 'Invalid timestamp length.');
-
-        if oRes is None:
-            sError = 'Invalid timestamp (format: 2012-10-08 01:54:06.364207+02:00).';
-        else:
-            iYear  = int(oRes.group(1));
-            if iYear % 4 == 0 and (iYear % 100 != 0  or iYear % 400 == 0):
-                acDaysOfMonth = [31, 29, 31,  30, 31, 30,  31, 31, 30,  31, 30, 31];
+        # Validate and strip off the timezone stuff.
+        if sValue[-1] in 'Zz':
+            sStripped = sValue[:-1];
+            sValue = sStripped + 'Z';
+        elif len(sValue) >= 19 + 3:
+            oRes = re.match(r'^.*[+-](\d\d):(\d\d)$', sValue);
+            if oRes is not None:
+                if int(oRes.group(1)) > 12 or int(oRes.group(2)) >= 60:
+                    return (sValue, 'Invalid timezone offset.');
+                sStripped = sValue[:-6];
             else:
-                acDaysOfMonth = [31, 28, 31,  30, 31, 30,  31, 31, 30,  31, 30, 31];
-            iMonth = int(oRes.group(2));
-            iDay   = int(oRes.group(3));
-            iHour  = int(oRes.group(4));
-            iSec   = int(oRes.group(5));
-            if iMonth > 12:
-                sError = 'Invalid timestamp month.';
-            elif iDay > acDaysOfMonth[iMonth - 1]:
-                sError = 'Invalid timestamp day-of-month (%02d has %d days).' % (iMonth, acDaysOfMonth[iMonth - 1]);
-            elif iHour > 23:
-                sError = 'Invalid timestamp hour.'
-            elif iSec >= 61:
-                sError = 'Invalid timestamp second.'
-            elif iSec >= 60:
-                sError = 'Invalid timestamp: no leap seconds, please.'
+                sStripped = sValue;
+        else:
+            sStripped = sValue;
+
+        # Used the stripped value length to find regular expression for validating and parsing the timestamp.
+        sError = None;
+        sRegExp = ModelDataBase.kdTimestampRegex.get(len(sStripped), None);
+        if sRegExp:
+            oRes = re.match(sRegExp, sStripped);
+            if oRes is not None:
+                iYear  = int(oRes.group(1));
+                if iYear % 4 == 0 and (iYear % 100 != 0  or iYear % 400 == 0):
+                    acDaysOfMonth = [31, 29, 31,  30, 31, 30,  31, 31, 30,  31, 30, 31];
+                else:
+                    acDaysOfMonth = [31, 28, 31,  30, 31, 30,  31, 31, 30,  31, 30, 31];
+                iMonth = int(oRes.group(2));
+                iDay   = int(oRes.group(3));
+                iHour  = int(oRes.group(4));
+                iSec   = int(oRes.group(5));
+                if iMonth > 12 or (iMonth <= 0 and not fRelative):
+                    sError = 'Invalid timestamp month.';
+                elif iDay > acDaysOfMonth[iMonth - 1]:
+                    sError = 'Invalid timestamp day-of-month (%02d has %d days).' % (iMonth, acDaysOfMonth[iMonth - 1]);
+                elif iHour > 23:
+                    sError = 'Invalid timestamp hour.'
+                elif iSec >= 61:
+                    sError = 'Invalid timestamp second.'
+                elif iSec >= 60:
+                    sError = 'Invalid timestamp: no leap seconds, please.'
+            else:
+                sError = 'Invalid timestamp (validation regexp: %s).' % (sRegExp,);
+        else:
+            sError = 'Invalid timestamp length.';
         return (sValue, sError);
 
     @staticmethod
@@ -661,10 +680,10 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
             return (sValue, None);
 
         try:
-            socket.inet_pton(socket.AF_INET, sValue); # pylint: disable=E1101
+            socket.inet_pton(socket.AF_INET, sValue); # pylint: disable=no-member
         except:
             try:
-                socket.inet_pton(socket.AF_INET6, sValue); # pylint: disable=E1101
+                socket.inet_pton(socket.AF_INET6, sValue); # pylint: disable=no-member
             except:
                 return (sValue, 'Not a valid IP address.');
 
@@ -742,14 +761,14 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
     @staticmethod
     def validateListOfSomething(asValues, aoNilValues = tuple([[], None]), fAllowNull = True):
         """ Validate a list of some uniform values. Returns a copy of the list (if list it is). """
-        if asValues in aoNilValues  or  (len(asValues) == 0 and not fAllowNull):
+        if asValues in aoNilValues  or  (not asValues and not fAllowNull):
             return (asValues, None if fAllowNull else 'Mandatory.')
 
         if not isinstance(asValues, list):
             return (asValues, 'Invalid data type (%s).' % (type(asValues),));
 
         asValues = list(asValues); # copy the list.
-        if len(asValues) > 0:
+        if asValues:
             oType = type(asValues[0]);
             for i in range(1, len(asValues)):
                 if type(asValues[i]) is not oType: # pylint: disable=unidiomatic-typecheck
@@ -763,7 +782,7 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
         """ Validates a list of text items."""
         (asValues, sError) = ModelDataBase.validateListOfSomething(asValues, aoNilValues, fAllowNull);
 
-        if sError is None  and asValues not in aoNilValues  and  len(asValues) > 0:
+        if sError is None  and  asValues not in aoNilValues  and  asValues:
             if not utils.isString(asValues[0]):
                 return (asValues, 'Invalid item data type.');
 
@@ -792,7 +811,7 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
         """ Validates a list of integer items."""
         (asValues, sError) = ModelDataBase.validateListOfSomething(asValues, aoNilValues, fAllowNull);
 
-        if sError is None  and asValues not in aoNilValues  and  len(asValues) > 0:
+        if sError is None  and  asValues not in aoNilValues  and  asValues:
             for i, _ in enumerate(asValues):
                 sValue = asValues[i];
 
@@ -1044,6 +1063,83 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
         return oDb.formatBindArgs(sQuery, aBindArgs) \
              + ModelDataBase.formatSimpleNowAndPeriod(oDb, tsNow, sPeriodBack, sTablePrefix, sExpCol, sEffCol);
 
+
+    #
+    # JSON
+    #
+
+    @staticmethod
+    def stringToJson(sString):
+        """ Converts a string to a JSON value string. """
+        if not utils.isString(sString):
+            sString = utils.toUnicode(sString);
+            if not utils.isString(sString):
+                sString = str(sString);
+        return json.dumps(sString);
+
+    @staticmethod
+    def dictToJson(dDict, dOptions = None):
+        """ Converts a dictionary to a JSON string. """
+        sJson = u'{ ';
+        for i, oKey in enumerate(dDict):
+            if i > 0:
+                sJson += ', ';
+            sJson += '%s: %s' % (ModelDataBase.stringToJson(oKey),
+                                 ModelDataBase.genericToJson(dDict[oKey], dOptions));
+        return sJson + ' }';
+
+    @staticmethod
+    def listToJson(aoList, dOptions = None):
+        """ Converts list of something to a JSON string. """
+        sJson = u'[ ';
+        for i, oValue in enumerate(aoList):
+            if i > 0:
+                sJson += u', ';
+            sJson += ModelDataBase.genericToJson(oValue, dOptions);
+        return sJson + u' ]';
+
+    @staticmethod
+    def datetimeToJson(oDateTime):
+        """ Converts a datetime instance to a JSON string. """
+        return '"%s"' % (oDateTime,);
+
+
+    @staticmethod
+    def genericToJson(oValue, dOptions = None):
+        """ Converts a generic object to a JSON string. """
+        if isinstance(oValue, ModelDataBase):
+            return oValue.toJson();
+        if isinstance(oValue, dict):
+            return ModelDataBase.dictToJson(oValue, dOptions);
+        if isinstance(oValue, (list, tuple, set, frozenset)):
+            return ModelDataBase.listToJson(oValue, dOptions);
+        if isinstance(oValue, datetime.datetime):
+            return ModelDataBase.datetimeToJson(oValue)
+        return json.dumps(oValue);
+
+    def attribValueToJson(self, sAttr, oValue, dOptions = None):
+        """
+        Converts the attribute value to JSON.
+        Returns JSON (string).
+        """
+        _ = sAttr;
+        return self.genericToJson(oValue, dOptions);
+
+    def toJson(self, dOptions = None):
+        """
+        Converts the object to JSON.
+        Returns JSON (string).
+        """
+        sJson = u'{ ';
+        for iAttr, sAttr in enumerate(self.getDataAttributes()):
+            oValue = getattr(self, sAttr);
+            if iAttr > 0:
+                sJson += ', ';
+            sJson += u'"%s": ' % (sAttr,);
+            sJson += self.attribValueToJson(sAttr, oValue, dOptions);
+        return sJson + u' }';
+
+
     #
     # Sub-classes.
     #
@@ -1066,7 +1162,7 @@ class ModelDataBase(ModelBase): # pylint: disable=R0903
 
 
 
-# pylint: disable=E1101,C0111,R0903
+# pylint: disable=no-member,missing-docstring,too-few-public-methods
 class ModelDataBaseTestCase(unittest.TestCase):
     """
     Base testcase for ModelDataBase decendants.
@@ -1088,7 +1184,7 @@ class ModelDataBaseTestCase(unittest.TestCase):
             self.assertIsNotNone(oSample.isEqual(self.aoSamples[0]));
 
     def testNullConversion(self):
-        if len(self.aoSamples[0].getDataAttributes()) == 0:
+        if not self.aoSamples[0].getDataAttributes():
             return;
         for oSample in self.aoSamples:
             oCopy = copy.copy(oSample);
@@ -1152,7 +1248,183 @@ class ModelDataBaseTestCase(unittest.TestCase):
             self.assertIsNotNone(oSample.toString());
 
 
-class ModelLogicBase(ModelBase): # pylint: disable=R0903
+class FilterCriterionValueAndDescription(object):
+    """
+    A filter criterion value and its description.
+    """
+
+    def __init__(self, oValue, sDesc, cTimes = None, sHover = None, fIrrelevant = False):
+        self.oValue      = oValue;      ##< Typically the ID of something in the database.
+        self.sDesc       = sDesc;       ##< What to display.
+        self.cTimes      = cTimes;      ##< Number of times the value occurs in the result set. None if not given.
+        self.sHover      = sHover;      ##< Optional hover/title string.
+        self.fIrrelevant = fIrrelevant; ##< Irrelevant filter option, only present because it's selected
+        self.aoSubs      = [];          ##< References to FilterCriterion.oSub.aoPossible.
+
+
+class FilterCriterion(object):
+    """
+    A filter criterion.
+    """
+
+    ## @name The state.
+    ## @{
+    ksState_NotSelected = 'not-selected';
+    ksState_Selected    = 'selected';
+    ## @}
+
+    ## @name The kind of filtering.
+    ## @{
+    ## 'Element of' by default, 'not an element of' when fInverted is False.
+    ksKind_ElementOfOrNot = 'element-of-or-not';
+    ## The criterion is a special one and cannot be inverted.
+    ksKind_Special        = 'special';
+    ## @}
+
+    ## @name The value type.
+    ## @{
+    ksType_UInt    = 'uint';     ##< unsigned integer value.
+    ksType_UIntNil = 'uint-nil'; ##< unsigned integer value, with nil.
+    ksType_String  = 'string';   ##< string value.
+    ksType_Ranges  = 'ranges';   ##< List of (unsigned) integer ranges.
+    ## @}
+
+    def __init__(self, sName, sVarNm = None, sType = ksType_UInt, # pylint: disable=too-many-arguments
+                 sState = ksState_NotSelected, sKind = ksKind_ElementOfOrNot,
+                 sTable = None, sColumn = None, asTables = None, oSub = None):
+        assert len(sVarNm) == 2;    # required by wuimain.py for filtering.
+        self.sName      = sName;
+        self.sState     = sState;
+        self.sType      = sType;
+        self.sKind      = sKind;
+        self.sVarNm     = sVarNm;
+        self.aoSelected = [];       ##< User input from sVarNm. Single value, type according to sType.
+        self.sInvVarNm  = 'i' + sVarNm if sKind == self.ksKind_ElementOfOrNot else None;
+        self.fInverted  = False;    ##< User input from sInvVarNm. Inverts the operation (-> not an element of).
+        self.aoPossible = [];       ##< type: list[FilterCriterionValueAndDescription]
+        assert (sTable is None and asTables is None) or ((sTable is not None) != (asTables is not None)), \
+               '%s %s' % (sTable, asTables);
+        self.asTables   = [sTable,] if sTable is not None else asTables;
+        assert sColumn is None or len(self.asTables) == 1, '%s %s' % (self.asTables, sColumn);
+        self.sColumn    = sColumn;  ##< Normally only applicable if one table.
+        self.fExpanded  = None;     ##< Tristate (None, False, True)
+        self.oSub       = oSub;     ##< type: FilterCriterion
+
+
+class ModelFilterBase(ModelBase):
+    """
+    Base class for filters.
+
+    Filters are used to narrow down data that is displayed in a list or
+    report.  This class differs a little from ModelDataBase in that it is not
+    tied to a database table, but one or more database queries that are
+    typically rather complicated.
+
+    The filter object has two roles:
+
+      1. It is used by a ModelLogicBase descendant to store the available
+         filtering options for data begin displayed.
+
+      2. It decodes and stores the filtering options submitted by the user so
+         a ModeLogicBase descendant can use it to construct WHERE statements.
+
+    The ModelFilterBase class is related to the ModelDataBase class in that it
+    decodes user parameters and stores data, however it is not a descendant.
+
+    Note! In order to reduce URL lengths, we use very very brief parameter
+          names for the filters.
+    """
+
+    def __init__(self):
+        ModelBase.__init__(self);
+        self.aCriteria = [] # type: list[FilterCriterion]
+
+    def _initFromParamsWorker(self, oDisp, oCriterion): # (,FilterCriterion)
+        """ Worker for initFromParams. """
+        if oCriterion.sType == FilterCriterion.ksType_UInt:
+            oCriterion.aoSelected = oDisp.getListOfIntParams(oCriterion.sVarNm, iMin = 0, aiDefaults = []);
+        elif oCriterion.sType == FilterCriterion.ksType_UIntNil:
+            oCriterion.aoSelected = oDisp.getListOfIntParams(oCriterion.sVarNm, iMin = -1, aiDefaults = []);
+        elif oCriterion.sType == FilterCriterion.ksType_String:
+            oCriterion.aoSelected = oDisp.getListOfStrParams(oCriterion.sVarNm, asDefaults = []);
+            if len(oCriterion.aoSelected) > 100:
+                raise TMExceptionBase('Variable %s has %u value, max allowed is 100!'
+                                      % (oCriterion.sVarNm, len(oCriterion.aoSelected)));
+            for sValue in oCriterion.aoSelected:
+                if   len(sValue) > 64 \
+                  or '\'' in sValue \
+                  or sValue[-1] == '\\':
+                    raise TMExceptionBase('Variable %s has an illegal value "%s"!' % (oCriterion.sVarNm, sValue));
+        elif oCriterion.sType == FilterCriterion.ksType_Ranges:
+            def convertRangeNumber(sValue):
+                """ Helper """
+                sValue = sValue.strip();
+                if sValue and sValue not in ('inf', 'Inf', 'INf', 'INF', 'InF', 'iNf', 'iNF', 'inF',):
+                    try:    return int(sValue);
+                    except: pass;
+                return None;
+
+            for sRange in oDisp.getStringParam(oCriterion.sVarNm, sDefault = '').split(','):
+                sRange = sRange.strip();
+                if sRange and sRange != '-' and any(ch.isdigit() for ch in sRange):
+                    asValues = sRange.split('-');
+                    if len(asValues) == 1:
+                        asValues = [asValues[0], asValues[0]];
+                    elif len(asValues) > 2:
+                        asValues = [asValues[0], asValues[-1]];
+                    tTuple = (convertRangeNumber(asValues[0]), convertRangeNumber(asValues[1]));
+                    if tTuple[0] is not None and tTuple[1] is not None and tTuple[0] > tTuple[1]:
+                        tTuple = (tTuple[1], tTuple[0]);
+                    oCriterion.aoSelected.append(tTuple);
+        else:
+            assert False;
+        if oCriterion.aoSelected:
+            oCriterion.sState = FilterCriterion.ksState_Selected;
+        else:
+            oCriterion.sState = FilterCriterion.ksState_NotSelected;
+
+        if oCriterion.sKind == FilterCriterion.ksKind_ElementOfOrNot:
+            oCriterion.fInverted = oDisp.getBoolParam(oCriterion.sInvVarNm, fDefault = False);
+
+        if oCriterion.oSub is not None:
+            self._initFromParamsWorker(oDisp, oCriterion.oSub);
+        return;
+
+    def initFromParams(self, oDisp): # type: (WuiDispatcherBase) -> self
+        """
+        Initialize the object from parameters.
+
+        Returns self. Raises exception on invalid parameter value.
+        """
+
+        for oCriterion in self.aCriteria:
+            self._initFromParamsWorker(oDisp, oCriterion);
+        return self;
+
+    def strainParameters(self, dParams, aAdditionalParams = None):
+        """ Filters just the parameters relevant to this filter, returning a copy. """
+
+        # Collect the parameter names.
+        dWanted = dict();
+        for oCrit in self.aCriteria:
+            dWanted[oCrit.sVarNm] = 1;
+            if oCrit.sInvVarNm:
+                dWanted[oCrit.sInvVarNm] = 1;
+
+        # Add additional stuff.
+        if aAdditionalParams:
+            for sParam in aAdditionalParams:
+                dWanted[sParam] = 1;
+
+        # To the straining.
+        dRet = dict();
+        for sKey in dParams:
+            if sKey in dWanted:
+                dRet[sKey] = dParams[sKey];
+        return dRet;
+
+
+class ModelLogicBase(ModelBase): # pylint: disable=too-few-public-methods
     """
     Something all classes in the logic classes the logical model inherits from.
     """
@@ -1195,7 +1467,7 @@ class ModelLogicBase(ModelBase): # pylint: disable=R0903
 
 
 
-class AttributeChangeEntry(object): # pylint: disable=R0903
+class AttributeChangeEntry(object): # pylint: disable=too-few-public-methods
     """
     Data class representing the changes made to one attribute.
     """
@@ -1207,7 +1479,15 @@ class AttributeChangeEntry(object): # pylint: disable=R0903
         self.sNewText       = sNewText;
         self.sOldText       = sOldText;
 
-class ChangeLogEntry(object): # pylint: disable=R0903
+class AttributeChangeEntryPre(AttributeChangeEntry): # pylint: disable=too-few-public-methods
+    """
+    AttributeChangeEntry for preformatted values.
+    """
+
+    def __init__(self, sAttr, oNewRaw, oOldRaw, sNewText, sOldText):
+        AttributeChangeEntry.__init__(self, sAttr, oNewRaw, oOldRaw, sNewText, sOldText);
+
+class ChangeLogEntry(object): # pylint: disable=too-few-public-methods
     """
     A change log entry returned by the fetchChangeLog method typically
     implemented by ModelLogicBase child classes.

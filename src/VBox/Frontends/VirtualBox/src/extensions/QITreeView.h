@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: QITreeView.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Qt extensions: QITreeView class declaration.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,11 +15,17 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___QITreeView_h___
-#define ___QITreeView_h___
+#ifndef FEQT_INCLUDED_SRC_extensions_QITreeView_h
+#define FEQT_INCLUDED_SRC_extensions_QITreeView_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QTreeView>
+
+/* GUI includes: */
+#include "UILibraryDefs.h"
 
 /* Forward declarations: */
 class QITreeViewItem;
@@ -27,7 +33,7 @@ class QITreeView;
 
 
 /** OObject subclass used as item for the QITreeView. */
-class QITreeViewItem : public QObject
+class SHARED_LIBRARY_STUFF QITreeViewItem : public QObject
 {
     Q_OBJECT;
 
@@ -67,14 +73,14 @@ public:
 private:
 
     /** Holds the parent tree reference. */
-    QITreeView *m_pParentTree;
+    QITreeView     *m_pParentTree;
     /** Holds the parent item reference. */
     QITreeViewItem *m_pParentItem;
 };
 
 
 /** QTreeView subclass extending standard functionality. */
-class QITreeView : public QTreeView
+class SHARED_LIBRARY_STUFF QITreeView : public QTreeView
 {
     Q_OBJECT;
 
@@ -93,8 +99,19 @@ signals:
     void mouseMoved(QMouseEvent *pEvent);
     /** Notifies listeners about mouse pressed @a pEvent. */
     void mousePressed(QMouseEvent *pEvent);
+    /** Notifies listeners about mouse released @a pEvent. */
+    void mouseReleased(QMouseEvent *pEvent);
     /** Notifies listeners about mouse double-clicked @a pEvent. */
     void mouseDoubleClicked(QMouseEvent *pEvent);
+
+    /** Notifies listeners about mouse drag entered @a pEvent. */
+    void dragEntered(QDragEnterEvent *pEvent);
+    /** Notifies listeners about mouse drag moved @a pEvent. */
+    void dragMoved(QDragMoveEvent *pEvent);
+    /** Notifies listeners about mouse drag left @a pEvent. */
+    void dragLeft(QDragLeaveEvent *pEvent);
+    /** Notifies listeners about mouse drag dropped @a pEvent. */
+    void dragDropped(QDropEvent *pEvent);
 
 public:
 
@@ -120,14 +137,25 @@ protected:
       * @param  pPainter  Brings the painter to draw branches.
       * @param  rect      Brings the rectangle embedding branches.
       * @param  index     Brings the index of the item for which branches will be painted. */
-    void drawBranches(QPainter *pPainter, const QRect &rect, const QModelIndex &index) const;
+    virtual void drawBranches(QPainter *pPainter, const QRect &rect, const QModelIndex &index) const /* override */;
 
     /** Handles mouse move @a pEvent. */
-    void mouseMoveEvent(QMouseEvent *pEvent);
+    virtual void mouseMoveEvent(QMouseEvent *pEvent) /* override */;
     /** Handles mouse press @a pEvent. */
-    void mousePressEvent(QMouseEvent *pEvent);
+    virtual void mousePressEvent(QMouseEvent *pEvent) /* override */;
+    /** Handles mouse release @a pEvent. */
+    virtual void mouseReleaseEvent(QMouseEvent *pEvent) /* override */;
     /** Handles mouse double-click @a pEvent. */
-    void mouseDoubleClickEvent(QMouseEvent *pEvent);
+    virtual void mouseDoubleClickEvent(QMouseEvent *pEvent) /* override */;
+
+    /** Handles mouse drag enter @a pEvent. */
+    virtual void dragEnterEvent(QDragEnterEvent *pEvent) /* override */;
+    /** Handles mouse drag move @a pEvent. */
+    virtual void dragMoveEvent(QDragMoveEvent *pEvent) /* override */;
+    /** Handles mouse drag leave @a pEvent. */
+    virtual void dragLeaveEvent(QDragLeaveEvent *pEvent) /* override */;
+    /** Handles mouse drop @a pEvent. */
+    virtual void dropEvent(QDropEvent *pEvent) /* override */;
 
 private:
 
@@ -135,5 +163,5 @@ private:
     void prepare();
 };
 
-#endif /* !___QITreeView_h___ */
 
+#endif /* !FEQT_INCLUDED_SRC_extensions_QITreeView_h */

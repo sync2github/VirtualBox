@@ -1,5 +1,10 @@
+/* $Id: keyboard.c 82968 2020-02-04 10:35:17Z vboxsync $ */
+/** @file
+ * PC BIOS - ???
+ */
+
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -36,6 +41,15 @@
  *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA
  *
+ */
+
+/*
+ * Oracle LGPL Disclaimer: For the avoidance of doubt, except that if any license choice
+ * other than GPL or LGPL is available it will apply instead, Oracle elects to use only
+ * the Lesser General Public License version 2.1 (LGPLv2) at this time for any software where
+ * a choice of LGPL license versions is made available with the language indicating
+ * that LGPLv2 or any later version may be used, or where a choice of which version
+ * of the LGPL is applied is otherwise unspecified.
  */
 
 
@@ -326,12 +340,12 @@ unsigned int enqueue_key(uint8_t scan_code, uint8_t ascii_code)
 {
     uint16_t    buffer_start, buffer_end, buffer_head, buffer_tail, temp_tail;
 
-#if BX_CPU < 2
-    buffer_start = 0x001E;
-    buffer_end   = 0x003E;
-#else
+#if VBOX_BIOS_CPU >= 80286
     buffer_start = read_word(0x0040, 0x0080);
     buffer_end   = read_word(0x0040, 0x0082);
+#else
+    buffer_start = 0x001E;
+    buffer_end   = 0x003E;
 #endif
 
     buffer_head = read_word(0x0040, 0x001A);
@@ -602,12 +616,12 @@ unsigned int dequeue_key(uint8_t __far *scan_code, uint8_t __far *ascii_code, un
     uint16_t    buffer_start, buffer_end, buffer_head, buffer_tail;
     uint8_t     acode, scode;
 
-#if BX_CPU < 2
-    buffer_start = 0x001E;
-    buffer_end   = 0x003E;
-#else
+#if VBOX_BIOS_CPU >= 80286
     buffer_start = read_word(0x0040, 0x0080);
     buffer_end   = read_word(0x0040, 0x0082);
+#else
+    buffer_start = 0x001E;
+    buffer_end   = 0x003E;
 #endif
 
     buffer_head = read_word(0x0040, 0x001a);
@@ -644,6 +658,7 @@ unsigned int dequeue_key(uint8_t __far *scan_code, uint8_t __far *ascii_code, un
 #define BP      r.gr.u.r16.bp
 #define SP      r.gr.u.r16.sp
 #define FLAGS   r.ra.flags.u.r16.flags
+#define IFLGS   r.ifl
 
 /* Interrupt 16h service implementation. */
 
@@ -685,7 +700,8 @@ void BIOSCALL int16_function(volatile kbd_regs_t r)
         break;
 
     case 0x01: /* check keyboard status */
-        SET_IF();   /* Enable interrupts. Some callers depend on that! */
+        /* Enable interrupts, preserve most flags. Some callers depend on that! */
+        FLAGS = IFLGS;
         if ( !dequeue_key(&scan_code, &ascii_code, 0) ) {
             SET_ZF();
             return;
@@ -762,7 +778,8 @@ void BIOSCALL int16_function(volatile kbd_regs_t r)
         break;
 
     case 0x11: /* check MF-II keyboard status */
-        SET_IF();
+        /* Enable interrupts, preserve most flags. Some callers depend on that! */
+        FLAGS = IFLGS;
         if ( !dequeue_key(&scan_code, &ascii_code, 0) ) {
             SET_ZF();
             return;

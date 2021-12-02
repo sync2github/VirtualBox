@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGPlugInDiggers.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DbfPlugInDiggers - Debugger and Guest OS Digger Plug-in.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,7 +24,7 @@
 #include <VBox/vmm/dbgf.h>
 #include "DBGPlugIns.h"
 #include <VBox/version.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 
 DECLEXPORT(int) DbgPlugInEntry(DBGFPLUGINOP enmOperation, PUVM pUVM, uintptr_t uArg)

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: EventImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox COM IEvent implementation
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,19 +15,22 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_EVENTIMPL
-#define ____H_EVENTIMPL
+#ifndef MAIN_INCLUDED_EventImpl_h
+#define MAIN_INCLUDED_EventImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "EventWrap.h"
 #include "EventSourceWrap.h"
 #include "VetoEventWrap.h"
 
 
-class ATL_NO_VTABLE VBoxEvent :
-    public EventWrap
+class ATL_NO_VTABLE VBoxEvent
+    : public EventWrap
 {
 public:
-    DECLARE_EMPTY_CTOR_DTOR(VBoxEvent)
+    DECLARE_COMMON_CLASS_METHODS(VBoxEvent)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -51,11 +54,11 @@ private:
 };
 
 
-class ATL_NO_VTABLE VBoxVetoEvent :
-    public VetoEventWrap
+class ATL_NO_VTABLE VBoxVetoEvent
+    : public VetoEventWrap
 {
 public:
-    DECLARE_EMPTY_CTOR_DTOR(VBoxVetoEvent)
+    DECLARE_COMMON_CLASS_METHODS(VBoxVetoEvent)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -90,7 +93,7 @@ class ATL_NO_VTABLE EventSource :
     public EventSourceWrap
 {
 public:
-    DECLARE_EMPTY_CTOR_DTOR(EventSource)
+    DECLARE_COMMON_CLASS_METHODS(EventSource)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -119,7 +122,7 @@ private:
 
 
     struct Data;
-    Data* m;
+    Data *m;
 
     friend class ListenerRecord;
 };
@@ -130,22 +133,18 @@ public:
     VBoxEventDesc() : mEvent(0), mEventSource(0)
     {}
 
+    VBoxEventDesc(IEvent *aEvent, IEventSource *aSource)
+        : mEvent(aEvent), mEventSource(aSource)
+    {}
+
     ~VBoxEventDesc()
     {}
 
-    /**
-     * This function to be used with some care, as arguments order must match
-     * attribute declaration order event class and its superclasses up to
-     * IEvent. If unsure, consult implementation in generated VBoxEvents.cpp.
-     */
-    HRESULT init(IEventSource* aSource, VBoxEventType_T aType, ...);
-
-    /**
-    * Function similar to the above, but assumes that init() for this type
-    * already called once, so no need to allocate memory, and only reinit
-    * fields. Assumes event is subtype of IReusableEvent, asserts otherwise.
-    */
-    HRESULT reinit(VBoxEventType_T aType, ...);
+    void init(IEvent *aEvent, IEventSource *aSource)
+    {
+        mEvent       = aEvent;
+        mEventSource = aSource;
+    }
 
     void uninit()
     {
@@ -163,8 +162,8 @@ public:
         if (mEventSource && mEvent)
         {
             BOOL fDelivered = FALSE;
-            int rc = mEventSource->FireEvent(mEvent, aTimeout, &fDelivered);
-            AssertRCReturn(rc, FALSE);
+            HRESULT hrc = mEventSource->FireEvent(mEvent, aTimeout, &fDelivered);
+            AssertComRCReturn(hrc, FALSE);
             return fDelivered;
         }
         return FALSE;
@@ -176,4 +175,4 @@ private:
 };
 
 
-#endif // ____H_EVENTIMPL
+#endif /* !MAIN_INCLUDED_EventImpl_h */

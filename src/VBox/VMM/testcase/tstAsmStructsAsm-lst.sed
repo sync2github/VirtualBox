@@ -1,3 +1,20 @@
+# $Id: tstAsmStructsAsm-lst.sed 91287 2021-09-16 21:30:45Z vboxsync $
+## @file
+# For testing assembly struct when using yasm.
+#
+
+#
+# Copyright (C) 2006-2020 Oracle Corporation
+#
+# This file is part of VirtualBox Open Source Edition (OSE), as
+# available from http://www.virtualbox.org. This file is free software;
+# you can redistribute it and/or modify it under the terms of the GNU
+# General Public License (GPL) as published by the Free Software
+# Foundation, in version 2 as it comes in the "COPYING" file of the
+# VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+# hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+
 #
 # Strip stuff lines and spaces we don't care about.
 #
@@ -13,6 +30,7 @@ s/^ *//g
 /^\.text$/d
 /^\.data$/d
 /^\.bss$/d
+/ *\.unnamed_padding\./d
 s/[[:space:]][[:space:]]*/ /g
 
 #
@@ -22,6 +40,7 @@ s/[[:space:]][[:space:]]*/ /g
 /^[[:alpha:]_][[:alnum:]_]*_size EQU \$ - .*$/b struct_equ
 /<gap>/b member
 /^\.[[:alpha:]_][[:alnum:]_.:]* res.*$/b member_two
+/^\.[[:alpha:]_][[:alnum:]_.:]* EQU .*$/b member_two
 /^\.[[:alpha:]_][[:alnum:]_.:]*:$/b member_alias
 b error
 b member_two
@@ -61,6 +80,7 @@ b end
 #
 :member_two
 s/[:]*  *res[bwdtq] .*$//
+s/[:]*  *EQU .*$//
 s/$/ /
 /^\.[[:alnum:]_.]* *$/!t error
 G

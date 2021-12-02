@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvHostBase-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * DrvHostBase - Host base drive access driver, Windows specifics.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -14,70 +14,20 @@
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
+
+
+/*********************************************************************************************************************************
+*   Header Files                                                                                                                 *
+*********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DRV_HOST_BASE
-#pragma warning(disable : 4163)
-#define _interlockedbittestandset      they_messed_it_up_in_winnt_h_this_time_sigh__interlockedbittestandset
-#define _interlockedbittestandreset    they_messed_it_up_in_winnt_h_this_time_sigh__interlockedbittestandreset
-#define _interlockedbittestandset64    they_messed_it_up_in_winnt_h_this_time_sigh__interlockedbittestandset64
-#define _interlockedbittestandreset64  they_messed_it_up_in_winnt_h_this_time_sigh__interlockedbittestandreset64
-
-#define WIN32_NO_STATUS
-#include <iprt/win/windows.h>
+#include <iprt/nt/nt-and-windows.h>
 #include <dbt.h>
-#undef WIN32_NO_STATUS
-
-#include <winioctl.h>
 #include <ntddscsi.h>
-#pragma warning(default : 4163)
-#undef _interlockedbittestandset
-#undef _interlockedbittestandreset
-#undef _interlockedbittestandset64
-#undef _interlockedbittestandreset64
-#include <ntstatus.h>
-
-/* from ntdef.h */
-typedef LONG NTSTATUS;
-
-/* from ntddk.h */
-typedef struct _IO_STATUS_BLOCK {
-    union {
-        NTSTATUS Status;
-        PVOID Pointer;
-    };
-    ULONG_PTR Information;
-} IO_STATUS_BLOCK, *PIO_STATUS_BLOCK;
-
-
-/* from ntinternals.com */
-typedef enum _FS_INFORMATION_CLASS {
-    FileFsVolumeInformation=1,
-    FileFsLabelInformation,
-    FileFsSizeInformation,
-    FileFsDeviceInformation,
-    FileFsAttributeInformation,
-    FileFsControlInformation,
-    FileFsFullSizeInformation,
-    FileFsObjectIdInformation,
-    FileFsMaximumInformation
-} FS_INFORMATION_CLASS, *PFS_INFORMATION_CLASS;
-
-typedef struct _FILE_FS_SIZE_INFORMATION {
-    LARGE_INTEGER   TotalAllocationUnits;
-    LARGE_INTEGER   AvailableAllocationUnits;
-    ULONG           SectorsPerAllocationUnit;
-    ULONG           BytesPerSector;
-} FILE_FS_SIZE_INFORMATION, *PFILE_FS_SIZE_INFORMATION;
-
-extern "C"
-NTSTATUS __stdcall NtQueryVolumeInformationFile(
-        /*IN*/ HANDLE               FileHandle,
-        /*OUT*/ PIO_STATUS_BLOCK    IoStatusBlock,
-        /*OUT*/ PVOID               FileSystemInformation,
-        /*IN*/ ULONG                Length,
-        /*IN*/ FS_INFORMATION_CLASS FileSystemInformationClass );
 
 #include <iprt/ctype.h>
 #include <iprt/file.h>
+#include <iprt/string.h>
+#include <VBox/err.h>
 #include <VBox/scsi.h>
 
 /**
@@ -100,6 +50,14 @@ AssertCompile(sizeof(DRVHOSTBASEOS) <= 64);
 
 #define DRVHOSTBASE_OS_INT_DECLARED
 #include "DrvHostBase.h"
+
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
+/** Maximum buffer size we support, check whether darwin has some real upper limit. */
+#define WIN_SCSI_MAX_BUFFER_SIZE (100 * _1K)
+
 
 
 /**
@@ -283,11 +241,11 @@ DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, s
     Req.spt.TimeOutValue = (cTimeoutMillies + 999) / 1000; /* Convert to seconds */
     Assert(cbSense <= sizeof(Req.aSense));
     Req.spt.SenseInfoLength = (UCHAR)RT_MIN(sizeof(Req.aSense), cbSense);
-    Req.spt.SenseInfoOffset = RT_OFFSETOF(struct _REQ, aSense);
+    Req.spt.SenseInfoOffset = RT_UOFFSETOF(struct _REQ, aSense);
     if (DeviceIoControl((HANDLE)RTFileToNative(pThis->Os.hFileDevice), IOCTL_SCSI_PASS_THROUGH_DIRECT,
                         &Req, sizeof(Req), &Req, sizeof(Req), &cbReturned, NULL))
     {
-        if (cbReturned > RT_OFFSETOF(struct _REQ, aSense))
+        if (cbReturned > RT_UOFFSETOF(struct _REQ, aSense))
             memcpy(pbSense, Req.aSense, cbSense);
         else
             memset(pbSense, '\0', cbSense);
@@ -304,6 +262,15 @@ DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, s
 
     return rc;
 }
+
+
+DECLHIDDEN(size_t) drvHostBaseScsiCmdGetBufLimitOs(PDRVHOSTBASE pThis)
+{
+    RT_NOREF(pThis);
+
+    return WIN_SCSI_MAX_BUFFER_SIZE;
+}
+
 
 DECLHIDDEN(int) drvHostBaseGetMediaSizeOs(PDRVHOSTBASE pThis, uint64_t *pcb)
 {
@@ -338,7 +305,7 @@ DECLHIDDEN(int) drvHostBaseGetMediaSizeOs(PDRVHOSTBASE pThis, uint64_t *pcb)
     {
         /* use NT api, retry a few times if the media is being verified. */
         IO_STATUS_BLOCK             IoStatusBlock = {0};
-        FILE_FS_SIZE_INFORMATION    FsSize= {0};
+        FILE_FS_SIZE_INFORMATION    FsSize = {0};
         NTSTATUS rcNt = NtQueryVolumeInformationFile((HANDLE)RTFileToNative(pThis->Os.hFileDevice),  &IoStatusBlock,
                                                      &FsSize, sizeof(FsSize), FileFsSizeInformation);
         int cRetries = 5;
@@ -526,15 +493,6 @@ DECLHIDDEN(int) drvHostBaseMediaRefreshOs(PDRVHOSTBASE pThis)
 }
 
 
-DECLHIDDEN(int) drvHostBasePollerWakeupOs(PDRVHOSTBASE pThis)
-{
-    if (pThis->Os.hwndDeviceChange)
-        PostMessage(pThis->Os.hwndDeviceChange, WM_CLOSE, 0, 0); /* default win proc will destroy the window */
-
-    return VINF_SUCCESS;
-}
-
-
 DECLHIDDEN(int) drvHostBaseQueryMediaStatusOs(PDRVHOSTBASE pThis, bool *pfMediaChanged, bool *pfMediaPresent)
 {
     RT_NOREF3(pThis, pfMediaChanged, pfMediaPresent); /* We don't support the polling method. */
@@ -552,6 +510,25 @@ DECLHIDDEN(bool) drvHostBaseIsMediaPollingRequiredOs(PDRVHOSTBASE pThis)
 
 DECLHIDDEN(void) drvHostBaseDestructOs(PDRVHOSTBASE pThis)
 {
+    /*
+     * Terminate the thread.
+     */
+    if (pThis->Os.hThrdMediaChange != NIL_RTTHREAD)
+    {
+        int rc;
+        int cTimes = 50;
+        do
+        {
+            if (pThis->Os.hwndDeviceChange)
+                PostMessage(pThis->Os.hwndDeviceChange, WM_CLOSE, 0, 0); /* default win proc will destroy the window */
+
+            rc = RTThreadWait(pThis->Os.hThrdMediaChange, 100, NULL);
+        } while (cTimes-- > 0 && rc == VERR_TIMEOUT);
+
+        if (RT_SUCCESS(rc))
+            pThis->Os.hThrdMediaChange = NIL_RTTHREAD;
+    }
+
     /*
      * Unlock the drive if we've locked it or we're in passthru mode.
      */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardExportApp.h 91894 2021-10-20 13:27:20Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardExportApp class declaration.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,70 +15,263 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIWizardExportApp_h__
-#define __UIWizardExportApp_h__
+#ifndef FEQT_INCLUDED_SRC_wizards_exportappliance_UIWizardExportApp_h
+#define FEQT_INCLUDED_SRC_wizards_exportappliance_UIWizardExportApp_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/* Local includes: */
-#include "UIWizard.h"
+/* GUI includes: */
+#include "UINativeWizard.h"
 
-/* Forward declarations: */
-class CAppliance;
+/* COM includes: */
+#include "COMEnums.h"
+#include "CAppliance.h"
+#include "CCloudClient.h"
+#include "CVirtualSystemDescription.h"
+#include "CVirtualSystemDescriptionForm.h"
 
-/* Export Appliance wizard: */
-class UIWizardExportApp : public UIWizard
+/** MAC address export policies. */
+enum MACAddressExportPolicy
+{
+    MACAddressExportPolicy_KeepAllMACs,
+    MACAddressExportPolicy_StripAllNonNATMACs,
+    MACAddressExportPolicy_StripAllMACs,
+    MACAddressExportPolicy_MAX
+};
+Q_DECLARE_METATYPE(MACAddressExportPolicy);
+
+/** Cloud export option modes. */
+enum CloudExportMode
+{
+    CloudExportMode_Invalid,
+    CloudExportMode_AskThenExport,
+    CloudExportMode_ExportThenAsk,
+    CloudExportMode_DoNotAsk
+};
+Q_DECLARE_METATYPE(CloudExportMode);
+
+/** Export Appliance wizard. */
+class UIWizardExportApp : public UINativeWizard
 {
     Q_OBJECT;
 
 public:
 
-    /* Page IDs: */
-    enum
-    {
-        Page1,
-        Page2,
-        Page3,
-        Page4
-    };
+    /** Constructs Export Appliance wizard passing @a pParent to the base-class.
+      * @param  predefinedMachineNames  Brings the predefined list of machine names.
+      * @param  fFastTraverToExportOCI  Brings whether wizard should start with OCI target. */
+    UIWizardExportApp(QWidget *pParent,
+                      const QStringList &predefinedMachineNames = QStringList(),
+                      bool fFastTraverToExportOCI = false);
 
-    /* Page IDs: */
-    enum
-    {
-        PageExpert
-    };
+    /** @name Common fields.
+      * @{ */
+        /** Returns a list of machine names. */
+        QStringList machineNames() const { return m_machineNames; }
+        /** Returns a list of machine IDs. */
+        QList<QUuid> machineIDs() const { return m_machineIDs; }
 
-    /* Constructor: */
-    UIWizardExportApp(QWidget *pParent, const QStringList &selectedVMNames = QStringList());
+        /** Returns format. */
+        QString format() const { return m_strFormat; }
+
+        /** Returns whether format is cloud one. */
+        bool isFormatCloudOne() const { return m_fFormatCloudOne; }
+    /** @} */
+
+    /** @name Local export fields.
+      * @{ */
+        /** Returns path. */
+        QString path() const { return m_strPath; }
+
+        /** Returns MAC address export policy. */
+        MACAddressExportPolicy macAddressExportPolicy() const { return m_enmMACAddressExportPolicy; }
+
+        /** Returns whether manifest is selected. */
+        bool isManifestSelected() const { return m_fManifestSelected; }
+
+        /** Returns whether include ISOs is selected. */
+        bool isIncludeISOsSelected() const { return m_fIncludeISOsSelected; }
+
+        /** Returns local appliance object. */
+        CAppliance localAppliance() const { return m_comLocalAppliance; }
+    /** @} */
+
+    /** @name Cloud export fields.
+      * @{ */
+        /** Returns profile name. */
+        QString profileName() const { return m_strProfileName; }
+
+        /** Returns cloud appliance object. */
+        CAppliance cloudAppliance() const { return m_comCloudAppliance; }
+
+        /** Returns cloud client object. */
+        CCloudClient cloudClient() const { return m_comCloudClient; }
+
+        /** Returns virtual system description object. */
+        CVirtualSystemDescription vsd() const { return m_comVsd; }
+
+        /** Returns virtual system description export form object. */
+        CVirtualSystemDescriptionForm vsdExportForm() const { return m_comVsdExportForm; }
+
+        /** Returns virtual system description launch form object. */
+        CVirtualSystemDescriptionForm vsdLaunchForm() const { return m_comVsdLaunchForm; }
+
+        /** Returns cloud export mode. */
+        CloudExportMode cloudExportMode() const { return m_enmCloudExportMode; }
+    /** @} */
+
+    /** @name Auxiliary stuff.
+      * @{ */
+        /** Goes forward. Required for fast travel to next page. */
+        void goForward();
+
+        /** Disables basic/expert and next/back buttons. */
+        void disableButtons();
+
+        /** Composes universal resource identifier.
+          * @param  fWithFile  Brings whether uri should include file name as well. */
+        QString uri(bool fWithFile = true) const;
+
+        /** Exports Appliance. */
+        bool exportAppliance();
+
+        /** Creates VSD Form. */
+        void createVsdLaunchForm();
+
+        /** Creates New Cloud VM. */
+        bool createCloudVM();
+    /** @} */
+
+public slots:
+
+    /** @name Common fields.
+      * @{ */
+        /** Defines a list of machine @a names. */
+        void setMachineNames(const QStringList &names) { m_machineNames = names; }
+        /** Defines a list of machine @a ids. */
+        void setMachineIDs(const QList<QUuid> &ids) { m_machineIDs = ids; }
+
+        /** Defines @a strFormat. */
+        void setFormat(const QString &strFormat) { m_strFormat = strFormat; }
+
+        /** Defines whether format is @a fCloudOne. */
+        void setFormatCloudOne(bool fCloudOne) { m_fFormatCloudOne = fCloudOne; }
+    /** @} */
+
+    /** @name Local export fields.
+      * @{ */
+        /** Defines @a strPath. */
+        void setPath(const QString &strPath) { m_strPath = strPath; }
+
+        /** Defines MAC address export @a enmPolicy. */
+        void setMACAddressExportPolicy(MACAddressExportPolicy enmPolicy) { m_enmMACAddressExportPolicy = enmPolicy; }
+
+        /** Defines whether manifest is @a fSelected. */
+        void setManifestSelected(bool fSelected) { m_fManifestSelected = fSelected; }
+
+        /** Defines whether include ISOs is @a fSelected. */
+        void setIncludeISOsSelected(bool fSelected) { m_fIncludeISOsSelected = fSelected; }
+
+        /** Defines local @a comAppliance object. */
+        void setLocalAppliance(const CAppliance &comAppliance) { m_comLocalAppliance = comAppliance; }
+    /** @} */
+
+    /** @name Cloud export fields.
+      * @{ */
+        /** Defines profile @a strName. */
+        void setProfileName(const QString &strName) { m_strProfileName = strName; }
+
+        /** Defines cloud @a comAppliance object. */
+        void setCloudAppliance(const CAppliance &comAppliance) { m_comCloudAppliance = comAppliance; }
+
+        /** Defines cloud @a comClient object. */
+        void setCloudClient(const CCloudClient &comClient) { m_comCloudClient = comClient; }
+
+        /** Defines virtual system @a comDescription object. */
+        void setVsd(const CVirtualSystemDescription &comDescription) { m_comVsd = comDescription; }
+
+        /** Defines virtual system description export @a comForm object. */
+        void setVsdExportForm(const CVirtualSystemDescriptionForm &comForm) { m_comVsdExportForm = comForm; }
+
+        /** Defines virtual system description launch @a comForm object. */
+        void setVsdLaunchForm(const CVirtualSystemDescriptionForm &comForm) { m_comVsdLaunchForm = comForm; }
+
+        /** Defines cloud export @a enmMode. */
+        void setCloudExportMode(const CloudExportMode &enmMode) { m_enmCloudExportMode = enmMode; }
+    /** @} */
 
 protected:
 
-    /* Export appliance stuff: */
-    bool exportAppliance();
-    bool exportVMs(CAppliance &appliance);
-    QString uri(bool fWithFile = true) const;
+    /** @name Virtual stuff.
+      * @{ */
+        /** Populates pages. */
+        virtual void populatePages() /* override final */;
 
-    /* Who will be able to export appliance: */
-    friend class UIWizardExportAppPage4;
-    friend class UIWizardExportAppPageBasic4;
-    friend class UIWizardExportAppPageExpert;
-
-private slots:
-
-    /* Page change handler: */
-    void sltCurrentIdChanged(int iId);
-    /* Custom button 2 click handler: */
-    void sltCustomButtonClicked(int iId);
+        /** Handles translation event. */
+        virtual void retranslateUi() /* override final */;
+    /** @} */
 
 private:
 
-    /* Translation stuff: */
-    void retranslateUi();
+    /** @name Auxiliary stuff.
+      * @{ */
+        /** Exports VMs enumerated in @a comAppliance. */
+        bool exportVMs(CAppliance &comAppliance);
+    /** @} */
 
-    /* Pages related stuff: */
-    void prepare();
+    /** @name Arguments.
+      * @{ */
+        /** Holds the predefined list of machine names. */
+        QStringList  m_predefinedMachineNames;
+        /** Holds whether we should fast travel to page 2. */
+        bool         m_fFastTraverToExportOCI;
+    /** @} */
 
-    /* Variables: */
-    QStringList m_selectedVMNames;
+    /** @name Common fields.
+      * @{ */
+        /** Holds the list of machine names. */
+        QStringList   m_machineNames;
+        /** Holds the list of machine IDs. */
+        QList<QUuid>  m_machineIDs;
+
+        /** Holds the format. */
+        QString  m_strFormat;
+        /** Holds whether format is cloud one. */
+        bool     m_fFormatCloudOne;
+    /** @} */
+
+    /** @name Local export fields.
+      * @{ */
+        /** Holds the path. */
+        QString                 m_strPath;
+        /** Holds the MAC address export policy. */
+        MACAddressExportPolicy  m_enmMACAddressExportPolicy;
+        /** Holds whether manifest is selected. */
+        bool                    m_fManifestSelected;
+        /** Holds whether ISOs are included. */
+        bool                    m_fIncludeISOsSelected;
+        /** Holds local appliance object. */
+        CAppliance              m_comLocalAppliance;
+    /** @} */
+
+    /** @name Cloud export fields.
+      * @{ */
+        /** Holds profile name. */
+        QString                        m_strProfileName;
+        /** Holds cloud appliance object. */
+        CAppliance                     m_comCloudAppliance;
+        /** Returns cloud client object. */
+        CCloudClient                   m_comCloudClient;
+        /** Returns virtual system description object. */
+        CVirtualSystemDescription      m_comVsd;
+        /** Returns virtual system description export form object. */
+        CVirtualSystemDescriptionForm  m_comVsdExportForm;
+        /** Returns virtual system description launch form object. */
+        CVirtualSystemDescriptionForm  m_comVsdLaunchForm;
+        /** Returns cloud export mode. */
+        CloudExportMode                m_enmCloudExportMode;
+    /** @} */
 };
 
-#endif /* __UIWizardExportApp_h__ */
-
+#endif /* !FEQT_INCLUDED_SRC_wizards_exportappliance_UIWizardExportApp_h */

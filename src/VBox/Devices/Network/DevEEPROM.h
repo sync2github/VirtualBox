@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DevEEPROM.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * DevEEPROM - Microware-compatible 64x16-bit 93C46 EEPROM Emulation, Header.
+ * DevEEPROM - Microwire-compatible 64x16-bit 93C46 EEPROM Emulation, Header.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,7 +15,12 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-/* Interface */
+#ifndef VBOX_INCLUDED_SRC_Network_DevEEPROM_h
+#define VBOX_INCLUDED_SRC_Network_DevEEPROM_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
 #include <iprt/types.h>
 
 /** The current Saved state version. */
@@ -69,8 +74,8 @@ struct EEPROM93C46
 
 
     /** @todo save and load methods */
-    void save(PSSMHANDLE pSSM);
-    int  load(PSSMHANDLE pSSM);
+    void save(PCPDMDEVHLPR3 pHlp, PSSMHANDLE pSSM);
+    int  load(PCPDMDEVHLPR3 pHlp, PSSMHANDLE pSSM);
 
     /** Actual content of EEPROM */
     uint16_t m_au16Data[SIZE];
@@ -132,3 +137,5 @@ struct EEPROM93C46
     void storeWord(uint32_t u32Addr, uint16_t u16Value);
 #endif /* IN_RING3 */
 };
+
+#endif /* !VBOX_INCLUDED_SRC_Network_DevEEPROM_h */

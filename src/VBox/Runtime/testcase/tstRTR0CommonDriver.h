@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTR0CommonDriver.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT R0 Testcase - Common header for the testcase drivers.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___testcase_tstRTR0CommonDriver_h
-#define ___testcase_tstRTR0CommonDriver_h
+#ifndef IPRT_INCLUDED_SRC_testcase_tstRTR0CommonDriver_h
+#define IPRT_INCLUDED_SRC_testcase_tstRTR0CommonDriver_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 /*******************************************************************************
@@ -276,5 +278,5 @@ bool RTR3TestR0SimpleTest(uint32_t uOperation, const char *pszTestFmt, ...)
     return rtR3TestR0ProcessMessages(&Req);
 }
 
-#endif
+#endif /* !IPRT_INCLUDED_SRC_testcase_tstRTR0CommonDriver_h */
 

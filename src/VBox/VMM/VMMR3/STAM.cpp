@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: STAM.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * STAM - The Statistics Manager.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -51,8 +51,8 @@
 #define LOG_GROUP LOG_GROUP_STAM
 #include <VBox/vmm/stam.h>
 #include "STAMInternal.h"
-#include <VBox/vmm/vm.h>
-#include <VBox/vmm/uvm.h>
+#include <VBox/vmm/vmcc.h>
+
 #include <VBox/err.h>
 #include <VBox/dbg.h>
 #include <VBox/log.h>
@@ -81,7 +81,7 @@ typedef struct STAMR3PRINTONEARGS
 {
     PUVM        pUVM;
     void       *pvArg;
-    DECLCALLBACKMEMBER(void, pfnPrintf)(struct STAMR3PRINTONEARGS *pvArg, const char *pszFormat, ...);
+    DECLCALLBACKMEMBER(void, pfnPrintf,(struct STAMR3PRINTONEARGS *pvArg, const char *pszFormat, ...));
 } STAMR3PRINTONEARGS, *PSTAMR3PRINTONEARGS;
 
 
@@ -140,11 +140,10 @@ typedef struct STAMR0SAMPLE
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
 *********************************************************************************************************************************/
-#ifdef STAM_WITH_LOOKUP_TREE
 static void                 stamR3LookupDestroyTree(PSTAMLOOKUP pRoot);
-#endif
-static int                  stamR3RegisterU(PUVM pUVM, void *pvSample, PFNSTAMR3CALLBACKRESET pfnReset, PFNSTAMR3CALLBACKPRINT pfnPrint,
-                                            STAMTYPE enmType, STAMVISIBILITY enmVisibility, const char *pszName, STAMUNIT enmUnit, const char *pszDesc);
+static int                  stamR3RegisterU(PUVM pUVM, void *pvSample, PFNSTAMR3CALLBACKRESET pfnReset,
+                                            PFNSTAMR3CALLBACKPRINT pfnPrint, STAMTYPE enmType, STAMVISIBILITY enmVisibility,
+                                            const char *pszName, STAMUNIT enmUnit, const char *pszDesc, uint8_t iRefreshGrp);
 static int                  stamR3ResetOne(PSTAMDESC pDesc, void *pvArg);
 static DECLCALLBACK(void)   stamR3EnumLogPrintf(PSTAMR3PRINTONEARGS pvArg, const char *pszFormat, ...);
 static DECLCALLBACK(void)   stamR3EnumRelLogPrintf(PSTAMR3PRINTONEARGS pvArg, const char *pszFormat, ...);
@@ -157,8 +156,6 @@ static bool                 stamR3MultiMatch(const char * const *papszExpression
 static char **              stamR3SplitPattern(const char *pszPat, unsigned *pcExpressions, char **ppszCopy);
 static int                  stamR3EnumU(PUVM pUVM, const char *pszPat, bool fUpdateRing0, int (pfnCallback)(PSTAMDESC pDesc, void *pvArg), void *pvArg);
 static void                 stamR3Ring0StatsRegisterU(PUVM pUVM);
-static void                 stamR3Ring0StatsUpdateU(PUVM pUVM, const char *pszPat);
-static void                 stamR3Ring0StatsUpdateMultiU(PUVM pUVM, const char * const *papszExpressions, unsigned cExpressions);
 
 #ifdef VBOX_WITH_DEBUGGER
 static FNDBGCCMD            stamR3CmdStats;
@@ -243,6 +240,7 @@ static const STAMR0SAMPLE g_aGMMStats[] =
     { RT_UOFFSETOF(GMMSTATS, cChunks),                          STAMTYPE_U32,   STAMUNIT_COUNT, "/GMM/cChunks",                     "The number of allocation chunks." },
     { RT_UOFFSETOF(GMMSTATS, cFreedChunks),                     STAMTYPE_U32,   STAMUNIT_COUNT, "/GMM/cFreedChunks",                "The number of freed chunks ever." },
     { RT_UOFFSETOF(GMMSTATS, cShareableModules),                STAMTYPE_U32,   STAMUNIT_COUNT, "/GMM/cShareableModules",           "The number of shareable modules." },
+    { RT_UOFFSETOF(GMMSTATS, idFreeGeneration),                 STAMTYPE_U64,   STAMUNIT_NONE,  "/GMM/idFreeGeneration",            "The current chunk freeing generation number (for per-VM chunk lookup TLB versioning)." },
     { RT_UOFFSETOF(GMMSTATS, VMStats.Reserved.cBasePages),      STAMTYPE_U64,   STAMUNIT_PAGES, "/GMM/VM/Reserved/cBasePages",      "The amount of base memory (RAM, ROM, ++) reserved by the VM." },
     { RT_UOFFSETOF(GMMSTATS, VMStats.Reserved.cShadowPages),    STAMTYPE_U32,   STAMUNIT_PAGES, "/GMM/VM/Reserved/cShadowPages",    "The amount of memory reserved for shadow/nested page tables." },
     { RT_UOFFSETOF(GMMSTATS, VMStats.Reserved.cFixedPages),     STAMTYPE_U32,   STAMUNIT_PAGES, "/GMM/VM/Reserved/cFixedPages",     "The amount of memory reserved for fixed allocations like MMIO2 and the hyper heap." },
@@ -289,7 +287,6 @@ VMMR3DECL(int) STAMR3InitUVM(PUVM pUVM)
 
     RTListInit(&pUVM->stam.s.List);
 
-#ifdef STAM_WITH_LOOKUP_TREE
     /*
      * Initialize the root node.
      */
@@ -311,8 +308,6 @@ VMMR3DECL(int) STAMR3InitUVM(PUVM pUVM)
     pRoot->szName[0]    = '\0';
 
     pUVM->stam.s.pRoot = pRoot;
-#endif
-
 
     /*
      * Register the ring-0 statistics (GVMM/GMM).
@@ -349,16 +344,12 @@ VMMR3DECL(void) STAMR3TermUVM(PUVM pUVM)
     PSTAMDESC pCur, pNext;
     RTListForEachSafe(&pUVM->stam.s.List, pCur, pNext, STAMDESC, ListEntry)
     {
-#ifdef STAM_WITH_LOOKUP_TREE
         pCur->pLookup->pDesc = NULL;
-#endif
         RTMemFree(pCur);
     }
 
-#ifdef STAM_WITH_LOOKUP_TREE
     stamR3LookupDestroyTree(pUVM->stam.s.pRoot);
     pUVM->stam.s.pRoot = NULL;
-#endif
 
     Assert(pUVM->stam.s.RWSem != NIL_RTSEMRW);
     RTSemRWDestroy(pUVM->stam.s.RWSem);
@@ -388,11 +379,12 @@ VMMR3DECL(void) STAMR3TermUVM(PUVM pUVM)
  * @param   enmUnit     Sample unit.
  * @param   pszDesc     Sample description.
  */
-VMMR3DECL(int)  STAMR3RegisterU(PUVM pUVM, void *pvSample, STAMTYPE enmType, STAMVISIBILITY enmVisibility, const char *pszName, STAMUNIT enmUnit, const char *pszDesc)
+VMMR3DECL(int)  STAMR3RegisterU(PUVM pUVM, void *pvSample, STAMTYPE enmType, STAMVISIBILITY enmVisibility, const char *pszName,
+                                STAMUNIT enmUnit, const char *pszDesc)
 {
     AssertReturn(enmType != STAMTYPE_CALLBACK, VERR_INVALID_PARAMETER);
     UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
-    return stamR3RegisterU(pUVM, pvSample, NULL, NULL, enmType, enmVisibility, pszName, enmUnit, pszDesc);
+    return stamR3RegisterU(pUVM, pvSample, NULL, NULL, enmType, enmVisibility, pszName, enmUnit, pszDesc, STAM_REFRESH_GRP_NONE);
 }
 
 
@@ -418,10 +410,12 @@ VMMR3DECL(int)  STAMR3RegisterU(PUVM pUVM, void *pvSample, STAMTYPE enmType, STA
  * @param   enmUnit     Sample unit.
  * @param   pszDesc     Sample description.
  */
-VMMR3DECL(int)  STAMR3Register(PVM pVM, void *pvSample, STAMTYPE enmType, STAMVISIBILITY enmVisibility, const char *pszName, STAMUNIT enmUnit, const char *pszDesc)
+VMMR3DECL(int)  STAMR3Register(PVM pVM, void *pvSample, STAMTYPE enmType, STAMVISIBILITY enmVisibility, const char *pszName,
+                               STAMUNIT enmUnit, const char *pszDesc)
 {
     AssertReturn(enmType != STAMTYPE_CALLBACK, VERR_INVALID_PARAMETER);
-    return stamR3RegisterU(pVM->pUVM, pvSample, NULL, NULL, enmType, enmVisibility, pszName, enmUnit, pszDesc);
+    return stamR3RegisterU(pVM->pUVM, pvSample, NULL, NULL, enmType, enmVisibility, pszName, enmUnit, pszDesc,
+                           STAM_REFRESH_GRP_NONE);
 }
 
 
@@ -575,9 +569,63 @@ VMMR3DECL(int)  STAMR3RegisterCallbackV(PVM pVM, void *pvSample, STAMVISIBILITY 
     if (!pszFormattedName)
         return VERR_NO_MEMORY;
 
-    int rc = stamR3RegisterU(pVM->pUVM, pvSample, pfnReset, pfnPrint, STAMTYPE_CALLBACK, enmVisibility, pszFormattedName, enmUnit, pszDesc);
+    int rc = stamR3RegisterU(pVM->pUVM, pvSample, pfnReset, pfnPrint, STAMTYPE_CALLBACK, enmVisibility, pszFormattedName,
+                             enmUnit, pszDesc, STAM_REFRESH_GRP_NONE);
     RTStrFree(pszFormattedName);
     return rc;
+}
+
+
+/**
+ * Same as STAMR3RegisterFU, except there is an extra refresh group parameter.
+ *
+ * @returns VBox status code.
+ * @param   pUVM        Pointer to the user mode VM structure.
+ * @param   pvSample    Pointer to the sample.
+ * @param   enmType     Sample type. This indicates what pvSample is pointing at.
+ * @param   enmVisibility  Visibility type specifying whether unused statistics should be visible or not.
+ * @param   enmUnit     Sample unit.
+ * @param   iRefreshGrp The refresh group, STAM_REFRESH_GRP_XXX.
+ * @param   pszDesc     Sample description.
+ * @param   pszName     The sample name format string.
+ * @param   ...         Arguments to the format string.
+ */
+VMMR3DECL(int) STAMR3RegisterRefresh(PUVM pUVM, void *pvSample, STAMTYPE enmType, STAMVISIBILITY enmVisibility, STAMUNIT enmUnit,
+                                     uint8_t iRefreshGrp, const char *pszDesc, const char *pszName, ...)
+{
+    va_list args;
+    va_start(args, pszName);
+    int rc = STAMR3RegisterRefreshV(pUVM, pvSample, enmType, enmVisibility, enmUnit, iRefreshGrp, pszDesc, pszName, args);
+    va_end(args);
+    return rc;
+}
+
+
+/**
+ * Same as STAMR3RegisterVU, except there is an extra refresh group parameter.
+ *
+ * @returns VBox status code.
+ * @param   pUVM        The user mode VM structure.
+ * @param   pvSample    Pointer to the sample.
+ * @param   enmType     Sample type. This indicates what pvSample is pointing at.
+ * @param   enmVisibility  Visibility type specifying whether unused statistics should be visible or not.
+ * @param   enmUnit     Sample unit.
+ * @param   iRefreshGrp The refresh group, STAM_REFRESH_GRP_XXX.
+ * @param   pszDesc     Sample description.
+ * @param   pszName     The sample name format string.
+ * @param   va          Arguments to the format string.
+ */
+VMMR3DECL(int) STAMR3RegisterRefreshV(PUVM pUVM, void *pvSample, STAMTYPE enmType, STAMVISIBILITY enmVisibility, STAMUNIT enmUnit,
+                                      uint8_t iRefreshGrp, const char *pszDesc, const char *pszName, va_list va)
+{
+    AssertReturn(enmType != STAMTYPE_CALLBACK, VERR_INVALID_PARAMETER);
+
+    char   szFormattedName[STAM_MAX_NAME_LEN + 8];
+    size_t cch = RTStrPrintfV(szFormattedName, sizeof(szFormattedName), pszName, va);
+    AssertReturn(cch <= STAM_MAX_NAME_LEN, VERR_OUT_OF_RANGE);
+
+    UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
+    return stamR3RegisterU(pUVM, pvSample, NULL, NULL, enmType, enmVisibility, pszName, enmUnit, pszDesc, iRefreshGrp);
 }
 
 
@@ -617,8 +665,6 @@ static int stamR3SlashCompare(const char *psz1, const char *psz2)
 }
 #endif /* VBOX_STRICT */
 
-
-#ifdef STAM_WITH_LOOKUP_TREE
 
 /**
  * Compares a lookup node with a name.
@@ -660,7 +706,7 @@ static PSTAMLOOKUP stamR3LookupNewChild(PSTAMLOOKUP pParent, const char *pchName
     /*
      * Allocate a new entry.
      */
-    PSTAMLOOKUP pNew = (PSTAMLOOKUP)RTMemAlloc(RT_OFFSETOF(STAMLOOKUP, szName[cchName + 1]));
+    PSTAMLOOKUP pNew = (PSTAMLOOKUP)RTMemAlloc(RT_UOFFSETOF_DYN(STAMLOOKUP, szName[cchName + 1]));
     if (!pNew)
         return NULL;
     pNew->pParent       = pParent;
@@ -943,7 +989,7 @@ static PSTAMDESC stamR3LookupFindFirstDescForRange(PSTAMLOOKUP pFirst, PSTAMLOOK
 
 
 /**
- * Finds the first sample descriptor for a given lookup range.
+ * Finds the last sample descriptor for a given lookup range.
  *
  * This is for pattern range lookups.
  *
@@ -1066,6 +1112,167 @@ static PSTAMDESC stamR3LookupFindPatternDescRange(PSTAMLOOKUP pRoot, PRTLISTANCH
 
     /* No match. */
     *ppLastDesc = NULL;
+    return NULL;
+}
+
+
+/**
+ * Look up the first descriptors for starts-with name string.
+ *
+ * This is used to optimize deletion.
+ *
+ * @returns Pointer to the first descriptor in the range.
+ * @param   pRoot       The root node.
+ * @param   pchPrefix   The name prefix.
+ * @param   cchPrefix   The name prefix length (can be shorter than the
+ *                      actual string).
+ * @param   ppLastDesc  Where to store the address of the last descriptor.
+ * @sa      stamR3LookupFindPatternDescRange
+ */
+static PSTAMDESC stamR3LookupFindByPrefixRange(PSTAMLOOKUP pRoot, const char *pchPrefix, uint32_t cchPrefix,
+                                               PSTAMDESC *ppLastDesc)
+
+{
+    *ppLastDesc = NULL;
+    Assert(!pRoot->pParent);
+    AssertReturn(cchPrefix > 0, NULL);
+
+    /*
+     * We start with a root slash.
+     */
+    if (!cchPrefix || *pchPrefix != '/')
+        return NULL;
+
+    /*
+     * Walk thru the prefix component by component, since that's how
+     * the lookup tree is organized.
+     */
+    while (   cchPrefix
+           && *pchPrefix == '/'
+           && pRoot->cDescsInTree > 0
+           && pRoot->cChildren    > 0)
+    {
+        cchPrefix -= 1;
+        pchPrefix += 1;
+
+        const char *pszEnd = (const char *)memchr(pchPrefix, '/', cchPrefix);
+        if (!pszEnd)
+        {
+            /*
+             * We've narrowed it down to a sub-tree now.  If we've no more prefix to work
+             * with now (e.g. '/Devices/'), the prefix matches all the children.  Otherwise,
+             * traverse the children to find the ones matching the prefix.
+             */
+            if (!cchPrefix)
+            {
+                *ppLastDesc = stamR3LookupFindLastDescForRange(pRoot->papChildren[0], pRoot->papChildren[pRoot->cChildren - 1]);
+                return stamR3LookupFindFirstDescForRange(pRoot->papChildren[0], pRoot->papChildren[pRoot->cChildren - 1]);
+            }
+
+            size_t iEnd = pRoot->cChildren;
+            if (iEnd < 16)
+            {
+                /* Linear scan of the children: */
+                for (size_t i = 0; i < pRoot->cChildren; i++)
+                {
+                    PSTAMLOOKUP pCur = pRoot->papChildren[i];
+                    if (pCur->cch >= cchPrefix)
+                    {
+                        int iDiff = memcmp(pCur->szName, pchPrefix, cchPrefix);
+                        if (iDiff == 0)
+                        {
+                            size_t iLast = i;
+                            while (++iLast < pRoot->cChildren)
+                            {
+                                PSTAMLOOKUP pCur2 = pRoot->papChildren[iLast];
+                                if (   pCur2->cch < cchPrefix
+                                    || memcmp(pCur2->szName, pchPrefix, cchPrefix) != 0)
+                                    break;
+                            }
+                            iLast--;
+
+                            *ppLastDesc = stamR3LookupFindLastDescForRange(pCur, pRoot->papChildren[iLast]);
+                            return stamR3LookupFindFirstDescForRange(pCur, pRoot->papChildren[iLast]);
+                        }
+                        if (iDiff > 0)
+                            break;
+                    }
+                }
+            }
+            else
+            {
+                /* Binary search to find something matching the prefix, followed
+                   by a reverse scan to locate the first child: */
+                size_t iFirst = 0;
+                size_t i      = iEnd / 2;
+                for (;;)
+                {
+                    PSTAMLOOKUP pCur = pRoot->papChildren[i];
+                    int iDiff;
+                    if (pCur->cch >= cchPrefix)
+                        iDiff = memcmp(pCur->szName, pchPrefix, cchPrefix);
+                    else
+                    {
+                        iDiff = memcmp(pCur->szName, pchPrefix, pCur->cch);
+                        if (!iDiff)
+                            iDiff = 1;
+                    }
+                    if (iDiff > 0)
+                    {
+                        if (iFirst < i)
+                            iEnd = i;
+                        else
+                            return NULL;
+                    }
+                    else if (iDiff < 0)
+                    {
+                        i += 1;
+                        if (i < iEnd)
+                            iFirst = i;
+                        else
+                            return NULL;
+                    }
+                    else
+                    {
+                        /* Match.  Reverse scan to find the first. */
+                        iFirst = i;
+                        while (   iFirst > 0
+                               && (pCur = pRoot->papChildren[iFirst - 1])->cch >= cchPrefix
+                               && memcmp(pCur->szName, pchPrefix, cchPrefix) == 0)
+                            iFirst--;
+
+                        /* Forward scan to find the last.*/
+                        size_t iLast = i;
+                        while (++iLast < pRoot->cChildren)
+                        {
+                            pCur = pRoot->papChildren[iLast];
+                            if (   pCur->cch < cchPrefix
+                                || memcmp(pCur->szName, pchPrefix, cchPrefix) != 0)
+                                break;
+                        }
+                        iLast--;
+
+                        *ppLastDesc = stamR3LookupFindLastDescForRange(pRoot->papChildren[iFirst], pRoot->papChildren[iLast]);
+                        return stamR3LookupFindFirstDescForRange(pRoot->papChildren[iFirst], pRoot->papChildren[iLast]);
+                    }
+
+                    i = iFirst + (iEnd - iFirst) / 2;
+                }
+            }
+            break;
+        }
+
+        /* Find child matching the path component:  */
+        uint32_t    cchChild = pszEnd - pchPrefix;
+        PSTAMLOOKUP pChild   = stamR3LookupFindChild(pRoot, pchPrefix, cchChild, NULL);
+        if (!pChild)
+            break;
+
+        /* Advance: */
+        cchPrefix -= cchChild;
+        pchPrefix  = pszEnd;
+        pRoot      = pChild;
+    }
     return NULL;
 }
 
@@ -1233,9 +1440,6 @@ static void stamR3LookupDestroyTree(PSTAMLOOKUP pRoot)
     }
 }
 
-#endif /* STAM_WITH_LOOKUP_TREE */
-
-
 
 /**
  * Internal worker for the different register calls.
@@ -1250,11 +1454,12 @@ static void stamR3LookupDestroyTree(PSTAMLOOKUP pRoot)
  * @param   pszName     The sample name format string.
  * @param   enmUnit     Sample unit.
  * @param   pszDesc     Sample description.
+ * @param   iRefreshGrp The refresh group, STAM_REFRESH_GRP_XXX.
  * @remark  There is currently no device or driver variant of this API. Add one if it should become necessary!
  */
 static int stamR3RegisterU(PUVM pUVM, void *pvSample, PFNSTAMR3CALLBACKRESET pfnReset, PFNSTAMR3CALLBACKPRINT pfnPrint,
                            STAMTYPE enmType, STAMVISIBILITY enmVisibility,
-                           const char *pszName, STAMUNIT enmUnit, const char *pszDesc)
+                           const char *pszName, STAMUNIT enmUnit, const char *pszDesc, uint8_t iRefreshGrp)
 {
     AssertReturn(pszName[0] == '/', VERR_INVALID_NAME);
     AssertReturn(pszName[1] != '/' && pszName[1], VERR_INVALID_NAME);
@@ -1262,13 +1467,13 @@ static int stamR3RegisterU(PUVM pUVM, void *pvSample, PFNSTAMR3CALLBACKRESET pfn
     AssertReturn(cchName <= STAM_MAX_NAME_LEN, VERR_OUT_OF_RANGE);
     AssertReturn(pszName[cchName - 1] != '/', VERR_INVALID_NAME);
     AssertReturn(memchr(pszName, '\\', cchName) == NULL, VERR_INVALID_NAME);
+    AssertReturn(iRefreshGrp == STAM_REFRESH_GRP_NONE || iRefreshGrp < 64, VERR_INVALID_PARAMETER);
 
     STAM_LOCK_WR(pUVM);
 
     /*
      * Look up the tree location, populating the lookup tree as we walk it.
      */
-#ifdef STAM_WITH_LOOKUP_TREE
     PSTAMLOOKUP pLookup = pUVM->stam.s.pRoot; Assert(pLookup);
     uint32_t    offName = 1;
     for (;;)
@@ -1312,27 +1517,9 @@ static int stamR3RegisterU(PUVM pUVM, void *pvSample, PFNSTAMR3CALLBACKRESET pfn
 
     PSTAMDESC pCur = stamR3LookupFindNextWithDesc(pLookup);
 
-#else
-    PSTAMDESC pCur;
-    RTListForEach(&pUVM->stam.s.List, pCur, STAMDESC, ListEntry)
-    {
-        int iDiff = strcmp(pCur->pszName, pszName);
-        /* passed it */
-        if (iDiff > 0)
-            break;
-        /* found it. */
-        if (!iDiff)
-        {
-            STAM_UNLOCK_WR(pUVM);
-            AssertMsgFailed(("Duplicate sample name: %s\n", pszName));
-            return VERR_ALREADY_EXISTS;
-        }
-    }
-#endif
-
     /*
      * Check that the name doesn't screw up sorting order when taking
-     * slashes into account. The QT4 GUI makes some assumptions.
+     * slashes into account. The QT GUI makes some assumptions.
      * Problematic chars are: !"#$%&'()*+,-.
      */
 #ifdef VBOX_STRICT
@@ -1415,6 +1602,7 @@ static int stamR3RegisterU(PUVM pUVM, void *pvSample, PFNSTAMR3CALLBACKRESET pfn
             pNew->u.Callback.pfnPrint = pfnPrint;
         }
         pNew->enmUnit       = enmUnit;
+        pNew->iRefreshGroup = iRefreshGrp;
         pNew->pszDesc       = NULL;
         if (pszDesc)
             pNew->pszDesc   = (char *)memcpy((char *)(pNew + 1) + cchName + 1, pszDesc, cbDesc);
@@ -1424,11 +1612,9 @@ static int stamR3RegisterU(PUVM pUVM, void *pvSample, PFNSTAMR3CALLBACKRESET pfn
         else
             RTListAppend(&pUVM->stam.s.List, &pNew->ListEntry);
 
-#ifdef STAM_WITH_LOOKUP_TREE
         pNew->pLookup       = pLookup;
         pLookup->pDesc      = pNew;
         stamR3LookupIncUsage(pLookup);
-#endif
 
         stamR3ResetOne(pNew, pUVM->pVM);
         rc = VINF_SUCCESS;
@@ -1450,11 +1636,9 @@ static int stamR3RegisterU(PUVM pUVM, void *pvSample, PFNSTAMR3CALLBACKRESET pfn
 static int stamR3DestroyDesc(PSTAMDESC pCur)
 {
     RTListNodeRemove(&pCur->ListEntry);
-#ifdef STAM_WITH_LOOKUP_TREE
     pCur->pLookup->pDesc = NULL; /** @todo free lookup nodes once it's working. */
     stamR3LookupDecUsage(pCur->pLookup);
     stamR3LookupMaybeFree(pCur->pLookup);
-#endif
     RTMemFree(pCur);
 
     return VINF_SUCCESS;
@@ -1611,6 +1795,48 @@ VMMR3DECL(int)  STAMR3DeregisterV(PUVM pUVM, const char *pszPatFmt, va_list va)
 
 
 /**
+ * Deregister zero or more samples given their name prefix.
+ *
+ * @returns VBox status code.
+ * @param   pUVM        Pointer to the user mode VM structure.
+ * @param   pszPrefix   The name prefix of the samples to remove.
+ * @sa      STAMR3Deregister, STAMR3DeregisterF, STAMR3DeregisterV
+ */
+VMMR3DECL(int)  STAMR3DeregisterByPrefix(PUVM pUVM, const char *pszPrefix)
+{
+    UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
+
+    /* This is a complete waste of time when shutting down. */
+    VMSTATE enmState = VMR3GetStateU(pUVM);
+    if (enmState >= VMSTATE_DESTROYING)
+        return VINF_SUCCESS;
+
+    size_t const cchPrefix = strlen(pszPrefix);
+    int          rc        = VWRN_NOT_FOUND;
+    STAM_LOCK_WR(pUVM);
+
+    PSTAMDESC pLast;
+    PSTAMDESC pCur = stamR3LookupFindByPrefixRange(pUVM->stam.s.pRoot, pszPrefix, (uint32_t)cchPrefix, &pLast);
+    if (pCur)
+        for (;;)
+        {
+            PSTAMDESC const pNext = RTListNodeGetNext(&pCur->ListEntry, STAMDESC, ListEntry);
+            Assert(strncmp(pCur->pszName, pszPrefix, cchPrefix) == 0);
+
+            rc = stamR3DestroyDesc(pCur);
+
+            /* advance. */
+            if (pCur == pLast)
+                break;
+            pCur = pNext;
+        }
+
+    STAM_UNLOCK_WR(pUVM);
+    return rc;
+}
+
+
+/**
  * Resets statistics for the specified VM.
  * It's possible to select a subset of the samples.
  *
@@ -1679,7 +1905,7 @@ VMMR3DECL(int)  STAMR3Reset(PUVM pUVM, const char *pszPat)
         GVMMReq.Hdr.cbReq    = sizeof(GVMMReq);
         GVMMReq.Hdr.u32Magic = SUPVMMR0REQHDR_MAGIC;
         GVMMReq.pSession     = pVM->pSession;
-        rc = SUPR3CallVMMR0Ex(pVM->pVMR0, NIL_VMCPUID, VMMR0_DO_GVMM_RESET_STATISTICS, 0, &GVMMReq.Hdr);
+        rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), NIL_VMCPUID, VMMR0_DO_GVMM_RESET_STATISTICS, 0, &GVMMReq.Hdr);
     }
 
     if (fGMMMatched)
@@ -1688,7 +1914,7 @@ VMMR3DECL(int)  STAMR3Reset(PUVM pUVM, const char *pszPat)
         GMMReq.Hdr.cbReq    = sizeof(GMMReq);
         GMMReq.Hdr.u32Magic = SUPVMMR0REQHDR_MAGIC;
         GMMReq.pSession     = pVM->pSession;
-        rc = SUPR3CallVMMR0Ex(pVM->pVMR0, NIL_VMCPUID, VMMR0_DO_GMM_RESET_STATISTICS, 0, &GMMReq.Hdr);
+        rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), NIL_VMCPUID, VMMR0_DO_GMM_RESET_STATISTICS, 0, &GMMReq.Hdr);
     }
 
     /* and the reset */
@@ -2043,8 +2269,11 @@ static DECLCALLBACK(size_t) stamR3SnapshotOutput(void *pvArg, const char *pach, 
     /*
      * Copy the chars to the buffer and terminate it.
      */
-    memcpy(pThis->psz, pach, cch);
-    pThis->psz += cch;
+    if (cch)
+    {
+        memcpy(pThis->psz, pach, cch);
+        pThis->psz += cch;
+    }
     *pThis->psz = '\0';
     return cch;
 }
@@ -2078,7 +2307,7 @@ static int stamR3SnapshotPrintf(PSTAMR3SNAPSHOTONE pThis, const char *pszFormat,
  */
 VMMR3DECL(int)  STAMR3SnapshotFree(PUVM pUVM, char *pszSnapshot)
 {
-    if (!pszSnapshot)
+    if (pszSnapshot)
         RTMemFree(pszSnapshot);
     NOREF(pUVM);
     return VINF_SUCCESS;
@@ -2375,17 +2604,124 @@ static int stamR3EnumOne(PSTAMDESC pDesc, void *pvArg)
     return rc;
 }
 
+static void stamR3RefreshGroup(PUVM pUVM, uint8_t iRefreshGroup, uint64_t *pbmRefreshedGroups)
+{
+    *pbmRefreshedGroups |= RT_BIT_64(iRefreshGroup);
+
+    PVM pVM = pUVM->pVM;
+    if (pVM && pVM->pSession)
+    {
+        switch (iRefreshGroup)
+        {
+            /*
+             * GVMM
+             */
+            case STAM_REFRESH_GRP_GVMM:
+            {
+                GVMMQUERYSTATISTICSSREQ Req;
+                Req.Hdr.cbReq    = sizeof(Req);
+                Req.Hdr.u32Magic = SUPVMMR0REQHDR_MAGIC;
+                Req.pSession     = pVM->pSession;
+                int rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), NIL_VMCPUID, VMMR0_DO_GVMM_QUERY_STATISTICS, 0, &Req.Hdr);
+                if (RT_SUCCESS(rc))
+                {
+                    pUVM->stam.s.GVMMStats = Req.Stats;
+
+                    /*
+                     * Check if the number of host CPUs has changed (it will the first
+                     * time around and normally never again).
+                     */
+                    if (RT_UNLIKELY(pUVM->stam.s.GVMMStats.cHostCpus > pUVM->stam.s.cRegisteredHostCpus))
+                    {
+                        if (RT_UNLIKELY(pUVM->stam.s.GVMMStats.cHostCpus > pUVM->stam.s.cRegisteredHostCpus))
+                        {
+                            STAM_UNLOCK_RD(pUVM);
+                            STAM_LOCK_WR(pUVM);
+                            uint32_t cCpus = pUVM->stam.s.GVMMStats.cHostCpus;
+                            for (uint32_t iCpu = pUVM->stam.s.cRegisteredHostCpus; iCpu < cCpus; iCpu++)
+                            {
+                                char   szName[120];
+                                size_t cchBase = RTStrPrintf(szName, sizeof(szName), "/GVMM/HostCpus/%u", iCpu);
+                                stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].idCpu, NULL, NULL,
+                                                STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_NONE,
+                                                "Host CPU ID", STAM_REFRESH_GRP_GVMM);
+                                strcpy(&szName[cchBase], "/idxCpuSet");
+                                stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].idxCpuSet, NULL, NULL,
+                                                STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_NONE,
+                                                "CPU Set index", STAM_REFRESH_GRP_GVMM);
+                                strcpy(&szName[cchBase], "/DesiredHz");
+                                stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].uDesiredHz, NULL, NULL,
+                                                STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_HZ,
+                                                "The desired frequency", STAM_REFRESH_GRP_GVMM);
+                                strcpy(&szName[cchBase], "/CurTimerHz");
+                                stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].uTimerHz, NULL, NULL,
+                                                STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_HZ,
+                                                "The current timer frequency", STAM_REFRESH_GRP_GVMM);
+                                strcpy(&szName[cchBase], "/PPTChanges");
+                                stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].cChanges, NULL, NULL,
+                                                STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_OCCURENCES,
+                                                "RTTimerChangeInterval calls", STAM_REFRESH_GRP_GVMM);
+                                strcpy(&szName[cchBase], "/PPTStarts");
+                                stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].cStarts, NULL, NULL,
+                                                STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_OCCURENCES,
+                                                "RTTimerStart calls", STAM_REFRESH_GRP_GVMM);
+                            }
+                            pUVM->stam.s.cRegisteredHostCpus = cCpus;
+                            STAM_UNLOCK_WR(pUVM);
+                            STAM_LOCK_RD(pUVM);
+                        }
+                    }
+                }
+                break;
+            }
+
+            /*
+             * GMM
+             */
+            case STAM_REFRESH_GRP_GMM:
+            {
+                GMMQUERYSTATISTICSSREQ Req;
+                Req.Hdr.cbReq    = sizeof(Req);
+                Req.Hdr.u32Magic = SUPVMMR0REQHDR_MAGIC;
+                Req.pSession     = pVM->pSession;
+                int rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), NIL_VMCPUID, VMMR0_DO_GMM_QUERY_STATISTICS, 0, &Req.Hdr);
+                if (RT_SUCCESS(rc))
+                    pUVM->stam.s.GMMStats = Req.Stats;
+                break;
+            }
+
+            /*
+             * NEM.
+             */
+            case STAM_REFRESH_GRP_NEM:
+                SUPR3CallVMMR0(VMCC_GET_VMR0_FOR_CALL(pVM), NIL_VMCPUID, VMMR0_DO_NEM_UPDATE_STATISTICS, NULL);
+                break;
+
+            default:
+                AssertMsgFailed(("iRefreshGroup=%d\n", iRefreshGroup));
+        }
+    }
+}
+
 
 /**
- * Checks if the string contains a pattern expression or not.
+ * Refreshes the statistics behind the given entry, if necessary.
  *
- * @returns true / false.
- * @param   pszPat              The potential pattern.
+ * This helps implement fetching global ring-0 stats into ring-3 accessible
+ * storage.  GVMM, GMM and NEM makes use of this.
+ *
+ * @param   pUVM                The user mode VM handle.
+ * @param   pCur                The statistics descriptor which group to check
+ *                              and maybe update.
+ * @param   pbmRefreshedGroups  Bitmap tracking what has already been updated.
  */
-static bool stamR3IsPattern(const char *pszPat)
+DECLINLINE(void) stamR3Refresh(PUVM pUVM, PSTAMDESC pCur, uint64_t *pbmRefreshedGroups)
 {
-    return strchr(pszPat, '*') != NULL
-        || strchr(pszPat, '?') != NULL;
+    uint8_t const iRefreshGroup = pCur->iRefreshGroup;
+    if (RT_LIKELY(iRefreshGroup == STAM_REFRESH_GRP_NONE))
+    { /* likely */ }
+    else if (!(*pbmRefreshedGroups & RT_BIT_64(iRefreshGroup)))
+        stamR3RefreshGroup(pUVM, iRefreshGroup, pbmRefreshedGroups);
 }
 
 
@@ -2409,7 +2745,8 @@ static bool stamR3MultiMatch(const char * const *papszExpressions, unsigned cExp
             /* later:
             if (piExpression && i > *piExpression)
             {
-                check if we can skip some expressions
+                Check if we can skip some expressions.
+                Requires the expressions to be sorted.
             }*/
             return true;
         }
@@ -2477,7 +2814,7 @@ static char **stamR3SplitPattern(const char *pszPat, unsigned *pcExpressions, ch
  * @returns The rc from the callback.
  * @param   pUVM            Pointer to the user mode VM structure.
  * @param   pszPat          Pattern.
- * @param   fUpdateRing0    Update the ring-0 .
+ * @param   fUpdateRing0    Update the stats residing in ring-0.
  * @param   pfnCallback     Callback function which shall be called for matching nodes.
  *                          If it returns anything but VINF_SUCCESS the enumeration is
  *                          terminated and the status code returned to the caller.
@@ -2486,20 +2823,23 @@ static char **stamR3SplitPattern(const char *pszPat, unsigned *pcExpressions, ch
 static int stamR3EnumU(PUVM pUVM, const char *pszPat, bool fUpdateRing0,
                        int (*pfnCallback)(PSTAMDESC pDesc, void *pvArg), void *pvArg)
 {
-    int rc = VINF_SUCCESS;
-    PSTAMDESC pCur;
+    size_t const cchPat            = pszPat ? strlen(pszPat) : 0;
+    int          rc                = VINF_SUCCESS;
+    uint64_t     bmRefreshedGroups = 0;
+    PSTAMDESC    pCur;
 
     /*
      * All.
      */
-    if (!pszPat || !*pszPat || !strcmp(pszPat, "*"))
+    if (   cchPat < 1
+        || (   cchPat == 1
+            && *pszPat == '*'))
     {
-        if (fUpdateRing0)
-            stamR3Ring0StatsUpdateU(pUVM, "*");
-
         STAM_LOCK_RD(pUVM);
         RTListForEach(&pUVM->stam.s.List, pCur, STAMDESC, ListEntry)
         {
+            if (fUpdateRing0)
+                stamR3Refresh(pUVM, pCur, &bmRefreshedGroups);
             rc = pfnCallback(pCur, pvArg);
             if (rc)
                 break;
@@ -2510,21 +2850,53 @@ static int stamR3EnumU(PUVM pUVM, const char *pszPat, bool fUpdateRing0,
     /*
      * Single expression pattern.
      */
-    else if (!strchr(pszPat, '|'))
+    else if (memchr(pszPat, '|', cchPat) == NULL)
     {
-        if (fUpdateRing0)
-            stamR3Ring0StatsUpdateU(pUVM, pszPat);
+        const char  *pszAsterisk = (const char *)memchr(pszPat, '*',  cchPat);
+        const char  *pszQuestion = (const char *)memchr(pszPat, '?',  cchPat);
 
         STAM_LOCK_RD(pUVM);
-#ifdef STAM_WITH_LOOKUP_TREE
-        if (!stamR3IsPattern(pszPat))
+        if (!pszAsterisk && !pszQuestion)
         {
             pCur = stamR3LookupFindDesc(pUVM->stam.s.pRoot, pszPat);
             if (pCur)
+            {
+                if (fUpdateRing0)
+                    stamR3Refresh(pUVM, pCur, &bmRefreshedGroups);
                 rc = pfnCallback(pCur, pvArg);
+            }
+        }
+        /* Is this a prefix expression where we can use the lookup tree to
+           efficiently figure out the exact range? */
+        else if (   pszAsterisk == &pszPat[cchPat - 1]
+                 && pszPat[0] == '/'
+                 && !pszQuestion)
+        {
+            PSTAMDESC pLast;
+            pCur = stamR3LookupFindByPrefixRange(pUVM->stam.s.pRoot, pszPat, (uint32_t)(cchPat - 1), &pLast);
+            if (pCur)
+            {
+                for (;;)
+                {
+                    Assert(strncmp(pCur->pszName, pszPat, cchPat - 1) == 0);
+                    if (fUpdateRing0)
+                        stamR3Refresh(pUVM, pCur, &bmRefreshedGroups);
+                    rc = pfnCallback(pCur, pvArg);
+                    if (rc)
+                        break;
+                    if (pCur == pLast)
+                        break;
+                    pCur = RTListNodeGetNext(&pCur->ListEntry, STAMDESC, ListEntry);
+                }
+                Assert(pLast);
+            }
+            else
+                Assert(!pLast);
         }
         else
         {
+            /* It's a more complicated pattern.  Find the approximate range
+               and scan it for matches. */
             PSTAMDESC pLast;
             pCur = stamR3LookupFindPatternDescRange(pUVM->stam.s.pRoot, &pUVM->stam.s.List, pszPat, &pLast);
             if (pCur)
@@ -2533,6 +2905,8 @@ static int stamR3EnumU(PUVM pUVM, const char *pszPat, bool fUpdateRing0,
                 {
                     if (RTStrSimplePatternMatch(pszPat, pCur->pszName))
                     {
+                        if (fUpdateRing0)
+                            stamR3Refresh(pUVM, pCur, &bmRefreshedGroups);
                         rc = pfnCallback(pCur, pvArg);
                         if (rc)
                             break;
@@ -2545,19 +2919,7 @@ static int stamR3EnumU(PUVM pUVM, const char *pszPat, bool fUpdateRing0,
             }
             else
                 Assert(!pLast);
-
         }
-#else
-        RTListForEach(&pUVM->stam.s.List, pCur, STAMDESC, ListEntry)
-        {
-            if (RTStrSimplePatternMatch(pszPat, pCur->pszName))
-            {
-                rc = pfnCallback(pCur, pvArg);
-                if (rc)
-                    break;
-            }
-        }
-#endif
         STAM_UNLOCK_RD(pUVM);
     }
 
@@ -2578,15 +2940,14 @@ static int stamR3EnumU(PUVM pUVM, const char *pszPat, bool fUpdateRing0,
         /*
          * Perform the enumeration.
          */
-        if (fUpdateRing0)
-            stamR3Ring0StatsUpdateMultiU(pUVM, papszExpressions, cExpressions);
-
         STAM_LOCK_RD(pUVM);
         unsigned iExpression = 0;
         RTListForEach(&pUVM->stam.s.List, pCur, STAMDESC, ListEntry)
         {
             if (stamR3MultiMatch(papszExpressions, cExpressions, &iExpression, pCur->pszName))
             {
+                if (fUpdateRing0)
+                    stamR3Refresh(pUVM, pCur, &bmRefreshedGroups);
                 rc = pfnCallback(pCur, pvArg);
                 if (rc)
                     break;
@@ -2613,129 +2974,14 @@ static void stamR3Ring0StatsRegisterU(PUVM pUVM)
     for (unsigned i = 0; i < RT_ELEMENTS(g_aGVMMStats); i++)
         stamR3RegisterU(pUVM, (uint8_t *)&pUVM->stam.s.GVMMStats + g_aGVMMStats[i].offVar, NULL, NULL,
                         g_aGVMMStats[i].enmType, STAMVISIBILITY_ALWAYS, g_aGVMMStats[i].pszName,
-                        g_aGVMMStats[i].enmUnit, g_aGVMMStats[i].pszDesc);
+                        g_aGVMMStats[i].enmUnit, g_aGVMMStats[i].pszDesc, STAM_REFRESH_GRP_GVMM);
     pUVM->stam.s.cRegisteredHostCpus = 0;
 
     /* GMM */
     for (unsigned i = 0; i < RT_ELEMENTS(g_aGMMStats); i++)
         stamR3RegisterU(pUVM, (uint8_t *)&pUVM->stam.s.GMMStats + g_aGMMStats[i].offVar, NULL, NULL,
                         g_aGMMStats[i].enmType, STAMVISIBILITY_ALWAYS, g_aGMMStats[i].pszName,
-                        g_aGMMStats[i].enmUnit, g_aGMMStats[i].pszDesc);
-}
-
-
-/**
- * Updates the ring-0 statistics (the copy).
- *
- * @param   pUVM        Pointer to the user mode VM structure.
- * @param   pszPat      The pattern.
- */
-static void stamR3Ring0StatsUpdateU(PUVM pUVM, const char *pszPat)
-{
-    stamR3Ring0StatsUpdateMultiU(pUVM, &pszPat, 1);
-}
-
-
-/**
- * Updates the ring-0 statistics.
- *
- * The ring-0 statistics aren't directly addressable from ring-3 and must be
- * copied when needed.
- *
- * @param   pUVM                Pointer to the user mode VM structure.
- * @param   papszExpressions    The patterns (for knowing when to skip).
- * @param   cExpressions        Number of patterns.
- */
-static void stamR3Ring0StatsUpdateMultiU(PUVM pUVM, const char * const *papszExpressions, unsigned cExpressions)
-{
-    PVM pVM = pUVM->pVM;
-    if (!pVM || !pVM->pSession)
-        return;
-
-    /*
-     * GVMM
-     */
-    bool fUpdate = false;
-    for (unsigned i = 0; i < RT_ELEMENTS(g_aGVMMStats); i++)
-        if (stamR3MultiMatch(papszExpressions, cExpressions, NULL, g_aGVMMStats[i].pszName))
-        {
-            fUpdate = true;
-            break;
-        }
-    if (!fUpdate)
-    {
-        /** @todo check the cpu leaves - rainy day. */
-    }
-    if (fUpdate)
-    {
-        GVMMQUERYSTATISTICSSREQ Req;
-        Req.Hdr.cbReq = sizeof(Req);
-        Req.Hdr.u32Magic = SUPVMMR0REQHDR_MAGIC;
-        Req.pSession = pVM->pSession;
-        int rc = SUPR3CallVMMR0Ex(pVM->pVMR0, NIL_VMCPUID, VMMR0_DO_GVMM_QUERY_STATISTICS, 0, &Req.Hdr);
-        if (RT_SUCCESS(rc))
-        {
-            pUVM->stam.s.GVMMStats = Req.Stats;
-
-            /*
-             * Check if the number of host CPUs has changed (it will the first
-             * time around and normally never again).
-             */
-            if (RT_UNLIKELY(pUVM->stam.s.GVMMStats.cHostCpus > pUVM->stam.s.cRegisteredHostCpus))
-            {
-                STAM_LOCK_WR(pUVM);
-                if (RT_UNLIKELY(pUVM->stam.s.GVMMStats.cHostCpus > pUVM->stam.s.cRegisteredHostCpus))
-                {
-                    uint32_t cCpus = pUVM->stam.s.GVMMStats.cHostCpus;
-                    for (uint32_t iCpu  = pUVM->stam.s.cRegisteredHostCpus; iCpu < cCpus; iCpu++)
-                    {
-                        char   szName[120];
-                        size_t cchBase = RTStrPrintf(szName, sizeof(szName), "/GVMM/HostCpus/%u", iCpu);
-                        stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].idCpu, NULL, NULL,
-                                        STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_NONE, "Host CPU ID");
-                        strcpy(&szName[cchBase], "/idxCpuSet");
-                        stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].idxCpuSet, NULL, NULL,
-                                        STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_NONE, "CPU Set index");
-                        strcpy(&szName[cchBase], "/DesiredHz");
-                        stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].uDesiredHz, NULL, NULL,
-                                        STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_HZ, "The desired frequency");
-                        strcpy(&szName[cchBase], "/CurTimerHz");
-                        stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].uTimerHz, NULL, NULL,
-                                        STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_HZ, "The current timer frequency");
-                        strcpy(&szName[cchBase], "/PPTChanges");
-                        stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].cChanges, NULL, NULL,
-                                        STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_OCCURENCES, "RTTimerChangeInterval calls");
-                        strcpy(&szName[cchBase], "/PPTStarts");
-                        stamR3RegisterU(pUVM, &pUVM->stam.s.GVMMStats.aHostCpus[iCpu].cStarts, NULL, NULL,
-                                        STAMTYPE_U32, STAMVISIBILITY_ALWAYS, szName, STAMUNIT_OCCURENCES, "RTTimerStart calls");
-                    }
-                    pUVM->stam.s.cRegisteredHostCpus = cCpus;
-                }
-                STAM_UNLOCK_WR(pUVM);
-            }
-        }
-    }
-
-    /*
-     * GMM
-     */
-    fUpdate = false;
-    for (unsigned i = 0; i < RT_ELEMENTS(g_aGMMStats); i++)
-        if (stamR3MultiMatch(papszExpressions, cExpressions, NULL, g_aGMMStats[i].pszName))
-        {
-            fUpdate = true;
-            break;
-        }
-    if (fUpdate)
-    {
-        GMMQUERYSTATISTICSSREQ Req;
-        Req.Hdr.cbReq    = sizeof(Req);
-        Req.Hdr.u32Magic = SUPVMMR0REQHDR_MAGIC;
-        Req.pSession     = pVM->pSession;
-        int rc = SUPR3CallVMMR0Ex(pVM->pVMR0, NIL_VMCPUID, VMMR0_DO_GMM_QUERY_STATISTICS, 0, &Req.Hdr);
-        if (RT_SUCCESS(rc))
-            pUVM->stam.s.GMMStats = Req.Stats;
-    }
+                        g_aGMMStats[i].enmUnit, g_aGMMStats[i].pszDesc, STAM_REFRESH_GRP_GMM);
 }
 
 

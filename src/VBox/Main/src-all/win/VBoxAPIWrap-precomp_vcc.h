@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxAPIWrap-precomp_vcc.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox COM - Visual C++ precompiled header for the API wrappers.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -37,5 +37,4 @@
 #if defined(Log) || defined(LogIsEnabled)
 # error "Log() from iprt/log.h cannot be defined in the precompiled header!"
 #endif
-
 

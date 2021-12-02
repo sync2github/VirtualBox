@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTFileReadAllByHandleEx-generic.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - RTFileReadAllByHandleEx, generic implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,7 @@
 #include <iprt/mem.h>
 #include <iprt/assert.h>
 #include <iprt/string.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 
 RTDECL(int) RTFileReadAllByHandleEx(RTFILE File, RTFOFF off, RTFOFF cbMax, uint32_t fFlags, void **ppvFile, size_t *pcbFile)
@@ -52,50 +52,61 @@ RTDECL(int) RTFileReadAllByHandleEx(RTFILE File, RTFOFF off, RTFOFF cbMax, uint3
          * Get the file size, adjust it and check that it might fit into memory.
          */
         RTFOFF cbFile;
-        rc = RTFileSeek(File, 0,RTFILE_SEEK_END, (uint64_t *)&cbFile);
+        AssertCompile(sizeof(cbFile) == sizeof(uint64_t));
+        rc = RTFileSeek(File, 0, RTFILE_SEEK_END, (uint64_t *)&cbFile);
         if (RT_SUCCESS(rc))
         {
             RTFOFF cbAllocFile = cbFile > off ? cbFile - off : 0;
-            if (cbAllocFile > cbMax)
+            if (cbAllocFile <= cbMax)
+            { /* likely */ }
+            else if (!(fFlags & RTFILE_RDALL_F_FAIL_ON_MAX_SIZE))
                 cbAllocFile = cbMax;
-            size_t cbAllocMem = (size_t)cbAllocFile;
-            if ((RTFOFF)cbAllocMem == cbAllocFile)
+            else
+                rc = VERR_OUT_OF_RANGE;
+            if (RT_SUCCESS(rc))
             {
-                /*
-                 * Try allocate the required memory and initialize the header (hardcoded fun).
-                 */
-                void *pvHdr = RTMemAlloc(cbAllocMem + 32);
-                if (pvHdr)
+                size_t cbAllocMem = (size_t)cbAllocFile;
+                if ((RTFOFF)cbAllocMem == cbAllocFile)
                 {
-                    memset(pvHdr, 0xff, 32);
-                    *(size_t *)pvHdr = cbAllocMem;
-
                     /*
-                     * Seek and read.
+                     * Try allocate the required memory and initialize the header (hardcoded fun).
                      */
-                    rc = RTFileSeek(File, off, RTFILE_SEEK_BEGIN, NULL);
-                    if (RT_SUCCESS(rc))
+                    void *pvHdr = RTMemAlloc(cbAllocMem + 32 + (fFlags & RTFILE_RDALL_F_TRAILING_ZERO_BYTE ? 1 : 0));
+                    if (pvHdr)
                     {
-                        void *pvFile = (uint8_t *)pvHdr + 32;
-                        rc = RTFileRead(File, pvFile, cbAllocMem, NULL);
+                        memset(pvHdr, 0xff, 32);
+                        *(size_t *)pvHdr = cbAllocMem;
+
+                        /*
+                         * Seek and read.
+                         */
+                        rc = RTFileSeek(File, off, RTFILE_SEEK_BEGIN, NULL);
                         if (RT_SUCCESS(rc))
                         {
-                            /*
-                             * Success - fill in the return values.
-                             */
-                            *ppvFile = pvFile;
-                            *pcbFile = cbAllocMem;
-                        }
-                    }
+                            void *pvFile = (uint8_t *)pvHdr + 32;
+                            rc = RTFileRead(File, pvFile, cbAllocMem, NULL);
+                            if (RT_SUCCESS(rc))
+                            {
+                                if (fFlags & RTFILE_RDALL_F_TRAILING_ZERO_BYTE)
+                                    ((uint8_t *)pvFile)[cbAllocFile] = '\0';
 
-                    if (RT_FAILURE(rc))
-                        RTMemFree(pvHdr);
+                                /*
+                                 * Success - fill in the return values.
+                                 */
+                                *ppvFile = pvFile;
+                                *pcbFile = cbAllocMem;
+                            }
+                        }
+
+                        if (RT_FAILURE(rc))
+                            RTMemFree(pvHdr);
+                    }
+                    else
+                        rc = VERR_NO_MEMORY;
                 }
                 else
-                    rc = VERR_NO_MEMORY;
+                    rc = VERR_TOO_MUCH_DATA;
             }
-            else
-                rc = VERR_TOO_MUCH_DATA;
         }
         /* restore the position. */
         RTFileSeek(File, offOrg, RTFILE_SEEK_BEGIN, NULL);

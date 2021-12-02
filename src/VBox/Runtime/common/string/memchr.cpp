@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: memchr.cpp 85075 2020-07-06 17:17:30Z vboxsync $ */
 /** @file
  * IPRT - CRT Strings, memcpy().
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -50,8 +50,8 @@ void *memchr(const void *pv, int ch, size_t cb)
 void *memchr(const void *pv, int ch, size_t cb)
 #endif
 {
-    register uint8_t const *pu8 = (uint8_t const *)pv;
-    register size_t cb2 = cb;
+    uint8_t const *pu8 = (uint8_t const *)pv;
+    size_t cb2 = cb;
     while (cb2-- > 0)
     {
         if (*pu8 == ch)

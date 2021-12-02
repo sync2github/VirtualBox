@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VSCSISense.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * Virtual SCSI driver: Sense handling
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -43,7 +43,10 @@ int vscsiReqSenseOkSet(PVSCSISENSE pVScsiSense, PVSCSIREQINT pVScsiReq)
     pVScsiSense->abSenseBuf[13] = SCSI_ASC_NONE; /* Should be ASCQ but it has the same value for success. */
 
     if (pVScsiReq->pbSense && pVScsiReq->cbSense)
-        memcpy(pVScsiReq->pbSense, pVScsiSense->abSenseBuf, RT_MIN(sizeof(pVScsiSense->abSenseBuf), pVScsiReq->cbSense));
+    {
+        pVScsiReq->cbSenseWritten = RT_MIN(sizeof(pVScsiSense->abSenseBuf), pVScsiReq->cbSense);
+        memcpy(pVScsiReq->pbSense, pVScsiSense->abSenseBuf, pVScsiReq->cbSenseWritten);
+    }
 
     return SCSI_STATUS_OK;
 }
@@ -58,7 +61,10 @@ int vscsiReqSenseErrorSet(PVSCSISENSE pVScsiSense, PVSCSIREQINT pVScsiReq, uint8
     pVScsiSense->abSenseBuf[13] = uSCSIASCQ;
 
     if (pVScsiReq->pbSense && pVScsiReq->cbSense)
-        memcpy(pVScsiReq->pbSense, pVScsiSense->abSenseBuf, RT_MIN(sizeof(pVScsiSense->abSenseBuf), pVScsiReq->cbSense));
+    {
+        pVScsiReq->cbSenseWritten = RT_MIN(sizeof(pVScsiSense->abSenseBuf), pVScsiReq->cbSense);
+        memcpy(pVScsiReq->pbSense, pVScsiSense->abSenseBuf, pVScsiReq->cbSenseWritten);
+    }
 
     return SCSI_STATUS_CHECK_CONDITION;
 }
@@ -68,13 +74,16 @@ int vscsiReqSenseErrorInfoSet(PVSCSISENSE pVScsiSense, PVSCSIREQINT pVScsiReq, u
     memset(pVScsiSense->abSenseBuf, 0, sizeof(pVScsiSense->abSenseBuf));
     pVScsiSense->abSenseBuf[0] = RT_BIT(7) | SCSI_SENSE_RESPONSE_CODE_CURR_FIXED; /* Fixed format */
     pVScsiSense->abSenseBuf[2] = uSCSISenseKey;
-    vscsiH2BEU32(&pVScsiSense->abSenseBuf[3], uInfo);
+    scsiH2BE_U32(&pVScsiSense->abSenseBuf[3], uInfo);
     pVScsiSense->abSenseBuf[7]  = 10;
     pVScsiSense->abSenseBuf[12] = uSCSIASC;
     pVScsiSense->abSenseBuf[13] = uSCSIASCQ;
 
     if (pVScsiReq->pbSense && pVScsiReq->cbSense)
-        memcpy(pVScsiReq->pbSense, pVScsiSense->abSenseBuf, RT_MIN(sizeof(pVScsiSense->abSenseBuf), pVScsiReq->cbSense));
+    {
+        pVScsiReq->cbSenseWritten = RT_MIN(sizeof(pVScsiSense->abSenseBuf), pVScsiReq->cbSense);
+        memcpy(pVScsiReq->pbSense, pVScsiSense->abSenseBuf, pVScsiReq->cbSenseWritten);
+    }
 
     return SCSI_STATUS_CHECK_CONDITION;
 }

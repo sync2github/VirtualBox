@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIDnDDropSource_win.h 85681 2020-08-11 09:36:37Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIDnDDropSource class declaration.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIDnDDropSource_win_h___
-#define ___UIDnDDropSource_win_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_UIDnDDropSource_win_h
+#define FEQT_INCLUDED_SRC_runtime_UIDnDDropSource_win_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* COM includes: */
 #include "COMEnums.h"
@@ -52,6 +55,7 @@ protected:
 
     /** Pointer to parent widget. */
     QWidget         *m_pParent;
+    /** Pointer to current data object. */
     UIDnDDataObject *m_pDataObject;
     /** The current reference count. */
     LONG             m_cRefCount;
@@ -61,5 +65,5 @@ protected:
     Qt::DropActions  m_uCurAction;
 };
 
-#endif /* ___UIDnDDropSource_win_h___ */
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIDnDDropSource_win_h */
 

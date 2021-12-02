@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineWindowFullscreen.h 90567 2021-08-07 11:50:28Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineWindowFullscreen class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMachineWindowFullscreen_h___
-#define ___UIMachineWindowFullscreen_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_fullscreen_UIMachineWindowFullscreen_h
+#define FEQT_INCLUDED_SRC_runtime_fullscreen_UIMachineWindowFullscreen_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UIMachineWindow.h"
@@ -66,6 +69,10 @@ private slots:
 
     /** Revokes window activation. */
     void sltRevokeWindowActivation();
+
+    /** Handles signal about mini-toolbar auto-hide toggled.
+      * @param  fEnabled  Brings whether auto-hide is enabled. */
+    void sltHandleMiniToolBarAutoHideToggled(bool fEnabled);
 #endif /* VBOX_WS_WIN || VBOX_WS_X11 */
 
 #ifdef RT_OS_DARWIN
@@ -75,8 +82,13 @@ private slots:
     void sltExitNativeFullscreen(UIMachineWindow *pMachineWindow);
 #endif /* RT_OS_DARWIN */
 
+    /** Shows window in minimized state. */
+    void sltShowMinimized();
+
 private:
 
+    /** Prepare notification-center routine. */
+    void prepareNotificationCenter();
     /** Prepare visual-state routine. */
     void prepareVisualState();
 #if defined(VBOX_WS_WIN) || defined(VBOX_WS_X11)
@@ -90,6 +102,8 @@ private:
 #endif /* VBOX_WS_WIN || VBOX_WS_X11 */
     /** Cleanup visual-state routine. */
     void cleanupVisualState();
+    /** Cleanup notification-center routine. */
+    void cleanupNotificationCenter();
 
     /** Updates geometry according to visual-state. */
     void placeOnScreen();
@@ -101,17 +115,15 @@ private:
     void updateAppearanceOf(int iElement);
 #endif /* VBOX_WS_WIN || VBOX_WS_X11 */
 
-#if defined(VBOX_WS_X11) && QT_VERSION >= 0x050000
-    /** Handles @a pEvent about state change. */
+#ifdef VBOX_WS_X11
+    /** X11: Handles @a pEvent about state change. */
     void changeEvent(QEvent *pEvent);
-#endif /* VBOX_WS_X11 && QT_VERSION >= 0x050000 */
+#endif
 
 #ifdef VBOX_WS_WIN
-# if QT_VERSION >= 0x050000
     /** Win: Handles show @a pEvent. */
     void showEvent(QShowEvent *pEvent);
-# endif /* QT_VERSION >= 0x050000 */
-#endif /* VBOX_WS_WIN */
+#endif
 
 #if defined(VBOX_WS_WIN) || defined(VBOX_WS_X11)
     /** Holds the mini-toolbar instance. */
@@ -128,15 +140,18 @@ private:
     /** Holds whether the window was minimized before became hidden.
       * Used to restore minimized state when the window shown again. */
     bool m_fWasMinimized;
-#if defined(VBOX_WS_X11) && QT_VERSION >= 0x050000
-    /** Holds whether the window is currently minimized.
+#ifdef VBOX_WS_X11
+    /** X11: Holds whether the window minimization is currently requested.
+      * Used to prevent accidentally restoring to full-screen state. */
+    bool m_fIsMinimizationRequested;
+    /** X11: Holds whether the window is currently minimized.
       * Used to restore full-screen state when the window restored again. */
     bool m_fIsMinimized;
-#endif /* VBOX_WS_X11 && QT_VERSION >= 0x050000 */
+#endif
 
     /** Factory support. */
     friend class UIMachineWindow;
 };
 
-#endif /* !___UIMachineWindowFullscreen_h___ */
+#endif /* !FEQT_INCLUDED_SRC_runtime_fullscreen_UIMachineWindowFullscreen_h */
 

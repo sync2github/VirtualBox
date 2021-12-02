@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 87672 2021-02-10 09:57:14Z vboxsync $
 ## @file
 # VirtualBox Validation Kit - Storage Tests.
 #
 
 #
-# Copyright (C) 2012-2016 Oracle Corporation
+# Copyright (C) 2012-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -35,6 +35,7 @@ ValidationKitTestsStorage_EXEC_SOURCES := \
 	$(PATH_SUB_CURRENT)/tdStorageBenchmark1.py \
 	$(PATH_SUB_CURRENT)/tdStorageSnapshotMerging1.py \
 	$(PATH_SUB_CURRENT)/tdStorageStress1.py \
+	$(PATH_SUB_CURRENT)/tdStorageRawDrive1.py \
 	$(PATH_SUB_CURRENT)/remoteexecutor.py \
 	$(PATH_SUB_CURRENT)/storagecfg.py
 

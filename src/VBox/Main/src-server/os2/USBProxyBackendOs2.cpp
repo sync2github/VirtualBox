@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBProxyBackendOs2.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox USB Proxy Service, OS/2 Specialization.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,19 +19,20 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_MAIN_USBPROXYBACKEND
 #define INCL_BASE
 #define INCL_ERRORS
 #include "USBProxyBackend.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/usb.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 
 #include <iprt/string.h>
 #include <iprt/alloc.h>
 #include <iprt/assert.h>
 #include <iprt/file.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 
 
 /**
@@ -76,15 +77,15 @@ USBProxyBackendOs2::USBProxyBackendOs2(USBProxyService *aUsbProxyService, const 
                     }
                 }
 
-                LogRel(("USBProxyServiceOs2: failed to register change notification, rc=%d\n", rc));
+                LogRel(("USBProxyBackendOs2: failed to register change notification, rc=%d\n", rc));
             }
             else
-                LogRel(("USBProxyServiceOs2: failed to load usbcalls\n"));
+                LogRel(("USBProxyBackendOs2: failed to load usbcalls\n"));
 
             DosFreeModule(mhmod);
         }
         else
-            LogRel(("USBProxyServiceOs2: failed to load usbcalls, rc=%d\n", rc));
+            LogRel(("USBProxyBackendOs2: failed to load usbcalls, rc=%d\n", rc));
         mhmod = NULLHANDLE;
     }
     else
@@ -98,7 +99,7 @@ USBProxyBackendOs2::USBProxyBackendOs2(USBProxyService *aUsbProxyService, const 
 /**
  * Stop all service threads and free the device chain.
  */
-USBProxyServiceOs2::~USBProxyServiceOs2()
+USBProxyBackendOs2::~USBProxyBackendOs2()
 {
     LogFlowThisFunc(("\n"));
 
@@ -127,7 +128,7 @@ USBProxyServiceOs2::~USBProxyServiceOs2()
 }
 
 
-int USBProxyServiceOs2::captureDevice(HostUSBDevice *aDevice)
+int USBProxyBackendOs2::captureDevice(HostUSBDevice *aDevice)
 {
     AssertReturn(aDevice, VERR_GENERAL_FAILURE);
     AssertReturn(!aDevice->isWriteLockOnCurrentThread(), VERR_GENERAL_FAILURE);
@@ -146,7 +147,7 @@ int USBProxyServiceOs2::captureDevice(HostUSBDevice *aDevice)
 }
 
 
-int USBProxyServiceOs2::releaseDevice(HostUSBDevice *aDevice)
+int USBProxyBackendOs2::releaseDevice(HostUSBDevice *aDevice)
 {
     AssertReturn(aDevice, VERR_GENERAL_FAILURE);
     AssertReturn(!aDevice->isWriteLockOnCurrentThread(), VERR_GENERAL_FAILURE);
@@ -165,24 +166,26 @@ int USBProxyServiceOs2::releaseDevice(HostUSBDevice *aDevice)
 }
 
 
-bool USBProxyServiceOs2::updateDeviceState(HostUSBDevice *aDevice, PUSBDEVICE aUSBDevice, bool *aRunFilters,
+#if 0
+bool USBProxyBackendOs2::updateDeviceState(HostUSBDevice *aDevice, PUSBDEVICE aUSBDevice, bool *aRunFilters,
                                            SessionMachine **aIgnoreMachine)
 {
     AssertReturn(aDevice, false);
     AssertReturn(!aDevice->isWriteLockOnCurrentThread(), false);
     return updateDeviceStateFake(aDevice, aUSBDevice, aRunFilters, aIgnoreMachine);
 }
+#endif
 
 
 
-int USBProxyServiceOs2::wait(RTMSINTERVAL aMillies)
+int USBProxyBackendOs2::wait(RTMSINTERVAL aMillies)
 {
     int rc = DosWaitEventSem(mhev, aMillies);
     return RTErrConvertFromOS2(rc);
 }
 
 
-int USBProxyServiceOs2::interruptWait(void)
+int USBProxyBackendOs2::interruptWait(void)
 {
     int rc = DosPostEventSem(mhev);
     return rc == NO_ERROR || rc == ERROR_ALREADY_POSTED
@@ -192,7 +195,7 @@ int USBProxyServiceOs2::interruptWait(void)
 
 #include <stdio.h>
 
-PUSBDEVICE USBProxyServiceOs2::getDevices(void)
+PUSBDEVICE USBProxyBackendOs2::getDevices(void)
 {
     /*
      * Count the devices.

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tooltip.css 84599 2020-05-29 01:12:32Z vboxsync $ */
 /** @file
  * Test Manager - Tooltip content (via iframe).
  */
 
 /*
- * Copyright (C) 2012-2015 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,11 +27,11 @@
 /*
  * Form the main divs in template-tooltip.html.
  */
-#tooltip {
+.tooltip-main {
     width:          100%;
 }
 
-#tooltip-inner {
+.tooltip-inner {
     clear:          both;
     border:         2px solid black;
     padding-left:   2px;
@@ -114,7 +114,7 @@
 }
 
 /* This helps highlighting the revision we're showing the tooltip for. */
-.tmvcstimeline :target, .tmvcstimeline :target + dd {
+.tmvcstimeline-highlight, .tmvcstimeline :target, .tmvcstimeline :target + dd {
     background-color: #d8e8ff;
     padding-top:    0.2em;
     padding-bottom: 0.2em;

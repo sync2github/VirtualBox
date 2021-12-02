@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_utf16_h
-#define ___iprt_utf16_h
+#ifndef IPRT_INCLUDED_utf16_h
+#define IPRT_INCLUDED_utf16_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/string.h>
 
@@ -265,6 +268,17 @@ RTDECL(int) RTUtf16NLenEx(PCRTUTF16 pwszString, size_t cwcMax, size_t *pcwc);
 RTDECL(PCRTUTF16) RTUtf16End(PCRTUTF16 pwszString, size_t cwcMax);
 
 /**
+ * Finds a give UTF-16 character in a UTF-16 string.
+ *
+ * @returns Pointer to the first occurence of @a wc.
+ * @returns NULL if @a wc was not found.
+ *
+ * @param   pwszString  The string to search.
+ * @param   wc          The UTF-16 character to search for.
+ */
+RTDECL(PRTUTF16) RTUtf16Chr(PCRTUTF16 pwszString, RTUTF16 wc);
+
+/**
  * Strips blankspaces from both ends of the string.
  *
  * @returns Pointer to first non-blank char in the string.
@@ -381,7 +395,7 @@ RTDECL(int) RTUtf16CatEx(PRTUTF16 pwszDst, size_t cwcDst, PCRTUTF16 pwszSrc, siz
 /**
  * Performs a case sensitive string compare between two UTF-16 strings.
  *
- * @returns < 0 if the first string less than the second string.s
+ * @returns < 0 if the first string less than the second string.
  * @returns 0 if the first string identical to the second string.
  * @returns > 0 if the first string greater than the second string.
  * @param   pwsz1       First UTF-16 string. Null is allowed.
@@ -394,7 +408,7 @@ RTDECL(int) RTUtf16Cmp(PCRTUTF16 pwsz1, PCRTUTF16 pwsz2);
  * Performs a case sensitive string compare between an UTF-16 string and a pure
  * ASCII string.
  *
- * @returns < 0 if the first string less than the second string.s
+ * @returns < 0 if the first string less than the second string.
  * @returns 0 if the first string identical to the second string.
  * @returns > 0 if the first string greater than the second string.
  * @param   pwsz1       First UTF-16 string. Null is allowed.
@@ -407,7 +421,7 @@ RTDECL(int) RTUtf16CmpAscii(PCRTUTF16 pwsz1, const char *psz2);
  * Performs a case sensitive string compare between an UTF-16 string and a UTF-8
  * string.
  *
- * @returns < 0 if the first string less than the second string.s
+ * @returns < 0 if the first string less than the second string.
  * @returns 0 if the first string identical to the second string.
  * @returns > 0 if the first string greater than the second string.
  * @param   pwsz1       First UTF-16 string. Null is allowed.
@@ -415,6 +429,52 @@ RTDECL(int) RTUtf16CmpAscii(PCRTUTF16 pwsz1, const char *psz2);
  * @remarks NULL and empty strings are treated equally.
  */
 RTDECL(int) RTUtf16CmpUtf8(PCRTUTF16 pwsz1, const char *psz2);
+
+
+/**
+ * Performs a case sensitive and length limited string compare between two UTF-16 strings.
+ *
+ * @returns < 0 if the first string less than the second string.
+ * @returns 0 if the first string identical to the second string.
+ * @returns > 0 if the first string greater than the second string.
+ * @param   pwsz1       First UTF-16 string. Null is allowed.
+ * @param   pwsz2       Second UTF-16 string. Null is allowed.
+ * @param   cwcMax      Maximum number of characters (RTUTF16) from the first
+ * @remark  This function will not make any attempt to validate the encoding.
+ */
+RTDECL(int) RTUtf16NCmp(PCRTUTF16 pwsz1, PCRTUTF16 pwsz2, size_t cwcMax);
+
+/**
+ * Performs a case sensitive and length limited string compare between an UTF-16
+ * string and a pure ASCII string.
+ *
+ * @returns < 0 if the first string less than the second string.
+ * @returns 0 if the first string identical to the second string.
+ * @returns > 0 if the first string greater than the second string.
+ * @param   pwsz1       First UTF-16 string. Null is allowed.
+ * @param   psz2        Second string, pure ASCII. Null is allowed.
+ * @param   cwcMax      Maximum number of characters (RTUTF16) to compare.
+ * @remark  This function will not make any attempt to validate the encoding.
+ */
+RTDECL(int) RTUtf16NCmpAscii(PCRTUTF16 pwsz1, const char *psz2, size_t cwcMax);
+
+/**
+ * Performs a case sensitive and length limited string compare between an UTF-16
+ * string and a UTF-8 string.
+ *
+ * @returns < 0 if the first string less than the second string.
+ * @returns 0 if the first string identical to the second string.
+ * @returns > 0 if the first string greater than the second string.
+ * @param   pwsz1       First UTF-16 string. Null is allowed.
+ * @param   psz2        Second string, UTF-8. Null is allowed.
+ * @param   cwcMax1     Maximum number of UTF-16 characters (RTUTF16) from the
+ *                      first string to compare.
+ * @param   cchMax2     Maximum number of UTF-8 characters (char) from the
+ *                      second string to compare.
+ * @remarks NULL and empty strings are treated equally.
+ */
+RTDECL(int) RTUtf16NCmpUtf8(PCRTUTF16 pwsz1, const char *psz2, size_t cwcMax1, size_t cchMax2);
+
 
 /**
  * Performs a case insensitive string compare between two UTF-16 strings.
@@ -432,6 +492,22 @@ RTDECL(int) RTUtf16CmpUtf8(PCRTUTF16 pwsz1, const char *psz2);
 RTDECL(int) RTUtf16ICmp(PCRTUTF16 pwsz1, PCRTUTF16 pwsz2);
 
 /**
+ * Performs a case insensitive string compare between two big endian UTF-16
+ * strings.
+ *
+ * This is a simplified compare, as only the simplified lower/upper case folding
+ * specified by the unicode specs are used. It does not consider character pairs
+ * as they are used in some languages, just simple upper & lower case compares.
+ *
+ * @returns < 0 if the first string less than the second string.
+ * @returns 0 if the first string identical to the second string.
+ * @returns > 0 if the first string greater than the second string.
+ * @param   pwsz1       First big endian UTF-16 string. Null is allowed.
+ * @param   pwsz2       Second big endian  UTF-16 string. Null is allowed.
+ */
+RTDECL(int) RTUtf16BigICmp(PCRTUTF16 pwsz1, PCRTUTF16 pwsz2);
+
+/**
  * Performs a case insensitive string compare between an UTF-16 string and a
  * UTF-8 string.
  *
@@ -445,7 +521,7 @@ RTDECL(int) RTUtf16ICmp(PCRTUTF16 pwsz1, PCRTUTF16 pwsz2);
 RTDECL(int) RTUtf16ICmpUtf8(PCRTUTF16 pwsz1, const char *psz2);
 
 /**
- * Performs a case insensitive string compare between an UTF-16 string and an
+ * Performs a case insensitive string compare between an UTF-16 string and a
  * pure ASCII string.
  *
  * Since this compare only takes cares about the first 128 codepoints in
@@ -474,6 +550,57 @@ RTDECL(int) RTUtf16ICmpAscii(PCRTUTF16 pwsz1, const char *psz2);
  * @param   pwsz2       Second UTF-16 string. Null is allowed.
  */
 RTDECL(int) RTUtf16LocaleICmp(PCRTUTF16 pwsz1, PCRTUTF16 pwsz2);
+
+/**
+ * Performs a case insensitive string compare between two UTF-16 strings,
+ * stopping after N characters.
+ *
+ * This is a simplified compare, as only the simplified lower/upper case folding
+ * specified by the unicode specs are used. It does not consider character pairs
+ * as they are used in some languages, just simple upper & lower case compares.
+ *
+ * @returns < 0 if the first string less than the second string.
+ * @returns 0 if the first string identical to the second string.
+ * @returns > 0 if the first string greater than the second string.
+ * @param   pwsz1       First UTF-16 string. Null is allowed.
+ * @param   pwsz2       Second UTF-16 string. Null is allowed.
+ * @param   cwcMax      Maximum number of characters to compare.
+ */
+RTDECL(int) RTUtf16NICmp(PCRTUTF16 pwsz1, PCRTUTF16 pwsz2, size_t cwcMax);
+
+/**
+ * Performs a case insensitive string compare between two big endian UTF-16
+ * strings, stopping after N characters.
+ *
+ * This is a simplified compare, as only the simplified lower/upper case folding
+ * specified by the unicode specs are used. It does not consider character pairs
+ * as they are used in some languages, just simple upper & lower case compares.
+ *
+ * @returns < 0 if the first string less than the second string.
+ * @returns 0 if the first string identical to the second string.
+ * @returns > 0 if the first string greater than the second string.
+ * @param   pwsz1       First big endian UTF-16 string. Null is allowed.
+ * @param   pwsz2       Second big endian UTF-16 string. Null is allowed.
+ * @param   cwcMax      Maximum number of characters to compare.
+ */
+RTDECL(int) RTUtf16BigNICmp(PCRTUTF16 pwsz1, PCRTUTF16 pwsz2, size_t cwcMax);
+
+/**
+ * Performs a case insensitive string compare between a UTF-16 string and a pure
+ * ASCII string, stopping after N characters.
+ *
+ * Since this compare only takes cares about the first 128 codepoints in
+ * unicode, no tables are needed and there aren't any real complications.
+ *
+ * @returns < 0 if the first string less than the second string.
+ * @returns 0 if the first string identical to the second string.
+ * @returns > 0 if the first string greater than the second string.
+ * @param   pwsz1       The UTF-16 first string. Null is allowed.
+ * @param   psz2        The pure ASCII second string. Null is allowed.
+ * @param   cwcMax      Maximum number of UTF-16 characters to compare.
+ */
+RTDECL(int) RTUtf16NICmpAscii(PCRTUTF16 pwsz1, const char *psz2, size_t cwcMax);
+
 
 /**
  * Folds a UTF-16 string to lowercase.
@@ -548,6 +675,7 @@ RTDECL(bool) RTUtf16IsValidEncoding(PCRTUTF16 pwsz);
  */
 RTDECL(ssize_t) RTUtf16PurgeComplementSet(PRTUTF16 pwsz, PCRTUNICP puszValidPairs, char chReplacement);
 
+
 /**
  * Translate a UTF-16 string into a UTF-8 allocating the result buffer (default
  * tag).
@@ -571,6 +699,67 @@ RTDECL(ssize_t) RTUtf16PurgeComplementSet(PRTUTF16 pwsz, PCRTUNICP puszValidPair
  * @param   pszTag          Allocation tag used for statistics and such.
  */
 RTDECL(int)  RTUtf16ToUtf8Tag(PCRTUTF16 pwszString, char **ppszString, const char *pszTag);
+
+/**
+ * Translate a UTF-16BE string into a UTF-8 allocating the result buffer
+ * (default tag).
+ *
+ * This differs from RTUtf16ToUtf8 in that the input is always a
+ * big-endian string.
+ *
+ * @returns iprt status code.
+ * @param   pwszString      UTF-16BE string to convert.
+ * @param   ppszString      Receives pointer of allocated UTF-8 string on
+ *                          success, and is always set to NULL on failure.
+ *                          The returned pointer must be freed using RTStrFree().
+ */
+#define RTUtf16BigToUtf8(pwszString, ppszString)       RTUtf16BigToUtf8Tag((pwszString), (ppszString), RTSTR_TAG)
+
+/**
+ * Translate a UTF-16BE string into a UTF-8 allocating the result buffer.
+ *
+ * This differs from RTUtf16ToUtf8Tag in that the input is always a
+ * big-endian string.
+ *
+ * @returns iprt status code.
+ * @param   pwszString      UTF-16BE string to convert.
+ * @param   ppszString      Receives pointer of allocated UTF-8 string on
+ *                          success, and is always set to NULL on failure.
+ *                          The returned pointer must be freed using RTStrFree().
+ * @param   pszTag          Allocation tag used for statistics and such.
+ */
+RTDECL(int)  RTUtf16BigToUtf8Tag(PCRTUTF16 pwszString, char **ppszString, const char *pszTag);
+
+/**
+ * Translate a UTF-16LE string into a UTF-8 allocating the result buffer
+ * (default tag).
+ *
+ * This differs from RTUtf16ToUtf8 in that the input is always a
+ * little-endian string.
+ *
+ * @returns iprt status code.
+ * @param   pwszString      UTF-16LE string to convert.
+ * @param   ppszString      Receives pointer of allocated UTF-8 string on
+ *                          success, and is always set to NULL on failure.
+ *                          The returned pointer must be freed using RTStrFree().
+ */
+#define RTUtf16LittleToUtf8(pwszString, ppszString)     RTUtf16LittleToUtf8Tag((pwszString), (ppszString), RTSTR_TAG)
+
+/**
+ * Translate a UTF-16LE string into a UTF-8 allocating the result buffer.
+ *
+ * This differs from RTUtf16ToUtf8Tag in that the input is always a
+ * little-endian string.
+ *
+ * @returns iprt status code.
+ * @param   pwszString      UTF-16LE string to convert.
+ * @param   ppszString      Receives pointer of allocated UTF-8 string on
+ *                          success, and is always set to NULL on failure.
+ *                          The returned pointer must be freed using RTStrFree().
+ * @param   pszTag          Allocation tag used for statistics and such.
+ */
+RTDECL(int)  RTUtf16LittleToUtf8Tag(PCRTUTF16 pwszString, char **ppszString, const char *pszTag);
+
 
 /**
  * Translates UTF-16 to UTF-8 using buffer provided by the caller or a fittingly
@@ -625,6 +814,123 @@ RTDECL(int)  RTUtf16ToUtf8Tag(PCRTUTF16 pwszString, char **ppszString, const cha
 RTDECL(int)  RTUtf16ToUtf8ExTag(PCRTUTF16 pwszString, size_t cwcString, char **ppsz, size_t cch, size_t *pcch, const char *pszTag);
 
 /**
+ * Translates UTF-16BE to UTF-8 using buffer provided by the caller or a
+ * fittingly sized buffer allocated by the function (default tag).
+ *
+ * This differs from RTUtf16ToUtf8Ex in that the input is always a
+ * big-endian string.
+ *
+ * @returns iprt status code.
+ * @param   pwszString      The UTF-16BE string to convert.
+ * @param   cwcString       The number of RTUTF16 items to translate from pwszString.
+ *                          The translation will stop when reaching cwcString or the terminator ('\\0').
+ *                          Use RTSTR_MAX to translate the entire string.
+ * @param   ppsz            If cch is non-zero, this must either be pointing to a pointer to
+ *                          a buffer of the specified size, or pointer to a NULL pointer.
+ *                          If *ppsz is NULL or cch is zero a buffer of at least cch chars
+ *                          will be allocated to hold the translated string.
+ *                          If a buffer was requested it must be freed using RTStrFree().
+ * @param   cch             The buffer size in chars (the type). This includes the terminator.
+ * @param   pcch            Where to store the length of the translated string,
+ *                          excluding the terminator. (Optional)
+ *
+ *                          This may be set under some error conditions,
+ *                          however, only for VERR_BUFFER_OVERFLOW and
+ *                          VERR_NO_STR_MEMORY will it contain a valid string
+ *                          length that can be used to resize the buffer.
+ */
+#define RTUtf16BigToUtf8Ex(pwszString, cwcString, ppsz, cch, pcch) \
+    RTUtf16BigToUtf8ExTag((pwszString), (cwcString), (ppsz), (cch), (pcch), RTSTR_TAG)
+
+/**
+ * Translates UTF-16BE to UTF-8 using buffer provided by the caller or a
+ * fittingly sized buffer allocated by the function (custom tag).
+ *
+ * This differs from RTUtf16ToUtf8ExTag in that the input is always a
+ * big-endian string.
+ *
+ * @returns iprt status code.
+ * @param   pwszString      The UTF-16BE string to convert.
+ * @param   cwcString       The number of RTUTF16 items to translate from pwszString.
+ *                          The translation will stop when reaching cwcString or the terminator ('\\0').
+ *                          Use RTSTR_MAX to translate the entire string.
+ * @param   ppsz            If cch is non-zero, this must either be pointing to a pointer to
+ *                          a buffer of the specified size, or pointer to a NULL pointer.
+ *                          If *ppsz is NULL or cch is zero a buffer of at least cch chars
+ *                          will be allocated to hold the translated string.
+ *                          If a buffer was requested it must be freed using RTStrFree().
+ * @param   cch             The buffer size in chars (the type). This includes the terminator.
+ * @param   pcch            Where to store the length of the translated string,
+ *                          excluding the terminator. (Optional)
+ *
+ *                          This may be set under some error conditions,
+ *                          however, only for VERR_BUFFER_OVERFLOW and
+ *                          VERR_NO_STR_MEMORY will it contain a valid string
+ *                          length that can be used to resize the buffer.
+ * @param   pszTag          Allocation tag used for statistics and such.
+ */
+RTDECL(int) RTUtf16BigToUtf8ExTag(PCRTUTF16 pwszString, size_t cwcString, char **ppsz, size_t cch, size_t *pcch, const char *pszTag);
+
+/**
+ * Translates UTF-16LE to UTF-8 using buffer provided by the caller or a
+ * fittingly sized buffer allocated by the function (default tag).
+ *
+ * This differs from RTUtf16ToUtf8Ex in that the input is always a
+ * little-endian string.
+ *
+ * @returns iprt status code.
+ * @param   pwszString      The UTF-16LE string to convert.
+ * @param   cwcString       The number of RTUTF16 items to translate from pwszString.
+ *                          The translation will stop when reaching cwcString or the terminator ('\\0').
+ *                          Use RTSTR_MAX to translate the entire string.
+ * @param   ppsz            If cch is non-zero, this must either be pointing to a pointer to
+ *                          a buffer of the specified size, or pointer to a NULL pointer.
+ *                          If *ppsz is NULL or cch is zero a buffer of at least cch chars
+ *                          will be allocated to hold the translated string.
+ *                          If a buffer was requested it must be freed using RTStrFree().
+ * @param   cch             The buffer size in chars (the type). This includes the terminator.
+ * @param   pcch            Where to store the length of the translated string,
+ *                          excluding the terminator. (Optional)
+ *
+ *                          This may be set under some error conditions,
+ *                          however, only for VERR_BUFFER_OVERFLOW and
+ *                          VERR_NO_STR_MEMORY will it contain a valid string
+ *                          length that can be used to resize the buffer.
+ */
+#define RTUtf16LittleToUtf8Ex(pwszString, cwcString, ppsz, cch, pcch) \
+    RTUtf16LittleToUtf8ExTag((pwszString), (cwcString), (ppsz), (cch), (pcch), RTSTR_TAG)
+
+/**
+ * Translates UTF-16LE to UTF-8 using buffer provided by the caller or a
+ * fittingly sized buffer allocated by the function (custom tag).
+ *
+ * This differs from RTUtf16ToUtf8ExTag in that the input is always a
+ * little-endian string.
+ *
+ * @returns iprt status code.
+ * @param   pwszString      The UTF-16LE string to convert.
+ * @param   cwcString       The number of RTUTF16 items to translate from pwszString.
+ *                          The translation will stop when reaching cwcString or the terminator ('\\0').
+ *                          Use RTSTR_MAX to translate the entire string.
+ * @param   ppsz            If cch is non-zero, this must either be pointing to a pointer to
+ *                          a buffer of the specified size, or pointer to a NULL pointer.
+ *                          If *ppsz is NULL or cch is zero a buffer of at least cch chars
+ *                          will be allocated to hold the translated string.
+ *                          If a buffer was requested it must be freed using RTStrFree().
+ * @param   cch             The buffer size in chars (the type). This includes the terminator.
+ * @param   pcch            Where to store the length of the translated string,
+ *                          excluding the terminator. (Optional)
+ *
+ *                          This may be set under some error conditions,
+ *                          however, only for VERR_BUFFER_OVERFLOW and
+ *                          VERR_NO_STR_MEMORY will it contain a valid string
+ *                          length that can be used to resize the buffer.
+ * @param   pszTag          Allocation tag used for statistics and such.
+ */
+RTDECL(int) RTUtf16LittleToUtf8ExTag(PCRTUTF16 pwszString, size_t cwcString, char **ppsz, size_t cch, size_t *pcch,
+                                     const char *pszTag);
+
+/**
  * Calculates the length of the UTF-16 string in UTF-8 chars (bytes).
  *
  * This function will validate the string, and incorrectly encoded UTF-16
@@ -639,6 +945,34 @@ RTDECL(int)  RTUtf16ToUtf8ExTag(PCRTUTF16 pwszString, size_t cwcString, char **p
 RTDECL(size_t) RTUtf16CalcUtf8Len(PCRTUTF16 pwsz);
 
 /**
+ * Calculates the length of the UTF-16BE string in UTF-8 chars (bytes).
+ *
+ * This function will validate the string, and incorrectly encoded UTF-16BE
+ * strings will be rejected.  The primary purpose of this function is to
+ * help allocate buffers for RTUtf16BigToUtf8() of the correct size.  For most
+ * other purposes RTUtf16BigToUtf8Ex() should be used.
+ *
+ * @returns Number of char (bytes).
+ * @returns 0 if the string was incorrectly encoded.
+ * @param   pwsz        The UTF-16BE string.
+ */
+RTDECL(size_t) RTUtf16BigCalcUtf8Len(PCRTUTF16 pwsz);
+
+/**
+ * Calculates the length of the UTF-16LE string in UTF-8 chars (bytes).
+ *
+ * This function will validate the string, and incorrectly encoded UTF-16LE
+ * strings will be rejected.  The primary purpose of this function is to
+ * help allocate buffers for RTUtf16LittleToUtf8() of the correct size.  For
+ * most other purposes RTUtf16LittleToUtf8Ex() should be used.
+ *
+ * @returns Number of char (bytes).
+ * @returns 0 if the string was incorrectly encoded.
+ * @param   pwsz        The UTF-16LE string.
+ */
+RTDECL(size_t) RTUtf16LittleCalcUtf8Len(PCRTUTF16 pwsz);
+
+/**
  * Calculates the length of the UTF-16 string in UTF-8 chars (bytes).
  *
  * This function will validate the string, and incorrectly encoded UTF-16
@@ -651,6 +985,34 @@ RTDECL(size_t) RTUtf16CalcUtf8Len(PCRTUTF16 pwsz);
  *                      This is undefined on failure.
  */
 RTDECL(int) RTUtf16CalcUtf8LenEx(PCRTUTF16 pwsz, size_t cwc, size_t *pcch);
+
+/**
+ * Calculates the length of the UTF-16BE string in UTF-8 chars (bytes).
+ *
+ * This function will validate the string, and incorrectly encoded UTF-16BE
+ * strings will be rejected.
+ *
+ * @returns iprt status code.
+ * @param   pwsz        The string.
+ * @param   cwc         The max string length. Use RTSTR_MAX to process the entire string.
+ * @param   pcch        Where to store the string length (in bytes). Optional.
+ *                      This is undefined on failure.
+ */
+RTDECL(int) RTUtf16BigCalcUtf8LenEx(PCRTUTF16 pwsz, size_t cwc, size_t *pcch);
+
+/**
+ * Calculates the length of the UTF-16LE string in UTF-8 chars (bytes).
+ *
+ * This function will validate the string, and incorrectly encoded UTF-16LE
+ * strings will be rejected.
+ *
+ * @returns iprt status code.
+ * @param   pwsz        The string.
+ * @param   cwc         The max string length. Use RTSTR_MAX to process the entire string.
+ * @param   pcch        Where to store the string length (in bytes). Optional.
+ *                      This is undefined on failure.
+ */
+RTDECL(int) RTUtf16LittleCalcUtf8LenEx(PCRTUTF16 pwsz, size_t cwc, size_t *pcch);
 
 /**
  * Translate a UTF-16 string into a Latin-1 (ISO-8859-1) allocating the result
@@ -807,6 +1169,19 @@ RTDECL(RTUNICP) RTUtf16GetCpInternal(PCRTUTF16 pwsz);
 RTDECL(int) RTUtf16GetCpExInternal(PCRTUTF16 *ppwsz, PRTUNICP pCp);
 
 /**
+ * Get the unicode code point at the given string position, big endian.
+ *
+ * @returns iprt status code.
+ * @param   ppwsz       Pointer to the string pointer. This will be updated to
+ *                      point to the char following the current code point.
+ * @param   pCp         Where to store the code point.
+ *                      RTUNICP_INVALID is stored here on failure.
+ *
+ * @remark  This is an internal worker for RTUtf16BigGetCpEx().
+ */
+RTDECL(int) RTUtf16BigGetCpExInternal(PCRTUTF16 *ppwsz, PRTUNICP pCp);
+
+/**
  * Put the unicode code point at the given string position
  * and return the pointer to the char following it.
  *
@@ -864,6 +1239,36 @@ DECLINLINE(int) RTUtf16GetCpEx(PCRTUTF16 *ppwsz, PRTUNICP pCp)
         return VINF_SUCCESS;
     }
     return RTUtf16GetCpExInternal(ppwsz, pCp);
+}
+
+/**
+ * Get the unicode code point at the given string position, big endian version.
+ *
+ * @returns iprt status code.
+ * @param   ppwsz       Pointer to the string pointer. This will be updated to
+ *                      point to the char following the current code point.
+ * @param   pCp         Where to store the code point.
+ *                      RTUNICP_INVALID is stored here on failure.
+ *
+ * @remark  We optimize this operation by using an inline function for
+ *          everything which isn't a surrogate pair or and endian indicator.
+ */
+DECLINLINE(int) RTUtf16BigGetCpEx(PCRTUTF16 *ppwsz, PRTUNICP pCp)
+{
+#ifdef RT_BIG_ENDIAN
+    return RTUtf16GetCpEx(ppwsz, pCp);
+#else
+# ifdef IPRT_INCLUDED_asm_h
+    const RTUTF16 wc = RT_BE2H_U16(**ppwsz);
+    if (wc < 0xd800 || (wc > 0xdfff && wc < 0xfffe))
+    {
+        (*ppwsz)++;
+        *pCp = wc;
+        return VINF_SUCCESS;
+    }
+# endif
+    return RTUtf16BigGetCpExInternal(ppwsz, pCp);
+#endif
 }
 
 /**
@@ -976,12 +1381,78 @@ DECLINLINE(bool) RTUtf16IsSurrogatePair(RTUTF16 wcHigh, RTUTF16 wcLow)
  */
 RTDECL(int) RTUtf16PrintHexBytes(PRTUTF16 pwszBuf, size_t cwcBuf, void const *pv, size_t cb, uint32_t fFlags);
 
+/**
+ * String printf producing UTF-16 output.
+ *
+ * @returns On success, positive count of formatted RTUTF16 units excluding the
+ *          terminator.  On buffer overflow, negative number giving the required
+ *          buffer size (including terminator) in RTUTF16 units.
+ *
+ * @param   pwszBuffer  Output buffer.
+ * @param   cwcBuffer   Size of the output buffer in RTUTF16 units.
+ * @param   pszFormat   Pointer to the format string, @see pg_rt_str_format.
+ * @param   args        The format argument.
+ *
+ * @note    This is similar to RTStrPrintf2V (not RTStrPrintfV)!
+ */
+RTDECL(ssize_t) RTUtf16PrintfV(PRTUTF16 pwszBuffer, size_t cwcBuffer, const char *pszFormat, va_list args) RT_IPRT_FORMAT_ATTR(3, 0);
+
+/**
+ * String printf producing UTF-16 output.
+ *
+ * @returns On success, positive count of formatted RTUTF16 units excluding the
+ *          terminator.  On buffer overflow, negative number giving the required
+ *          buffer size (including terminator) in RTUTF16 units.
+ *
+ * @param   pwszBuffer  Output buffer.
+ * @param   cwcBuffer   Size of the output buffer in RTUTF16 units.
+ * @param   pszFormat   Pointer to the format string, @see pg_rt_str_format.
+ * @param   ...         The format argument.
+ *
+ * @note    This is similar to RTStrPrintf2 (not RTStrPrintf)!
+ */
+RTDECL(ssize_t) RTUtf16Printf(PRTUTF16 pwszBuffer, size_t cwcBuffer, const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(3, 4);
+
+/**
+ * String printf producing UTF-16 output with custom formatting.
+ *
+ * @returns On success, positive count of formatted RTUTF16 units excluding the
+ *          terminator.  On buffer overflow, negative number giving the required
+ *          buffer size (including terminator) in RTUTF16 units.
+ *
+ * @param   pfnFormat   Pointer to handler function for the custom formats.
+ * @param   pvArg       Argument to the pfnFormat function.
+ * @param   pwszBuffer  Output buffer.
+ * @param   cwcBuffer   Size of the output buffer in RTUTF16 units.
+ * @param   pszFormat   Pointer to the format string, @see pg_rt_str_format.
+ * @param   args        The format argument.
+ *
+ * @note    This is similar to RTStrPrintf2ExV (not RTStrPrintfExV)!
+ */
+RTDECL(ssize_t) RTUtf16PrintfExV(PFNSTRFORMAT pfnFormat, void *pvArg, PRTUTF16 pwszBuffer, size_t cwcBuffer,
+                                 const char *pszFormat, va_list args)  RT_IPRT_FORMAT_ATTR(5, 0);
+
+/**
+ * String printf producing UTF-16 output with custom formatting.
+ *
+ * @returns On success, positive count of formatted RTUTF16 units excluding the
+ *          terminator.  On buffer overflow, negative number giving the required
+ *          buffer size (including terminator) in RTUTF16 units.
+ *
+ * @param   pfnFormat   Pointer to handler function for the custom formats.
+ * @param   pvArg       Argument to the pfnFormat function.
+ * @param   pwszBuffer  Output buffer.
+ * @param   cwcBuffer   Size of the output buffer in RTUTF16 units.
+ * @param   pszFormat   Pointer to the format string, @see pg_rt_str_format.
+ * @param   ...         The format argument.
+ *
+ * @note    This is similar to RTStrPrintf2Ex (not RTStrPrintfEx)!
+ */
+RTDECL(ssize_t) RTUtf16PrintfEx(PFNSTRFORMAT pfnFormat, void *pvArg, PRTUTF16 pwszBuffer, size_t cwcBuffer,
+                                const char *pszFormat, ...)  RT_IPRT_FORMAT_ATTR(5, 6);
+
 /** @} */
-
-
 RT_C_DECLS_END
 
-/** @} */
-
-#endif
+#endif /* !IPRT_INCLUDED_utf16_h */
 

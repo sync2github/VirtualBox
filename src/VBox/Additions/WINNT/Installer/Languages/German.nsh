@@ -1,9 +1,10 @@
-; $Id$
-; @file NLS for German language.
+; $Id: German.nsh 84956 2020-06-25 15:24:13Z vboxsync $
+;; @file
+; NLS for German language.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -16,51 +17,50 @@
 
 LangString VBOX_TEST ${LANG_GERMAN}                                 "Das ist eine Test-Nachricht von $(^Name)!"
 
-LangString VBOX_NOADMIN ${LANG_GERMAN}                              "Sie benötigen Administrations-Rechte zum (De-)Installieren der $(^Name)!$\r$\nDas Setup wird nun beendet."
+LangString VBOX_NOADMIN ${LANG_GERMAN}                              "Sie benÃ¶tigen Administrations-Rechte zum (De-)Installieren der $(^Name)!$\r$\nDas Setup wird nun beendet."
 
-LangString VBOX_NOTICE_ARCH_X86 ${LANG_GERMAN}                      "Diese Applikation läuft nur auf 32-bit Windows-Systemen. Bitte installieren Sie die 64-bit Version der $(^Name)!"
-LangString VBOX_NOTICE_ARCH_AMD64 ${LANG_GERMAN}                    "Diese Applikation läuft nur auf 64-bit Windows-Systemen. Bitte installieren Sie die 32-bit Version der $(^Name)!"
-LangString VBOX_NT4_NO_SP6 ${LANG_GERMAN}                           "Es ist kein Service Pack 6 für NT 4.0 installiert.$\r$\nEs wird empfohlen das Service-Pack vor dieser Installation zu installieren. Trotzdem jetzt ohne Service-Pack installieren?"
+LangString VBOX_NOTICE_ARCH_X86 ${LANG_GERMAN}                      "Diese Applikation lÃ¤uft nur auf 32-bit Windows-Systemen. Bitte installieren Sie die 64-bit Version der $(^Name)!"
+LangString VBOX_NOTICE_ARCH_AMD64 ${LANG_GERMAN}                    "Diese Applikation lÃ¤uft nur auf 64-bit Windows-Systemen. Bitte installieren Sie die 32-bit Version der $(^Name)!"
+LangString VBOX_NT4_NO_SP6 ${LANG_GERMAN}                           "Es ist kein Service Pack 6 fÃ¼r NT 4.0 installiert.$\r$\nEs wird empfohlen das Service-Pack vor dieser Installation zu installieren. Trotzdem jetzt ohne Service-Pack installieren?"
 
-LangString VBOX_PLATFORM_UNSUPPORTED ${LANG_GERMAN}                 "Diese Plattform wird noch nicht durch diese Guest Additions unterstützt!"
+LangString VBOX_PLATFORM_UNSUPPORTED ${LANG_GERMAN}                 "Diese Plattform wird noch nicht durch diese Guest Additions unterstÃ¼tzt!"
 
-LangString VBOX_SUN_FOUND ${LANG_GERMAN}                            "Eine veraltete Version der Sun Guest Additions ist auf diesem System bereits installiert. Diese muss erst deinstalliert werden bevor aktuelle Guest Additions installiert werden können.$\r$\n$\r$\nJetzt die alten Guest Additions deinstallieren?"
+LangString VBOX_SUN_FOUND ${LANG_GERMAN}                            "Eine veraltete Version der Sun Guest Additions ist auf diesem System bereits installiert. Diese muss erst deinstalliert werden bevor aktuelle Guest Additions installiert werden kÃ¶nnen.$\r$\n$\r$\nJetzt die alten Guest Additions deinstallieren?"
 LangString VBOX_SUN_ABORTED ${LANG_GERMAN}                          "Die Installation der Guest Additions kann nicht fortgesetzt werden.$\r$\nBitte deinstallieren Sie erst die alten Sun Guest Additions!"
 
-LangString VBOX_INNOTEK_FOUND ${LANG_GERMAN}                        "Eine veraltete Version der innotek Guest Additions ist auf diesem System bereits installiert. Diese muss erst deinstalliert werden bevor aktuelle Guest Additions installiert werden können.$\r$\n$\r$\nJetzt die alten Guest Additions deinstallieren?"
+LangString VBOX_INNOTEK_FOUND ${LANG_GERMAN}                        "Eine veraltete Version der innotek Guest Additions ist auf diesem System bereits installiert. Diese muss erst deinstalliert werden bevor aktuelle Guest Additions installiert werden kÃ¶nnen.$\r$\n$\r$\nJetzt die alten Guest Additions deinstallieren?"
 LangString VBOX_INNOTEK_ABORTED ${LANG_GERMAN}                      "Die Installation der Guest Additions kann nicht fortgesetzt werden.$\r$\nBitte deinstallieren Sie erst die alten innotek Guest Additions!"
 
-LangString VBOX_UNINSTALL_START ${LANG_GERMAN}                      "Auf OK klicken um mit der Deinstallation zu beginnen.$\r$\nBitte warten Sie dann während die Deinstallation im Hintergrund ausgeführt wird ..."
+LangString VBOX_UNINSTALL_START ${LANG_GERMAN}                      "Auf OK klicken um mit der Deinstallation zu beginnen.$\r$\nBitte warten Sie dann wÃ¤hrend die Deinstallation im Hintergrund ausgefÃ¼hrt wird ..."
 LangString VBOX_UNINSTALL_REBOOT ${LANG_GERMAN}                     "Es wird dringend empfohlen das System neu zu starten bevor die neuen Guest Additions installiert werden.$\r$\nBitte starten Sie die Installation nach dem Neustart erneut.$\r$\n$\r$\nJetzt neu starten?"
 
 LangString VBOX_COMPONENT_MAIN ${LANG_GERMAN}                       "VirtualBox Guest Additions"
 LangString VBOX_COMPONENT_MAIN_DESC ${LANG_GERMAN}                  "Hauptkomponenten der VirtualBox Guest Additions"
 
-LangString VBOX_COMPONENT_AUTOLOGON ${LANG_GERMAN}                  "Unterstützung für automatisches Anmelden"
-LangString VBOX_COMPONENT_AUTOLOGON_DESC ${LANG_GERMAN}             "Ermöglicht automatisches Anmelden von Benutzern"
-LangString VBOX_COMPONENT_AUTOLOGON_WARN_3RDPARTY ${LANG_GERMAN}    "Es ist bereits eine Komponente für das automatische Anmelden installiert.$\r$\nFalls Sie diese Komponente nun mit der von VirtualBox ersetzen, könnte das System instabil werden.$\r$\nDennoch installieren?"
+LangString VBOX_COMPONENT_AUTOLOGON ${LANG_GERMAN}                  "UnterstÃ¼tzung fÃ¼r automatisches Anmelden"
+LangString VBOX_COMPONENT_AUTOLOGON_DESC ${LANG_GERMAN}             "ErmÃ¶glicht automatisches Anmelden von Benutzern"
+LangString VBOX_COMPONENT_AUTOLOGON_WARN_3RDPARTY ${LANG_GERMAN}    "Es ist bereits eine Komponente fÃ¼r das automatische Anmelden installiert.$\r$\nFalls Sie diese Komponente nun mit der von VirtualBox ersetzen, kÃ¶nnte das System instabil werden.$\r$\nDennoch installieren?"
 
-LangString VBOX_COMPONENT_D3D  ${LANG_GERMAN}                       "Direct3D-Unterstützung (Experimentell)"
-LangString VBOX_COMPONENT_D3D_DESC  ${LANG_GERMAN}                  "Ermöglicht Direct3D-Unterstützung für Gäste (Experimentell)"
-LangString VBOX_COMPONENT_D3D_NO_SM ${LANG_GERMAN}                  "Windows befindet sich aktuell nicht im abgesicherten Modus.$\r$\nDaher kann die D3D-Unterstützung nicht installiert werden."
-LangString VBOX_COMPONENT_D3D_NOT_SUPPORTED ${LANG_GERMAN}          "Direct3D Gast-Unterstützung nicht verfügbar unter Windows $g_strWinVersion!"
-LangString VBOX_COMPONENT_D3D_OR_WDDM ${LANG_GERMAN}                "Für diesen Gast ist Windows Aero (WDDM)-Unterstützung verfügbar.$\r$\nDieses Feature ist jedoch noch experimentell und sollte daher noch nicht auf produktiven Systemen eingesetzt werden.$\r$\n$\r$\nMöchten Sie stattdessen die reguläre Direct3D-Unterstützung installieren?"
-LangString VBOX_COMPONENT_D3D_HINT_VRAM ${LANG_GERMAN}              "Bitte beachten Sie, dass die virtuelle Maschine für die Benutzung von 3D-Beschleunigung einen Grafikspeicher von mindestens 128 MB für einen Monitor benötigt und für den Multi-Monitor-Betrieb bis zu 256 MB empfohlen wird.$\r$\n$\r$\nSie können den Grafikspeicher in den VM-Einstellungen in der Kategorie $\"Anzeige$\" ändern."
-LangString VBOX_COMPONENT_D3D_INVALID ${LANG_GERMAN}                "Das Setup hat eine ungültige/beschädigte DirectX-Installation festgestellt.$\r$\n$\r$\nUm die Direct3D-Unterstützung installieren zu können wird empfohlen, zuerst das VirtualBox Benutzerhandbuch zu konsultieren.$\r$\n$\r$\nMit der Installation jetzt trotzdem fortfahren?"
-LangString VBOX_COMPONENT_D3D_INVALID_MANUAL ${LANG_GERMAN}         "Soll nun das VirtualBox-Handbuch angezeigt werden um nach einer Lösung zu suchen?"
+LangString VBOX_COMPONENT_D3D  ${LANG_GERMAN}                       "Direct3D-UnterstÃ¼tzung (Experimentell)"
+LangString VBOX_COMPONENT_D3D_DESC  ${LANG_GERMAN}                  "ErmÃ¶glicht Direct3D-UnterstÃ¼tzung fÃ¼r GÃ¤ste (Experimentell)"
+LangString VBOX_COMPONENT_D3D_NO_SM ${LANG_GERMAN}                  "Windows befindet sich aktuell nicht im abgesicherten Modus.$\r$\nDaher kann die D3D-UnterstÃ¼tzung nicht installiert werden."
+LangString VBOX_COMPONENT_D3D_NOT_SUPPORTED ${LANG_GERMAN}          "Direct3D Gast-UnterstÃ¼tzung nicht verfÃ¼gbar unter Windows $g_strWinVersion!"
+;LangString VBOX_COMPONENT_D3D_HINT_VRAM ${LANG_GERMAN}              "Bitte beachten Sie, dass die virtuelle Maschine fÃ¼r die Benutzung von 3D-Beschleunigung einen Grafikspeicher von mindestens 128 MB fÃ¼r einen Monitor benÃ¶tigt und fÃ¼r den Multi-Monitor-Betrieb bis zu 256 MB empfohlen wird.$\r$\n$\r$\nSie kÃ¶nnen den Grafikspeicher in den VM-Einstellungen in der Kategorie $\"Anzeige$\" Ã¤ndern."
+LangString VBOX_COMPONENT_D3D_INVALID ${LANG_GERMAN}                "Das Setup hat eine ungÃ¼ltige/beschÃ¤digte DirectX-Installation festgestellt.$\r$\n$\r$\nUm die Direct3D-UnterstÃ¼tzung installieren zu kÃ¶nnen wird empfohlen, zuerst das VirtualBox Benutzerhandbuch zu konsultieren.$\r$\n$\r$\nMit der Installation jetzt trotzdem fortfahren?"
+LangString VBOX_COMPONENT_D3D_INVALID_MANUAL ${LANG_GERMAN}         "Soll nun das VirtualBox-Handbuch angezeigt werden um nach einer LÃ¶sung zu suchen?"
 
-LangString VBOX_COMPONENT_STARTMENU ${LANG_GERMAN}                  "Startmenü-Einträge"
-LangString VBOX_COMPONENT_STARTMENU_DESC ${LANG_GERMAN}             "Erstellt Einträge im Startmenü"
+LangString VBOX_COMPONENT_STARTMENU ${LANG_GERMAN}                  "StartmenÃ¼-EintrÃ¤ge"
+LangString VBOX_COMPONENT_STARTMENU_DESC ${LANG_GERMAN}             "Erstellt EintrÃ¤ge im StartmenÃ¼"
 
-LangString VBOX_WFP_WARN_REPLACE ${LANG_GERMAN}                     "Das Setup hat gerade Systemdateien ersetzt um die ${PRODUCT_NAME} korrekt installieren zu können.$\r$\nFalls nun ein Warn-Dialog des Windows-Dateischutzes erscheint, diesen bitte abbrechen und die Dateien nicht wiederherstellen lassen!"
-LangString VBOX_REBOOT_REQUIRED ${LANG_GERMAN}                      "Um alle Änderungen durchführen zu können, muss das System neu gestartet werden. Jetzt neu starten?"
+LangString VBOX_WFP_WARN_REPLACE ${LANG_GERMAN}                     "Das Setup hat gerade Systemdateien ersetzt um die ${PRODUCT_NAME} korrekt installieren zu kÃ¶nnen.$\r$\nFalls nun ein Warn-Dialog des Windows-Dateischutzes erscheint, diesen bitte abbrechen und die Dateien nicht wiederherstellen lassen!"
+LangString VBOX_REBOOT_REQUIRED ${LANG_GERMAN}                      "Um alle Ã„nderungen durchfÃ¼hren zu kÃ¶nnen, muss das System neu gestartet werden. Jetzt neu starten?"
 
 LangString VBOX_EXTRACTION_COMPLETE ${LANG_GERMAN}                  "$(^Name): Die Dateien wurden erfolgreich nach $\"$INSTDIR$\" entpackt!"
 
-LangString VBOX_ERROR_INST_FAILED ${LANG_GERMAN}                    "Es trat ein Fehler während der Installation auf!$\r$\nBitte werfen Sie einen Blick in die Log-Datei unter '$INSTDIR\install_ui.log' für mehr Informationen."
-LangString VBOX_ERROR_OPEN_LINK ${LANG_GERMAN}                      "Link konnte nicht im Standard-Browser geöffnet werden."
+LangString VBOX_ERROR_INST_FAILED ${LANG_GERMAN}                    "Es trat ein Fehler wÃ¤hrend der Installation auf!$\r$\nBitte werfen Sie einen Blick in die Log-Datei unter '$INSTDIR\install_ui.log' fÃ¼r mehr Informationen."
+LangString VBOX_ERROR_OPEN_LINK ${LANG_GERMAN}                      "Link konnte nicht im Standard-Browser geÃ¶ffnet werden."
 
 LangString VBOX_UNINST_CONFIRM ${LANG_GERMAN}                       "Wollen Sie wirklich die $(^Name) deinstallieren?"
 LangString VBOX_UNINST_SUCCESS ${LANG_GERMAN}                       "$(^Name) wurden erfolgreich deinstalliert."
-LangString VBOX_UNINST_INVALID_D3D ${LANG_GERMAN}                   "Unvollständige oder ungültige Installation der Direct3D-Unterstützung erkannt; Deinstallation wird übersprungen."
+LangString VBOX_UNINST_INVALID_D3D ${LANG_GERMAN}                   "UnvollstÃ¤ndige oder ungÃ¼ltige Installation der Direct3D-UnterstÃ¼tzung erkannt; Deinstallation wird Ã¼bersprungen."
 LangString VBOX_UNINST_UNABLE_TO_RESTORE_D3D ${LANG_GERMAN}         "Konnte Direct3D-Originaldateien nicht wiederherstellen. Bitte DirectX neu installieren."

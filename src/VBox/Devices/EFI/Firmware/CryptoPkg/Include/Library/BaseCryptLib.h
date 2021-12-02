@@ -4,14 +4,8 @@
   primitives (Hash Serials, HMAC, RSA, Diffie-Hellman, etc) for UEFI security
   functionality enabling.
 
-Copyright (c) 2009 - 2015, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2009 - 2020, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -19,11 +13,6 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #define __BASE_CRYPT_LIB_H__
 
 #include <Uefi/UefiBaseType.h>
-
-///
-/// MD4 digest size in bytes
-///
-#define MD4_DIGEST_SIZE     16
 
 ///
 /// MD5 digest size in bytes
@@ -49,6 +38,11 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 /// SHA-512 digest size in bytes
 ///
 #define SHA512_DIGEST_SIZE  64
+
+///
+/// SM3 digest size in bytes
+///
+#define SM3_256_DIGEST_SIZE 32
 
 ///
 /// TDES block size in bytes
@@ -78,120 +72,7 @@ typedef enum {
 //    One-Way Cryptographic Hash Primitives
 //=====================================================================================
 
-/**
-  Retrieves the size, in bytes, of the context buffer required for MD4 hash operations.
-
-  If this interface is not supported, then return zero.
-
-  @return  The size, in bytes, of the context buffer required for MD4 hash operations.
-  @retval  0   This interface is not supported.
-
-**/
-UINTN
-EFIAPI
-Md4GetContextSize (
-  VOID
-  );
-
-/**
-  Initializes user-supplied memory pointed by Md4Context as MD4 hash context for
-  subsequent use.
-
-  If Md4Context is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[out]  Md4Context  Pointer to MD4 context being initialized.
-
-  @retval TRUE   MD4 context initialization succeeded.
-  @retval FALSE  MD4 context initialization failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-Md4Init (
-  OUT  VOID  *Md4Context
-  );
-
-/**
-  Makes a copy of an existing MD4 context.
-
-  If Md4Context is NULL, then return FALSE.
-  If NewMd4Context is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]  Md4Context     Pointer to MD4 context being copied.
-  @param[out] NewMd4Context  Pointer to new MD4 context.
-
-  @retval TRUE   MD4 context copy succeeded.
-  @retval FALSE  MD4 context copy failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-Md4Duplicate (
-  IN   CONST VOID  *Md4Context,
-  OUT  VOID        *NewMd4Context
-  );
-
-/**
-  Digests the input data and updates MD4 context.
-
-  This function performs MD4 digest on a data buffer of the specified size.
-  It can be called multiple times to compute the digest of long or discontinuous data streams.
-  MD4 context should be already correctly intialized by Md4Init(), and should not be finalized
-  by Md4Final(). Behavior with invalid context is undefined.
-
-  If Md4Context is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in, out]  Md4Context  Pointer to the MD4 context.
-  @param[in]       Data        Pointer to the buffer containing the data to be hashed.
-  @param[in]       DataSize    Size of Data buffer in bytes.
-
-  @retval TRUE   MD4 data digest succeeded.
-  @retval FALSE  MD4 data digest failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-Md4Update (
-  IN OUT  VOID        *Md4Context,
-  IN      CONST VOID  *Data,
-  IN      UINTN       DataSize
-  );
-
-/**
-  Completes computation of the MD4 digest value.
-
-  This function completes MD4 hash computation and retrieves the digest value into
-  the specified memory. After this function has been called, the MD4 context cannot
-  be used again.
-  MD4 context should be already correctly intialized by Md4Init(), and should not be
-  finalized by Md4Final(). Behavior with invalid MD4 context is undefined.
-
-  If Md4Context is NULL, then return FALSE.
-  If HashValue is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in, out]  Md4Context  Pointer to the MD4 context.
-  @param[out]      HashValue   Pointer to a buffer that receives the MD4 digest
-                               value (16 bytes).
-
-  @retval TRUE   MD4 digest computation succeeded.
-  @retval FALSE  MD4 digest computation failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-Md4Final (
-  IN OUT  VOID   *Md4Context,
-  OUT     UINT8  *HashValue
-  );
-
+#ifdef ENABLE_MD5_DEPRECATED_INTERFACES
 /**
   Retrieves the size, in bytes, of the context buffer required for MD5 hash operations.
 
@@ -254,7 +135,7 @@ Md5Duplicate (
 
   This function performs MD5 digest on a data buffer of the specified size.
   It can be called multiple times to compute the digest of long or discontinuous data streams.
-  MD5 context should be already correctly intialized by Md5Init(), and should not be finalized
+  MD5 context should be already correctly initialized by Md5Init(), and should not be finalized
   by Md5Final(). Behavior with invalid context is undefined.
 
   If Md5Context is NULL, then return FALSE.
@@ -283,7 +164,7 @@ Md5Update (
   This function completes MD5 hash computation and retrieves the digest value into
   the specified memory. After this function has been called, the MD5 context cannot
   be used again.
-  MD5 context should be already correctly intialized by Md5Init(), and should not be
+  MD5 context should be already correctly initialized by Md5Init(), and should not be
   finalized by Md5Final(). Behavior with invalid MD5 context is undefined.
 
   If Md5Context is NULL, then return FALSE.
@@ -306,6 +187,34 @@ Md5Final (
   OUT     UINT8  *HashValue
   );
 
+/**
+  Computes the MD5 message digest of a input data buffer.
+
+  This function performs the MD5 message digest of a given data buffer, and places
+  the digest value into the specified memory.
+
+  If this interface is not supported, then return FALSE.
+
+  @param[in]   Data        Pointer to the buffer containing the data to be hashed.
+  @param[in]   DataSize    Size of Data buffer in bytes.
+  @param[out]  HashValue   Pointer to a buffer that receives the MD5 digest
+                           value (16 bytes).
+
+  @retval TRUE   MD5 digest computation succeeded.
+  @retval FALSE  MD5 digest computation failed.
+  @retval FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+Md5HashAll (
+  IN   CONST VOID  *Data,
+  IN   UINTN       DataSize,
+  OUT  UINT8       *HashValue
+  );
+#endif
+
+#ifndef DISABLE_SHA1_DEPRECATED_INTERFACES
 /**
   Retrieves the size, in bytes, of the context buffer required for SHA-1 hash operations.
 
@@ -368,7 +277,7 @@ Sha1Duplicate (
 
   This function performs SHA-1 digest on a data buffer of the specified size.
   It can be called multiple times to compute the digest of long or discontinuous data streams.
-  SHA-1 context should be already correctly intialized by Sha1Init(), and should not be finalized
+  SHA-1 context should be already correctly initialized by Sha1Init(), and should not be finalized
   by Sha1Final(). Behavior with invalid context is undefined.
 
   If Sha1Context is NULL, then return FALSE.
@@ -397,7 +306,7 @@ Sha1Update (
   This function completes SHA-1 hash computation and retrieves the digest value into
   the specified memory. After this function has been called, the SHA-1 context cannot
   be used again.
-  SHA-1 context should be already correctly intialized by Sha1Init(), and should not be
+  SHA-1 context should be already correctly initialized by Sha1Init(), and should not be
   finalized by Sha1Final(). Behavior with invalid SHA-1 context is undefined.
 
   If Sha1Context is NULL, then return FALSE.
@@ -419,6 +328,33 @@ Sha1Final (
   IN OUT  VOID   *Sha1Context,
   OUT     UINT8  *HashValue
   );
+
+/**
+  Computes the SHA-1 message digest of a input data buffer.
+
+  This function performs the SHA-1 message digest of a given data buffer, and places
+  the digest value into the specified memory.
+
+  If this interface is not supported, then return FALSE.
+
+  @param[in]   Data        Pointer to the buffer containing the data to be hashed.
+  @param[in]   DataSize    Size of Data buffer in bytes.
+  @param[out]  HashValue   Pointer to a buffer that receives the SHA-1 digest
+                           value (20 bytes).
+
+  @retval TRUE   SHA-1 digest computation succeeded.
+  @retval FALSE  SHA-1 digest computation failed.
+  @retval FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+Sha1HashAll (
+  IN   CONST VOID  *Data,
+  IN   UINTN       DataSize,
+  OUT  UINT8       *HashValue
+  );
+#endif
 
 /**
   Retrieves the size, in bytes, of the context buffer required for SHA-256 hash operations.
@@ -477,7 +413,7 @@ Sha256Duplicate (
 
   This function performs SHA-256 digest on a data buffer of the specified size.
   It can be called multiple times to compute the digest of long or discontinuous data streams.
-  SHA-256 context should be already correctly intialized by Sha256Init(), and should not be finalized
+  SHA-256 context should be already correctly initialized by Sha256Init(), and should not be finalized
   by Sha256Final(). Behavior with invalid context is undefined.
 
   If Sha256Context is NULL, then return FALSE.
@@ -504,7 +440,7 @@ Sha256Update (
   This function completes SHA-256 hash computation and retrieves the digest value into
   the specified memory. After this function has been called, the SHA-256 context cannot
   be used again.
-  SHA-256 context should be already correctly intialized by Sha256Init(), and should not be
+  SHA-256 context should be already correctly initialized by Sha256Init(), and should not be
   finalized by Sha256Final(). Behavior with invalid SHA-256 context is undefined.
 
   If Sha256Context is NULL, then return FALSE.
@@ -523,6 +459,32 @@ EFIAPI
 Sha256Final (
   IN OUT  VOID   *Sha256Context,
   OUT     UINT8  *HashValue
+  );
+
+/**
+  Computes the SHA-256 message digest of a input data buffer.
+
+  This function performs the SHA-256 message digest of a given data buffer, and places
+  the digest value into the specified memory.
+
+  If this interface is not supported, then return FALSE.
+
+  @param[in]   Data        Pointer to the buffer containing the data to be hashed.
+  @param[in]   DataSize    Size of Data buffer in bytes.
+  @param[out]  HashValue   Pointer to a buffer that receives the SHA-256 digest
+                           value (32 bytes).
+
+  @retval TRUE   SHA-256 digest computation succeeded.
+  @retval FALSE  SHA-256 digest computation failed.
+  @retval FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+Sha256HashAll (
+  IN   CONST VOID  *Data,
+  IN   UINTN       DataSize,
+  OUT  UINT8       *HashValue
   );
 
 /**
@@ -582,7 +544,7 @@ Sha384Duplicate (
 
   This function performs SHA-384 digest on a data buffer of the specified size.
   It can be called multiple times to compute the digest of long or discontinuous data streams.
-  SHA-384 context should be already correctly intialized by Sha384Init(), and should not be finalized
+  SHA-384 context should be already correctly initialized by Sha384Init(), and should not be finalized
   by Sha384Final(). Behavior with invalid context is undefined.
 
   If Sha384Context is NULL, then return FALSE.
@@ -609,7 +571,7 @@ Sha384Update (
   This function completes SHA-384 hash computation and retrieves the digest value into
   the specified memory. After this function has been called, the SHA-384 context cannot
   be used again.
-  SHA-384 context should be already correctly intialized by Sha384Init(), and should not be
+  SHA-384 context should be already correctly initialized by Sha384Init(), and should not be
   finalized by Sha384Final(). Behavior with invalid SHA-384 context is undefined.
 
   If Sha384Context is NULL, then return FALSE.
@@ -628,6 +590,32 @@ EFIAPI
 Sha384Final (
   IN OUT  VOID   *Sha384Context,
   OUT     UINT8  *HashValue
+  );
+
+/**
+  Computes the SHA-384 message digest of a input data buffer.
+
+  This function performs the SHA-384 message digest of a given data buffer, and places
+  the digest value into the specified memory.
+
+  If this interface is not supported, then return FALSE.
+
+  @param[in]   Data        Pointer to the buffer containing the data to be hashed.
+  @param[in]   DataSize    Size of Data buffer in bytes.
+  @param[out]  HashValue   Pointer to a buffer that receives the SHA-384 digest
+                           value (48 bytes).
+
+  @retval TRUE   SHA-384 digest computation succeeded.
+  @retval FALSE  SHA-384 digest computation failed.
+  @retval FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+Sha384HashAll (
+  IN   CONST VOID  *Data,
+  IN   UINTN       DataSize,
+  OUT  UINT8       *HashValue
   );
 
 /**
@@ -687,7 +675,7 @@ Sha512Duplicate (
 
   This function performs SHA-512 digest on a data buffer of the specified size.
   It can be called multiple times to compute the digest of long or discontinuous data streams.
-  SHA-512 context should be already correctly intialized by Sha512Init(), and should not be finalized
+  SHA-512 context should be already correctly initialized by Sha512Init(), and should not be finalized
   by Sha512Final(). Behavior with invalid context is undefined.
 
   If Sha512Context is NULL, then return FALSE.
@@ -714,7 +702,7 @@ Sha512Update (
   This function completes SHA-512 hash computation and retrieves the digest value into
   the specified memory. After this function has been called, the SHA-512 context cannot
   be used again.
-  SHA-512 context should be already correctly intialized by Sha512Init(), and should not be
+  SHA-512 context should be already correctly initialized by Sha512Init(), and should not be
   finalized by Sha512Final(). Behavior with invalid SHA-512 context is undefined.
 
   If Sha512Context is NULL, then return FALSE.
@@ -735,445 +723,298 @@ Sha512Final (
   OUT     UINT8  *HashValue
   );
 
+/**
+  Computes the SHA-512 message digest of a input data buffer.
+
+  This function performs the SHA-512 message digest of a given data buffer, and places
+  the digest value into the specified memory.
+
+  If this interface is not supported, then return FALSE.
+
+  @param[in]   Data        Pointer to the buffer containing the data to be hashed.
+  @param[in]   DataSize    Size of Data buffer in bytes.
+  @param[out]  HashValue   Pointer to a buffer that receives the SHA-512 digest
+                           value (64 bytes).
+
+  @retval TRUE   SHA-512 digest computation succeeded.
+  @retval FALSE  SHA-512 digest computation failed.
+  @retval FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+Sha512HashAll (
+  IN   CONST VOID  *Data,
+  IN   UINTN       DataSize,
+  OUT  UINT8       *HashValue
+  );
+
+/**
+  Retrieves the size, in bytes, of the context buffer required for SM3 hash operations.
+
+  @return  The size, in bytes, of the context buffer required for SM3 hash operations.
+
+**/
+UINTN
+EFIAPI
+Sm3GetContextSize (
+  VOID
+  );
+
+/**
+  Initializes user-supplied memory pointed by Sm3Context as SM3 hash context for
+  subsequent use.
+
+  If Sm3Context is NULL, then return FALSE.
+
+  @param[out]  Sm3Context  Pointer to SM3 context being initialized.
+
+  @retval TRUE   SM3 context initialization succeeded.
+  @retval FALSE  SM3 context initialization failed.
+
+**/
+BOOLEAN
+EFIAPI
+Sm3Init (
+  OUT  VOID  *Sm3Context
+  );
+
+/**
+  Makes a copy of an existing SM3 context.
+
+  If Sm3Context is NULL, then return FALSE.
+  If NewSm3Context is NULL, then return FALSE.
+  If this interface is not supported, then return FALSE.
+
+  @param[in]  Sm3Context     Pointer to SM3 context being copied.
+  @param[out] NewSm3Context  Pointer to new SM3 context.
+
+  @retval TRUE   SM3 context copy succeeded.
+  @retval FALSE  SM3 context copy failed.
+  @retval FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+Sm3Duplicate (
+  IN   CONST VOID  *Sm3Context,
+  OUT  VOID        *NewSm3Context
+  );
+
+/**
+  Digests the input data and updates SM3 context.
+
+  This function performs SM3 digest on a data buffer of the specified size.
+  It can be called multiple times to compute the digest of long or discontinuous data streams.
+  SM3 context should be already correctly initialized by Sm3Init(), and should not be finalized
+  by Sm3Final(). Behavior with invalid context is undefined.
+
+  If Sm3Context is NULL, then return FALSE.
+
+  @param[in, out]  Sm3Context     Pointer to the SM3 context.
+  @param[in]       Data           Pointer to the buffer containing the data to be hashed.
+  @param[in]       DataSize       Size of Data buffer in bytes.
+
+  @retval TRUE   SM3 data digest succeeded.
+  @retval FALSE  SM3 data digest failed.
+
+**/
+BOOLEAN
+EFIAPI
+Sm3Update (
+  IN OUT  VOID        *Sm3Context,
+  IN      CONST VOID  *Data,
+  IN      UINTN       DataSize
+  );
+
+/**
+  Completes computation of the SM3 digest value.
+
+  This function completes SM3 hash computation and retrieves the digest value into
+  the specified memory. After this function has been called, the SM3 context cannot
+  be used again.
+  SM3 context should be already correctly initialized by Sm3Init(), and should not be
+  finalized by Sm3Final(). Behavior with invalid SM3 context is undefined.
+
+  If Sm3Context is NULL, then return FALSE.
+  If HashValue is NULL, then return FALSE.
+
+  @param[in, out]  Sm3Context     Pointer to the SM3 context.
+  @param[out]      HashValue      Pointer to a buffer that receives the SM3 digest
+                                  value (32 bytes).
+
+  @retval TRUE   SM3 digest computation succeeded.
+  @retval FALSE  SM3 digest computation failed.
+
+**/
+BOOLEAN
+EFIAPI
+Sm3Final (
+  IN OUT  VOID   *Sm3Context,
+  OUT     UINT8  *HashValue
+  );
+
+/**
+  Computes the SM3 message digest of a input data buffer.
+
+  This function performs the SM3 message digest of a given data buffer, and places
+  the digest value into the specified memory.
+
+  If this interface is not supported, then return FALSE.
+
+  @param[in]   Data        Pointer to the buffer containing the data to be hashed.
+  @param[in]   DataSize    Size of Data buffer in bytes.
+  @param[out]  HashValue   Pointer to a buffer that receives the SM3 digest
+                           value (32 bytes).
+
+  @retval TRUE   SM3 digest computation succeeded.
+  @retval FALSE  SM3 digest computation failed.
+  @retval FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+Sm3HashAll (
+  IN   CONST VOID  *Data,
+  IN   UINTN       DataSize,
+  OUT  UINT8       *HashValue
+  );
+
 //=====================================================================================
 //    MAC (Message Authentication Code) Primitive
 //=====================================================================================
 
 /**
-  Retrieves the size, in bytes, of the context buffer required for HMAC-MD5 operations.
+  Allocates and initializes one HMAC_CTX context for subsequent HMAC-SHA256 use.
 
-  If this interface is not supported, then return zero.
-
-  @return  The size, in bytes, of the context buffer required for HMAC-MD5 operations.
-  @retval  0   This interface is not supported.
+  @return  Pointer to the HMAC_CTX context that has been initialized.
+           If the allocations fails, HmacSha256New() returns NULL.
 
 **/
-UINTN
+VOID *
 EFIAPI
-HmacMd5GetContextSize (
+HmacSha256New (
   VOID
   );
 
 /**
-  Initializes user-supplied memory pointed by HmacMd5Context as HMAC-MD5 context for
-  subsequent use.
+  Release the specified HMAC_CTX context.
 
-  If HmacMd5Context is NULL, then return FALSE.
+  @param[in]  HmacSha256Ctx  Pointer to the HMAC_CTX context to be released.
+
+**/
+VOID
+EFIAPI
+HmacSha256Free (
+  IN  VOID  *HmacSha256Ctx
+  );
+
+/**
+  Set user-supplied key for subsequent use. It must be done before any
+  calling to HmacSha256Update().
+
+  If HmacSha256Context is NULL, then return FALSE.
   If this interface is not supported, then return FALSE.
 
-  @param[out]  HmacMd5Context  Pointer to HMAC-MD5 context being initialized.
-  @param[in]   Key             Pointer to the user-supplied key.
-  @param[in]   KeySize         Key size in bytes.
+  @param[out]  HmacSha256Context  Pointer to HMAC-SHA256 context.
+  @param[in]   Key                Pointer to the user-supplied key.
+  @param[in]   KeySize            Key size in bytes.
 
-  @retval TRUE   HMAC-MD5 context initialization succeeded.
-  @retval FALSE  HMAC-MD5 context initialization failed.
+  @retval TRUE   The Key is set successfully.
+  @retval FALSE  The Key is set unsuccessfully.
   @retval FALSE  This interface is not supported.
 
 **/
 BOOLEAN
 EFIAPI
-HmacMd5Init (
-  OUT  VOID         *HmacMd5Context,
+HmacSha256SetKey (
+  OUT  VOID         *HmacSha256Context,
   IN   CONST UINT8  *Key,
   IN   UINTN        KeySize
   );
 
 /**
-  Makes a copy of an existing HMAC-MD5 context.
+  Makes a copy of an existing HMAC-SHA256 context.
 
-  If HmacMd5Context is NULL, then return FALSE.
-  If NewHmacMd5Context is NULL, then return FALSE.
+  If HmacSha256Context is NULL, then return FALSE.
+  If NewHmacSha256Context is NULL, then return FALSE.
   If this interface is not supported, then return FALSE.
 
-  @param[in]  HmacMd5Context     Pointer to HMAC-MD5 context being copied.
-  @param[out] NewHmacMd5Context  Pointer to new HMAC-MD5 context.
+  @param[in]  HmacSha256Context     Pointer to HMAC-SHA256 context being copied.
+  @param[out] NewHmacSha256Context  Pointer to new HMAC-SHA256 context.
 
-  @retval TRUE   HMAC-MD5 context copy succeeded.
-  @retval FALSE  HMAC-MD5 context copy failed.
+  @retval TRUE   HMAC-SHA256 context copy succeeded.
+  @retval FALSE  HMAC-SHA256 context copy failed.
   @retval FALSE  This interface is not supported.
 
 **/
 BOOLEAN
 EFIAPI
-HmacMd5Duplicate (
-  IN   CONST VOID  *HmacMd5Context,
-  OUT  VOID        *NewHmacMd5Context
+HmacSha256Duplicate (
+  IN   CONST VOID  *HmacSha256Context,
+  OUT  VOID        *NewHmacSha256Context
   );
 
 /**
-  Digests the input data and updates HMAC-MD5 context.
+  Digests the input data and updates HMAC-SHA256 context.
 
-  This function performs HMAC-MD5 digest on a data buffer of the specified size.
+  This function performs HMAC-SHA256 digest on a data buffer of the specified size.
   It can be called multiple times to compute the digest of long or discontinuous data streams.
-  HMAC-MD5 context should be already correctly intialized by HmacMd5Init(), and should not be
-  finalized by HmacMd5Final(). Behavior with invalid context is undefined.
+  HMAC-SHA256 context should be initialized by HmacSha256New(), and should not be finalized
+  by HmacSha256Final(). Behavior with invalid context is undefined.
 
-  If HmacMd5Context is NULL, then return FALSE.
+  If HmacSha256Context is NULL, then return FALSE.
   If this interface is not supported, then return FALSE.
 
-  @param[in, out]  HmacMd5Context  Pointer to the HMAC-MD5 context.
-  @param[in]       Data            Pointer to the buffer containing the data to be digested.
-  @param[in]       DataSize        Size of Data buffer in bytes.
+  @param[in, out]  HmacSha256Context Pointer to the HMAC-SHA256 context.
+  @param[in]       Data              Pointer to the buffer containing the data to be digested.
+  @param[in]       DataSize          Size of Data buffer in bytes.
 
-  @retval TRUE   HMAC-MD5 data digest succeeded.
-  @retval FALSE  HMAC-MD5 data digest failed.
+  @retval TRUE   HMAC-SHA256 data digest succeeded.
+  @retval FALSE  HMAC-SHA256 data digest failed.
   @retval FALSE  This interface is not supported.
 
 **/
 BOOLEAN
 EFIAPI
-HmacMd5Update (
-  IN OUT  VOID        *HmacMd5Context,
+HmacSha256Update (
+  IN OUT  VOID        *HmacSha256Context,
   IN      CONST VOID  *Data,
   IN      UINTN       DataSize
   );
 
 /**
-  Completes computation of the HMAC-MD5 digest value.
+  Completes computation of the HMAC-SHA256 digest value.
 
-  This function completes HMAC-MD5 hash computation and retrieves the digest value into
-  the specified memory. After this function has been called, the HMAC-MD5 context cannot
+  This function completes HMAC-SHA256 hash computation and retrieves the digest value into
+  the specified memory. After this function has been called, the HMAC-SHA256 context cannot
   be used again.
-  HMAC-MD5 context should be already correctly intialized by HmacMd5Init(), and should not be
-  finalized by HmacMd5Final(). Behavior with invalid HMAC-MD5 context is undefined.
+  HMAC-SHA256 context should be initialized by HmacSha256New(), and should not be finalized
+  by HmacSha256Final(). Behavior with invalid HMAC-SHA256 context is undefined.
 
-  If HmacMd5Context is NULL, then return FALSE.
-  If HashValue is NULL, then return FALSE.
+  If HmacSha256Context is NULL, then return FALSE.
+  If HmacValue is NULL, then return FALSE.
   If this interface is not supported, then return FALSE.
 
-  @param[in, out]  HmacMd5Context  Pointer to the HMAC-MD5 context.
-  @param[out]      HashValue       Pointer to a buffer that receives the HMAC-MD5 digest
-                                   value (16 bytes).
+  @param[in, out]  HmacSha256Context  Pointer to the HMAC-SHA256 context.
+  @param[out]      HmacValue          Pointer to a buffer that receives the HMAC-SHA256 digest
+                                      value (32 bytes).
 
-  @retval TRUE   HMAC-MD5 digest computation succeeded.
-  @retval FALSE  HMAC-MD5 digest computation failed.
+  @retval TRUE   HMAC-SHA256 digest computation succeeded.
+  @retval FALSE  HMAC-SHA256 digest computation failed.
   @retval FALSE  This interface is not supported.
 
 **/
 BOOLEAN
 EFIAPI
-HmacMd5Final (
-  IN OUT  VOID   *HmacMd5Context,
-  OUT     UINT8  *HmacValue
-  );
-
-/**
-  Retrieves the size, in bytes, of the context buffer required for HMAC-SHA1 operations.
-
-  If this interface is not supported, then return zero.
-
-  @return  The size, in bytes, of the context buffer required for HMAC-SHA1 operations.
-  @retval  0   This interface is not supported.
-
-**/
-UINTN
-EFIAPI
-HmacSha1GetContextSize (
-  VOID
-  );
-
-/**
-  Initializes user-supplied memory pointed by HmacSha1Context as HMAC-SHA1 context for
-  subsequent use.
-
-  If HmacSha1Context is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[out]  HmacSha1Context  Pointer to HMAC-SHA1 context being initialized.
-  @param[in]   Key              Pointer to the user-supplied key.
-  @param[in]   KeySize          Key size in bytes.
-
-  @retval TRUE   HMAC-SHA1 context initialization succeeded.
-  @retval FALSE  HMAC-SHA1 context initialization failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-HmacSha1Init (
-  OUT  VOID         *HmacSha1Context,
-  IN   CONST UINT8  *Key,
-  IN   UINTN        KeySize
-  );
-
-/**
-  Makes a copy of an existing HMAC-SHA1 context.
-
-  If HmacSha1Context is NULL, then return FALSE.
-  If NewHmacSha1Context is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]  HmacSha1Context     Pointer to HMAC-SHA1 context being copied.
-  @param[out] NewHmacSha1Context  Pointer to new HMAC-SHA1 context.
-
-  @retval TRUE   HMAC-SHA1 context copy succeeded.
-  @retval FALSE  HMAC-SHA1 context copy failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-HmacSha1Duplicate (
-  IN   CONST VOID  *HmacSha1Context,
-  OUT  VOID        *NewHmacSha1Context
-  );
-
-/**
-  Digests the input data and updates HMAC-SHA1 context.
-
-  This function performs HMAC-SHA1 digest on a data buffer of the specified size.
-  It can be called multiple times to compute the digest of long or discontinuous data streams.
-  HMAC-SHA1 context should be already correctly intialized by HmacSha1Init(), and should not
-  be finalized by HmacSha1Final(). Behavior with invalid context is undefined.
-
-  If HmacSha1Context is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in, out]  HmacSha1Context Pointer to the HMAC-SHA1 context.
-  @param[in]       Data            Pointer to the buffer containing the data to be digested.
-  @param[in]       DataSize        Size of Data buffer in bytes.
-
-  @retval TRUE   HMAC-SHA1 data digest succeeded.
-  @retval FALSE  HMAC-SHA1 data digest failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-HmacSha1Update (
-  IN OUT  VOID        *HmacSha1Context,
-  IN      CONST VOID  *Data,
-  IN      UINTN       DataSize
-  );
-
-/**
-  Completes computation of the HMAC-SHA1 digest value.
-
-  This function completes HMAC-SHA1 hash computation and retrieves the digest value into
-  the specified memory. After this function has been called, the HMAC-SHA1 context cannot
-  be used again.
-  HMAC-SHA1 context should be already correctly intialized by HmacSha1Init(), and should
-  not be finalized by HmacSha1Final(). Behavior with invalid HMAC-SHA1 context is undefined.
-
-  If HmacSha1Context is NULL, then return FALSE.
-  If HashValue is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in, out]  HmacSha1Context  Pointer to the HMAC-SHA1 context.
-  @param[out]      HashValue        Pointer to a buffer that receives the HMAC-SHA1 digest
-                                    value (20 bytes).
-
-  @retval TRUE   HMAC-SHA1 digest computation succeeded.
-  @retval FALSE  HMAC-SHA1 digest computation failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-HmacSha1Final (
-  IN OUT  VOID   *HmacSha1Context,
+HmacSha256Final (
+  IN OUT  VOID   *HmacSha256Context,
   OUT     UINT8  *HmacValue
   );
 
 //=====================================================================================
 //    Symmetric Cryptography Primitive
 //=====================================================================================
-
-/**
-  Retrieves the size, in bytes, of the context buffer required for TDES operations.
-
-  If this interface is not supported, then return zero.
-
-  @return  The size, in bytes, of the context buffer required for TDES operations.
-  @retval  0   This interface is not supported.
-
-**/
-UINTN
-EFIAPI
-TdesGetContextSize (
-  VOID
-  );
-
-/**
-  Initializes user-supplied memory as TDES context for subsequent use.
-
-  This function initializes user-supplied memory pointed by TdesContext as TDES context.
-  In addition, it sets up all TDES key materials for subsequent encryption and decryption
-  operations.
-  There are 3 key options as follows:
-  KeyLength = 64,  Keying option 1: K1 == K2 == K3 (Backward compatibility with DES)
-  KeyLength = 128, Keying option 2: K1 != K2 and K3 = K1 (Less Security)
-  KeyLength = 192  Keying option 3: K1 != K2 != K3 (Strongest)
-
-  If TdesContext is NULL, then return FALSE.
-  If Key is NULL, then return FALSE.
-  If KeyLength is not valid, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[out]  TdesContext  Pointer to TDES context being initialized.
-  @param[in]   Key          Pointer to the user-supplied TDES key.
-  @param[in]   KeyLength    Length of TDES key in bits.
-
-  @retval TRUE   TDES context initialization succeeded.
-  @retval FALSE  TDES context initialization failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-TdesInit (
-  OUT  VOID         *TdesContext,
-  IN   CONST UINT8  *Key,
-  IN   UINTN        KeyLength
-  );
-
-/**
-  Performs TDES encryption on a data buffer of the specified size in ECB mode.
-
-  This function performs TDES encryption on data buffer pointed by Input, of specified
-  size of InputSize, in ECB mode.
-  InputSize must be multiple of block size (8 bytes). This function does not perform
-  padding. Caller must perform padding, if necessary, to ensure valid input data size.
-  TdesContext should be already correctly initialized by TdesInit(). Behavior with
-  invalid TDES context is undefined.
-
-  If TdesContext is NULL, then return FALSE.
-  If Input is NULL, then return FALSE.
-  If InputSize is not multiple of block size (8 bytes), then return FALSE.
-  If Output is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]   TdesContext  Pointer to the TDES context.
-  @param[in]   Input        Pointer to the buffer containing the data to be encrypted.
-  @param[in]   InputSize    Size of the Input buffer in bytes.
-  @param[out]  Output       Pointer to a buffer that receives the TDES encryption output.
-
-  @retval TRUE   TDES encryption succeeded.
-  @retval FALSE  TDES encryption failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-TdesEcbEncrypt (
-  IN   VOID         *TdesContext,
-  IN   CONST UINT8  *Input,
-  IN   UINTN        InputSize,
-  OUT  UINT8        *Output
-  );
-
-/**
-  Performs TDES decryption on a data buffer of the specified size in ECB mode.
-
-  This function performs TDES decryption on data buffer pointed by Input, of specified
-  size of InputSize, in ECB mode.
-  InputSize must be multiple of block size (8 bytes). This function does not perform
-  padding. Caller must perform padding, if necessary, to ensure valid input data size.
-  TdesContext should be already correctly initialized by TdesInit(). Behavior with
-  invalid TDES context is undefined.
-
-  If TdesContext is NULL, then return FALSE.
-  If Input is NULL, then return FALSE.
-  If InputSize is not multiple of block size (8 bytes), then return FALSE.
-  If Output is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]   TdesContext  Pointer to the TDES context.
-  @param[in]   Input        Pointer to the buffer containing the data to be decrypted.
-  @param[in]   InputSize    Size of the Input buffer in bytes.
-  @param[out]  Output       Pointer to a buffer that receives the TDES decryption output.
-
-  @retval TRUE   TDES decryption succeeded.
-  @retval FALSE  TDES decryption failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-TdesEcbDecrypt (
-  IN   VOID         *TdesContext,
-  IN   CONST UINT8  *Input,
-  IN   UINTN        InputSize,
-  OUT  UINT8        *Output
-  );
-
-/**
-  Performs TDES encryption on a data buffer of the specified size in CBC mode.
-
-  This function performs TDES encryption on data buffer pointed by Input, of specified
-  size of InputSize, in CBC mode.
-  InputSize must be multiple of block size (8 bytes). This function does not perform
-  padding. Caller must perform padding, if necessary, to ensure valid input data size.
-  Initialization vector should be one block size (8 bytes).
-  TdesContext should be already correctly initialized by TdesInit(). Behavior with
-  invalid TDES context is undefined.
-
-  If TdesContext is NULL, then return FALSE.
-  If Input is NULL, then return FALSE.
-  If InputSize is not multiple of block size (8 bytes), then return FALSE.
-  If Ivec is NULL, then return FALSE.
-  If Output is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]   TdesContext  Pointer to the TDES context.
-  @param[in]   Input        Pointer to the buffer containing the data to be encrypted.
-  @param[in]   InputSize    Size of the Input buffer in bytes.
-  @param[in]   Ivec         Pointer to initialization vector.
-  @param[out]  Output       Pointer to a buffer that receives the TDES encryption output.
-
-  @retval TRUE   TDES encryption succeeded.
-  @retval FALSE  TDES encryption failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-TdesCbcEncrypt (
-  IN   VOID         *TdesContext,
-  IN   CONST UINT8  *Input,
-  IN   UINTN        InputSize,
-  IN   CONST UINT8  *Ivec,
-  OUT  UINT8        *Output
-  );
-
-/**
-  Performs TDES decryption on a data buffer of the specified size in CBC mode.
-
-  This function performs TDES decryption on data buffer pointed by Input, of specified
-  size of InputSize, in CBC mode.
-  InputSize must be multiple of block size (8 bytes). This function does not perform
-  padding. Caller must perform padding, if necessary, to ensure valid input data size.
-  Initialization vector should be one block size (8 bytes).
-  TdesContext should be already correctly initialized by TdesInit(). Behavior with
-  invalid TDES context is undefined.
-
-  If TdesContext is NULL, then return FALSE.
-  If Input is NULL, then return FALSE.
-  If InputSize is not multiple of block size (8 bytes), then return FALSE.
-  If Ivec is NULL, then return FALSE.
-  If Output is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]   TdesContext  Pointer to the TDES context.
-  @param[in]   Input        Pointer to the buffer containing the data to be encrypted.
-  @param[in]   InputSize    Size of the Input buffer in bytes.
-  @param[in]   Ivec         Pointer to initialization vector.
-  @param[out]  Output       Pointer to a buffer that receives the TDES encryption output.
-
-  @retval TRUE   TDES decryption succeeded.
-  @retval FALSE  TDES decryption failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-TdesCbcDecrypt (
-  IN   VOID         *TdesContext,
-  IN   CONST UINT8  *Input,
-  IN   UINTN        InputSize,
-  IN   CONST UINT8  *Ivec,
-  OUT  UINT8        *Output
-  );
 
 /**
   Retrieves the size, in bytes, of the context buffer required for AES operations.
@@ -1218,76 +1059,6 @@ AesInit (
   OUT  VOID         *AesContext,
   IN   CONST UINT8  *Key,
   IN   UINTN        KeyLength
-  );
-
-/**
-  Performs AES encryption on a data buffer of the specified size in ECB mode.
-
-  This function performs AES encryption on data buffer pointed by Input, of specified
-  size of InputSize, in ECB mode.
-  InputSize must be multiple of block size (16 bytes). This function does not perform
-  padding. Caller must perform padding, if necessary, to ensure valid input data size.
-  AesContext should be already correctly initialized by AesInit(). Behavior with
-  invalid AES context is undefined.
-
-  If AesContext is NULL, then return FALSE.
-  If Input is NULL, then return FALSE.
-  If InputSize is not multiple of block size (16 bytes), then return FALSE.
-  If Output is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]   AesContext  Pointer to the AES context.
-  @param[in]   Input       Pointer to the buffer containing the data to be encrypted.
-  @param[in]   InputSize   Size of the Input buffer in bytes.
-  @param[out]  Output      Pointer to a buffer that receives the AES encryption output.
-
-  @retval TRUE   AES encryption succeeded.
-  @retval FALSE  AES encryption failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-AesEcbEncrypt (
-  IN   VOID         *AesContext,
-  IN   CONST UINT8  *Input,
-  IN   UINTN        InputSize,
-  OUT  UINT8        *Output
-  );
-
-/**
-  Performs AES decryption on a data buffer of the specified size in ECB mode.
-
-  This function performs AES decryption on data buffer pointed by Input, of specified
-  size of InputSize, in ECB mode.
-  InputSize must be multiple of block size (16 bytes). This function does not perform
-  padding. Caller must perform padding, if necessary, to ensure valid input data size.
-  AesContext should be already correctly initialized by AesInit(). Behavior with
-  invalid AES context is undefined.
-
-  If AesContext is NULL, then return FALSE.
-  If Input is NULL, then return FALSE.
-  If InputSize is not multiple of block size (16 bytes), then return FALSE.
-  If Output is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]   AesContext  Pointer to the AES context.
-  @param[in]   Input       Pointer to the buffer containing the data to be decrypted.
-  @param[in]   InputSize   Size of the Input buffer in bytes.
-  @param[out]  Output      Pointer to a buffer that receives the AES decryption output.
-
-  @retval TRUE   AES decryption succeeded.
-  @retval FALSE  AES decryption failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-AesEcbDecrypt (
-  IN   VOID         *AesContext,
-  IN   CONST UINT8  *Input,
-  IN   UINTN        InputSize,
-  OUT  UINT8        *Output
   );
 
 /**
@@ -1368,138 +1139,6 @@ AesCbcDecrypt (
   OUT  UINT8        *Output
   );
 
-/**
-  Retrieves the size, in bytes, of the context buffer required for ARC4 operations.
-
-  If this interface is not supported, then return zero.
-
-  @return  The size, in bytes, of the context buffer required for ARC4 operations.
-  @retval  0   This interface is not supported.
-
-**/
-UINTN
-EFIAPI
-Arc4GetContextSize (
-  VOID
-  );
-
-/**
-  Initializes user-supplied memory as ARC4 context for subsequent use.
-
-  This function initializes user-supplied memory pointed by Arc4Context as ARC4 context.
-  In addition, it sets up all ARC4 key materials for subsequent encryption and decryption
-  operations.
-
-  If Arc4Context is NULL, then return FALSE.
-  If Key is NULL, then return FALSE.
-  If KeySize does not in the range of [5, 256] bytes, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[out]  Arc4Context  Pointer to ARC4 context being initialized.
-  @param[in]   Key          Pointer to the user-supplied ARC4 key.
-  @param[in]   KeySize      Size of ARC4 key in bytes.
-
-  @retval TRUE   ARC4 context initialization succeeded.
-  @retval FALSE  ARC4 context initialization failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-Arc4Init (
-  OUT  VOID         *Arc4Context,
-  IN   CONST UINT8  *Key,
-  IN   UINTN        KeySize
-  );
-
-/**
-  Performs ARC4 encryption on a data buffer of the specified size.
-
-  This function performs ARC4 encryption on data buffer pointed by Input, of specified
-  size of InputSize.
-  Arc4Context should be already correctly initialized by Arc4Init(). Behavior with
-  invalid ARC4 context is undefined.
-
-  If Arc4Context is NULL, then return FALSE.
-  If Input is NULL, then return FALSE.
-  If Output is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]   Arc4Context  Pointer to the ARC4 context.
-  @param[in]   Input        Pointer to the buffer containing the data to be encrypted.
-  @param[in]   InputSize    Size of the Input buffer in bytes.
-  @param[out]  Output       Pointer to a buffer that receives the ARC4 encryption output.
-
-  @retval TRUE   ARC4 encryption succeeded.
-  @retval FALSE  ARC4 encryption failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-Arc4Encrypt (
-  IN OUT  VOID         *Arc4Context,
-  IN      CONST UINT8  *Input,
-  IN      UINTN        InputSize,
-  OUT     UINT8        *Output
-  );
-
-/**
-  Performs ARC4 decryption on a data buffer of the specified size.
-
-  This function performs ARC4 decryption on data buffer pointed by Input, of specified
-  size of InputSize.
-  Arc4Context should be already correctly initialized by Arc4Init(). Behavior with
-  invalid ARC4 context is undefined.
-
-  If Arc4Context is NULL, then return FALSE.
-  If Input is NULL, then return FALSE.
-  If Output is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in]   Arc4Context  Pointer to the ARC4 context.
-  @param[in]   Input        Pointer to the buffer containing the data to be decrypted.
-  @param[in]   InputSize    Size of the Input buffer in bytes.
-  @param[out]  Output       Pointer to a buffer that receives the ARC4 decryption output.
-
-  @retval TRUE   ARC4 decryption succeeded.
-  @retval FALSE  ARC4 decryption failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-Arc4Decrypt (
-  IN OUT  VOID   *Arc4Context,
-  IN      UINT8  *Input,
-  IN      UINTN  InputSize,
-  OUT     UINT8  *Output
-  );
-
-/**
-  Resets the ARC4 context to the initial state.
-
-  The function resets the ARC4 context to the state it had immediately after the
-  ARC4Init() function call.
-  Contrary to ARC4Init(), Arc4Reset() requires no secret key as input, but ARC4 context
-  should be already correctly initialized by ARC4Init().
-
-  If Arc4Context is NULL, then return FALSE.
-  If this interface is not supported, then return FALSE.
-
-  @param[in, out]  Arc4Context  Pointer to the ARC4 context.
-
-  @retval TRUE   ARC4 reset succeeded.
-  @retval FALSE  ARC4 reset failed.
-  @retval FALSE  This interface is not supported.
-
-**/
-BOOLEAN
-EFIAPI
-Arc4Reset (
-  IN OUT  VOID  *Arc4Context
-  );
-
 //=====================================================================================
 //    Asymmetric Cryptography Primitive
 //=====================================================================================
@@ -1537,14 +1176,14 @@ RsaFree (
   This function sets the tag-designated RSA key component into the established
   RSA context from the user-specified non-negative integer (octet string format
   represented in RSA PKCS#1).
-  If BigNumber is NULL, then the specified key componenet in RSA context is cleared.
+  If BigNumber is NULL, then the specified key component in RSA context is cleared.
 
   If RsaContext is NULL, then return FALSE.
 
   @param[in, out]  RsaContext  Pointer to RSA context being set.
   @param[in]       KeyTag      Tag of RSA key component being set.
   @param[in]       BigNumber   Pointer to octet integer buffer.
-                               If NULL, then the specified key componenet in RSA
+                               If NULL, then the specified key component in RSA
                                context is cleared.
   @param[in]       BnSize      Size of big number buffer in bytes.
                                If BigNumber is NULL, then it is ignored.
@@ -1636,7 +1275,7 @@ RsaGenerateKey (
   NOTE: This function performs integrity checks on all the RSA key material, so
         the RSA key structure must contain all the private key data.
 
-  This function validates key compoents of RSA context in following aspects:
+  This function validates key components of RSA context in following aspects:
   - Whether p is a prime
   - Whether q is a prime
   - Whether n = p * q
@@ -1725,6 +1364,80 @@ RsaPkcs1Verify (
   );
 
 /**
+  Carries out the RSA-SSA signature generation with EMSA-PSS encoding scheme.
+
+  This function carries out the RSA-SSA signature generation with EMSA-PSS encoding scheme defined in
+  RFC 8017.
+  Mask generation function is the same as the message digest algorithm.
+  If the Signature buffer is too small to hold the contents of signature, FALSE
+  is returned and SigSize is set to the required buffer size to obtain the signature.
+
+  If RsaContext is NULL, then return FALSE.
+  If Message is NULL, then return FALSE.
+  If MsgSize is zero or > INT_MAX, then return FALSE.
+  If DigestLen is NOT 32, 48 or 64, return FALSE.
+  If SaltLen is < DigestLen, then return FALSE.
+  If SigSize is large enough but Signature is NULL, then return FALSE.
+  If this interface is not supported, then return FALSE.
+
+  @param[in]      RsaContext   Pointer to RSA context for signature generation.
+  @param[in]      Message      Pointer to octet message to be signed.
+  @param[in]      MsgSize      Size of the message in bytes.
+  @param[in]      DigestLen    Length of the digest in bytes to be used for RSA signature operation.
+  @param[in]      SaltLen      Length of the salt in bytes to be used for PSS encoding.
+  @param[out]     Signature    Pointer to buffer to receive RSA PSS signature.
+  @param[in, out] SigSize      On input, the size of Signature buffer in bytes.
+                               On output, the size of data returned in Signature buffer in bytes.
+
+  @retval  TRUE   Signature successfully generated in RSASSA-PSS.
+  @retval  FALSE  Signature generation failed.
+  @retval  FALSE  SigSize is too small.
+  @retval  FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+RsaPssSign (
+  IN      VOID         *RsaContext,
+  IN      CONST UINT8  *Message,
+  IN      UINTN        MsgSize,
+  IN      UINT16       DigestLen,
+  IN      UINT16       SaltLen,
+  OUT     UINT8        *Signature,
+  IN OUT  UINTN        *SigSize
+  );
+
+/**
+  Verifies the RSA signature with RSASSA-PSS signature scheme defined in RFC 8017.
+  Implementation determines salt length automatically from the signature encoding.
+  Mask generation function is the same as the message digest algorithm.
+  Salt length should atleast be equal to digest length.
+
+  @param[in]  RsaContext      Pointer to RSA context for signature verification.
+  @param[in]  Message         Pointer to octet message to be verified.
+  @param[in]  MsgSize         Size of the message in bytes.
+  @param[in]  Signature       Pointer to RSASSA-PSS signature to be verified.
+  @param[in]  SigSize         Size of signature in bytes.
+  @param[in]  DigestLen       Length of digest for RSA operation.
+  @param[in]  SaltLen         Salt length for PSS encoding.
+
+  @retval  TRUE   Valid signature encoded in RSASSA-PSS.
+  @retval  FALSE  Invalid signature or invalid RSA context.
+
+**/
+BOOLEAN
+EFIAPI
+RsaPssVerify (
+  IN  VOID         *RsaContext,
+  IN  CONST UINT8  *Message,
+  IN  UINTN        MsgSize,
+  IN  CONST UINT8  *Signature,
+  IN  UINTN        SigSize,
+  IN  UINT16       DigestLen,
+  IN  UINT16       SaltLen
+  );
+
+/**
   Retrieve the RSA Private Key from the password-protected PEM key data.
 
   If PemData is NULL, then return FALSE.
@@ -1807,6 +1520,76 @@ X509GetSubjectName (
   );
 
 /**
+  Retrieve the common name (CN) string from one X.509 certificate.
+
+  @param[in]      Cert             Pointer to the DER-encoded X509 certificate.
+  @param[in]      CertSize         Size of the X509 certificate in bytes.
+  @param[out]     CommonName       Buffer to contain the retrieved certificate common
+                                   name string (UTF8). At most CommonNameSize bytes will be
+                                   written and the string will be null terminated. May be
+                                   NULL in order to determine the size buffer needed.
+  @param[in,out]  CommonNameSize   The size in bytes of the CommonName buffer on input,
+                                   and the size of buffer returned CommonName on output.
+                                   If CommonName is NULL then the amount of space needed
+                                   in buffer (including the final null) is returned.
+
+  @retval RETURN_SUCCESS           The certificate CommonName retrieved successfully.
+  @retval RETURN_INVALID_PARAMETER If Cert is NULL.
+                                   If CommonNameSize is NULL.
+                                   If CommonName is not NULL and *CommonNameSize is 0.
+                                   If Certificate is invalid.
+  @retval RETURN_NOT_FOUND         If no CommonName entry exists.
+  @retval RETURN_BUFFER_TOO_SMALL  If the CommonName is NULL. The required buffer size
+                                   (including the final null) is returned in the
+                                   CommonNameSize parameter.
+  @retval RETURN_UNSUPPORTED       The operation is not supported.
+
+**/
+RETURN_STATUS
+EFIAPI
+X509GetCommonName (
+  IN      CONST UINT8  *Cert,
+  IN      UINTN        CertSize,
+  OUT     CHAR8        *CommonName,  OPTIONAL
+  IN OUT  UINTN        *CommonNameSize
+  );
+
+/**
+  Retrieve the organization name (O) string from one X.509 certificate.
+
+  @param[in]      Cert             Pointer to the DER-encoded X509 certificate.
+  @param[in]      CertSize         Size of the X509 certificate in bytes.
+  @param[out]     NameBuffer       Buffer to contain the retrieved certificate organization
+                                   name string. At most NameBufferSize bytes will be
+                                   written and the string will be null terminated. May be
+                                   NULL in order to determine the size buffer needed.
+  @param[in,out]  NameBufferSize   The size in bytes of the Name buffer on input,
+                                   and the size of buffer returned Name on output.
+                                   If NameBuffer is NULL then the amount of space needed
+                                   in buffer (including the final null) is returned.
+
+  @retval RETURN_SUCCESS           The certificate Organization Name retrieved successfully.
+  @retval RETURN_INVALID_PARAMETER If Cert is NULL.
+                                   If NameBufferSize is NULL.
+                                   If NameBuffer is not NULL and *CommonNameSize is 0.
+                                   If Certificate is invalid.
+  @retval RETURN_NOT_FOUND         If no Organization Name entry exists.
+  @retval RETURN_BUFFER_TOO_SMALL  If the NameBuffer is NULL. The required buffer size
+                                   (including the final null) is returned in the
+                                   CommonNameSize parameter.
+  @retval RETURN_UNSUPPORTED       The operation is not supported.
+
+**/
+RETURN_STATUS
+EFIAPI
+X509GetOrganizationName (
+  IN      CONST UINT8   *Cert,
+  IN      UINTN         CertSize,
+  OUT     CHAR8         *NameBuffer,  OPTIONAL
+  IN OUT  UINTN         *NameBufferSize
+  );
+
+/**
   Verify one X509 certificate was issued by the trusted CA.
 
   If Cert is NULL, then return FALSE.
@@ -1855,6 +1638,32 @@ X509ConstructCertificate (
   IN   CONST UINT8  *Cert,
   IN   UINTN        CertSize,
   OUT  UINT8        **SingleX509Cert
+  );
+
+/**
+  Construct a X509 stack object from a list of DER-encoded certificate data.
+
+  If X509Stack is NULL, then return FALSE.
+  If this interface is not supported, then return FALSE.
+
+  @param[in, out]  X509Stack  On input, pointer to an existing or NULL X509 stack object.
+                              On output, pointer to the X509 stack object with new
+                              inserted X509 certificate.
+  @param[in]       Args       VA_LIST marker for the variable argument list.
+                              A list of DER-encoded single certificate data followed
+                              by certificate size. A NULL terminates the list. The
+                              pairs are the arguments to X509ConstructCertificate().
+
+  @retval     TRUE            The X509 stack construction succeeded.
+  @retval     FALSE           The construction operation failed.
+  @retval     FALSE           This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+X509ConstructCertificateStackV (
+  IN OUT  UINT8    **X509Stack,
+  IN      VA_LIST  Args
   );
 
 /**
@@ -1937,21 +1746,136 @@ X509GetTBSCert (
   );
 
 /**
+  Derives a key from a password using a salt and iteration count, based on PKCS#5 v2.0
+  password based encryption key derivation function PBKDF2, as specified in RFC 2898.
+
+  If Password or Salt or OutKey is NULL, then return FALSE.
+  If the hash algorithm could not be determined, then return FALSE.
+  If this interface is not supported, then return FALSE.
+
+  @param[in]  PasswordLength  Length of input password in bytes.
+  @param[in]  Password        Pointer to the array for the password.
+  @param[in]  SaltLength      Size of the Salt in bytes.
+  @param[in]  Salt            Pointer to the Salt.
+  @param[in]  IterationCount  Number of iterations to perform. Its value should be
+                              greater than or equal to 1.
+  @param[in]  DigestSize      Size of the message digest to be used (eg. SHA256_DIGEST_SIZE).
+                              NOTE: DigestSize will be used to determine the hash algorithm.
+                                    Only SHA1_DIGEST_SIZE or SHA256_DIGEST_SIZE is supported.
+  @param[in]  KeyLength       Size of the derived key buffer in bytes.
+  @param[out] OutKey          Pointer to the output derived key buffer.
+
+  @retval  TRUE   A key was derived successfully.
+  @retval  FALSE  One of the pointers was NULL or one of the sizes was too large.
+  @retval  FALSE  The hash algorithm could not be determined from the digest size.
+  @retval  FALSE  The key derivation operation failed.
+  @retval  FALSE  This interface is not supported.
+
+**/
+BOOLEAN
+EFIAPI
+Pkcs5HashPassword (
+  IN  UINTN        PasswordLength,
+  IN  CONST CHAR8  *Password,
+  IN  UINTN        SaltLength,
+  IN  CONST UINT8  *Salt,
+  IN  UINTN        IterationCount,
+  IN  UINTN        DigestSize,
+  IN  UINTN        KeyLength,
+  OUT UINT8        *OutKey
+  );
+
+/**
+  Encrypts a blob using PKCS1v2 (RSAES-OAEP) schema. On success, will return the
+  encrypted message in a newly allocated buffer.
+
+  Things that can cause a failure include:
+  - X509 key size does not match any known key size.
+  - Fail to parse X509 certificate.
+  - Fail to allocate an intermediate buffer.
+  - Null pointer provided for a non-optional parameter.
+  - Data size is too large for the provided key size (max size is a function of key size
+    and hash digest size).
+
+  @param[in]  PublicKey           A pointer to the DER-encoded X509 certificate that
+                                  will be used to encrypt the data.
+  @param[in]  PublicKeySize       Size of the X509 cert buffer.
+  @param[in]  InData              Data to be encrypted.
+  @param[in]  InDataSize          Size of the data buffer.
+  @param[in]  PrngSeed            [Optional] If provided, a pointer to a random seed buffer
+                                  to be used when initializing the PRNG. NULL otherwise.
+  @param[in]  PrngSeedSize        [Optional] If provided, size of the random seed buffer.
+                                  0 otherwise.
+  @param[out] EncryptedData       Pointer to an allocated buffer containing the encrypted
+                                  message.
+  @param[out] EncryptedDataSize   Size of the encrypted message buffer.
+
+  @retval     TRUE                Encryption was successful.
+  @retval     FALSE               Encryption failed.
+
+**/
+BOOLEAN
+EFIAPI
+Pkcs1v2Encrypt (
+  IN   CONST UINT8  *PublicKey,
+  IN   UINTN        PublicKeySize,
+  IN   UINT8        *InData,
+  IN   UINTN        InDataSize,
+  IN   CONST UINT8  *PrngSeed,  OPTIONAL
+  IN   UINTN        PrngSeedSize,  OPTIONAL
+  OUT  UINT8        **EncryptedData,
+  OUT  UINTN        *EncryptedDataSize
+  );
+
+/**
+  The 3rd parameter of Pkcs7GetSigners will return all embedded
+  X.509 certificate in one given PKCS7 signature. The format is:
+  //
+  // UINT8  CertNumber;
+  // UINT32 Cert1Length;
+  // UINT8  Cert1[];
+  // UINT32 Cert2Length;
+  // UINT8  Cert2[];
+  // ...
+  // UINT32 CertnLength;
+  // UINT8  Certn[];
+  //
+
+  The two following C-structure are used for parsing CertStack more clearly.
+**/
+#pragma pack(1)
+
+typedef struct {
+  UINT32    CertDataLength;       // The length in bytes of X.509 certificate.
+  UINT8     CertDataBuffer[0];    // The X.509 certificate content (DER).
+} EFI_CERT_DATA;
+
+typedef struct {
+  UINT8             CertNumber;   // Number of X.509 certificate.
+  //EFI_CERT_DATA   CertArray[];  // An array of X.509 certificate.
+} EFI_CERT_STACK;
+
+#pragma pack()
+
+/**
   Get the signer's certificates from PKCS#7 signed data as described in "PKCS #7:
   Cryptographic Message Syntax Standard". The input signed data could be wrapped
   in a ContentInfo structure.
 
   If P7Data, CertStack, StackLength, TrustedCert or CertLength is NULL, then
-  return FALSE. If P7Length overflow, then return FAlSE.
+  return FALSE. If P7Length overflow, then return FALSE.
   If this interface is not supported, then return FALSE.
 
   @param[in]  P7Data       Pointer to the PKCS#7 message to verify.
   @param[in]  P7Length     Length of the PKCS#7 message in bytes.
   @param[out] CertStack    Pointer to Signer's certificates retrieved from P7Data.
-                           It's caller's responsiblity to free the buffer.
+                           It's caller's responsibility to free the buffer with
+                           Pkcs7FreeSigners().
+                           This data structure is EFI_CERT_STACK type.
   @param[out] StackLength  Length of signer's certificates in bytes.
   @param[out] TrustedCert  Pointer to a trusted certificate from Signer's certificates.
-                           It's caller's responsiblity to free the buffer.
+                           It's caller's responsibility to free the buffer with
+                           Pkcs7FreeSigners().
   @param[out] CertLength   Length of the trusted certificate in bytes.
 
   @retval  TRUE            The operation is finished successfully.
@@ -1985,6 +1909,39 @@ Pkcs7FreeSigners (
   );
 
 /**
+  Retrieves all embedded certificates from PKCS#7 signed data as described in "PKCS #7:
+  Cryptographic Message Syntax Standard", and outputs two certificate lists chained and
+  unchained to the signer's certificates.
+  The input signed data could be wrapped in a ContentInfo structure.
+
+  @param[in]  P7Data            Pointer to the PKCS#7 message.
+  @param[in]  P7Length          Length of the PKCS#7 message in bytes.
+  @param[out] SignerChainCerts  Pointer to the certificates list chained to signer's
+                                certificate. It's caller's responsibility to free the buffer
+                                with Pkcs7FreeSigners().
+                                This data structure is EFI_CERT_STACK type.
+  @param[out] ChainLength       Length of the chained certificates list buffer in bytes.
+  @param[out] UnchainCerts      Pointer to the unchained certificates lists. It's caller's
+                                responsibility to free the buffer with Pkcs7FreeSigners().
+                                This data structure is EFI_CERT_STACK type.
+  @param[out] UnchainLength     Length of the unchained certificates list buffer in bytes.
+
+  @retval  TRUE         The operation is finished successfully.
+  @retval  FALSE        Error occurs during the operation.
+
+**/
+BOOLEAN
+EFIAPI
+Pkcs7GetCertificatesList (
+  IN  CONST UINT8  *P7Data,
+  IN  UINTN        P7Length,
+  OUT UINT8        **SignerChainCerts,
+  OUT UINTN        *ChainLength,
+  OUT UINT8        **UnchainCerts,
+  OUT UINTN        *UnchainLength
+  );
+
+/**
   Creates a PKCS#7 signedData as described in "PKCS #7: Cryptographic Message
   Syntax Standard, version 1.5". This interface is only intended to be used for
   application to perform PKCS#7 functionality validation.
@@ -2002,7 +1959,8 @@ Pkcs7FreeSigners (
   @param[in]  OtherCerts       Pointer to an optional additional set of certificates to
                                include in the PKCS#7 signedData (e.g. any intermediate
                                CAs in the chain).
-  @param[out] SignedData       Pointer to output PKCS#7 signedData.
+  @param[out] SignedData       Pointer to output PKCS#7 signedData. It's caller's
+                               responsibility to free the buffer with FreePool().
   @param[out] SignedDataSize   Size of SignedData in bytes.
 
   @retval     TRUE             PKCS#7 data signing succeeded.
@@ -2025,12 +1983,12 @@ Pkcs7Sign (
   );
 
 /**
-  Verifies the validility of a PKCS#7 signed data as described in "PKCS #7:
+  Verifies the validity of a PKCS#7 signed data as described in "PKCS #7:
   Cryptographic Message Syntax Standard". The input signed data could be wrapped
   in a ContentInfo structure.
 
   If P7Data, TrustedCert or InData is NULL, then return FALSE.
-  If P7Length, CertLength or DataLength overflow, then return FAlSE.
+  If P7Length, CertLength or DataLength overflow, then return FALSE.
   If this interface is not supported, then return FALSE.
 
   @param[in]  P7Data       Pointer to the PKCS#7 message to verify.
@@ -2058,11 +2016,53 @@ Pkcs7Verify (
   );
 
 /**
+  This function receives a PKCS7 formatted signature, and then verifies that
+  the specified Enhanced or Extended Key Usages (EKU's) are present in the end-entity
+  leaf signing certificate.
+  Note that this function does not validate the certificate chain.
+
+  Applications for custom EKU's are quite flexible. For example, a policy EKU
+  may be present in an Issuing Certificate Authority (CA), and any sub-ordinate
+  certificate issued might also contain this EKU, thus constraining the
+  sub-ordinate certificate.  Other applications might allow a certificate
+  embedded in a device to specify that other Object Identifiers (OIDs) are
+  present which contains binary data specifying custom capabilities that
+  the device is able to do.
+
+  @param[in]  Pkcs7Signature       The PKCS#7 signed information content block. An array
+                                   containing the content block with both the signature,
+                                   the signer's certificate, and any necessary intermediate
+                                   certificates.
+  @param[in]  Pkcs7SignatureSize   Number of bytes in Pkcs7Signature.
+  @param[in]  RequiredEKUs         Array of null-terminated strings listing OIDs of
+                                   required EKUs that must be present in the signature.
+  @param[in]  RequiredEKUsSize     Number of elements in the RequiredEKUs string array.
+  @param[in]  RequireAllPresent    If this is TRUE, then all of the specified EKU's
+                                   must be present in the leaf signer.  If it is
+                                   FALSE, then we will succeed if we find any
+                                   of the specified EKU's.
+
+  @retval EFI_SUCCESS              The required EKUs were found in the signature.
+  @retval EFI_INVALID_PARAMETER    A parameter was invalid.
+  @retval EFI_NOT_FOUND            One or more EKU's were not found in the signature.
+
+**/
+RETURN_STATUS
+EFIAPI
+VerifyEKUsInPkcs7Signature (
+  IN  CONST UINT8   *Pkcs7Signature,
+  IN  CONST UINT32  SignatureSize,
+  IN  CONST CHAR8   *RequiredEKUs[],
+  IN  CONST UINT32  RequiredEKUsSize,
+  IN  BOOLEAN       RequireAllPresent
+  );
+
+/**
   Extracts the attached content from a PKCS#7 signed data if existed. The input signed
   data could be wrapped in a ContentInfo structure.
 
   If P7Data, Content, or ContentSize is NULL, then return FALSE. If P7Length overflow,
-  then return FAlSE. If the P7Data is not correctly formatted, then return FALSE.
+  then return FALSE. If the P7Data is not correctly formatted, then return FALSE.
 
   Caution: This function may receive untrusted input. So this function will do
            basic check for PKCS#7 data structure.
@@ -2070,13 +2070,13 @@ Pkcs7Verify (
   @param[in]   P7Data       Pointer to the PKCS#7 signed data to process.
   @param[in]   P7Length     Length of the PKCS#7 signed data in bytes.
   @param[out]  Content      Pointer to the extracted content from the PKCS#7 signedData.
-                            It's caller's responsiblity to free the buffer.
+                            It's caller's responsibility to free the buffer with FreePool().
   @param[out]  ContentSize  The size of the extracted content in bytes.
 
   @retval     TRUE          The P7Data was correctly formatted for processing.
   @retval     FALSE         The P7Data was not correctly formatted for processing.
 
-*/
+**/
 BOOLEAN
 EFIAPI
 Pkcs7GetAttachedContent (
@@ -2087,7 +2087,7 @@ Pkcs7GetAttachedContent (
   );
 
 /**
-  Verifies the validility of a PE/COFF Authenticode Signature as described in "Windows
+  Verifies the validity of a PE/COFF Authenticode Signature as described in "Windows
   Authenticode Portable Executable Signature Format".
 
   If AuthData is NULL, then return FALSE.
@@ -2100,7 +2100,7 @@ Pkcs7GetAttachedContent (
   @param[in]  TrustedCert  Pointer to a trusted/root certificate encoded in DER, which
                            is used for certificate chain verification.
   @param[in]  CertSize     Size of the trusted certificate in bytes.
-  @param[in]  ImageHash    Pointer to the original image file hash value. The procudure
+  @param[in]  ImageHash    Pointer to the original image file hash value. The procedure
                            for calculating the image hash value is described in Authenticode
                            specification.
   @param[in]  HashSize     Size of Image hash value in bytes.
@@ -2122,7 +2122,7 @@ AuthenticodeVerify (
   );
 
 /**
-  Verifies the validility of a RFC3161 Timestamp CounterSignature embedded in PE/COFF Authenticode
+  Verifies the validity of a RFC3161 Timestamp CounterSignature embedded in PE/COFF Authenticode
   signature.
 
   If AuthData is NULL, then return FALSE.
@@ -2201,7 +2201,7 @@ DhFree (
   @param[in]       PrimeLength  Length in bits of prime to be generated.
   @param[out]      Prime        Pointer to the buffer to receive the generated prime number.
 
-  @retval TRUE   DH pamameter generation succeeded.
+  @retval TRUE   DH parameter generation succeeded.
   @retval FALSE  Value of Generator is not supported.
   @retval FALSE  PRNG fails to generate random prime number with PrimeLength.
   @retval FALSE  This interface is not supported.
@@ -2231,7 +2231,7 @@ DhGenerateParameter (
   @param[in]       PrimeLength  Length in bits of prime to be generated.
   @param[in]       Prime        Pointer to the prime number.
 
-  @retval TRUE   DH pamameter setting succeeded.
+  @retval TRUE   DH parameter setting succeeded.
   @retval FALSE  Value of Generator is not supported.
   @retval FALSE  Value of Generator is not suitable for the Prime.
   @retval FALSE  Value of Prime is not a prime number.
@@ -2352,7 +2352,7 @@ RandomSeed (
   If this interface is not supported, then return FALSE.
 
   @param[out]  Output  Pointer to buffer to receive random value.
-  @param[in]   Size    Size of randome bytes to generate.
+  @param[in]   Size    Size of random bytes to generate.
 
   @retval TRUE   Pseudorandom byte stream generated successfully.
   @retval FALSE  Pseudorandom number generator fails to generate due to lack of entropy.
@@ -2364,6 +2364,39 @@ EFIAPI
 RandomBytes (
   OUT  UINT8  *Output,
   IN   UINTN  Size
+  );
+
+//=====================================================================================
+//    Key Derivation Function Primitive
+//=====================================================================================
+
+/**
+  Derive key data using HMAC-SHA256 based KDF.
+
+  @param[in]   Key              Pointer to the user-supplied key.
+  @param[in]   KeySize          Key size in bytes.
+  @param[in]   Salt             Pointer to the salt(non-secret) value.
+  @param[in]   SaltSize         Salt size in bytes.
+  @param[in]   Info             Pointer to the application specific info.
+  @param[in]   InfoSize         Info size in bytes.
+  @param[out]  Out              Pointer to buffer to receive hkdf value.
+  @param[in]   OutSize          Size of hkdf bytes to generate.
+
+  @retval TRUE   Hkdf generated successfully.
+  @retval FALSE  Hkdf generation failed.
+
+**/
+BOOLEAN
+EFIAPI
+HkdfSha256ExtractAndExpand (
+  IN   CONST UINT8  *Key,
+  IN   UINTN        KeySize,
+  IN   CONST UINT8  *Salt,
+  IN   UINTN        SaltSize,
+  IN   CONST UINT8  *Info,
+  IN   UINTN        InfoSize,
+  OUT  UINT8        *Out,
+  IN   UINTN        OutSize
   );
 
 #endif // __BASE_CRYPT_LIB_H__

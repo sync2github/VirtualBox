@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDispD3DIf.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxVideo Display D3D User mode dll
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,474 +23,6 @@
 /** Convert a given FourCC code to a D3DDDIFORMAT enum. */
 #define VBOXWDDM_D3DDDIFORMAT_FROM_FOURCC(_a, _b, _c, _d) \
     ((D3DDDIFORMAT)MAKEFOURCC(_a, _b, _c, _d))
-
-void VBoxDispD3DClose(VBOXDISPD3D *pD3D)
-{
-    FreeLibrary(pD3D->hD3DLib);
-    pD3D->hD3DLib = NULL;
-}
-
-/**
- * Loads a system DLL.
- *
- * @returns Module handle or NULL
- * @param   pszName             The DLL name.
- */
-static HMODULE loadSystemDll(const char *pszName)
-{
-    char   szPath[MAX_PATH];
-    UINT   cchPath = GetSystemDirectoryA(szPath, sizeof(szPath));
-    size_t cbName  = strlen(pszName) + 1;
-    if (cchPath + 1 + cbName > sizeof(szPath))
-    {
-        SetLastError(ERROR_FILENAME_EXCED_RANGE);
-        return NULL;
-    }
-    szPath[cchPath] = '\\';
-    memcpy(&szPath[cchPath + 1], pszName, cbName);
-    return LoadLibraryA(szPath);
-}
-
-HRESULT VBoxDispD3DOpen(VBOXDISPD3D *pD3D)
-{
-#ifdef VBOX_WDDM_WOW64
-    pD3D->hD3DLib = loadSystemDll("VBoxD3D9wddm-x86.dll");
-#else
-    pD3D->hD3DLib = loadSystemDll("VBoxD3D9wddm.dll");
-#endif
-    if (!pD3D->hD3DLib)
-    {
-        DWORD winErr = GetLastError(); NOREF(winErr);
-        WARN((__FUNCTION__": LoadLibrary failed, winErr = (%d)", winErr));
-        return E_FAIL;
-    }
-
-    do
-    {
-        pD3D->pfnDirect3DCreate9Ex = (PFNVBOXDISPD3DCREATE9EX)GetProcAddress(pD3D->hD3DLib, "Direct3DCreate9Ex");
-        if (!pD3D->pfnDirect3DCreate9Ex)
-        {
-            WARN(("no Direct3DCreate9Ex"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9CreateTexture = (PFNVBOXWINEEXD3DDEV9_CREATETEXTURE)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9CreateTexture");
-        if (!pD3D->pfnVBoxWineExD3DDev9CreateTexture)
-        {
-            WARN(("no VBoxWineExD3DDev9CreateTexture"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9CreateCubeTexture = (PFNVBOXWINEEXD3DDEV9_CREATECUBETEXTURE)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9CreateCubeTexture");
-        if (!pD3D->pfnVBoxWineExD3DDev9CreateCubeTexture)
-        {
-            WARN(("no VBoxWineExD3DDev9CreateCubeTexture"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9CreateVolumeTexture = (PFNVBOXWINEEXD3DDEV9_CREATEVOLUMETEXTURE)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9CreateVolumeTexture");
-        if (!pD3D->pfnVBoxWineExD3DDev9CreateVolumeTexture)
-        {
-            WARN(("no VBoxWineExD3DDev9CreateVolumeTexture"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9Flush = (PFNVBOXWINEEXD3DDEV9_FLUSH)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9Flush");
-        if (!pD3D->pfnVBoxWineExD3DDev9Flush)
-        {
-            WARN(("no VBoxWineExD3DDev9Flush"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9FlushToHost = (PFNVBOXWINEEXD3DDEV9_FLUSHTOHOST)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9FlushToHost");
-        if (!pD3D->pfnVBoxWineExD3DDev9FlushToHost)
-        {
-            WARN(("no VBoxWineExD3DDev9FlushToHost"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9Finish = (PFNVBOXWINEEXD3DDEV9_FINISH)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9Finish");
-        if (!pD3D->pfnVBoxWineExD3DDev9Finish)
-        {
-            WARN(("no VBoxWineExD3DDev9Finish"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9VolBlt = (PFNVBOXWINEEXD3DDEV9_VOLBLT)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9VolBlt");
-        if (!pD3D->pfnVBoxWineExD3DDev9VolBlt)
-        {
-            WARN(("no VBoxWineExD3DDev9VolBlt"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9VolTexBlt = (PFNVBOXWINEEXD3DDEV9_VOLTEXBLT)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9VolTexBlt");
-        if (!pD3D->pfnVBoxWineExD3DDev9VolTexBlt)
-        {
-            WARN(("no VBoxWineExD3DDev9VolTexBlt"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9Term = (PFNVBOXWINEEXD3DDEV9_TERM)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9Term");
-        if (!pD3D->pfnVBoxWineExD3DDev9Term)
-        {
-            WARN(("no VBoxWineExD3DDev9Term"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DSwapchain9Present = (PFNVBOXWINEEXD3DSWAPCHAIN9_PRESENT)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DSwapchain9Present");
-        if (!pD3D->pfnVBoxWineExD3DSwapchain9Present)
-        {
-            WARN(("no VBoxWineExD3DSwapchain9Present"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DSurf9GetHostId = (PFNVBOXWINEEXD3DSURF9_GETHOSTID)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DSurf9GetHostId");
-        if (!pD3D->pfnVBoxWineExD3DSurf9GetHostId)
-        {
-            WARN(("no VBoxWineExD3DSurf9GetHostId"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DSurf9SyncToHost = (PFNVBOXWINEEXD3DSURF9_SYNCTOHOST)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DSurf9SyncToHost");
-        if (!pD3D->pfnVBoxWineExD3DSurf9SyncToHost)
-        {
-            WARN(("no VBoxWineExD3DSurf9SyncToHost"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DSwapchain9GetHostWinID = (PFNVBOXWINEEXD3DSWAPCHAIN9_GETHOSTWINID)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DSwapchain9GetHostWinID");
-        if (!pD3D->pfnVBoxWineExD3DSwapchain9GetHostWinID)
-        {
-            WARN(("no VBoxWineExD3DSwapchain9GetHostWinID"));
-            break;
-        }
-
-        pD3D->pfnVBoxWineExD3DDev9GetHostId = (PFNVBOXWINEEXD3DDEV9_GETHOSTID)GetProcAddress(pD3D->hD3DLib, "VBoxWineExD3DDev9GetHostId");
-        if (!pD3D->pfnVBoxWineExD3DDev9GetHostId)
-        {
-            WARN(("no VBoxWineExD3DDev9GetHostId"));
-            break;
-        }
-
-        return S_OK;
-
-    } while (0);
-
-    VBoxDispD3DClose(pD3D);
-
-    return E_FAIL;
-}
-
-
-
-static FORMATOP gVBoxFormatOps3D[] = {
-    {D3DDDIFMT_A8R8G8B8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_UP_TO_ALPHA_RENDERTARGET|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|FORMATOP_SRGBREAD|
-        FORMATOP_MEMBEROFGROUP_ARGB|
-        FORMATOP_SRGBWRITE|FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_X8R8G8B8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        FORMATOP_DISPLAYMODE|FORMATOP_3DACCELERATION|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|FORMATOP_SRGBREAD|
-        FORMATOP_MEMBEROFGROUP_ARGB|
-        FORMATOP_SRGBWRITE|FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A2R10G10B10,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_MEMBEROFGROUP_ARGB|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_X1R5G5B5,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_MEMBEROFGROUP_ARGB|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A1R5G5B5,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_UP_TO_ALPHA_RENDERTARGET|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_MEMBEROFGROUP_ARGB|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A4R4G4B4,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_UP_TO_ALPHA_RENDERTARGET|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_R5G6B5,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        FORMATOP_DISPLAYMODE|FORMATOP_3DACCELERATION|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_MEMBEROFGROUP_ARGB|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_L16,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A8L8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_L8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_D16,   FORMATOP_TEXTURE|FORMATOP_ZSTENCIL|FORMATOP_ZSTENCIL_WITH_ARBITRARY_COLOR_DEPTH, 0, 0, 0},
-    {D3DDDIFMT_D24S8, FORMATOP_TEXTURE|FORMATOP_ZSTENCIL|FORMATOP_ZSTENCIL_WITH_ARBITRARY_COLOR_DEPTH, 0, 0, 0},
-    {D3DDDIFMT_D24X8, FORMATOP_TEXTURE|FORMATOP_ZSTENCIL|FORMATOP_ZSTENCIL_WITH_ARBITRARY_COLOR_DEPTH, 0, 0, 0},
-    {D3DDDIFMT_D16_LOCKABLE, FORMATOP_ZSTENCIL|FORMATOP_ZSTENCIL_WITH_ARBITRARY_COLOR_DEPTH, 0, 0, 0},
-    {D3DDDIFMT_X8D24, FORMATOP_TEXTURE|FORMATOP_ZSTENCIL|FORMATOP_ZSTENCIL_WITH_ARBITRARY_COLOR_DEPTH, 0, 0, 0},
-    {D3DDDIFMT_D32F_LOCKABLE, FORMATOP_TEXTURE|FORMATOP_ZSTENCIL|FORMATOP_ZSTENCIL_WITH_ARBITRARY_COLOR_DEPTH, 0, 0, 0},
-    {D3DDDIFMT_S8D24, FORMATOP_TEXTURE|FORMATOP_ZSTENCIL|FORMATOP_ZSTENCIL_WITH_ARBITRARY_COLOR_DEPTH, 0, 0, 0},
-
-    {D3DDDIFMT_DXT1,
-        FORMATOP_TEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|FORMATOP_SRGBREAD|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_DXT2,
-        FORMATOP_TEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|FORMATOP_SRGBREAD|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_DXT3,
-        FORMATOP_TEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|FORMATOP_SRGBREAD|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_DXT4,
-        FORMATOP_TEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|FORMATOP_SRGBREAD|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_DXT5,
-        FORMATOP_TEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|FORMATOP_SRGBREAD|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_X8L8V8U8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        0|
-        FORMATOP_BUMPMAP|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A2W10V10U10,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        0|
-        FORMATOP_BUMPMAP|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_V8U8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        0|
-        FORMATOP_BUMPMAP|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_Q8W8V8U8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        0|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_BUMPMAP|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_CxV8U8, FORMATOP_NOFILTER|FORMATOP_NOALPHABLEND|FORMATOP_NOTEXCOORDWRAPNORMIP, 0, 0, 0},
-
-    {D3DDDIFMT_R16F,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_R32F,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_G16R16F,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_G32R32F,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-// Floating-point formats are not implemented in Chromium.
-    {D3DDDIFMT_A16B16G16R16F,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A32B32G32R32F,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_G16R16,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A16B16G16R16,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        0|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_V16U16,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        0|
-        FORMATOP_BUMPMAP|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_P8, FORMATOP_DISPLAYMODE|FORMATOP_3DACCELERATION|FORMATOP_OFFSCREENPLAIN, 0, 0, 0},
-
-    {D3DDDIFMT_UYVY,
-        0|
-        0|
-        0|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_NOFILTER|
-        FORMATOP_NOALPHABLEND|
-        FORMATOP_NOTEXCOORDWRAPNORMIP, 0, 0, 0},
-
-    {D3DDDIFMT_YUY2,
-        0|
-        0|
-        0|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_NOFILTER|
-        FORMATOP_NOALPHABLEND|
-        FORMATOP_NOTEXCOORDWRAPNORMIP, 0, 0, 0},
-
-    {VBOXWDDM_D3DDDIFORMAT_FROM_FOURCC('Y', 'V', '1', '2'),
-        0|
-        0|
-        0|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_NOFILTER|
-        FORMATOP_NOALPHABLEND|
-        FORMATOP_NOTEXCOORDWRAPNORMIP, 0, 0, 0},
-
-    {D3DDDIFMT_Q16W16V16U16,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_BUMPMAP|FORMATOP_DMAP|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_X8B8G8R8,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_UP_TO_ALPHA_RENDERTARGET|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|FORMATOP_SRGBREAD|
-        FORMATOP_DMAP|FORMATOP_MEMBEROFGROUP_ARGB|
-        FORMATOP_SRGBWRITE|FORMATOP_AUTOGENMIPMAP|FORMATOP_VERTEXTEXTURE|
-        FORMATOP_OVERLAY, 0, 0, 0},
-
-    {D3DDDIFMT_BINARYBUFFER, FORMATOP_OFFSCREENPLAIN, 0, 0, 0},
-
-    {D3DDDIFMT_A4L4,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|
-        0|
-        0|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_DMAP|
-        FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-
-    {D3DDDIFMT_A2B10G10R10,
-        FORMATOP_TEXTURE|FORMATOP_VOLUMETEXTURE|FORMATOP_CUBETEXTURE|FORMATOP_OFFSCREEN_RENDERTARGET|
-        FORMATOP_SAME_FORMAT_RENDERTARGET|
-        0|
-        FORMATOP_CONVERT_TO_ARGB|FORMATOP_OFFSCREENPLAIN|
-        FORMATOP_DMAP|FORMATOP_MEMBEROFGROUP_ARGB|
-        FORMATOP_AUTOGENMIPMAP|FORMATOP_VERTEXTEXTURE, 0, 0, 0},
-};
 
 static FORMATOP gVBoxFormatOpsBase[] = {
     {D3DDDIFMT_X8R8G8B8, FORMATOP_DISPLAYMODE, 0, 0, 0},
@@ -897,9 +429,9 @@ HRESULT VBoxDispD3DGlobal2DFormatsInit(PVBOXWDDMDISP_ADAPTER pAdapter)
     uint8_t* pvBuf = (uint8_t*)RTMemAllocZ(cbBuf);
     if (pvBuf)
     {
-        pAdapter->Formats.paFormstOps = (FORMATOP*)pvBuf;
-        memcpy ((void*)pAdapter->Formats.paFormstOps , gVBoxFormatOpsBase, sizeof (gVBoxFormatOpsBase));
-        pAdapter->Formats.cFormstOps = RT_ELEMENTS(gVBoxFormatOpsBase);
+        pAdapter->Formats.paFormatOps = (FORMATOP*)pvBuf;
+        memcpy ((void*)pAdapter->Formats.paFormatOps , gVBoxFormatOpsBase, sizeof (gVBoxFormatOpsBase));
+        pAdapter->Formats.cFormatOps = RT_ELEMENTS(gVBoxFormatOpsBase);
 
         FORMATOP fo = {D3DDDIFMT_UNKNOWN, 0, 0, 0, 0};
         for (uint32_t i = 0; i < pAdapter->cHeads; ++i)
@@ -911,7 +443,7 @@ HRESULT VBoxDispD3DGlobal2DFormatsInit(PVBOXWDDMDISP_ADAPTER pAdapter)
                 {
                     fo.Format = pVhwa->Settings.aFormats[j];
                     fo.Operations = FORMATOP_OVERLAY;
-                    hr = vboxFormatOpsMerge((FORMATOP *)pAdapter->Formats.paFormstOps, &pAdapter->Formats.cFormstOps, cFormats, &fo);
+                    hr = vboxFormatOpsMerge((FORMATOP *)pAdapter->Formats.paFormatOps, &pAdapter->Formats.cFormatOps, cFormats, &fo);
                     if (FAILED(hr))
                     {
                         WARN(("vboxFormatOpsMerge failed, hr 0x%x", hr));
@@ -956,8 +488,11 @@ HRESULT VBoxDispD3DGlobal2DFormatsInit(PVBOXWDDMDISP_ADAPTER pAdapter)
 
 void VBoxDispD3DGlobal2DFormatsTerm(PVBOXWDDMDISP_ADAPTER pAdapter)
 {
-    if (pAdapter->Formats.paFormstOps)
-        RTMemFree((void *)pAdapter->Formats.paFormstOps);
+    if (pAdapter->Formats.paFormatOps)
+    {
+        RTMemFree((void *)pAdapter->Formats.paFormatOps);
+        pAdapter->Formats.paFormatOps = NULL;
+    }
 }
 
 #endif
@@ -988,13 +523,6 @@ void VBoxDispD3DGlobalTerm()
     DeleteCriticalSection(&g_VBoxDispD3DGlobalCritSect);
 }
 
-static void vboxDispD3DGlobalD3DFormatsInit(PVBOXWDDMDISP_FORMATS pFormats)
-{
-    memset(pFormats, 0, sizeof (*pFormats));
-    pFormats->paFormstOps = gVBoxFormatOps3D;
-    pFormats->cFormstOps = RT_ELEMENTS(gVBoxFormatOps3D);
-}
-
 #ifndef D3DCAPS2_CANRENDERWINDOWED
 #define D3DCAPS2_CANRENDERWINDOWED UINT32_C(0x00080000)
 #endif
@@ -1007,7 +535,7 @@ static void vboxDispD3DGlobalD3DFormatsInit(PVBOXWDDMDISP_FORMATS pFormats)
 #define VBOX_D3D_CHECK_FLAGS(level, field, flags) do { \
         if (((field) & (flags)) != (flags)) \
         { \
-            LogRel(("D3D level %s %s flags: 0x%08X -> 0x%08X\n", #level, #field, (field), (flags))); \
+            LogRel(("D3D level %s %s flags: 0x%08X -> 0x%08X (missing 0x%08X)\n", #level, #field, (field), (flags), ((field) & (flags)) ^ (flags))); \
         } \
     } while (0)
 
@@ -1025,7 +553,7 @@ static void vboxDispD3DGlobalD3DFormatsInit(PVBOXWDDMDISP_FORMATS pFormats)
         } \
     } while (0)
 
-static void vboxDispCheckCapsLevel(const D3DCAPS9 *pCaps)
+void vboxDispCheckCapsLevel(const D3DCAPS9 *pCaps)
 {
     /* Misc. */
     VBOX_D3D_CHECK_FLAGS(misc, pCaps->Caps,                     D3DCAPS_READ_SCANLINE);
@@ -1135,137 +663,54 @@ static void vboxDispCheckCapsLevel(const D3DCAPS9 *pCaps)
 
 #endif /* DEBUG */
 
-static HRESULT vboxWddmGetD3D9Caps(PVBOXWDDMDISP_D3D pD3D, D3DCAPS9 *pCaps)
-{
-    HRESULT hr = pD3D->pD3D9If->GetDeviceCaps(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, pCaps);
-    if (FAILED(hr))
-    {
-        WARN(("GetDeviceCaps failed hr(0x%x)",hr));
-        return hr;
-    }
-
-#ifdef DEBUG
-    vboxDispCheckCapsLevel(pCaps);
+#ifdef VBOX_WITH_MESA3D
+HRESULT GaWddmD3DBackendOpen(PVBOXWDDMDISP_D3D pD3D, VBOXWDDM_QAI const *pAdapterInfo, PVBOXWDDMDISP_FORMATS pFormats);
 #endif
 
-    /* needed for Windows Media Player to work properly */
-    pCaps->Caps |= D3DCAPS_READ_SCANLINE;
-    pCaps->Caps2 |= 0x00080000 /*D3DCAPS2_CANRENDERWINDOWED*/;
-    pCaps->Caps2 |= D3DCAPS2_CANSHARERESOURCE;
-    pCaps->DevCaps |= D3DDEVCAPS_FLOATTLVERTEX /* <- must be set according to the docs */
-            /*| D3DDEVCAPS_HWVERTEXBUFFER | D3DDEVCAPS_HWINDEXBUFFER |  D3DDEVCAPS_SUBVOLUMELOCK */;
-    pCaps->PrimitiveMiscCaps |= D3DPMISCCAPS_INDEPENDENTWRITEMASKS
-            | D3DPMISCCAPS_FOGINFVF
-            | D3DPMISCCAPS_SEPARATEALPHABLEND | D3DPMISCCAPS_MRTINDEPENDENTBITDEPTHS;
-    pCaps->RasterCaps |= D3DPRASTERCAPS_SUBPIXEL | D3DPRASTERCAPS_STIPPLE | D3DPRASTERCAPS_ZBIAS | D3DPRASTERCAPS_COLORPERSPECTIVE /* keep */;
-    pCaps->TextureCaps |= D3DPTEXTURECAPS_TRANSPARENCY | D3DPTEXTURECAPS_TEXREPEATNOTSCALEDBYSIZE;
-    pCaps->TextureAddressCaps |= D3DPTADDRESSCAPS_MIRRORONCE;
-    pCaps->VolumeTextureAddressCaps |= D3DPTADDRESSCAPS_MIRRORONCE;
-    pCaps->StencilCaps |= D3DSTENCILCAPS_TWOSIDED;
-    pCaps->DeclTypes |= D3DDTCAPS_FLOAT16_2 | D3DDTCAPS_FLOAT16_4;
-    pCaps->VertexTextureFilterCaps |= D3DPTFILTERCAPS_MINFPOINT | D3DPTFILTERCAPS_MAGFPOINT;
-    pCaps->GuardBandLeft = -8192.;
-    pCaps->GuardBandTop = -8192.;
-    pCaps->GuardBandRight = 8192.;
-    pCaps->GuardBandBottom = 8192.;
-    pCaps->VS20Caps.DynamicFlowControlDepth = 24;
-    pCaps->VS20Caps.NumTemps = D3DVS20_MAX_NUMTEMPS;
-    pCaps->PS20Caps.DynamicFlowControlDepth = 24;
-    pCaps->PS20Caps.NumTemps = D3DVS20_MAX_NUMTEMPS;
-
-    /* workaround for wine not returning InstructionSlots correctly for  shaders v3.0 */
-    if ((pCaps->VertexShaderVersion & 0xff00) == 0x0300)
-    {
-        pCaps->MaxVertexShader30InstructionSlots = RT_MIN(32768, pCaps->MaxVertexShader30InstructionSlots);
-        pCaps->MaxPixelShader30InstructionSlots = RT_MIN(32768, pCaps->MaxPixelShader30InstructionSlots);
-    }
-#if defined(DEBUG)
-    if ((pCaps->VertexShaderVersion & 0xff00) == 0x0300)
-    {
-        Assert(pCaps->MaxVertexShader30InstructionSlots >= 512);
-        Assert(pCaps->MaxVertexShader30InstructionSlots <= 32768);
-        Assert(pCaps->MaxPixelShader30InstructionSlots >= 512);
-        Assert(pCaps->MaxPixelShader30InstructionSlots <= 32768);
-    }
-    else if ((pCaps->VertexShaderVersion & 0xff00) == 0x0200)
-    {
-        Assert(pCaps->MaxVertexShader30InstructionSlots == 0);
-        Assert(pCaps->MaxPixelShader30InstructionSlots == 0);
-    }
-    else
-    {
-        WARN(("incorect shader caps!"));
-    }
-#endif
-
-    pCaps->MaxVertexW = 10000000000.f; /* Required by D3D feature level 9.3. */
-
-#ifdef DEBUG
-    vboxDispCheckCapsLevel(pCaps);
-#endif
-
-    vboxDispDumpD3DCAPS9(pCaps);
-
-    return S_OK;
-}
-
-static void vboxDispD3DGlobalDoClose(PVBOXWDDMDISP_D3D pD3D)
-{
-    pD3D->pD3D9If->Release();
-    VBoxDispD3DClose(&pD3D->D3D);
-}
-
-static HRESULT vboxDispD3DGlobalDoOpen(PVBOXWDDMDISP_D3D pD3D)
+static HRESULT vboxDispD3DGlobalDoOpen(PVBOXWDDMDISP_D3D pD3D, VBOXWDDM_QAI const *pAdapterInfo, PVBOXWDDMDISP_FORMATS pFormats)
 {
     memset(pD3D, 0, sizeof (*pD3D));
-    HRESULT hr = VBoxDispD3DOpen(&pD3D->D3D);
-    if (SUCCEEDED(hr))
+
+    HRESULT hr;
+    if (pAdapterInfo->enmHwType == VBOXVIDEO_HWTYPE_VBOX)
     {
-        hr = pD3D->D3D.pfnDirect3DCreate9Ex(D3D_SDK_VERSION, &pD3D->pD3D9If);
-        if (SUCCEEDED(hr))
-        {
-            hr = vboxWddmGetD3D9Caps(pD3D, &pD3D->Caps);
-            if (SUCCEEDED(hr))
-            {
-                pD3D->cMaxSimRTs = pD3D->Caps.NumSimultaneousRTs;
-                Assert(pD3D->cMaxSimRTs);
-                Assert(pD3D->cMaxSimRTs < UINT32_MAX/2);
-                LOG(("SUCCESS 3D Enabled, pD3D (0x%p)", pD3D));
-                return S_OK;
-            }
-            else
-            {
-                WARN(("vboxWddmGetD3D9Caps failed hr = 0x%x", hr));
-            }
-            pD3D->pD3D9If->Release();
-        }
-        else
-        {
-            WARN(("pfnDirect3DCreate9Ex failed hr = 0x%x", hr));
-        }
-        VBoxDispD3DClose(&pD3D->D3D);
+        hr = E_FAIL;
     }
+#ifdef VBOX_WITH_MESA3D
+    else if (pAdapterInfo->enmHwType == VBOXVIDEO_HWTYPE_VMSVGA)
+        hr = GaWddmD3DBackendOpen(pD3D, pAdapterInfo, pFormats);
+#endif
     else
     {
-        WARN(("VBoxDispD3DOpen failed hr = 0x%x", hr));
+        RT_NOREF(pFormats);
+        hr = E_FAIL;
     }
+
+    if (SUCCEEDED(hr))
+    {
+        pD3D->cMaxSimRTs = pD3D->Caps.NumSimultaneousRTs;
+
+        Assert(pD3D->cMaxSimRTs);
+        Assert(pD3D->cMaxSimRTs < UINT32_MAX/2);
+
+        LOG(("SUCCESS 3D Enabled, pD3D (0x%p)", pD3D));
+    }
+
     return hr;
 }
 
-HRESULT VBoxDispD3DGlobalOpen(PVBOXWDDMDISP_D3D pD3D, PVBOXWDDMDISP_FORMATS pFormats)
+HRESULT VBoxDispD3DGlobalOpen(PVBOXWDDMDISP_D3D pD3D, PVBOXWDDMDISP_FORMATS pFormats, VBOXWDDM_QAI const *pAdapterInfo)
 {
     vboxDispD3DGlobalLock();
     if (!g_cVBoxDispD3DGlobalOpens)
     {
-        HRESULT hr = vboxDispD3DGlobalDoOpen(&g_VBoxDispD3DGlobalD3D);
+        HRESULT hr = vboxDispD3DGlobalDoOpen(&g_VBoxDispD3DGlobalD3D, pAdapterInfo, &g_VBoxDispD3DGlobalD3DFormats);
         if (!SUCCEEDED(hr))
         {
             vboxDispD3DGlobalUnlock();
             WARN(("vboxDispD3DGlobalDoOpen failed hr = 0x%x", hr));
             return hr;
         }
-
-        vboxDispD3DGlobalD3DFormatsInit(&g_VBoxDispD3DGlobalD3DFormats);
     }
     ++g_cVBoxDispD3DGlobalOpens;
     vboxDispD3DGlobalUnlock();
@@ -1281,6 +726,6 @@ void VBoxDispD3DGlobalClose(PVBOXWDDMDISP_D3D pD3D, PVBOXWDDMDISP_FORMATS pForma
     vboxDispD3DGlobalLock();
     --g_cVBoxDispD3DGlobalOpens;
     if (!g_cVBoxDispD3DGlobalOpens)
-        vboxDispD3DGlobalDoClose(&g_VBoxDispD3DGlobalD3D);
+        g_VBoxDispD3DGlobalD3D.pfnD3DBackendClose(&g_VBoxDispD3DGlobalD3D);
     vboxDispD3DGlobalUnlock();
 }

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineSettingsAudio.h 86095 2020-09-11 14:28:34Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineSettingsAudio class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,86 +15,98 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIMachineSettingsAudio_h__
-#define __UIMachineSettingsAudio_h__
+#ifndef FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsAudio_h
+#define FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsAudio_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
 #include "UISettingsPage.h"
-#include "UIMachineSettingsAudio.gen.h"
 
-/* Machine settings / Audio page / Data: */
-struct UIDataSettingsMachineAudio
-{
-    /* Constructor: */
-    UIDataSettingsMachineAudio()
-        : m_fAudioEnabled(false)
-        , m_audioDriverType(KAudioDriverType_Null)
-        , m_audioControllerType(KAudioControllerType_AC97) {}
+/* Forward declarations: */
+class QCheckBox;
+class QLabel;
+class UIAudioControllerEditor;
+class UIAudioHostDriverEditor;
+struct UIDataSettingsMachineAudio;
+typedef UISettingsCache<UIDataSettingsMachineAudio> UISettingsCacheMachineAudio;
 
-    /* Helpers: Compare functions/operators: */
-    bool equal(const UIDataSettingsMachineAudio &other) const
-    {
-        return (m_fAudioEnabled == other.m_fAudioEnabled) &&
-               (m_audioDriverType == other.m_audioDriverType) &&
-               (m_audioControllerType == other.m_audioControllerType);
-    }
-    bool operator==(const UIDataSettingsMachineAudio &other) const { return equal(other); }
-    bool operator!=(const UIDataSettingsMachineAudio &other) const { return !equal(other); }
-
-    /* Variables: */
-    bool m_fAudioEnabled;
-    KAudioDriverType m_audioDriverType;
-    KAudioControllerType m_audioControllerType;
-};
-typedef UISettingsCache<UIDataSettingsMachineAudio> UICacheSettingsMachineAudio;
-
-/* Machine settings / Audio page: */
-class UIMachineSettingsAudio : public UISettingsPageMachine, public Ui::UIMachineSettingsAudio
+/** Machine settings: Audio page. */
+class SHARED_LIBRARY_STUFF UIMachineSettingsAudio : public UISettingsPageMachine
 {
     Q_OBJECT;
 
 public:
 
-    /* Constructor: */
+    /** Constructs Audio settings page. */
     UIMachineSettingsAudio();
+    /** Destructs Audio settings page. */
+    ~UIMachineSettingsAudio();
 
 protected:
 
-    /* API: Cache stuff: */
-    bool changed() const { return m_cache.wasChanged(); }
+    /** Returns whether the page content was changed. */
+    virtual bool changed() const /* override */;
 
-    /* Load data to cache from corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void loadToCacheFrom(QVariant &data);
-    /* Load data to corresponding widgets from cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void getFromCache();
+    /** Loads settings from external object(s) packed inside @a data to cache.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void loadToCacheFrom(QVariant &data) /* override */;
+    /** Loads data from cache to corresponding widgets.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void getFromCache() /* override */;
 
-    /* Save data from corresponding widgets to cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void putToCache();
-    /* Save data from cache to corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void saveFromCacheTo(QVariant &data);
+    /** Saves data from corresponding widgets to cache.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void putToCache() /* override */;
+    /** Saves settings from cache to external object(s) packed inside @a data.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void saveFromCacheTo(QVariant &data) /* overrride */;
 
-    /* API: Focus-order stuff: */
-    void setOrderAfter(QWidget *pWidget);
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
 
-    /* Helper: Translate stuff: */
-    void retranslateUi();
-
-    /* Helper: Polish stuff: */
-    void polishPage();
+    /** Performs final page polishing. */
+    virtual void polishPage() /* override */;
 
 private:
 
-    /* Helpers: Prepare stuff: */
+    /** Prepares all. */
     void prepare();
-    void prepareComboboxes();
+    /** Prepares widgets. */
+    void prepareWidgets();
+    /** Prepares connections. */
+    void prepareConnections();
+    /** Cleanups all. */
+    void cleanup();
 
-    /* Cache: */
-    UICacheSettingsMachineAudio m_cache;
+    /** Saves existing audio data from the cache. */
+    bool saveAudioData();
+
+    /** Holds the page data cache instance. */
+    UISettingsCacheMachineAudio *m_pCache;
+
+    /** @name Widgets
+     * @{ */
+        /** Holds the audio check-box instance. */
+        QCheckBox               *m_pCheckBoxAudio;
+        /** Holds the audio settings widget instance. */
+        QWidget                 *m_pWidgetAudioSettings;
+        /** Holds the audio host driver label instance. */
+        QLabel                  *m_pLabelAudioHostDriver;
+        /** Holds the audio host driver editor instance. */
+        UIAudioHostDriverEditor *m_pEditorAudioHostDriver;
+        /** Holds the audio host controller label instance. */
+        QLabel                  *m_pLabelAudioController;
+        /** Holds the audio host controller instance instance. */
+        UIAudioControllerEditor *m_pEditorAudioController;
+        /** Holds the audio extended label instance. */
+        QLabel                  *m_pLabelAudioExtended;
+        /** Holds the audio output check-box instance. */
+        QCheckBox               *m_pCheckBoxAudioOutput;
+        /** Holds the audio input check-box instance. */
+        QCheckBox               *m_pCheckBoxAudioInput;
+    /** @} */
 };
 
-#endif // __UIMachineSettingsAudio_h__
-
+#endif /* !FEQT_INCLUDED_SRC_settings_machine_UIMachineSettingsAudio_h */

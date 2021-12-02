@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: the-haiku-kernel.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Include all necessary headers for the Haiku kernel.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___the_haiku_kernel_h
-#define ___the_haiku_kernel_h
+#ifndef IPRT_INCLUDED_SRC_r0drv_haiku_the_haiku_kernel_h
+#define IPRT_INCLUDED_SRC_r0drv_haiku_the_haiku_kernel_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -110,5 +112,5 @@ DECLINLINE(int) RTErrConvertFromHaikuKernReturn(status_t rc)
     }
 }
 
-#endif /* ___the_haiku_kernel_h */
+#endif /* !IPRT_INCLUDED_SRC_r0drv_haiku_the_haiku_kernel_h */
 

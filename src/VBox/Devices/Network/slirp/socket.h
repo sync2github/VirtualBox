@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: socket.h 86843 2020-11-10 04:26:48Z vboxsync $ */
 /** @file
  * NAT - socket handling (declarations/defines).
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -59,6 +59,8 @@ struct socket
     struct tcpiphdr *so_ti;      /* Pointer to the original ti within
                                   * so_mconn, for non-blocking connections */
     uint8_t         *so_ohdr;    /* unmolested IP header of the datagram in so_m */
+    caddr_t         so_optp;     /* tcp options in so_m */
+    int             so_optlen;   /* length of options in so_m */
     int             so_urgc;
     struct in_addr  so_faddr;    /* foreign host table entry */
     struct in_addr  so_laddr;    /* local host table entry */
@@ -97,10 +99,6 @@ struct socket
     void (* so_timeout)(PNATState pData, struct socket *so, void *arg);
     void *so_timeout_arg;
 
-#ifdef VBOX_WITH_NAT_UDP_SOCKET_CLONE
-    struct socket *so_cloneOf; /* pointer to master instance */
-    int so_cCloneCounter;      /* number of clones */
-#endif
     /** These flags (''fUnderPolling'' and ''fShouldBeRemoved'') introduced to
      *  to let polling routine gain control over freeing socket whatever level of
      *  TCP/IP initiated socket releasing.
@@ -170,6 +168,7 @@ void so_init (void);
 struct socket * solookup (struct socket *, struct in_addr, u_int, struct in_addr, u_int);
 struct socket * socreate (void);
 void sofree (PNATState, struct socket *);
+int sobind(PNATState, struct socket *);
 int soread (PNATState, struct socket *);
 void sorecvoob (PNATState, struct socket *);
 int sosendoob (struct socket *);
@@ -185,16 +184,6 @@ int sofcantrcvmore (struct  socket *);
 void sofcantsendmore (struct socket *);
 void soisfdisconnected (struct socket *);
 void sofwdrain (struct socket *);
-
-/**
- * Creates copy of UDP socket with specified addr
- * fBindSocket - in case we want bind a real socket.
- * @return copy of the socket with f_addr equal to u32ForeignAddr
- */
-#ifdef VBOX_WITH_NAT_UDP_SOCKET_CLONE
-struct socket * soCloneUDPSocketWithForegnAddr(PNATState pData, bool fBindSocket, struct socket *pSo, uint32_t u32ForeignAddr);
-struct socket *soLookUpClonedUDPSocket(PNATState pData, const struct socket *pcSo, uint32_t u32ForeignAddress);
-#endif
 
 static inline int soIgnorableErrorCode(int iErrorCode)
 {

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_com_AutoLock_h
-#define ___VBox_com_AutoLock_h
+#ifndef VBOX_INCLUDED_com_AutoLock_h
+#define VBOX_INCLUDED_com_AutoLock_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -84,7 +87,8 @@ enum VBoxLockingClass
     LOCKCLASS_OTHEROBJECT = 10,             // any regular object member variable lock
     LOCKCLASS_PROGRESSLIST = 11,            // list of progress objects in VirtualBox; no other object lock
                                             // may be held after this!
-    LOCKCLASS_OBJECTSTATE = 12              // object state lock (handled by AutoCaller classes)
+    LOCKCLASS_OBJECTSTATE = 12,             // object state lock (handled by AutoCaller classes)
+    LOCKCLASS_TRANSLATOR = 13               // translator internal lock
 };
 
 void InitAutoLockSystem();
@@ -122,6 +126,13 @@ public:
      * read/write semaphore. Intended for debugging only.
      */
     virtual bool isWriteLockOnCurrentThread() const = 0;
+
+    /**
+     * Returns @c true if the current thread holds a read lock on this
+     * read/write semaphore. Intended for debugging only as it isn't always
+     * accurate given @a fWannaHear.
+     */
+    virtual bool isReadLockedOnCurrentThread(bool fWannaHear = true) const = 0;
 
     /**
      * Returns the current write lock level of this semaphore. The lock level
@@ -163,6 +174,7 @@ public:
     virtual ~RWLockHandle();
 
     virtual bool isWriteLockOnCurrentThread() const;
+    virtual bool isReadLockedOnCurrentThread(bool fWannaHear = true) const;
 
     virtual void lockWrite(LOCKVAL_SRC_POS_DECL);
     virtual void unlockWrite();
@@ -201,6 +213,7 @@ public:
     WriteLockHandle(VBoxLockingClass lockClass);
     virtual ~WriteLockHandle();
     virtual bool isWriteLockOnCurrentThread() const;
+    virtual bool isReadLockedOnCurrentThread(bool fWannaHear = true) const;
 
     virtual void lockWrite(LOCKVAL_SRC_POS_DECL);
     virtual void unlockWrite();
@@ -236,6 +249,7 @@ private:
 class Lockable
 {
 public:
+    virtual ~Lockable() { } /* To make VC++ 2019 happy. */
 
     /**
      * Returns a pointer to a LockHandle used by AutoWriteLock/AutoReadLock
@@ -253,6 +267,17 @@ public:
     {
         LockHandle *h = lockHandle();
         return h ? h->isWriteLockOnCurrentThread() : false;
+    }
+
+    /**
+     * Equivalent to <tt>#lockHandle()->isReadLockedOnCurrentThread()</tt>.
+     * Returns @c false if lockHandle() returns @c NULL.
+     * @note Use with care, simple debug assertions and similar only.
+     */
+    bool isReadLockedOnCurrentThread(bool fWannaHear = true) const
+    {
+        LockHandle *h = lockHandle();
+        return h ? h->isReadLockedOnCurrentThread(fWannaHear) : false;
     }
 };
 
@@ -573,6 +598,8 @@ public:
     bool isWriteLockOnCurrentThread() const;
     uint32_t writeLockLevel() const;
 
+    bool isReadLockedOnCurrentThread(bool fWannaHear = true) const;
+
 private:
     DECLARE_CLS_COPY_CTOR_ASSIGN_NOOP(AutoWriteLock); /* Shuts up MSC warning C4625. */
 };
@@ -662,6 +689,6 @@ private:
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_com_AutoLock_h */
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

@@ -97,6 +97,7 @@
 # include <VBox/sup.h>
 # include <iprt/assert.h>
 # include <iprt/cpuset.h>
+# include <iprt/err.h>
 # include <iprt/mem.h>
 # include <iprt/mp.h>
 # include <iprt/string.h>
@@ -104,6 +105,9 @@
 # include <iprt/thread.h>
 # include <iprt/timer.h>
 # include <limits.h>
+
+# undef offsetof
+# define offsetof RT_OFFSETOF
 
 /*
  * Use asm.h to implemente some of the simple stuff in dtrace_asm.s.
@@ -316,7 +320,7 @@ dtrace_enable_nullop(void)
 static dtrace_pops_t	dtrace_provider_ops = {
 	(void (*)(void *, const dtrace_probedesc_t *))dtrace_nullop,
 	(void (*)(void *, struct modctl *))dtrace_nullop,
-	(int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop,
+	(int (*)(void *, dtrace_id_t, void *))(uintptr_t)dtrace_enable_nullop,
 	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
 	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
 	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
@@ -2418,7 +2422,7 @@ dtrace_speculation_commit(dtrace_state_t *state, processorid_t cpu,
 				new = DTRACESPEC_COMMITTING;
 				break;
 			}
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 
 		case DTRACESPEC_ACTIVEMANY:
 			new = DTRACESPEC_COMMITTINGMANY;
@@ -4931,7 +4935,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				*illval = regs[r1];
 				break;
 			}
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DIF_OP_LDSB:
 			regs[rd] = (int8_t)dtrace_load8(regs[r1]);
 			break;
@@ -4941,7 +4945,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				*illval = regs[r1];
 				break;
 			}
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DIF_OP_LDSH:
 			regs[rd] = (int16_t)dtrace_load16(regs[r1]);
 			break;
@@ -4951,7 +4955,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				*illval = regs[r1];
 				break;
 			}
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DIF_OP_LDSW:
 			regs[rd] = (int32_t)dtrace_load32(regs[r1]);
 			break;
@@ -4961,7 +4965,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				*illval = regs[r1];
 				break;
 			}
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DIF_OP_LDUB:
 			regs[rd] = dtrace_load8(regs[r1]);
 			break;
@@ -4971,7 +4975,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				*illval = regs[r1];
 				break;
 			}
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DIF_OP_LDUH:
 			regs[rd] = dtrace_load16(regs[r1]);
 			break;
@@ -4981,7 +4985,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				*illval = regs[r1];
 				break;
 			}
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DIF_OP_LDUW:
 			regs[rd] = dtrace_load32(regs[r1]);
 			break;
@@ -4991,7 +4995,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				*illval = regs[r1];
 				break;
 			}
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DIF_OP_LDX:
 			regs[rd] = dtrace_load64(regs[r1]);
 			break;
@@ -7016,12 +7020,12 @@ top:
 	case '\\':
 		if ((c = *p++) == '\0')
 			return (0);
-		/*FALLTHRU*/
+		RT_FALL_THRU();
 
 	default:
 		if (c != s1)
 			return (0);
-		/*FALLTHRU*/
+		RT_FALL_THRU();
 
 	case '?':
 		if (s1 != '\0')
@@ -7382,7 +7386,7 @@ dtrace_unregister(dtrace_provider_id_t id)
 	dtrace_probe_t *probe, *first = NULL;
 
 	if (old->dtpv_pops.dtps_enable ==
-	    (int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop) {
+	    (int (*)(void *, dtrace_id_t, void *))(uintptr_t)dtrace_enable_nullop) {
 		/*
 		 * If DTrace itself is the provider, we're called with locks
 		 * already held.
@@ -7532,7 +7536,7 @@ dtrace_invalidate(dtrace_provider_id_t id)
 	dtrace_provider_t *pvp = (dtrace_provider_t *)id;
 
 	ASSERT(pvp->dtpv_pops.dtps_enable !=
-	    (int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop);
+	    (int (*)(void *, dtrace_id_t, void *))(uintptr_t)dtrace_enable_nullop);
 
 	mutex_enter(&dtrace_provider_lock);
 	mutex_enter(&dtrace_lock);
@@ -7573,7 +7577,7 @@ dtrace_condense(dtrace_provider_id_t id)
 	 * Make sure this isn't the dtrace provider itself.
 	 */
 	ASSERT(prov->dtpv_pops.dtps_enable !=
-	    (int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop);
+	    (int (*)(void *, dtrace_id_t, void *))(uintptr_t)dtrace_enable_nullop);
 
 	mutex_enter(&dtrace_provider_lock);
 	mutex_enter(&dtrace_lock);
@@ -9972,7 +9976,7 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 				    (char *)(uintptr_t)arg);
 			}
 
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DTRACEACT_LIBACT:
 		case DTRACEACT_DIFEXPR:
 			if (dp == NULL)
@@ -10009,7 +10013,7 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 
 			arg = DTRACE_USTACK_ARG(nframes, strsize);
 
-			/*FALLTHROUGH*/
+			RT_FALL_THRU();
 		case DTRACEACT_USTACK:
 			if (desc->dtad_kind != DTRACEACT_JSTACK &&
 			    (nframes = DTRACE_USTACK_NFRAMES(arg)) == 0) {
@@ -15234,7 +15238,7 @@ dtrace_ioctl_helper(int cmd, intptr_t arg, int *rv)
 
 		dhp = &help;
 		arg = (intptr_t)help.dofhp_dof;
-		/*FALLTHROUGH*/
+		RT_FALL_THRU();
 
 	case DTRACEHIOC_ADD: {
 		dof_hdr_t *dof = dtrace_dof_copyin(arg, &rval);

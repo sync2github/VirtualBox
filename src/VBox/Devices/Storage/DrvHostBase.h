@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DrvHostBase.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * DrvHostBase - Host base drive access driver.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __HostDrvBase_h__
-#define __HostDrvBase_h__
+#ifndef VBOX_INCLUDED_SRC_Storage_DrvHostBase_h
+#define VBOX_INCLUDED_SRC_Storage_DrvHostBase_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/assert.h>
 #include <iprt/err.h>
@@ -132,7 +135,7 @@ typedef struct DRVHOSTBASE
      * @param   pThis       Pointer to the instance data.
      * @param   fLock       Set if locking, clear if unlocking.
      */
-    DECLCALLBACKMEMBER(int, pfnDoLock)(PDRVHOSTBASE pThis, bool fLock);
+    DECLCALLBACKMEMBER(int, pfnDoLock,(PDRVHOSTBASE pThis, bool fLock));
 
     union
     {
@@ -166,6 +169,7 @@ DECLCALLBACK(void) DRVHostBaseDestruct(PPDMDRVINS pDrvIns);
 
 DECLHIDDEN(int) drvHostBaseScsiCmdOs(PDRVHOSTBASE pThis, const uint8_t *pbCmd, size_t cbCmd, PDMMEDIATXDIR enmTxDir,
                                      void *pvBuf, uint32_t *pcbBuf, uint8_t *pbSense, size_t cbSense, uint32_t cTimeoutMillies);
+DECLHIDDEN(size_t) drvHostBaseScsiCmdGetBufLimitOs(PDRVHOSTBASE pThis);
 DECLHIDDEN(int) drvHostBaseGetMediaSizeOs(PDRVHOSTBASE pThis, uint64_t *pcb);
 DECLHIDDEN(int) drvHostBaseReadOs(PDRVHOSTBASE pThis, uint64_t off, void *pvBuf, size_t cbRead);
 DECLHIDDEN(int) drvHostBaseWriteOs(PDRVHOSTBASE pThis, uint64_t off, const void *pvBuf, size_t cbWrite);
@@ -185,4 +189,4 @@ DECLHIDDEN(int) drvHostBaseBufferRelease(PDRVHOSTBASE pThis, PDRVHOSTBASEREQ pRe
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Storage_DrvHostBase_h */

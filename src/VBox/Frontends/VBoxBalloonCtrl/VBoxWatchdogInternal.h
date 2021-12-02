@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxWatchdogInternal.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxWatchdog - VirtualBox Watchdog Service.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___H_VBOXWATCHDOG
-#define ___H_VBOXWATCHDOG
+#ifndef VBOX_INCLUDED_SRC_VBoxBalloonCtrl_VBoxWatchdogInternal_h
+#define VBOX_INCLUDED_SRC_VBoxBalloonCtrl_VBoxWatchdogInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifndef VBOX_ONLY_DOCS
 # include <iprt/getopt.h>
@@ -31,10 +34,7 @@
 # include <VBox/com/VirtualBox.h>
 #endif /* !VBOX_ONLY_DOCS */
 
-#include <algorithm>
 #include <map>
-#include <sstream>
-#include <string>
 #include <vector>
 
 using namespace com;
@@ -137,7 +137,7 @@ typedef struct
      * Called before parsing arguments.
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnPreInit)(void);
+    DECLCALLBACKMEMBER(int, pfnPreInit,(void));
 
     /**
      * Tries to parse the given command line options.
@@ -148,31 +148,31 @@ typedef struct
      * @param   piConsumed  How many parameters this callback consumed from the
      *                      remaining arguments passed in.
      */
-    DECLCALLBACKMEMBER(int, pfnOption)(int argc, char *argv[], int *piConsumed);
+    DECLCALLBACKMEMBER(int, pfnOption,(int argc, char *argv[], int *piConsumed));
 
     /**
      * Called before parsing arguments.
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnInit)(void);
+    DECLCALLBACKMEMBER(int, pfnInit,(void));
 
     /** Called from the watchdog's main function. Non-blocking.
      *
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnMain)(void);
+    DECLCALLBACKMEMBER(int, pfnMain,(void));
 
     /**
      * Stop the module.
      */
-    DECLCALLBACKMEMBER(int, pfnStop)(void);
+    DECLCALLBACKMEMBER(int, pfnStop,(void));
 
     /**
      * Does termination cleanups.
      *
      * @remarks This may be called even if pfnInit hasn't been called!
      */
-    DECLCALLBACKMEMBER(void, pfnTerm)(void);
+    DECLCALLBACKMEMBER(void, pfnTerm,(void));
 
     /** @name  Callbacks.
      * @{
@@ -182,25 +182,25 @@ typedef struct
      *
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnOnMachineRegistered)(const Bstr &strUuid);
+    DECLCALLBACKMEMBER(int, pfnOnMachineRegistered,(const Bstr &strUuid));
 
     /**
      *
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnOnMachineUnregistered)(const Bstr &strUuid);
+    DECLCALLBACKMEMBER(int, pfnOnMachineUnregistered,(const Bstr &strUuid));
 
     /**
      *
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnOnMachineStateChanged)(const Bstr &strUuid, MachineState_T enmState);
+    DECLCALLBACKMEMBER(int, pfnOnMachineStateChanged,(const Bstr &strUuid, MachineState_T enmState));
 
     /**
      *
      * @returns VBox status code.
      */
-    DECLCALLBACKMEMBER(int, pfnOnServiceStateChanged)(bool fAvailable);
+    DECLCALLBACKMEMBER(int, pfnOnServiceStateChanged,(bool fAvailable));
 
     /** @} */
 } VBOXMODULE;
@@ -243,5 +243,5 @@ int cfgGetValueU32(const ComPtr<IVirtualBox> &rptrVBox, const ComPtr<IMachine> &
                    const char *pszGlobal, const char *pszVM, uint32_t *puValue, uint32_t uDefault);
 RT_C_DECLS_END
 
-#endif /* !___H_VBOXWATCHDOG */
+#endif /* !VBOX_INCLUDED_SRC_VBoxBalloonCtrl_VBoxWatchdogInternal_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetSend.h 85344 2020-07-14 18:46:00Z vboxsync $ */
 /** @file
  * A place to share code and definitions between VBoxNetAdp and VBoxNetFlt host drivers.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,11 +13,24 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 /** @todo move this to src/VBox/HostDrivers/darwin as a .cpp file. */
-#ifndef ___VBox_VBoxNetSend_h
-#define ___VBox_VBoxNetSend_h
+
+#ifndef VBOX_INCLUDED_SRC_darwin_VBoxNetSend_h
+#define VBOX_INCLUDED_SRC_darwin_VBoxNetSend_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #if defined(RT_OS_DARWIN)
 
@@ -26,11 +39,22 @@
 # include <iprt/string.h>
 
 # include <sys/socket.h>
-# include <net/kpi_interface.h>
+# if MAC_OS_X_VERSION_MIN_REQUIRED >= 101500 /* The 10.15 SDK has a slightly butchered API deprecation attempt. */
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wmacro-redefined"      /* Each header redefines __NKE_API_DEPRECATED. */
+#  pragma clang diagnostic ignored "-Wmissing-declarations" /* Misplaced __NKE_API_DEPRECATED; in kpi_mbuf.h. */
+#  include <net/kpi_interface.h>
+#  include <sys/kpi_mbuf.h>
+#  include <net/if.h>
+#  pragma clang diagnostic pop
+# else /* < 10.15 */
+#  include <net/kpi_interface.h>
 RT_C_DECLS_BEGIN /* Buggy 10.4 headers, fixed in 10.5. */
-# include <sys/kpi_mbuf.h>
+#  include <sys/kpi_mbuf.h>
 RT_C_DECLS_END
-# include <net/if.h>
+#  include <net/if.h>
+# endif /* < 10.15 */
+
 
 RT_C_DECLS_BEGIN
 
@@ -94,5 +118,5 @@ RT_C_DECLS_END
 
 #endif /* RT_OS_DARWIN */
 
-#endif /* !___VBox_VBoxNetSend_h */
+#endif /* !VBOX_INCLUDED_SRC_darwin_VBoxNetSend_h */
 

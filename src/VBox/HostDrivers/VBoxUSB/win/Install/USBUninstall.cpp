@@ -1,10 +1,10 @@
+/* $Id: USBUninstall.cpp 83803 2020-04-18 18:20:34Z vboxsync $ */
 /** @file
- *
- * VBox host drivers - USB drivers - Filter & driver uninstallation
- *
- * Installation code
- *
- * Copyright (C) 2006-2016 Oracle Corporation
+ * VBox host drivers - USB drivers - Filter & driver uninstallation.
+ */
+
+/*
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -24,11 +33,11 @@
 #include <newdev.h>
 
 #include <iprt/assert.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/param.h>
 #include <iprt/path.h>
 #include <iprt/string.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/VBoxDrvCfg-win.h>
 #include <stdio.h>
 
@@ -75,7 +84,7 @@ int __cdecl main(int argc, char **argv)
     HRESULT hr = VBoxDrvCfgInfUninstallAllF(L"USB", L"USB\\VID_80EE&PID_CAFE", SUOI_FORCEDELETE);
     if (hr != S_OK)
     {
-        printf("SetupUninstallOEMInf failed with hr=0x%x\n", hr);
+        printf("SetupUninstallOEMInf failed with hr=0x%lx\n", hr);
         return 1;
     }
 
@@ -106,8 +115,7 @@ int usblibOsStopService(void)
      */
     int rc = -1;
     SC_HANDLE   hSMgr = OpenSCManager(NULL, NULL, SERVICE_STOP | SERVICE_QUERY_STATUS);
-    DWORD LastError = GetLastError(); NOREF(LastError);
-    AssertMsg(hSMgr, ("OpenSCManager(,,delete) failed rc=%d\n", LastError));
+    AssertMsg(hSMgr, ("OpenSCManager(,,delete) failed rc=%d\n", GetLastError()));
     if (hSMgr)
     {
         SC_HANDLE hService = OpenService(hSMgr, SERVICE_NAME, SERVICE_STOP | SERVICE_QUERY_STATUS);
@@ -138,19 +146,13 @@ int usblibOsStopService(void)
                    AssertMsgFailed(("Failed to stop service. status=%d\n", Status.dwCurrentState));
             }
             else
-            {
-                DWORD LastError = GetLastError(); NOREF(LastError);
-                AssertMsgFailed(("ControlService failed with LastError=%Rwa. status=%d\n", LastError, Status.dwCurrentState));
-            }
+                AssertMsgFailed(("ControlService failed with LastError=%Rwa. status=%d\n", GetLastError(), Status.dwCurrentState));
             CloseServiceHandle(hService);
         }
         else if (GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST)
             rc = 0;
         else
-        {
-            DWORD LastError = GetLastError(); NOREF(LastError);
-            AssertMsgFailed(("OpenService failed LastError=%Rwa\n", LastError));
-        }
+            AssertMsgFailed(("OpenService failed LastError=%Rwa\n", GetLastError()));
         CloseServiceHandle(hSMgr);
     }
     return rc;
@@ -169,9 +171,8 @@ int usblibOsDeleteService(void)
      * Assume it didn't exist, so we'll create the service.
      */
     int rc = -1;
-    SC_HANDLE   hSMgr = OpenSCManager(NULL, NULL, SERVICE_CHANGE_CONFIG);
-    DWORD LastError = GetLastError(); NOREF(LastError);
-    AssertMsg(hSMgr, ("OpenSCManager(,,delete) failed rc=%d\n", LastError));
+    SC_HANDLE hSMgr = OpenSCManager(NULL, NULL, SERVICE_CHANGE_CONFIG);
+    AssertMsg(hSMgr, ("OpenSCManager(,,delete) failed rc=%d\n", GetLastError()));
     if (hSMgr)
     {
         SC_HANDLE hService = OpenService(hSMgr, SERVICE_NAME, DELETE);
@@ -183,19 +184,13 @@ int usblibOsDeleteService(void)
             if (DeleteService(hService))
                 rc = 0;
             else
-            {
-                DWORD LastError = GetLastError(); NOREF(LastError);
-                AssertMsgFailed(("DeleteService failed LastError=%Rwa\n", LastError));
-            }
+                AssertMsgFailed(("DeleteService failed LastError=%Rwa\n", GetLastError()));
             CloseServiceHandle(hService);
         }
         else if (GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST)
             rc = 0;
         else
-        {
-            DWORD LastError = GetLastError(); NOREF(LastError);
-            AssertMsgFailed(("OpenService failed LastError=%Rwa\n", LastError));
-        }
+            AssertMsgFailed(("OpenService failed LastError=%Rwa\n", GetLastError()));
         CloseServiceHandle(hSMgr);
     }
     return rc;

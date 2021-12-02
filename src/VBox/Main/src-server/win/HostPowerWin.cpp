@@ -1,11 +1,10 @@
-/* $Id$ */
+/* $Id: HostPowerWin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- *
  * VirtualBox interface to host's power notification service
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,6 +19,7 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_MAIN_HOST
 #include <iprt/win/windows.h>
 /* Some SDK versions lack the extern "C" and thus cause linking failures.
  * This workaround isn't pretty, but there are not many options. */
@@ -28,10 +28,16 @@ extern "C" {
 }
 
 #include <VBox/com/ptr.h>
+#include <iprt/errcore.h>
 #include "HostPower.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
+
+/*********************************************************************************************************************************
+*   Global Variables                                                                                                             *
+*********************************************************************************************************************************/
 static WCHAR gachWindowClassName[] = L"VBoxPowerNotifyClass";
+
 
 HostPowerServiceWin::HostPowerServiceWin(VirtualBox *aVirtualBox) : HostPowerService(aVirtualBox), mThread(NIL_RTTHREAD)
 {

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MMAll.cpp 91949 2021-10-21 13:46:13Z vboxsync $ */
 /** @file
  * MM - Memory Manager - Any Context.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,7 +23,7 @@
 #include <VBox/vmm/mm.h>
 #include <VBox/vmm/vmm.h>
 #include "MMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
 #include <VBox/vmm/hm.h>
 #include <VBox/log.h>
 #include <iprt/assert.h>
@@ -209,12 +209,12 @@ DECLINLINE(PMMLOOKUPHYPER) mmHyperLookupRC(PVM pVM, RTRCPTR RCPtr, uint32_t *pof
  */
 DECLINLINE(PMMLOOKUPHYPER) mmHyperLookupCC(PVM pVM, void *pv, uint32_t *poff)
 {
-#ifdef IN_RC
-    return mmHyperLookupRC(pVM, (RTRCPTR)pv, poff);
-#elif defined(IN_RING0)
+#ifdef IN_RING0
     return mmHyperLookupR0(pVM, pv, poff);
-#else
+#elif defined(IN_RING3)
     return mmHyperLookupR3(pVM, pv, poff);
+#else
+# error "Neither IN_RING0 nor IN_RING3!"
 #endif
 }
 
@@ -256,11 +256,7 @@ DECLINLINE(RTR0PTR) mmHyperLookupCalcR0(PVM pVM, PMMLOOKUPHYPER pLookup, uint32_
         case MMLOOKUPHYPERTYPE_LOCKED:
             if (pLookup->u.Locked.pvR0)
                 return (RTR0PTR)((RTR0UINTPTR)pLookup->u.Locked.pvR0 + off);
-#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
-            AssertMsg(!HMIsEnabled(pVM), ("%s\n", R3STRING(pLookup->pszDesc)));
-#else
             AssertMsgFailed(("%s\n", R3STRING(pLookup->pszDesc))); NOREF(pVM);
-#endif
             return NIL_RTR0PTR;
 
         case MMLOOKUPHYPERTYPE_HCPHYS:
@@ -277,20 +273,6 @@ DECLINLINE(RTR0PTR) mmHyperLookupCalcR0(PVM pVM, PMMLOOKUPHYPER pLookup, uint32_
 
 
 /**
- * Calculate the raw-mode context address of an offset into the HMA memory chunk.
- *
- * @returns the raw-mode context base address.
- * @param   pVM         The cross context VM structure.
- * @param   pLookup     The HMA lookup record.
- * @param   off         The offset into the HMA memory chunk.
- */
-DECLINLINE(RTRCPTR) mmHyperLookupCalcRC(PVM pVM, PMMLOOKUPHYPER pLookup, uint32_t off)
-{
-    return (RTRCPTR)((RTRCUINTPTR)pVM->mm.s.pvHyperAreaGC + pLookup->off + off);
-}
-
-
-/**
  * Calculate the guest context address of an offset into the HMA memory chunk.
  *
  * @returns the guest context base address.
@@ -300,13 +282,13 @@ DECLINLINE(RTRCPTR) mmHyperLookupCalcRC(PVM pVM, PMMLOOKUPHYPER pLookup, uint32_
  */
 DECLINLINE(void *) mmHyperLookupCalcCC(PVM pVM, PMMLOOKUPHYPER pLookup, uint32_t off)
 {
-#ifdef IN_RC
-    return (void *)mmHyperLookupCalcRC(pVM, pLookup, off);
-#elif defined(IN_RING0)
+#ifdef IN_RING0
     return mmHyperLookupCalcR0(pVM, pLookup, off);
-#else
+#elif defined(IN_RING3)
     NOREF(pVM);
     return mmHyperLookupCalcR3(pLookup, off);
+#else
+# error "Neither IN_RING0 nor IN_RING3!"
 #endif
 }
 
@@ -327,25 +309,6 @@ VMMDECL(RTR3PTR) MMHyperR0ToR3(PVM pVM, RTR0PTR R0Ptr)
     if (pLookup)
         return mmHyperLookupCalcR3(pLookup, off);
     return NIL_RTR3PTR;
-}
-
-
-/**
- * Converts a ring-0 host context address in the Hypervisor memory region to a raw-mode context address.
- *
- * @returns raw-mode context address.
- * @param   pVM         The cross context VM structure.
- * @param   R0Ptr       The ring-0 host context address.
- *                      You'll be damned if this is not in the HMA! :-)
- * @thread  The Emulation Thread.
- */
-VMMDECL(RTRCPTR) MMHyperR0ToRC(PVM pVM, RTR0PTR R0Ptr)
-{
-    uint32_t off;
-    PMMLOOKUPHYPER pLookup = mmHyperLookupR0(pVM, R0Ptr, &off);
-    if (pLookup)
-        return mmHyperLookupCalcRC(pVM, pLookup, off);
-    return NIL_RTRCPTR;
 }
 
 
@@ -387,26 +350,6 @@ VMMDECL(RTR0PTR) MMHyperR3ToR0(PVM pVM, RTR3PTR R3Ptr)
         return mmHyperLookupCalcR0(pVM, pLookup, off);
     AssertMsgFailed(("R3Ptr=%p is not inside the hypervisor memory area!\n", R3Ptr));
     return NIL_RTR0PTR;
-}
-
-
-/**
- * Converts a ring-3 host context address in the Hypervisor memory region to a guest context address.
- *
- * @returns guest context address.
- * @param   pVM         The cross context VM structure.
- * @param   R3Ptr       The ring-3 host context address.
- *                      You'll be damned if this is not in the HMA! :-)
- * @thread  The Emulation Thread.
- */
-VMMDECL(RTRCPTR) MMHyperR3ToRC(PVM pVM, RTR3PTR R3Ptr)
-{
-    uint32_t off;
-    PMMLOOKUPHYPER pLookup = mmHyperLookupR3(pVM, R3Ptr, &off);
-    if (pLookup)
-        return mmHyperLookupCalcRC(pVM, pLookup, off);
-    AssertMsgFailed(("R3Ptr=%p is not inside the hypervisor memory area!\n", R3Ptr));
-    return NIL_RTRCPTR;
 }
 
 
@@ -468,7 +411,7 @@ VMMDECL(RTR0PTR) MMHyperRCToR0(PVM pVM, RTRCPTR RCPtr)
     return NIL_RTR0PTR;
 }
 
-#ifndef IN_RC
+
 /**
  * Converts a raw-mode context address in the Hypervisor memory region to a current context address.
  *
@@ -486,7 +429,7 @@ VMMDECL(void *) MMHyperRCToCC(PVM pVM, RTRCPTR RCPtr)
         return mmHyperLookupCalcCC(pVM, pLookup, off);
     return NULL;
 }
-#endif
+
 
 #ifndef IN_RING3
 /**
@@ -529,27 +472,6 @@ VMMDECL(RTR0PTR) MMHyperCCToR0(PVM pVM, void *pv)
 #endif
 
 
-#ifndef IN_RC
-/**
- * Converts a current context address in the Hypervisor memory region to a raw-mode context address.
- *
- * @returns guest context address.
- * @param   pVM         The cross context VM structure.
- * @param   pv          The current context address.
- *                      You'll be damned if this is not in the HMA! :-)
- * @thread  The Emulation Thread.
- */
-VMMDECL(RTRCPTR) MMHyperCCToRC(PVM pVM, void *pv)
-{
-    uint32_t off;
-    PMMLOOKUPHYPER pLookup = mmHyperLookupCC(pVM, pv, &off);
-    if (pLookup)
-        return mmHyperLookupCalcRC(pVM, pLookup, off);
-    return NIL_RTRCPTR;
-}
-#endif
-
-
 /**
  * Gets the string name of a memory tag.
  *
@@ -576,6 +498,7 @@ const char *mmGetTagName(MMTAG enmTag)
 
         TAG2STR(DBGF);
         TAG2STR(DBGF_AS);
+        TAG2STR(DBGF_FLOWTRACE);
         TAG2STR(DBGF_INFO);
         TAG2STR(DBGF_LINE);
         TAG2STR(DBGF_LINE_DUP);
@@ -586,6 +509,7 @@ const char *mmGetTagName(MMTAG enmTag)
         TAG2STR(DBGF_SYMBOL);
         TAG2STR(DBGF_SYMBOL_DUP);
         TAG2STR(DBGF_TYPE);
+        TAG2STR(DBGF_TRACER);
 
         TAG2STR(EM);
 

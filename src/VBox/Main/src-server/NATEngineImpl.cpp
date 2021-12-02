@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: NATEngineImpl.cpp 92133 2021-10-28 10:43:36Z vboxsync $ */
 /** @file
  * Implementation of INATEngine in VBoxSVC.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,16 +15,16 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_NATENGINE
 #include "NATEngineImpl.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 #include "MachineImpl.h"
-#include "GuestOSTypeImpl.h"
 
 #include <iprt/string.h>
 #include <iprt/cpp/utils.h>
 
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/settings.h>
 #include <VBox/com/array.h>
 
@@ -179,6 +179,28 @@ void NATEngine::i_copyFrom(NATEngine *aThat)
     mData->m.assignCopy(aThat->mData->m);
 }
 
+void NATEngine::i_applyDefaults()
+{
+    /* sanity */
+    AutoCaller autoCaller(this);
+    AssertComRCReturnVoid(autoCaller.rc());
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    mData->m->fLocalhostReachable = false; /* Applies to new VMs only, see @bugref{9896} */
+}
+
+bool NATEngine::i_hasDefaults()
+{
+   /* sanity */
+    AutoCaller autoCaller(this);
+    AssertComRCReturn(autoCaller.rc(), true);
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    return mData->m->areDefaultSettings(mParent->i_getSettingsVersion());
+}
+
 HRESULT NATEngine::getNetworkSettings(ULONG *aMtu, ULONG *aSockSnd, ULONG *aSockRcv, ULONG *aTcpWndSnd, ULONG *aTcpWndRcv)
 {
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
@@ -303,8 +325,7 @@ HRESULT NATEngine::addRedirect(const com::Utf8Str &aName, NATProtocol_T aProto, 
     mAdapter->COMGETTER(Slot)(&ulSlot);
 
     alock.release();
-    mParent->i_onNATRedirectRuleChange(ulSlot, FALSE, Bstr(name).raw(), aProto, Bstr(r.strHostIP).raw(),
-                                       r.u16HostPort, Bstr(r.strGuestIP).raw(), r.u16GuestPort);
+    mParent->i_onNATRedirectRuleChanged(ulSlot, FALSE, name, aProto, r.strHostIP, r.u16HostPort, r.strGuestIP, r.u16GuestPort);
     return S_OK;
 }
 
@@ -327,8 +348,7 @@ HRESULT NATEngine::removeRedirect(const com::Utf8Str &aName)
     mData->m->mapRules.erase(aName); /* NB: erase by key, "it" may not be valid */
     mParent->i_setModified(Machine::IsModified_NetworkAdapters);
     alock.release();
-    mParent->i_onNATRedirectRuleChange(ulSlot, TRUE, Bstr(aName).raw(), r.proto, Bstr(r.strHostIP).raw(),
-                                       r.u16HostPort, Bstr(r.strGuestIP).raw(), r.u16GuestPort);
+    mParent->i_onNATRedirectRuleChanged(ulSlot, TRUE, aName, r.proto, r.strHostIP, r.u16HostPort, r.strGuestIP, r.u16GuestPort);
     return S_OK;
 }
 
@@ -380,6 +400,20 @@ HRESULT NATEngine::getNetwork(com::Utf8Str &aNetwork)
 
 HRESULT NATEngine::setHostIP(const com::Utf8Str &aHostIP)
 {
+    if (aHostIP.isNotEmpty())
+    {
+        RTNETADDRIPV4 addr;
+
+        /* parses as an IPv4 address */
+        int rc = RTNetStrToIPv4Addr(aHostIP.c_str(), &addr);
+        if (RT_FAILURE(rc))
+            return setError(E_INVALIDARG, "Invalid IPv4 address \"%s\"", aHostIP.c_str());
+
+        /* is a unicast address */
+        if ((addr.u & RT_N2H_U32_C(0xe0000000)) == RT_N2H_U32_C(0xe0000000))
+            return setError(E_INVALIDARG, "Cannot bind to a multicast address %s", aHostIP.c_str());
+    }
+
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
     if (mData->m->strBindIP != aHostIP)
     {
@@ -396,6 +430,26 @@ HRESULT NATEngine::getHostIP(com::Utf8Str &aBindIP)
 
     if (!mData->m->strBindIP.isEmpty())
         aBindIP = mData->m->strBindIP;
+    return S_OK;
+}
+
+HRESULT NATEngine::setLocalhostReachable(BOOL fLocalhostReachable)
+{
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    if (mData->m->fLocalhostReachable != RT_BOOL(fLocalhostReachable))
+    {
+        mData->m.backup();
+        mData->m->fLocalhostReachable = RT_BOOL(fLocalhostReachable);
+        mParent->i_setModified(Machine::IsModified_NetworkAdapters);
+    }
+    return S_OK;
+}
+
+HRESULT NATEngine::getLocalhostReachable(BOOL *pfLocalhostReachable)
+{
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+    *pfLocalhostReachable = mData->m->fLocalhostReachable;
     return S_OK;
 }
 

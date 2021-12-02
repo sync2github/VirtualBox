@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardExportAppPageExpert.h 91714 2021-10-13 13:05:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardExportAppPageExpert class declaration.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,83 +15,184 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIWizardExportAppPageExpert_h__
-#define __UIWizardExportAppPageExpert_h__
+#ifndef FEQT_INCLUDED_SRC_wizards_exportappliance_UIWizardExportAppPageExpert_h
+#define FEQT_INCLUDED_SRC_wizards_exportappliance_UIWizardExportAppPageExpert_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/* Local includes: */
-#include "UIWizardExportAppPageBasic1.h"
-#include "UIWizardExportAppPageBasic2.h"
-#include "UIWizardExportAppPageBasic3.h"
-#include "UIWizardExportAppPageBasic4.h"
+/* GUI includes: */
+#include "UINativeWizardPage.h"
+#include "UIWizardExportApp.h"
+
+/* COM includes: */
+#include "COMEnums.h"
+#include "CAppliance.h"
+#include "CCloudClient.h"
+#include "CCloudProfile.h"
+#include "CVirtualSystemDescription.h"
+#include "CVirtualSystemDescriptionForm.h"
 
 /* Forward declarations: */
+class QAbstractButton;
+class QButtonGroup;
+class QCheckBox;
+class QGridLayout;
 class QGroupBox;
+class QLabel;
+class QListWidget;
+class QStackedWidget;
+class QIComboBox;
+class QIToolButton;
+class UIApplianceExportEditorWidget;
+class UIEmptyFilePathSelector;
+class UIFormEditorWidget;
+class UIToolBox;
+class UIWizardExportApp;
 
-/* Expert page of the Export Appliance wizard: */
-class UIWizardExportAppPageExpert : public UIWizardPage,
-                                    public UIWizardExportAppPage1,
-                                    public UIWizardExportAppPage2,
-                                    public UIWizardExportAppPage3,
-                                    public UIWizardExportAppPage4
+/** UINativeWizardPage extension for expert page of the Export Appliance wizard,
+  * based on UIWizardExportAppVMs, UIWizardExportAppFormat & UIWizardExportAppSettings namespace functions. */
+class UIWizardExportAppPageExpert : public UINativeWizardPage
 {
     Q_OBJECT;
-    Q_PROPERTY(QStringList machineNames READ machineNames);
-    Q_PROPERTY(QStringList machineIDs READ machineIDs);
-    Q_PROPERTY(StorageType storageType READ storageType WRITE setStorageType);
-    Q_PROPERTY(QString format READ format WRITE setFormat);
-    Q_PROPERTY(bool manifestSelected READ isManifestSelected WRITE setManifestSelected);
-    Q_PROPERTY(QString username READ username WRITE setUserName);
-    Q_PROPERTY(QString password READ password WRITE setPassword);
-    Q_PROPERTY(QString hostname READ hostname WRITE setHostname);
-    Q_PROPERTY(QString bucket READ bucket WRITE setBucket);
-    Q_PROPERTY(QString path READ path WRITE setPath);
-    Q_PROPERTY(ExportAppliancePointer applianceWidget READ applianceWidget);
 
 public:
 
-    /* Constructor: */
-    UIWizardExportAppPageExpert(const QStringList &selectedVMNames);
+    /** Constructs expert page.
+      * @param  selectedVMNames  Brings the list of selected VM names. */
+    UIWizardExportAppPageExpert(const QStringList &selectedVMNames, bool fExportToOCIByDefault);
 
 protected:
 
-    /* Wrapper to access 'wizard' from base part: */
-    UIWizard* wizardImp() { return UIWizardPage::wizard(); }
-    /* Wrapper to access 'this' from base part: */
-    UIWizardPage* thisImp() { return this; }
-    /* Wrapper to access 'wizard-field' from base part: */
-    QVariant fieldImp(const QString &strFieldName) const { return UIWizardPage::field(strFieldName); }
+    /** Returns wizard this page belongs to. */
+    UIWizardExportApp *wizard() const;
+
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override final */;
+
+    /** Performs page initialization. */
+    virtual void initializePage() /* override final */;
+
+    /** Returns whether page is complete. */
+    virtual bool isComplete() const /* override final */;
+
+    /** Performs page validation. */
+    virtual bool validatePage() /* override final */;
 
 private slots:
 
-    /* VM Selector selection change handler: */
-    void sltVMSelectionChangeHandler();
+    /** Handles VM selector index change. */
+    void sltHandleVMItemSelectionChanged();
 
-    /* Storage-type change handler: */
-    void sltStorageTypeChangeHandler();
+    /** Handles format combo change. */
+    void sltHandleFormatComboChange();
 
-    /* Format combo change handler: */
-    void sltUpdateFormatComboToolTip() { updateFormatComboToolTip(); }
+    /** Handles change in file-name selector. */
+    void sltHandleFileSelectorChange();
+
+    /** Handles change in MAC address export policy combo-box. */
+    void sltHandleMACAddressExportPolicyComboChange();
+
+    /** Handles change in manifest check-box. */
+    void sltHandleManifestCheckBoxChange();
+
+    /** Handles change in include ISOs check-box. */
+    void sltHandleIncludeISOsCheckBoxChange();
+
+    /** Handles change in profile combo-box. */
+    void sltHandleProfileComboChange();
+
+    /** Handles cloud export radio-button clicked. */
+    void sltHandleRadioButtonToggled(QAbstractButton *pButton, bool fToggled);
+
+    /** Handles profile tool-button click. */
+    void sltHandleProfileButtonClick();
 
 private:
 
-    /* Field API: */
-    QVariant field(const QString &strFieldName) const { return UIWizardPage::field(strFieldName); }
+    /** Update local stuff. */
+    void updateLocalStuff();
+    /** Updates cloud stuff. */
+    void updateCloudStuff();
 
-    /* Translate stuff: */
-    void retranslateUi();
+    /** Holds the list of selected VM names. */
+    const QStringList  m_selectedVMNames;
+    /** Holds whether default format should be Export to OCI. */
+    bool               m_fExportToOCIByDefault;
 
-    /* Prepare stuff: */
-    void initializePage();
+    /** Holds the default appliance name. */
+    QString  m_strDefaultApplianceName;
+    /** Holds the file selector name. */
+    QString  m_strFileSelectorName;
+    /** Holds the file selector ext. */
+    QString  m_strFileSelectorExt;
 
-    /* Validation stuff: */
-    bool isComplete() const;
-    bool validatePage();
+    /** Holds the Cloud Profile object reference. */
+    CCloudProfile  m_comCloudProfile;
 
-    /* Widgets: */
-    QGroupBox *m_pSelectorCnt;
-    QGroupBox *m_pApplianceCnt;
-    QGroupBox *m_pSettingsCnt;
+
+    /** Holds the tool-box instance. */
+    UIToolBox *m_pToolBox;
+
+
+    /** Holds the VM selector instance. */
+    QListWidget *m_pVMSelector;
+
+
+    /** Holds the format layout. */
+    QGridLayout *m_pFormatLayout;
+    /** Holds the format combo-box label instance. */
+    QLabel      *m_pFormatComboBoxLabel;
+    /** Holds the format combo-box instance. */
+    QIComboBox  *m_pFormatComboBox;
+
+    /** Holds the settings widget 1 instance. */
+    QStackedWidget *m_pSettingsWidget1;
+
+    /** Holds the settings layout 1. */
+    QGridLayout             *m_pSettingsLayout1;
+    /** Holds the file selector label instance. */
+    QLabel                  *m_pFileSelectorLabel;
+    /** Holds the file selector instance. */
+    UIEmptyFilePathSelector *m_pFileSelector;
+    /** Holds the MAC address policy combo-box label instance. */
+    QLabel                  *m_pMACComboBoxLabel;
+    /** Holds the MAC address policy check-box instance. */
+    QIComboBox              *m_pMACComboBox;
+    /** Holds the additional label instance. */
+    QLabel                  *m_pAdditionalLabel;
+    /** Holds the manifest check-box instance. */
+    QCheckBox               *m_pManifestCheckbox;
+    /** Holds the include ISOs check-box instance. */
+    QCheckBox               *m_pIncludeISOsCheckbox;
+
+    /** Holds the settings layout 2. */
+    QGridLayout   *m_pSettingsLayout2;
+    /** Holds the profile label instance. */
+    QLabel        *m_pProfileLabel;
+    /** Holds the profile combo-box instance. */
+    QIComboBox    *m_pProfileComboBox;
+    /** Holds the profile management tool-button instance. */
+    QIToolButton  *m_pProfileToolButton;
+
+    /** Holds the export mode label instance. */
+    QLabel                                  *m_pExportModeLabel;
+    /** Holds the export mode button group instance. */
+    QButtonGroup                            *m_pExportModeButtonGroup;
+    /** Holds the map of export mode button instances. */
+    QMap<CloudExportMode, QAbstractButton*>  m_exportModeButtons;
+
+
+    /** Holds the settings widget 2 instance. */
+    QStackedWidget *m_pSettingsWidget2;
+
+    /** Holds the appliance widget reference. */
+    UIApplianceExportEditorWidget *m_pApplianceWidget;
+    /** Holds the Form Editor widget instance. */
+    UIFormEditorWidget            *m_pFormEditor;
+
+    /** Holds whether cloud exporting is at launching stage. */
+    bool  m_fLaunching;
 };
 
-#endif /* __UIWizardExportAppPageExpert_h__ */
-
+#endif /* !FEQT_INCLUDED_SRC_wizards_exportappliance_UIWizardExportAppPageExpert_h */

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: testboxcontroller.py 86974 2020-11-25 14:38:52Z vboxsync $
 
 """
 Test Manager Core - Web Server Abstraction Base Class.
@@ -7,7 +7,7 @@ Test Manager Core - Web Server Abstraction Base Class.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,13 +26,13 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 86974 $"
 
 
 # Standard python imports.
 import re;
 import os;
-import string;                          # pylint: disable=W0402
+import string;                          # pylint: disable=deprecated-module
 import sys;
 import uuid;
 
@@ -45,24 +45,24 @@ from testmanager.core.base              import TMExceptionBase;
 from testmanager.core.globalresource    import GlobalResourceLogic;
 from testmanager.core.testboxstatus     import TestBoxStatusData, TestBoxStatusLogic;
 from testmanager.core.testbox           import TestBoxData, TestBoxLogic;
-from testmanager.core.testresults       import TestResultLogic;
+from testmanager.core.testresults       import TestResultLogic, TestResultFileData;
 from testmanager.core.testset           import TestSetData, TestSetLogic;
 from testmanager.core.systemlog         import SystemLogData, SystemLogLogic;
 from testmanager.core.schedulerbase     import SchedulerBase;
 
 # Python 3 hacks:
 if sys.version_info[0] >= 3:
-    long = int;     # pylint: disable=W0622,C0103
+    long = int;     # pylint: disable=redefined-builtin,invalid-name
 
 
 class TestBoxControllerException(TMExceptionBase):
     """
     Exception class for TestBoxController.
     """
-    pass;
+    pass;                               # pylint: disable=unnecessary-pass
 
 
-class TestBoxController(object): # pylint: disable=R0903
+class TestBoxController(object): # pylint: disable=too-few-public-methods
     """
     TestBox Controller class.
     """
@@ -189,7 +189,7 @@ class TestBoxController(object): # pylint: disable=R0903
         valid boolean.
         """
         sValue = self._getStringParam(sName, [ 'True', 'true', '1', 'False', 'false', '0'], sDefValue = str(fDefValue));
-        return sValue == 'True' or sValue == 'true' or sValue == '1';
+        return sValue in ('True', 'true', '1',);
 
     def _getIntParam(self, sName, iMin = None, iMax = None):
         """
@@ -345,7 +345,7 @@ class TestBoxController(object): # pylint: disable=R0903
         oFile.close();
         return fSizeOk;
 
-    def _actionSignOn(self):        # pylint: disable=R0914
+    def _actionSignOn(self):        # pylint: disable=too-many-locals
         """ Implement sign-on """
 
         #
@@ -371,9 +371,9 @@ class TestBoxController(object): # pylint: disable=R0903
         self._checkForUnknownParameters();
 
         # Null conversions for new parameters.
-        if len(sReport) == 0:
+        if not sReport:
             sReport = None;
-        if len(sCpuName) == 0:
+        if not sCpuName:
             sCpuName = None;
         if lCpuRevision <= 0:
             lCpuRevision = None;
@@ -400,7 +400,7 @@ class TestBoxController(object): # pylint: disable=R0903
         else:
             cPctScratchDiff = 100;
 
-        # pylint: disable=R0916
+        # pylint: disable=too-many-boolean-expressions
         if   self._sTestBoxAddr != oTestBox.ip \
           or sOs                != oTestBox.sOs \
           or sOsVersion         != oTestBox.sOsVersion \
@@ -656,7 +656,7 @@ class TestBoxController(object): # pylint: disable=R0903
         # Parameter validation.
         #
         sBody = self._getStringParam(constants.tbreq.LOG_PARAM_BODY, fStrip = False);
-        if len(sBody) == 0:
+        if not sBody:
             return self._resultResponse(constants.tbresp.STATUS_NACK);
         self._checkForUnknownParameters();
 
@@ -703,28 +703,7 @@ class TestBoxController(object): # pylint: disable=R0903
                           ]:
             raise TestBoxControllerException('Invalid MIME type "%s"' % (sMime,));
 
-        if sKind not in [ 'log/release/vm',
-                          'log/debug/vm',
-                          'log/release/svc',
-                          'log/debug/svc',
-                          'log/release/client',
-                          'log/debug/client',
-                          'log/installer',
-                          'log/uninstaller',
-                          'log/guest/kernel',
-                          'crash/report/vm',
-                          'crash/dump/vm',
-                          'crash/report/svc',
-                          'crash/dump/svc',
-                          'crash/report/client',
-                          'crash/dump/client',
-                          'info/collection',
-                          'info/vgatext',
-                          'misc/other',
-                          'screenshot/failure',
-                          'screenshot/success',
-                          #'screencapture/failure',
-                          ]:
+        if sKind not in TestResultFileData.kasKinds:
             raise TestBoxControllerException('Invalid kind "%s"' % (sKind,));
 
         if len(sDesc) > 256:
@@ -750,7 +729,7 @@ class TestBoxController(object): # pylint: disable=R0903
                                                 cbFile = cbFile, fCommit = True);
 
         offFile  = 0;
-        oSrcFile = self._oSrvGlue.getBodyIoStream();
+        oSrcFile = self._oSrvGlue.getBodyIoStreamBinary();
         while offFile < cbFile:
             cbToRead = cbFile - offFile;
             if cbToRead > 256*1024:
@@ -758,10 +737,10 @@ class TestBoxController(object): # pylint: disable=R0903
             offFile += cbToRead;
 
             abBuf = oSrcFile.read(cbToRead);
-            oDstFile.write(abBuf); # pylint: disable=E1103
+            oDstFile.write(abBuf); # pylint: disable=maybe-no-member
             del abBuf;
 
-        oDstFile.close(); # pylint: disable=E1103
+        oDstFile.close(); # pylint: disable=maybe-no-member
 
         # Done.
         return self._resultResponse(constants.tbresp.STATUS_ACK);
@@ -773,7 +752,7 @@ class TestBoxController(object): # pylint: disable=R0903
         #
         sXml = self._getStringParam(constants.tbreq.XML_RESULT_PARAM_BODY, fStrip = False);
         self._checkForUnknownParameters();
-        if len(sXml) == 0: # Used for link check by vboxinstaller.py on Windows.
+        if not sXml: # Used for link check by vboxinstaller.py on Windows.
             return self._resultResponse(constants.tbresp.STATUS_ACK);
 
         (oDb, oStatusData, _) = self._connectToDbAndValidateTb([TestBoxStatusData.ksTestBoxState_Testing,

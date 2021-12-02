@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 86908 2020-11-18 10:56:12Z vboxsync $
 ## @file
 # Sub-Makefile for VBoxTray.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -25,20 +25,44 @@ ifdef VBOX_SIGN_ADDITIONS # (See the parent makefile.)
  VBoxTray_DEBUG_INSTTYPE = both
 endif
 VBoxTray_SDKS     = ReorderCompilerIncs $(VBOX_WINDDK_GST)
-VBoxTray_DEFS     = \
-	VBOX_WITH_HGCM \
-	VBOX_BUILD_TARGET=\"$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH)\"
-VBoxTray_INCS     = ../include
+ifdef VBOX_WITH_AUTOMATIC_DEFS_QUOTING
+ VBoxTray_DEFS   := VBOX_WITH_HGCM VBOX_BUILD_TARGET="$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH)"
+else
+ VBoxTray_DEFS   := VBOX_WITH_HGCM VBOX_BUILD_TARGET=\"$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH)\"
+endif
+VBoxTray_INCS     = \
+	../include \
+	$(PATH_ROOT)/src/VBox/Additions/WINNT/Graphics/Video/disp/wddm/shared \
+	$(VBOX_GRAPHICS_INCS)
 VBoxTray_SOURCES  = \
 	VBoxTray.cpp \
 	VBoxDispIf.cpp \
 	VBoxSeamless.cpp \
-	VBoxClipboard.cpp \
 	VBoxDisplay.cpp \
 	VBoxVRDP.cpp \
 	VBoxIPC.cpp \
-	VBoxHelpers.cpp \
-	VBoxTray.rc
+	VBoxHelpers.cpp
+VBoxTray_USES.win = vboximportchecker
+VBoxTray_VBOX_IMPORT_CHECKER.win.x86 = nt4 #nt350
+VBoxTray_VBOX_IMPORT_CHECKER.win.amd64 = xp64
+ifdef VBOX_WITH_SHARED_CLIPBOARD
+ VBoxTray_DEFS     += \
+	$(if $(VBOX_WITH_SHARED_CLIPBOARD),VBOX_WITH_SHARED_CLIPBOARD,) \
+	$(if $(VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS),VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS,)
+ VBoxTray_SOURCES  += \
+	VBoxClipboard.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-win.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-common.cpp
+ ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+  VBoxTray_DEFS     += VBOX_WITH_SHARED_CLIPBOARD_GUEST
+  VBoxTray_SOURCES  += \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/ClipboardDataObjectImpl-win.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/ClipboardEnumFormatEtcImpl-win.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/ClipboardPath.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/ClipboardStreamImpl-win.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-transfers.cpp
+ endif
+endif
 ifdef VBOX_WITH_DRAG_AND_DROP
  VBoxTray_DEFS     += \
 	VBOX_WITH_DRAG_AND_DROP \
@@ -58,32 +82,17 @@ ifdef VBOX_WITH_GUEST_PROPS
 	VBoxHostVersion.cpp \
 	VBoxLA.cpp
 endif
-ifdef VBOX_WITH_SHARED_FOLDERS
- VBoxTray_DEFS     += VBOX_WITH_SHARED_FOLDERS
- VBoxTray_SOURCES  += \
-	VBoxSharedFolders.cpp
- VBoxTray_LIBS.win += \
-	mpr.lib
-endif
 ifdef VBOX_WITH_WDDM
  VBoxTray_DEFS   += VBOX_WITH_WDDM
  # VBoxTray_DEFS   += LOG_ENABLED
- VBoxTray_SOURCES += ../Graphics/Video/disp/wddm/VBoxDispKmt.cpp
+ VBoxTray_SOURCES += $(PATH_ROOT)/src/VBox/Additions/WINNT/Graphics/Video/disp/wddm/shared/VBoxDispKmt.cpp
 endif
 
 # VBoxTray.cpp uses VBOX_SVN_REV.
 VBoxTray.cpp_DEFS += VBOX_SVN_REV=$(VBOX_SVN_REV)
 VBoxTray.cpp_DEPS = $(VBOX_SVN_REV_KMK)
 
-# The icon location is configurable.
-VBoxTray.rc_INCS = $(VBoxTray_0_OUTDIR)
-VBoxTray.rc_DEPS = $(VBoxTray_0_OUTDIR)/VBoxTray-icon.rc
-VBoxTray.rc_CLEAN = $(VBoxTray_0_OUTDIR)/VBoxTray-icon.rc
-
-# Icon include file.
-$$(VBoxTray_0_OUTDIR)/VBoxTray-icon.rc: $(VBOX_WINDOWS_ADDITIONS_ICON_FILE) $$(VBoxTray_DEFPATH)/Makefile.kmk | $$(dir $$@)
-	$(RM) -f $@
-	$(APPEND) $@ 'IDI_VIRTUALBOX ICON DISCARDABLE "$(subst /,\\,$(VBOX_WINDOWS_ADDITIONS_ICON_FILE))"'
+# Version info / description + icon.
+$(call VBOX_SET_VER_INFO_EXE,VBoxTray,VirtualBox Guest Additions Tray Application,$(VBOX_WINDOWS_ADDITIONS_ICON_FILE))
 
 include $(FILE_KBUILD_SUB_FOOTER)
-

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-test.h 92258 2021-11-08 09:18:20Z vboxsync $ */
 /** @file
  * BS3Kit - Bs3Test internal header.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___bs3_cmn_test_h
-#define ___bs3_cmn_test_h
+#ifndef BS3KIT_INCLUDED_bs3_cmn_test_h
+#define BS3KIT_INCLUDED_bs3_cmn_test_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "bs3kit.h"
 #include <VBox/VMMDevTesting.h>
@@ -76,7 +79,7 @@ extern uint16_t             g_cusBs3SubTestsFailed;
 #ifndef DOXYGEN_RUNNING
 # define g_aszBs3TestUnitNames BS3_DATA_NM(g_aszBs3TestUnitNames)
 #endif
-extern char const           g_aszBs3TestUnitNames[][16];
+extern char const           g_aszBs3TestUnitNames[][12];
 
 /** The test name. */
 extern const char BS3_FAR  *g_pszBs3Test_c16;
@@ -162,5 +165,5 @@ typedef struct BS3TESTFAILEDBUF
 /** Pointer to a bs3TestFailedStrOutput buffer.  */
 typedef BS3TESTFAILEDBUF BS3_FAR *PBS3TESTFAILEDBUF;
 
-#endif
+#endif /* !BS3KIT_INCLUDED_bs3_cmn_test_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIDesktopServices_darwin.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - Qt GUI - Utility Classes and Functions specific to darwin..
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,12 +23,12 @@
 /* Qt includes */
 #include <QString>
 
-bool UIDesktopServices::createMachineShortcut(const QString &strSrcFile, const QString &strDstPath, const QString &strName, const QString &strUuid)
+bool UIDesktopServices::createMachineShortcut(const QString &strSrcFile, const QString &strDstPath, const QString &strName, const QUuid &uUuid)
 {
     return ::darwinCreateMachineShortcut(::darwinToNativeString(strSrcFile.toUtf8().constData()),
                                          ::darwinToNativeString(strDstPath.toUtf8().constData()),
                                          ::darwinToNativeString(strName.toUtf8().constData()),
-                                         ::darwinToNativeString(strUuid.toUtf8().constData()));
+                                         ::darwinToNativeString(uUuid.toString().toUtf8().constData()));
 }
 
 bool UIDesktopServices::openInFileManager(const QString &strFile)

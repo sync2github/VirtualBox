@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ExtPackUtil.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Main - Extension Pack Utilities and definitions, VBoxC, VBoxSVC, ++.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_EXTPACKUTIL
-#define ____H_EXTPACKUTIL
+#ifndef MAIN_INCLUDED_ExtPackUtil_h
+#define MAIN_INCLUDED_ExtPackUtil_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifdef __cplusplus
 # include <iprt/cpp/ministring.h>
@@ -99,6 +102,8 @@ typedef struct VBOXEXTPACKDESC
     uint32_t                uRevision;
     /** The name of the main module. */
     RTCString               strMainModule;
+    /** The name of the main VM module, empty if none. */
+    RTCString               strMainVMModule;
     /** The name of the VRDE module, empty if none. */
     RTCString               strVrdeModule;
     /** The number of plug-in descriptors. */
@@ -137,5 +142,5 @@ int                 VBoxExtPackValidateTarball(RTFILE hTarballFile, const char *
                                                PRTMANIFEST phValidManifest, PRTVFSFILE phXmlFile, RTCString *pStrDigest);
 #endif /* __cplusplus */
 
-#endif
+#endif /* !MAIN_INCLUDED_ExtPackUtil_h */
 

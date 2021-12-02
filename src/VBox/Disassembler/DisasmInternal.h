@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DisasmInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox disassembler - Internal header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___DisasmInternal_h___
-#define ___DisasmInternal_h___
+#ifndef VBOX_INCLUDED_SRC_DisasmInternal_h
+#define VBOX_INCLUDED_SRC_DisasmInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <VBox/dis.h>
@@ -44,7 +47,7 @@ enum IDX_Parse
   IDX_ParseImmUlong,
   IDX_ParseImmQword,
   IDX_ParseTwoByteEsc,
-  IDX_ParseImmGrpl,
+  IDX_ParseGrp1,
   IDX_ParseShiftGrp2,
   IDX_ParseGrp3,
   IDX_ParseGrp4,
@@ -206,5 +209,5 @@ extern const PCDISOPCODE g_apMapX86_FP_High[8];
 size_t disFormatBytes(PCDISSTATE pDis, char *pszDst, size_t cchDst, uint32_t fFlags);
 
 /** @} */
-#endif
+#endif /* !VBOX_INCLUDED_SRC_DisasmInternal_h */
 

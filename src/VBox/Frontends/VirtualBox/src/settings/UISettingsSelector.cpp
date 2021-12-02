@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UISettingsSelector.cpp 86233 2020-09-23 12:10:51Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UISettingsSelector class implementation.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,31 +15,25 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QAccessibleWidget>
-# include <QAction>
-# include <QHeaderView>
-# include <QLayout>
-# include <QTabWidget>
-# include <QToolButton>
+#include <QAccessibleWidget>
+#include <QAction>
+#include <QHeaderView>
+#include <QLayout>
+#include <QTabWidget>
+#include <QToolButton>
 
 /* GUI includes: */
-# include "QITabWidget.h"
-# include "QITreeWidget.h"
-# include "UISettingsSelector.h"
-# include "UIIconPool.h"
-# include "UISettingsPage.h"
-# include "UIToolBar.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "QITabWidget.h"
+#include "QITreeWidget.h"
+#include "UISettingsSelector.h"
+#include "UIIconPool.h"
+#include "UISettingsPage.h"
+#include "QIToolBar.h"
 
 
-/** QAccessibleWidget extension used as an accessibility interface for UIToolBar buttons. */
-class UIAccessibilityInterfaceForUIToolBarButton : public QAccessibleWidget
+/** QAccessibleWidget extension used as an accessibility interface for UISettingsSelectorToolBar buttons. */
+class UIAccessibilityInterfaceForUISettingsSelectorToolBarButton : public QAccessibleWidget
 {
 public:
 
@@ -50,14 +44,14 @@ public:
         if (   pObject
             && strClassname == QLatin1String("QToolButton")
             && pObject->property("Belongs to") == "UISettingsSelectorToolBar")
-            return new UIAccessibilityInterfaceForUIToolBarButton(qobject_cast<QWidget*>(pObject));
+            return new UIAccessibilityInterfaceForUISettingsSelectorToolBarButton(qobject_cast<QWidget*>(pObject));
 
         /* Null by default: */
         return 0;
     }
 
     /** Constructs an accessibility interface passing @a pWidget to the base-class. */
-    UIAccessibilityInterfaceForUIToolBarButton(QWidget *pWidget)
+    UIAccessibilityInterfaceForUISettingsSelectorToolBarButton(QWidget *pWidget)
         : QAccessibleWidget(pWidget, QAccessible::Button)
     {}
 
@@ -136,7 +130,7 @@ public:
     QIcon icon() const { return m_icon; }
     /** Returns the item text. */
     QString text() const { return m_strText; }
-    /** Defines the item @s strText. */
+    /** Defines the item @a strText. */
     void setText(const QString &strText) { m_strText = strText; }
     /** Returns the item ID. */
     int id() const { return m_iID; }
@@ -325,8 +319,8 @@ UISettingsSelectorTreeView::UISettingsSelectorTreeView(QWidget *pParent /* = 0 *
     m_pTreeWidget->hideColumn(TreeWidgetSection_Id);
     m_pTreeWidget->hideColumn(TreeWidgetSection_Link);
     /* Setup connections: */
-    connect(m_pTreeWidget, SIGNAL(currentItemChanged(QTreeWidgetItem*, QTreeWidgetItem*)),
-             this, SLOT(sltSettingsGroupChanged(QTreeWidgetItem *, QTreeWidgetItem*)));
+    connect(m_pTreeWidget, &QITreeWidget::currentItemChanged,
+            this, &UISettingsSelectorTreeView::sltSettingsGroupChanged);
 }
 
 UISettingsSelectorTreeView::~UISettingsSelectorTreeView()
@@ -505,10 +499,10 @@ UISettingsSelectorToolBar::UISettingsSelectorToolBar(QWidget *pParent /* = 0 */)
     , m_pActionGroup(0)
 {
     /* Install tool-bar button accessibility interface factory: */
-    QAccessible::installFactory(UIAccessibilityInterfaceForUIToolBarButton::pFactory);
+    QAccessible::installFactory(UIAccessibilityInterfaceForUISettingsSelectorToolBarButton::pFactory);
 
     /* Prepare the toolbar: */
-    m_pToolBar = new UIToolBar(pParent);
+    m_pToolBar = new QIToolBar(pParent);
     m_pToolBar->setUseTextLabels(true);
     m_pToolBar->setIconSize(QSize(32, 32));
 #ifdef VBOX_WS_MAC
@@ -518,8 +512,8 @@ UISettingsSelectorToolBar::UISettingsSelectorToolBar(QWidget *pParent /* = 0 */)
     /* Prepare the action group: */
     m_pActionGroup = new QActionGroup(this);
     m_pActionGroup->setExclusive(true);
-    connect(m_pActionGroup, SIGNAL(triggered(QAction*)),
-            this, SLOT(sltSettingsGroupChanged(QAction*)));
+    connect(m_pActionGroup, &QActionGroup::triggered,
+            this, static_cast<void(UISettingsSelectorToolBar::*)(QAction*)>(&UISettingsSelectorToolBar::sltSettingsGroupChanged));
 }
 
 UISettingsSelectorToolBar::~UISettingsSelectorToolBar()
@@ -806,13 +800,12 @@ UISelectorActionItem *UISettingsSelectorToolBar::findActionItemByTabWidget(QTabW
     foreach (UISelectorItem *pItem, m_list)
         if (static_cast<UISelectorActionItem*>(pItem)->tabWidget() == pTabWidget)
         {
-            QTabWidget *pTabWidget = static_cast<UISelectorActionItem*>(pItem)->tabWidget();
+            QTabWidget *pTabWidget2 = static_cast<UISelectorActionItem*>(pItem)->tabWidget(); /// @todo r=bird: same as pTabWidget?
             pResult = static_cast<UISelectorActionItem*>(
-                findItemByPage(static_cast<UISettingsPage*>(pTabWidget->widget(iIndex))));
+                findItemByPage(static_cast<UISettingsPage*>(pTabWidget2->widget(iIndex))));
             break;
         }
 
     return pResult;
 
 }
-

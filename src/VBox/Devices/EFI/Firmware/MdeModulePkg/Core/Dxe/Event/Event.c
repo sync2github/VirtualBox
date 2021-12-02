@@ -1,14 +1,9 @@
 /** @file
   UEFI Event support functions implemented in this file.
 
-Copyright (c) 2006 - 2014, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
+(C) Copyright 2015 Hewlett Packard Enterprise Development LP<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -142,7 +137,7 @@ CoreInitializeEventServices (
   CoreCreateEventEx (
     EVT_NOTIFY_SIGNAL,
     TPL_NOTIFY,
-    CoreEmptyCallbackFunction,
+    EfiEventEmptyFunction,
     NULL,
     &gIdleLoopEventGuid,
     &gIdleLoopEvent
@@ -477,7 +472,7 @@ CoreCreateEventInternal (
   IEvent->NotifyContext  = (VOID *)NotifyContext;
   if (EventGroup != NULL) {
     CopyGuid (&IEvent->EventGroup, EventGroup);
-    IEvent->ExFlag = TRUE;
+    IEvent->ExFlag |= EVT_EXFLAG_EVENT_GROUP;
   }
 
   *Event = IEvent;
@@ -490,6 +485,14 @@ CoreCreateEventInternal (
     IEvent->RuntimeData.NotifyTpl      = NotifyTpl;
     IEvent->RuntimeData.NotifyFunction = NotifyFunction;
     IEvent->RuntimeData.NotifyContext  = (VOID *) NotifyContext;
+    //
+    // Work around the bug in the Platform Init specification (v1.7), reported
+    // as Mantis#2017: "EFI_RUNTIME_EVENT_ENTRY.Event" should have type
+    // EFI_EVENT, not (EFI_EVENT*). The PI spec documents the field correctly
+    // as "The EFI_EVENT returned by CreateEvent()", but the type of the field
+    // doesn't match the natural language description. Therefore we need an
+    // explicit cast here.
+    //
     IEvent->RuntimeData.Event          = (EFI_EVENT *) IEvent;
     InsertTailList (&gRuntime->EventHead, &IEvent->RuntimeData.Link);
   }
@@ -554,7 +557,7 @@ CoreSignalEvent (
     // If signalling type is a notify function, queue it
     //
     if ((Event->Type & EVT_NOTIFY_SIGNAL) != 0) {
-      if (Event->ExFlag) {
+      if ((Event->ExFlag & EVT_EXFLAG_EVENT_GROUP) != 0) {
         //
         // The CreateEventEx() style requires all members of the Event Group
         //  to be signaled.
@@ -764,8 +767,15 @@ CoreCloseEvent (
   //
   // If the event is registered on a protocol notify, then remove it from the protocol database
   //
-  CoreUnregisterProtocolNotify (Event);
+  if ((Event->ExFlag & EVT_EXFLAG_EVENT_PROTOCOL_NOTIFICATION) != 0) {
+    CoreUnregisterProtocolNotify (Event);
+  }
 
+  //
+  // To avoid the Event to be signalled wrongly after closed,
+  // clear the Signature of Event before free pool.
+  //
+  Event->Signature = 0;
   Status = CoreFreePool (Event);
   ASSERT_EFI_ERROR (Status);
 

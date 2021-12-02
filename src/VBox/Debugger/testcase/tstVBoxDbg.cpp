@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstVBoxDbg.cpp 90520 2021-08-04 21:37:54Z vboxsync $ */
 /** @file
  * VBox Debugger GUI, dummy testcase.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -21,8 +21,8 @@
 *********************************************************************************************************************************/
 #include <qapplication.h>
 #include <VBox/dbggui.h>
-#include <VBox/vmm/vm.h>
-#include <VBox/err.h>
+#include <VBox/vmm/vmapi.h>
+#include <iprt/errcore.h>
 #include <iprt/initterm.h>
 #include <VBox/log.h>
 #include <iprt/assert.h>
@@ -72,7 +72,7 @@ int main(int argc, char **argv)
             if (argc <= 1 || argc == 3)
             {
                 RTPrintf(TESTCASE ": calling pfnShowStatistics...\n");
-                pGuiVT->pfnShowStatistics(pGui);
+                pGuiVT->pfnShowStatistics(pGui, NULL, NULL);
                 if (RT_FAILURE(rc))
                 {
                     RTPrintf(TESTCASE ": error: pfnShowStatistics failed! rc=%Rrc\n", rc);

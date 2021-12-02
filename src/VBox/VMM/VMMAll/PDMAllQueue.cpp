@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMAllQueue.cpp 91895 2021-10-20 13:30:17Z vboxsync $ */
 /** @file
  * PDM Queue - Transport data and tasks to EMT and R3.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,13 +23,10 @@
 #include "PDMInternal.h"
 #include <VBox/vmm/pdm.h>
 #ifndef IN_RC
-# ifdef VBOX_WITH_REM
-#  include <VBox/vmm/rem.h>
-# endif
 # include <VBox/vmm/mm.h>
 #endif
-#include <VBox/vmm/vm.h>
-#include <VBox/err.h>
+#include <VBox/vmm/vmcc.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 #include <iprt/asm.h>
 #include <iprt/assert.h>
@@ -47,7 +44,7 @@
  */
 VMMDECL(PPDMQUEUEITEMCORE) PDMQueueAlloc(PPDMQUEUE pQueue)
 {
-    Assert(VALID_PTR(pQueue) && pQueue->CTX_SUFF(pVM));
+    Assert(RT_VALID_PTR(pQueue) && pQueue->CTX_SUFF(pVM));
     PPDMQUEUEITEMCORE pNew;
     uint32_t iNext;
     uint32_t i;
@@ -78,9 +75,6 @@ static void pdmQueueSetFF(PPDMQUEUE pQueue)
     VM_FF_SET(pVM, VM_FF_PDM_QUEUES);
     ASMAtomicBitSet(&pVM->pdm.s.fQueueFlushing, PDM_QUEUE_FLUSH_FLAG_PENDING_BIT);
 #ifdef IN_RING3
-# ifdef VBOX_WITH_REM
-    REMR3NotifyQueuePending(pVM); /** @todo r=bird: we can remove REMR3NotifyQueuePending and let VMR3NotifyFF do the work. */
-# endif
     VMR3NotifyGlobalFFU(pVM->pUVM, VMNOTIFYFF_FLAGS_DONE_REM);
 #endif
 }
@@ -88,6 +82,7 @@ static void pdmQueueSetFF(PPDMQUEUE pQueue)
 
 /**
  * Queue an item.
+ *
  * The item must have been obtained using PDMQueueAlloc(). Once the item
  * have been passed to this function it must not be touched!
  *
@@ -97,8 +92,8 @@ static void pdmQueueSetFF(PPDMQUEUE pQueue)
  */
 VMMDECL(void) PDMQueueInsert(PPDMQUEUE pQueue, PPDMQUEUEITEMCORE pItem)
 {
-    Assert(VALID_PTR(pQueue) && pQueue->CTX_SUFF(pVM));
-    Assert(VALID_PTR(pItem));
+    Assert(RT_VALID_PTR(pQueue) && pQueue->CTX_SUFF(pVM));
+    AssertPtr(pItem);
 
 #if 0 /* the paranoid android version: */
     void *pvNext;
@@ -116,7 +111,7 @@ VMMDECL(void) PDMQueueInsert(PPDMQUEUE pQueue, PPDMQUEUEITEMCORE pItem)
     } while (!ASMAtomicCmpXchgPtr(&pQueue->CTX_SUFF(pPending), pItem, pNext));
 #endif
 
-    if (!pQueue->pTimer)
+    if (pQueue->hTimer == NIL_TMTIMERHANDLE)
         pdmQueueSetFF(pQueue);
     STAM_REL_COUNTER_INC(&pQueue->StatInsert);
     STAM_STATS({ ASMAtomicIncU32(&pQueue->cStatPending); });
@@ -125,6 +120,7 @@ VMMDECL(void) PDMQueueInsert(PPDMQUEUE pQueue, PPDMQUEUEITEMCORE pItem)
 
 /**
  * Queue an item.
+ *
  * The item must have been obtained using PDMQueueAlloc(). Once the item
  * have been passed to this function it must not be touched!
  *
@@ -154,26 +150,6 @@ VMMDECL(void) PDMQueueInsertEx(PPDMQUEUE pQueue, PPDMQUEUEITEMCORE pItem, uint64
 }
 
 
-
-/**
- * Gets the RC pointer for the specified queue.
- *
- * @returns The RC address of the queue.
- * @returns NULL if pQueue is invalid.
- * @param   pQueue          The queue handle.
- */
-VMMDECL(RCPTRTYPE(PPDMQUEUE)) PDMQueueRCPtr(PPDMQUEUE pQueue)
-{
-    Assert(VALID_PTR(pQueue));
-    Assert(pQueue->pVMR3 && pQueue->pVMRC);
-#ifdef IN_RC
-    return pQueue;
-#else
-    return MMHyperCCToRC(pQueue->CTX_SUFF(pVM), pQueue);
-#endif
-}
-
-
 /**
  * Gets the ring-0 pointer for the specified queue.
  *
@@ -183,7 +159,7 @@ VMMDECL(RCPTRTYPE(PPDMQUEUE)) PDMQueueRCPtr(PPDMQUEUE pQueue)
  */
 VMMDECL(R0PTRTYPE(PPDMQUEUE)) PDMQueueR0Ptr(PPDMQUEUE pQueue)
 {
-    Assert(VALID_PTR(pQueue));
+    AssertPtr(pQueue);
     Assert(pQueue->pVMR3 && pQueue->pVMR0);
 #ifdef IN_RING0
     return pQueue;
@@ -203,8 +179,7 @@ VMMDECL(bool) PDMQueueFlushIfNecessary(PPDMQUEUE pQueue)
 {
     AssertPtr(pQueue);
     if (   pQueue->pPendingR3 != NIL_RTR3PTR
-        || pQueue->pPendingR0 != NIL_RTR0PTR
-        || pQueue->pPendingRC != NIL_RTRCPTR)
+        || pQueue->pPendingR0 != NIL_RTR0PTR)
     {
         pdmQueueSetFF(pQueue);
         return false;

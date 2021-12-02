@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineViewFullscreen.cpp 84790 2020-06-11 10:30:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineViewFullscreen class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,50 +15,35 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QApplication>
-# include <QMainWindow>
-# include <QTimer>
-# ifdef VBOX_WS_MAC
-#  include <QMenuBar>
-# endif /* VBOX_WS_MAC */
+#include <QApplication>
+#include <QMainWindow>
+#include <QTimer>
+#ifdef VBOX_WS_MAC
+# include <QMenuBar>
+#endif /* VBOX_WS_MAC */
 
 /* GUI includes: */
-# include "UISession.h"
-# include "UIActionPoolRuntime.h"
-# include "UIMachineLogicFullscreen.h"
-# include "UIMachineWindow.h"
-# include "UIMachineViewFullscreen.h"
-# include "UIFrameBuffer.h"
-# include "UIExtraDataManager.h"
-# include "UIDesktopWidgetWatchdog.h"
+#include "UISession.h"
+#include "UIActionPoolRuntime.h"
+#include "UIMachineLogicFullscreen.h"
+#include "UIMachineWindow.h"
+#include "UIMachineViewFullscreen.h"
+#include "UIFrameBuffer.h"
+#include "UIExtraDataManager.h"
+#include "UIDesktopWidgetWatchdog.h"
 
 /* Other VBox includes: */
-# include "VBox/log.h"
+#include "VBox/log.h"
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
+/* External includes: */
 #ifdef VBOX_WS_X11
 # include <limits.h>
 #endif /* VBOX_WS_X11 */
 
 
-UIMachineViewFullscreen::UIMachineViewFullscreen(  UIMachineWindow *pMachineWindow
-                                                 , ulong uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                                                 , bool bAccelerate2DVideo
-#endif
-                                                 )
-    : UIMachineView(  pMachineWindow
-                    , uScreenId
-#ifdef VBOX_WITH_VIDEOHWACCEL
-                    , bAccelerate2DVideo
-#endif
-                    )
+UIMachineViewFullscreen::UIMachineViewFullscreen(UIMachineWindow *pMachineWindow, ulong uScreenId)
+    : UIMachineView(pMachineWindow, uScreenId)
     , m_bIsGuestAutoresizeEnabled(actionPool()->action(UIActionIndexRT_M_View_T_GuestAutoresize)->isChecked())
 {
 }
@@ -83,9 +68,7 @@ bool UIMachineViewFullscreen::eventFilter(QObject *pWatched, QEvent *pEvent)
 
                 /* Recalculate max guest size: */
                 setMaxGuestSize();
-                /* And resize guest to that size: */
-                if (m_bIsGuestAutoresizeEnabled && uisession()->isGuestSupportsGraphics())
-                    QTimer::singleShot(0, this, SLOT(sltPerformGuestResize()));
+
                 break;
             }
             default:
@@ -124,7 +107,7 @@ void UIMachineViewFullscreen::prepareConsoleConnections()
     UIMachineView::prepareConsoleConnections();
 
     /* Guest additions state-change updater: */
-    connect(uisession(), SIGNAL(sigAdditionsStateActualChange()), this, SLOT(sltAdditionsStateChanged()));
+    connect(uisession(), &UISession::sigAdditionsStateActualChange, this, &UIMachineViewFullscreen::sltAdditionsStateChanged);
 }
 
 void UIMachineViewFullscreen::setGuestAutoresizeEnabled(bool fEnabled)
@@ -221,4 +204,3 @@ QSize UIMachineViewFullscreen::calculateMaxGuestSize() const
 {
     return workingArea().size();
 }
-

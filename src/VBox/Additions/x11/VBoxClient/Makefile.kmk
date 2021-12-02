@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 91758 2021-10-15 10:29:15Z vboxsync $
 ## @file
 # Sub-Makefile for the VirtualBox Guest Addition X11 Client.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -18,35 +18,64 @@
 SUB_DEPTH = ../../../../..
 include $(KBUILD_PATH)/subheader.kmk
 
+# Use header files from our tree for randr and xinerama. and don't link but rather dlopen libXrand
+# This is mostly because the GA build boxes can have a very old xrandr lib, so instead of linking we dlopen.
+VBOX_WITH_DISTRO_XRAND_XINERAMA=
+
+# We don't yet have a seamless mode compilation flag, so define it here unconditionally.
+VBOX_WITH_SEAMLESS:=1
+
 #
 # VBoxClient - clipboard and seamless.
 #
 PROGRAMS += VBoxClient
+#
+# Please make sure that you grep the source tree and modify all occurences accordingly
+# if you rename the following program name.
+#
+PROGRAMS += VBoxDRMClient
 
 VBoxClient_TEMPLATE = NewVBoxGuestR3Exe
 VBoxClient_DEFS += VBOX_X11_CLIPBOARD VBOX_WITH_HGCM
+VBoxClient_DEFS += VBOX_BUILD_TARGET=\"$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH)\"
 ifdef VBOX_WITH_DBUS
  VBoxClient_DEFS += VBOX_WITH_DBUS
 endif
+
 VBoxClient_DEFS.linux += _GNU_SOURCE
+VBoxClient_INCS = $(VBOX_GRAPHICS_INCS)
+VBoxClient_INCS += ../x11include/panoramiXproto-1.1
+VBoxClient_INCS += ../x11include/libXrandr-1.5.2
+VBoxClient_INCS += ../x11include/randrproto-1.6.0
 VBoxClient_SOURCES = \
-	main.cpp
-VBoxClient_SOURCES += \
-  	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-helper.cpp \
-  	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/x11-clipboard.cpp \
-	clipboard.cpp
+	main.cpp \
+	logging.cpp
+
+VBoxDRMClient_TEMPLATE = NewVBoxGuestR3Exe
+VBoxDRMClient_DEFS += VBOX_BUILD_TARGET=\"$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH)\"
+VBoxDRMClient_SOURCES = \
+    display-drm.cpp \
+    logging.cpp
+
+
+VBoxClient_SOURCES.linux = \
+	chk_stubs.c
 VBoxClient_LIBPATH = \
 	$(VBOX_LIBPATH32_X11)
 VBoxClient_LIBS.freebsd = \
 	iconv
 VBoxClient_LIBS.linux = \
 	dl
+VBoxClient_LIBS.netbsd = \
+	crypt
 VBoxClient_LIBS.solaris = \
 	dl
 VBoxClient_LIBS = \
-	X11 \
-	Xrandr \
-	Xt
+	X11 Xt Xext Xmu
+ifdef VBOX_WITH_DISTRO_XRAND_XINERAMA
+ VBoxClient_DEFS += WITH_DISTRO_XRAND_XINERAMA
+ VBoxClient_LIBS += Xrandr
+endif
 
 # XXX: -L comes from the template, but not rpath
 VBoxClient_LDFLAGS.netbsd = \
@@ -54,84 +83,121 @@ VBoxClient_LDFLAGS.netbsd = \
 
 ifdef VBOX_WITH_DRAG_AND_DROP
  ifdef VBOX_DND_WITH_XTEST
- VBoxClient_DEFS += VBOX_DND_WITH_XTEST
- VBoxClient_LIBS += \
+  VBoxClient_DEFS += VBOX_DND_WITH_XTEST
+  VBoxClient_LIBS += \
 	Xtst
  endif
 endif
 
-# These are static replacements for gcc-specific parts of libstdc++
-VBoxClient_LIBS += \
-	supc++ \
-	gcc_eh
-ifdef VBOX_X11_SEAMLESS_GUEST
- VBoxClient_DEFS += SEAMLESS_GUEST DYNAMIC_RESIZE
- VBoxClient_SOURCES += \
-	seamless.cpp \
-	seamless-x11.cpp \
-	display.cpp \
-	hostversion.cpp \
-	check3d.cpp
- VBoxClient_LIBS += \
-	Xext Xmu
+# This forces the memcpy references in the static libraries to go to
+# __wrap_memcpy, which we can wrap around memcpy@GLIBC_2.2.5.  I do not know
+# how else to do that without recompiling or implementing our own memcpy.
+ifeq ($(KBUILD_TARGET),linux)
+ VBoxClient_LDFLAGS.amd64 += \
+	-Wl,--wrap=memcpy
 endif
+
 ifdef VBOX_WITH_GUEST_PROPS
- VBoxClient_DEFS += VBOX_WITH_GUEST_PROPS
+ VBoxClient_DEFS    += VBOX_WITH_GUEST_PROPS
+ VBoxClient_SOURCES += \
+	hostversion.cpp
 endif
+
 ifdef VBOX_WITH_DRAG_AND_DROP
- VBoxClient_DEFS += \
+ VBoxClient_DEFS     += \
 	VBOX_WITH_DRAG_AND_DROP \
 	$(if $(VBOX_WITH_DRAG_AND_DROP_GH),VBOX_WITH_DRAG_AND_DROP_GH,)
- VBoxClient_SOURCES += \
+ VBoxClient_SOURCES  += \
 	draganddrop.cpp
  VBoxClient_LIBS     += \
+	$(VBOX_LIB_VBGL_R3) \
 	$(PATH_STAGE_LIB)/additions/VBoxDnDGuestR3Lib$(VBOX_SUFF_LIB)
 endif
 
-ifdef VBOX_X11_SEAMLESS_GUEST
- if defined(VBOX_WITH_TESTCASES) && !defined(VBOX_ONLY_ADDITIONS) && !defined(VBOX_ONLY_SDK)
-  if1of ($(KBUILD_TARGET), freebsd linux netbsd openbsd solaris)
+ifdef VBOX_WITH_SEAMLESS
+ VBoxClient_DEFS    += VBOX_WITH_SEAMLESS
+ VBoxClient_SOURCES += \
+	seamless.cpp \
+	seamless-x11.cpp
+endif
+
+ifdef VBOX_WITH_VMSVGA
+ VBoxClient_DEFS    += VBOX_WITH_VMSVGA
+ VBoxClient_SOURCES += \
+	display-svga-x11.cpp
+endif
+
+ifdef VBOX_WITH_SHARED_CLIPBOARD
+ VBoxClient_DEFS     += VBOX_WITH_SHARED_CLIPBOARD
+ VBoxClient_SOURCES  += \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-common.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-x11.cpp \
+	clipboard.cpp
+ ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
+  VBoxClient_DEFS    += VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS VBOX_WITH_SHARED_CLIPBOARD_GUEST
+  VBoxClient_SOURCES += \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-transfers.cpp \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/ClipboardPath.cpp
+  ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS_HTTP
+   VBoxClient_DEFS    += VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS_HTTP
+   VBoxClient_SOURCES += \
+	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-transfers-http.cpp
+  endif
+  ifdef VBOX_WITH_SHARED_CLIPBOARD_FUSE
+   VBoxClient_DEFS    += VBOX_WITH_SHARED_CLIPBOARD_FUSE
+   # @todo Make this dynamic loading more generic.
+   VBoxClient_SOURCES += \
+	$(PATH_ROOT)/src/VBox/ImageMounter/vboximg-mount/fuse.cpp \
+	clipboard-fuse.cpp
+   # @todo Ditto.
+   VBoxClient_INCS    += \
+	$(PATH_ROOT)/src/VBox/ImageMounter/vboximg-mount
+  endif
+ endif
+endif
+
+if defined(VBOX_WITH_TESTCASES) && !defined(VBOX_ONLY_ADDITIONS) && !defined(VBOX_ONLY_SDK)
+ if1of ($(KBUILD_TARGET), freebsd linux netbsd openbsd solaris)
 
 # Set this in LocalConfig.kmk if you are working on the X11 clipboard service
 # to automatically run the unit test at build time.
 #       OTHERS += $(tstSeamlessX11-auto_0_OUTDIR)/tstSeamlessX11-auto.run
 
-   PROGRAMS += tstSeamlessX11-auto
-   tstSeamlessX11-auto_TEMPLATE = VBOXR3TSTEXE
-   tstSeamlessX11-auto_SOURCES = \
-           testcase/tstSeamlessX11-auto.cpp \
-           seamless-x11.cpp
-   tstSeamlessX11-auto_DEFS = TESTCASE
-   tstSeamlessX11-auto_LIBS = \
-           $(LIB_RUNTIME)
+  PROGRAMS += tstSeamlessX11-auto
+  tstSeamlessX11-auto_TEMPLATE = VBOXR3TSTEXE
+  tstSeamlessX11-auto_SOURCES = \
+          testcase/tstSeamlessX11-auto.cpp \
+          seamless-x11.cpp
+  tstSeamlessX11-auto_DEFS = TESTCASE
+  tstSeamlessX11-auto_LIBS = \
+          $(LIB_RUNTIME)
 
-   TESTING  += $(tstSeamlessX11-auto_0_OUTDIR)/tstSeamlessX11-auto
+  TESTING  += $(tstSeamlessX11-auto_0_OUTDIR)/tstSeamlessX11-auto
 $$(tstSeamlessX11-auto_0_OUTDIR)/tstSeamlessX11-auto.run: \
-        $$(tstSeamlessX11-auto_1_STAGE_TARGET)
+       $$(tstSeamlessX11-auto_1_STAGE_TARGET)
 	export VBOX_LOG_DEST=nofile; $(tstSeamlessX11-auto_1_STAGE_TARGET) quiet
 	$(QUIET)$(APPEND) -t "$@" "done"
 
-   #
-   # Additional testcase designed to be run manually, which initiates and starts the Linux
-   # guest client part of the seamless additions in the host, faking seamless events from
-   # the host and writing information about guest events to standard output.
-   #
-   PROGRAMS += tstSeamlessX11
-   tstSeamlessX11_TEMPLATE = VBOXR3TSTEXE
-   tstSeamlessX11_SOURCES = \
-           testcase/tstSeamlessX11.cpp \
-           seamless.cpp \
-           seamless-x11.cpp
-   tstSeamlessX11_LIBPATH = \
-           $(VBOX_LIBPATH_X11)
-   tstSeamlessX11_LIBS = \
-           $(LIB_RUNTIME) \
-           Xext \
-           Xmu \
-           X11
-  endif
+  #
+  # Additional testcase designed to be run manually, which initiates and starts the Linux
+  # guest client part of the seamless additions in the host, faking seamless events from
+  # the host and writing information about guest events to standard output.
+  #
+  PROGRAMS += tstSeamlessX11
+  tstSeamlessX11_TEMPLATE = VBOXR3TSTEXE
+  tstSeamlessX11_SOURCES = \
+          testcase/tstSeamlessX11.cpp \
+          seamless.cpp \
+          seamless-x11.cpp
+  tstSeamlessX11_DEFS   += VBOX_BUILD_TARGET=\"$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH)\"
+  tstSeamlessX11_LIBPATH = \
+          $(VBOX_LIBPATH_X11)
+  tstSeamlessX11_LIBS = \
+          $(LIB_RUNTIME) \
+          Xext \
+          Xmu \
+          X11
  endif
 endif
 
 include $(FILE_KBUILD_SUB_FOOTER)
-

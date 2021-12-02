@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: cidet.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * CPU Instruction Decoding & Execution Tests - C/C++ Header.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___cidet_h___
-#define ___cidet_h___
+#ifndef VBOX_INCLUDED_SRC_cpu_cidet_h
+#define VBOX_INCLUDED_SRC_cpu_cidet_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 #include <iprt/x86.h>
@@ -118,7 +120,7 @@
  * @param   fInvalid        When set, get the next invalid operands that will
  *                          cause exceptions/faults.
  */
-typedef DECLCALLBACK(int) FNCIDETSETUPINOUT(struct CIDETCORE *pThis, bool fInvalid);
+typedef DECLCALLBACKTYPE(int, FNCIDETSETUPINOUT,(struct CIDETCORE *pThis, bool fInvalid));
 /** Pointer to a FNCIDETSETUPINOUT function. */
 typedef FNCIDETSETUPINOUT *PFNCIDETSETUPINOUT;
 
@@ -804,7 +806,7 @@ typedef struct CIDETCORE
      * @param   pThis           The core state.
      * @param   pBuf            Pointer to the buffer structure.
      */
-    DECLCALLBACKMEMBER(bool, pfnReInitDataBuf)(struct CIDETCORE *pThis, PCIDETBUF pBuf);
+    DECLCALLBACKMEMBER(bool, pfnReInitDataBuf,(struct CIDETCORE *pThis, PCIDETBUF pBuf));
 
     /**
      * Copies bytes into the data buffer and sets it up for execution.
@@ -815,7 +817,7 @@ typedef struct CIDETCORE
      * @param   pvSrc           The source bytes (size and destination offset
      *                          given in pfnReinitBuf call).
      */
-    DECLCALLBACKMEMBER(bool, pfnSetupDataBuf)(struct CIDETCORE *pThis, PCIDETBUF pBuf, void const *pvSrc);
+    DECLCALLBACKMEMBER(bool, pfnSetupDataBuf,(struct CIDETCORE *pThis, PCIDETBUF pBuf, void const *pvSrc));
 
     /**
      * Compares buffer content after test execution.
@@ -831,7 +833,7 @@ typedef struct CIDETCORE
      * @param   pvExpected      Pointer to the expected source bytes (size and
      *                          buffer offset given in pfnReinitBuf call).
      */
-    DECLCALLBACKMEMBER(bool, pfnIsBufEqual)(struct CIDETCORE *pThis, struct CIDETBUF *pBuf, void const *pvExpected);
+    DECLCALLBACKMEMBER(bool, pfnIsBufEqual,(struct CIDETCORE *pThis, struct CIDETBUF *pBuf, void const *pvExpected));
 
     /**
      * Re-initializes the code buffer.
@@ -842,7 +844,7 @@ typedef struct CIDETCORE
      *                          members represent what the core wants to
      *                          execute.
      */
-    DECLCALLBACKMEMBER(bool, pfnReInitCodeBuf)(struct CIDETCORE *pThis, PCIDETBUF pBuf);
+    DECLCALLBACKMEMBER(bool, pfnReInitCodeBuf,(struct CIDETCORE *pThis, PCIDETBUF pBuf));
 
     /**
      * Emit code into the code buffer, making everything ready for pfnExecute.
@@ -852,7 +854,7 @@ typedef struct CIDETCORE
      * @param   pBuf            Pointer to the CodeBuf member.
      * @param   pvInstr         Pointer to the encoded instruction bytes.
      */
-    DECLCALLBACKMEMBER(bool, pfnSetupCodeBuf)(struct CIDETCORE *pThis, PCIDETBUF pBuf, void const *pvInstr);
+    DECLCALLBACKMEMBER(bool, pfnSetupCodeBuf,(struct CIDETCORE *pThis, PCIDETBUF pBuf, void const *pvInstr));
 
     /**
      * Executes the code indicated by InCtx, returning the result in ActualCtx.
@@ -860,7 +862,7 @@ typedef struct CIDETCORE
      * @returns true if execute, false if skipped.
      * @param   pThis           Pointer to the core structure.
      */
-    DECLCALLBACKMEMBER(bool, pfnExecute)(struct CIDETCORE *pThis);
+    DECLCALLBACKMEMBER(bool, pfnExecute,(struct CIDETCORE *pThis));
 
     /**
      * Report a test failure.
@@ -869,7 +871,7 @@ typedef struct CIDETCORE
      * @param   pszFormat       Format string containing failure details.
      * @param   va              Arguments referenced in @a pszFormat.
      */
-    DECLCALLBACKMEMBER(void, pfnFailure)(struct CIDETCORE *pThis, const char *pszFormat, va_list va);
+    DECLCALLBACKMEMBER(void, pfnFailure,(struct CIDETCORE *pThis, const char *pszFormat, va_list va));
 
     /** Array of indexes for use by FNCIDETSETUPINOUT.
      * Reset when changing instruction or switching between valid and invalid
@@ -1076,5 +1078,5 @@ bool    CidetCoreTestInstruction(PCIDETCORE pThis, PCCIDETINSTR pInstr);
 extern const CIDETINSTR g_aCidetInstructions1[];
 extern const uint32_t   g_cCidetInstructions1;
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_cpu_cidet_h */
 

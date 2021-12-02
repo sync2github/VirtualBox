@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-PitIrqHandler.c 88839 2021-05-03 14:28:49Z vboxsync $ */
 /** @file
  * BS3Kit - The PIT IRQ Handler and associated data.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -46,18 +46,17 @@ uint32_t volatile   g_cBs3PitTicks = 0;
 uint32_t            g_cBs3PitIntervalNs = 0;
 /** The current interval in milliseconds (approximately).
  * This is 0 if not yet started (used for checking the state internally). */
-uint16_t volatile   g_cBs3PitIntervalMs = 0;
+uint16_t            g_cBs3PitIntervalMs = 0;
 /** The current PIT frequency (approximately).  0 if not yet started.  */
-uint16_t            g_cBs3PitIntervalHz = 0;
+uint16_t volatile   g_cBs3PitIntervalHz = 0;
 #endif
 
 
 BS3_DECL_NEAR_CALLBACK(void) BS3_CMN_NM(bs3PitIrqHandler)(PBS3TRAPFRAME pTrapFrame)
 {
-    uint16_t cMsIntercal = g_cBs3PitIntervalMs;
-    if (cMsIntercal)
+    if (g_cBs3PitIntervalHz)
     {
-        g_cBs3PitMs += cMsIntercal;
+        g_cBs3PitMs += g_cBs3PitIntervalMs;
         g_cBs3PitNs += g_cBs3PitIntervalNs;
         g_cBs3PitTicks++;
     }

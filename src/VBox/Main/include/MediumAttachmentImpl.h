@@ -1,11 +1,11 @@
-/* $Id: $ */
+/* $Id: MediumAttachmentImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_MEDIUMATTACHMENTIMPL
-#define ____H_MEDIUMATTACHMENTIMPL
+#ifndef MAIN_INCLUDED_MediumAttachmentImpl_h
+#define MAIN_INCLUDED_MediumAttachmentImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "MediumAttachmentWrap.h"
 
@@ -26,7 +29,7 @@ class ATL_NO_VTABLE MediumAttachment :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(MediumAttachment)
+    DECLARE_COMMON_CLASS_METHODS(MediumAttachment)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -38,12 +41,12 @@ public:
                  LONG aPort,
                  LONG aDevice,
                  DeviceType_T aType,
-                 bool fImplicit,
-                 bool fPassthrough,
-                 bool fTempEject,
-                 bool fNonRotational,
-                 bool fDiscard,
-                 bool fHotPluggable,
+                 bool aImplicit,
+                 bool aPassthrough,
+                 bool aTempEject,
+                 bool aNonRotational,
+                 bool aDiscard,
+                 bool aHotPluggable,
                  const Utf8Str &strBandwidthGroup);
     HRESULT initCopy(Machine *aParent, MediumAttachment *aThat);
     void uninit();
@@ -109,6 +112,7 @@ public:
 private:
 
     // Wrapped IMediumAttachment properties
+    HRESULT getMachine(ComPtr<IMachine> &aMachine);
     HRESULT getMedium(ComPtr<IMedium> &aHardDisk);
     HRESULT getController(com::Utf8Str &aController);
     HRESULT getPort(LONG *aPort);
@@ -128,5 +132,5 @@ private:
     Utf8Str mLogName;                   /**< For logging purposes */
 };
 
-#endif // ____H_MEDIUMATTACHMENTIMPL
+#endif /* !MAIN_INCLUDED_MediumAttachmentImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

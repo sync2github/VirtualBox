@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: openssl-md2.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * IPRT - Message-Digest Algorithm 2.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,10 +30,14 @@
 *********************************************************************************************************************************/
 #include "internal/iprt.h"
 
+#include "internal/openssl-pre.h"
 #include <openssl/opensslconf.h>
 #ifndef OPENSSL_NO_MD2
 # include <openssl/md2.h>
+#endif
+#include "internal/openssl-post.h"
 
+#ifndef OPENSSL_NO_MD2
 # define RT_MD2_PRIVATE_CONTEXT
 # include <iprt/md2.h>
 

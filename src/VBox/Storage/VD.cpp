@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VD.cpp 90820 2021-08-23 20:37:24Z vboxsync $ */
 /** @file
- * VBoxHDD - VBox HDD Container implementation.
+ * VD - Virtual disk container implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,28 +31,13 @@
 #include <iprt/file.h>
 #include <iprt/string.h>
 #include <iprt/asm.h>
-#include <iprt/ldr.h>
-#include <iprt/dir.h>
-#include <iprt/path.h>
 #include <iprt/param.h>
-#include <iprt/memcache.h>
+#include <iprt/path.h>
 #include <iprt/sg.h>
-#include <iprt/list.h>
-#include <iprt/avl.h>
 #include <iprt/semaphore.h>
+#include <iprt/vector.h>
 
-#include <VBox/vd-plugin.h>
-
-#include "VDBackends.h"
-
-/** Disable dynamic backends on non x86 architectures. This feature
- * requires the SUPR3 library which is not available there.
- */
-#if !defined(VBOX_HDD_NO_DYNAMIC_BACKENDS) && !defined(RT_ARCH_X86) && !defined(RT_ARCH_AMD64)
-# define VBOX_HDD_NO_DYNAMIC_BACKENDS
-#endif
-
-#define VBOXHDDDISK_SIGNATURE 0x6f0e2a7d
+#include "VDInternal.h"
 
 /** Buffer size used for merging images. */
 #define VD_MERGE_BUFFER_SIZE    (16 * _1M)
@@ -77,226 +62,12 @@ typedef struct VDIIOFALLBACKSTORAGE
 } VDIIOFALLBACKSTORAGE, *PVDIIOFALLBACKSTORAGE;
 
 /**
- * Structure containing everything I/O related
- * for the image and cache descriptors.
- */
-typedef struct VDIO
-{
-    /** I/O interface to the upper layer. */
-    PVDINTERFACEIO      pInterfaceIo;
-
-    /** Per image internal I/O interface. */
-    VDINTERFACEIOINT    VDIfIoInt;
-
-    /** Fallback I/O interface, only used if the caller doesn't provide it. */
-    VDINTERFACEIO       VDIfIo;
-
-    /** Opaque backend data. */
-    void               *pBackendData;
-    /** Disk this image is part of */
-    PVBOXHDD            pDisk;
-    /** Flag whether to ignore flush requests. */
-    bool                fIgnoreFlush;
-} VDIO, *PVDIO;
-
-/** Forward declaration of an I/O task */
-typedef struct VDIOTASK *PVDIOTASK;
-
-/**
- * VBox HDD Container image descriptor.
- */
-typedef struct VDIMAGE
-{
-    /** Link to parent image descriptor, if any. */
-    struct VDIMAGE     *pPrev;
-    /** Link to child image descriptor, if any. */
-    struct VDIMAGE     *pNext;
-    /** Container base filename. (UTF-8) */
-    char               *pszFilename;
-    /** Data managed by the backend which keeps the actual info. */
-    void               *pBackendData;
-    /** Cached sanitized image flags. */
-    unsigned            uImageFlags;
-    /** Image open flags (only those handled generically in this code and which
-     * the backends will never ever see). */
-    unsigned            uOpenFlags;
-
-    /** Function pointers for the various backend methods. */
-    PCVDIMAGEBACKEND    Backend;
-    /** Pointer to list of VD interfaces, per-image. */
-    PVDINTERFACE        pVDIfsImage;
-    /** I/O related things. */
-    VDIO                VDIo;
-} VDIMAGE, *PVDIMAGE;
-
-/**
  * uModified bit flags.
  */
 #define VD_IMAGE_MODIFIED_FLAG                  RT_BIT(0)
 #define VD_IMAGE_MODIFIED_FIRST                 RT_BIT(1)
 #define VD_IMAGE_MODIFIED_DISABLE_UUID_UPDATE   RT_BIT(2)
 
-
-/**
- * VBox HDD Cache image descriptor.
- */
-typedef struct VDCACHE
-{
-    /** Cache base filename. (UTF-8) */
-    char               *pszFilename;
-    /** Data managed by the backend which keeps the actual info. */
-    void               *pBackendData;
-    /** Cached sanitized image flags. */
-    unsigned            uImageFlags;
-    /** Image open flags (only those handled generically in this code and which
-     * the backends will never ever see). */
-    unsigned            uOpenFlags;
-
-    /** Function pointers for the various backend methods. */
-    PCVDCACHEBACKEND    Backend;
-
-    /** Pointer to list of VD interfaces, per-cache. */
-    PVDINTERFACE        pVDIfsCache;
-    /** I/O related things. */
-    VDIO                VDIo;
-} VDCACHE, *PVDCACHE;
-
-/**
- * A block waiting for a discard.
- */
-typedef struct VDDISCARDBLOCK
-{
-    /** AVL core. */
-    AVLRU64NODECORE    Core;
-    /** LRU list node. */
-    RTLISTNODE         NodeLru;
-    /** Number of bytes to discard. */
-    size_t             cbDiscard;
-    /** Bitmap of allocated sectors. */
-    void              *pbmAllocated;
-} VDDISCARDBLOCK, *PVDDISCARDBLOCK;
-
-/**
- * VD discard state.
- */
-typedef struct VDDISCARDSTATE
-{
-    /** Number of bytes waiting for a discard. */
-    size_t              cbDiscarding;
-    /** AVL tree with blocks waiting for a discard.
-     * The uOffset + cbDiscard range is the search key. */
-    PAVLRU64TREE        pTreeBlocks;
-    /** LRU list of the least frequently discarded blocks.
-     * If there are to many blocks waiting the least frequently used
-     * will be removed and the range will be set to 0.
-     */
-    RTLISTNODE          ListLru;
-} VDDISCARDSTATE, *PVDDISCARDSTATE;
-
-/**
- * VD filter instance.
- */
-typedef struct VDFILTER
-{
-    /** List node for the read filter chain. */
-    RTLISTNODE         ListNodeChainRead;
-    /** List node for the write filter chain. */
-    RTLISTNODE         ListNodeChainWrite;
-    /** Number of references to this filter. */
-    uint32_t           cRefs;
-    /** Opaque VD filter backend instance data. */
-    void              *pvBackendData;
-    /** Pointer to the filter backend interface. */
-    PCVDFILTERBACKEND  pBackend;
-    /** Pointer to list of VD interfaces, per-filter. */
-    PVDINTERFACE        pVDIfsFilter;
-    /** I/O related things. */
-    VDIO                VDIo;
-} VDFILTER;
-/** Pointer to a VD filter instance. */
-typedef VDFILTER *PVDFILTER;
-
-/**
- * VBox HDD Container main structure, private part.
- */
-struct VBOXHDD
-{
-    /** Structure signature (VBOXHDDDISK_SIGNATURE). */
-    uint32_t               u32Signature;
-
-    /** Image type. */
-    VDTYPE                 enmType;
-
-    /** Number of opened images. */
-    unsigned               cImages;
-
-    /** Base image. */
-    PVDIMAGE               pBase;
-
-    /** Last opened image in the chain.
-     * The same as pBase if only one image is used. */
-    PVDIMAGE               pLast;
-
-    /** If a merge to one of the parents is running this may be non-NULL
-     * to indicate to what image the writes should be additionally relayed. */
-    PVDIMAGE               pImageRelay;
-
-    /** Flags representing the modification state. */
-    unsigned               uModified;
-
-    /** Cached size of this disk. */
-    uint64_t               cbSize;
-    /** Cached PCHS geometry for this disk. */
-    VDGEOMETRY             PCHSGeometry;
-    /** Cached LCHS geometry for this disk. */
-    VDGEOMETRY             LCHSGeometry;
-
-    /** Pointer to list of VD interfaces, per-disk. */
-    PVDINTERFACE           pVDIfsDisk;
-    /** Pointer to the common interface structure for error reporting. */
-    PVDINTERFACEERROR      pInterfaceError;
-    /** Pointer to the optional thread synchronization callbacks. */
-    PVDINTERFACETHREADSYNC pInterfaceThreadSync;
-
-    /** Memory cache for I/O contexts */
-    RTMEMCACHE             hMemCacheIoCtx;
-    /** Memory cache for I/O tasks. */
-    RTMEMCACHE             hMemCacheIoTask;
-    /** An I/O context is currently using the disk structures
-     * Every I/O context must be placed on one of the lists below. */
-    volatile bool          fLocked;
-    /** Head of pending I/O tasks waiting for completion - LIFO order. */
-    volatile PVDIOTASK     pIoTasksPendingHead;
-    /** Head of newly queued I/O contexts - LIFO order. */
-    volatile PVDIOCTX      pIoCtxHead;
-    /** Head of halted I/O contexts which are given back to generic
-     * disk framework by the backend. - LIFO order. */
-    volatile PVDIOCTX      pIoCtxHaltedHead;
-
-    /** Head of blocked I/O contexts, processed only
-     * after pIoCtxLockOwner was freed - LIFO order. */
-    volatile PVDIOCTX      pIoCtxBlockedHead;
-    /** I/O context which locked the disk for a growing write or flush request.
-     * Other flush or growing write requests need to wait until
-     * the current one completes. - NIL_VDIOCTX if unlocked. */
-    volatile PVDIOCTX      pIoCtxLockOwner;
-    /** If the disk was locked by a growing write, flush or discard request this
-     * contains the start offset to check for interfering I/O while it is in progress. */
-    uint64_t               uOffsetStartLocked;
-    /** If the disk was locked by a growing write, flush or discard request this contains
-     * the first non affected offset to check for interfering I/O while it is in progress. */
-    uint64_t               uOffsetEndLocked;
-
-    /** Pointer to the L2 disk cache if any. */
-    PVDCACHE               pCache;
-    /** Pointer to the discard state if any. */
-    PVDDISCARDSTATE        pDiscard;
-
-    /** Read filter chain - PVDFILTER. */
-    RTLISTANCHOR           ListFilterChainRead;
-    /** Write filter chain - PVDFILTER. */
-    RTLISTANCHOR           ListFilterChainWrite;
-};
 
 # define VD_IS_LOCKED(a_pDisk) \
     do \
@@ -312,7 +83,7 @@ struct VBOXHDD
 typedef struct VDPARENTSTATEDESC
 {
     /** Pointer to disk descriptor. */
-    PVBOXHDD pDisk;
+    PVDISK pDisk;
     /** Pointer to image descriptor. */
     PVDIMAGE pImage;
 } VDPARENTSTATEDESC, *PVDPARENTSTATEDESC;
@@ -335,7 +106,7 @@ typedef enum VDIOCTXTXDIR
 } VDIOCTXTXDIR, *PVDIOCTXTXDIR;
 
 /** Transfer function */
-typedef DECLCALLBACK(int) FNVDIOCTXTRANSFER (PVDIOCTX pIoCtx);
+typedef DECLCALLBACKTYPE(int, FNVDIOCTXTRANSFER ,(PVDIOCTX pIoCtx));
 /** Pointer to a transfer function. */
 typedef FNVDIOCTXTRANSFER *PFNVDIOCTXTRANSFER;
 
@@ -347,7 +118,7 @@ typedef struct VDIOCTX
     /** Pointer to the next I/O context. */
     struct VDIOCTX * volatile    pIoCtxNext;
     /** Disk this is request is for. */
-    PVBOXHDD                     pDisk;
+    PVDISK                       pDisk;
     /** Return code. */
     int                          rcReq;
     /** Various flags for the I/O context. */
@@ -603,188 +374,17 @@ typedef struct VDMETAXFER
 #define VDMETAXFER_TXDIR_GET(flags)      ((flags) & VDMETAXFER_TXDIR_MASK)
 #define VDMETAXFER_TXDIR_SET(flags, dir) ((flags) = (flags & ~VDMETAXFER_TXDIR_MASK) | (dir))
 
-/**
- * Plugin structure.
- */
-typedef struct VDPLUGIN
-{
-    /** Pointer to the next plugin structure. */
-    RTLISTNODE NodePlugin;
-    /** Handle of loaded plugin library. */
-    RTLDRMOD   hPlugin;
-    /** Filename of the loaded plugin. */
-    char       *pszFilename;
-} VDPLUGIN;
-/** Pointer to a plugin structure. */
-typedef VDPLUGIN *PVDPLUGIN;
-
-/** Head of loaded plugin list. */
-static RTLISTANCHOR g_ListPluginsLoaded;
-
-/** Number of image backends supported. */
-static unsigned g_cBackends = 0;
-/** Array of pointers to the image backends. */
-static PCVDIMAGEBACKEND *g_apBackends = NULL;
-/** Array of handles to the corresponding plugin. */
-static RTLDRMOD *g_ahBackendPlugins = NULL;
-/** Builtin image backends. */
-static PCVDIMAGEBACKEND aStaticBackends[] =
-{
-    &g_VmdkBackend,
-    &g_VDIBackend,
-    &g_VhdBackend,
-    &g_ParallelsBackend,
-    &g_DmgBackend,
-    &g_QedBackend,
-    &g_QCowBackend,
-    &g_VhdxBackend,
-    &g_RawBackend,
-    &g_ISCSIBackend
-};
-
-/** Number of supported cache backends. */
-static unsigned g_cCacheBackends = 0;
-/** Array of pointers to the cache backends. */
-static PCVDCACHEBACKEND *g_apCacheBackends = NULL;
-/** Array of handles to the corresponding plugin. */
-static RTLDRMOD *g_ahCacheBackendPlugins = NULL;
-/** Builtin cache backends. */
-static PCVDCACHEBACKEND aStaticCacheBackends[] =
-{
-    &g_VciCacheBackend
-};
-
-/** Number of supported filter backends. */
-static unsigned g_cFilterBackends = 0;
-/** Array of pointers to the filters backends. */
-static PCVDFILTERBACKEND *g_apFilterBackends = NULL;
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-/** Array of handles to the corresponding plugin. */
-static PRTLDRMOD g_pahFilterBackendPlugins = NULL;
-#endif
-
 /** Forward declaration of the async discard helper. */
 static DECLCALLBACK(int) vdDiscardHelperAsync(PVDIOCTX pIoCtx);
 static DECLCALLBACK(int) vdWriteHelperAsync(PVDIOCTX pIoCtx);
-static void vdDiskProcessBlockedIoCtx(PVBOXHDD pDisk);
-static int vdDiskUnlock(PVBOXHDD pDisk, PVDIOCTX pIoCtxRc);
+static void vdDiskProcessBlockedIoCtx(PVDISK pDisk);
+static int vdDiskUnlock(PVDISK pDisk, PVDIOCTX pIoCtxRc);
 static DECLCALLBACK(void) vdIoCtxSyncComplete(void *pvUser1, void *pvUser2, int rcReq);
-
-/**
- * internal: add several backends.
- */
-static int vdAddBackends(RTLDRMOD hPlugin, PCVDIMAGEBACKEND *ppBackends, unsigned cBackends)
-{
-    PCVDIMAGEBACKEND *pTmp = (PCVDIMAGEBACKEND *)RTMemRealloc(g_apBackends,
-           (g_cBackends + cBackends) * sizeof(PCVDIMAGEBACKEND));
-    if (RT_UNLIKELY(!pTmp))
-        return VERR_NO_MEMORY;
-    g_apBackends = pTmp;
-
-    RTLDRMOD *pTmpPlugins = (RTLDRMOD*)RTMemRealloc(g_ahBackendPlugins,
-           (g_cBackends + cBackends) * sizeof(RTLDRMOD));
-    if (RT_UNLIKELY(!pTmpPlugins))
-        return VERR_NO_MEMORY;
-    g_ahBackendPlugins = pTmpPlugins;
-    memcpy(&g_apBackends[g_cBackends], ppBackends, cBackends * sizeof(PCVDIMAGEBACKEND));
-    for (unsigned i = g_cBackends; i < g_cBackends + cBackends; i++)
-        g_ahBackendPlugins[i] = hPlugin;
-    g_cBackends += cBackends;
-    return VINF_SUCCESS;
-}
-
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-/**
- * internal: add single backend.
- */
-DECLINLINE(int) vdAddBackend(RTLDRMOD hPlugin, PCVDIMAGEBACKEND pBackend)
-{
-    return vdAddBackends(hPlugin, &pBackend, 1);
-}
-#endif
-
-/**
- * internal: add several cache backends.
- */
-static int vdAddCacheBackends(RTLDRMOD hPlugin, PCVDCACHEBACKEND *ppBackends, unsigned cBackends)
-{
-    PCVDCACHEBACKEND *pTmp = (PCVDCACHEBACKEND*)RTMemRealloc(g_apCacheBackends,
-           (g_cCacheBackends + cBackends) * sizeof(PCVDCACHEBACKEND));
-    if (RT_UNLIKELY(!pTmp))
-        return VERR_NO_MEMORY;
-    g_apCacheBackends = pTmp;
-
-    RTLDRMOD *pTmpPlugins = (RTLDRMOD*)RTMemRealloc(g_ahCacheBackendPlugins,
-           (g_cCacheBackends + cBackends) * sizeof(RTLDRMOD));
-    if (RT_UNLIKELY(!pTmpPlugins))
-        return VERR_NO_MEMORY;
-    g_ahCacheBackendPlugins = pTmpPlugins;
-    memcpy(&g_apCacheBackends[g_cCacheBackends], ppBackends, cBackends * sizeof(PCVDCACHEBACKEND));
-    for (unsigned i = g_cCacheBackends; i < g_cCacheBackends + cBackends; i++)
-        g_ahCacheBackendPlugins[i] = hPlugin;
-    g_cCacheBackends += cBackends;
-    return VINF_SUCCESS;
-}
-
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-
-/**
- * internal: add single cache backend.
- */
-DECLINLINE(int) vdAddCacheBackend(RTLDRMOD hPlugin, PCVDCACHEBACKEND pBackend)
-{
-    return vdAddCacheBackends(hPlugin, &pBackend, 1);
-}
-
-
-/**
- * Add several filter backends.
- *
- * @returns VBox status code.
- * @param   hPlugin       Plugin handle to add.
- * @param   ppBackends    Array of filter backends to add.
- * @param   cBackends     Number of backends to add.
- */
-static int vdAddFilterBackends(RTLDRMOD hPlugin, PCVDFILTERBACKEND *ppBackends, unsigned cBackends)
-{
-    PCVDFILTERBACKEND *pTmp = (PCVDFILTERBACKEND *)RTMemRealloc(g_apFilterBackends,
-           (g_cFilterBackends + cBackends) * sizeof(PCVDFILTERBACKEND));
-    if (RT_UNLIKELY(!pTmp))
-        return VERR_NO_MEMORY;
-    g_apFilterBackends = pTmp;
-
-    PRTLDRMOD pTmpPlugins = (PRTLDRMOD)RTMemRealloc(g_pahFilterBackendPlugins,
-                                                    (g_cFilterBackends + cBackends) * sizeof(RTLDRMOD));
-    if (RT_UNLIKELY(!pTmpPlugins))
-        return VERR_NO_MEMORY;
-
-    g_pahFilterBackendPlugins = pTmpPlugins;
-    memcpy(&g_apFilterBackends[g_cFilterBackends], ppBackends, cBackends * sizeof(PCVDFILTERBACKEND));
-    for (unsigned i = g_cFilterBackends; i < g_cFilterBackends + cBackends; i++)
-        g_pahFilterBackendPlugins[i] = hPlugin;
-    g_cFilterBackends += cBackends;
-    return VINF_SUCCESS;
-}
-
-
-/**
- * Add a single filter backend to the list of supported filters.
- *
- * @returns VBox status code.
- * @param   hPlugin     Plugin handle to add.
- * @param   pBackend    The backend to add.
- */
-DECLINLINE(int) vdAddFilterBackend(RTLDRMOD hPlugin, PCVDFILTERBACKEND pBackend)
-{
-    return vdAddFilterBackends(hPlugin, &pBackend, 1);
-}
-
-#endif /* VBOX_HDD_NO_DYNAMIC_BACKENDS*/
 
 /**
  * internal: issue error message.
  */
-static int vdError(PVBOXHDD pDisk, int rc, RT_SRC_POS_DECL,
+static int vdError(PVDISK pDisk, int rc, RT_SRC_POS_DECL,
                    const char *pszFormat, ...)
 {
     va_list va;
@@ -798,7 +398,7 @@ static int vdError(PVBOXHDD pDisk, int rc, RT_SRC_POS_DECL,
 /**
  * internal: thread synchronization, start read.
  */
-DECLINLINE(int) vdThreadStartRead(PVBOXHDD pDisk)
+DECLINLINE(int) vdThreadStartRead(PVDISK pDisk)
 {
     int rc = VINF_SUCCESS;
     if (RT_UNLIKELY(pDisk->pInterfaceThreadSync))
@@ -809,7 +409,7 @@ DECLINLINE(int) vdThreadStartRead(PVBOXHDD pDisk)
 /**
  * internal: thread synchronization, finish read.
  */
-DECLINLINE(int) vdThreadFinishRead(PVBOXHDD pDisk)
+DECLINLINE(int) vdThreadFinishRead(PVDISK pDisk)
 {
     int rc = VINF_SUCCESS;
     if (RT_UNLIKELY(pDisk->pInterfaceThreadSync))
@@ -820,7 +420,7 @@ DECLINLINE(int) vdThreadFinishRead(PVBOXHDD pDisk)
 /**
  * internal: thread synchronization, start write.
  */
-DECLINLINE(int) vdThreadStartWrite(PVBOXHDD pDisk)
+DECLINLINE(int) vdThreadStartWrite(PVDISK pDisk)
 {
     int rc = VINF_SUCCESS;
     if (RT_UNLIKELY(pDisk->pInterfaceThreadSync))
@@ -831,7 +431,7 @@ DECLINLINE(int) vdThreadStartWrite(PVBOXHDD pDisk)
 /**
  * internal: thread synchronization, finish write.
  */
-DECLINLINE(int) vdThreadFinishWrite(PVBOXHDD pDisk)
+DECLINLINE(int) vdThreadFinishWrite(PVDISK pDisk)
 {
     int rc = VINF_SUCCESS;
     if (RT_UNLIKELY(pDisk->pInterfaceThreadSync))
@@ -840,76 +440,9 @@ DECLINLINE(int) vdThreadFinishWrite(PVBOXHDD pDisk)
 }
 
 /**
- * internal: find image format backend.
- */
-static int vdFindBackend(const char *pszBackend, PCVDIMAGEBACKEND *ppBackend)
-{
-    int rc = VINF_SUCCESS;
-    PCVDIMAGEBACKEND pBackend = NULL;
-
-    if (!g_apBackends)
-        VDInit();
-
-    for (unsigned i = 0; i < g_cBackends; i++)
-    {
-        if (!RTStrICmp(pszBackend, g_apBackends[i]->pszBackendName))
-        {
-            pBackend = g_apBackends[i];
-            break;
-        }
-    }
-    *ppBackend = pBackend;
-    return rc;
-}
-
-/**
- * internal: find cache format backend.
- */
-static int vdFindCacheBackend(const char *pszBackend, PCVDCACHEBACKEND *ppBackend)
-{
-    int rc = VINF_SUCCESS;
-    PCVDCACHEBACKEND pBackend = NULL;
-
-    if (!g_apCacheBackends)
-        VDInit();
-
-    for (unsigned i = 0; i < g_cCacheBackends; i++)
-    {
-        if (!RTStrICmp(pszBackend, g_apCacheBackends[i]->pszBackendName))
-        {
-            pBackend = g_apCacheBackends[i];
-            break;
-        }
-    }
-    *ppBackend = pBackend;
-    return rc;
-}
-
-/**
- * internal: find filter backend.
- */
-static int vdFindFilterBackend(const char *pszFilter, PCVDFILTERBACKEND *ppBackend)
-{
-    int rc = VINF_SUCCESS;
-    PCVDFILTERBACKEND pBackend = NULL;
-
-    for (unsigned i = 0; i < g_cFilterBackends; i++)
-    {
-        if (!RTStrICmp(pszFilter, g_apFilterBackends[i]->pszBackendName))
-        {
-            pBackend = g_apFilterBackends[i];
-            break;
-        }
-    }
-    *ppBackend = pBackend;
-    return rc;
-}
-
-
-/**
  * internal: add image structure to the end of images list.
  */
-static void vdAddImageToList(PVBOXHDD pDisk, PVDIMAGE pImage)
+static void vdAddImageToList(PVDISK pDisk, PVDIMAGE pImage)
 {
     pImage->pPrev = NULL;
     pImage->pNext = NULL;
@@ -934,7 +467,7 @@ static void vdAddImageToList(PVBOXHDD pDisk, PVDIMAGE pImage)
 /**
  * internal: remove image structure from the images list.
  */
-static void vdRemoveImageFromList(PVBOXHDD pDisk, PVDIMAGE pImage)
+static void vdRemoveImageFromList(PVDISK pDisk, PVDIMAGE pImage)
 {
     Assert(pDisk->cImages > 0);
 
@@ -987,7 +520,7 @@ static uint32_t vdFilterRetain(PVDFILTER pFilter)
 /**
  * internal: find image by index into the images list.
  */
-static PVDIMAGE vdGetImageByNumber(PVBOXHDD pDisk, unsigned nImage)
+static PVDIMAGE vdGetImageByNumber(PVDISK pDisk, unsigned nImage)
 {
     PVDIMAGE pImage = pDisk->pBase;
     if (nImage == VD_LAST_IMAGE)
@@ -1001,6 +534,102 @@ static PVDIMAGE vdGetImageByNumber(PVBOXHDD pDisk, unsigned nImage)
 }
 
 /**
+ * Creates a new region list from the given one converting to match the flags if necessary.
+ *
+ * @returns VBox status code.
+ * @param   pRegionList     The region list to convert from.
+ * @param   fFlags          The flags for the new region list.
+ * @param   ppRegionList    Where to store the new region list on success.
+ */
+static int vdRegionListConv(PCVDREGIONLIST pRegionList, uint32_t fFlags, PPVDREGIONLIST ppRegionList)
+{
+    int rc = VINF_SUCCESS;
+    PVDREGIONLIST pRegionListNew = (PVDREGIONLIST)RTMemDup(pRegionList,
+                                                           RT_UOFFSETOF_DYN(VDREGIONLIST, aRegions[pRegionList->cRegions]));
+    if (RT_LIKELY(pRegionListNew))
+    {
+        /* Do we have to convert anything? */
+        if (pRegionList->fFlags != fFlags)
+        {
+            uint64_t offRegionNext = 0;
+
+            pRegionListNew->fFlags = fFlags;
+            for (unsigned i = 0; i < pRegionListNew->cRegions; i++)
+            {
+                PVDREGIONDESC pRegion = &pRegionListNew->aRegions[i];
+
+                if (   (fFlags & VD_REGION_LIST_F_LOC_SIZE_BLOCKS)
+                    && !(pRegionList->fFlags & VD_REGION_LIST_F_LOC_SIZE_BLOCKS))
+                {
+                    Assert(!(pRegion->cRegionBlocksOrBytes % pRegion->cbBlock));
+
+                    /* Convert from bytes to logical blocks. */
+                    pRegion->offRegion            = offRegionNext;
+                    pRegion->cRegionBlocksOrBytes = pRegion->cRegionBlocksOrBytes / pRegion->cbBlock;
+                    offRegionNext += pRegion->cRegionBlocksOrBytes;
+                }
+                else
+                {
+                    /* Convert from logical blocks to bytes. */
+                    pRegion->offRegion            = offRegionNext;
+                    pRegion->cRegionBlocksOrBytes = pRegion->cRegionBlocksOrBytes * pRegion->cbBlock;
+                    offRegionNext += pRegion->cRegionBlocksOrBytes;
+                }
+            }
+        }
+
+        *ppRegionList = pRegionListNew;
+    }
+    else
+        rc = VERR_NO_MEMORY;
+
+    return rc;
+}
+
+/**
+ * Returns the virtual size of the image in bytes.
+ *
+ * @returns Size of the given image in bytes.
+ * @param   pImage          The image to get the size from.
+ */
+static uint64_t vdImageGetSize(PVDIMAGE pImage)
+{
+    uint64_t cbImage = 0;
+
+    if (pImage->cbImage == VD_IMAGE_SIZE_UNINITIALIZED)
+    {
+        PCVDREGIONLIST pRegionList = NULL;
+        int rc = pImage->Backend->pfnQueryRegions(pImage->pBackendData, &pRegionList);
+        if (RT_SUCCESS(rc))
+        {
+            if (pRegionList->fFlags & VD_REGION_LIST_F_LOC_SIZE_BLOCKS)
+            {
+                PVDREGIONLIST pRegionListConv = NULL;
+                rc = vdRegionListConv(pRegionList, 0, &pRegionListConv);
+                if (RT_SUCCESS(rc))
+                {
+                    for (uint32_t i = 0; i < pRegionListConv->cRegions; i++)
+                        cbImage += pRegionListConv->aRegions[i].cRegionBlocksOrBytes;
+
+                    VDRegionListFree(pRegionListConv);
+                }
+            }
+            else
+                for (uint32_t i = 0; i < pRegionList->cRegions; i++)
+                    cbImage += pRegionList->aRegions[i].cRegionBlocksOrBytes;
+
+            AssertPtr(pImage->Backend->pfnRegionListRelease);
+            pImage->Backend->pfnRegionListRelease(pImage->pBackendData, pRegionList);
+            pImage->cbImage = cbImage; /* Cache the value. */
+        }
+    }
+    else
+        cbImage = pImage->cbImage;
+
+    return cbImage;
+}
+
+/**
  * Applies the filter chain to the given write request.
  *
  * @returns VBox status code.
@@ -1009,7 +638,7 @@ static PVDIMAGE vdGetImageByNumber(PVBOXHDD pDisk, unsigned nImage)
  * @param   cbWrite  Number of bytes to write.
  * @param   pIoCtx   The I/O context associated with the request.
  */
-static int vdFilterChainApplyWrite(PVBOXHDD pDisk, uint64_t uOffset, size_t cbWrite,
+static int vdFilterChainApplyWrite(PVDISK pDisk, uint64_t uOffset, size_t cbWrite,
                                    PVDIOCTX pIoCtx)
 {
     int rc = VINF_SUCCESS;
@@ -1038,7 +667,7 @@ static int vdFilterChainApplyWrite(PVBOXHDD pDisk, uint64_t uOffset, size_t cbWr
  * @param   cbRead   Number of bytes read.
  * @param   pIoCtx   The I/O context associated with the request.
  */
-static int vdFilterChainApplyRead(PVBOXHDD pDisk, uint64_t uOffset, size_t cbRead,
+static int vdFilterChainApplyRead(PVDISK pDisk, uint64_t uOffset, size_t cbRead,
                                   PVDIOCTX pIoCtx)
 {
     int rc = VINF_SUCCESS;
@@ -1061,7 +690,7 @@ static int vdFilterChainApplyRead(PVBOXHDD pDisk, uint64_t uOffset, size_t cbRea
     return rc;
 }
 
-DECLINLINE(void) vdIoCtxRootComplete(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
+DECLINLINE(void) vdIoCtxRootComplete(PVDISK pDisk, PVDIOCTX pIoCtx)
 {
     if (   RT_SUCCESS(pIoCtx->rcReq)
         && pIoCtx->enmTxDir == VDIOCTXTXDIR_READ)
@@ -1076,9 +705,9 @@ DECLINLINE(void) vdIoCtxRootComplete(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
 /**
  * Initialize the structure members of a given I/O context.
  */
-DECLINLINE(void) vdIoCtxInit(PVDIOCTX pIoCtx, PVBOXHDD pDisk, VDIOCTXTXDIR enmTxDir,
+DECLINLINE(void) vdIoCtxInit(PVDIOCTX pIoCtx, PVDISK pDisk, VDIOCTXTXDIR enmTxDir,
                              uint64_t uOffset, size_t cbTransfer, PVDIMAGE pImageStart,
-                             PCRTSGBUF pcSgBuf, void *pvAllocation,
+                             PCRTSGBUF pSgBuf, void *pvAllocation,
                              PFNVDIOCTXTRANSFER pfnIoCtxTransfer, uint32_t fFlags)
 {
     pIoCtx->pDisk                 = pDisk;
@@ -1105,7 +734,7 @@ DECLINLINE(void) vdIoCtxInit(PVDIOCTX pIoCtx, PVBOXHDD pDisk, VDIOCTXTXDIR enmTx
     /* There is no S/G list for a flush request. */
     if (   enmTxDir != VDIOCTXTXDIR_FLUSH
         && enmTxDir != VDIOCTXTXDIR_DISCARD)
-        RTSgBufClone(&pIoCtx->Req.Io.SgBuf, pcSgBuf);
+        RTSgBufClone(&pIoCtx->Req.Io.SgBuf, pSgBuf);
     else
         memset(&pIoCtx->Req.Io.SgBuf, 0, sizeof(RTSGBUF));
 }
@@ -1224,7 +853,7 @@ static PVDDISCARDSTATE vdDiscardStateCreate(void)
  * @param   cbDiscardingNew    How many bytes should be waiting on success.
  *                             The number of bytes waiting can be less.
  */
-static int vdDiscardRemoveBlocks(PVBOXHDD pDisk, PVDDISCARDSTATE pDiscard, size_t cbDiscardingNew)
+static int vdDiscardRemoveBlocks(PVDISK pDisk, PVDDISCARDSTATE pDiscard, size_t cbDiscardingNew)
 {
     int rc = VINF_SUCCESS;
 
@@ -1309,7 +938,7 @@ static int vdDiscardRemoveBlocks(PVBOXHDD pDisk, PVDDISCARDSTATE pDiscard, size_
  * @returns VBox status code.
  * @param   pDisk    VD disk container.
  */
-static int vdDiscardStateDestroy(PVBOXHDD pDisk)
+static int vdDiscardStateDestroy(PVDISK pDisk)
 {
     int rc = VINF_SUCCESS;
 
@@ -1335,7 +964,7 @@ static int vdDiscardStateDestroy(PVBOXHDD pDisk)
  * @param   uOffset  First byte to mark as allocated.
  * @param   cbRange  Number of bytes to mark as allocated.
  */
-static int vdDiscardSetRangeAllocated(PVBOXHDD pDisk, uint64_t uOffset, size_t cbRange)
+static int vdDiscardSetRangeAllocated(PVDISK pDisk, uint64_t uOffset, size_t cbRange)
 {
     PVDDISCARDSTATE pDiscard = pDisk->pDiscard;
     int rc = VINF_SUCCESS;
@@ -1377,9 +1006,9 @@ static int vdDiscardSetRangeAllocated(PVBOXHDD pDisk, uint64_t uOffset, size_t c
     return rc;
 }
 
-DECLINLINE(PVDIOCTX) vdIoCtxAlloc(PVBOXHDD pDisk, VDIOCTXTXDIR enmTxDir,
+DECLINLINE(PVDIOCTX) vdIoCtxAlloc(PVDISK pDisk, VDIOCTXTXDIR enmTxDir,
                                   uint64_t uOffset, size_t cbTransfer,
-                                  PVDIMAGE pImageStart,PCRTSGBUF pcSgBuf,
+                                  PVDIMAGE pImageStart,PCRTSGBUF pSgBuf,
                                   void *pvAllocation, PFNVDIOCTXTRANSFER pfnIoCtxTransfer,
                                   uint32_t fFlags)
 {
@@ -1389,15 +1018,15 @@ DECLINLINE(PVDIOCTX) vdIoCtxAlloc(PVBOXHDD pDisk, VDIOCTXTXDIR enmTxDir,
     if (RT_LIKELY(pIoCtx))
     {
         vdIoCtxInit(pIoCtx, pDisk, enmTxDir, uOffset, cbTransfer, pImageStart,
-                    pcSgBuf, pvAllocation, pfnIoCtxTransfer, fFlags);
+                    pSgBuf, pvAllocation, pfnIoCtxTransfer, fFlags);
     }
 
     return pIoCtx;
 }
 
-DECLINLINE(PVDIOCTX) vdIoCtxRootAlloc(PVBOXHDD pDisk, VDIOCTXTXDIR enmTxDir,
+DECLINLINE(PVDIOCTX) vdIoCtxRootAlloc(PVDISK pDisk, VDIOCTXTXDIR enmTxDir,
                                       uint64_t uOffset, size_t cbTransfer,
-                                      PVDIMAGE pImageStart, PCRTSGBUF pcSgBuf,
+                                      PVDIMAGE pImageStart, PCRTSGBUF pSgBuf,
                                       PFNVDASYNCTRANSFERCOMPLETE pfnComplete,
                                       void *pvUser1, void *pvUser2,
                                       void *pvAllocation,
@@ -1405,7 +1034,7 @@ DECLINLINE(PVDIOCTX) vdIoCtxRootAlloc(PVBOXHDD pDisk, VDIOCTXTXDIR enmTxDir,
                                       uint32_t fFlags)
 {
     PVDIOCTX pIoCtx = vdIoCtxAlloc(pDisk, enmTxDir, uOffset, cbTransfer, pImageStart,
-                                   pcSgBuf, pvAllocation, pfnIoCtxTransfer, fFlags);
+                                   pSgBuf, pvAllocation, pfnIoCtxTransfer, fFlags);
 
     if (RT_LIKELY(pIoCtx))
     {
@@ -1419,7 +1048,7 @@ DECLINLINE(PVDIOCTX) vdIoCtxRootAlloc(PVBOXHDD pDisk, VDIOCTXTXDIR enmTxDir,
     return pIoCtx;
 }
 
-DECLINLINE(void) vdIoCtxDiscardInit(PVDIOCTX pIoCtx, PVBOXHDD pDisk, PCRTRANGE paRanges,
+DECLINLINE(void) vdIoCtxDiscardInit(PVDIOCTX pIoCtx, PVDISK pDisk, PCRTRANGE paRanges,
                                     unsigned cRanges, PFNVDASYNCTRANSFERCOMPLETE pfnComplete,
                                     void *pvUser1, void *pvUser2, void *pvAllocation,
                                     PFNVDIOCTXTRANSFER pfnIoCtxTransfer, uint32_t fFlags)
@@ -1448,7 +1077,7 @@ DECLINLINE(void) vdIoCtxDiscardInit(PVDIOCTX pIoCtx, PVBOXHDD pDisk, PCRTRANGE p
     pIoCtx->Type.Root.pvUser2     = pvUser2;
 }
 
-DECLINLINE(PVDIOCTX) vdIoCtxDiscardAlloc(PVBOXHDD pDisk, PCRTRANGE paRanges,
+DECLINLINE(PVDIOCTX) vdIoCtxDiscardAlloc(PVDISK pDisk, PCRTRANGE paRanges,
                                          unsigned cRanges,
                                          PFNVDASYNCTRANSFERCOMPLETE pfnComplete,
                                          void *pvUser1, void *pvUser2,
@@ -1469,15 +1098,15 @@ DECLINLINE(PVDIOCTX) vdIoCtxDiscardAlloc(PVBOXHDD pDisk, PCRTRANGE paRanges,
     return pIoCtx;
 }
 
-DECLINLINE(PVDIOCTX) vdIoCtxChildAlloc(PVBOXHDD pDisk, VDIOCTXTXDIR enmTxDir,
+DECLINLINE(PVDIOCTX) vdIoCtxChildAlloc(PVDISK pDisk, VDIOCTXTXDIR enmTxDir,
                                        uint64_t uOffset, size_t cbTransfer,
-                                       PVDIMAGE pImageStart, PCRTSGBUF pcSgBuf,
+                                       PVDIMAGE pImageStart, PCRTSGBUF pSgBuf,
                                        PVDIOCTX pIoCtxParent, size_t cbTransferParent,
                                        size_t cbWriteParent, void *pvAllocation,
                                        PFNVDIOCTXTRANSFER pfnIoCtxTransfer)
 {
     PVDIOCTX pIoCtx = vdIoCtxAlloc(pDisk, enmTxDir, uOffset, cbTransfer, pImageStart,
-                                   pcSgBuf, pvAllocation, pfnIoCtxTransfer, pIoCtxParent->fFlags & ~VDIOCTX_FLAGS_DONT_FREE);
+                                   pSgBuf, pvAllocation, pfnIoCtxTransfer, pIoCtxParent->fFlags & ~VDIOCTX_FLAGS_DONT_FREE);
 
     AssertPtr(pIoCtxParent);
     Assert(!pIoCtxParent->pIoCtxParent);
@@ -1530,7 +1159,7 @@ DECLINLINE(PVDIOTASK) vdIoTaskMetaAlloc(PVDIOSTORAGE pIoStorage, PFNVDXFERCOMPLE
     return pIoTask;
 }
 
-DECLINLINE(void) vdIoCtxFree(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
+DECLINLINE(void) vdIoCtxFree(PVDISK pDisk, PVDIOCTX pIoCtx)
 {
     Log(("Freeing I/O context %#p\n", pIoCtx));
 
@@ -1545,7 +1174,7 @@ DECLINLINE(void) vdIoCtxFree(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
     }
 }
 
-DECLINLINE(void) vdIoTaskFree(PVBOXHDD pDisk, PVDIOTASK pIoTask)
+DECLINLINE(void) vdIoTaskFree(PVDISK pDisk, PVDIOTASK pIoTask)
 {
 #ifdef DEBUG
     memset(pIoTask, 0xff, sizeof(VDIOTASK));
@@ -1565,7 +1194,7 @@ DECLINLINE(void) vdIoCtxChildReset(PVDIOCTX pIoCtx)
 
 DECLINLINE(PVDMETAXFER) vdMetaXferAlloc(PVDIOSTORAGE pIoStorage, uint64_t uOffset, size_t cb)
 {
-    PVDMETAXFER pMetaXfer = (PVDMETAXFER)RTMemAlloc(RT_OFFSETOF(VDMETAXFER, abData[cb]));
+    PVDMETAXFER pMetaXfer = (PVDMETAXFER)RTMemAlloc(RT_UOFFSETOF_DYN(VDMETAXFER, abData[cb]));
 
     if (RT_LIKELY(pMetaXfer))
     {
@@ -1597,7 +1226,7 @@ DECLINLINE(void) vdIoCtxAddToWaitingList(volatile PVDIOCTX *ppList, PVDIOCTX pIo
     }
 }
 
-DECLINLINE(void) vdIoCtxDefer(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
+DECLINLINE(void) vdIoCtxDefer(PVDISK pDisk, PVDIOCTX pIoCtx)
 {
     LogFlowFunc(("Deferring I/O context pIoCtx=%#p\n", pIoCtx));
 
@@ -1761,7 +1390,7 @@ static int vdIoCtxProcessLocked(PVDIOCTX pIoCtx)
  *                   The status code is returned. NULL if there is no I/O context
  *                   to return the status code for.
  */
-static int vdDiskProcessWaitingIoCtx(PVBOXHDD pDisk, PVDIOCTX pIoCtxRc)
+static int vdDiskProcessWaitingIoCtx(PVDISK pDisk, PVDIOCTX pIoCtxRc)
 {
     int rc = VERR_VD_ASYNC_IO_IN_PROGRESS;
 
@@ -1831,8 +1460,12 @@ static int vdDiskProcessWaitingIoCtx(PVBOXHDD pDisk, PVDIOCTX pIoCtxRc)
         {
             LogFlowFunc(("Waiting I/O context completed pTmp=%#p\n", pTmp));
             vdThreadFinishWrite(pDisk);
+
+            bool fFreeCtx = RT_BOOL(!(pTmp->fFlags & VDIOCTX_FLAGS_DONT_FREE));
             vdIoCtxRootComplete(pDisk, pTmp);
-            vdIoCtxFree(pDisk, pTmp);
+
+            if (fFreeCtx)
+                vdIoCtxFree(pDisk, pTmp);
         }
     }
 
@@ -1846,7 +1479,7 @@ static int vdDiskProcessWaitingIoCtx(PVBOXHDD pDisk, PVDIOCTX pIoCtxRc)
  * @returns nothing.
  * @param   pDisk    The disk structure.
  */
-static void vdDiskProcessBlockedIoCtx(PVBOXHDD pDisk)
+static void vdDiskProcessBlockedIoCtx(PVDISK pDisk)
 {
     LogFlowFunc(("pDisk=%#p\n", pDisk));
 
@@ -1886,8 +1519,11 @@ static void vdDiskProcessBlockedIoCtx(PVBOXHDD pDisk)
         {
             LogFlowFunc(("Waiting I/O context completed pTmp=%#p\n", pTmp));
             vdThreadFinishWrite(pDisk);
+
+            bool fFreeCtx = RT_BOOL(!(pTmp->fFlags & VDIOCTX_FLAGS_DONT_FREE));
             vdIoCtxRootComplete(pDisk, pTmp);
-            vdIoCtxFree(pDisk, pTmp);
+            if (fFreeCtx)
+                vdIoCtxFree(pDisk, pTmp);
         }
     }
 
@@ -1904,7 +1540,7 @@ static void vdDiskProcessBlockedIoCtx(PVBOXHDD pDisk)
 static int vdIoCtxProcessTryLockDefer(PVDIOCTX pIoCtx)
 {
     int rc = VINF_SUCCESS;
-    PVBOXHDD pDisk = pIoCtx->pDisk;
+    PVDISK pDisk = pIoCtx->pDisk;
 
     Log(("Defer pIoCtx=%#p\n", pIoCtx));
 
@@ -1937,7 +1573,7 @@ static int vdIoCtxProcessTryLockDefer(PVDIOCTX pIoCtx)
 static int vdIoCtxProcessSync(PVDIOCTX pIoCtx, RTSEMEVENT hEventComplete)
 {
     int rc = VINF_SUCCESS;
-    PVBOXHDD pDisk = pIoCtx->pDisk;
+    PVDISK pDisk = pIoCtx->pDisk;
 
     LogFlowFunc(("pIoCtx=%p\n", pIoCtx));
 
@@ -1960,12 +1596,12 @@ static int vdIoCtxProcessSync(PVDIOCTX pIoCtx, RTSEMEVENT hEventComplete)
     return rc;
 }
 
-DECLINLINE(bool) vdIoCtxIsDiskLockOwner(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
+DECLINLINE(bool) vdIoCtxIsDiskLockOwner(PVDISK pDisk, PVDIOCTX pIoCtx)
 {
     return pDisk->pIoCtxLockOwner == pIoCtx;
 }
 
-static int vdIoCtxLockDisk(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
+static int vdIoCtxLockDisk(PVDISK pDisk, PVDIOCTX pIoCtx)
 {
     int rc = VINF_SUCCESS;
 
@@ -1984,7 +1620,7 @@ static int vdIoCtxLockDisk(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
     return rc;
 }
 
-static void vdIoCtxUnlockDisk(PVBOXHDD pDisk, PVDIOCTX pIoCtx, bool fProcessBlockedReqs)
+static void vdIoCtxUnlockDisk(PVDISK pDisk, PVDIOCTX pIoCtx, bool fProcessBlockedReqs)
 {
     RT_NOREF1(pIoCtx);
     LogFlowFunc(("pDisk=%#p pIoCtx=%#p fProcessBlockedReqs=%RTbool\n",
@@ -2008,7 +1644,7 @@ static void vdIoCtxUnlockDisk(PVBOXHDD pDisk, PVDIOCTX pIoCtx, bool fProcessBloc
 /**
  * Internal: Reads a given amount of data from the image chain of the disk.
  **/
-static int vdDiskReadHelper(PVBOXHDD pDisk, PVDIMAGE pImage, PVDIMAGE pImageParentOverride,
+static int vdDiskReadHelper(PVDISK pDisk, PVDIMAGE pImage, PVDIMAGE pImageParentOverride,
                             uint64_t uOffset, size_t cbRead, PVDIOCTX pIoCtx, size_t *pcbThisRead)
 {
     RT_NOREF1(pDisk);
@@ -2052,7 +1688,7 @@ static int vdDiskReadHelper(PVBOXHDD pDisk, PVDIMAGE pImage, PVDIMAGE pImagePare
 static DECLCALLBACK(int) vdReadHelperAsync(PVDIOCTX pIoCtx)
 {
     int rc;
-    PVBOXHDD pDisk                = pIoCtx->pDisk;
+    PVDISK pDisk                = pIoCtx->pDisk;
     size_t cbToRead               = pIoCtx->Req.Io.cbTransfer;
     uint64_t uOffset              = pIoCtx->Req.Io.uOffset;
     PVDIMAGE pCurrImage           = pIoCtx->Req.Io.pImageCur;
@@ -2257,7 +1893,7 @@ static DECLCALLBACK(int) vdParentRead(void *pvUser, uint64_t uOffset, void *pvBu
  * @param   cImagesRead             Number of images in the chain to read until
  *                                  the read is cut off. A value of 0 disables the cut off.
  */
-static int vdReadHelperEx(PVBOXHDD pDisk, PVDIMAGE pImage, PVDIMAGE pImageParentOverride,
+static int vdReadHelperEx(PVDISK pDisk, PVDIMAGE pImage, PVDIMAGE pImageParentOverride,
                           uint64_t uOffset, void *pvBuf, size_t cbRead,
                           bool fZeroFreeBlocks, bool fUpdateCache, unsigned cImagesRead)
 {
@@ -2297,7 +1933,7 @@ static int vdReadHelperEx(PVBOXHDD pDisk, PVDIMAGE pImage, PVDIMAGE pImageParent
  * internal: read the specified amount of data in whatever blocks the backend
  * will give us.
  */
-static int vdReadHelper(PVBOXHDD pDisk, PVDIMAGE pImage, uint64_t uOffset,
+static int vdReadHelper(PVDISK pDisk, PVDIMAGE pImage, uint64_t uOffset,
                         void *pvBuf, size_t cbRead, bool fUpdateCache)
 {
     return vdReadHelperEx(pDisk, pImage, NULL, uOffset, pvBuf, cbRead,
@@ -2307,7 +1943,7 @@ static int vdReadHelper(PVBOXHDD pDisk, PVDIMAGE pImage, uint64_t uOffset,
 /**
  * internal: mark the disk as not modified.
  */
-static void vdResetModifiedFlag(PVBOXHDD pDisk)
+static void vdResetModifiedFlag(PVDISK pDisk)
 {
     if (pDisk->uModified & VD_IMAGE_MODIFIED_FLAG)
     {
@@ -2332,7 +1968,7 @@ static void vdResetModifiedFlag(PVBOXHDD pDisk)
 /**
  * internal: mark the disk as modified.
  */
-static void vdSetModifiedFlag(PVBOXHDD pDisk)
+static void vdSetModifiedFlag(PVDISK pDisk)
 {
     pDisk->uModified |= VD_IMAGE_MODIFIED_FLAG;
     if (pDisk->uModified & VD_IMAGE_MODIFIED_FIRST)
@@ -2356,7 +1992,7 @@ static void vdSetModifiedFlag(PVBOXHDD pDisk)
  * internal: write buffer to the image, taking care of block boundaries and
  * write optimizations.
  */
-static int vdWriteHelperEx(PVBOXHDD pDisk, PVDIMAGE pImage,
+static int vdWriteHelperEx(PVDISK pDisk, PVDIMAGE pImage,
                            PVDIMAGE pImageParentOverride, uint64_t uOffset,
                            const void *pvBuf, size_t cbWrite,
                            uint32_t fFlags, unsigned cImagesRead)
@@ -2396,7 +2032,7 @@ static int vdWriteHelperEx(PVBOXHDD pDisk, PVDIMAGE pImage,
  * internal: write buffer to the image, taking care of block boundaries and
  * write optimizations.
  */
-static int vdWriteHelper(PVBOXHDD pDisk, PVDIMAGE pImage, uint64_t uOffset,
+static int vdWriteHelper(PVDISK pDisk, PVDIMAGE pImage, uint64_t uOffset,
                          const void *pvBuf, size_t cbWrite, uint32_t fFlags)
 {
     return vdWriteHelperEx(pDisk, pImage, NULL, uOffset, pvBuf, cbWrite,
@@ -2407,7 +2043,7 @@ static int vdWriteHelper(PVBOXHDD pDisk, PVDIMAGE pImage, uint64_t uOffset,
  * Internal: Copies the content of one disk to another one applying optimizations
  * to speed up the copy process if possible.
  */
-static int vdCopyHelper(PVBOXHDD pDiskFrom, PVDIMAGE pImageFrom, PVBOXHDD pDiskTo,
+static int vdCopyHelper(PVDISK pDiskFrom, PVDIMAGE pImageFrom, PVDISK pDiskTo,
                         uint64_t cbSize, unsigned cImagesFromRead, unsigned cImagesToRead,
                         bool fSuppressRedundantIo, PVDINTERFACEPROGRESS pIfProgress,
                         PVDINTERFACEPROGRESS pDstIfProgress)
@@ -2575,7 +2211,7 @@ static DECLCALLBACK(int) vdSetModifiedHelperAsync(PVDIOCTX pIoCtx)
 /**
  * internal: mark the disk as modified - async version.
  */
-static int vdSetModifiedFlagAsync(PVBOXHDD pDisk, PVDIOCTX pIoCtx)
+static int vdSetModifiedFlagAsync(PVDISK pDisk, PVDIOCTX pIoCtx)
 {
     int rc = VINF_SUCCESS;
 
@@ -2760,7 +2396,7 @@ static DECLCALLBACK(int) vdWriteHelperOptimizedPreReadAsync(PVDIOCTX pIoCtx)
  */
 static DECLCALLBACK(int) vdWriteHelperOptimizedAsync(PVDIOCTX pIoCtx)
 {
-    PVBOXHDD pDisk = pIoCtx->pDisk;
+    PVDISK pDisk = pIoCtx->pDisk;
     uint64_t uOffset   = pIoCtx->Type.Child.uOffsetSaved;
     size_t cbThisWrite = pIoCtx->Type.Child.cbTransferParent;
     size_t cbPreRead   = pIoCtx->Type.Child.cbPreRead;
@@ -2930,7 +2566,7 @@ static DECLCALLBACK(int) vdWriteHelperStandardPreReadAsync(PVDIOCTX pIoCtx)
 
 static DECLCALLBACK(int) vdWriteHelperStandardAsync(PVDIOCTX pIoCtx)
 {
-    PVBOXHDD pDisk = pIoCtx->pDisk;
+    PVDISK pDisk = pIoCtx->pDisk;
     uint64_t uOffset   = pIoCtx->Type.Child.uOffsetSaved;
     size_t cbThisWrite = pIoCtx->Type.Child.cbTransferParent;
     size_t cbPreRead   = pIoCtx->Type.Child.cbPreRead;
@@ -2995,7 +2631,7 @@ static DECLCALLBACK(int) vdWriteHelperAsync(PVDIOCTX pIoCtx)
     size_t cbWrite   = pIoCtx->Req.Io.cbTransfer;
     uint64_t uOffset = pIoCtx->Req.Io.uOffset;
     PVDIMAGE pImage  = pIoCtx->Req.Io.pImageCur;
-    PVBOXHDD pDisk   = pIoCtx->pDisk;
+    PVDISK pDisk   = pIoCtx->pDisk;
     unsigned fWrite;
     size_t cbThisWrite;
     size_t cbPreRead, cbPostRead;
@@ -3077,7 +2713,7 @@ static DECLCALLBACK(int) vdWriteHelperAsync(PVDIOCTX pIoCtx)
                                                            (pImage->uOpenFlags & VD_OPEN_FLAGS_HONOR_SAME)
                                                          ? vdWriteHelperStandardAsync
                                                          : vdWriteHelperOptimizedAsync);
-                if (!VALID_PTR(pIoCtxWrite))
+                if (!pIoCtxWrite)
                 {
                     RTMemTmpFree(pTmp);
                     rc = VERR_NO_MEMORY;
@@ -3172,7 +2808,7 @@ static DECLCALLBACK(int) vdWriteHelperAsync(PVDIOCTX pIoCtx)
 static DECLCALLBACK(int) vdFlushHelperAsync(PVDIOCTX pIoCtx)
 {
     int rc = VINF_SUCCESS;
-    PVBOXHDD pDisk = pIoCtx->pDisk;
+    PVDISK pDisk = pIoCtx->pDisk;
     PVDIMAGE pImage = pIoCtx->Req.Io.pImageCur;
 
     rc = vdIoCtxLockDisk(pDisk, pIoCtx);
@@ -3216,7 +2852,7 @@ static DECLCALLBACK(int) vdFlushHelperAsync(PVDIOCTX pIoCtx)
 static DECLCALLBACK(int) vdDiscardWholeBlockAsync(PVDIOCTX pIoCtx)
 {
     int rc = VINF_SUCCESS;
-    PVBOXHDD pDisk = pIoCtx->pDisk;
+    PVDISK pDisk = pIoCtx->pDisk;
     PVDDISCARDSTATE pDiscard = pDisk->pDiscard;
     PVDDISCARDBLOCK pBlock = pIoCtx->Req.Discard.pBlock;
     size_t cbPreAllocated, cbPostAllocated, cbActuallyDiscarded;
@@ -3264,7 +2900,7 @@ static DECLCALLBACK(int) vdDiscardWholeBlockAsync(PVDIOCTX pIoCtx)
  * @param   cbDiscardingNew    How many bytes should be waiting on success.
  *                             The number of bytes waiting can be less.
  */
-static int vdDiscardRemoveBlocksAsync(PVBOXHDD pDisk, PVDIOCTX pIoCtx, size_t cbDiscardingNew)
+static int vdDiscardRemoveBlocksAsync(PVDISK pDisk, PVDIOCTX pIoCtx, size_t cbDiscardingNew)
 {
     int rc = VINF_SUCCESS;
     PVDDISCARDSTATE pDiscard = pDisk->pDiscard;
@@ -3353,7 +2989,7 @@ static int vdDiscardRemoveBlocksAsync(PVBOXHDD pDisk, PVDIOCTX pIoCtx, size_t cb
  */
 static DECLCALLBACK(int) vdDiscardCurrentRangeAsync(PVDIOCTX pIoCtx)
 {
-    PVBOXHDD        pDisk         = pIoCtx->pDisk;
+    PVDISK        pDisk         = pIoCtx->pDisk;
     PVDDISCARDSTATE pDiscard      = pDisk->pDiscard;
     uint64_t        offStart      = pIoCtx->Req.Discard.offCur;
     size_t          cbThisDiscard = pIoCtx->Req.Discard.cbThisDiscard;
@@ -3427,7 +3063,7 @@ static DECLCALLBACK(int) vdDiscardCurrentRangeAsync(PVDIOCTX pIoCtx)
 static DECLCALLBACK(int) vdDiscardHelperAsync(PVDIOCTX pIoCtx)
 {
     int rc             = VINF_SUCCESS;
-    PVBOXHDD  pDisk    = pIoCtx->pDisk;
+    PVDISK  pDisk    = pIoCtx->pDisk;
     PCRTRANGE paRanges = pIoCtx->Req.Discard.paRanges;
     unsigned  cRanges  = pIoCtx->Req.Discard.cRanges;
     PVDDISCARDSTATE pDiscard = pDisk->pDiscard;
@@ -3537,426 +3173,6 @@ static DECLCALLBACK(int) vdDiscardHelperAsync(PVDIOCTX pIoCtx)
     return rc;
 }
 
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-
-/**
- * @interface_method_impl{VDBACKENDREGISTER,pfnRegisterImage}
- */
-static DECLCALLBACK(int) vdPluginRegisterImage(void *pvUser, PCVDIMAGEBACKEND pBackend)
-{
-    int rc = VINF_SUCCESS;
-
-    if (VD_VERSION_ARE_COMPATIBLE(VD_IMGBACKEND_VERSION, pBackend->u32Version))
-        vdAddBackend((RTLDRMOD)pvUser, pBackend);
-    else
-    {
-        LogFunc(("ignored plugin: pBackend->u32Version=%u rc=%Rrc\n", pBackend->u32Version, rc));
-        rc = VERR_IGNORED;
-    }
-
-    return rc;
-}
-
-/**
- * @interface_method_impl{VDBACKENDREGISTER,pfnRegisterCache}
- */
-static DECLCALLBACK(int) vdPluginRegisterCache(void *pvUser, PCVDCACHEBACKEND pBackend)
-{
-    int rc = VINF_SUCCESS;
-
-    if (VD_VERSION_ARE_COMPATIBLE(VD_CACHEBACKEND_VERSION, pBackend->u32Version))
-        vdAddCacheBackend((RTLDRMOD)pvUser, pBackend);
-    else
-    {
-        LogFunc(("ignored plugin: pBackend->u32Version=%u rc=%Rrc\n", pBackend->u32Version, rc));
-        rc = VERR_IGNORED;
-    }
-
-    return rc;
-}
-
-/**
- * @interface_method_impl{VDBACKENDREGISTER,pfnRegisterFilter}
- */
-static DECLCALLBACK(int) vdPluginRegisterFilter(void *pvUser, PCVDFILTERBACKEND pBackend)
-{
-    int rc = VINF_SUCCESS;
-
-    if (VD_VERSION_ARE_COMPATIBLE(VD_FLTBACKEND_VERSION, pBackend->u32Version))
-        vdAddFilterBackend((RTLDRMOD)pvUser, pBackend);
-    else
-    {
-        LogFunc(("ignored plugin: pBackend->u32Version=%u rc=%Rrc\n", pBackend->u32Version, rc));
-        rc = VERR_IGNORED;
-    }
-
-    return rc;
-}
-
-/**
- * Checks whether the given plugin filename was already loaded.
- *
- * @returns Pointer to already loaded plugin, NULL if not found.
- * @param   pszFilename    The filename to check.
- */
-static PVDPLUGIN vdPluginFind(const char *pszFilename)
-{
-    PVDPLUGIN pIt;
-    RTListForEach(&g_ListPluginsLoaded, pIt, VDPLUGIN, NodePlugin)
-    {
-        if (!RTStrCmp(pIt->pszFilename, pszFilename))
-            return pIt;
-    }
-
-    return NULL;
-}
-
-/**
- * Adds a plugin to the list of loaded plugins.
- *
- * @returns VBox status code.
- * @param   hPlugin     Plugin handle to add.
- * @param   pszFilename The associated filename, used for finding duplicates.
- */
-static int vdAddPlugin(RTLDRMOD hPlugin, const char *pszFilename)
-{
-    int rc = VINF_SUCCESS;
-    PVDPLUGIN pPlugin = (PVDPLUGIN)RTMemAllocZ(sizeof(VDPLUGIN));
-
-    if (pPlugin)
-    {
-        pPlugin->hPlugin = hPlugin;
-        pPlugin->pszFilename = RTStrDup(pszFilename);
-        if (pPlugin->pszFilename)
-            RTListAppend(&g_ListPluginsLoaded, &pPlugin->NodePlugin);
-        else
-        {
-            RTMemFree(pPlugin);
-            rc = VERR_NO_MEMORY;
-        }
-    }
-    else
-        rc = VERR_NO_MEMORY;
-
-    return rc;
-}
-
-static int vdRemovePlugin(const char *pszFilename)
-{
-    /* Find plugin to be removed from the list. */
-    PVDPLUGIN pIt = vdPluginFind(pszFilename);
-    if (!pIt)
-        return VINF_SUCCESS;
-
-    /** @todo r=klaus: need to add a plugin entry point for unregistering the
-     * backends. Only if this doesn't exist (or fails to work) we should fall
-     * back to the following uncoordinated backend cleanup. */
-    for (unsigned i = 0; i < g_cBackends; i++)
-    {
-        while (i < g_cBackends && g_ahBackendPlugins[i] == pIt->hPlugin)
-        {
-            memcpy(&g_apBackends[i], &g_apBackends[i + 1], (g_cBackends - i - 1) * sizeof(PCVDIMAGEBACKEND));
-            memcpy(&g_ahBackendPlugins[i], &g_ahBackendPlugins[i + 1], (g_cBackends - i - 1) * sizeof(RTLDRMOD));
-            /** @todo for now skip reallocating, doesn't save much */
-            g_cBackends--;
-        }
-    }
-    for (unsigned i = 0; i < g_cCacheBackends; i++)
-    {
-        while (i < g_cCacheBackends && g_ahCacheBackendPlugins[i] == pIt->hPlugin)
-        {
-            memcpy(&g_apCacheBackends[i], &g_apCacheBackends[i + 1], (g_cCacheBackends - i - 1) * sizeof(PCVDCACHEBACKEND));
-            memcpy(&g_ahCacheBackendPlugins[i], &g_ahCacheBackendPlugins[i + 1], (g_cCacheBackends - i - 1) * sizeof(RTLDRMOD));
-            /** @todo for now skip reallocating, doesn't save much */
-            g_cCacheBackends--;
-        }
-    }
-    for (unsigned i = 0; i < g_cFilterBackends; i++)
-    {
-        while (i < g_cFilterBackends && g_pahFilterBackendPlugins[i] == pIt->hPlugin)
-        {
-            memcpy(&g_apFilterBackends[i], &g_apFilterBackends[i + 1], (g_cFilterBackends - i - 1) * sizeof(PCVDFILTERBACKEND));
-            memcpy(&g_pahFilterBackendPlugins[i], &g_pahFilterBackendPlugins[i + 1], (g_cFilterBackends - i - 1) * sizeof(RTLDRMOD));
-            /** @todo for now skip reallocating, doesn't save much */
-            g_cFilterBackends--;
-        }
-    }
-
-    /* Remove the plugin node now, all traces of it are gone. */
-    RTListNodeRemove(&pIt->NodePlugin);
-    RTLdrClose(pIt->hPlugin);
-    RTStrFree(pIt->pszFilename);
-    RTMemFree(pIt);
-
-    return VINF_SUCCESS;
-}
-
-#endif /* !VBOX_HDD_NO_DYNAMIC_BACKENDS */
-
-/**
- * Worker for VDPluginLoadFromFilename() and vdPluginLoadFromPath().
- *
- * @returns VBox status code.
- * @param   pszFilename    The plugin filename to load.
- */
-static int vdPluginLoadFromFilename(const char *pszFilename)
-{
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-    /* Plugin loaded? Nothing to do. */
-    if (vdPluginFind(pszFilename))
-        return VINF_SUCCESS;
-
-    RTLDRMOD hPlugin = NIL_RTLDRMOD;
-    int rc = SUPR3HardenedLdrLoadPlugIn(pszFilename, &hPlugin, NULL);
-    if (RT_SUCCESS(rc))
-    {
-        VDBACKENDREGISTER BackendRegister;
-        PFNVDPLUGINLOAD pfnVDPluginLoad = NULL;
-
-        BackendRegister.u32Version        = VD_BACKENDREG_CB_VERSION;
-        BackendRegister.pfnRegisterImage  = vdPluginRegisterImage;
-        BackendRegister.pfnRegisterCache  = vdPluginRegisterCache;
-        BackendRegister.pfnRegisterFilter = vdPluginRegisterFilter;
-
-        rc = RTLdrGetSymbol(hPlugin, VD_PLUGIN_LOAD_NAME, (void**)&pfnVDPluginLoad);
-        if (RT_FAILURE(rc) || !pfnVDPluginLoad)
-        {
-            LogFunc(("error resolving the entry point %s in plugin %s, rc=%Rrc, pfnVDPluginLoad=%#p\n",
-                     VD_PLUGIN_LOAD_NAME, pszFilename, rc, pfnVDPluginLoad));
-            if (RT_SUCCESS(rc))
-                rc = VERR_SYMBOL_NOT_FOUND;
-        }
-
-        if (RT_SUCCESS(rc))
-        {
-            /* Get the function table. */
-            rc = pfnVDPluginLoad(hPlugin, &BackendRegister);
-        }
-        else
-            LogFunc(("ignored plugin '%s': rc=%Rrc\n", pszFilename, rc));
-
-        /* Create a plugin entry on success. */
-        if (RT_SUCCESS(rc))
-            vdAddPlugin(hPlugin, pszFilename);
-        else
-            RTLdrClose(hPlugin);
-    }
-
-    return rc;
-#else
-    RT_NOREF1(pszFilename);
-    return VERR_NOT_IMPLEMENTED;
-#endif
-}
-
-/**
- * Worker for VDPluginLoadFromPath() and vdLoadDynamicBackends().
- *
- * @returns VBox status code.
- * @param   pszPath        The path to load plugins from.
- */
-static int vdPluginLoadFromPath(const char *pszPath)
-{
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-    /* To get all entries with VBoxHDD as prefix. */
-    char *pszPluginFilter = RTPathJoinA(pszPath, VD_PLUGIN_PREFIX "*");
-    if (!pszPluginFilter)
-        return VERR_NO_STR_MEMORY;
-
-    PRTDIRENTRYEX pPluginDirEntry = NULL;
-    PRTDIR pPluginDir = NULL;
-    size_t cbPluginDirEntry = sizeof(RTDIRENTRYEX);
-    int rc = RTDirOpenFiltered(&pPluginDir, pszPluginFilter, RTDIRFILTER_WINNT, 0);
-    if (RT_SUCCESS(rc))
-    {
-        pPluginDirEntry = (PRTDIRENTRYEX)RTMemAllocZ(sizeof(RTDIRENTRYEX));
-        if (pPluginDirEntry)
-        {
-            while (   (rc = RTDirReadEx(pPluginDir, pPluginDirEntry, &cbPluginDirEntry, RTFSOBJATTRADD_NOTHING, RTPATH_F_ON_LINK))
-                   != VERR_NO_MORE_FILES)
-            {
-                char *pszPluginPath = NULL;
-
-                if (rc == VERR_BUFFER_OVERFLOW)
-                {
-                    /* allocate new buffer. */
-                    RTMemFree(pPluginDirEntry);
-                    pPluginDirEntry = (PRTDIRENTRYEX)RTMemAllocZ(cbPluginDirEntry);
-                    if (!pPluginDirEntry)
-                    {
-                        rc = VERR_NO_MEMORY;
-                        break;
-                    }
-                    /* Retry. */
-                    rc = RTDirReadEx(pPluginDir, pPluginDirEntry, &cbPluginDirEntry, RTFSOBJATTRADD_NOTHING, RTPATH_F_ON_LINK);
-                    if (RT_FAILURE(rc))
-                        break;
-                }
-                else if (RT_FAILURE(rc))
-                    break;
-
-                /* We got the new entry. */
-                if (!RTFS_IS_FILE(pPluginDirEntry->Info.Attr.fMode))
-                    continue;
-
-                /* Prepend the path to the libraries. */
-                pszPluginPath = RTPathJoinA(pszPath, pPluginDirEntry->szName);
-                if (!pszPluginPath)
-                {
-                    rc = VERR_NO_STR_MEMORY;
-                    break;
-                }
-
-                rc = vdPluginLoadFromFilename(pszPluginPath);
-                RTStrFree(pszPluginPath);
-            }
-
-            RTMemFree(pPluginDirEntry);
-        }
-        else
-            rc = VERR_NO_MEMORY;
-
-        RTDirClose(pPluginDir);
-    }
-    else
-    {
-        /* On Windows the above immediately signals that there are no
-         * files matching, while on other platforms enumerating the
-         * files below fails. Either way: no plugins. */
-    }
-
-    if (rc == VERR_NO_MORE_FILES)
-        rc = VINF_SUCCESS;
-    RTStrFree(pszPluginFilter);
-    return rc;
-#else
-    RT_NOREF1(pszPath);
-    return VERR_NOT_IMPLEMENTED;
-#endif
-}
-
-/**
- * internal: scans plugin directory and loads found plugins.
- */
-static int vdLoadDynamicBackends(void)
-{
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-    /*
-     * Enumerate plugin backends from the application directory where the other
-     * shared libraries are.
-     */
-    char szPath[RTPATH_MAX];
-    int rc = RTPathAppPrivateArch(szPath, sizeof(szPath));
-    if (RT_FAILURE(rc))
-        return rc;
-
-    return vdPluginLoadFromPath(szPath);
-#else
-    return VINF_SUCCESS;
-#endif
-}
-
-/**
- * Worker for VDPluginUnloadFromFilename() and vdPluginUnloadFromPath().
- *
- * @returns VBox status code.
- * @param   pszFilename    The plugin filename to unload.
- */
-static int vdPluginUnloadFromFilename(const char *pszFilename)
-{
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-    return vdRemovePlugin(pszFilename);
-#else
-    RT_NOREF1(pszFilename);
-    return VERR_NOT_IMPLEMENTED;
-#endif
-}
-
-/**
- * Worker for VDPluginUnloadFromPath().
- *
- * @returns VBox status code.
- * @param   pszPath        The path to unload plugins from.
- */
-static int vdPluginUnloadFromPath(const char *pszPath)
-{
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-    /* To get all entries with VBoxHDD as prefix. */
-    char *pszPluginFilter = RTPathJoinA(pszPath, VD_PLUGIN_PREFIX "*");
-    if (!pszPluginFilter)
-        return VERR_NO_STR_MEMORY;
-
-    PRTDIRENTRYEX pPluginDirEntry = NULL;
-    PRTDIR pPluginDir = NULL;
-    size_t cbPluginDirEntry = sizeof(RTDIRENTRYEX);
-    int rc = RTDirOpenFiltered(&pPluginDir, pszPluginFilter, RTDIRFILTER_WINNT, 0);
-    if (RT_SUCCESS(rc))
-    {
-        pPluginDirEntry = (PRTDIRENTRYEX)RTMemAllocZ(sizeof(RTDIRENTRYEX));
-        if (pPluginDirEntry)
-        {
-            while ((rc = RTDirReadEx(pPluginDir, pPluginDirEntry, &cbPluginDirEntry, RTFSOBJATTRADD_NOTHING, RTPATH_F_ON_LINK)) != VERR_NO_MORE_FILES)
-            {
-                char *pszPluginPath = NULL;
-
-                if (rc == VERR_BUFFER_OVERFLOW)
-                {
-                    /* allocate new buffer. */
-                    RTMemFree(pPluginDirEntry);
-                    pPluginDirEntry = (PRTDIRENTRYEX)RTMemAllocZ(cbPluginDirEntry);
-                    if (!pPluginDirEntry)
-                    {
-                        rc = VERR_NO_MEMORY;
-                        break;
-                    }
-                    /* Retry. */
-                    rc = RTDirReadEx(pPluginDir, pPluginDirEntry, &cbPluginDirEntry, RTFSOBJATTRADD_NOTHING, RTPATH_F_ON_LINK);
-                    if (RT_FAILURE(rc))
-                        break;
-                }
-                else if (RT_FAILURE(rc))
-                    break;
-
-                /* We got the new entry. */
-                if (!RTFS_IS_FILE(pPluginDirEntry->Info.Attr.fMode))
-                    continue;
-
-                /* Prepend the path to the libraries. */
-                pszPluginPath = RTPathJoinA(pszPath, pPluginDirEntry->szName);
-                if (!pszPluginPath)
-                {
-                    rc = VERR_NO_STR_MEMORY;
-                    break;
-                }
-
-                rc = vdPluginUnloadFromFilename(pszPluginPath);
-                RTStrFree(pszPluginPath);
-            }
-
-            RTMemFree(pPluginDirEntry);
-        }
-        else
-            rc = VERR_NO_MEMORY;
-
-        RTDirClose(pPluginDir);
-    }
-    else
-    {
-        /* On Windows the above immediately signals that there are no
-         * files matching, while on other platforms enumerating the
-         * files below fails. Either way: no plugins. */
-    }
-    
-    if (rc == VERR_NO_MORE_FILES)
-        rc = VINF_SUCCESS;
-    RTStrFree(pszPluginFilter);
-    return rc;
-#else
-    RT_NOREF1(pszPath);
-    return VERR_NOT_IMPLEMENTED;
-#endif
-}
-
 /**
  * VD async I/O interface open callback.
  */
@@ -4033,7 +3249,7 @@ static DECLCALLBACK(int) vdIOGetSizeFallback(void *pvUser, void *pvStorage, uint
     RT_NOREF1(pvUser);
     PVDIIOFALLBACKSTORAGE pStorage = (PVDIIOFALLBACKSTORAGE)pvStorage;
 
-    return RTFileGetSize(pStorage->File, pcbSize);
+    return RTFileQuerySize(pStorage->File, pcbSize);
 }
 
 /**
@@ -4103,6 +3319,7 @@ static DECLCALLBACK(int) vdIOReadAsyncFallback(void *pvUser, void *pStorage, uin
                                                void **ppTask)
 {
     RT_NOREF8(pvUser, pStorage, uOffset, paSegments, cSegments, cbRead, pvCompletion, ppTask);
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -4115,6 +3332,7 @@ static DECLCALLBACK(int) vdIOWriteAsyncFallback(void *pvUser, void *pStorage, ui
                                                 void **ppTask)
 {
     RT_NOREF8(pvUser, pStorage, uOffset, paSegments, cSegments, cbWrite, pvCompletion, ppTask);
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -4125,6 +3343,7 @@ static DECLCALLBACK(int) vdIOFlushAsyncFallback(void *pvUser, void *pStorage,
                                                 void *pvCompletion, void **ppTask)
 {
     RT_NOREF4(pvUser, pStorage, pvCompletion, ppTask);
+    AssertFailed();
     return VERR_NOT_IMPLEMENTED;
 }
 
@@ -4134,7 +3353,7 @@ static DECLCALLBACK(int) vdIOFlushAsyncFallback(void *pvUser, void *pStorage,
  */
 static int vdIoCtxContinue(PVDIOCTX pIoCtx, int rcReq)
 {
-    PVBOXHDD pDisk = pIoCtx->pDisk;
+    PVDISK pDisk = pIoCtx->pDisk;
     int rc = VINF_SUCCESS;
 
     VD_IS_LOCKED(pDisk);
@@ -4151,6 +3370,7 @@ static int vdIoCtxContinue(PVDIOCTX pIoCtx, int rcReq)
             && ASMAtomicCmpXchgBool(&pIoCtx->fComplete, true, false))
         {
             LogFlowFunc(("I/O context completed pIoCtx=%#p\n", pIoCtx));
+            bool fFreeCtx = RT_BOOL(!(pIoCtx->fFlags & VDIOCTX_FLAGS_DONT_FREE));
             if (pIoCtx->pIoCtxParent)
             {
                 PVDIOCTX pIoCtxParent = pIoCtx->pIoCtxParent;
@@ -4188,9 +3408,12 @@ static int vdIoCtxContinue(PVDIOCTX pIoCtx, int rcReq)
                     && ASMAtomicCmpXchgBool(&pIoCtxParent->fComplete, true, false))
                 {
                     LogFlowFunc(("Parent I/O context completed pIoCtxParent=%#p rcReq=%Rrc\n", pIoCtxParent, pIoCtxParent->rcReq));
+                    bool fFreeParentCtx = RT_BOOL(!(pIoCtxParent->fFlags & VDIOCTX_FLAGS_DONT_FREE));
                     vdIoCtxRootComplete(pDisk, pIoCtxParent);
                     vdThreadFinishWrite(pDisk);
-                    vdIoCtxFree(pDisk, pIoCtxParent);
+
+                    if (fFreeParentCtx)
+                        vdIoCtxFree(pDisk, pIoCtxParent);
                     vdDiskProcessBlockedIoCtx(pDisk);
                 }
                 else if (!vdIoCtxIsDiskLockOwner(pDisk, pIoCtx))
@@ -4219,7 +3442,8 @@ static int vdIoCtxContinue(PVDIOCTX pIoCtx, int rcReq)
                 vdIoCtxRootComplete(pDisk, pIoCtx);
             }
 
-            vdIoCtxFree(pDisk, pIoCtx);
+            if (fFreeCtx)
+                vdIoCtxFree(pDisk, pIoCtx);
         }
     }
 
@@ -4234,7 +3458,7 @@ static int vdUserXferCompleted(PVDIOSTORAGE pIoStorage, PVDIOCTX pIoCtx,
                                size_t cbTransfer, int rcReq)
 {
     int rc = VINF_SUCCESS;
-    PVBOXHDD pDisk = pIoCtx->pDisk;
+    PVDISK pDisk = pIoCtx->pDisk;
 
     LogFlowFunc(("pIoStorage=%#p pIoCtx=%#p pfnComplete=%#p pvUser=%#p cbTransfer=%zu rcReq=%Rrc\n",
                  pIoStorage, pIoCtx, pfnComplete, pvUser, cbTransfer, rcReq));
@@ -4294,8 +3518,8 @@ static void vdIoCtxContinueDeferredList(PVDIOSTORAGE pIoStorage, PRTLISTANCHOR p
 static int vdMetaXferCompleted(PVDIOSTORAGE pIoStorage, PFNVDXFERCOMPLETED pfnComplete, void *pvUser,
                                PVDMETAXFER pMetaXfer, int rcReq)
 {
-    PVBOXHDD pDisk = pIoStorage->pVDIo->pDisk;
-    RTLISTNODE ListIoCtxWaiting;
+    PVDISK pDisk = pIoStorage->pVDIo->pDisk;
+    RTLISTANCHOR ListIoCtxWaiting;
     bool fFlush;
 
     LogFlowFunc(("pIoStorage=%#p pfnComplete=%#p pvUser=%#p pMetaXfer=%#p rcReq=%Rrc\n",
@@ -4410,7 +3634,7 @@ static int vdMetaXferCompleted(PVDIOSTORAGE pIoStorage, PFNVDXFERCOMPLETED pfnCo
  * @returns nothing.
  * @param   pDisk    The disk to process the list for.
  */
-static void vdIoTaskProcessWaitingList(PVBOXHDD pDisk)
+static void vdIoTaskProcessWaitingList(PVDISK pDisk)
 {
     LogFlowFunc(("pDisk=%#p\n", pDisk));
 
@@ -4455,7 +3679,7 @@ static void vdIoTaskProcessWaitingList(PVBOXHDD pDisk)
  * @returns nothing.
  * @param   pDisk    The disk.
  */
-static void vdIoCtxProcessHaltedList(PVBOXHDD pDisk)
+static void vdIoCtxProcessHaltedList(PVDISK pDisk)
 {
     LogFlowFunc(("pDisk=%#p\n", pDisk));
 
@@ -4497,7 +3721,7 @@ static void vdIoCtxProcessHaltedList(PVBOXHDD pDisk)
  * @param   pDisk    The disk to unlock.
  * @param   pIoCtxRc The I/O context to get the status code from, optional.
  */
-static int vdDiskUnlock(PVBOXHDD pDisk, PVDIOCTX pIoCtxRc)
+static int vdDiskUnlock(PVDISK pDisk, PVDIOCTX pIoCtxRc)
 {
     int rc = VINF_SUCCESS;
 
@@ -4548,7 +3772,7 @@ static int vdDiskUnlock(PVBOXHDD pDisk, PVDIOCTX pIoCtxRc)
 static void vdXferTryLockDiskDeferIoTask(PVDIOTASK pIoTask)
 {
     PVDIOSTORAGE pIoStorage = pIoTask->pIoStorage;
-    PVBOXHDD pDisk = pIoStorage->pVDIo->pDisk;
+    PVDISK pDisk = pIoStorage->pVDIo->pDisk;
 
     Log(("Deferring I/O task pIoTask=%p\n", pIoTask));
 
@@ -4750,7 +3974,7 @@ static DECLCALLBACK(int) vdIOIntReadUser(void *pvUser, PVDIOSTORAGE pIoStorage, 
 {
     int rc = VINF_SUCCESS;
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
 
     LogFlowFunc(("pvUser=%#p pIoStorage=%#p uOffset=%llu pIoCtx=%#p cbRead=%u\n",
                  pvUser, pIoStorage, uOffset, pIoCtx, cbRead));
@@ -4848,7 +4072,7 @@ static DECLCALLBACK(int) vdIOIntWriteUser(void *pvUser, PVDIOSTORAGE pIoStorage,
 {
     int rc = VINF_SUCCESS;
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
 
     LogFlowFunc(("pvUser=%#p pIoStorage=%#p uOffset=%llu pIoCtx=%#p cbWrite=%u\n",
                  pvUser, pIoStorage, uOffset, pIoCtx, cbWrite));
@@ -4948,7 +4172,7 @@ static DECLCALLBACK(int) vdIOIntReadMeta(void *pvUser, PVDIOSTORAGE pIoStorage, 
                                          void *pvCompleteUser)
 {
     PVDIO pVDIo     = (PVDIO)pvUser;
-    PVBOXHDD pDisk  = pVDIo->pDisk;
+    PVDISK pDisk  = pVDIo->pDisk;
     int rc = VINF_SUCCESS;
     RTSGSEG Seg;
     PVDIOTASK pIoTask;
@@ -5028,7 +4252,7 @@ static DECLCALLBACK(int) vdIOIntReadMeta(void *pvUser, PVDIOSTORAGE pIoStorage, 
                 rc = VERR_VD_NOT_ENOUGH_METADATA;
         }
 
-        Assert(VALID_PTR(pMetaXfer) || RT_FAILURE(rc));
+        Assert(RT_VALID_PTR(pMetaXfer) || RT_FAILURE(rc));
 
         if (RT_SUCCESS(rc) || rc == VERR_VD_NOT_ENOUGH_METADATA || rc == VERR_VD_ASYNC_IO_IN_PROGRESS)
         {
@@ -5069,7 +4293,7 @@ static DECLCALLBACK(int) vdIOIntWriteMeta(void *pvUser, PVDIOSTORAGE pIoStorage,
                                           PFNVDXFERCOMPLETED pfnComplete, void *pvCompleteUser)
 {
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
     int rc = VINF_SUCCESS;
     RTSGSEG Seg;
     PVDIOTASK pIoTask;
@@ -5225,7 +4449,7 @@ static DECLCALLBACK(int) vdIOIntWriteMeta(void *pvUser, PVDIOSTORAGE pIoStorage,
 static DECLCALLBACK(void) vdIOIntMetaXferRelease(void *pvUser, PVDMETAXFER pMetaXfer)
 {
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
     PVDIOSTORAGE pIoStorage;
 
     /*
@@ -5261,7 +4485,7 @@ static DECLCALLBACK(int) vdIOIntFlush(void *pvUser, PVDIOSTORAGE pIoStorage, PVD
                                       PFNVDXFERCOMPLETED pfnComplete, void *pvCompleteUser)
 {
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
     int rc = VINF_SUCCESS;
     PVDIOTASK pIoTask;
     PVDMETAXFER pMetaXfer = NULL;
@@ -5338,7 +4562,7 @@ static DECLCALLBACK(size_t) vdIOIntIoCtxCopyTo(void *pvUser, PVDIOCTX pIoCtx,
                                                const void *pvBuf, size_t cbBuf)
 {
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
     size_t cbCopied = 0;
 
     /** @todo Enable check for sync I/O later. */
@@ -5358,7 +4582,7 @@ static DECLCALLBACK(size_t) vdIOIntIoCtxCopyFrom(void *pvUser, PVDIOCTX pIoCtx,
                                                  void *pvBuf, size_t cbBuf)
 {
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
     size_t cbCopied = 0;
 
     /** @todo Enable check for sync I/O later. */
@@ -5377,7 +4601,7 @@ static DECLCALLBACK(size_t) vdIOIntIoCtxCopyFrom(void *pvUser, PVDIOCTX pIoCtx,
 static DECLCALLBACK(size_t) vdIOIntIoCtxSet(void *pvUser, PVDIOCTX pIoCtx, int ch, size_t cb)
 {
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
     size_t cbSet = 0;
 
     /** @todo Enable check for sync I/O later. */
@@ -5398,7 +4622,7 @@ static DECLCALLBACK(size_t) vdIOIntIoCtxSegArrayCreate(void *pvUser, PVDIOCTX pI
                                                        size_t cbData)
 {
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
     size_t cbCreated = 0;
 
     /** @todo It is possible that this gets called from a filter plugin
@@ -5421,7 +4645,7 @@ static DECLCALLBACK(void) vdIOIntIoCtxCompleted(void *pvUser, PVDIOCTX pIoCtx, i
                                                 size_t cbCompleted)
 {
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
 
     LogFlowFunc(("pvUser=%#p pIoCtx=%#p rcReq=%Rrc cbCompleted=%zu\n",
                  pvUser, pIoCtx, rcReq, cbCompleted));
@@ -5477,11 +4701,23 @@ static DECLCALLBACK(size_t) vdIOIntIoCtxGetDataUnitSize(void *pvUser, PVDIOCTX p
 {
     RT_NOREF1(pIoCtx);
     PVDIO    pVDIo = (PVDIO)pvUser;
-    PVBOXHDD pDisk = pVDIo->pDisk;
+    PVDISK pDisk = pVDIo->pDisk;
+    size_t cbSector = 0;
 
     PVDIMAGE pImage = vdGetImageByNumber(pDisk, VD_LAST_IMAGE);
     AssertPtrReturn(pImage, 0);
-    return pImage->Backend->pfnGetSectorSize(pImage->pBackendData);
+
+    PCVDREGIONLIST pRegionList = NULL;
+    int rc = pImage->Backend->pfnQueryRegions(pImage->pBackendData, &pRegionList);
+    if (RT_SUCCESS(rc))
+    {
+        cbSector = pRegionList->aRegions[0].cbBlock;
+
+        AssertPtr(pImage->Backend->pfnRegionListRelease);
+        pImage->Backend->pfnRegionListRelease(pImage->pBackendData, pRegionList);
+    }
+
+    return cbSector;
 }
 
 /**
@@ -5650,7 +4886,7 @@ static DECLCALLBACK(int) vdLogMessage(void *pvUser, const char *pszFormat, va_li
     return VINF_SUCCESS;
 }
 
-DECLINLINE(int) vdMessageWrapper(PVBOXHDD pDisk, const char *pszFormat, ...)
+DECLINLINE(int) vdMessageWrapper(PVDISK pDisk, const char *pszFormat, ...)
 {
     va_list va;
     va_start(va, pszFormat);
@@ -5683,7 +4919,7 @@ static void vdFixupPCHSGeometry(PVDGEOMETRY pPCHS, uint64_t cbSize)
 }
 
 /**
- * internal: adjust PCHS geometry
+ * internal: adjust LCHS geometry
  */
 static void vdFixupLCHSGeometry(PVDGEOMETRY pLCHS, uint64_t cbSize)
 {
@@ -5785,71 +5021,24 @@ static DECLCALLBACK(void) vdIoCtxSyncComplete(void *pvUser1, void *pvUser2, int 
     RTSemEventSignal(hEvent);
 }
 
-/**
- * Initializes HDD backends.
- *
- * @returns VBox status code.
- */
+
 VBOXDDU_DECL(int) VDInit(void)
 {
-    int rc = vdAddBackends(NIL_RTLDRMOD, aStaticBackends, RT_ELEMENTS(aStaticBackends));
-    if (RT_SUCCESS(rc))
-    {
-        rc = vdAddCacheBackends(NIL_RTLDRMOD, aStaticCacheBackends, RT_ELEMENTS(aStaticCacheBackends));
-        if (RT_SUCCESS(rc))
-        {
-            RTListInit(&g_ListPluginsLoaded);
-            rc = vdLoadDynamicBackends();
-        }
-    }
-    LogRel(("VD: VDInit finished\n"));
+    int rc = vdPluginInit();
+    LogRel(("VD: VDInit finished with %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Destroys loaded HDD backends.
- *
- * @returns VBox status code.
- */
+
 VBOXDDU_DECL(int) VDShutdown(void)
 {
-    if (!g_apBackends)
-        return VERR_INTERNAL_ERROR;
-
-    if (g_apCacheBackends)
-        RTMemFree(g_apCacheBackends);
-    RTMemFree(g_apBackends);
-
-    g_cBackends = 0;
-    g_apBackends = NULL;
-
-    /* Clear the supported cache backends. */
-    g_cCacheBackends = 0;
-    g_apCacheBackends = NULL;
-
-#ifndef VBOX_HDD_NO_DYNAMIC_BACKENDS
-    PVDPLUGIN pPlugin, pPluginNext;
-    RTListForEachSafe(&g_ListPluginsLoaded, pPlugin, pPluginNext, VDPLUGIN, NodePlugin)
-    {
-        RTLdrClose(pPlugin->hPlugin);
-        RTStrFree(pPlugin->pszFilename);
-        RTListNodeRemove(&pPlugin->NodePlugin);
-        RTMemFree(pPlugin);
-    }
-#endif
-
-    return VINF_SUCCESS;
+    return vdPluginTerm();
 }
 
-/**
- * Loads a single plugin given by filename.
- *
- * @returns VBox status code.
- * @param   pszFilename     The plugin filename to load.
- */
+
 VBOXDDU_DECL(int) VDPluginLoadFromFilename(const char *pszFilename)
 {
-    if (!g_apBackends)
+    if (!vdPluginIsInitialized())
     {
         int rc = VDInit();
         if (RT_FAILURE(rc))
@@ -5867,7 +5056,7 @@ VBOXDDU_DECL(int) VDPluginLoadFromFilename(const char *pszFilename)
  */
 VBOXDDU_DECL(int) VDPluginLoadFromPath(const char *pszPath)
 {
-    if (!g_apBackends)
+    if (!vdPluginIsInitialized())
     {
         int rc = VDInit();
         if (RT_FAILURE(rc))
@@ -5877,15 +5066,10 @@ VBOXDDU_DECL(int) VDPluginLoadFromPath(const char *pszPath)
     return vdPluginLoadFromPath(pszPath);
 }
 
-/**
- * Unloads a single plugin given by filename.
- *
- * @returns VBox status code.
- * @param   pszFilename     The plugin filename to unload.
- */
+
 VBOXDDU_DECL(int) VDPluginUnloadFromFilename(const char *pszFilename)
 {
-    if (!g_apBackends)
+    if (!vdPluginIsInitialized())
     {
         int rc = VDInit();
         if (RT_FAILURE(rc))
@@ -5895,15 +5079,10 @@ VBOXDDU_DECL(int) VDPluginUnloadFromFilename(const char *pszFilename)
     return vdPluginUnloadFromFilename(pszFilename);
 }
 
-/**
- * Unload all plugins from a given path.
- *
- * @returns VBox statuse code.
- * @param   pszPath         The path to unload plugins from.
- */
+
 VBOXDDU_DECL(int) VDPluginUnloadFromPath(const char *pszPath)
 {
-    if (!g_apBackends)
+    if (!vdPluginIsInitialized())
     {
         int rc = VDInit();
         if (RT_FAILURE(rc))
@@ -5913,15 +5092,7 @@ VBOXDDU_DECL(int) VDPluginUnloadFromPath(const char *pszPath)
     return vdPluginUnloadFromPath(pszPath);
 }
 
-/**
- * Lists all HDD backends and their capabilities in a caller-provided buffer.
- *
- * @returns VBox status code.
- *          VERR_BUFFER_OVERFLOW if not enough space is passed.
- * @param   cEntriesAlloc   Number of list entries available.
- * @param   pEntries        Pointer to array for the entries.
- * @param   pcEntriesUsed   Number of entries returned.
- */
+
 VBOXDDU_DECL(int) VDBackendInfo(unsigned cEntriesAlloc, PVDBACKENDINFO pEntries,
                                 unsigned *pcEntriesUsed)
 {
@@ -5929,84 +5100,62 @@ VBOXDDU_DECL(int) VDBackendInfo(unsigned cEntriesAlloc, PVDBACKENDINFO pEntries,
 
     LogFlowFunc(("cEntriesAlloc=%u pEntries=%#p pcEntriesUsed=%#p\n", cEntriesAlloc, pEntries, pcEntriesUsed));
     /* Check arguments. */
-    AssertMsgReturn(cEntriesAlloc,
-                    ("cEntriesAlloc=%u\n", cEntriesAlloc),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pEntries),
-                    ("pEntries=%#p\n", pEntries),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pcEntriesUsed),
-                    ("pcEntriesUsed=%#p\n", pcEntriesUsed),
-                    VERR_INVALID_PARAMETER);
-    if (!g_apBackends)
+    AssertMsgReturn(cEntriesAlloc, ("cEntriesAlloc=%u\n", cEntriesAlloc), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pEntries, VERR_INVALID_POINTER);
+    AssertPtrReturn(pcEntriesUsed, VERR_INVALID_POINTER);
+    if (!vdPluginIsInitialized())
         VDInit();
 
-    if (cEntriesAlloc < g_cBackends)
+    uint32_t cBackends = vdGetImageBackendCount();
+    if (cEntriesAlloc < cBackends)
     {
-        *pcEntriesUsed = g_cBackends;
+        *pcEntriesUsed = cBackends;
         return VERR_BUFFER_OVERFLOW;
     }
 
-    for (unsigned i = 0; i < g_cBackends; i++)
+    for (unsigned i = 0; i < cBackends; i++)
     {
-        pEntries[i].pszBackend = g_apBackends[i]->pszBackendName;
-        pEntries[i].uBackendCaps = g_apBackends[i]->uBackendCaps;
-        pEntries[i].paFileExtensions = g_apBackends[i]->paFileExtensions;
-        pEntries[i].paConfigInfo = g_apBackends[i]->paConfigInfo;
-        pEntries[i].pfnComposeLocation = g_apBackends[i]->pfnComposeLocation;
-        pEntries[i].pfnComposeName = g_apBackends[i]->pfnComposeName;
+        PCVDIMAGEBACKEND pBackend;
+        rc = vdQueryImageBackend(i, &pBackend);
+        AssertRC(rc);
+
+        pEntries[i].pszBackend         = pBackend->pszBackendName;
+        pEntries[i].uBackendCaps       = pBackend->uBackendCaps;
+        pEntries[i].paFileExtensions   = pBackend->paFileExtensions;
+        pEntries[i].paConfigInfo       = pBackend->paConfigInfo;
+        pEntries[i].pfnComposeLocation = pBackend->pfnComposeLocation;
+        pEntries[i].pfnComposeName     = pBackend->pfnComposeName;
     }
 
-    LogFlowFunc(("returns %Rrc *pcEntriesUsed=%u\n", rc, g_cBackends));
-    *pcEntriesUsed = g_cBackends;
+    LogFlowFunc(("returns %Rrc *pcEntriesUsed=%u\n", rc, cBackends));
+    *pcEntriesUsed = cBackends;
     return rc;
 }
 
-/**
- * Lists the capabilities of a backend identified by its name.
- *
- * @returns VBox status code.
- * @param   pszBackend      The backend name.
- * @param   pEntry          Pointer to an entry.
- */
+
 VBOXDDU_DECL(int) VDBackendInfoOne(const char *pszBackend, PVDBACKENDINFO pEntry)
 {
     LogFlowFunc(("pszBackend=%#p pEntry=%#p\n", pszBackend, pEntry));
     /* Check arguments. */
-    AssertMsgReturn(VALID_PTR(pszBackend),
-                    ("pszBackend=%#p\n", pszBackend),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pEntry),
-                    ("pEntry=%#p\n", pEntry),
-                    VERR_INVALID_PARAMETER);
-    if (!g_apBackends)
+    AssertPtrReturn(pszBackend, VERR_INVALID_POINTER);
+    AssertPtrReturn(pEntry, VERR_INVALID_POINTER);
+    if (!vdPluginIsInitialized())
         VDInit();
 
-    /* Go through loaded backends. */
-    for (unsigned i = 0; i < g_cBackends; i++)
+    PCVDIMAGEBACKEND pBackend;
+    int rc = vdFindImageBackend(pszBackend, &pBackend);
+    if (RT_SUCCESS(rc))
     {
-        if (!RTStrICmp(pszBackend, g_apBackends[i]->pszBackendName))
-        {
-            pEntry->pszBackend = g_apBackends[i]->pszBackendName;
-            pEntry->uBackendCaps = g_apBackends[i]->uBackendCaps;
-            pEntry->paFileExtensions = g_apBackends[i]->paFileExtensions;
-            pEntry->paConfigInfo = g_apBackends[i]->paConfigInfo;
-            return VINF_SUCCESS;
-        }
+        pEntry->pszBackend       = pBackend->pszBackendName;
+        pEntry->uBackendCaps     = pBackend->uBackendCaps;
+        pEntry->paFileExtensions = pBackend->paFileExtensions;
+        pEntry->paConfigInfo     = pBackend->paConfigInfo;
     }
 
-    return VERR_NOT_FOUND;
+    return rc;
 }
 
-/**
- * Lists all filters and their capabilities in a caller-provided buffer.
- *
- * @return  VBox status code.
- *          VERR_BUFFER_OVERFLOW if not enough space is passed.
- * @param   cEntriesAlloc   Number of list entries available.
- * @param   pEntries        Pointer to array for the entries.
- * @param   pcEntriesUsed   Number of entries returned.
- */
+
 VBOXDDU_DECL(int) VDFilterInfo(unsigned cEntriesAlloc, PVDFILTERINFO pEntries,
                                unsigned *pcEntriesUsed)
 {
@@ -6017,92 +5166,68 @@ VBOXDDU_DECL(int) VDFilterInfo(unsigned cEntriesAlloc, PVDFILTERINFO pEntries,
     AssertMsgReturn(cEntriesAlloc,
                     ("cEntriesAlloc=%u\n", cEntriesAlloc),
                     VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pEntries),
-                    ("pEntries=%#p\n", pEntries),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pcEntriesUsed),
-                    ("pcEntriesUsed=%#p\n", pcEntriesUsed),
-                    VERR_INVALID_PARAMETER);
-    if (!g_apBackends)
+    AssertPtrReturn(pEntries, VERR_INVALID_POINTER);
+    AssertPtrReturn(pcEntriesUsed, VERR_INVALID_POINTER);
+    if (!vdPluginIsInitialized())
         VDInit();
 
-    if (cEntriesAlloc < g_cFilterBackends)
+    uint32_t cBackends = vdGetFilterBackendCount();
+    if (cEntriesAlloc < cBackends)
     {
-        *pcEntriesUsed = g_cFilterBackends;
+        *pcEntriesUsed = cBackends;
         return VERR_BUFFER_OVERFLOW;
     }
 
-    for (unsigned i = 0; i < g_cFilterBackends; i++)
+    for (unsigned i = 0; i < cBackends; i++)
     {
-        pEntries[i].pszFilter = g_apFilterBackends[i]->pszBackendName;
-        pEntries[i].paConfigInfo = g_apFilterBackends[i]->paConfigInfo;
+        PCVDFILTERBACKEND pBackend;
+        rc = vdQueryFilterBackend(i, &pBackend);
+        pEntries[i].pszFilter    = pBackend->pszBackendName;
+        pEntries[i].paConfigInfo = pBackend->paConfigInfo;
     }
 
-    LogFlowFunc(("returns %Rrc *pcEntriesUsed=%u\n", rc, g_cFilterBackends));
-    *pcEntriesUsed = g_cFilterBackends;
+    LogFlowFunc(("returns %Rrc *pcEntriesUsed=%u\n", rc, cBackends));
+    *pcEntriesUsed = cBackends;
     return rc;
 }
 
-/**
- * Lists the capabilities of a filter identified by its name.
- *
- * @return  VBox status code.
- * @param   pszFilter       The filter name (case insensitive).
- * @param   pEntry          Pointer to an entry.
- */
+
 VBOXDDU_DECL(int) VDFilterInfoOne(const char *pszFilter, PVDFILTERINFO pEntry)
 {
     LogFlowFunc(("pszFilter=%#p pEntry=%#p\n", pszFilter, pEntry));
     /* Check arguments. */
-    AssertMsgReturn(VALID_PTR(pszFilter),
-                    ("pszFilter=%#p\n", pszFilter),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pEntry),
-                    ("pEntry=%#p\n", pEntry),
-                    VERR_INVALID_PARAMETER);
-    if (!g_apBackends)
+    AssertPtrReturn(pszFilter, VERR_INVALID_POINTER);
+    AssertPtrReturn(pEntry, VERR_INVALID_POINTER);
+    if (!vdPluginIsInitialized())
         VDInit();
 
-    /* Go through loaded backends. */
-    for (unsigned i = 0; i < g_cFilterBackends; i++)
+    PCVDFILTERBACKEND pBackend;
+    int rc = vdFindFilterBackend(pszFilter, &pBackend);
+    if (RT_SUCCESS(rc))
     {
-        if (!RTStrICmp(pszFilter, g_apFilterBackends[i]->pszBackendName))
-        {
-            pEntry->pszFilter = g_apFilterBackends[i]->pszBackendName;
-            pEntry->paConfigInfo = g_apFilterBackends[i]->paConfigInfo;
-            return VINF_SUCCESS;
-        }
+        pEntry->pszFilter    = pBackend->pszBackendName;
+        pEntry->paConfigInfo = pBackend->paConfigInfo;
     }
 
-    return VERR_NOT_FOUND;
+    return rc;
 }
 
-/**
- * Allocates and initializes an empty HDD container.
- * No image files are opened.
- *
- * @returns VBox status code.
- * @param   pVDIfsDisk      Pointer to the per-disk VD interface list.
- * @param   enmType         Type of the image container.
- * @param   ppDisk          Where to store the reference to HDD container.
- */
-VBOXDDU_DECL(int) VDCreate(PVDINTERFACE pVDIfsDisk, VDTYPE enmType, PVBOXHDD *ppDisk)
+
+VBOXDDU_DECL(int) VDCreate(PVDINTERFACE pVDIfsDisk, VDTYPE enmType, PVDISK *ppDisk)
 {
     int rc = VINF_SUCCESS;
-    PVBOXHDD pDisk = NULL;
+    PVDISK pDisk = NULL;
 
     LogFlowFunc(("pVDIfsDisk=%#p\n", pVDIfsDisk));
+    /* Check arguments. */
+    AssertPtrReturn(ppDisk, VERR_INVALID_POINTER);
+
     do
     {
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(ppDisk),
-                           ("ppDisk=%#p\n", ppDisk),
-                           rc = VERR_INVALID_PARAMETER);
-
-        pDisk = (PVBOXHDD)RTMemAllocZ(sizeof(VBOXHDD));
+        pDisk = (PVDISK)RTMemAllocZ(sizeof(VDISK));
         if (pDisk)
         {
-            pDisk->u32Signature            = VBOXHDDDISK_SIGNATURE;
+            pDisk->u32Signature            = VDISK_SIGNATURE;
             pDisk->enmType                 = enmType;
             pDisk->cImages                 = 0;
             pDisk->pBase                   = NULL;
@@ -6162,14 +5287,8 @@ VBOXDDU_DECL(int) VDCreate(PVDINTERFACE pVDIfsDisk, VDTYPE enmType, PVBOXHDD *pp
     return rc;
 }
 
-/**
- * Destroys HDD container.
- * If container has opened image files they will be closed.
- *
- * @returns VBox status code.
- * @param   pDisk           Pointer to HDD container.
- */
-VBOXDDU_DECL(int) VDDestroy(PVBOXHDD pDisk)
+
+VBOXDDU_DECL(int) VDDestroy(PVDISK pDisk)
 {
     int rc = VINF_SUCCESS;
     LogFlowFunc(("pDisk=%#p\n", pDisk));
@@ -6177,7 +5296,7 @@ VBOXDDU_DECL(int) VDDestroy(PVBOXHDD pDisk)
     {
         /* sanity check */
         AssertPtrBreak(pDisk);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+        AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
         Assert(!pDisk->fLocked);
 
         rc = VDCloseAll(pDisk);
@@ -6193,21 +5312,10 @@ VBOXDDU_DECL(int) VDDestroy(PVBOXHDD pDisk)
     return rc;
 }
 
-/**
- * Try to get the backend name which can use this image.
- *
- * @returns VBox status code.
- *          VINF_SUCCESS if a plugin was found.
- *                       ppszFormat contains the string which can be used as backend name.
- *          VERR_NOT_SUPPORTED if no backend was found.
- * @param   pVDIfsDisk      Pointer to the per-disk VD interface list.
- * @param   pVDIfsImage     Pointer to the per-image VD interface list.
- * @param   pszFilename     Name of the image file for which the backend is queried.
- * @param   ppszFormat      Receives pointer of the UTF-8 string which contains the format name.
- *                          The returned pointer must be freed using RTStrFree().
- */
+
 VBOXDDU_DECL(int) VDGetFormat(PVDINTERFACE pVDIfsDisk, PVDINTERFACE pVDIfsImage,
-                              const char *pszFilename, char **ppszFormat, VDTYPE *penmType)
+                              const char *pszFilename, VDTYPE enmDesiredType,
+                              char **ppszFormat, VDTYPE *penmType)
 {
     int rc = VERR_NOT_SUPPORTED;
     VDINTERFACEIOINT VDIfIoInt;
@@ -6216,17 +5324,13 @@ VBOXDDU_DECL(int) VDGetFormat(PVDINTERFACE pVDIfsDisk, PVDINTERFACE pVDIfsImage,
 
     LogFlowFunc(("pszFilename=\"%s\"\n", pszFilename));
     /* Check arguments. */
-    AssertMsgReturn(VALID_PTR(pszFilename) && *pszFilename,
-                    ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(ppszFormat),
-                    ("ppszFormat=%#p\n", ppszFormat),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(penmType),
-                    ("penmType=%#p\n", penmType),
-                    VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(ppszFormat, VERR_INVALID_POINTER);
+    AssertPtrReturn(penmType, VERR_INVALID_POINTER);
+    AssertReturn(enmDesiredType >= VDTYPE_INVALID && enmDesiredType <= VDTYPE_FLOPPY, VERR_INVALID_PARAMETER);
 
-    if (!g_apBackends)
+    if (!vdPluginIsInitialized())
         VDInit();
 
     pInterfaceIo = VDIfIoGet(pVDIfsImage);
@@ -6259,17 +5363,35 @@ VBOXDDU_DECL(int) VDGetFormat(PVDINTERFACE pVDIfsDisk, PVDINTERFACE pVDIfsImage,
                         pInterfaceIo, sizeof(VDINTERFACEIOINT), &pVDIfsImage);
     AssertRC(rc);
 
+    /** @todo r=bird: Would be better to do a scoring approach here, where the
+     * backend that scores the highest is choosen.  That way we don't have to depend
+     * on registration order and filename suffixes to figure out what RAW should
+     * handle and not.   Besides, the registration order won't cut it for plug-ins
+     * anyway, as they end up after the builtin ones.
+     */
+
     /* Find the backend supporting this file format. */
-    for (unsigned i = 0; i < g_cBackends; i++)
+    for (unsigned i = 0; i < vdGetImageBackendCount(); i++)
     {
-        if (g_apBackends[i]->pfnProbe)
+        PCVDIMAGEBACKEND pBackend;
+        rc = vdQueryImageBackend(i, &pBackend);
+        AssertRC(rc);
+
+        if (pBackend->pfnProbe)
         {
-            rc = g_apBackends[i]->pfnProbe(pszFilename, pVDIfsDisk, pVDIfsImage, penmType);
+            rc = pBackend->pfnProbe(pszFilename, pVDIfsDisk, pVDIfsImage, enmDesiredType, penmType);
             if (    RT_SUCCESS(rc)
                 /* The correct backend has been found, but there is a small
                  * incompatibility so that the file cannot be used. Stop here
                  * and signal success - the actual open will of course fail,
                  * but that will create a really sensible error message. */
+
+                    /** @todo r=bird: this bit of code is _certifiably_ _insane_ as it allows
+                     *        simple stuff like VERR_EOF to pass thru.  I've just amended it with
+                     *        disallowing VERR_EOF too, but someone needs to pick up the courage to
+                     *        fix this stuff properly or at least update the docs!
+                     *        (Parallels returns VERR_EOF, btw.) */
+
                 ||  (   rc != VERR_VD_GEN_INVALID_HEADER
                      && rc != VERR_VD_VDI_INVALID_HEADER
                      && rc != VERR_VD_VMDK_INVALID_HEADER
@@ -6281,10 +5403,12 @@ VBOXDDU_DECL(int) VDGetFormat(PVDINTERFACE pVDIfsDisk, PVDINTERFACE pVDIfsImage,
                      && rc != VERR_VD_RAW_SIZE_OPTICAL_TOO_SMALL
                      && rc != VERR_VD_RAW_SIZE_FLOPPY_TOO_BIG
                      && rc != VERR_VD_PARALLELS_INVALID_HEADER
-                     && rc != VERR_VD_DMG_INVALID_HEADER))
+                     && rc != VERR_VD_DMG_INVALID_HEADER
+                     && rc != VERR_EOF /* bird for viso */
+                        ))
             {
                 /* Copy the name into the new string. */
-                char *pszFormat = RTStrDup(g_apBackends[i]->pszBackendName);
+                char *pszFormat = RTStrDup(pBackend->pszBackendName);
                 if (!pszFormat)
                 {
                     rc = VERR_NO_MEMORY;
@@ -6306,17 +5430,20 @@ VBOXDDU_DECL(int) VDGetFormat(PVDINTERFACE pVDIfsDisk, PVDINTERFACE pVDIfsImage,
     /* Try the cache backends. */
     if (rc == VERR_NOT_SUPPORTED)
     {
-        for (unsigned i = 0; i < g_cCacheBackends; i++)
+        for (unsigned i = 0; i < vdGetCacheBackendCount(); i++)
         {
-            if (g_apCacheBackends[i]->pfnProbe)
+            PCVDCACHEBACKEND pBackend;
+            rc = vdQueryCacheBackend(i, &pBackend);
+            AssertRC(rc);
+
+            if (pBackend->pfnProbe)
             {
-                rc = g_apCacheBackends[i]->pfnProbe(pszFilename, pVDIfsDisk,
-                                                    pVDIfsImage);
+                rc = pBackend->pfnProbe(pszFilename, pVDIfsDisk, pVDIfsImage);
                 if (    RT_SUCCESS(rc)
                     ||  (rc != VERR_VD_GEN_INVALID_HEADER))
                 {
                     /* Copy the name into the new string. */
-                    char *pszFormat = RTStrDup(g_apBackends[i]->pszBackendName);
+                    char *pszFormat = RTStrDup(pBackend->pszBackendName);
                     if (!pszFormat)
                     {
                         rc = VERR_NO_MEMORY;
@@ -6335,27 +5462,8 @@ VBOXDDU_DECL(int) VDGetFormat(PVDINTERFACE pVDIfsDisk, PVDINTERFACE pVDIfsImage,
     return rc;
 }
 
-/**
- * Opens an image file.
- *
- * The first opened image file in HDD container must have a base image type,
- * others (next opened images) must be a differencing or undo images.
- * Linkage is checked for differencing image to be in consistence with the previously opened image.
- * When another differencing image is opened and the last image was opened in read/write access
- * mode, then the last image is reopened in read-only with deny write sharing mode. This allows
- * other processes to use images in read-only mode too.
- *
- * Note that the image is opened in read-only mode if a read/write open is not possible.
- * Use VDIsReadOnly to check open mode.
- *
- * @returns VBox status code.
- * @param   pDisk           Pointer to HDD container.
- * @param   pszBackend      Name of the image file backend to use.
- * @param   pszFilename     Name of the image file to open.
- * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
- * @param   pVDIfsImage     Pointer to the per-image VD interface list.
- */
-VBOXDDU_DECL(int) VDOpen(PVBOXHDD pDisk, const char *pszBackend,
+
+VBOXDDU_DECL(int) VDOpen(PVDISK pDisk, const char *pszBackend,
                          const char *pszFilename, unsigned uOpenFlags,
                          PVDINTERFACE pVDIfsImage)
 {
@@ -6366,28 +5474,25 @@ VBOXDDU_DECL(int) VDOpen(PVBOXHDD pDisk, const char *pszBackend,
 
     LogFlowFunc(("pDisk=%#p pszBackend=\"%s\" pszFilename=\"%s\" uOpenFlags=%#x, pVDIfsImage=%#p\n",
                  pDisk, pszBackend, pszFilename, uOpenFlags, pVDIfsImage));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_PARAMETER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pszBackend, VERR_INVALID_POINTER);
+    AssertReturn(*pszBackend != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+    AssertMsgReturn((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0,
+                    ("uOpenFlags=%#x\n", uOpenFlags),
+                    VERR_INVALID_PARAMETER);
+    AssertMsgReturn(   !(uOpenFlags & VD_OPEN_FLAGS_SKIP_CONSISTENCY_CHECKS)
+                    ||  (uOpenFlags & VD_OPEN_FLAGS_READONLY),
+                    ("uOpenFlags=%#x\n", uOpenFlags),
+                    VERR_INVALID_PARAMETER);
 
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszBackend) && *pszBackend,
-                           ("pszBackend=%#p \"%s\"\n", pszBackend, pszBackend),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(VALID_PTR(pszFilename) && *pszFilename,
-                           ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0,
-                           ("uOpenFlags=%#x\n", uOpenFlags),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(   !(uOpenFlags & VD_OPEN_FLAGS_SKIP_CONSISTENCY_CHECKS)
-                           ||  (uOpenFlags & VD_OPEN_FLAGS_READONLY),
-                           ("uOpenFlags=%#x\n", uOpenFlags),
-                           rc = VERR_INVALID_PARAMETER);
-
         /*
          * Destroy the current discard state first which might still have pending blocks
          * for the currently opened image which will be switched to readonly mode.
@@ -6417,10 +5522,11 @@ VBOXDDU_DECL(int) VDOpen(PVBOXHDD pDisk, const char *pszBackend,
             break;
         }
 
+        pImage->cbImage     = VD_IMAGE_SIZE_UNINITIALIZED;
         pImage->VDIo.pDisk  = pDisk;
         pImage->pVDIfsImage = pVDIfsImage;
 
-        rc = vdFindBackend(pszBackend, &pImage->Backend);
+        rc = vdFindImageBackend(pszBackend, &pImage->Backend);
         if (RT_FAILURE(rc))
             break;
         if (!pImage->Backend)
@@ -6589,7 +5695,7 @@ VBOXDDU_DECL(int) VDOpen(PVBOXHDD pDisk, const char *pszBackend,
         /** @todo optionally check UUIDs */
 
         /* Cache disk information. */
-        pDisk->cbSize = pImage->Backend->pfnGetSize(pImage->pBackendData);
+        pDisk->cbSize = vdImageGetSize(pImage);
 
         /* Cache PCHS geometry. */
         rc2 = pImage->Backend->pfnGetPCHSGeometry(pImage->pBackendData,
@@ -6672,17 +5778,8 @@ VBOXDDU_DECL(int) VDOpen(PVBOXHDD pDisk, const char *pszBackend,
     return rc;
 }
 
-/**
- * Opens a cache image.
- *
- * @return  VBox status code.
- * @param   pDisk           Pointer to the HDD container which should use the cache image.
- * @param   pszBackend      Name of the cache file backend to use (case insensitive).
- * @param   pszFilename     Name of the cache image to open.
- * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
- * @param   pVDIfsCache     Pointer to the per-cache VD interface list.
- */
-VBOXDDU_DECL(int) VDCacheOpen(PVBOXHDD pDisk, const char *pszBackend,
+
+VBOXDDU_DECL(int) VDCacheOpen(PVDISK pDisk, const char *pszBackend,
                               const char *pszFilename, unsigned uOpenFlags,
                               PVDINTERFACE pVDIfsCache)
 {
@@ -6694,23 +5791,20 @@ VBOXDDU_DECL(int) VDCacheOpen(PVBOXHDD pDisk, const char *pszBackend,
     LogFlowFunc(("pDisk=%#p pszBackend=\"%s\" pszFilename=\"%s\" uOpenFlags=%#x, pVDIfsCache=%#p\n",
                  pDisk, pszBackend, pszFilename, uOpenFlags, pVDIfsCache));
 
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_PARAMETER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pszBackend, VERR_INVALID_POINTER);
+    AssertReturn(*pszBackend != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+    AssertMsgReturn((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0, ("uOpenFlags=%#x\n", uOpenFlags),
+                    VERR_INVALID_PARAMETER);
+
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszBackend) && *pszBackend,
-                           ("pszBackend=%#p \"%s\"\n", pszBackend, pszBackend),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(VALID_PTR(pszFilename) && *pszFilename,
-                           ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0,
-                           ("uOpenFlags=%#x\n", uOpenFlags),
-                           rc = VERR_INVALID_PARAMETER);
-
         /* Set up image descriptor. */
         pCache = (PVDCACHE)RTMemAllocZ(sizeof(VDCACHE));
         if (!pCache)
@@ -6854,7 +5948,8 @@ VBOXDDU_DECL(int) VDCacheOpen(PVBOXHDD pDisk, const char *pszBackend,
     return rc;
 }
 
-VBOXDDU_DECL(int) VDFilterAdd(PVBOXHDD pDisk, const char *pszFilter, uint32_t fFlags,
+
+VBOXDDU_DECL(int) VDFilterAdd(PVDISK pDisk, const char *pszFilter, uint32_t fFlags,
                               PVDINTERFACE pVDIfsFilter)
 {
     int rc = VINF_SUCCESS;
@@ -6865,21 +5960,18 @@ VBOXDDU_DECL(int) VDFilterAdd(PVBOXHDD pDisk, const char *pszFilter, uint32_t fF
     LogFlowFunc(("pDisk=%#p pszFilter=\"%s\" pVDIfsFilter=%#p\n",
                  pDisk, pszFilter, pVDIfsFilter));
 
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_PARAMETER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pszFilter, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilter != '\0', VERR_INVALID_PARAMETER);
+    AssertMsgReturn(!(fFlags & ~VD_FILTER_FLAGS_MASK), ("Invalid flags set (fFlags=%#x)\n", fFlags),
+                    VERR_INVALID_PARAMETER);
+
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszFilter) && *pszFilter,
-                           ("pszFilter=%#p \"%s\"\n", pszFilter, pszFilter),
-                           rc = VERR_INVALID_PARAMETER);
-
-        AssertMsgBreakStmt(!(fFlags & ~VD_FILTER_FLAGS_MASK),
-                           ("Invalid flags set (fFlags=%#x)\n", fFlags),
-                           rc = VERR_INVALID_PARAMETER);
-
         /* Set up image descriptor. */
         pFilter = (PVDFILTER)RTMemAllocZ(sizeof(VDFILTER));
         if (!pFilter)
@@ -6948,24 +6040,8 @@ VBOXDDU_DECL(int) VDFilterAdd(PVBOXHDD pDisk, const char *pszFilter, uint32_t fF
     return rc;
 }
 
-/**
- * Creates and opens a new base image file.
- *
- * @returns VBox status code.
- * @param   pDisk           Pointer to HDD container.
- * @param   pszBackend      Name of the image file backend to use.
- * @param   pszFilename     Name of the image file to create.
- * @param   cbSize          Image size in bytes.
- * @param   uImageFlags     Flags specifying special image features.
- * @param   pszComment      Pointer to image comment. NULL is ok.
- * @param   pPCHSGeometry   Pointer to physical disk geometry <= (16383,16,63). Not NULL.
- * @param   pLCHSGeometry   Pointer to logical disk geometry <= (x,255,63). Not NULL.
- * @param   pUuid           New UUID of the image. If NULL, a new UUID is created.
- * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
- * @param   pVDIfsImage     Pointer to the per-image VD interface list.
- * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
- */
-VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
+
+VBOXDDU_DECL(int) VDCreateBase(PVDISK pDisk, const char *pszBackend,
                                const char *pszFilename, uint64_t cbSize,
                                unsigned uImageFlags, const char *pszComment,
                                PCVDGEOMETRY pPCHSGeometry,
@@ -6987,58 +6063,55 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
                  pLCHSGeometry->cHeads, pLCHSGeometry->cSectors, pUuid,
                  uOpenFlags, pVDIfsImage, pVDIfsOperation));
 
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsgReturn(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature),
+                    VERR_INVALID_MAGIC);
+
+    /* Check arguments. */
+    AssertPtrReturn(pszBackend, VERR_INVALID_POINTER);
+    AssertReturn(*pszBackend != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+    AssertMsgReturn(cbSize || (uImageFlags & VD_VMDK_IMAGE_FLAGS_RAWDISK), ("cbSize=%llu\n", cbSize),
+                    VERR_INVALID_PARAMETER);
+    if (cbSize % 512 && !(uImageFlags & VD_VMDK_IMAGE_FLAGS_RAWDISK))
+    {
+        rc = vdError(pDisk, VERR_VD_INVALID_SIZE, RT_SRC_POS,
+                     N_("VD: The given disk size %llu is not aligned on a sector boundary (512 bytes)"), cbSize);
+        LogFlowFunc(("returns %Rrc\n", rc));
+        return rc;
+    }
+    AssertMsgReturn(   ((uImageFlags & ~VD_IMAGE_FLAGS_MASK) == 0)
+                    || ((uImageFlags & (VD_IMAGE_FLAGS_FIXED | VD_IMAGE_FLAGS_DIFF)) != VD_IMAGE_FLAGS_FIXED),
+                    ("uImageFlags=%#x\n", uImageFlags),
+                    VERR_INVALID_PARAMETER);
+    AssertMsgReturn(   !(uImageFlags & VD_VMDK_IMAGE_FLAGS_RAWDISK)
+                    || !(uImageFlags & ~(VD_VMDK_IMAGE_FLAGS_RAWDISK | VD_IMAGE_FLAGS_FIXED)),
+                    ("uImageFlags=%#x\n", uImageFlags),
+                    VERR_INVALID_PARAMETER);
+    /* The PCHS geometry fields may be 0 to leave it for later. */
+    AssertPtrReturn(pPCHSGeometry, VERR_INVALID_PARAMETER);
+    AssertMsgReturn(   pPCHSGeometry->cHeads <= 16
+                    && pPCHSGeometry->cSectors <= 63,
+                    ("PCHS=%u/%u/%u\n", pPCHSGeometry->cCylinders, pPCHSGeometry->cHeads, pPCHSGeometry->cSectors),
+                    VERR_INVALID_PARAMETER);
+    /* The LCHS geometry fields may be 0 to leave it to later autodetection. */
+    AssertPtrReturn(pLCHSGeometry, VERR_INVALID_POINTER);
+    AssertMsgReturn(   pLCHSGeometry->cHeads <= 255
+                    && pLCHSGeometry->cSectors <= 63,
+                    ("LCHS=%u/%u/%u\n", pLCHSGeometry->cCylinders, pLCHSGeometry->cHeads, pLCHSGeometry->cSectors),
+                    VERR_INVALID_PARAMETER);
+    /* The UUID may be NULL. */
+    AssertPtrNullReturn(pUuid, VERR_INVALID_POINTER);
+    AssertMsgReturn((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0, ("uOpenFlags=%#x\n", uOpenFlags),
+                    VERR_INVALID_PARAMETER);
+
+    AssertPtrNullReturn(pVDIfsOperation, VERR_INVALID_PARAMETER);
     PVDINTERFACEPROGRESS pIfProgress = VDIfProgressGet(pVDIfsOperation);
 
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszBackend) && *pszBackend,
-                           ("pszBackend=%#p \"%s\"\n", pszBackend, pszBackend),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(VALID_PTR(pszFilename) && *pszFilename,
-                           ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(cbSize,
-                           ("cbSize=%llu\n", cbSize),
-                           rc = VERR_INVALID_PARAMETER);
-        if (cbSize % 512)
-        {
-            rc = vdError(pDisk, VERR_VD_INVALID_SIZE, RT_SRC_POS,
-                         N_("VD: The given disk size %llu is not aligned on a sector boundary (512 bytes)"), cbSize);
-            break;
-        }
-        AssertMsgBreakStmt(   ((uImageFlags & ~VD_IMAGE_FLAGS_MASK) == 0)
-                           || ((uImageFlags & (VD_IMAGE_FLAGS_FIXED | VD_IMAGE_FLAGS_DIFF)) != VD_IMAGE_FLAGS_FIXED),
-                           ("uImageFlags=%#x\n", uImageFlags),
-                           rc = VERR_INVALID_PARAMETER);
-        /* The PCHS geometry fields may be 0 to leave it for later. */
-        AssertMsgBreakStmt(   VALID_PTR(pPCHSGeometry)
-                           && pPCHSGeometry->cHeads <= 16
-                           && pPCHSGeometry->cSectors <= 63,
-                           ("pPCHSGeometry=%#p PCHS=%u/%u/%u\n", pPCHSGeometry,
-                            pPCHSGeometry->cCylinders, pPCHSGeometry->cHeads,
-                            pPCHSGeometry->cSectors),
-                           rc = VERR_INVALID_PARAMETER);
-        /* The LCHS geometry fields may be 0 to leave it to later autodetection. */
-        AssertMsgBreakStmt(   VALID_PTR(pLCHSGeometry)
-                           && pLCHSGeometry->cHeads <= 255
-                           && pLCHSGeometry->cSectors <= 63,
-                           ("pLCHSGeometry=%#p LCHS=%u/%u/%u\n", pLCHSGeometry,
-                            pLCHSGeometry->cCylinders, pLCHSGeometry->cHeads,
-                            pLCHSGeometry->cSectors),
-                           rc = VERR_INVALID_PARAMETER);
-        /* The UUID may be NULL. */
-        AssertMsgBreakStmt(pUuid == NULL || VALID_PTR(pUuid),
-                           ("pUuid=%#p UUID=%RTuuid\n", pUuid, pUuid),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0,
-                           ("uOpenFlags=%#x\n", uOpenFlags),
-                           rc = VERR_INVALID_PARAMETER);
-
         /* Check state. Needs a temporary read lock. Holding the write lock
          * all the time would be blocking other activities for too long. */
         rc2 = vdThreadStartRead(pDisk);
@@ -7064,6 +6137,7 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
             rc = VERR_NO_MEMORY;
             break;
         }
+        pImage->cbImage     = VD_IMAGE_SIZE_UNINITIALIZED;
         pImage->VDIo.pDisk  = pDisk;
         pImage->pVDIfsImage = pVDIfsImage;
 
@@ -7084,7 +6158,7 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
                             &pImage->VDIo, sizeof(VDINTERFACEIOINT), &pImage->pVDIfsImage);
         AssertRC(rc);
 
-        rc = vdFindBackend(pszBackend, &pImage->Backend);
+        rc = vdFindImageBackend(pszBackend, &pImage->Backend);
         if (RT_FAILURE(rc))
             break;
         if (!pImage->Backend)
@@ -7102,7 +6176,8 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
         }
         if (   (   (uImageFlags & VD_VMDK_IMAGE_FLAGS_SPLIT_2G)
                 && !(pImage->Backend->uBackendCaps & VD_CAP_CREATE_SPLIT_2G))
-            || (   (uImageFlags & VD_VMDK_IMAGE_FLAGS_STREAM_OPTIMIZED)
+            || (   (uImageFlags & (  VD_VMDK_IMAGE_FLAGS_STREAM_OPTIMIZED
+                                   | VD_VMDK_IMAGE_FLAGS_RAWDISK))
                 && RTStrICmp(pszBackend, "VMDK")))
         {
             rc =  vdError(pDisk, VERR_INVALID_PARAMETER, RT_SRC_POS,
@@ -7165,7 +6240,7 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
         if (RT_SUCCESS(rc))
         {
             /* Cache disk information. */
-            pDisk->cbSize = pImage->Backend->pfnGetSize(pImage->pBackendData);
+            pDisk->cbSize = vdImageGetSize(pImage);
 
             /* Cache PCHS geometry. */
             rc2 = pImage->Backend->pfnGetPCHSGeometry(pImage->pBackendData,
@@ -7246,23 +6321,8 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
     return rc;
 }
 
-/**
- * Creates and opens a new differencing image file in HDD container.
- * See comments for VDOpen function about differencing images.
- *
- * @returns VBox status code.
- * @param   pDisk           Pointer to HDD container.
- * @param   pszBackend      Name of the image file backend to use.
- * @param   pszFilename     Name of the differencing image file to create.
- * @param   uImageFlags     Flags specifying special image features.
- * @param   pszComment      Pointer to image comment. NULL is ok.
- * @param   pUuid           New UUID of the image. If NULL, a new UUID is created.
- * @param   pParentUuid     New parent UUID of the image. If NULL, the UUID is queried automatically.
- * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
- * @param   pVDIfsImage     Pointer to the per-image VD interface list.
- * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
- */
-VBOXDDU_DECL(int) VDCreateDiff(PVBOXHDD pDisk, const char *pszBackend,
+
+VBOXDDU_DECL(int) VDCreateDiff(PVDISK pDisk, const char *pszBackend,
                                const char *pszFilename, unsigned uImageFlags,
                                const char *pszComment, PCRTUUID pUuid,
                                PCRTUUID pParentUuid, unsigned uOpenFlags,
@@ -7278,36 +6338,27 @@ VBOXDDU_DECL(int) VDCreateDiff(PVBOXHDD pDisk, const char *pszBackend,
     LogFlowFunc(("pDisk=%#p pszBackend=\"%s\" pszFilename=\"%s\" uImageFlags=%#x pszComment=\"%s\" Uuid=%RTuuid uOpenFlags=%#x pVDIfsImage=%#p pVDIfsOperation=%#p\n",
                  pDisk, pszBackend, pszFilename, uImageFlags, pszComment, pUuid, uOpenFlags, pVDIfsImage, pVDIfsOperation));
 
-    PVDINTERFACEPROGRESS pIfProgress = VDIfProgressGet(pVDIfsOperation);
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_PARAMETER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
+    /* Check arguments. */
+    AssertPtrReturn(pszBackend, VERR_INVALID_POINTER);
+    AssertReturn(*pszBackend != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+    AssertMsgReturn((uImageFlags & ~VD_IMAGE_FLAGS_MASK) == 0, ("uImageFlags=%#x\n", uImageFlags),
+                    VERR_INVALID_PARAMETER);
+    /* The UUID may be NULL. */
+    AssertPtrNullReturn(pUuid, VERR_INVALID_POINTER);
+    /* The parent UUID may be NULL. */
+    AssertPtrNullReturn(pParentUuid, VERR_INVALID_POINTER);
+    AssertMsgReturn((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0, ("uOpenFlags=%#x\n", uOpenFlags),
+                    VERR_INVALID_PARAMETER);
+
+    PVDINTERFACEPROGRESS pIfProgress = VDIfProgressGet(pVDIfsOperation);
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszBackend) && *pszBackend,
-                           ("pszBackend=%#p \"%s\"\n", pszBackend, pszBackend),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(VALID_PTR(pszFilename) && *pszFilename,
-                           ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt((uImageFlags & ~VD_IMAGE_FLAGS_MASK) == 0,
-                           ("uImageFlags=%#x\n", uImageFlags),
-                           rc = VERR_INVALID_PARAMETER);
-        /* The UUID may be NULL. */
-        AssertMsgBreakStmt(pUuid == NULL || VALID_PTR(pUuid),
-                           ("pUuid=%#p UUID=%RTuuid\n", pUuid, pUuid),
-                           rc = VERR_INVALID_PARAMETER);
-        /* The parent UUID may be NULL. */
-        AssertMsgBreakStmt(pParentUuid == NULL || VALID_PTR(pParentUuid),
-                           ("pParentUuid=%#p ParentUUID=%RTuuid\n", pParentUuid, pParentUuid),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0,
-                           ("uOpenFlags=%#x\n", uOpenFlags),
-                           rc = VERR_INVALID_PARAMETER);
-
         /* Check state. Needs a temporary read lock. Holding the write lock
          * all the time would be blocking other activities for too long. */
         rc2 = vdThreadStartRead(pDisk);
@@ -7349,7 +6400,7 @@ VBOXDDU_DECL(int) VDCreateDiff(PVBOXHDD pDisk, const char *pszBackend,
             break;
         }
 
-        rc = vdFindBackend(pszBackend, &pImage->Backend);
+        rc = vdFindImageBackend(pszBackend, &pImage->Backend);
         if (RT_FAILURE(rc))
             break;
         if (!pImage->Backend)
@@ -7367,6 +6418,7 @@ VBOXDDU_DECL(int) VDCreateDiff(PVBOXHDD pDisk, const char *pszBackend,
             break;
         }
 
+        pImage->cbImage     = VD_IMAGE_SIZE_UNINITIALIZED;
         pImage->VDIo.pDisk  = pDisk;
         pImage->pVDIfsImage = pVDIfsImage;
 
@@ -7523,21 +6575,7 @@ VBOXDDU_DECL(int) VDCreateDiff(PVBOXHDD pDisk, const char *pszBackend,
 }
 
 
-/**
- * Creates and opens new cache image file in HDD container.
- *
- * @return  VBox status code.
- * @param   pDisk           Name of the cache file backend to use (case insensitive).
- * @param   pszFilename     Name of the differencing cache file to create.
- * @param   cbSize          Maximum size of the cache.
- * @param   uImageFlags     Flags specifying special cache features.
- * @param   pszComment      Pointer to image comment. NULL is ok.
- * @param   pUuid           New UUID of the image. If NULL, a new UUID is created.
- * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
- * @param   pVDIfsCache     Pointer to the per-cache VD interface list.
- * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
- */
-VBOXDDU_DECL(int) VDCreateCache(PVBOXHDD pDisk, const char *pszBackend,
+VBOXDDU_DECL(int) VDCreateCache(PVDISK pDisk, const char *pszBackend,
                                 const char *pszFilename, uint64_t cbSize,
                                 unsigned uImageFlags, const char *pszComment,
                                 PCRTUUID pUuid, unsigned uOpenFlags,
@@ -7552,35 +6590,27 @@ VBOXDDU_DECL(int) VDCreateCache(PVBOXHDD pDisk, const char *pszBackend,
     LogFlowFunc(("pDisk=%#p pszBackend=\"%s\" pszFilename=\"%s\" cbSize=%llu uImageFlags=%#x pszComment=\"%s\" Uuid=%RTuuid uOpenFlags=%#x pVDIfsImage=%#p pVDIfsOperation=%#p\n",
                  pDisk, pszBackend, pszFilename, cbSize, uImageFlags, pszComment, pUuid, uOpenFlags, pVDIfsCache, pVDIfsOperation));
 
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pszBackend, VERR_INVALID_POINTER);
+    AssertReturn(*pszBackend, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+    AssertReturn(cbSize > 0, VERR_INVALID_PARAMETER);
+    AssertMsgReturn((uImageFlags & ~VD_IMAGE_FLAGS_MASK) == 0, ("uImageFlags=%#x\n", uImageFlags),
+                    VERR_INVALID_PARAMETER);
+    /* The UUID may be NULL. */
+    AssertPtrNullReturn(pUuid, VERR_INVALID_POINTER);
+    AssertMsgReturn((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0, ("uOpenFlags=%#x\n", uOpenFlags),
+                    VERR_INVALID_PARAMETER);
+
     PVDINTERFACEPROGRESS pIfProgress = VDIfProgressGet(pVDIfsOperation);
 
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszBackend) && *pszBackend,
-                           ("pszBackend=%#p \"%s\"\n", pszBackend, pszBackend),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(VALID_PTR(pszFilename) && *pszFilename,
-                           ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(cbSize,
-                           ("cbSize=%llu\n", cbSize),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt((uImageFlags & ~VD_IMAGE_FLAGS_MASK) == 0,
-                           ("uImageFlags=%#x\n", uImageFlags),
-                           rc = VERR_INVALID_PARAMETER);
-        /* The UUID may be NULL. */
-        AssertMsgBreakStmt(pUuid == NULL || VALID_PTR(pUuid),
-                           ("pUuid=%#p UUID=%RTuuid\n", pUuid, pUuid),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0,
-                           ("uOpenFlags=%#x\n", uOpenFlags),
-                           rc = VERR_INVALID_PARAMETER);
-
         /* Check state. Needs a temporary read lock. Holding the write lock
          * all the time would be blocking other activities for too long. */
         rc2 = vdThreadStartRead(pDisk);
@@ -7739,20 +6769,8 @@ VBOXDDU_DECL(int) VDCreateCache(PVBOXHDD pDisk, const char *pszBackend,
     return rc;
 }
 
-/**
- * Merges two images (not necessarily with direct parent/child relationship).
- * As a side effect the source image and potentially the other images which
- * are also merged to the destination are deleted from both the disk and the
- * images in the HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImageFrom      Name of the image file to merge from.
- * @param   nImageTo        Name of the image file to merge to.
- * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
- */
-VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
+
+VBOXDDU_DECL(int) VDMerge(PVDISK pDisk, unsigned nImageFrom,
                           unsigned nImageTo, PVDINTERFACE pVDIfsOperation)
 {
     int rc = VINF_SUCCESS;
@@ -7769,7 +6787,7 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
     {
         /* sanity check */
         AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+        AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
         /* For simplicity reasons lock for writing as the image reopen below
          * might need it. After all the reopen is usually needed. */
@@ -7801,7 +6819,7 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
         }
 
         /* Get size of destination image. */
-        uint64_t cbSize = pImageTo->Backend->pfnGetSize(pImageTo->pBackendData);
+        uint64_t cbSize = vdImageGetSize(pImageTo);
         rc2 = vdThreadFinishWrite(pDisk);
         AssertRC(rc2);
         fLockWrite = false;
@@ -7823,6 +6841,7 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
              * the images to be merged. */
             uint64_t uOffset = 0;
             uint64_t cbRemaining = cbSize;
+
             do
             {
                 size_t cbThisRead = RT_MIN(VD_MERGE_BUFFER_SIZE, cbRemaining);
@@ -7854,9 +6873,20 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
                          pCurrImage != NULL && pCurrImage != pImageFrom->pPrev && rc == VERR_VD_BLOCK_FREE;
                          pCurrImage = pCurrImage->pPrev)
                     {
-                        rc = pCurrImage->Backend->pfnRead(pCurrImage->pBackendData,
-                                                          uOffset, cbThisRead,
-                                                          &IoCtx, &cbThisRead);
+                        /*
+                         * Skip reading when offset exceeds image size which can happen when the target is
+                         * bigger than the source.
+                         */
+                        uint64_t cbImage = vdImageGetSize(pCurrImage);
+                        if (uOffset < cbImage)
+                        {
+                            cbThisRead = RT_MIN(cbThisRead, cbImage - uOffset);
+                            rc = pCurrImage->Backend->pfnRead(pCurrImage->pBackendData,
+                                                              uOffset, cbThisRead,
+                                                              &IoCtx, &cbThisRead);
+                        }
+                        else
+                            rc = VERR_VD_BLOCK_FREE;
                     }
 
                     if (rc != VERR_VD_BLOCK_FREE)
@@ -7950,6 +6980,7 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
             /* Merge child state into parent. This means writing all blocks
              * which are allocated in the image up to the source image to the
              * destination image. */
+            unsigned uProgressOld = 0;
             uint64_t uOffset = 0;
             uint64_t cbRemaining = cbSize;
             do
@@ -7980,9 +7011,20 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
                      pCurrImage != NULL && pCurrImage != pImageTo && rc == VERR_VD_BLOCK_FREE;
                      pCurrImage = pCurrImage->pPrev)
                 {
-                    rc = pCurrImage->Backend->pfnRead(pCurrImage->pBackendData,
-                                                           uOffset, cbThisRead,
-                                                           &IoCtx, &cbThisRead);
+                    /*
+                     * Skip reading when offset exceeds image size which can happen when the target is
+                     * bigger than the source.
+                     */
+                    uint64_t cbImage = vdImageGetSize(pCurrImage);
+                    if (uOffset < cbImage)
+                    {
+                        cbThisRead = RT_MIN(cbThisRead, cbImage - uOffset);
+                        rc = pCurrImage->Backend->pfnRead(pCurrImage->pBackendData,
+                                                          uOffset, cbThisRead,
+                                                          &IoCtx, &cbThisRead);
+                    }
+                    else
+                        rc = VERR_VD_BLOCK_FREE;
                 }
 
                 if (rc != VERR_VD_BLOCK_FREE)
@@ -8004,16 +7046,20 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
                 uOffset += cbThisRead;
                 cbRemaining -= cbThisRead;
 
-                if (pIfProgress && pIfProgress->pfnProgress)
+                unsigned uProgressNew = uOffset * 99 / cbSize;
+                if (uProgressNew != uProgressOld)
                 {
-                    /** @todo r=klaus: this can update the progress to the same
-                     * percentage over and over again if the image format makes
-                     * relatively small increments. */
-                    rc = pIfProgress->pfnProgress(pIfProgress->Core.pvUser,
-                                                  uOffset * 99 / cbSize);
-                    if (RT_FAILURE(rc))
-                        break;
+                    uProgressOld = uProgressNew;
+
+                    if (pIfProgress && pIfProgress->pfnProgress)
+                    {
+                        rc = pIfProgress->pfnProgress(pIfProgress->Core.pvUser,
+                                                      uProgressOld);
+                        if (RT_FAILURE(rc))
+                            break;
+                    }
                 }
+
             } while (uOffset < cbSize);
 
             /* In case we set up a "write proxy" image above we must clear
@@ -8108,7 +7154,7 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
                 pTmp = pImg->pPrev;
             vdRemoveImageFromList(pDisk, pImg);
             pImg->Backend->pfnClose(pImg->pBackendData, true);
-            RTMemFree(pImg->pszFilename);
+            RTStrFree(pImg->pszFilename);
             RTMemFree(pImg);
             pImg = pTmp;
         }
@@ -8163,46 +7209,8 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
     return rc;
 }
 
-/**
- * Copies an image from one HDD container to another - extended version.
- * The copy is opened in the target HDD container.
- * It is possible to convert between different image formats, because the
- * backend for the destination may be different from the source.
- * If both the source and destination reference the same HDD container,
- * then the image is moved (by copying/deleting or renaming) to the new location.
- * The source container is unchanged if the move operation fails, otherwise
- * the image at the new location is opened in the same way as the old one was.
- *
- * @note The read/write accesses across disks are not synchronized, just the
- * accesses to each disk. Once there is a use case which requires a defined
- * read/write behavior in this situation this needs to be extended.
- *
- * @returns VBox status code.
- * @retval  VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDiskFrom       Pointer to source HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pDiskTo         Pointer to destination HDD container.
- * @param   pszBackend      Name of the image file backend to use (may be NULL to use the same as the source, case insensitive).
- * @param   pszFilename     New name of the image (may be NULL to specify that the
- *                          copy destination is the destination container, or
- *                          if pDiskFrom == pDiskTo, i.e. when moving).
- * @param   fMoveByRename   If true, attempt to perform a move by renaming (if successful the new size is ignored).
- * @param   cbSize          New image size (0 means leave unchanged).
- * @param   nImageFromSame  todo
- * @param   nImageToSame    todo
- * @param   uImageFlags     Flags specifying special destination image features.
- * @param   pDstUuid        New UUID of the destination image. If NULL, a new UUID is created.
- *                          This parameter is used if and only if a true copy is created.
- *                          In all rename/move cases or copy to existing image cases the modification UUIDs are copied over.
- * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
- *                          Only used if the destination image is created.
- * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
- * @param   pDstVDIfsImage  Pointer to the per-image VD interface list, for the
- *                          destination image.
- * @param   pDstVDIfsOperation Pointer to the per-operation VD interface list,
- *                          for the destination operation.
- */
-VBOXDDU_DECL(int) VDCopyEx(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
+
+VBOXDDU_DECL(int) VDCopyEx(PVDISK pDiskFrom, unsigned nImage, PVDISK pDiskTo,
                            const char *pszBackend, const char *pszFilename,
                            bool fMoveByRename, uint64_t cbSize,
                            unsigned nImageFromSame, unsigned nImageToSame,
@@ -8219,24 +7227,22 @@ VBOXDDU_DECL(int) VDCopyEx(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo
     LogFlowFunc(("pDiskFrom=%#p nImage=%u pDiskTo=%#p pszBackend=\"%s\" pszFilename=\"%s\" fMoveByRename=%d cbSize=%llu nImageFromSame=%u nImageToSame=%u uImageFlags=%#x pDstUuid=%#p uOpenFlags=%#x pVDIfsOperation=%#p pDstVDIfsImage=%#p pDstVDIfsOperation=%#p\n",
                  pDiskFrom, nImage, pDiskTo, pszBackend, pszFilename, fMoveByRename, cbSize, nImageFromSame, nImageToSame, uImageFlags, pDstUuid, uOpenFlags, pVDIfsOperation, pDstVDIfsImage, pDstVDIfsOperation));
 
+    /* Check arguments. */
+    AssertReturn(pDiskFrom, VERR_INVALID_POINTER);
+    AssertMsg(pDiskFrom->u32Signature == VDISK_SIGNATURE,
+              ("u32Signature=%08x\n", pDiskFrom->u32Signature));
+
     PVDINTERFACEPROGRESS pIfProgress    = VDIfProgressGet(pVDIfsOperation);
     PVDINTERFACEPROGRESS pDstIfProgress = VDIfProgressGet(pDstVDIfsOperation);
 
     do {
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pDiskFrom), ("pDiskFrom=%#p\n", pDiskFrom),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDiskFrom->u32Signature == VBOXHDDDISK_SIGNATURE,
-                  ("u32Signature=%08x\n", pDiskFrom->u32Signature));
-
         rc2 = vdThreadStartRead(pDiskFrom);
         AssertRC(rc2);
         fLockReadFrom = true;
         PVDIMAGE pImageFrom = vdGetImageByNumber(pDiskFrom, nImage);
         AssertPtrBreakStmt(pImageFrom, rc = VERR_VD_IMAGE_NOT_FOUND);
-        AssertMsgBreakStmt(VALID_PTR(pDiskTo), ("pDiskTo=%#p\n", pDiskTo),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDiskTo->u32Signature == VBOXHDDDISK_SIGNATURE,
+        AssertPtrBreakStmt(pDiskTo, rc = VERR_INVALID_POINTER);
+        AssertMsg(pDiskTo->u32Signature == VDISK_SIGNATURE,
                   ("u32Signature=%08x\n", pDiskTo->u32Signature));
         AssertMsgBreakStmt(   (nImageFromSame < nImage || nImageFromSame == VD_IMAGE_CONTENT_UNKNOWN)
                            && (nImageToSame < pDiskTo->cImages || nImageToSame == VD_IMAGE_CONTENT_UNKNOWN)
@@ -8273,12 +7279,14 @@ VBOXDDU_DECL(int) VDCopyEx(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo
         }
 
         /* pszFilename is allowed to be NULL, as this indicates copy to the existing image. */
-        AssertMsgBreakStmt(pszFilename == NULL || (VALID_PTR(pszFilename) && *pszFilename),
-                           ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                           rc = VERR_INVALID_PARAMETER);
+        if (pszFilename)
+        {
+            AssertPtrBreakStmt(pszFilename, rc = VERR_INVALID_POINTER);
+            AssertBreakStmt(*pszFilename != '\0', rc = VERR_INVALID_PARAMETER);
+        }
 
         uint64_t cbSizeFrom;
-        cbSizeFrom = pImageFrom->Backend->pfnGetSize(pImageFrom->pBackendData);
+        cbSizeFrom = vdImageGetSize(pImageFrom);
         if (cbSizeFrom == 0)
         {
             rc = VERR_VD_VALUE_NOT_FOUND;
@@ -8381,7 +7389,7 @@ VBOXDDU_DECL(int) VDCopyEx(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo
             AssertPtrBreakStmt(pImageTo, rc = VERR_VD_IMAGE_NOT_FOUND);
 
             uint64_t cbSizeTo;
-            cbSizeTo = pImageTo->Backend->pfnGetSize(pImageTo->pBackendData);
+            cbSizeTo = vdImageGetSize(pImageTo);
             if (cbSizeTo == 0)
             {
                 rc = VERR_VD_VALUE_NOT_FOUND;
@@ -8502,38 +7510,8 @@ VBOXDDU_DECL(int) VDCopyEx(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo
     return rc;
 }
 
-/**
- * Copies an image from one HDD container to another.
- * The copy is opened in the target HDD container.
- * It is possible to convert between different image formats, because the
- * backend for the destination may be different from the source.
- * If both the source and destination reference the same HDD container,
- * then the image is moved (by copying/deleting or renaming) to the new location.
- * The source container is unchanged if the move operation fails, otherwise
- * the image at the new location is opened in the same way as the old one was.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDiskFrom       Pointer to source HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pDiskTo         Pointer to destination HDD container.
- * @param   pszBackend      Name of the image file backend to use.
- * @param   pszFilename     New name of the image (may be NULL if pDiskFrom == pDiskTo).
- * @param   fMoveByRename   If true, attempt to perform a move by renaming (if successful the new size is ignored).
- * @param   cbSize          New image size (0 means leave unchanged).
- * @param   uImageFlags     Flags specifying special destination image features.
- * @param   pDstUuid        New UUID of the destination image. If NULL, a new UUID is created.
- *                          This parameter is used if and only if a true copy is created.
- *                          In all rename/move cases the UUIDs are copied over.
- * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
- *                          Only used if the destination image is created.
- * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
- * @param   pDstVDIfsImage  Pointer to the per-image VD interface list, for the
- *                          destination image.
- * @param   pDstVDIfsOperation Pointer to the per-image VD interface list,
- *                          for the destination image.
- */
-VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
+
+VBOXDDU_DECL(int) VDCopy(PVDISK pDiskFrom, unsigned nImage, PVDISK pDiskTo,
                          const char *pszBackend, const char *pszFilename,
                          bool fMoveByRename, uint64_t cbSize,
                          unsigned uImageFlags, PCRTUUID pDstUuid,
@@ -8547,23 +7525,8 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
                     pDstVDIfsImage, pDstVDIfsOperation);
 }
 
-/**
- * Optimizes the storage consumption of an image. Typically the unused blocks
- * have to be wiped with zeroes to achieve a substantial reduced storage use.
- * Another optimization done is reordering the image blocks, which can provide
- * a significant performance boost, as reads and writes tend to use less random
- * file offsets.
- *
- * @return  VBox status code.
- * @return  VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @return  VERR_VD_IMAGE_READ_ONLY if image is not writable.
- * @return  VERR_NOT_SUPPORTED if this kind of image can be compacted, but
- *                             the code for this isn't implemented yet.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
- */
-VBOXDDU_DECL(int) VDCompact(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDCompact(PVDISK pDisk, unsigned nImage,
                             PVDINTERFACE pVDIfsOperation)
 {
     int rc = VINF_SUCCESS;
@@ -8574,16 +7537,14 @@ VBOXDDU_DECL(int) VDCompact(PVBOXHDD pDisk, unsigned nImage,
 
     LogFlowFunc(("pDisk=%#p nImage=%u pVDIfsOperation=%#p\n",
                  pDisk, nImage, pVDIfsOperation));
+    /* Check arguments. */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE,
+              ("u32Signature=%08x\n", pDisk->u32Signature));
 
     PVDINTERFACEPROGRESS pIfProgress = VDIfProgressGet(pVDIfsOperation);
 
     do {
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pDisk), ("pDisk=%#p\n", pDisk),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE,
-                  ("u32Signature=%08x\n", pDisk->u32Signature));
-
         rc2 = vdThreadStartRead(pDisk);
         AssertRC(rc2);
         fLockRead = true;
@@ -8658,20 +7619,8 @@ VBOXDDU_DECL(int) VDCompact(PVBOXHDD pDisk, unsigned nImage,
     return rc;
 }
 
-/**
- * Resizes the given disk image to the given size.
- *
- * @return  VBox status
- * @return  VERR_VD_IMAGE_READ_ONLY if image is not writable.
- * @return  VERR_NOT_SUPPORTED if this kind of image can be compacted, but
- *
- * @param   pDisk           Pointer to the HDD container.
- * @param   cbSize          New size of the image.
- * @param   pPCHSGeometry   Pointer to the new physical disk geometry <= (16383,16,63). Not NULL.
- * @param   pLCHSGeometry   Pointer to the new logical disk geometry <= (x,255,63). Not NULL.
- * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
- */
-VBOXDDU_DECL(int) VDResize(PVBOXHDD pDisk, uint64_t cbSize,
+
+VBOXDDU_DECL(int) VDResize(PVDISK pDisk, uint64_t cbSize,
                            PCVDGEOMETRY pPCHSGeometry,
                            PCVDGEOMETRY pLCHSGeometry,
                            PVDINTERFACE pVDIfsOperation)
@@ -8683,16 +7632,14 @@ VBOXDDU_DECL(int) VDResize(PVBOXHDD pDisk, uint64_t cbSize,
 
     LogFlowFunc(("pDisk=%#p cbSize=%llu pVDIfsOperation=%#p\n",
                  pDisk, cbSize, pVDIfsOperation));
+    /* Check arguments. */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE,
+              ("u32Signature=%08x\n", pDisk->u32Signature));
 
     PVDINTERFACEPROGRESS pIfProgress = VDIfProgressGet(pVDIfsOperation);
 
     do {
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pDisk), ("pDisk=%#p\n", pDisk),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE,
-                  ("u32Signature=%08x\n", pDisk->u32Signature));
-
         rc2 = vdThreadStartRead(pDisk);
         AssertRC(rc2);
         fLockRead = true;
@@ -8765,6 +7712,9 @@ VBOXDDU_DECL(int) VDResize(PVBOXHDD pDisk, uint64_t cbSize,
                                             pDisk->pVDIfsDisk,
                                             pImage->pVDIfsImage,
                                             pVDIfsOperation);
+        /* Mark the image size as uninitialized so it gets recalculated the next time. */
+        if (RT_SUCCESS(rc))
+            pImage->cbImage = VD_IMAGE_SIZE_UNINITIALIZED;
     } while (0);
 
     if (RT_UNLIKELY(fLockWrite))
@@ -8790,23 +7740,21 @@ VBOXDDU_DECL(int) VDResize(PVBOXHDD pDisk, uint64_t cbSize,
     return rc;
 }
 
-VBOXDDU_DECL(int) VDPrepareWithFilters(PVBOXHDD pDisk, PVDINTERFACE pVDIfsOperation)
+VBOXDDU_DECL(int) VDPrepareWithFilters(PVDISK pDisk, PVDINTERFACE pVDIfsOperation)
 {
     int rc = VINF_SUCCESS;
     int rc2;
     bool fLockRead = false, fLockWrite = false;
 
     LogFlowFunc(("pDisk=%#p pVDIfsOperation=%#p\n", pDisk, pVDIfsOperation));
+    /* Check arguments. */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE,
+              ("u32Signature=%08x\n", pDisk->u32Signature));
 
     PVDINTERFACEPROGRESS pIfProgress = VDIfProgressGet(pVDIfsOperation);
 
     do {
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pDisk), ("pDisk=%#p\n", pDisk),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE,
-                  ("u32Signature=%08x\n", pDisk->u32Signature));
-
         rc2 = vdThreadStartRead(pDisk);
         AssertRC(rc2);
         fLockRead = true;
@@ -8872,7 +7820,7 @@ VBOXDDU_DECL(int) VDPrepareWithFilters(PVBOXHDD pDisk, PVDINTERFACE pVDIfsOperat
                    && RT_SUCCESS(rc))
             {
                 /* Get size of image. */
-                uint64_t cbSize = pImage->Backend->pfnGetSize(pImage->pBackendData);
+                uint64_t cbSize = vdImageGetSize(pImage);
                 uint64_t cbSizeFile = pImage->Backend->pfnGetFileSize(pImage->pBackendData);
                 uint64_t cbFileWritten = 0;
                 uint64_t uOffset = 0;
@@ -8981,18 +7929,8 @@ VBOXDDU_DECL(int) VDPrepareWithFilters(PVBOXHDD pDisk, PVDINTERFACE pVDIfsOperat
     return rc;
 }
 
-/**
- * Closes the last opened image file in HDD container.
- * If previous image file was opened in read-only mode (the normal case) and
- * the last opened image is in read-write mode then the previous image will be
- * reopened in read/write mode.
- *
- * @returns VBox status code.
- * @returns VERR_VD_NOT_OPENED if no image is opened in HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   fDelete         If true, delete the image from the host disk.
- */
-VBOXDDU_DECL(int) VDClose(PVBOXHDD pDisk, bool fDelete)
+
+VBOXDDU_DECL(int) VDClose(PVDISK pDisk, bool fDelete)
 {
     int rc = VINF_SUCCESS;
     int rc2;
@@ -9003,7 +7941,7 @@ VBOXDDU_DECL(int) VDClose(PVBOXHDD pDisk, bool fDelete)
     {
         /* sanity check */
         AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+        AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
         /* Not worth splitting this up into a read lock phase and write
          * lock phase, as closing an image is a relatively fast operation
@@ -9048,7 +7986,7 @@ VBOXDDU_DECL(int) VDClose(PVBOXHDD pDisk, bool fDelete)
         }
 
         /* Cache disk information. */
-        pDisk->cbSize = pImage->Backend->pfnGetSize(pImage->pBackendData);
+        pDisk->cbSize = vdImageGetSize(pImage);
 
         /* Cache PCHS geometry. */
         rc2 = pImage->Backend->pfnGetPCHSGeometry(pImage->pBackendData,
@@ -9094,15 +8032,8 @@ VBOXDDU_DECL(int) VDClose(PVBOXHDD pDisk, bool fDelete)
     return rc;
 }
 
-/**
- * Closes the currently opened cache image file in HDD container.
- *
- * @return  VBox status code.
- * @return  VERR_VD_NOT_OPENED if no cache is opened in HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   fDelete         If true, delete the image from the host disk.
- */
-VBOXDDU_DECL(int) VDCacheClose(PVBOXHDD pDisk, bool fDelete)
+
+VBOXDDU_DECL(int) VDCacheClose(PVDISK pDisk, bool fDelete)
 {
     int rc = VINF_SUCCESS;
     int rc2;
@@ -9115,7 +8046,7 @@ VBOXDDU_DECL(int) VDCacheClose(PVBOXHDD pDisk, bool fDelete)
     {
         /* sanity check */
         AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+        AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
@@ -9142,7 +8073,7 @@ VBOXDDU_DECL(int) VDCacheClose(PVBOXHDD pDisk, bool fDelete)
     return rc;
 }
 
-VBOXDDU_DECL(int) VDFilterRemove(PVBOXHDD pDisk, uint32_t fFlags)
+VBOXDDU_DECL(int) VDFilterRemove(PVDISK pDisk, uint32_t fFlags)
 {
     int rc = VINF_SUCCESS;
     int rc2;
@@ -9155,7 +8086,7 @@ VBOXDDU_DECL(int) VDFilterRemove(PVBOXHDD pDisk, uint32_t fFlags)
     {
         /* sanity check */
         AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+        AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
         AssertMsgBreakStmt(!(fFlags & ~VD_FILTER_FLAGS_MASK),
                            ("Invalid flags set (fFlags=%#x)\n", fFlags),
@@ -9194,131 +8125,92 @@ VBOXDDU_DECL(int) VDFilterRemove(PVBOXHDD pDisk, uint32_t fFlags)
     return rc;
 }
 
-/**
- * Closes all opened image files in HDD container.
- *
- * @returns VBox status code.
- * @param   pDisk           Pointer to HDD container.
- */
-VBOXDDU_DECL(int) VDCloseAll(PVBOXHDD pDisk)
+
+VBOXDDU_DECL(int) VDCloseAll(PVDISK pDisk)
 {
     int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockWrite = false;
 
     LogFlowFunc(("pDisk=%#p\n", pDisk));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Lock the entire operation. */
+    int rc2 = vdThreadStartWrite(pDisk);
+    AssertRC(rc2);
+
+    PVDCACHE pCache = pDisk->pCache;
+    if (pCache)
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+        rc2 = pCache->Backend->pfnClose(pCache->pBackendData, false);
+        if (RT_FAILURE(rc2) && RT_SUCCESS(rc))
+            rc = rc2;
 
-        /* Lock the entire operation. */
-        rc2 = vdThreadStartWrite(pDisk);
-        AssertRC(rc2);
-        fLockWrite = true;
-
-        PVDCACHE pCache = pDisk->pCache;
-        if (pCache)
-        {
-            rc2 = pCache->Backend->pfnClose(pCache->pBackendData, false);
-            if (RT_FAILURE(rc2) && RT_SUCCESS(rc))
-                rc = rc2;
-
-            if (pCache->pszFilename)
-                RTStrFree(pCache->pszFilename);
-            RTMemFree(pCache);
-        }
-
-        PVDIMAGE pImage = pDisk->pLast;
-        while (VALID_PTR(pImage))
-        {
-            PVDIMAGE pPrev = pImage->pPrev;
-            /* Remove image from list of opened images. */
-            vdRemoveImageFromList(pDisk, pImage);
-            /* Close image. */
-            rc2 = pImage->Backend->pfnClose(pImage->pBackendData, false);
-            if (RT_FAILURE(rc2) && RT_SUCCESS(rc))
-                rc = rc2;
-            /* Free remaining resources related to the image. */
-            RTStrFree(pImage->pszFilename);
-            RTMemFree(pImage);
-            pImage = pPrev;
-        }
-        Assert(!VALID_PTR(pDisk->pLast));
-    } while (0);
-
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
+        if (pCache->pszFilename)
+            RTStrFree(pCache->pszFilename);
+        RTMemFree(pCache);
     }
+
+    PVDIMAGE pImage = pDisk->pLast;
+    while (RT_VALID_PTR(pImage))
+    {
+        PVDIMAGE pPrev = pImage->pPrev;
+        /* Remove image from list of opened images. */
+        vdRemoveImageFromList(pDisk, pImage);
+        /* Close image. */
+        rc2 = pImage->Backend->pfnClose(pImage->pBackendData, false);
+        if (RT_FAILURE(rc2) && RT_SUCCESS(rc))
+            rc = rc2;
+        /* Free remaining resources related to the image. */
+        RTStrFree(pImage->pszFilename);
+        RTMemFree(pImage);
+        pImage = pPrev;
+    }
+    Assert(!RT_VALID_PTR(pDisk->pLast));
+
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Removes all filters of the given HDD container.
- *
- * @return  VBox status code.
- * @param   pDisk           Pointer to HDD container.
- */
-VBOXDDU_DECL(int) VDFilterRemoveAll(PVBOXHDD pDisk)
+
+VBOXDDU_DECL(int) VDFilterRemoveAll(PVDISK pDisk)
 {
-    int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockWrite = false;
-
     LogFlowFunc(("pDisk=%#p\n", pDisk));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Lock the entire operation. */
+    int rc2 = vdThreadStartWrite(pDisk);
+    AssertRC(rc2);
+
+    PVDFILTER pFilter, pFilterNext;
+    RTListForEachSafe(&pDisk->ListFilterChainWrite, pFilter, pFilterNext, VDFILTER, ListNodeChainWrite)
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Lock the entire operation. */
-        rc2 = vdThreadStartWrite(pDisk);
-        AssertRC(rc2);
-        fLockWrite = true;
-
-        PVDFILTER pFilter, pFilterNext;
-        RTListForEachSafe(&pDisk->ListFilterChainWrite, pFilter, pFilterNext, VDFILTER, ListNodeChainWrite)
-        {
-            RTListNodeRemove(&pFilter->ListNodeChainWrite);
-            vdFilterRelease(pFilter);
-        }
-
-        RTListForEachSafe(&pDisk->ListFilterChainRead, pFilter, pFilterNext, VDFILTER, ListNodeChainRead)
-        {
-            RTListNodeRemove(&pFilter->ListNodeChainRead);
-            vdFilterRelease(pFilter);
-        }
-        Assert(RTListIsEmpty(&pDisk->ListFilterChainRead));
-        Assert(RTListIsEmpty(&pDisk->ListFilterChainWrite));
-    } while (0);
-
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
+        RTListNodeRemove(&pFilter->ListNodeChainWrite);
+        vdFilterRelease(pFilter);
     }
 
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
+    RTListForEachSafe(&pDisk->ListFilterChainRead, pFilter, pFilterNext, VDFILTER, ListNodeChainRead)
+    {
+        RTListNodeRemove(&pFilter->ListNodeChainRead);
+        vdFilterRelease(pFilter);
+    }
+    Assert(RTListIsEmpty(&pDisk->ListFilterChainRead));
+    Assert(RTListIsEmpty(&pDisk->ListFilterChainWrite));
+
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
+
+    LogFlowFunc(("returns %Rrc\n", VINF_SUCCESS));
+    return VINF_SUCCESS;
 }
 
-/**
- * Read data from virtual HDD.
- *
- * @returns VBox status code.
- * @retval  VERR_VD_NOT_OPENED if no image is opened in HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   uOffset         Offset of first reading byte from start of disk.
- * @param   pvBuf           Pointer to buffer for reading data.
- * @param   cbRead          Number of bytes to read.
- */
-VBOXDDU_DECL(int) VDRead(PVBOXHDD pDisk, uint64_t uOffset, void *pvBuf,
+
+VBOXDDU_DECL(int) VDRead(PVDISK pDisk, uint64_t uOffset, void *pvBuf,
                          size_t cbRead)
 {
     int rc = VINF_SUCCESS;
@@ -9327,23 +8219,25 @@ VBOXDDU_DECL(int) VDRead(PVBOXHDD pDisk, uint64_t uOffset, void *pvBuf,
 
     LogFlowFunc(("pDisk=%#p uOffset=%llu pvBuf=%p cbRead=%zu\n",
                  pDisk, uOffset, pvBuf, cbRead));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pvBuf, VERR_INVALID_POINTER);
+    AssertReturn(cbRead > 0, VERR_INVALID_PARAMETER);
+
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pvBuf),
-                           ("pvBuf=%#p\n", pvBuf),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(cbRead,
-                           ("cbRead=%zu\n", cbRead),
-                           rc = VERR_INVALID_PARAMETER);
-
         rc2 = vdThreadStartRead(pDisk);
         AssertRC(rc2);
         fLockRead = true;
+
+        AssertMsgBreakStmt(   uOffset < pDisk->cbSize
+                           && cbRead <= pDisk->cbSize - uOffset,
+                           ("uOffset=%llu cbRead=%zu pDisk->cbSize=%llu\n",
+                            uOffset, cbRead, pDisk->cbSize),
+                           rc = VERR_INVALID_PARAMETER);
 
         PVDIMAGE pImage = pDisk->pLast;
         AssertPtrBreakStmt(pImage, rc = VERR_VD_NOT_OPENED);
@@ -9376,45 +8270,30 @@ VBOXDDU_DECL(int) VDRead(PVBOXHDD pDisk, uint64_t uOffset, void *pvBuf,
     return rc;
 }
 
-/**
- * Write data to virtual HDD.
- *
- * @returns VBox status code.
- * @retval  VERR_VD_NOT_OPENED if no image is opened in HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   uOffset         Offset of the first byte being
- *                          written from start of disk.
- * @param   pvBuf           Pointer to buffer for writing data.
- * @param   cbWrite         Number of bytes to write.
- */
-VBOXDDU_DECL(int) VDWrite(PVBOXHDD pDisk, uint64_t uOffset, const void *pvBuf,
+
+VBOXDDU_DECL(int) VDWrite(PVDISK pDisk, uint64_t uOffset, const void *pvBuf,
                           size_t cbWrite)
 {
     int rc = VINF_SUCCESS;
     int rc2;
-    bool fLockWrite = false;
 
     LogFlowFunc(("pDisk=%#p uOffset=%llu pvBuf=%p cbWrite=%zu\n",
                  pDisk, uOffset, pvBuf, cbWrite));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pvBuf, VERR_INVALID_POINTER);
+    AssertReturn(cbWrite > 0, VERR_INVALID_PARAMETER);
+
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pvBuf),
-                           ("pvBuf=%#p\n", pvBuf),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(cbWrite,
-                           ("cbWrite=%zu\n", cbWrite),
-                           rc = VERR_INVALID_PARAMETER);
-
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
-        fLockWrite = true;
 
-        AssertMsgBreakStmt(uOffset + cbWrite <= pDisk->cbSize,
+        AssertMsgBreakStmt(   uOffset < pDisk->cbSize
+                           && cbWrite <= pDisk->cbSize - uOffset,
                            ("uOffset=%llu cbWrite=%zu pDisk->cbSize=%llu\n",
                             uOffset, cbWrite, pDisk->cbSize),
                            rc = VERR_INVALID_PARAMETER);
@@ -9441,39 +8320,28 @@ VBOXDDU_DECL(int) VDWrite(PVBOXHDD pDisk, uint64_t uOffset, const void *pvBuf,
                                pvBuf, cbWrite, VDIOCTX_FLAGS_DEFAULT);
     } while (0);
 
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Make sure the on disk representation of a virtual HDD is up to date.
- *
- * @returns VBox status code.
- * @retval  VERR_VD_NOT_OPENED if no image is opened in HDD container.
- * @param   pDisk           Pointer to HDD container.
- */
-VBOXDDU_DECL(int) VDFlush(PVBOXHDD pDisk)
+
+VBOXDDU_DECL(int) VDFlush(PVDISK pDisk)
 {
     int rc = VINF_SUCCESS;
     int rc2;
-    bool fLockWrite = false;
 
     LogFlowFunc(("pDisk=%#p\n", pDisk));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
-        fLockWrite = true;
 
         PVDIMAGE pImage = pDisk->pLast;
         AssertPtrBreakStmt(pImage, rc = VERR_VD_NOT_OPENED);
@@ -9496,269 +8364,192 @@ VBOXDDU_DECL(int) VDFlush(PVBOXHDD pDisk)
         RTSemEventDestroy(hEventComplete);
     } while (0);
 
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Get number of opened images in HDD container.
- *
- * @returns Number of opened images for HDD container. 0 if no images have been opened.
- * @param   pDisk           Pointer to HDD container.
- */
-VBOXDDU_DECL(unsigned) VDGetCount(PVBOXHDD pDisk)
+
+VBOXDDU_DECL(unsigned) VDGetCount(PVDISK pDisk)
 {
-    unsigned cImages;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p\n", pDisk));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, cImages = 0);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* sanity check */
+    AssertPtrReturn(pDisk, 0);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        cImages = pDisk->cImages;
-    } while (0);
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    unsigned cImages = pDisk->cImages;
+
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %u\n", cImages));
     return cImages;
 }
 
-/**
- * Get read/write mode of HDD container.
- *
- * @returns Virtual disk ReadOnly status.
- * @returns true if no image is opened in HDD container.
- * @param   pDisk           Pointer to HDD container.
- */
-VBOXDDU_DECL(bool) VDIsReadOnly(PVBOXHDD pDisk)
+
+VBOXDDU_DECL(bool) VDIsReadOnly(PVDISK pDisk)
 {
-    bool fReadOnly;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p\n", pDisk));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, true);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
+
+    bool fReadOnly = true;
+    PVDIMAGE pImage = pDisk->pLast;
+    AssertPtr(pImage);
+    if (pImage)
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, fReadOnly = false);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
-
-        PVDIMAGE pImage = pDisk->pLast;
-        AssertPtrBreakStmt(pImage, fReadOnly = true);
-
-        unsigned uOpenFlags;
-        uOpenFlags = pDisk->pLast->Backend->pfnGetOpenFlags(pDisk->pLast->pBackendData);
+        unsigned uOpenFlags = pDisk->pLast->Backend->pfnGetOpenFlags(pDisk->pLast->pBackendData);
         fReadOnly = !!(uOpenFlags & VD_OPEN_FLAGS_READONLY);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
     }
+
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %d\n", fReadOnly));
     return fReadOnly;
 }
 
-/**
- * Get sector size of an image in HDD container.
- *
- * @return  Virtual disk sector size in bytes.
- * @return  0 if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- */
-VBOXDDU_DECL(uint32_t) VDGetSectorSize(PVBOXHDD pDisk, unsigned nImage)
+
+VBOXDDU_DECL(uint32_t) VDGetSectorSize(PVDISK pDisk, unsigned nImage)
 {
-    uint64_t cbSector;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u\n", pDisk, nImage));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, 0);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
+
+    uint64_t cbSector = 0;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, cbSector = 0);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+        PCVDREGIONLIST pRegionList = NULL;
+        int rc = pImage->Backend->pfnQueryRegions(pImage->pBackendData, &pRegionList);
+        if (RT_SUCCESS(rc))
+        {
+            AssertMsg(pRegionList->cRegions == 1, ("%u\n", pRegionList->cRegions));
+            if (pRegionList->cRegions == 1)
+            {
+                cbSector = pRegionList->aRegions[0].cbBlock;
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
-
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, cbSector = 0);
-        cbSector = pImage->Backend->pfnGetSectorSize(pImage->pBackendData);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
+                AssertPtr(pImage->Backend->pfnRegionListRelease);
+                pImage->Backend->pfnRegionListRelease(pImage->pBackendData, pRegionList);
+            }
+        }
     }
+
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %u\n", cbSector));
     return cbSector;
 }
 
-/**
- * Get total capacity of an image in HDD container.
- *
- * @returns Virtual disk size in bytes.
- * @returns 0 if no image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- */
-VBOXDDU_DECL(uint64_t) VDGetSize(PVBOXHDD pDisk, unsigned nImage)
+
+VBOXDDU_DECL(uint64_t) VDGetSize(PVDISK pDisk, unsigned nImage)
 {
-    uint64_t cbSize;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u\n", pDisk, nImage));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, cbSize = 0);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, 0);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, cbSize = 0);
-        cbSize = pImage->Backend->pfnGetSize(pImage->pBackendData);
-    } while (0);
+    uint64_t cbSize;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
+        cbSize = vdImageGetSize(pImage);
+    else
+        cbSize = 0;
 
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
-    LogFlowFunc(("returns %llu\n", cbSize));
+    LogFlowFunc(("returns %llu (%#RX64)\n", cbSize, cbSize));
     return cbSize;
 }
 
-/**
- * Get total file size of an image in HDD container.
- *
- * @returns Virtual disk size in bytes.
- * @returns 0 if no image is opened in HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- */
-VBOXDDU_DECL(uint64_t) VDGetFileSize(PVBOXHDD pDisk, unsigned nImage)
+
+VBOXDDU_DECL(uint64_t) VDGetFileSize(PVDISK pDisk, unsigned nImage)
 {
-    uint64_t cbSize;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u\n", pDisk, nImage));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, cbSize = 0);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* sanity check */
+    AssertPtrReturn(pDisk, 0);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, cbSize = 0);
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
+
+    uint64_t cbSize = 0;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
         cbSize = pImage->Backend->pfnGetFileSize(pImage->pBackendData);
-    } while (0);
 
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
-    LogFlowFunc(("returns %llu\n", cbSize));
+    LogFlowFunc(("returns %llu (%#RX64)\n", cbSize, cbSize));
     return cbSize;
 }
 
-/**
- * Get virtual disk PCHS geometry stored in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @returns VERR_VD_GEOMETRY_NOT_SET if no geometry present in the HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pPCHSGeometry   Where to store PCHS geometry. Not NULL.
- */
-VBOXDDU_DECL(int) VDGetPCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDGetPCHSGeometry(PVDISK pDisk, unsigned nImage,
                                     PVDGEOMETRY pPCHSGeometry)
 {
-    int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pPCHSGeometry=%#p\n",
                  pDisk, nImage, pPCHSGeometry));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pPCHSGeometry, VERR_INVALID_POINTER);
+
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
+
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pPCHSGeometry),
-                           ("pPCHSGeometry=%#p\n", pPCHSGeometry),
-                           rc = VERR_INVALID_PARAMETER);
-
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
-
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
         if (pImage == pDisk->pLast)
         {
             /* Use cached information if possible. */
             if (pDisk->PCHSGeometry.cCylinders != 0)
+            {
                 *pPCHSGeometry = pDisk->PCHSGeometry;
+                rc = VINF_SUCCESS;
+            }
             else
                 rc = VERR_VD_GEOMETRY_NOT_SET;
         }
         else
-            rc = pImage->Backend->pfnGetPCHSGeometry(pImage->pBackendData,
-                                                     pPCHSGeometry);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
+            rc = pImage->Backend->pfnGetPCHSGeometry(pImage->pBackendData, pPCHSGeometry);
     }
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
+
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("%Rrc (PCHS=%u/%u/%u)\n", rc,
                  pDisk->PCHSGeometry.cCylinders, pDisk->PCHSGeometry.cHeads,
@@ -9766,46 +8557,30 @@ VBOXDDU_DECL(int) VDGetPCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
     return rc;
 }
 
-/**
- * Store virtual disk PCHS geometry in HDD container.
- *
- * Note that in case of unrecoverable error all images in HDD container will be closed.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @returns VERR_VD_GEOMETRY_NOT_SET if no geometry present in the HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pPCHSGeometry   Where to load PCHS geometry from. Not NULL.
- */
-VBOXDDU_DECL(int) VDSetPCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDSetPCHSGeometry(PVDISK pDisk, unsigned nImage,
                                     PCVDGEOMETRY pPCHSGeometry)
 {
     int rc = VINF_SUCCESS;
     int rc2;
-    bool fLockWrite = false;
 
     LogFlowFunc(("pDisk=%#p nImage=%u pPCHSGeometry=%#p PCHS=%u/%u/%u\n",
                  pDisk, nImage, pPCHSGeometry, pPCHSGeometry->cCylinders,
                  pPCHSGeometry->cHeads, pPCHSGeometry->cSectors));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pPCHSGeometry, VERR_INVALID_POINTER);
+    AssertMsgReturn(   pPCHSGeometry->cHeads <= 16
+                    && pPCHSGeometry->cSectors <= 63,
+                    ("PCHS=%u/%u/%u\n", pPCHSGeometry->cCylinders, pPCHSGeometry->cHeads, pPCHSGeometry->cSectors),
+                    VERR_INVALID_PARAMETER);
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(   VALID_PTR(pPCHSGeometry)
-                           && pPCHSGeometry->cHeads <= 16
-                           && pPCHSGeometry->cSectors <= 63,
-                           ("pPCHSGeometry=%#p PCHS=%u/%u/%u\n", pPCHSGeometry,
-                            pPCHSGeometry->cCylinders, pPCHSGeometry->cHeads,
-                            pPCHSGeometry->cSectors),
-                           rc = VERR_INVALID_PARAMETER);
-
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
-        fLockWrite = true;
 
         PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
         AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
@@ -9862,53 +8637,34 @@ VBOXDDU_DECL(int) VDSetPCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
         }
     } while (0);
 
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Get virtual disk LCHS geometry stored in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @returns VERR_VD_GEOMETRY_NOT_SET if no geometry present in the HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pLCHSGeometry   Where to store LCHS geometry. Not NULL.
- */
-VBOXDDU_DECL(int) VDGetLCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDGetLCHSGeometry(PVDISK pDisk, unsigned nImage,
                                     PVDGEOMETRY pLCHSGeometry)
 {
-    int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pLCHSGeometry=%#p\n",
                  pDisk, nImage, pLCHSGeometry));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pLCHSGeometry, VERR_INVALID_POINTER);
+
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
+
+    int rc = VINF_SUCCESS;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pLCHSGeometry),
-                           ("pLCHSGeometry=%#p\n", pLCHSGeometry),
-                           rc = VERR_INVALID_PARAMETER);
-
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
-
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
         if (pImage == pDisk->pLast)
         {
             /* Use cached information if possible. */
@@ -9918,15 +8674,13 @@ VBOXDDU_DECL(int) VDGetLCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
                 rc = VERR_VD_GEOMETRY_NOT_SET;
         }
         else
-            rc = pImage->Backend->pfnGetLCHSGeometry(pImage->pBackendData,
-                                                     pLCHSGeometry);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
+            rc = pImage->Backend->pfnGetLCHSGeometry(pImage->pBackendData, pLCHSGeometry);
     }
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
+
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc((": %Rrc (LCHS=%u/%u/%u)\n", rc,
                  pDisk->LCHSGeometry.cCylinders, pDisk->LCHSGeometry.cHeads,
@@ -9934,46 +8688,31 @@ VBOXDDU_DECL(int) VDGetLCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
     return rc;
 }
 
-/**
- * Store virtual disk LCHS geometry in HDD container.
- *
- * Note that in case of unrecoverable error all images in HDD container will be closed.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @returns VERR_VD_GEOMETRY_NOT_SET if no geometry present in the HDD container.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pLCHSGeometry   Where to load LCHS geometry from. Not NULL.
- */
-VBOXDDU_DECL(int) VDSetLCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDSetLCHSGeometry(PVDISK pDisk, unsigned nImage,
                                     PCVDGEOMETRY pLCHSGeometry)
 {
     int rc = VINF_SUCCESS;
     int rc2;
-    bool fLockWrite = false;
 
     LogFlowFunc(("pDisk=%#p nImage=%u pLCHSGeometry=%#p LCHS=%u/%u/%u\n",
                  pDisk, nImage, pLCHSGeometry, pLCHSGeometry->cCylinders,
                  pLCHSGeometry->cHeads, pLCHSGeometry->cSectors));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pLCHSGeometry, VERR_INVALID_POINTER);
+    AssertMsgReturn(   pLCHSGeometry->cHeads <= 255
+                    && pLCHSGeometry->cSectors <= 63,
+                    ("LCHS=%u/%u/%u\n", pLCHSGeometry->cCylinders, pLCHSGeometry->cHeads, pLCHSGeometry->cSectors),
+                    VERR_INVALID_PARAMETER);
+
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(   VALID_PTR(pLCHSGeometry)
-                           && pLCHSGeometry->cHeads <= 255
-                           && pLCHSGeometry->cSectors <= 63,
-                           ("pLCHSGeometry=%#p LCHS=%u/%u/%u\n", pLCHSGeometry,
-                            pLCHSGeometry->cCylinders, pLCHSGeometry->cHeads,
-                            pLCHSGeometry->cSectors),
-                           rc = VERR_INVALID_PARAMETER);
-
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
-        fLockWrite = true;
 
         PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
         AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
@@ -10030,816 +8769,587 @@ VBOXDDU_DECL(int) VDSetLCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
         }
     } while (0);
 
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Get version of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   puVersion       Where to store the image version.
- */
-VBOXDDU_DECL(int) VDGetVersion(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDQueryRegions(PVDISK pDisk, unsigned nImage, uint32_t fFlags,
+                                 PPVDREGIONLIST ppRegionList)
+{
+    LogFlowFunc(("pDisk=%#p nImage=%u fFlags=%#x ppRegionList=%#p\n",
+                 pDisk, nImage, fFlags, ppRegionList));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(ppRegionList, VERR_INVALID_POINTER);
+
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
+
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
+    {
+        PCVDREGIONLIST pRegionList = NULL;
+        rc = pImage->Backend->pfnQueryRegions(pImage->pBackendData, &pRegionList);
+        if (RT_SUCCESS(rc))
+        {
+            rc = vdRegionListConv(pRegionList, fFlags, ppRegionList);
+
+            AssertPtr(pImage->Backend->pfnRegionListRelease);
+            pImage->Backend->pfnRegionListRelease(pImage->pBackendData, pRegionList);
+        }
+    }
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
+
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
+
+    LogFlowFunc((": %Rrc\n", rc));
+    return rc;
+}
+
+
+VBOXDDU_DECL(void) VDRegionListFree(PVDREGIONLIST pRegionList)
+{
+    RTMemFree(pRegionList);
+}
+
+
+VBOXDDU_DECL(int) VDGetVersion(PVDISK pDisk, unsigned nImage,
                                unsigned *puVersion)
 {
-    int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u puVersion=%#p\n",
                  pDisk, nImage, puVersion));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(puVersion),
-                           ("puVersion=%#p\n", puVersion),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrReturn(puVersion, VERR_INVALID_POINTER);
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
+    int rc = VINF_SUCCESS;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
         *puVersion = pImage->Backend->pfnGetVersion(pImage->pBackendData);
-    } while (0);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc uVersion=%#x\n", rc, *puVersion));
     return rc;
 }
 
-/**
- * List the capabilities of image backend in HDD container.
- *
- * @returns VBox status code.
- * @retval  VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to the HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pBackendInfo    Where to store the backend information.
- */
-VBOXDDU_DECL(int) VDBackendInfoSingle(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDBackendInfoSingle(PVDISK pDisk, unsigned nImage,
                                       PVDBACKENDINFO pBackendInfo)
 {
     int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockRead = false;
 
     LogFlowFunc(("pDisk=%#p nImage=%u pBackendInfo=%#p\n",
                  pDisk, nImage, pBackendInfo));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertPtrReturn(pBackendInfo, VERR_INVALID_POINTER);
+
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
+
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pBackendInfo),
-                           ("pBackendInfo=%#p\n", pBackendInfo),
-                           rc = VERR_INVALID_PARAMETER);
-
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
-
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
         pBackendInfo->pszBackend = pImage->Backend->pszBackendName;
         pBackendInfo->uBackendCaps = pImage->Backend->uBackendCaps;
         pBackendInfo->paFileExtensions = pImage->Backend->paFileExtensions;
         pBackendInfo->paConfigInfo = pImage->Backend->paConfigInfo;
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
     }
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
+
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Get flags of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   puImageFlags    Where to store the image flags.
- */
-VBOXDDU_DECL(int) VDGetImageFlags(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDGetImageFlags(PVDISK pDisk, unsigned nImage,
                                   unsigned *puImageFlags)
 {
-    int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u puImageFlags=%#p\n",
                  pDisk, nImage, puImageFlags));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(puImageFlags),
-                           ("puImageFlags=%#p\n", puImageFlags),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrReturn(puImageFlags, VERR_INVALID_POINTER);
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
+    int rc = VINF_SUCCESS;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
         *puImageFlags = pImage->uImageFlags;
-    } while (0);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc uImageFlags=%#x\n", rc, *puImageFlags));
     return rc;
 }
 
-/**
- * Get open flags of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   puOpenFlags     Where to store the image open flags.
- */
-VBOXDDU_DECL(int) VDGetOpenFlags(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDGetOpenFlags(PVDISK pDisk, unsigned nImage,
                                  unsigned *puOpenFlags)
 {
-    int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u puOpenFlags=%#p\n",
                  pDisk, nImage, puOpenFlags));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(puOpenFlags),
-                           ("puOpenFlags=%#p\n", puOpenFlags),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrReturn(puOpenFlags, VERR_INVALID_POINTER);
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
+    int rc = VINF_SUCCESS;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
         *puOpenFlags = pImage->Backend->pfnGetOpenFlags(pImage->pBackendData);
-    } while (0);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc uOpenFlags=%#x\n", rc, *puOpenFlags));
     return rc;
 }
 
-/**
- * Set open flags of image in HDD container.
- * This operation may cause file locking changes and/or files being reopened.
- * Note that in case of unrecoverable error all images in HDD container will be closed.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
- */
-VBOXDDU_DECL(int) VDSetOpenFlags(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDSetOpenFlags(PVDISK pDisk, unsigned nImage,
                                  unsigned uOpenFlags)
 {
-    int rc;
-    int rc2;
-    bool fLockWrite = false;
-
     LogFlowFunc(("pDisk=%#p uOpenFlags=%#u\n", pDisk, uOpenFlags));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertMsgReturn((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0, ("uOpenFlags=%#x\n", uOpenFlags),
+                    VERR_INVALID_PARAMETER);
+
+    /* Do the job. */
+    int rc2 = vdThreadStartWrite(pDisk);
+    AssertRC(rc2);
+
+    /* Destroy any discard state because the image might be changed to readonly mode. */
+    int rc = vdDiscardStateDestroy(pDisk);
+    if (RT_SUCCESS(rc))
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt((uOpenFlags & ~VD_OPEN_FLAGS_MASK) == 0,
-                           ("uOpenFlags=%#x\n", uOpenFlags),
-                           rc = VERR_INVALID_PARAMETER);
-
-        rc2 = vdThreadStartWrite(pDisk);
-        AssertRC(rc2);
-        fLockWrite = true;
-
-        /* Destroy any discard state because the image might be changed to readonly mode. */
-        rc = vdDiscardStateDestroy(pDisk);
-        if (RT_FAILURE(rc))
-            break;
-
         PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
-        rc = pImage->Backend->pfnSetOpenFlags(pImage->pBackendData,
-                                              uOpenFlags & ~(VD_OPEN_FLAGS_HONOR_SAME | VD_OPEN_FLAGS_IGNORE_FLUSH | VD_OPEN_FLAGS_INFORM_ABOUT_ZERO_BLOCKS));
-        if (RT_SUCCESS(rc))
-            pImage->uOpenFlags = uOpenFlags & (VD_OPEN_FLAGS_HONOR_SAME | VD_OPEN_FLAGS_DISCARD | VD_OPEN_FLAGS_IGNORE_FLUSH | VD_OPEN_FLAGS_INFORM_ABOUT_ZERO_BLOCKS);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
+        AssertPtr(pImage);
+        if (pImage)
+        {
+            rc = pImage->Backend->pfnSetOpenFlags(pImage->pBackendData,
+                                                  uOpenFlags & ~(VD_OPEN_FLAGS_HONOR_SAME | VD_OPEN_FLAGS_IGNORE_FLUSH
+                                                                 | VD_OPEN_FLAGS_INFORM_ABOUT_ZERO_BLOCKS));
+            if (RT_SUCCESS(rc))
+                pImage->uOpenFlags = uOpenFlags & (VD_OPEN_FLAGS_HONOR_SAME | VD_OPEN_FLAGS_DISCARD | VD_OPEN_FLAGS_IGNORE_FLUSH
+                                                   | VD_OPEN_FLAGS_INFORM_ABOUT_ZERO_BLOCKS);
+        }
+        else
+            rc = VERR_VD_IMAGE_NOT_FOUND;
     }
+
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Get base filename of image in HDD container. Some image formats use
- * other filenames as well, so don't use this for anything but informational
- * purposes.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @returns VERR_BUFFER_OVERFLOW if pszFilename buffer too small to hold filename.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pszFilename     Where to store the image file name.
- * @param   cbFilename      Size of buffer pszFilename points to.
- */
-VBOXDDU_DECL(int) VDGetFilename(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDGetFilename(PVDISK pDisk, unsigned nImage,
                                 char *pszFilename, unsigned cbFilename)
 {
-    int rc;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pszFilename=%#p cbFilename=%u\n",
                  pDisk, nImage, pszFilename, cbFilename));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszFilename) && *pszFilename,
-                           ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(cbFilename,
-                           ("cbFilename=%u\n", cbFilename),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(cbFilename > 0, VERR_INVALID_PARAMETER);
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    int rc;
+    if (pImage)
+        rc = RTStrCopy(pszFilename, cbFilename, pImage->pszFilename);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-        size_t cb = strlen(pImage->pszFilename);
-        if (cb <= cbFilename)
-        {
-            strcpy(pszFilename, pImage->pszFilename);
-            rc = VINF_SUCCESS;
-        }
-        else
-        {
-            strncpy(pszFilename, pImage->pszFilename, cbFilename - 1);
-            pszFilename[cbFilename - 1] = '\0';
-            rc = VERR_BUFFER_OVERFLOW;
-        }
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc, pszFilename=\"%s\"\n", rc, pszFilename));
     return rc;
 }
 
-/**
- * Get the comment line of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @returns VERR_BUFFER_OVERFLOW if pszComment buffer too small to hold comment text.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pszComment      Where to store the comment string of image. NULL is ok.
- * @param   cbComment       The size of pszComment buffer. 0 is ok.
- */
-VBOXDDU_DECL(int) VDGetComment(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDGetComment(PVDISK pDisk, unsigned nImage,
                                char *pszComment, unsigned cbComment)
 {
-    int rc;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pszComment=%#p cbComment=%u\n",
                  pDisk, nImage, pszComment, cbComment));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszComment),
-                           ("pszComment=%#p \"%s\"\n", pszComment, pszComment),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(cbComment,
-                           ("cbComment=%u\n", cbComment),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrReturn(pszComment, VERR_INVALID_POINTER);
+    AssertReturn(cbComment > 0, VERR_INVALID_PARAMETER);
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
+        rc = pImage->Backend->pfnGetComment(pImage->pBackendData, pszComment, cbComment);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-        rc = pImage->Backend->pfnGetComment(pImage->pBackendData, pszComment,
-                                            cbComment);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc, pszComment=\"%s\"\n", rc, pszComment));
     return rc;
 }
 
-/**
- * Changes the comment line of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pszComment      New comment string (UTF-8). NULL is allowed to reset the comment.
- */
-VBOXDDU_DECL(int) VDSetComment(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDSetComment(PVDISK pDisk, unsigned nImage,
                                const char *pszComment)
 {
-    int rc;
-    int rc2;
-    bool fLockWrite = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pszComment=%#p \"%s\"\n",
                  pDisk, nImage, pszComment, pszComment));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pszComment) || pszComment == NULL,
-                           ("pszComment=%#p \"%s\"\n", pszComment, pszComment),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrNullReturn(pszComment, VERR_INVALID_POINTER);
 
-        rc2 = vdThreadStartWrite(pDisk);
-        AssertRC(rc2);
-        fLockWrite = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartWrite(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
         rc = pImage->Backend->pfnSetComment(pImage->pBackendData, pszComment);
-    } while (0);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
 
-/**
- * Get UUID of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pUuid           Where to store the image creation UUID.
- */
-VBOXDDU_DECL(int) VDGetUuid(PVBOXHDD pDisk, unsigned nImage, PRTUUID pUuid)
+VBOXDDU_DECL(int) VDGetUuid(PVDISK pDisk, unsigned nImage, PRTUUID pUuid)
 {
-    int rc;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pUuid=%#p\n", pDisk, nImage, pUuid));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pUuid),
-                           ("pUuid=%#p\n", pUuid),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrReturn(pUuid, VERR_INVALID_POINTER);
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
         rc = pImage->Backend->pfnGetUuid(pImage->pBackendData, pUuid);
-    } while (0);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc, Uuid={%RTuuid}\n", rc, pUuid));
     return rc;
 }
 
-/**
- * Set the image's UUID. Should not be used by normal applications.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pUuid           New UUID of the image. If NULL, a new UUID is created.
- */
-VBOXDDU_DECL(int) VDSetUuid(PVBOXHDD pDisk, unsigned nImage, PCRTUUID pUuid)
-{
-    int rc;
-    int rc2;
-    bool fLockWrite = false;
 
+VBOXDDU_DECL(int) VDSetUuid(PVDISK pDisk, unsigned nImage, PCRTUUID pUuid)
+{
     LogFlowFunc(("pDisk=%#p nImage=%u pUuid=%#p {%RTuuid}\n",
                  pDisk, nImage, pUuid, pUuid));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    RTUUID Uuid;
+    if (pUuid)
+        AssertPtrReturn(pUuid, VERR_INVALID_POINTER);
+    else
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+        int rc = RTUuidCreate(&Uuid);
+        AssertRCReturn(rc, rc);
+        pUuid = &Uuid;
+    }
 
-        AssertMsgBreakStmt(VALID_PTR(pUuid) || pUuid == NULL,
-                           ("pUuid=%#p\n", pUuid),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Do the job. */
+    int rc2 = vdThreadStartWrite(pDisk);
+    AssertRC(rc2);
 
-        rc2 = vdThreadStartWrite(pDisk);
-        AssertRC(rc2);
-        fLockWrite = true;
-
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
-        RTUUID Uuid;
-        if (!pUuid)
-        {
-            RTUuidCreate(&Uuid);
-            pUuid = &Uuid;
-        }
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
         rc = pImage->Backend->pfnSetUuid(pImage->pBackendData, pUuid);
-    } while (0);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Get last modification UUID of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pUuid           Where to store the image modification UUID.
- */
-VBOXDDU_DECL(int) VDGetModificationUuid(PVBOXHDD pDisk, unsigned nImage, PRTUUID pUuid)
+
+VBOXDDU_DECL(int) VDGetModificationUuid(PVDISK pDisk, unsigned nImage, PRTUUID pUuid)
 {
-    int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pUuid=%#p\n", pDisk, nImage, pUuid));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pUuid),
-                           ("pUuid=%#p\n", pUuid),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrReturn(pUuid, VERR_INVALID_POINTER);
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
+        rc = pImage->Backend->pfnGetModificationUuid(pImage->pBackendData, pUuid);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-        rc = pImage->Backend->pfnGetModificationUuid(pImage->pBackendData,
-                                                     pUuid);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc, Uuid={%RTuuid}\n", rc, pUuid));
     return rc;
 }
 
-/**
- * Set the image's last modification UUID. Should not be used by normal applications.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pUuid           New modification UUID of the image. If NULL, a new UUID is created.
- */
-VBOXDDU_DECL(int) VDSetModificationUuid(PVBOXHDD pDisk, unsigned nImage, PCRTUUID pUuid)
-{
-    int rc;
-    int rc2;
-    bool fLockWrite = false;
 
+VBOXDDU_DECL(int) VDSetModificationUuid(PVDISK pDisk, unsigned nImage, PCRTUUID pUuid)
+{
     LogFlowFunc(("pDisk=%#p nImage=%u pUuid=%#p {%RTuuid}\n",
                  pDisk, nImage, pUuid, pUuid));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    RTUUID Uuid;
+    if (pUuid)
+        AssertPtrReturn(pUuid, VERR_INVALID_POINTER);
+    else
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pUuid) || pUuid == NULL,
-                           ("pUuid=%#p\n", pUuid),
-                           rc = VERR_INVALID_PARAMETER);
-
-        rc2 = vdThreadStartWrite(pDisk);
-        AssertRC(rc2);
-        fLockWrite = true;
-
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
-        RTUUID Uuid;
-        if (!pUuid)
-        {
-            RTUuidCreate(&Uuid);
-            pUuid = &Uuid;
-        }
-        rc = pImage->Backend->pfnSetModificationUuid(pImage->pBackendData,
-                                                     pUuid);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
+        int rc = RTUuidCreate(&Uuid);
+        AssertRCReturn(rc, rc);
+        pUuid = &Uuid;
     }
+
+    /* Do the job. */
+    int rc2 = vdThreadStartWrite(pDisk);
+    AssertRC(rc2);
+
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    if (pImage)
+        rc = pImage->Backend->pfnSetModificationUuid(pImage->pBackendData, pUuid);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
+
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
-/**
- * Get parent UUID of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pUuid           Where to store the parent image UUID.
- */
-VBOXDDU_DECL(int) VDGetParentUuid(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDGetParentUuid(PVDISK pDisk, unsigned nImage,
                                   PRTUUID pUuid)
 {
-    int rc = VINF_SUCCESS;
-    int rc2;
-    bool fLockRead = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pUuid=%#p\n", pDisk, nImage, pUuid));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pUuid),
-                           ("pUuid=%#p\n", pUuid),
-                           rc = VERR_INVALID_PARAMETER);
+    /* Check arguments. */
+    AssertPtrReturn(pUuid, VERR_INVALID_POINTER);
 
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
+    /* Do the job. */
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
 
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
         rc = pImage->Backend->pfnGetParentUuid(pImage->pBackendData, pUuid);
-    } while (0);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
 
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc, Uuid={%RTuuid}\n", rc, pUuid));
     return rc;
 }
 
-/**
- * Set the image's parent UUID. Should not be used by normal applications.
- *
- * @returns VBox status code.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   pUuid           New parent UUID of the image. If NULL, a new UUID is created.
- */
-VBOXDDU_DECL(int) VDSetParentUuid(PVBOXHDD pDisk, unsigned nImage,
+
+VBOXDDU_DECL(int) VDSetParentUuid(PVDISK pDisk, unsigned nImage,
                                   PCRTUUID pUuid)
 {
-    int rc;
-    int rc2;
-    bool fLockWrite = false;
-
     LogFlowFunc(("pDisk=%#p nImage=%u pUuid=%#p {%RTuuid}\n",
                  pDisk, nImage, pUuid, pUuid));
-    do
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    RTUUID Uuid;
+    if (pUuid)
+        AssertPtrReturn(pUuid, VERR_INVALID_POINTER);
+    else
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(pUuid) || pUuid == NULL,
-                           ("pUuid=%#p\n", pUuid),
-                           rc = VERR_INVALID_PARAMETER);
-
-        rc2 = vdThreadStartWrite(pDisk);
-        AssertRC(rc2);
-        fLockWrite = true;
-
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
-        RTUUID Uuid;
-        if (!pUuid)
-        {
-            RTUuidCreate(&Uuid);
-            pUuid = &Uuid;
-        }
-        rc = pImage->Backend->pfnSetParentUuid(pImage->pBackendData, pUuid);
-    } while (0);
-
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
+        int rc = RTUuidCreate(&Uuid);
+        AssertRCReturn(rc, rc);
+        pUuid = &Uuid;
     }
+
+    /* Do the job. */
+    int rc2 = vdThreadStartWrite(pDisk);
+    AssertRC(rc2);
+
+    int rc;
+    PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+    AssertPtr(pImage);
+    if (pImage)
+        rc = pImage->Backend->pfnSetParentUuid(pImage->pBackendData, pUuid);
+    else
+        rc = VERR_VD_IMAGE_NOT_FOUND;
+
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
 
-/**
- * Debug helper - dumps all opened images in HDD container into the log file.
- *
- * @param   pDisk           Pointer to HDD container.
- */
-VBOXDDU_DECL(void) VDDumpImages(PVBOXHDD pDisk)
+VBOXDDU_DECL(void) VDDumpImages(PVDISK pDisk)
 {
-    int rc2;
-    bool fLockRead = false;
+    /* sanity check */
+    AssertPtrReturnVoid(pDisk);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
-    do
+    AssertPtrReturnVoid(pDisk->pInterfaceError);
+    if (!RT_VALID_PTR(pDisk->pInterfaceError->pfnMessage))
+        pDisk->pInterfaceError->pfnMessage = vdLogMessage;
+
+    int rc2 = vdThreadStartRead(pDisk);
+    AssertRC(rc2);
+
+    vdMessageWrapper(pDisk, "--- Dumping VD Disk, Images=%u\n", pDisk->cImages);
+    for (PVDIMAGE pImage = pDisk->pBase; pImage; pImage = pImage->pNext)
     {
-        /* sanity check */
-        AssertPtrBreak(pDisk);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        if (!pDisk->pInterfaceError || !VALID_PTR(pDisk->pInterfaceError->pfnMessage))
-            pDisk->pInterfaceError->pfnMessage = vdLogMessage;
-
-        rc2 = vdThreadStartRead(pDisk);
-        AssertRC(rc2);
-        fLockRead = true;
-
-        vdMessageWrapper(pDisk, "--- Dumping VD Disk, Images=%u\n", pDisk->cImages);
-        for (PVDIMAGE pImage = pDisk->pBase; pImage; pImage = pImage->pNext)
-        {
-            vdMessageWrapper(pDisk, "Dumping VD image \"%s\" (Backend=%s)\n",
-                             pImage->pszFilename, pImage->Backend->pszBackendName);
-            pImage->Backend->pfnDump(pImage->pBackendData);
-        }
-    } while (0);
-
-    if (RT_UNLIKELY(fLockRead))
-    {
-        rc2 = vdThreadFinishRead(pDisk);
-        AssertRC(rc2);
+        vdMessageWrapper(pDisk, "Dumping VD image \"%s\" (Backend=%s)\n",
+                         pImage->pszFilename, pImage->Backend->pszBackendName);
+        pImage->Backend->pfnDump(pImage->pBackendData);
     }
+
+    rc2 = vdThreadFinishRead(pDisk);
+    AssertRC(rc2);
 }
 
 
-VBOXDDU_DECL(int) VDDiscardRanges(PVBOXHDD pDisk, PCRTRANGE paRanges, unsigned cRanges)
+VBOXDDU_DECL(int) VDDiscardRanges(PVDISK pDisk, PCRTRANGE paRanges, unsigned cRanges)
 {
     int rc;
     int rc2;
-    bool fLockWrite = false;
 
     LogFlowFunc(("pDisk=%#p paRanges=%#p cRanges=%u\n",
                  pDisk, paRanges, cRanges));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertReturn(cRanges > 0, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(paRanges, VERR_INVALID_POINTER);
+
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(cRanges,
-                           ("cRanges=%u\n", cRanges),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(VALID_PTR(paRanges),
-                           ("paRanges=%#p\n", paRanges),
-                           rc = VERR_INVALID_PARAMETER);
-
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
-        fLockWrite = true;
 
         AssertPtrBreakStmt(pDisk->pLast, rc = VERR_VD_NOT_OPENED);
 
@@ -10862,56 +9372,48 @@ VBOXDDU_DECL(int) VDDiscardRanges(PVBOXHDD pDisk, PCRTRANGE paRanges, unsigned c
         RTSemEventDestroy(hEventComplete);
     } while (0);
 
-    if (RT_UNLIKELY(fLockWrite))
-    {
-        rc2 = vdThreadFinishWrite(pDisk);
-        AssertRC(rc2);
-    }
+    rc2 = vdThreadFinishWrite(pDisk);
+    AssertRC(rc2);
 
     LogFlowFunc(("returns %Rrc\n", rc));
     return rc;
 }
 
 
-VBOXDDU_DECL(int) VDAsyncRead(PVBOXHDD pDisk, uint64_t uOffset, size_t cbRead,
-                              PCRTSGBUF pcSgBuf,
+VBOXDDU_DECL(int) VDAsyncRead(PVDISK pDisk, uint64_t uOffset, size_t cbRead,
+                              PCRTSGBUF pSgBuf,
                               PFNVDASYNCTRANSFERCOMPLETE pfnComplete,
                               void *pvUser1, void *pvUser2)
 {
     int rc = VERR_VD_BLOCK_FREE;
     int rc2;
-    bool fLockRead = false;
     PVDIOCTX pIoCtx = NULL;
 
-    LogFlowFunc(("pDisk=%#p uOffset=%llu pcSgBuf=%#p cbRead=%zu pvUser1=%#p pvUser2=%#p\n",
-                 pDisk, uOffset, pcSgBuf, cbRead, pvUser1, pvUser2));
+    LogFlowFunc(("pDisk=%#p uOffset=%llu pSgBuf=%#p cbRead=%zu pvUser1=%#p pvUser2=%#p\n",
+                 pDisk, uOffset, pSgBuf, cbRead, pvUser1, pvUser2));
+
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertReturn(cbRead > 0, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pSgBuf, VERR_INVALID_POINTER);
 
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(cbRead,
-                           ("cbRead=%zu\n", cbRead),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(VALID_PTR(pcSgBuf),
-                           ("pcSgBuf=%#p\n", pcSgBuf),
-                           rc = VERR_INVALID_PARAMETER);
-
         rc2 = vdThreadStartRead(pDisk);
         AssertRC(rc2);
-        fLockRead = true;
 
-        AssertMsgBreakStmt(uOffset + cbRead <= pDisk->cbSize,
+        AssertMsgBreakStmt(   uOffset < pDisk->cbSize
+                           && cbRead <= pDisk->cbSize - uOffset,
                            ("uOffset=%llu cbRead=%zu pDisk->cbSize=%llu\n",
                             uOffset, cbRead, pDisk->cbSize),
                            rc = VERR_INVALID_PARAMETER);
         AssertPtrBreakStmt(pDisk->pLast, rc = VERR_VD_NOT_OPENED);
 
         pIoCtx = vdIoCtxRootAlloc(pDisk, VDIOCTXTXDIR_READ, uOffset,
-                                  cbRead, pDisk->pLast, pcSgBuf,
+                                  cbRead, pDisk->pLast, pSgBuf,
                                   pfnComplete, pvUser1, pvUser2,
                                   NULL, vdReadHelperAsync,
                                   VDIOCTX_FLAGS_ZERO_FREE_BLOCKS);
@@ -10934,7 +9436,7 @@ VBOXDDU_DECL(int) VDAsyncRead(PVBOXHDD pDisk, uint64_t uOffset, size_t cbRead,
 
     } while (0);
 
-    if (RT_UNLIKELY(fLockRead) && (rc != VERR_VD_ASYNC_IO_IN_PROGRESS))
+    if (rc != VERR_VD_ASYNC_IO_IN_PROGRESS)
     {
         rc2 = vdThreadFinishRead(pDisk);
         AssertRC(rc2);
@@ -10945,44 +9447,39 @@ VBOXDDU_DECL(int) VDAsyncRead(PVBOXHDD pDisk, uint64_t uOffset, size_t cbRead,
 }
 
 
-VBOXDDU_DECL(int) VDAsyncWrite(PVBOXHDD pDisk, uint64_t uOffset, size_t cbWrite,
-                               PCRTSGBUF pcSgBuf,
+VBOXDDU_DECL(int) VDAsyncWrite(PVDISK pDisk, uint64_t uOffset, size_t cbWrite,
+                               PCRTSGBUF pSgBuf,
                                PFNVDASYNCTRANSFERCOMPLETE pfnComplete,
                                void *pvUser1, void *pvUser2)
 {
     int rc;
     int rc2;
-    bool fLockWrite = false;
     PVDIOCTX pIoCtx = NULL;
 
-    LogFlowFunc(("pDisk=%#p uOffset=%llu cSgBuf=%#p cbWrite=%zu pvUser1=%#p pvUser2=%#p\n",
-                 pDisk, uOffset, pcSgBuf, cbWrite, pvUser1, pvUser2));
+    LogFlowFunc(("pDisk=%#p uOffset=%llu pSgBuf=%#p cbWrite=%zu pvUser1=%#p pvUser2=%#p\n",
+                 pDisk, uOffset, pSgBuf, cbWrite, pvUser1, pvUser2));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
+
+    /* Check arguments. */
+    AssertReturn(cbWrite > 0, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pSgBuf, VERR_INVALID_POINTER);
+
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(cbWrite,
-                           ("cbWrite=%zu\n", cbWrite),
-                           rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(VALID_PTR(pcSgBuf),
-                           ("pcSgBuf=%#p\n", pcSgBuf),
-                           rc = VERR_INVALID_PARAMETER);
-
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
-        fLockWrite = true;
 
-        AssertMsgBreakStmt(uOffset + cbWrite <= pDisk->cbSize,
+        AssertMsgBreakStmt(   uOffset < pDisk->cbSize
+                           && cbWrite <= pDisk->cbSize - uOffset,
                            ("uOffset=%llu cbWrite=%zu pDisk->cbSize=%llu\n",
                             uOffset, cbWrite, pDisk->cbSize),
                            rc = VERR_INVALID_PARAMETER);
         AssertPtrBreakStmt(pDisk->pLast, rc = VERR_VD_NOT_OPENED);
 
         pIoCtx = vdIoCtxRootAlloc(pDisk, VDIOCTXTXDIR_WRITE, uOffset,
-                                  cbWrite, pDisk->pLast, pcSgBuf,
+                                  cbWrite, pDisk->pLast, pSgBuf,
                                   pfnComplete, pvUser1, pvUser2,
                                   NULL, vdWriteHelperAsync,
                                   VDIOCTX_FLAGS_DEFAULT);
@@ -11004,7 +9501,7 @@ VBOXDDU_DECL(int) VDAsyncWrite(PVBOXHDD pDisk, uint64_t uOffset, size_t cbWrite,
             vdIoCtxFree(pDisk, pIoCtx);
     } while (0);
 
-    if (RT_UNLIKELY(fLockWrite) && (rc != VERR_VD_ASYNC_IO_IN_PROGRESS))
+    if (rc != VERR_VD_ASYNC_IO_IN_PROGRESS)
     {
         rc2 = vdThreadFinishWrite(pDisk);
         AssertRC(rc2);
@@ -11015,25 +9512,22 @@ VBOXDDU_DECL(int) VDAsyncWrite(PVBOXHDD pDisk, uint64_t uOffset, size_t cbWrite,
 }
 
 
-VBOXDDU_DECL(int) VDAsyncFlush(PVBOXHDD pDisk, PFNVDASYNCTRANSFERCOMPLETE pfnComplete,
+VBOXDDU_DECL(int) VDAsyncFlush(PVDISK pDisk, PFNVDASYNCTRANSFERCOMPLETE pfnComplete,
                                void *pvUser1, void *pvUser2)
 {
     int rc;
     int rc2;
-    bool fLockWrite = false;
     PVDIOCTX pIoCtx = NULL;
 
     LogFlowFunc(("pDisk=%#p\n", pDisk));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
-        fLockWrite = true;
 
         AssertPtrBreakStmt(pDisk->pLast, rc = VERR_VD_NOT_OPENED);
 
@@ -11060,7 +9554,7 @@ VBOXDDU_DECL(int) VDAsyncFlush(PVBOXHDD pDisk, PFNVDASYNCTRANSFERCOMPLETE pfnCom
             vdIoCtxFree(pDisk, pIoCtx);
     } while (0);
 
-    if (RT_UNLIKELY(fLockWrite) && (rc != VERR_VD_ASYNC_IO_IN_PROGRESS))
+    if (rc != VERR_VD_ASYNC_IO_IN_PROGRESS)
     {
         rc2 = vdThreadFinishWrite(pDisk);
         AssertRC(rc2);
@@ -11070,26 +9564,23 @@ VBOXDDU_DECL(int) VDAsyncFlush(PVBOXHDD pDisk, PFNVDASYNCTRANSFERCOMPLETE pfnCom
     return rc;
 }
 
-VBOXDDU_DECL(int) VDAsyncDiscardRanges(PVBOXHDD pDisk, PCRTRANGE paRanges, unsigned cRanges,
+VBOXDDU_DECL(int) VDAsyncDiscardRanges(PVDISK pDisk, PCRTRANGE paRanges, unsigned cRanges,
                                        PFNVDASYNCTRANSFERCOMPLETE pfnComplete,
                                        void *pvUser1, void *pvUser2)
 {
     int rc;
     int rc2;
-    bool fLockWrite = false;
     PVDIOCTX pIoCtx = NULL;
 
     LogFlowFunc(("pDisk=%#p\n", pDisk));
+    /* sanity check */
+    AssertPtrReturn(pDisk, VERR_INVALID_POINTER);
+    AssertMsg(pDisk->u32Signature == VDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
     do
     {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
         rc2 = vdThreadStartWrite(pDisk);
         AssertRC(rc2);
-        fLockWrite = true;
 
         AssertPtrBreakStmt(pDisk->pLast, rc = VERR_VD_NOT_OPENED);
 
@@ -11115,7 +9606,7 @@ VBOXDDU_DECL(int) VDAsyncDiscardRanges(PVBOXHDD pDisk, PCRTRANGE paRanges, unsig
             vdIoCtxFree(pDisk, pIoCtx);
     } while (0);
 
-    if (RT_UNLIKELY(fLockWrite) && (rc != VERR_VD_ASYNC_IO_IN_PROGRESS))
+    if (rc != VERR_VD_ASYNC_IO_IN_PROGRESS)
     {
         rc2 = vdThreadFinishWrite(pDisk);
         AssertRC(rc2);
@@ -11137,14 +9628,10 @@ VBOXDDU_DECL(int) VDRepair(PVDINTERFACE pVDIfsDisk, PVDINTERFACE pVDIfsImage,
 
     LogFlowFunc(("pszFilename=\"%s\"\n", pszFilename));
     /* Check arguments. */
-    AssertMsgReturn(VALID_PTR(pszFilename) && *pszFilename,
-                    ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pszBackend),
-                    ("pszBackend=%#p\n", pszBackend),
-                    VERR_INVALID_PARAMETER);
-    AssertMsgReturn((fFlags & ~VD_REPAIR_FLAGS_MASK) == 0,
-                    ("fFlags=%#x\n", fFlags),
+    AssertPtrReturn(pszFilename, VERR_INVALID_POINTER);
+    AssertReturn(*pszFilename != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszBackend, VERR_INVALID_POINTER);
+    AssertMsgReturn((fFlags & ~VD_REPAIR_FLAGS_MASK) == 0, ("fFlags=%#x\n", fFlags),
                     VERR_INVALID_PARAMETER);
 
     pInterfaceIo = VDIfIoGet(pVDIfsImage);
@@ -11177,7 +9664,7 @@ VBOXDDU_DECL(int) VDRepair(PVDINTERFACE pVDIfsDisk, PVDINTERFACE pVDIfsImage,
                         pInterfaceIo, sizeof(VDINTERFACEIOINT), &pVDIfsImage);
     AssertRC(rc);
 
-    rc = vdFindBackend(pszBackend, &pBackend);
+    rc = vdFindImageBackend(pszBackend, &pBackend);
     if (RT_SUCCESS(rc))
     {
         if (pBackend->pfnRepair)

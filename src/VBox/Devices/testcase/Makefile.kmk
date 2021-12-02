@@ -1,10 +1,10 @@
-# $Id$
+# $Id: Makefile.kmk 89590 2021-06-10 08:43:08Z vboxsync $
 ## @file
 # Sub-Makefile for the device testcases.
 #
 
 #
-# Copyright (C) 2006-2016 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -29,12 +29,13 @@ BLDDIRS += $(VBOX_DEVICES_TEST_OUT_DIR)
 VBOX_DEVICES_TESTS_FEATURES = \
 	$(if $(VBOX_WITH_AHCI),VBOX_WITH_AHCI,) \
 	$(if $(VBOX_WITH_BUSLOGIC),VBOX_WITH_BUSLOGIC,) \
-	$(if $(VBOX_WITH_CRHGSMI),VBOX_WITH_CRHGSMI,) \
 	$(if $(VBOX_WITH_E1000),VBOX_WITH_E1000,) \
 	$(if $(VBOX_WITH_EHCI_IMPL),VBOX_WITH_EHCI_IMPL,) \
 	$(if $(VBOX_WITH_HGSMI),VBOX_WITH_HGSMI,) \
+	$(if $(VBOX_WITH_HP_HDA),VBOX_WITH_HP_HDA,) \
+	$(if $(VBOX_WITH_INTEL_HDA),VBOX_WITH_INTEL_HDA,) \
+	$(if $(VBOX_WITH_NVIDIA_HDA),VBOX_WITH_NVIDIA_HDA,) \
 	$(if $(VBOX_WITH_LSILOGIC),VBOX_WITH_LSILOGIC,) \
-	$(if $(VBOX_WITH_NEW_IOAPIC),VBOX_WITH_NEW_IOAPIC,) \
 	$(if $(VBOX_WITH_NVME_IMPL),VBOX_WITH_NVME_IMPL,) \
 	$(if $(VBOX_WITH_PCI_PASSTHROUGH_IMPL),VBOX_WITH_PCI_PASSTHROUGH_IMPL,) \
 	$(if $(VBOX_WITH_RAW_MODE),VBOX_WITH_RAW_MODE,) \
@@ -45,7 +46,11 @@ VBOX_DEVICES_TESTS_FEATURES = \
 	$(if $(VBOX_WITH_VIRTIO),VBOX_WITH_VIRTIO,) \
 	$(if $(VBOX_WITH_VMSVGA),VBOX_WITH_VMSVGA,) \
 	$(if $(VBOX_WITH_WDDM),VBOX_WITH_WDDM,) \
-	$(if $(VBOX_WITH_XHCI_IMPL),VBOX_WITH_XHCI_IMPL,)
+	$(if $(VBOX_WITH_XHCI_IMPL),VBOX_WITH_XHCI_IMPL,) \
+	$(if $(VBOX_WITH_IOMMU_AMD),VBOX_WITH_IOMMU_AMD,) \
+	$(if $(VBOX_WITH_IOMMU_INTEL),VBOX_WITH_IOMMU_INTEL,) \
+	$(VBOX_AUDIO_DEFS) \
+	$(VMM_COMMON_DEFS)
 
 #
 # We setup one 'other' target for executing the structure & alignment
@@ -73,7 +78,8 @@ ifdef VBOX_WITH_RAW_MODE
  tstDeviceStructSizeRC_INCS      = \
  	$(VBOX_PATH_DEVICES_SRC)/build \
  	$(VBOX_PATH_DEVICES_SRC)/Bus \
- 	$(VBOX_DEVICES_TEST_OUT_DIR)
+ 	$(VBOX_DEVICES_TEST_OUT_DIR) \
+ 	$(VBOX_GRAPHICS_INCS)
  tstDeviceStructSizeRC_INCS     += $(VBOX_PATH_VMM_DEVICES_SRC)
 endif # VBOX_WITH_RAW_MODE
 
@@ -81,12 +87,28 @@ endif # VBOX_WITH_RAW_MODE
 # The testcase it self.
 #
 PROGRAMS += tstDeviceStructSize
-tstDeviceStructSize_TEMPLATE = VBOXR3AUTOTST
+if "$(KBUILD_TARGET)" != "win" && $(VBOX_GCC_VERSION_CXX) < 40600
+ #
+ # Disable "ISO C++ prohibits anonymous structs [-Werror=pedantic]" caused by Mesa VMSVGA driver headers
+ # For GCC >= 4.6.0 the warning is disabled in DevVGA_SVGA.h
+ #
+ # Template used for gcc older than 4.6.  (Strips away compiler options.)
+ #
+ TEMPLATE_tstDeviceStructSizeOldGCC         := tstDeviceStructSizeOldGCC
+ TEMPLATE_tstDeviceStructSizeOldGCC_EXTENDS := VBOXR3AUTOTST
+ TEMPLATE_tstDeviceStructSizeOldGCC_CXXFLAGS = $(filter-out -pedantic,$(TEMPLATE_$(TEMPLATE_tstDeviceStructSizeOldGCC_EXTENDS)_CXXFLAGS))
+
+ tstDeviceStructSize_TEMPLATE = tstDeviceStructSizeOldGCC
+else
+ tstDeviceStructSize_TEMPLATE = VBOXR3AUTOTST
+endif
 tstDeviceStructSize_DEFS     = $(VBOX_DEVICES_TESTS_FEATURES)
 tstDeviceStructSize_INCS     = \
 	$(VBOX_PATH_DEVICES_SRC)/build \
 	$(VBOX_PATH_DEVICES_SRC)/Bus \
-	$(VBOX_DEVICES_TEST_OUT_DIR)
+	$(VBOX_DEVICES_TEST_OUT_DIR) \
+	$(VBOX_GRAPHICS_INCS) \
+	$(VBOX_PATH_VMSVGA_DEVICE_INC)
 tstDeviceStructSize_SOURCES  = tstDeviceStructSize.cpp
 tstDeviceStructSize_CLEAN    = \
 	$(VBOX_DEVICES_TEST_OUT_DIR)/tstDeviceStructSizeRC.h \

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fileaio-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - File async I/O, native implementation for the Windows host platform.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -121,7 +121,7 @@ typedef RTFILEAIOREQINTERNAL *PRTFILEAIOREQINTERNAL;
 /** Id for the wakeup event. */
 #define AIO_CONTEXT_WAKEUP_EVENT 1
 /** Converts a pointer to an OVERLAPPED structure to a internal request. */
-#define OVERLAPPED_2_RTFILEAIOREQINTERNAL(pOverlapped) ( (PRTFILEAIOREQINTERNAL)((uintptr_t)(pOverlapped) - RT_OFFSETOF(RTFILEAIOREQINTERNAL, Overlapped)) )
+#define OVERLAPPED_2_RTFILEAIOREQINTERNAL(pOverlapped) ( (PRTFILEAIOREQINTERNAL)((uintptr_t)(pOverlapped) - RT_UOFFSETOF(RTFILEAIOREQINTERNAL, Overlapped)) )
 
 RTR3DECL(int) RTFileAioGetLimits(PRTFILEAIOLIMITS pAioLimits)
 {

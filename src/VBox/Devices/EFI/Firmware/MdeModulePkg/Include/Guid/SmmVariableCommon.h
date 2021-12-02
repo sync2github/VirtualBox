@@ -1,19 +1,16 @@
 /** @file
   The file defined some common structures used for communicating between SMM variable module and SMM variable wrapper module.
 
-Copyright (c) 2011 - 2013, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials are licensed and made available under
-the terms and conditions of the BSD License that accompanies this distribution.
-The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php.
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2011 - 2019, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
 #ifndef _SMM_VARIABLE_COMMON_H_
 #define _SMM_VARIABLE_COMMON_H_
+
+#include <Guid/VariableFormat.h>
+#include <Protocol/VarCheck.h>
 
 #define EFI_SMM_VARIABLE_WRITE_GUID \
   { 0x93ba1826, 0xdffb, 0x45dd, { 0x82, 0xa7, 0xe7, 0xdc, 0xaa, 0x3b, 0xbd, 0xf3 } }
@@ -23,7 +20,7 @@ extern EFI_GUID gSmmVariableWriteGuid;
 //
 // This structure is used for SMM variable. the collected statistics data is saved in SMRAM. It can be got from
 // SMI handler. The communication buffer should be:
-// EFI_SMM_COMMUNICATE_HEADER + SMM_VARIABLE_COMMUNICATE_HEADER + payload.
+// EFI_MM_COMMUNICATE_HEADER + SMM_VARIABLE_COMMUNICATE_HEADER + payload.
 //
 typedef struct {
   UINTN       Function;
@@ -56,7 +53,7 @@ typedef struct {
 //
 #define SMM_VARIABLE_FUNCTION_EXIT_BOOT_SERVICE       6
 //
-// The payload for this function is VARIABLE_INFO_ENTRY. The GUID in EFI_SMM_COMMUNICATE_HEADER
+// The payload for this function is VARIABLE_INFO_ENTRY. The GUID in EFI_MM_COMMUNICATE_HEADER
 // is gEfiSmmVariableProtocolGuid.
 //
 #define SMM_VARIABLE_FUNCTION_GET_STATISTICS          7
@@ -65,10 +62,26 @@ typedef struct {
 //
 #define SMM_VARIABLE_FUNCTION_LOCK_VARIABLE           8
 
+#define SMM_VARIABLE_FUNCTION_VAR_CHECK_VARIABLE_PROPERTY_SET  9
+
+#define SMM_VARIABLE_FUNCTION_VAR_CHECK_VARIABLE_PROPERTY_GET  10
+
+#define SMM_VARIABLE_FUNCTION_GET_PAYLOAD_SIZE        11
+//
+// The payload for this function is SMM_VARIABLE_COMMUNICATE_RUNTIME_VARIABLE_CACHE_CONTEXT
+//
+#define SMM_VARIABLE_FUNCTION_INIT_RUNTIME_VARIABLE_CACHE_CONTEXT   12
+
+#define SMM_VARIABLE_FUNCTION_SYNC_RUNTIME_CACHE                    13
+//
+// The payload for this function is SMM_VARIABLE_COMMUNICATE_GET_RUNTIME_CACHE_INFO
+//
+#define SMM_VARIABLE_FUNCTION_GET_RUNTIME_CACHE_INFO                14
+
 ///
 /// Size of SMM communicate header, without including the payload.
 ///
-#define SMM_COMMUNICATE_HEADER_SIZE  (OFFSET_OF (EFI_SMM_COMMUNICATE_HEADER, Data))
+#define SMM_COMMUNICATE_HEADER_SIZE  (OFFSET_OF (EFI_MM_COMMUNICATE_HEADER, Data))
 
 ///
 /// Size of SMM variable communicate header, without including the payload.
@@ -106,5 +119,32 @@ typedef struct {
 } SMM_VARIABLE_COMMUNICATE_QUERY_VARIABLE_INFO;
 
 typedef SMM_VARIABLE_COMMUNICATE_GET_NEXT_VARIABLE_NAME SMM_VARIABLE_COMMUNICATE_LOCK_VARIABLE;
+
+typedef struct {
+  EFI_GUID                      Guid;
+  UINTN                         NameSize;
+  VAR_CHECK_VARIABLE_PROPERTY   VariableProperty;
+  CHAR16                        Name[1];
+} SMM_VARIABLE_COMMUNICATE_VAR_CHECK_VARIABLE_PROPERTY;
+
+typedef struct {
+  UINTN                         VariablePayloadSize;
+} SMM_VARIABLE_COMMUNICATE_GET_PAYLOAD_SIZE;
+
+typedef struct {
+  BOOLEAN                 *ReadLock;
+  BOOLEAN                 *PendingUpdate;
+  BOOLEAN                 *HobFlushComplete;
+  VARIABLE_STORE_HEADER   *RuntimeHobCache;
+  VARIABLE_STORE_HEADER   *RuntimeNvCache;
+  VARIABLE_STORE_HEADER   *RuntimeVolatileCache;
+} SMM_VARIABLE_COMMUNICATE_RUNTIME_VARIABLE_CACHE_CONTEXT;
+
+typedef struct {
+  UINTN                   TotalHobStorageSize;
+  UINTN                   TotalNvStorageSize;
+  UINTN                   TotalVolatileStorageSize;
+  BOOLEAN                 AuthenticatedVariableUsage;
+} SMM_VARIABLE_COMMUNICATE_GET_RUNTIME_CACHE_INFO;
 
 #endif // _SMM_VARIABLE_COMMON_H_

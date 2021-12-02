@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMouseLog.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Mouse drivers, logging helper
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,12 +15,14 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOXMOUSELOG_H
-#define VBOXMOUSELOG_H
-
-#ifdef DEBUG_misha
-# include <iprt/assert.h>
+#ifndef GA_INCLUDED_SRC_WINNT_Mouse_common_VBoxMouseLog_h
+#define GA_INCLUDED_SRC_WINNT_Mouse_common_VBoxMouseLog_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
 #endif
+
+#include <VBox/log.h>
+#include <iprt/assert.h>
 
 #define VBOX_MOUSE_LOG_NAME "VBoxMouse"
 
@@ -46,7 +48,7 @@
         _logger((VBOX_MOUSE_LOG_SUFFIX_FMT  VBOX_MOUSE_LOG_SUFFIX_PARMS));  \
     } while (0)
 
-#ifdef DEBUG_misha
+#if 1 /* Exclude yourself if you're not keen on this. */
 # define BREAK_WARN() AssertFailed()
 #else
 # define BREAK_WARN() do {} while(0)
@@ -67,5 +69,5 @@
 #define LOGF_ENTER() LOGF(("ENTER"))
 #define LOGF_LEAVE() LOGF(("LEAVE"))
 
-#endif /* !VBOXMOUSELOG_H */
+#endif /* !GA_INCLUDED_SRC_WINNT_Mouse_common_VBoxMouseLog_h */
 

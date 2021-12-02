@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPR0IdcClientStubs.c 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VirtualBox Support Driver - IDC Client Lib, Stubs for SUPR0 APIs.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,7 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include "SUPR0IdcClientInternal.h"
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/asm.h>
 
 
@@ -80,8 +80,8 @@ static void supR0IdcGetSymbolBySession(PSUPDRVSESSION pSession, PFNRT *ppfn, con
 
 SUPR0DECL(void *) SUPR0ObjRegister(PSUPDRVSESSION pSession, SUPDRVOBJTYPE enmType, PFNSUPDRVDESTRUCTOR pfnDestructor, void *pvUser1, void *pvUser2)
 {
-    static DECLCALLBACKPTR(void *, s_pfn)(PSUPDRVSESSION /* pSession */, SUPDRVOBJTYPE /* enmType */, PFNSUPDRVDESTRUCTOR /* pfnDestructor */, void * /* pvUser1 */, void * /* pvUser2 */);
-    DECLCALLBACKPTR(void *,          pfn)(PSUPDRVSESSION /* pSession */, SUPDRVOBJTYPE /* enmType */, PFNSUPDRVDESTRUCTOR /* pfnDestructor */, void * /* pvUser1 */, void * /* pvUser2 */);
+    static DECLCALLBACKPTR(void *, s_pfn,(PSUPDRVSESSION /* pSession */, SUPDRVOBJTYPE /* enmType */, PFNSUPDRVDESTRUCTOR /* pfnDestructor */, void * /* pvUser1 */, void * /* pvUser2 */));
+    DECLCALLBACKPTR(void *,          pfn,(PSUPDRVSESSION /* pSession */, SUPDRVOBJTYPE /* enmType */, PFNSUPDRVDESTRUCTOR /* pfnDestructor */, void * /* pvUser1 */, void * /* pvUser2 */));
     pfn = s_pfn;
     if (!pfn)
     {
@@ -97,8 +97,8 @@ SUPR0DECL(void *) SUPR0ObjRegister(PSUPDRVSESSION pSession, SUPDRVOBJTYPE enmTyp
 
 SUPR0DECL(int) SUPR0ObjAddRef(void *pvObj, PSUPDRVSESSION pSession)
 {
-    static DECLCALLBACKPTR(int, s_pfn)(void * /* pvObj */, PSUPDRVSESSION /* pSession */);
-    DECLCALLBACKPTR(int,          pfn)(void * /* pvObj */, PSUPDRVSESSION /* pSession */);
+    static DECLCALLBACKPTR(int, s_pfn,(void * /* pvObj */, PSUPDRVSESSION /* pSession */));
+    DECLCALLBACKPTR(int,          pfn,(void * /* pvObj */, PSUPDRVSESSION /* pSession */));
     pfn = s_pfn;
     if (!pfn)
     {
@@ -114,8 +114,8 @@ SUPR0DECL(int) SUPR0ObjAddRef(void *pvObj, PSUPDRVSESSION pSession)
 
 SUPR0DECL(int) SUPR0ObjRelease(void *pvObj, PSUPDRVSESSION pSession)
 {
-    static DECLCALLBACKPTR(int, s_pfn)(void * /* pvObj */, PSUPDRVSESSION /* pSession */);
-    DECLCALLBACKPTR(int,          pfn)(void * /* pvObj */, PSUPDRVSESSION /* pSession */);
+    static DECLCALLBACKPTR(int, s_pfn,(void * /* pvObj */, PSUPDRVSESSION /* pSession */));
+    DECLCALLBACKPTR(int,          pfn,(void * /* pvObj */, PSUPDRVSESSION /* pSession */));
     pfn = s_pfn;
     if (!pfn)
     {
@@ -131,8 +131,8 @@ SUPR0DECL(int) SUPR0ObjRelease(void *pvObj, PSUPDRVSESSION pSession)
 
 SUPR0DECL(int) SUPR0ObjVerifyAccess(void *pvObj, PSUPDRVSESSION pSession, const char *pszObjName)
 {
-    static DECLCALLBACKPTR(int, s_pfn)(void * /* pvObj */, PSUPDRVSESSION /* pSession */, const char * /* pszObjName */);
-    DECLCALLBACKPTR(int,          pfn)(void * /* pvObj */, PSUPDRVSESSION /* pSession */, const char * /* pszObjName */);
+    static DECLCALLBACKPTR(int, s_pfn,(void * /* pvObj */, PSUPDRVSESSION /* pSession */, const char * /* pszObjName */));
+    DECLCALLBACKPTR(int,          pfn,(void * /* pvObj */, PSUPDRVSESSION /* pSession */, const char * /* pszObjName */));
     pfn = s_pfn;
     if (!pfn)
     {

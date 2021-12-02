@@ -3,7 +3,7 @@
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -52,5 +52,4 @@ __data_start:
 BEGINBSS
 global __bss_start
 __bss_start:
-
 

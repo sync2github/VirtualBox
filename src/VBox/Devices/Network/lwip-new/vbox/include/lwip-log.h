@@ -27,9 +27,10 @@
  *          the  lwIP XXXX_DEBUG macros are used in \#if XXXX_DEBUG
  *          tests around the place.  This make MSC raise complaint
  *          C4668, that e.g. 'LOG_GROUP_LWIP_IP4' is not defined as a
- *          preprocessor macro and therefore placed with '0'.  However,
- *          that works just fine because we or LWIP_DB_ON so the test
- *          is true despite the warning. Thus the pragma below
+ *          preprocessor macro and therefore replaced with '0'.
+ *          However, that works just fine because we or LWIP_DBG_ON so
+ *          the test is true despite the warning. Thus the pragma
+ *          below.
  */
 # ifdef _MSC_VER
 #  pragma warning(disable:4668)
@@ -85,7 +86,7 @@
 
 #  define LWIP_DEBUGF(_when, _args) \
      do { \
-         const VBOX_LOGGROUP _group = (_when) >> LWIP_DEBUGF_LOG_GROUP_SHIFT; \
+         const VBOXLOGGROUP _group = (_when) >> LWIP_DEBUGF_LOG_GROUP_SHIFT; \
          if (_group >= LOG_GROUP_DEFAULT) { \
              /* severe => l1; serious => l2; warning => l3; default => l4 */ \
              const unsigned int _level = 1U << (LWIP_DBG_MASK_LEVEL + 1 - ((_when) & LWIP_DBG_MASK_LEVEL)); \
@@ -100,4 +101,4 @@
 # endif /* !LOG_ENABLED */
 
 #endif /* LWIP_DEBUG */
-#endif /* __VBOX_LWIP_LOG_H__ */
+#endif /* !__VBOX_LWIP_LOG_H__ */

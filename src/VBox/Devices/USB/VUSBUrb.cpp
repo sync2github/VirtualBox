@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VUSBUrb.cpp 90049 2021-07-06 10:23:26Z vboxsync $ */
 /** @file
  * Virtual USB - URBs.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -351,9 +351,9 @@ void vusbUrbCompletionRh(PVUSBURB pUrb)
             /* Don't bother with error callback for isochronous URBs. */
             break;
 
-#if 1   /** @todo r=bird: OHCI say "If the Transfer Descriptor is being
+#if 1   /** @todo r=bird: OHCI say ''If the Transfer Descriptor is being
          * retired because of an error, the Host Controller must update
-         * the Halt bit of the Endpoint Descriptor."
+         * the Halt bit of the Endpoint Descriptor.''
          *
          * So, I'll subject all transfertypes to the same halt stuff now. It could
          * just happen to fix the logitech disconnect trap in win2k.
@@ -409,19 +409,7 @@ DECLINLINE(bool) vusbUrbIsRequestSafe(PCVUSBSETUP pSetup, PVUSBURB pUrb)
          * cache. Yeah, it's a bit weird to read.)
          */
         case VUSB_REQ_GET_DESCRIPTOR:
-            if (    !pUrb->pVUsb->pDev->pDescCache->fUseCachedDescriptors
-                ||  (pSetup->bmRequestType & VUSB_RECIP_MASK) != VUSB_TO_DEVICE)
-                return true;
-            switch (pSetup->wValue >> 8)
-            {
-                case VUSB_DT_DEVICE:
-                case VUSB_DT_CONFIG:
-                    return false;
-                case VUSB_DT_STRING:
-                    return !pUrb->pVUsb->pDev->pDescCache->fUseCachedStringsDescriptors;
-                default:
-                    return true;
-            }
+            return !vusbDevIsDescriptorInCache(pUrb->pVUsb->pDev, pSetup);
 
         default:
             return true;
@@ -563,7 +551,7 @@ void vusbMsgResetExtraData(PVUSBCTRLEXTRA pExtra)
 static DECLCALLBACK(void) vusbMsgFreeUrb(PVUSBURB pUrb)
 {
     vusbUrbAssert(pUrb);
-    PVUSBCTRLEXTRA pExtra = (PVUSBCTRLEXTRA)((uint8_t *)pUrb - RT_OFFSETOF(VUSBCTRLEXTRA, Urb));
+    PVUSBCTRLEXTRA pExtra = (PVUSBCTRLEXTRA)((uint8_t *)pUrb - RT_UOFFSETOF(VUSBCTRLEXTRA, Urb));
     if (    pUrb->enmState == VUSBURBSTATE_CANCELLED
         &&  !pUrb->pVUsb->pvFreeCtx)
     {
@@ -610,8 +598,12 @@ static PVUSBCTRLEXTRA vusbMsgAllocExtraData(PVUSBURB pUrb)
 {
 /** @todo reuse these? */
     PVUSBCTRLEXTRA pExtra;
-    const size_t cbMax = sizeof(VUSBURBVUSBINT) + sizeof(pExtra->Urb.abData) + sizeof(VUSBSETUP);
-    pExtra = (PVUSBCTRLEXTRA)RTMemAllocZ(RT_OFFSETOF(VUSBCTRLEXTRA, Urb.abData[cbMax]));
+    /* The initial allocation tries to balance wasted memory versus the need to re-allocate
+     * the message data. Experience shows that an 8K initial allocation in practice never needs
+     * to be expanded but almost certainly wastes 4K or more memory.
+     */
+    const size_t cbMax = _2K + sizeof(VUSBSETUP);
+    pExtra = (PVUSBCTRLEXTRA)RTMemAllocZ(RT_UOFFSETOF_DYN(VUSBCTRLEXTRA, Urb.abData[cbMax]));
     if (pExtra)
     {
         pExtra->enmStage = CTLSTAGE_SETUP;
@@ -628,7 +620,7 @@ static PVUSBCTRLEXTRA vusbMsgAllocExtraData(PVUSBURB pUrb)
 #ifdef LOG_ENABLED
         RTStrAPrintf(&pExtra->Urb.pszDesc, "URB %p msg->%p", &pExtra->Urb, pUrb);
 #endif
-        pExtra->Urb.pVUsb = (PVUSBURBVUSB)&pExtra->Urb.abData[sizeof(pExtra->Urb.abData) + sizeof(VUSBSETUP)];
+        pExtra->Urb.pVUsb = &pExtra->VUsbExtra;
         //pExtra->Urb.pVUsb->pCtrlUrb = NULL;
         //pExtra->Urb.pVUsb->pNext = NULL;
         //pExtra->Urb.pVUsb->ppPrev = NULL;
@@ -681,16 +673,16 @@ static bool vusbMsgSetup(PVUSBPIPE pPipe, const void *pvBuf, uint32_t cbBuf)
      */
     if (pExtra->Urb.enmState == VUSBURBSTATE_CANCELLED)
     {
-        void *pvNew = RTMemDup(pExtra, RT_OFFSETOF(VUSBCTRLEXTRA, Urb.abData[pExtra->cbMax]));
+        void *pvNew = RTMemDup(pExtra, RT_UOFFSETOF_DYN(VUSBCTRLEXTRA, Urb.abData[pExtra->cbMax]));
         if (!pvNew)
         {
-            Log(("vusbMsgSetup: out of memory!!! cbReq=%u\n", RT_OFFSETOF(VUSBCTRLEXTRA, Urb.abData[pExtra->cbMax])));
+            Log(("vusbMsgSetup: out of memory!!! cbReq=%zu\n", RT_UOFFSETOF_DYN(VUSBCTRLEXTRA, Urb.abData[pExtra->cbMax])));
             return false;
         }
         pExtra->Urb.pVUsb->pvFreeCtx = NULL;
         LogFlow(("vusbMsgSetup: Replacing canceled pExtra=%p with %p.\n", pExtra, pvNew));
         pPipe->pCtrl = pExtra = (PVUSBCTRLEXTRA)pvNew;
-        pExtra->Urb.pVUsb = (PVUSBURBVUSB)&pExtra->Urb.abData[sizeof(pExtra->Urb.abData) + sizeof(VUSBSETUP)];
+        pExtra->Urb.pVUsb = &pExtra->VUsbExtra;
         pExtra->Urb.pVUsb->pUrb = &pExtra->Urb;
         pExtra->pMsg = (PVUSBSETUP)pExtra->Urb.abData;
         pExtra->Urb.enmState = VUSBURBSTATE_ALLOCATED;
@@ -700,23 +692,27 @@ static bool vusbMsgSetup(PVUSBPIPE pPipe, const void *pvBuf, uint32_t cbBuf)
     /*
      * Check that we've got sufficient space in the message URB.
      */
-    if (pExtra->cbMax < cbBuf + pSetupIn->wLength + sizeof(VUSBURBVUSBINT))
+    if (pExtra->cbMax < cbBuf + pSetupIn->wLength)
     {
-        uint32_t cbReq = RT_ALIGN_32(cbBuf + pSetupIn->wLength + sizeof(VUSBURBVUSBINT), 1024);
-        PVUSBCTRLEXTRA pNew = (PVUSBCTRLEXTRA)RTMemRealloc(pExtra, RT_OFFSETOF(VUSBCTRLEXTRA, Urb.abData[cbReq]));
+        uint32_t cbReq = RT_ALIGN_32(cbBuf + pSetupIn->wLength, 64);
+        PVUSBCTRLEXTRA pNew = (PVUSBCTRLEXTRA)RTMemRealloc(pExtra, RT_UOFFSETOF_DYN(VUSBCTRLEXTRA, Urb.abData[cbReq]));
         if (!pNew)
         {
-            Log(("vusbMsgSetup: out of memory!!! cbReq=%u %u\n",
-                 cbReq, RT_OFFSETOF(VUSBCTRLEXTRA, Urb.abData[cbReq])));
+            Log(("vusbMsgSetup: out of memory!!! cbReq=%u %zu\n",
+                 cbReq, RT_UOFFSETOF_DYN(VUSBCTRLEXTRA, Urb.abData[cbReq])));
             return false;
         }
         if (pExtra != pNew)
         {
+            LogFunc(("Reallocated %u -> %u\n", pExtra->cbMax, cbReq));
             pNew->pMsg = (PVUSBSETUP)pNew->Urb.abData;
             pExtra = pNew;
+            pPipe->pCtrl = pExtra;
+            pExtra->Urb.pVUsb = &pExtra->VUsbExtra;
+            pExtra->Urb.pVUsb->pUrb = &pExtra->Urb;
+            pExtra->Urb.pVUsb->pvFreeCtx = &pExtra->Urb;
         }
-        pExtra->Urb.pVUsb = (PVUSBURBVUSB)&pExtra->Urb.abData[cbBuf + pSetupIn->wLength];
-        pExtra->Urb.pVUsb->pUrb = &pExtra->Urb;
+
         pExtra->cbMax = cbReq;
     }
     Assert(pExtra->Urb.enmState == VUSBURBSTATE_ALLOCATED);
@@ -935,27 +931,43 @@ static int vusbUrbSubmitCtrl(PVUSBURB pUrb)
              * will be no status stage.
              */
             uint8_t *pbData = (uint8_t *)(pExtra->pMsg + 1);
-            if (&pExtra->pbCur[pUrb->cbData] > &pbData[pSetup->wLength])
+            if ((uintptr_t)&pExtra->pbCur[pUrb->cbData] > (uintptr_t)&pbData[pSetup->wLength])
             {
-                if (!pSetup->wLength) /* happens during iPhone detection with iTunes (correct?) */
+                /* In the device -> host direction, the device never returns more data than
+                   what was requested (wLength).  So, we can just cap cbData. */
+                ssize_t const cbLeft = &pbData[pSetup->wLength] - pExtra->pbCur;
+                if (pSetup->bmRequestType & VUSB_DIR_TO_HOST)
                 {
-                    Log(("%s: vusbUrbSubmitCtrl: pSetup->wLength == 0!! (iPhone)\n", pUrb->pszDesc));
-                    pSetup->wLength = pUrb->cbData;
+                    LogFlow(("%s: vusbUrbSubmitCtrl: Adjusting DATA request: %d -> %d\n", pUrb->pszDesc, pUrb->cbData, cbLeft));
+                    pUrb->cbData = cbLeft >= 0 ? (uint32_t)cbLeft : 0;
                 }
+                /* In the host -> direction it's undefined what happens if the host provides
+                   more data than what wLength inidicated.  However, in 2007, iPhone detection
+                   via iTunes would issue wLength=0 but provide a data URB which we needed to
+                   pass on to the device anyway, so we'll just quietly adjust wLength if it's
+                   zero and get on with the work.
 
-                /* Variable length data transfers */
-                if (    (pSetup->bmRequestType & VUSB_DIR_TO_HOST)
-                    ||  pSetup->wLength == 0
-                    ||  (pUrb->cbData % pSetup->wLength) == 0)  /* magic which need explaining... */
+                   What confuses me (bird) here, though, is that we've already sent the SETUP
+                   URB to the device when we received it, and all we end up doing is an
+                   unnecessary memcpy and completing the URB, but never actually sending the
+                   data to the device.  So, I guess this stuff is still a little iffy.
+
+                   Note! We currently won't be doing any resizing, as we've disabled resizing
+                         in general.
+                   P.S.  We used to have a very strange (pUrb->cbData % pSetup->wLength) == 0
+                         thing too that joined the pUrb->cbData adjusting above. */
+                else if (   pSetup->wLength == 0
+                         && pUrb->cbData <= pExtra->cbMax)
                 {
-                    uint8_t *pbEnd = pbData + pSetup->wLength;
-                    int cbLeft = pbEnd - pExtra->pbCur;
-                    LogFlow(("%s: vusbUrbSubmitCtrl: Var DATA, pUrb->cbData %d -> %d\n", pUrb->pszDesc, pUrb->cbData, cbLeft));
-                    pUrb->cbData = cbLeft;
+                    Log(("%s: vusbUrbSubmitCtrl: pAdjusting wLength: %u -> %u (iPhone hack)\n",
+                         pUrb->pszDesc, pSetup->wLength, pUrb->cbData));
+                    pSetup->wLength = pUrb->cbData;
+                    Assert(cbLeft >= (ssize_t)pUrb->cbData);
                 }
                 else
                 {
-                    Log(("%s: vusbUrbSubmitCtrl: Stall at data stage!!\n", pUrb->pszDesc));
+                    Log(("%s: vusbUrbSubmitCtrl: Stall at data stage!! wLength=%u cbData=%d cbMax=%d cbLeft=%dz\n",
+                         pUrb->pszDesc, pSetup->wLength, pUrb->cbData, pExtra->cbMax, cbLeft));
                     vusbMsgStall(pUrb);
                     break;
                 }
@@ -983,6 +995,8 @@ static int vusbUrbSubmitCtrl(PVUSBURB pUrb)
             else
             {
                 /* get data for sending when completed. */
+                AssertStmt((ssize_t)pUrb->cbData <= pExtra->cbMax - (pExtra->pbCur - pbData), /* paranoia: checked above */
+                           pUrb->cbData = pExtra->cbMax - (uint32_t)RT_MIN(pExtra->pbCur - pbData, pExtra->cbMax));
                 memcpy(pExtra->pbCur, pUrb->abData, pUrb->cbData);
 
                 /* advance */
@@ -1183,14 +1197,6 @@ int vusbUrbSubmit(PVUSBURB pUrb)
             LogRel(("VUSB: Capturing URB submit event failed with %Rrc\n", rc));
     }
 
-#ifdef VBOX_WITH_USB
-    if (pPipe && pPipe->hBuffer)
-    {
-        rc = vusbBufferedPipeSubmitUrb(pPipe->hBuffer, pUrb);
-        return rc;
-    }
-#endif
-
     /*
      * Take action based on type.
      */
@@ -1274,8 +1280,8 @@ void vusbUrbDoReapAsync(PRTLISTANCHOR pUrbLst, RTMSINTERVAL cMillies)
                    && ((pRipe = pDev->pUsbIns->pReg->pfnUrbReap(pDev->pUsbIns, cMillies)) != NULL))
             {
                 vusbUrbAssert(pRipe);
-                if (pRipe == pVUsbUrbNext->pUrb)
-                    pVUsbUrbNext = RTListGetNext(pUrbLst, pVUsbUrb, VUSBURBVUSBINT, NdLst);
+                if (pVUsbUrbNext && pRipe == pVUsbUrbNext->pUrb)
+                    pVUsbUrbNext = RTListGetNext(pUrbLst, pVUsbUrbNext, VUSBURBVUSBINT, NdLst);
                 vusbUrbRipe(pRipe);
             }
         }
@@ -1331,13 +1337,8 @@ static void vusbUrbCompletion(PVUSBURB pUrb)
 
     if (pUrb->enmState == VUSBURBSTATE_REAPED)
         vusbUrbUnlink(pUrb);
-#ifdef VBOX_WITH_USB
-    // Read-ahead URBs are handled differently
-    if (pUrb->pVUsb->pvBuffered)
-        vusbBufferedPipeCompleteUrb(pUrb);
-    else
-#endif
-        vusbUrbCompletionRh(pUrb);
+
+    vusbUrbCompletionRh(pUrb);
 }
 
 /**
@@ -1391,6 +1392,7 @@ DECLHIDDEN(int) vusbUrbCancelWorker(PVUSBURB pUrb, CANCELMODE enmMode)
         {
             default:
                 AssertMsgFailed(("Invalid cancel mode\n"));
+                RT_FALL_THRU();
             case CANCELMODE_FAIL:
                 pUrb->enmStatus = VUSBSTATUS_CRC;
                 break;

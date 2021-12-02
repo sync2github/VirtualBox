@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIIndicatorsPool.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIIndicatorsPool class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIIndicatorsPool_h___
-#define ___UIIndicatorsPool_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_UIIndicatorsPool_h
+#define FEQT_INCLUDED_SRC_runtime_UIIndicatorsPool_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QWidget>
@@ -63,10 +66,13 @@ public:
     /** Defines whether indicator-states auto-update is @a fEnabled. */
     void setAutoUpdateIndicatorStates(bool fEnabled);
 
+    /** Returns global screen position corresponding to @a indicatorPosition inside indicator of @a enmIndicatorType. */
+    QPoint mapIndicatorPositionToGlobal(IndicatorType enmIndicatorType, const QPoint &indicatorPosition);
+
 private slots:
 
     /** Handles configuration change. */
-    void sltHandleConfigurationChange(const QString &strMachineID);
+    void sltHandleConfigurationChange(const QUuid &uMachineID);
 
     /** Handles indicator-states auto-update. */
     void sltAutoUpdateIndicatorStates();
@@ -120,4 +126,5 @@ private:
     QTimer *m_pTimerAutoUpdate;
 };
 
-#endif /* !___UIIndicatorsPool_h___ */
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIIndicatorsPool_h */
+

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: NetworkServiceRunner.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Main - interface for VBox DHCP server.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,42 +15,63 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#include <iprt/err.h>
-#include <iprt/types.h>
-#include <iprt/string.h>
-#include <iprt/mem.h>
+#ifndef MAIN_INCLUDED_NetworkServiceRunner_h
+#define MAIN_INCLUDED_NetworkServiceRunner_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
 #include <VBox/com/string.h>
 
-#include <string>
 
+/** @name Internal networking trunk type option values (NetworkServiceRunner::kpszKeyTrunkType)
+ *  @{ */
 #define TRUNKTYPE_WHATEVER "whatever"
 #define TRUNKTYPE_NETFLT   "netflt"
 #define TRUNKTYPE_NETADP   "netadp"
 #define TRUNKTYPE_SRVNAT   "srvnat"
+/** @} */
 
+/**
+ * Network service runner.
+ *
+ * Build arguments, starts and stops network service processes.
+ */
 class NetworkServiceRunner
 {
 public:
     NetworkServiceRunner(const char *aProcName);
     virtual ~NetworkServiceRunner();
 
-    int setOption(const std::string& key, const std::string& val);
+    /** @name Argument management
+     * @{ */
+    int  addArgument(const char *pszArgument);
+    int  addArgPair(const char *pszOption, const char *pszValue);
+    void resetArguments();
+    /** @} */
 
-    int  start(bool aKillProcOnStop);
+    int  start(bool aKillProcessOnStop);
     int  stop();
-    bool isRunning();
     void detachFromServer();
+    bool isRunning();
 
-    static const std::string kNsrKeyName;
-    static const std::string kNsrKeyNetwork;
-    static const std::string kNsrKeyTrunkType;
-    static const std::string kNsrTrunkName;
-    static const std::string kNsrMacAddress;
-    static const std::string kNsrIpAddress;
-    static const std::string kNsrIpNetmask;
-    static const std::string kNsrKeyNeedMain;
+    RTPROCESS getPid() const;
+
+    /** @name Common options
+     * @{ */
+    static const char * const kpszKeyNetwork;
+    static const char * const kpszKeyTrunkType;
+    static const char * const kpszTrunkName;
+    static const char * const kpszMacAddress;
+    static const char * const kpszIpAddress;
+    static const char * const kpszIpNetmask;
+    static const char * const kpszKeyNeedMain;
+    /** @} */
 
 private:
     struct Data;
     Data *m;
 };
+
+#endif /* !MAIN_INCLUDED_NetworkServiceRunner_h */
+

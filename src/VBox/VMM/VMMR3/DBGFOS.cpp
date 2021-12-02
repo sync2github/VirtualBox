@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFOS.cpp 86159 2020-09-17 17:09:30Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, Guest OS Diggers.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -70,6 +70,8 @@ typedef struct DBGFOSEMTWRAPPER
         void                    *pv;
         /** DBGFOSINTERFACE_DMESG.*/
         PDBGFOSIDMESG           pDmesg;
+        /** DBGFOSINTERFACE_WINNT.*/
+        PDBGFOSIWINNT           pWinNt;
     } uDigger;
     /** The user mode VM handle. */
     PUVM                        pUVM;
@@ -78,6 +80,8 @@ typedef struct DBGFOSEMTWRAPPER
     {
         /** DBGFOSINTERFACE_DMESG.*/
         DBGFOSIDMESG            Dmesg;
+        /** DBGFOSINTERFACE_WINNT.*/
+        DBGFOSIWINNT            WinNt;
     } uWrapper;
 } DBGFOSEMTWRAPPER;
 /** Pointer to an EMT interface wrapper.   */
@@ -98,11 +102,11 @@ int dbgfR3OSInit(PUVM pUVM)
 
 
 /**
- * Internal cleanup routine called by DBGFR3Term().
+ * Internal cleanup routine called by DBGFR3Term(), part 1.
  *
  * @param   pUVM    The user mode VM handle.
  */
-void dbgfR3OSTerm(PUVM pUVM)
+void dbgfR3OSTermPart1(PUVM pUVM)
 {
     DBGF_OS_WRITE_LOCK(pUVM);
 
@@ -114,6 +118,22 @@ void dbgfR3OSTerm(PUVM pUVM)
         pUVM->dbgf.s.pCurOS->pReg->pfnTerm(pUVM, pUVM->dbgf.s.pCurOS->abData);
         pUVM->dbgf.s.pCurOS = NULL;
     }
+
+    DBGF_OS_WRITE_UNLOCK(pUVM);
+}
+
+
+/**
+ * Internal cleanup routine called by DBGFR3Term(), part 2.
+ *
+ * @param   pUVM    The user mode VM handle.
+ */
+void dbgfR3OSTermPart2(PUVM pUVM)
+{
+    DBGF_OS_WRITE_LOCK(pUVM);
+
+    /* This shouldn't happen. */
+    AssertStmt(!pUVM->dbgf.s.pCurOS, dbgfR3OSTermPart1(pUVM));
 
     /*
      * Destroy all the instances.
@@ -164,7 +184,7 @@ static DECLCALLBACK(int) dbgfR3OSRegister(PUVM pUVM, PDBGFOSREG pReg)
     /*
      * Allocate a new structure, call the constructor and link it into the list.
      */
-    pOS = (PDBGFOS)MMR3HeapAllocZU(pUVM, MM_TAG_DBGF_OS, RT_OFFSETOF(DBGFOS, abData[pReg->cbData]));
+    pOS = (PDBGFOS)MMR3HeapAllocZU(pUVM, MM_TAG_DBGF_OS, RT_UOFFSETOF_DYN(DBGFOS, abData[pReg->cbData]));
     AssertReturn(pOS, VERR_NO_MEMORY);
     pOS->pReg = pReg;
 
@@ -515,6 +535,71 @@ static DECLCALLBACK(int) dbgfR3OSEmtIDmesg_QueryKernelLog(PDBGFOSIDMESG pThis, P
 
 
 /**
+ * @interface_method_impl{DBGFOSIWINNT,pfnQueryVersion, Generic EMT wrapper.}
+ */
+static DECLCALLBACK(int) dbgfR3OSEmtIWinNt_QueryVersion(PDBGFOSIWINNT pThis, PUVM pUVM, uint32_t *puVersMajor, uint32_t *puVersMinor,
+                                                        uint32_t *puBuildNumber, bool *pf32Bit)
+{
+    PDBGFOSEMTWRAPPER pWrapper = RT_FROM_MEMBER(pThis, DBGFOSEMTWRAPPER, uWrapper.WinNt);
+    UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
+    AssertReturn(pUVM == pWrapper->pUVM, VERR_INVALID_VM_HANDLE);
+
+    return VMR3ReqPriorityCallWaitU(pWrapper->pUVM, 0 /*idDstCpu*/,
+                                   (PFNRT)pWrapper->uDigger.pWinNt->pfnQueryVersion, 6,
+                                    pWrapper->uDigger.pWinNt, pUVM, puVersMajor, puVersMinor,
+                                    puBuildNumber, pf32Bit);
+}
+
+
+/**
+ * @interface_method_impl{DBGFOSIWINNT,pfnQueryKernelPtrs, Generic EMT wrapper.}
+ */
+static DECLCALLBACK(int) dbgfR3OSEmtIWinNt_QueryKernelPtrs(PDBGFOSIWINNT pThis, PUVM pUVM,
+                                                           PRTGCUINTPTR pGCPtrKernBase, PRTGCUINTPTR pGCPtrPsLoadedModuleList)
+{
+    PDBGFOSEMTWRAPPER pWrapper = RT_FROM_MEMBER(pThis, DBGFOSEMTWRAPPER, uWrapper.WinNt);
+    UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
+    AssertReturn(pUVM == pWrapper->pUVM, VERR_INVALID_VM_HANDLE);
+
+    return VMR3ReqPriorityCallWaitU(pWrapper->pUVM, 0 /*idDstCpu*/,
+                                   (PFNRT)pWrapper->uDigger.pWinNt->pfnQueryKernelPtrs, 4,
+                                    pWrapper->uDigger.pWinNt, pUVM, pGCPtrKernBase, pGCPtrPsLoadedModuleList);
+}
+
+
+/**
+ * @interface_method_impl{DBGFOSIWINNT,pfnQueryKpcrForVCpu, Generic EMT wrapper.}
+ */
+static DECLCALLBACK(int) dbgfR3OSEmtIWinNt_QueryKpcrForVCpu(struct DBGFOSIWINNT *pThis, PUVM pUVM, VMCPUID idCpu,
+                                                            PRTGCUINTPTR pKpcr, PRTGCUINTPTR pKpcrb)
+{
+    PDBGFOSEMTWRAPPER pWrapper = RT_FROM_MEMBER(pThis, DBGFOSEMTWRAPPER, uWrapper.WinNt);
+    UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
+    AssertReturn(pUVM == pWrapper->pUVM, VERR_INVALID_VM_HANDLE);
+
+    return VMR3ReqPriorityCallWaitU(pWrapper->pUVM, 0 /*idDstCpu*/,
+                                    (PFNRT)pWrapper->uDigger.pWinNt->pfnQueryKpcrForVCpu, 5,
+                                    pWrapper->uDigger.pWinNt, pUVM, idCpu, pKpcr, pKpcrb);
+}
+
+
+/**
+ * @interface_method_impl{DBGFOSIWINNT,pfnQueryCurThrdForVCpu, Generic EMT wrapper.}
+ */
+static DECLCALLBACK(int) dbgfR3OSEmtIWinNt_QueryCurThrdForVCpu(struct DBGFOSIWINNT *pThis, PUVM pUVM, VMCPUID idCpu,
+                                                               PRTGCUINTPTR pCurThrd)
+{
+    PDBGFOSEMTWRAPPER pWrapper = RT_FROM_MEMBER(pThis, DBGFOSEMTWRAPPER, uWrapper.WinNt);
+    UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
+    AssertReturn(pUVM == pWrapper->pUVM, VERR_INVALID_VM_HANDLE);
+
+    return VMR3ReqPriorityCallWaitU(pWrapper->pUVM, 0 /*idDstCpu*/,
+                                    (PFNRT)pWrapper->uDigger.pWinNt->pfnQueryCurThrdForVCpu, 4,
+                                    pWrapper->uDigger.pWinNt, pUVM, idCpu, pCurThrd);
+}
+
+
+/**
  * EMT worker for DBGFR3OSQueryInterface.
  *
  * @param   pUVM            The user mode VM handle.
@@ -574,6 +659,14 @@ static DECLCALLBACK(void) dbgfR3OSQueryInterface(PUVM pUVM, DBGFOSINTERFACE enmI
                     pWrapper->uWrapper.Dmesg.pfnQueryKernelLog = dbgfR3OSEmtIDmesg_QueryKernelLog;
                     pWrapper->uWrapper.Dmesg.u32EndMagic       = DBGFOSIDMESG_MAGIC;
                     break;
+                case DBGFOSINTERFACE_WINNT:
+                    pWrapper->uWrapper.WinNt.u32Magic               = DBGFOSIWINNT_MAGIC;
+                    pWrapper->uWrapper.WinNt.pfnQueryVersion        = dbgfR3OSEmtIWinNt_QueryVersion;
+                    pWrapper->uWrapper.WinNt.pfnQueryKernelPtrs     = dbgfR3OSEmtIWinNt_QueryKernelPtrs;
+                    pWrapper->uWrapper.WinNt.pfnQueryKpcrForVCpu    = dbgfR3OSEmtIWinNt_QueryKpcrForVCpu;
+                    pWrapper->uWrapper.WinNt.pfnQueryCurThrdForVCpu = dbgfR3OSEmtIWinNt_QueryCurThrdForVCpu;
+                    pWrapper->uWrapper.WinNt.u32EndMagic            = DBGFOSIWINNT_MAGIC;
+                    break;
                 default:
                     AssertFailed();
                     MMR3HeapFree(pWrapper);
@@ -619,5 +712,27 @@ VMMR3DECL(void *) DBGFR3OSQueryInterface(PUVM pUVM, DBGFOSINTERFACE enmIf)
     void *pvIf = NULL;
     VMR3ReqPriorityCallVoidWaitU(pUVM, VMCPUID_ANY, (PFNRT)dbgfR3OSQueryInterface, 3, pUVM, enmIf, &pvIf);
     return pvIf;
+}
+
+
+
+/**
+ * Internal wrapper for calling DBGFOSREG::pfnStackUnwindAssist.
+ */
+int dbgfR3OSStackUnwindAssist(PUVM pUVM, VMCPUID idCpu, PDBGFSTACKFRAME pFrame, PRTDBGUNWINDSTATE pState,
+                              PCCPUMCTX pInitialCtx, RTDBGAS hAs, uint64_t *puScratch)
+{
+    int rc = VINF_SUCCESS;
+    if (pUVM->dbgf.s.pCurOS)
+    {
+        ASMCompilerBarrier();
+        DBGF_OS_READ_LOCK(pUVM);
+        PDBGFOS pOS = pUVM->dbgf.s.pCurOS;
+        if (pOS)
+            rc = pOS->pReg->pfnStackUnwindAssist(pUVM, pUVM->dbgf.s.pCurOS->abData, idCpu, pFrame,
+                                                 pState, pInitialCtx, hAs, puScratch);
+        DBGF_OS_READ_UNLOCK(pUVM);
+    }
+    return rc;
 }
 

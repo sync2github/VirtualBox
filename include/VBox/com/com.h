@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,10 +23,14 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_com_com_h
-#define ___VBox_com_com_h
+#ifndef VBOX_INCLUDED_com_com_h
+#define VBOX_INCLUDED_com_com_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VBox/com/defs.h"
+#include "VBox/com/utils.h"
 
 /** @defgroup grp_com   MS COM / XPCOM Abstraction Layer
  * @{
@@ -35,19 +39,31 @@
 namespace com
 {
 
+/** @name VBOX_COM_INIT_F_XXX - flags for com::Initialize().
+ * @{ */
+/** Windows: Caller is the GUI and needs a STA rather than MTA apartment. */
+#define VBOX_COM_INIT_F_GUI             RT_BIT_32(0)
+/** Windows: Auto registration updating, if privileged enough. */
+#define VBOX_COM_INIT_F_AUTO_REG_UPDATE RT_BIT_32(1)
+/** Windows: Opt-out of COM patching (client code should do this). */
+#define VBOX_COM_INIT_F_NO_COM_PATCHING RT_BIT_32(2)
+/** The default flags. */
+#define VBOX_COM_INIT_F_DEFAULT         (VBOX_COM_INIT_F_AUTO_REG_UPDATE)
+/** @} */
+
 /**
  *  Initializes the COM runtime.
+ *
  *  Must be called on the main thread, before any COM activity in any thread, and by any thread
  *  willing to perform COM operations.
  *
- *  @param fGui             if call is performed on the GUI thread
- *  @param fAutoRegUpdate   if to do auto MS COM registration updates.
  *  @return COM result code
  */
-HRESULT Initialize(bool fGui = false, bool fAutoRegUpdate = true);
+HRESULT Initialize(uint32_t fInitFlags = VBOX_COM_INIT_F_DEFAULT);
 
 /**
  *  Shuts down the COM runtime.
+ *
  *  Must be called on the main thread before termination.
  *  No COM calls may be made in any thread after this method returns.
  */
@@ -55,6 +71,7 @@ HRESULT Shutdown();
 
 /**
  *  Resolves a given interface ID to a string containing the interface name.
+ *
  *  If, for some reason, the given IID cannot be resolved to a name, a NULL
  *  string is returned. A non-NULL string returned by this function must be
  *  freed using SysFreeString().
@@ -64,53 +81,12 @@ HRESULT Shutdown();
  */
 void GetInterfaceNameByIID(const GUID &aIID, BSTR *aName);
 
-/**
- *  Returns the VirtualBox user home directory.
- *
- *  On failure, this function will return a path that caused a failure (or
- *  NULL if the failure is not path-related).
- *
- *  On success, this function will try to create the returned directory if it
- *  doesn't exist yet. This may also fail with the corresponding status code.
- *
- *  If @a aDirLen is smaller than RTPATH_MAX then there is a great chance that
- *  this method will return VERR_BUFFER_OVERFLOW.
- *
- *  @param aDir        Buffer to store the directory string in UTF-8 encoding.
- *  @param aDirLen     Length of the supplied buffer including space for the
- *                     terminating null character, in bytes.
- *  @param fCreateDir  Flag whether to create the returned directory on success if it
- *                     doesn't exist.
- *  @return            VBox status code.
- */
-int GetVBoxUserHomeDirectory(char *aDir, size_t aDirLen, bool fCreateDir = true);
-
-/**
- *  Creates a release log file, used both in VBoxSVC and in API clients.
- *
- *  @param pcszEntity       Human readable name of the program.
- *  @param pcszLogFile      Name of the release log file.
- *  @param fFlags           Logger instance flags.
- *  @param pcszGroupSettings Group logging settings.
- *  @param pcszEnvVarBase   Base environment variable name for the logger.
- *  @param fDestFlags       Logger destination flags.
- *  @param cMaxEntriesPerGroup Limit for log entries per group. UINT32_MAX for no limit.
- *  @param cHistory         Number of old log files to keep.
- *  @param uHistoryFileTime Maximum amount of time to put in a log file.
- *  @param uHistoryFileSize Maximum size of a log file before rotating.
- *  @param pszError         In case of creation failure: buffer for error message.
- *  @param cbError          Size of error message buffer.
- *  @return         VBox status code.
- */
-int VBoxLogRelCreate(const char *pcszEntity, const char *pcszLogFile,
-                     uint32_t fFlags, const char *pcszGroupSettings,
-                     const char *pcszEnvVarBase, uint32_t fDestFlags,
-                     uint32_t cMaxEntriesPerGroup, uint32_t cHistory,
-                     uint32_t uHistoryFileTime, uint64_t uHistoryFileSize,
-                     char *pszError, size_t cbError);
+#ifdef RT_OS_WINDOWS
+void PatchComBugs(void);
+#endif
 
 } /* namespace com */
 
 /** @} */
-#endif
+#endif /* !VBOX_INCLUDED_com_com_h */
 

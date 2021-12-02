@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: webutils.py 86436 2020-10-04 11:36:35Z vboxsync $
 
 """
 Common Web Utility Functions.
@@ -7,7 +7,7 @@ Common Web Utility Functions.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 86436 $"
 
 # Standard Python imports.
 import os;
@@ -35,13 +35,15 @@ import unittest;
 
 # Python 3 hacks:
 if sys.version_info[0] < 3:
-    from urllib2        import quote        as urllib_quote;
-    from urllib         import urlencode    as urllib_urlencode;
-    from urllib         import urlopen      as urllib_urlopen;
+    from urllib2        import quote        as urllib_quote;        # pylint: disable=import-error,no-name-in-module
+    from urllib         import urlencode    as urllib_urlencode;    # pylint: disable=import-error,no-name-in-module
+    from urllib2        import ProxyHandler as urllib_ProxyHandler; # pylint: disable=import-error,no-name-in-module
+    from urllib2        import build_opener as urllib_build_opener; # pylint: disable=import-error,no-name-in-module
 else:
-    from urllib.parse   import quote        as urllib_quote;        # pylint: disable=F0401,E0611
-    from urllib.parse   import urlencode    as urllib_urlencode;    # pylint: disable=F0401,E0611
-    from urllib.request import urlopen      as urllib_urlopen;      # pylint: disable=F0401,E0611
+    from urllib.parse   import quote        as urllib_quote;        # pylint: disable=import-error,no-name-in-module
+    from urllib.parse   import urlencode    as urllib_urlencode;    # pylint: disable=import-error,no-name-in-module
+    from urllib.request import ProxyHandler as urllib_ProxyHandler; # pylint: disable=import-error,no-name-in-module
+    from urllib.request import build_opener as urllib_build_opener; # pylint: disable=import-error,no-name-in-module
 
 # Validation Kit imports.
 from common import utils;
@@ -146,8 +148,6 @@ def downloadFile(sUrlFile, sDstFile, sLocalPrefix, fnLog, fnError = None, fNoPro
     Note! This method may use proxies configured on the system and the
           http_proxy, ftp_proxy, no_proxy environment variables.
 
-    @todo Fixed build burn here. Please set default value for fNoProxies
-          to appropriate one.
     """
     if fnError is None:
         fnError = fnLog;
@@ -159,24 +159,32 @@ def downloadFile(sUrlFile, sDstFile, sLocalPrefix, fnLog, fnError = None, fNoPro
         fnLog('Downloading "%s" to "%s"...' % (sUrlFile, sDstFile));
         try:
             ## @todo We get 404.html content instead of exceptions here, which is confusing and should be addressed.
-            if fNoProxies:
-                oSrc = urllib_urlopen(sUrlFile);
+            if not fNoProxies:
+                oOpener = urllib_build_opener();
             else:
-                oSrc = urllib_urlopen(sUrlFile, proxies = dict());
+                oOpener = urllib_build_opener(urllib_ProxyHandler(proxies = dict()));
+            oSrc = oOpener.open(sUrlFile);
             oDst = utils.openNoInherit(sDstFile, 'wb');
             oDst.write(oSrc.read());
             oDst.close();
             oSrc.close();
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             fnError('Error downloading "%s" to "%s": %s' % (sUrlFile, sDstFile, oXcpt));
             return False;
     else:
         # Assumes file from the build share.
-        sSrcPath = os.path.join(sLocalPrefix, sUrlFile);
+        if sUrlFile.startswith('file:///'):
+            sSrcPath = sUrlFile[7:];
+        elif sUrlFile.startswith('file://'):
+            sSrcPath = sUrlFile[6:];
+        elif os.path.isabs(sUrlFile):
+            sSrcPath = sUrlFile;
+        else:
+            sSrcPath = os.path.join(sLocalPrefix, sUrlFile);
         fnLog('Copying "%s" to "%s"...' % (sSrcPath, sDstFile));
         try:
             utils.copyFileSimple(sSrcPath, sDstFile);
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             fnError('Error copying "%s" to "%s": %s' % (sSrcPath, sDstFile, oXcpt));
             return False;
 
@@ -188,7 +196,7 @@ def downloadFile(sUrlFile, sDstFile, sLocalPrefix, fnLog, fnError = None, fNoPro
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class CommonUtilsTestCase(unittest.TestCase):
     def testHasSchema(self):
         self.assertTrue(hasSchema('http://www.oracle.com/'));

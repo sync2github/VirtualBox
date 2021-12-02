@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pxping_win.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT Network - ping proxy, Windows ICMP API version.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -217,7 +217,7 @@ pxping_recv4(void *arg, struct pbuf *p)
         bufsize += p->tot_len;
     bufsize += 16; /* whatever that is; empirically at least XP needs it */
 
-    pong = (struct pong4 *)malloc(RT_OFFSETOF(struct pong4, buf) + bufsize);
+    pong = (struct pong4 *)malloc(RT_UOFFSETOF(struct pong4, buf) + bufsize);
     if (RT_UNLIKELY(pong == NULL)) {
         goto out;
     }
@@ -501,7 +501,7 @@ pxping_recv6(void *arg, struct pbuf *p)
         bufsize += p->tot_len;
     bufsize += 16;
 
-    pong = (struct pong6 *)malloc(RT_OFFSETOF(struct pong6, buf) + bufsize);
+    pong = (struct pong6 *)malloc(RT_UOFFSETOF(struct pong6, buf) + bufsize);
     if (RT_UNLIKELY(pong == NULL)) {
         goto out;
     }

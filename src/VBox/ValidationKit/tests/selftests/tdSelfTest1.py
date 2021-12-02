@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: tdSelfTest1.py 86447 2020-10-04 12:29:28Z vboxsync $
 
 """
 Test Manager Self Test - Dummy Test Driver.
 """
 
+from __future__ import print_function;
+
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -27,16 +29,23 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 86447 $"
 
 
 import sys;
+import os;
 
 print('dummydriver.py: hello world!');
 print('dummydriver.py: args: %s' % (sys.argv,));
+
+print('dummydriver.py: environment:');
+for sVar in sorted(os.environ.keys()): # pylint: disable=consider-iterating-dictionary
+    print('%s=%s' % (sVar, os.environ[sVar]));
+
 if sys.argv[-1] in [ 'all', 'execute' ]:
 
     import time;
+
     for i in range(10, 1, -1):
         print('dummydriver.py: %u...', i);
         sys.stdout.flush();

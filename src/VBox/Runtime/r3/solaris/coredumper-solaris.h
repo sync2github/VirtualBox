@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: coredumper-solaris.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Custom Core Dumper, Solaris.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,6 +23,12 @@
  * You may elect to license modified versions of this file under the
  * terms and conditions of either the GPL or the CDDL or both.
  */
+
+#ifndef IPRT_INCLUDED_SRC_r3_solaris_coredumper_solaris_h
+#define IPRT_INCLUDED_SRC_r3_solaris_coredumper_solaris_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -156,4 +162,6 @@ typedef RTSOLCORE *PRTSOLCORE;
 
 typedef int (*PFNRTSOLCOREACCUMULATOR)(PRTSOLCORE pSolCore);
 typedef int (*PFNRTSOLCORETHREADWORKER)(PRTSOLCORE pSolCore, void *pvThreadInfo);
+
+#endif /* !IPRT_INCLUDED_SRC_r3_solaris_coredumper_solaris_h */
 

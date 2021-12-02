@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-cpu-instr-2-asm.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - bs3-cpu-instr-2
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -59,5 +59,4 @@ BS3_PROC_END   _bs3CpuInstr2_imul_bl_ud2
 ;
 BS3_INSTANTIATE_COMMON_TEMPLATE          "bs3-cpu-instr-2-template.mac"
 BS3_INSTANTIATE_TEMPLATE_WITH_WEIRD_ONES "bs3-cpu-instr-2-template.mac"
-
 

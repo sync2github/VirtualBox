@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: sched-posix.cpp 86525 2020-10-11 18:28:52Z vboxsync $ */
 /** @file
  * IPRT - Scheduling, POSIX.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -322,7 +322,7 @@ static enum
 
 /** Set if we figure we have nice capability, meaning we can use setpriority
  * to raise the priority. */
-bool g_fCanNice = false;
+static bool g_fCanNice = false;
 
 
 /*********************************************************************************************************************************
@@ -499,6 +499,7 @@ static void *rtSchedNativeProberThread(void *pvUser)
 
     /* done */
     rtSchedNativeRestore(&SavedPriority);
+    RT_NOREF(pvUser);
     return (void *)VINF_SUCCESS;
 }
 
@@ -633,22 +634,25 @@ static void *rtSchedNativeValidatorThread(void *pvUser)
 
     /* done */
     rtSchedNativeRestore(&SavedPriority);
-    return (void *)rc;
+    return (void *)(intptr_t)rc;
 }
 
 
-/**
- * Validates and sets the process priority.
- * This will check that all rtThreadNativeSetPriority() will success for all the
- * thread types when applied to the current thread.
- *
- * @returns iprt status code.
- * @param   enmPriority     The priority to validate and set.
- */
 DECLHIDDEN(int) rtProcNativeSetPriority(RTPROCPRIORITY enmPriority)
 {
     Assert(enmPriority > RTPROCPRIORITY_INVALID && enmPriority < RTPROCPRIORITY_LAST);
 
+#ifdef RTTHREAD_POSIX_WITH_CREATE_PRIORITY_PROXY
+    /*
+     * Make sure the proxy creation thread is started so we don't 'lose' our
+     * initial priority if it's lowered.
+     */
+    rtThreadPosixPriorityProxyStart();
+#endif
+
+    /*
+     * Nothing to validate for the default priority (assuming no external renice).
+     */
     int rc = VINF_SUCCESS;
     if (enmPriority == RTPROCPRIORITY_DEFAULT)
         g_pProcessPriority = &g_aDefaultPriority;
@@ -731,56 +735,65 @@ DECLHIDDEN(int) rtProcNativeSetPriority(RTPROCPRIORITY enmPriority)
 
 
 /**
- * Sets the priority of the thread according to the thread type
- * and current process priority.
- *
- * The RTTHREADINT::enmType member has not yet been updated and will be updated by
- * the caller on a successful return.
- *
- * @returns iprt status code.
- * @param   Thread      The thread in question.
- * @param   enmType     The thread type.
+ * Worker for rtThreadNativeSetPriority/OSPRIOSUP_PROCESS_AND_THREAD_LEVEL
+ * that's either called on the priority proxy thread or directly if no proxy.
  */
+static DECLCALLBACK(int) rtThreadPosixSetPriorityOnProcAndThrdCallback(PRTTHREADINT pThread, RTTHREADTYPE enmType)
+{
+    struct sched_param  SchedParam = {-9999999};
+    int                 iPolicy = -7777777;
+    int rc = pthread_getschedparam((pthread_t)pThread->Core.Key, &iPolicy, &SchedParam);
+    if (!rc)
+    {
+        SchedParam.sched_priority = g_pProcessPriority->paTypes[enmType].iPriority
+            + g_pProcessPriority->iDelta
+            + sched_get_priority_min(iPolicy);
+
+        rc = pthread_setschedparam((pthread_t)pThread->Core.Key, iPolicy, &SchedParam);
+        if (!rc)
+        {
+#ifdef THREAD_LOGGING
+            Log(("rtThreadNativeSetPriority: Thread=%p enmType=%d iPolicy=%d sched_priority=%d pid=%d\n",
+                 pThread->Core.Key, enmType, iPolicy, SchedParam.sched_priority, getpid()));
+#endif
+            return VINF_SUCCESS;
+        }
+    }
+
+    int rcNative = rc;
+    rc = RTErrConvertFromErrno(rc);
+    AssertMsgFailed(("pthread_[gs]etschedparam(%p, %d, {%d}) -> rcNative=%d rc=%Rrc\n",
+                     (void *)pThread->Core.Key, iPolicy, SchedParam.sched_priority, rcNative, rc)); NOREF(rcNative);
+    return rc;
+}
+
+
 DECLHIDDEN(int) rtThreadNativeSetPriority(PRTTHREADINT pThread, RTTHREADTYPE enmType)
 {
     Assert(enmType > RTTHREADTYPE_INVALID && enmType < RTTHREADTYPE_END);
     Assert(enmType == g_pProcessPriority->paTypes[enmType].enmType);
-    Assert((pthread_t)pThread->Core.Key == pthread_self());
 
     int rc = VINF_SUCCESS;
     switch (g_enmOsPrioSup)
     {
         case OSPRIOSUP_PROCESS_AND_THREAD_LEVEL:
         {
-            struct sched_param  SchedParam = {-9999999};
-            int                 iPolicy = -7777777;
-            pthread_t           Self = pthread_self();
-            rc = pthread_getschedparam(Self, &iPolicy, &SchedParam);
-            if (!rc)
-            {
-                SchedParam.sched_priority = g_pProcessPriority->paTypes[enmType].iPriority
-                    + g_pProcessPriority->iDelta
-                    + sched_get_priority_min(iPolicy);
-                rc = pthread_setschedparam(Self, iPolicy, &SchedParam);
-                if (!rc)
-                {
-#ifdef THREAD_LOGGING
-                    Log(("rtThreadNativeSetPriority: Thread=%p enmType=%d iPolicy=%d sched_priority=%d pid=%d\n",
-                         pThread->Core.Key, enmType, iPolicy, SchedParam.sched_priority, getpid()));
+#ifdef RTTHREAD_POSIX_WITH_CREATE_PRIORITY_PROXY
+            if (rtThreadPosixPriorityProxyStart())
+                rc = rtThreadPosixPriorityProxyCall(pThread, (PFNRT)rtThreadPosixSetPriorityOnProcAndThrdCallback,
+                                                    2, pThread, enmType);
+            else
 #endif
-                    break;
-                }
-            }
-
-            int rcNative = rc;
-            rc = RTErrConvertFromErrno(rc);
-            AssertMsgFailed(("pthread_[gs]etschedparam(%p, %d, {%d}) -> rcNative=%d rc=%Rrc\n",
-                             (void *)Self, iPolicy, SchedParam.sched_priority, rcNative, rc)); NOREF(rcNative);
+                rc = rtThreadPosixSetPriorityOnProcAndThrdCallback(pThread, enmType);
             break;
         }
 
         case OSPRIOSUP_THREAD_LEVEL:
         {
+            /* No cross platform way of getting the 'who' parameter value for
+               arbitrary threads, so this is restricted to the calling thread only. */
+            AssertReturn((pthread_t)pThread->Core.Key == pthread_self(), VERR_NOT_SUPPORTED);
+
             int iPriority = g_pProcessPriority->paTypes[enmType].iPriority + g_pProcessPriority->iDelta;
             if (!setpriority(PRIO_PROCESS, 0, iPriority))
             {

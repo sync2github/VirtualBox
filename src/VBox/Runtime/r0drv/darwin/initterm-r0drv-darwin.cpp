@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: initterm-r0drv-darwin.cpp 85167 2020-07-10 10:06:55Z vboxsync $ */
 /** @file
  * IPRT - Initialization & Termination, R0 Driver, Darwin.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
 #include "the-darwin-kernel.h"
 #include "internal/iprt.h"
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/assert.h>
 #include <iprt/dbg.h>
 #include "internal/initterm.h"
@@ -42,11 +42,15 @@
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
 /** Pointer to the lock group used by IPRT. */
-lck_grp_t                  *g_pDarwinLockGroup = NULL;
+DECL_HIDDEN_DATA(lck_grp_t *)                   g_pDarwinLockGroup = NULL;
 /** Pointer to the ast_pending function, if found. */
-PFNR0DARWINASTPENDING       g_pfnR0DarwinAstPending = NULL;
+DECL_HIDDEN_DATA(PFNR0DARWINASTPENDING)         g_pfnR0DarwinAstPending = NULL;
 /** Pointer to the cpu_interrupt function, if found. */
-PFNR0DARWINCPUINTERRUPT     g_pfnR0DarwinCpuInterrupt = NULL;
+DECL_HIDDEN_DATA(PFNR0DARWINCPUINTERRUPT)       g_pfnR0DarwinCpuInterrupt = NULL;
+#ifdef DEBUG
+/** Pointer to the vm_fault_external function - used once for debugging @bugref{9466}. */
+DECL_HIDDEN_DATA(PFNR0DARWINVMFAULTEXTERNAL)    g_pfnR0DarwinVmFaultExternal = NULL;
+#endif
 
 
 DECLHIDDEN(int) rtR0InitNative(void)
@@ -73,9 +77,13 @@ DECLHIDDEN(int) rtR0InitNative(void)
         if (RT_SUCCESS(rc))
         {
             RTR0DbgKrnlInfoQuerySymbol(hKrnlInfo, NULL, "ast_pending",   (void **)&g_pfnR0DarwinAstPending);
-            printf("ast_pending=%p\n", g_pfnR0DarwinAstPending);
+            printf("ast_pending=%p\n", (void *)(uintptr_t)g_pfnR0DarwinAstPending);
             RTR0DbgKrnlInfoQuerySymbol(hKrnlInfo, NULL, "cpu_interrupt", (void **)&g_pfnR0DarwinCpuInterrupt);
-            printf("cpu_interrupt=%p\n", g_pfnR0DarwinCpuInterrupt);
+            printf("cpu_interrupt=%p\n", (void *)(uintptr_t)g_pfnR0DarwinCpuInterrupt);
+#ifdef DEBUG
+            RTR0DbgKrnlInfoQuerySymbol(hKrnlInfo, NULL, "vm_fault_external", (void **)&g_pfnR0DarwinVmFaultExternal);
+            printf("vm_fault_external=%p\n", (void *)(uintptr_t)g_pfnR0DarwinVmFaultExternal);
+#endif
             RTR0DbgKrnlInfoRelease(hKrnlInfo);
         }
         if (RT_FAILURE(rc))

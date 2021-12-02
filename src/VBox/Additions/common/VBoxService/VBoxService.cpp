@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxService.cpp 90862 2021-08-25 00:37:59Z vboxsync $ */
 /** @file
  * VBoxService - Guest Additions Service Skeleton.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -77,6 +77,7 @@
 #ifdef DEBUG
 # include <iprt/memtracker.h>
 #endif
+#include <iprt/env.h>
 #include <iprt/message.h>
 #include <iprt/path.h>
 #include <iprt/process.h>
@@ -86,9 +87,11 @@
 #include <iprt/system.h>
 #include <iprt/thread.h>
 
+#include <VBox/err.h>
 #include <VBox/log.h>
 
 #include "VBoxServiceInternal.h"
+#include "VBoxServiceUtils.h"
 #ifdef VBOX_WITH_VBOXSERVICE_CONTROL
 # include "VBoxServiceControl.h"
 #endif
@@ -299,27 +302,22 @@ static DECLCALLBACK(void) vgsvcLogHeaderFooter(PRTLOGGER pLoggerRelease, RTLOGPH
  * Pass NULL to disabled logging.
  *
  * @return  IPRT status code.
- * @param   pszLogFile      Filename for log output.  NULL disables logging.
+ * @param   pszLogFile      Filename for log output.  NULL disables logging
+ *                          (r=bird: No, it doesn't!).
  */
 int VGSvcLogCreate(const char *pszLogFile)
 {
     /* Create release logger (stdout + file). */
     static const char * const s_apszGroups[] = VBOX_LOGGROUP_NAMES;
-    RTUINT fFlags = RTLOGFLAGS_PREFIX_THREAD | RTLOGFLAGS_PREFIX_TIME_PROG;
+    RTUINT fFlags = RTLOGFLAGS_PREFIX_THREAD | RTLOGFLAGS_PREFIX_TIME;
 #if defined(RT_OS_WINDOWS) || defined(RT_OS_OS2)
     fFlags |= RTLOGFLAGS_USECRLF;
 #endif
-    char szError[RTPATH_MAX + 128] = "";
-    int rc = RTLogCreateEx(&g_pLoggerRelease, fFlags, "all",
-#ifdef DEBUG
-                           "VBOXSERVICE_LOG",
-#else
-                           "VBOXSERVICE_RELEASE_LOG",
-#endif
-                           RT_ELEMENTS(s_apszGroups), s_apszGroups,
-                           RTLOGDEST_STDOUT | RTLOGDEST_USER,
+    int rc = RTLogCreateEx(&g_pLoggerRelease, "VBOXSERVICE_RELEASE_LOG", fFlags, "all",
+                           RT_ELEMENTS(s_apszGroups), s_apszGroups, UINT32_MAX /*cMaxEntriesPerGroup*/,
+                           0 /*cBufDescs*/, NULL /*paBufDescs*/, RTLOGDEST_STDOUT | RTLOGDEST_USER,
                            vgsvcLogHeaderFooter, g_cHistory, g_uHistoryFileSize, g_uHistoryFileTime,
-                           szError, sizeof(szError), pszLogFile);
+                           NULL /*pErrInfo*/, "%s", pszLogFile ? pszLogFile : "");
     if (RT_SUCCESS(rc))
     {
         /* register this logger as the release logger */
@@ -333,6 +331,36 @@ int VGSvcLogCreate(const char *pszLogFile)
 }
 
 
+/**
+ * Logs a verbose message.
+ *
+ * @param   pszFormat   The message text.
+ * @param   va          Format arguments.
+ */
+void VGSvcLogV(const char *pszFormat, va_list va)
+{
+#ifdef DEBUG
+    int rc = RTCritSectEnter(&g_csLog);
+    if (RT_SUCCESS(rc))
+    {
+#endif
+        char *psz = NULL;
+        RTStrAPrintfV(&psz, pszFormat, va);
+
+        AssertPtr(psz);
+        LogRel(("%s", psz));
+
+        RTStrFree(psz);
+#ifdef DEBUG
+        RTCritSectLeave(&g_csLog);
+    }
+#endif
+}
+
+
+/**
+ * Destroys the currently active logging instance.
+ */
 void VGSvcLogDestroy(void)
 {
     RTLogDestroy(RTLogRelSetDefaultInstance(NULL));
@@ -346,13 +374,12 @@ void VGSvcLogDestroy(void)
  */
 static int vgsvcUsage(void)
 {
-    RTPrintf("Usage:\n"
-             " %-12s [-f|--foreground] [-v|--verbose] [-l|--logfile <file>]\n"
-             "              [-p|--pidfile <file>] [-i|--interval <seconds>]\n"
-             "              [--disable-<service>] [--enable-<service>]\n"
-             "              [--only-<service>] [-h|-?|--help]\n", g_pszProgName);
+    RTPrintf("Usage: %s [-f|--foreground] [-v|--verbose] [-l|--logfile <file>]\n"
+             "           [-p|--pidfile <file>] [-i|--interval <seconds>]\n"
+             "           [--disable-<service>] [--enable-<service>]\n"
+             "           [--only-<service>] [-h|-?|--help]\n", g_pszProgName);
 #ifdef RT_OS_WINDOWS
-    RTPrintf("              [-r|--register] [-u|--unregister]\n");
+    RTPrintf("           [-r|--register] [-u|--unregister]\n");
 #endif
     for (unsigned j = 0; j < RT_ELEMENTS(g_aServices); j++)
         if (g_aServices[j].pDesc->pszUsage)
@@ -414,7 +441,8 @@ RTEXITCODE VGSvcError(const char *pszFormat, ...)
 
 
 /**
- * Displays a verbose message.
+ * Displays a verbose message based on the currently
+ * set global verbosity level.
  *
  * @param   iLevel      Minimum log level required to display this message.
  * @param   pszFormat   The message text.
@@ -424,25 +452,10 @@ void VGSvcVerbose(unsigned iLevel, const char *pszFormat, ...)
 {
     if (iLevel <= g_cVerbosity)
     {
-#ifdef DEBUG
-        int rc = RTCritSectEnter(&g_csLog);
-        if (RT_SUCCESS(rc))
-        {
-#endif
-            va_list args;
-            va_start(args, pszFormat);
-            char *psz = NULL;
-            RTStrAPrintfV(&psz, pszFormat, args);
-            va_end(args);
-
-            AssertPtr(psz);
-            LogRel(("%s", psz));
-
-            RTStrFree(psz);
-#ifdef DEBUG
-            RTCritSectLeave(&g_csLog);
-        }
-#endif
+        va_list va;
+        va_start(va, pszFormat);
+        VGSvcLogV(pszFormat, va);
+        va_end(va);
     }
 }
 
@@ -515,7 +528,7 @@ int VGSvcArgUInt32(int argc, char **argv, const char *psz, int *pi, uint32_t *pu
 static int vgsvcArgString(int argc, char **argv, const char *psz, int *pi, char *pszBuf, size_t cbBuf)
 {
     AssertPtrReturn(pszBuf, VERR_INVALID_POINTER);
-    AssertPtrReturn(cbBuf, VERR_INVALID_PARAMETER);
+    AssertReturn(cbBuf, VERR_INVALID_PARAMETER);
 
     if (*psz == ':' || *psz == '=')
         psz++;
@@ -600,7 +613,7 @@ static unsigned vgsvcCountEnabledServices(void)
  * @remarks This is generally called on a new thread, so we're racing every
  *          other thread in the process.
  */
-static BOOL WINAPI vgsvcWinConsoleControlHandler(DWORD dwCtrlType)
+static BOOL WINAPI vgsvcWinConsoleControlHandler(DWORD dwCtrlType) RT_NOTHROW_DEF
 {
     int rc = VINF_SUCCESS;
     bool fEventHandled = FALSE;
@@ -657,9 +670,9 @@ int VGSvcStartServices(void)
                     VGSvcReportStatus(VBoxGuestFacilityStatus_Failed);
                     return rc;
                 }
+
                 g_aServices[j].fEnabled = false;
                 VGSvcVerbose(0, "Service '%s' was disabled because of missing functionality\n", g_aServices[j].pDesc->pszName);
-
             }
         }
 
@@ -827,6 +840,10 @@ void VGSvcMainWait(void)
      *
      * The annoying EINTR/ERESTART loop is for the benefit of Solaris where
      * sigwait returns when we receive a SIGCHLD.  Kind of makes sense since
+     * the signal has to be delivered...  Anyway, darwin (10.9.5) has a much
+     * worse way of dealing with SIGCHLD, apparently it'll just return any
+     * of the signals we're waiting on when SIGCHLD becomes pending on this
+     * thread. So, we wait for SIGCHLD here and ignores it.
      */
     sigset_t signalMask;
     sigemptyset(&signalMask);
@@ -835,6 +852,7 @@ void VGSvcMainWait(void)
     sigaddset(&signalMask, SIGQUIT);
     sigaddset(&signalMask, SIGABRT);
     sigaddset(&signalMask, SIGTERM);
+    sigaddset(&signalMask, SIGCHLD);
     pthread_sigmask(SIG_BLOCK, &signalMask, NULL);
 
     int iSignal;
@@ -847,10 +865,27 @@ void VGSvcMainWait(void)
 # ifdef ERESTART
            || rc == ERESTART
 # endif
+           || iSignal == SIGCHLD
           );
 
     VGSvcVerbose(3, "VGSvcMainWait: Received signal %d (rc=%d)\n", iSignal, rc);
 #endif /* !RT_OS_WINDOWS */
+}
+
+
+/**
+ * Report VbglR3InitUser / VbglR3Init failure.
+ *
+ * @returns RTEXITCODE_FAILURE
+ * @param   rcVbgl      The failing status code.
+ */
+static RTEXITCODE vbglInitFailure(int rcVbgl)
+{
+    if (rcVbgl == VERR_ACCESS_DENIED)
+        return RTMsgErrorExit(RTEXITCODE_FAILURE,
+                              "Insufficient privileges to start %s! Please start with Administrator/root privileges!\n",
+                              g_pszProgName);
+    return RTMsgErrorExit(RTEXITCODE_FAILURE, "VbglR3Init failed with rc=%Rrc\n", rcVbgl);
 }
 
 
@@ -865,6 +900,9 @@ int main(int argc, char **argv)
     if (RT_FAILURE(rc))
         return RTMsgInitFailure(rc);
     g_pszProgName = RTPathFilename(argv[0]);
+#ifdef RT_OS_WINDOWS
+    VGSvcWinResolveApis();
+#endif
 #ifdef DEBUG
     rc = RTCritSectInit(&g_csLog);
     AssertRC(rc);
@@ -888,27 +926,19 @@ int main(int argc, char **argv)
      * handles a guest control session.
      */
     if (   argc >= 2
-        && !RTStrICmp(argv[1], "guestsession"))
+        && !RTStrICmp(argv[1], VBOXSERVICECTRLSESSION_GETOPT_PREFIX))
         fUserSession = true;
 #endif
 
     /*
-     * Connect to the kernel part before daemonizing so we can fail and
-     * complain if there is some kind of problem.  We need to initialize the
-     * guest lib *before* we do the pre-init just in case one of services needs
-     * do to some initial stuff with it.
+     * Connect to the kernel part before daemonizing and *before* we do the sub-service
+     * pre-init just in case one of services needs do to some initial stuff with it.
+     *
+     * However, we do not fail till after we've parsed arguments, because that will
+     * prevent useful stuff like --help, --register, --unregister and --version from
+     * working when the driver hasn't been installed/loaded yet.
      */
-    if (fUserSession)
-        rc = VbglR3InitUser();
-    else
-        rc = VbglR3Init();
-    if (RT_FAILURE(rc))
-    {
-        if (rc == VERR_ACCESS_DENIED)
-            return RTMsgErrorExit(RTEXITCODE_FAILURE, "Insufficient privileges to start %s! Please start with Administrator/root privileges!\n",
-                                  g_pszProgName);
-        return RTMsgErrorExit(RTEXITCODE_FAILURE, "VbglR3Init failed with rc=%Rrc\n", rc);
-    }
+    int const rcVbgl = fUserSession ? VbglR3InitUser() : VbglR3Init();
 
 #ifdef RT_OS_WINDOWS
     /*
@@ -917,7 +947,11 @@ int main(int argc, char **argv)
      */
     if (   argc == 2
         && !RTStrICmp(argv[1], "pagefusion"))
-        return VGSvcPageSharingWorkerChild();
+    {
+        if (RT_SUCCESS(rcVbgl))
+            return VGSvcPageSharingWorkerChild();
+        return vbglInitFailure(rcVbgl);
+    }
 #endif
 
 #ifdef VBOX_WITH_VBOXSERVICE_CONTROL
@@ -926,7 +960,11 @@ int main(int argc, char **argv)
      * handles a guest control session.
      */
     if (fUserSession)
-        return VGSvcGstCtrlSessionSpawnInit(argc, argv);
+    {
+        if (RT_SUCCESS(rcVbgl))
+            return VGSvcGstCtrlSessionSpawnInit(argc, argv);
+        return vbglInitFailure(rcVbgl);
+    }
 #endif
 
     /*
@@ -1025,8 +1063,7 @@ int main(int argc, char **argv)
             switch (*psz)
             {
                 case 'i':
-                    rc = VGSvcArgUInt32(argc, argv, psz + 1, &i,
-                                              &g_DefaultInterval, 1, (UINT32_MAX / 1000) - 1);
+                    rc = VGSvcArgUInt32(argc, argv, psz + 1, &i, &g_DefaultInterval, 1, (UINT32_MAX / 1000) - 1);
                     if (rc)
                         return rc;
                     psz = NULL;
@@ -1058,8 +1095,7 @@ int main(int argc, char **argv)
 
                 case 'l':
                 {
-                    rc = vgsvcArgString(argc, argv, psz + 1, &i,
-                                              g_szLogFile, sizeof(g_szLogFile));
+                    rc = vgsvcArgString(argc, argv, psz + 1, &i, g_szLogFile, sizeof(g_szLogFile));
                     if (rc)
                         return rc;
                     psz = NULL;
@@ -1068,8 +1104,7 @@ int main(int argc, char **argv)
 
                 case 'p':
                 {
-                    rc = vgsvcArgString(argc, argv, psz + 1, &i,
-                                              g_szPidFile, sizeof(g_szPidFile));
+                    rc = vgsvcArgString(argc, argv, psz + 1, &i, g_szPidFile, sizeof(g_szPidFile));
                     if (rc)
                         return rc;
                     psz = NULL;
@@ -1100,6 +1135,10 @@ int main(int argc, char **argv)
         } while (psz && *++psz);
     }
 
+    /* Now we can report the VBGL failure. */
+    if (RT_FAILURE(rcVbgl))
+        return vbglInitFailure(rcVbgl);
+
     /* Check that at least one service is enabled. */
     if (vgsvcCountEnabledServices() == 0)
         return RTMsgErrorExit(RTEXITCODE_SYNTAX, "At least one service must be enabled\n");
@@ -1113,6 +1152,15 @@ int main(int argc, char **argv)
     rcExit = vgsvcLazyPreInit();
     if (rcExit != RTEXITCODE_SUCCESS)
         return rcExit;
+
+#ifdef VBOX_WITH_VBOXSERVICE_DRMRESIZE
+    if (VbglR3DrmClientIsNeeded())
+    {
+        rc = VbglR3DrmClientStart();
+        if (RT_FAILURE(rc))
+            VGSvcError("Starting DRM resizing client failed with %Rrc\n", rc);
+    }
+#endif /* VBOX_WITH_VBOXSERVICE_DRMRESIZE */
 
 #ifdef RT_OS_WINDOWS
     /*
@@ -1188,7 +1236,7 @@ int main(int argc, char **argv)
 #ifdef RT_OS_WINDOWS
 # ifndef RT_OS_NT4 /** @todo r=bird: What's RT_OS_NT4??? */
         /* Install console control handler. */
-        if (!SetConsoleCtrlHandler((PHANDLER_ROUTINE)vgsvcWinConsoleControlHandler, TRUE /* Add handler */))
+        if (!SetConsoleCtrlHandler(vgsvcWinConsoleControlHandler, TRUE /* Add handler */))
         {
             VGSvcError("Unable to add console control handler, error=%ld\n", GetLastError());
             /* Just skip this error, not critical. */
@@ -1241,4 +1289,3 @@ int main(int argc, char **argv)
 
     return rcExit;
 }
-

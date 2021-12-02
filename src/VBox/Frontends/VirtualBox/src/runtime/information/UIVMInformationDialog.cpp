@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIVMInformationDialog.cpp 89093 2021-05-17 11:35:46Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIVMInformationDialog class implementation.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,149 +15,129 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QScrollBar>
-# include <QPushButton>
+#include <QPushButton>
+#include <QScrollBar>
+#include <QVBoxLayout>
 
 /* GUI includes: */
-# include "UIVMInformationDialog.h"
-# include "UIExtraDataManager.h"
-# include "UISession.h"
-# include "UIMachineLogic.h"
-# include "UIMachineWindow.h"
-# include "UIMachineView.h"
-# include "UIConverter.h"
-# include "UIIconPool.h"
-# include "QITabWidget.h"
-# include "QIDialogButtonBox.h"
-# include "VBoxGlobal.h"
-# include "VBoxUtils.h"
-# include "UIInformationConfiguration.h"
-# include "UIMachine.h"
-# include "UIVMItem.h"
-# include "UIInformationRuntime.h"
+#include "QITabWidget.h"
+#include "QIDialogButtonBox.h"
+#include "UICommon.h"
+#include "UIConverter.h"
+#include "UIExtraDataManager.h"
+#include "UIIconPool.h"
+#include "UIInformationConfiguration.h"
+#include "UIInformationRuntime.h"
+#include "UIGuestProcessControlWidget.h"
+#include "UIMachineLogic.h"
+#include "UIMachine.h"
+#include "UIMachineView.h"
+#include "UIMachineWindow.h"
+#include "UIMessageCenter.h"
+#include "UIVMActivityMonitor.h"
+#include "UISession.h"
+#include "UIVMInformationDialog.h"
+#include "VBoxUtils.h"
+
 
 /* COM includes: */
-# include "COMEnums.h"
-# include "CMachine.h"
-# include "CConsole.h"
-# include "CSystemProperties.h"
-# include "CMachineDebugger.h"
-# include "CDisplay.h"
-# include "CGuest.h"
-# include "CStorageController.h"
-# include "CMediumAttachment.h"
-# include "CNetworkAdapter.h"
-
-/* Other VBox includes: */
-# include <iprt/time.h>
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
+#include "COMEnums.h"
+#include "CMachine.h"
+#include "CConsole.h"
+#include "CSystemProperties.h"
+#include "CMachineDebugger.h"
+#include "CDisplay.h"
+#include "CStorageController.h"
+#include "CMediumAttachment.h"
+#include "CNetworkAdapter.h"
 #include "CVRDEServerInfo.h"
 
-/* static */
-UIVMInformationDialog* UIVMInformationDialog::m_spInstance = 0;
-
-void UIVMInformationDialog::invoke(UIMachineWindow *pMachineWindow)
-{
-    /* Make sure dialog instance exists: */
-    if (!m_spInstance)
-    {
-        /* Create new dialog instance if it doesn't exists yet: */
-        new UIVMInformationDialog(pMachineWindow);
-    }
-
-    /* Show dialog: */
-    m_spInstance->show();
-    /* Raise it: */
-    m_spInstance->raise();
-    /* De-miniaturize if necessary: */
-    m_spInstance->setWindowState(m_spInstance->windowState() & ~Qt::WindowMinimized);
-    /* And activate finally: */
-    m_spInstance->activateWindow();
-}
+/* Other VBox includes: */
+#include <iprt/time.h>
 
 UIVMInformationDialog::UIVMInformationDialog(UIMachineWindow *pMachineWindow)
-    : QIWithRetranslateUI<QIMainWindow>(0)
+    : QMainWindowWithRestorableGeometryAndRetranslateUi(0)
     , m_pTabWidget(0)
     , m_pMachineWindow(pMachineWindow)
+    , m_fCloseEmitted(false)
+    , m_iGeometrySaveTimerId(-1)
 {
-    /* Initialize instance: */
-    m_spInstance = this;
-
     /* Prepare: */
     prepare();
 }
 
 UIVMInformationDialog::~UIVMInformationDialog()
 {
-    /* Cleanup: */
-    cleanup();
-
-    /* Deinitialize instance: */
-    m_spInstance = 0;
 }
 
 bool UIVMInformationDialog::shouldBeMaximized() const
 {
-    return gEDataManager->informationWindowShouldBeMaximized(vboxGlobal().managedVMUuid());
+    return gEDataManager->sessionInformationDialogShouldBeMaximized();
 }
 
 void UIVMInformationDialog::retranslateUi()
 {
-    CMachine machine = gpMachine->uisession()->machine();
-    AssertReturnVoid(!machine.isNull());
-
     /* Setup dialog title: */
-    setWindowTitle(tr("%1 - Session Information").arg(machine.GetName()));
+    setWindowTitle(tr("%1 - Session Information").arg(m_pMachineWindow->machine().GetName()));
 
     /* Translate tabs: */
     m_pTabWidget->setTabText(0, tr("Configuration &Details"));
     m_pTabWidget->setTabText(1, tr("&Runtime Information"));
+    m_pTabWidget->setTabText(2, tr("VM &Activity"));
+    m_pTabWidget->setTabText(3, tr("&Guest Control"));
+
+    /* Retranslate button box buttons: */
+    if (m_pButtonBox)
+    {
+        m_pButtonBox->button(QDialogButtonBox::Close)->setText(tr("Close"));
+        m_pButtonBox->button(QDialogButtonBox::Help)->setText(tr("Help"));
+        m_pButtonBox->button(QDialogButtonBox::Close)->setStatusTip(tr("Close dialog without saving"));
+        m_pButtonBox->button(QDialogButtonBox::Help)->setStatusTip(tr("Show dialog help"));
+        m_pButtonBox->button(QDialogButtonBox::Close)->setShortcut(Qt::Key_Escape);
+        m_pButtonBox->button(QDialogButtonBox::Help)->setShortcut(QKeySequence::HelpContents);
+        m_pButtonBox->button(QDialogButtonBox::Close)->setToolTip(tr("Reset Changes (%1)").arg(m_pButtonBox->button(QDialogButtonBox::Close)->shortcut().toString()));
+        m_pButtonBox->button(QDialogButtonBox::Help)->setToolTip(tr("Show Help (%1)").arg(m_pButtonBox->button(QDialogButtonBox::Help)->shortcut().toString()));
+    }
+}
+
+void UIVMInformationDialog::closeEvent(QCloseEvent *pEvent)
+{
+    if (!m_fCloseEmitted)
+    {
+        m_fCloseEmitted = true;
+        UIVMInformationDialog::sigClose();
+        pEvent->ignore();
+    }
 }
 
 bool UIVMInformationDialog::event(QEvent *pEvent)
 {
-    /* Pre-process through base-class: */
-    bool fResult = QIMainWindow::event(pEvent);
-
-    /* Process required events: */
     switch (pEvent->type())
     {
-        /* Handle every Resize and Move we keep track of the geometry. */
         case QEvent::Resize:
-        {
-            if (isVisible() && (windowState() & (Qt::WindowMaximized | Qt::WindowMinimized | Qt::WindowFullScreen)) == 0)
-            {
-                QResizeEvent *pResizeEvent = static_cast<QResizeEvent*>(pEvent);
-                m_geometry.setSize(pResizeEvent->size());
-            }
-            break;
-        }
         case QEvent::Move:
         {
-            if (isVisible() && (windowState() & (Qt::WindowMaximized | Qt::WindowMinimized | Qt::WindowFullScreen)) == 0)
+            if (m_iGeometrySaveTimerId != -1)
+                killTimer(m_iGeometrySaveTimerId);
+            m_iGeometrySaveTimerId = startTimer(300);
+            break;
+        }
+        case QEvent::Timer:
+        {
+            QTimerEvent *pTimerEvent = static_cast<QTimerEvent*>(pEvent);
+            if (pTimerEvent->timerId() == m_iGeometrySaveTimerId)
             {
-#ifdef VBOX_WS_MAC
-                QMoveEvent *pMoveEvent = static_cast<QMoveEvent*>(pEvent);
-                m_geometry.moveTo(pMoveEvent->pos());
-#else /* VBOX_WS_MAC */
-                m_geometry.moveTo(geometry().x(), geometry().y());
-#endif /* !VBOX_WS_MAC */
+                killTimer(m_iGeometrySaveTimerId);
+                m_iGeometrySaveTimerId = -1;
+                saveDialogGeometry();
             }
             break;
         }
         default:
             break;
     }
-
-    /* Return result: */
-    return fResult;
+    return QMainWindowWithRestorableGeometryAndRetranslateUi::event(pEvent);
 }
 
 void UIVMInformationDialog::sltHandlePageChanged(int iIndex)
@@ -166,34 +146,34 @@ void UIVMInformationDialog::sltHandlePageChanged(int iIndex)
     m_pTabWidget->widget(iIndex)->setFocus();
 }
 
+void UIVMInformationDialog::saveDialogGeometry()
+{
+    const QRect geo = currentGeometry();
+    LogRel2(("GUI: UIVMInformationDialog: Saving geometry as: Origin=%dx%d, Size=%dx%d\n",
+             geo.x(), geo.y(), geo.width(), geo.height()));
+    gEDataManager->setSessionInformationDialogGeometry(geo, isCurrentlyMaximized());
+}
+
 void UIVMInformationDialog::prepare()
 {
     /* Prepare dialog: */
     prepareThis();
     /* Load settings: */
-    loadSettings();
+    loadDialogGeometry();
 }
 
 void UIVMInformationDialog::prepareThis()
 {
-    /* Delete dialog on close: */
-    setAttribute(Qt::WA_DeleteOnClose);
-    /* Delete dialog on machine-window destruction: */
-    connect(m_pMachineWindow, SIGNAL(destroyed(QObject*)), this, SLOT(suicide()));
-
 #ifdef VBOX_WS_MAC
-    /* No window-icon on Mac OX X, because it acts as proxy icon which isn't necessary here. */
+    /* No window-icon on Mac OS X, because it acts as proxy icon which isn't necessary here. */
     setWindowIcon(QIcon());
-#else /* !VBOX_WS_MAC */
-    /* Assign window-icon(s: */
+#else
+    /* Assign window-icons: */
     setWindowIcon(UIIconPool::iconSetFull(":/session_info_32px.png", ":/session_info_16px.png"));
-#endif /* !VBOX_WS_MAC */
+#endif
 
     /* Prepare central-widget: */
     prepareCentralWidget();
-
-    /* Configure handlers: */
-    connect(m_pTabWidget, SIGNAL(currentChanged(int)), this, SLOT(sltHandlePageChanged(int)));
 
     /* Retranslate: */
     retranslateUi();
@@ -219,10 +199,6 @@ void UIVMInformationDialog::prepareCentralWidget()
 
 void UIVMInformationDialog::prepareTabWidget()
 {
-    /* List of VM items: */
-    QList<UIVMItem*> items;
-    items << new UIVMItem(gpMachine->uisession()->machine());
-
     /* Create tab-widget: */
     m_pTabWidget = new QITabWidget;
     AssertPtrReturnVoid(m_pTabWidget);
@@ -231,28 +207,60 @@ void UIVMInformationDialog::prepareTabWidget()
         m_pTabWidget->setTabIcon(0, UIIconPool::iconSet(":/session_info_details_16px.png"));
         m_pTabWidget->setTabIcon(1, UIIconPool::iconSet(":/session_info_runtime_16px.png"));
 
-        /* Add tab-widget into main-layout: */
-        centralWidget()->layout()->addWidget(m_pTabWidget);
-
-        /* Create tabs: */
-        /* Create Configuration details tab: */
-        UIInformationConfiguration *pInformationConfigurationWidget = new UIInformationConfiguration(this, gpMachine->uisession()->machine(), gpMachine->uisession()->console());
-        AssertPtrReturnVoid(pInformationConfigurationWidget);
+        /* Create Configuration Details tab: */
+        UIInformationConfiguration *pInformationConfigurationWidget =
+            new UIInformationConfiguration(this, m_pMachineWindow->machine(), m_pMachineWindow->console());
+        if (pInformationConfigurationWidget)
         {
-            //pInformationWidget->setItems(items);
             m_tabs.insert(0, pInformationConfigurationWidget);
             m_pTabWidget->addTab(m_tabs.value(0), QString());
         }
 
-        /* Create Runtime information tab: */
-        UIInformationRuntime *pInformationRuntimeWidget = new UIInformationRuntime(this, gpMachine->uisession()->machine(), gpMachine->uisession()->console());
-        AssertPtrReturnVoid(pInformationRuntimeWidget);
+        /* Create Runtime Information tab: */
+        UIInformationRuntime *pInformationRuntimeWidget =
+            new UIInformationRuntime(this, m_pMachineWindow->machine(), m_pMachineWindow->console(), m_pMachineWindow->uisession());
+        if (pInformationRuntimeWidget)
         {
             m_tabs.insert(1, pInformationRuntimeWidget);
             m_pTabWidget->addTab(m_tabs.value(1), QString());
         }
-        /* Set runtime information tab as default: */
-        m_pTabWidget->setCurrentIndex(1);
+
+        /* Create Performance Monitor tab: */
+        UIVMActivityMonitor *pVMActivityMonitorWidget =
+            new UIVMActivityMonitor(EmbedTo_Dialog, this, m_pMachineWindow->machine());
+        if (pVMActivityMonitorWidget)
+        {
+            connect(m_pMachineWindow->uisession(), &UISession::sigAdditionsStateChange,
+                    pVMActivityMonitorWidget, &UIVMActivityMonitor::sltGuestAdditionsStateChange);
+            m_tabs.insert(2, pVMActivityMonitorWidget);
+            m_pTabWidget->addTab(m_tabs.value(2), QString());
+        }
+
+        /* Create Guest Process Control tab: */
+        QString strMachineName;
+        if (m_pMachineWindow && m_pMachineWindow->console().isOk())
+        {
+            CMachine comMachine = m_pMachineWindow->console().GetMachine();
+            if (comMachine.isOk())
+                strMachineName = comMachine.GetName();
+        }
+        UIGuestProcessControlWidget *pGuestProcessControlWidget =
+            new UIGuestProcessControlWidget(EmbedTo_Dialog, m_pMachineWindow->console().GetGuest(),
+                                            this, strMachineName, false /* fShowToolbar */);
+        if (pGuestProcessControlWidget)
+        {
+            m_tabs.insert(3, pGuestProcessControlWidget);
+            m_pTabWidget->addTab(m_tabs.value(3), QString());
+        }
+
+        /* Set Runtime Information tab as default: */
+        m_pTabWidget->setCurrentIndex(2);
+
+        /* Assign tab-widget page change handler: */
+        connect(m_pTabWidget, &QITabWidget::currentChanged, this, &UIVMInformationDialog::sltHandlePageChanged);
+
+        /* Add tab-widget into main-layout: */
+        centralWidget()->layout()->addWidget(m_pTabWidget);
     }
 }
 
@@ -263,46 +271,22 @@ void UIVMInformationDialog::prepareButtonBox()
     AssertPtrReturnVoid(m_pButtonBox);
     {
         /* Configure button-box: */
-        m_pButtonBox->setStandardButtons(QDialogButtonBox::Close);
+        m_pButtonBox->setStandardButtons(QDialogButtonBox::Close | QDialogButtonBox::Help);
         m_pButtonBox->button(QDialogButtonBox::Close)->setShortcut(Qt::Key_Escape);
-        connect(m_pButtonBox, SIGNAL(rejected()), this, SLOT(close()));
-        /* Add button-box into main-layout: */
+        m_pButtonBox->button(QDialogButtonBox::Help)->setShortcut(QKeySequence::HelpContents);
+        uiCommon().setHelpKeyword(m_pButtonBox->button(QDialogButtonBox::Help), "vm-session-information");
+        connect(m_pButtonBox, &QIDialogButtonBox::rejected, this, &UIVMInformationDialog::sigClose);
+        connect(m_pButtonBox->button(QDialogButtonBox::Help), &QPushButton::pressed,
+                &(msgCenter()), &UIMessageCenter::sltHandleHelpRequest);
+        /* add button-box into main-layout: */
         centralWidget()->layout()->addWidget(m_pButtonBox);
     }
 }
 
-void UIVMInformationDialog::loadSettings()
+void UIVMInformationDialog::loadDialogGeometry()
 {
-    /* Restore window geometry: */
-    {
-        /* Load geometry: */
-        m_geometry = gEDataManager->informationWindowGeometry(this, m_pMachineWindow, vboxGlobal().managedVMUuid());
-
-        /* Restore geometry: */
-        LogRel2(("GUI: UIVMInformationDialog: Restoring geometry to: Origin=%dx%d, Size=%dx%d\n",
-                 m_geometry.x(), m_geometry.y(), m_geometry.width(), m_geometry.height()));
-        restoreGeometry();
-    }
+    const QRect geo = gEDataManager->sessionInformationDialogGeometry(this, m_pMachineWindow);
+    LogRel2(("GUI: UIVMInformationDialog: Restoring geometry to: Origin=%dx%d, Size=%dx%d\n",
+             geo.x(), geo.y(), geo.width(), geo.height()));
+    restoreGeometry(geo);
 }
-
-void UIVMInformationDialog::saveSettings()
-{
-    /* Save window geometry: */
-    {
-        /* Save geometry: */
-#ifdef VBOX_WS_MAC
-        gEDataManager->setInformationWindowGeometry(m_geometry, ::darwinIsWindowMaximized(this), vboxGlobal().managedVMUuid());
-#else /* VBOX_WS_MAC */
-        gEDataManager->setInformationWindowGeometry(m_geometry, isMaximized(), vboxGlobal().managedVMUuid());
-#endif /* !VBOX_WS_MAC */
-        LogRel2(("GUI: UIVMInformationDialog: Geometry saved as: Origin=%dx%d, Size=%dx%d\n",
-                 m_geometry.x(), m_geometry.y(), m_geometry.width(), m_geometry.height()));
-    }
-}
-
-void UIVMInformationDialog::cleanup()
-{
-    /* Save settings: */
-    saveSettings();
-}
-

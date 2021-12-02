@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMF.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * VBox Mouse filter header
+ * VBox Mouse Filter Driver - Internal Header.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOXMF_H
-#define VBOXMF_H
+#ifndef GA_INCLUDED_SRC_WINNT_Mouse_NT5_VBoxMF_h
+#define GA_INCLUDED_SRC_WINNT_Mouse_NT5_VBoxMF_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #define LOG_GROUP LOG_GROUP_DRV_MOUSE
@@ -30,7 +33,7 @@ RT_C_DECLS_BEGIN
 #include <ntddkbd.h>
 #include <ntdd8042.h>
 RT_C_DECLS_END
-#include <VBox/VMMDev.h>
+#include <VBox/VMMDev.h> /* for VMMDevReqMouseStatus */
 
 #define IOCTL_INTERNAL_MOUSE_CONNECT CTL_CODE(FILE_DEVICE_MOUSE, 0x0080, METHOD_NEITHER, FILE_ANY_ACCESS)
 
@@ -73,13 +76,12 @@ NTSTATUS VBoxIrpPnP(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp);
 NTSTATUS VBoxIrpPower(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp);
 
 /* Internal functions */
-VOID VBoxDeviceAdded(PVBOXMOUSE_DEVEXT pDevExt);
-VOID VBoxInformHost(PVBOXMOUSE_DEVEXT pDevExt);
-VOID VBoxDeviceRemoved(PVBOXMOUSE_DEVEXT pDevExt);
-
-NTSTATUS VBoxNewProtInit();
-NTSTATUS VBoxNewProtTerm();
+void VBoxMouFltInitGlobals(void);
+void VBoxMouFltDeleteGlobals(void);
+void VBoxDeviceAdded(PVBOXMOUSE_DEVEXT pDevExt);
+void VBoxInformHost(PVBOXMOUSE_DEVEXT pDevExt);
+void VBoxDeviceRemoved(PVBOXMOUSE_DEVEXT pDevExt);
 
 VOID VBoxDrvNotifyServiceCB(PVBOXMOUSE_DEVEXT pDevExt, PMOUSE_INPUT_DATA InputDataStart, PMOUSE_INPUT_DATA InputDataEnd, PULONG  InputDataConsumed);
 
-#endif /*VBOXMF_H*/
+#endif /* !GA_INCLUDED_SRC_WINNT_Mouse_NT5_VBoxMF_h */

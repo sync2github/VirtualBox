@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vd_image_backend_h
-#define ___VBox_vd_image_backend_h
+#ifndef VBOX_INCLUDED_vd_image_backend_h
+#define VBOX_INCLUDED_vd_image_backend_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vd.h>
 #include <VBox/vd-common.h>
@@ -92,10 +95,11 @@ typedef struct VDIMAGEBACKEND
      * @param   pszFilename     Name of the image file.
      * @param   pVDIfsDisk      Pointer to the per-disk VD interface list.
      * @param   pVDIfsImage     Pointer to the per-image VD interface list.
+     * @param   enmDesiredType  The desired image type, VDTYPE_INVALID if anything goes.
      * @param   penmType        Returns the supported device type on success.
      */
     DECLR3CALLBACKMEMBER(int, pfnProbe, (const char *pszFilename, PVDINTERFACE pVDIfsDisk,
-                                         PVDINTERFACE pVDIfsImage, VDTYPE *penmType));
+                                         PVDINTERFACE pVDIfsImage, VDTYPE enmDesiredType, VDTYPE *penmType));
 
     /**
      * Open a disk image.
@@ -259,22 +263,6 @@ typedef struct VDIMAGEBACKEND
     DECLR3CALLBACKMEMBER(unsigned, pfnGetVersion, (void *pBackendData));
 
     /**
-     * Get the sector size of a disk image.
-     *
-     * @returns size of disk image in bytes.
-     * @param   pBackendData    Opaque state data for this image.
-     */
-    DECLR3CALLBACKMEMBER(uint32_t, pfnGetSectorSize, (void *pBackendData));
-
-    /**
-     * Get the capacity of a disk image.
-     *
-     * @returns size of disk image in bytes.
-     * @param   pBackendData    Opaque state data for this image.
-     */
-    DECLR3CALLBACKMEMBER(uint64_t, pfnGetSize, (void *pBackendData));
-
-    /**
      * Get the file size of a disk image.
      *
      * @returns size of disk image in bytes.
@@ -323,9 +311,28 @@ typedef struct VDIMAGEBACKEND
     DECLR3CALLBACKMEMBER(int, pfnSetLCHSGeometry, (void *pBackendData,  PCVDGEOMETRY pLCHSGeometry));
 
     /**
+     * Returns a region list for the disk image if supported, optional.
+     *
+     * @returns VBox status code.
+     * @retval  VERR_NOT_SUPPORTED if region lists are not supported for this kind of image.
+     * @param   pBackendData    Opaque state data for this image.
+     * @param   ppRegionList    Where to store the pointer to the region list on success.
+     */
+    DECLR3CALLBACKMEMBER(int, pfnQueryRegions, (void *pBackendData, PCVDREGIONLIST *ppRegionList));
+
+    /**
+     * Releases the region list acquired with VDIMAGEBACKEND::pfnQueryRegions() before.
+     *
+     * @returns nothing.
+     * @param   pBackendData    Opaque state data for this image.
+     * @param   pRegionList     The region list to release.
+     */
+    DECLR3CALLBACKMEMBER(void, pfnRegionListRelease, (void *pBackendData, PCVDREGIONLIST pRegionList));
+
+    /**
      * Get the image flags of a disk image.
      *
-     * @returns image flags of disk image.
+     * @returns image flags of disk image (VD_IMAGE_FLAGS_XXX).
      * @param   pBackendData    Opaque state data for this image.
      */
     DECLR3CALLBACKMEMBER(unsigned, pfnGetImageFlags, (void *pBackendData));
@@ -333,18 +340,20 @@ typedef struct VDIMAGEBACKEND
     /**
      * Get the open flags of a disk image.
      *
-     * @returns open flags of disk image.
+     * @returns open flags of disk image (VD_OPEN_FLAGS_XXX).
      * @param   pBackendData    Opaque state data for this image.
      */
     DECLR3CALLBACKMEMBER(unsigned, pfnGetOpenFlags, (void *pBackendData));
 
     /**
-     * Set the open flags of a disk image. May cause the image to be locked
-     * in a different mode or be reopened (which can fail).
+     * Set the open flags of a disk image.
+     *
+     * May cause the image to be locked in a different mode or be reopened (which
+     * can fail).
      *
      * @returns VBox status code.
      * @param   pBackendData    Opaque state data for this image.
-     * @param   uOpenFlags      New open flags for this image.
+     * @param   uOpenFlags      New open flags for this image (VD_OPEN_FLAGS_XXX).
      */
     DECLR3CALLBACKMEMBER(int, pfnSetOpenFlags, (void *pBackendData, unsigned uOpenFlags));
 
@@ -588,11 +597,11 @@ typedef VDIMAGEBACKEND *PVDIMAGEBACKEND;
 typedef const VDIMAGEBACKEND *PCVDIMAGEBACKEND;
 
 /** The current version of the VDIMAGEBACKEND structure. */
-#define VD_IMGBACKEND_VERSION                   VD_VERSION_MAKE(0xff01, 1, 0)
+#define VD_IMGBACKEND_VERSION                   VD_VERSION_MAKE(0xff01, 3, 0)
 
 /** @copydoc VDIMAGEBACKEND::pfnComposeLocation */
 DECLCALLBACK(int) genericFileComposeLocation(PVDINTERFACE pConfig, char **pszLocation);
 /** @copydoc VDIMAGEBACKEND::pfnComposeName */
 DECLCALLBACK(int) genericFileComposeName(PVDINTERFACE pConfig, char **pszName);
 
-#endif
+#endif /* !VBOX_INCLUDED_vd_image_backend_h */

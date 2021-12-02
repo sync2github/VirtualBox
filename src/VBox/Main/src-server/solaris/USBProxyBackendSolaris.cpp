@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBProxyBackendSolaris.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox USB Proxy Service, Solaris Specialization.
  */
 
 /*
- * Copyright (C) 2005-2016 Oracle Corporation
+ * Copyright (C) 2005-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,12 +19,13 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
+#define LOG_GROUP LOG_GROUP_MAIN_USBPROXYBACKEND
 #include "USBProxyBackend.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/usb.h>
 #include <VBox/usblib.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/semaphore.h>
 #include <iprt/path.h>
 
@@ -69,9 +70,10 @@ USBProxyBackendSolaris::~USBProxyBackendSolaris()
  *
  * @returns VBox status code.
  */
-int USBProxyBackendSolaris::init(USBProxyService *aUsbProxyService, const com::Utf8Str &strId, const com::Utf8Str &strAddress)
+int USBProxyBackendSolaris::init(USBProxyService *aUsbProxyService, const com::Utf8Str &strId,
+                                 const com::Utf8Str &strAddress, bool fLoadingSettings)
 {
-    USBProxyBackend::init(aUsbProxyService, strId, strAddress);
+    USBProxyBackend::init(aUsbProxyService, strId, strAddress, fLoadingSettings);
 
     unconst(m_strBackend) = Utf8Str("host");
 

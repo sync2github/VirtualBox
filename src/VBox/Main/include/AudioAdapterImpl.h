@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: AudioAdapterImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 
 /** @file
  *
@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -17,8 +17,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_AUDIOADAPTER
-#define ____H_AUDIOADAPTER
+#ifndef MAIN_INCLUDED_AudioAdapterImpl_h
+#define MAIN_INCLUDED_AudioAdapterImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "AudioAdapterWrap.h"
 namespace settings
@@ -31,7 +34,7 @@ class ATL_NO_VTABLE AudioAdapter :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR (AudioAdapter)
+    DECLARE_COMMON_CLASS_METHODS (AudioAdapter)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -75,5 +78,5 @@ private:
     Backupable<settings::AudioAdapter> mData;
 };
 
-#endif // ____H_AUDIOADAPTER
+#endif /* !MAIN_INCLUDED_AudioAdapterImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

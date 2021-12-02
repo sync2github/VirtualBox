@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GMMR0.cpp 92249 2021-11-06 15:39:24Z vboxsync $ */
 /** @file
  * GMM - Global Memory Manager.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,7 +31,7 @@
  * by the #GMM_CHUNK_SIZE \#define.
  *
  * Each chunk is given an unique ID. Each page also has a unique ID. The
- * relation ship between the two IDs is:
+ * relationship between the two IDs is:
  * @code
  *  GMM_CHUNK_SHIFT = log2(GMM_CHUNK_SIZE / PAGE_SIZE);
  *  idPage = (idChunk << GMM_CHUNK_SHIFT) | iPage;
@@ -107,6 +107,12 @@
  * by the VM that locked it. We will make no attempt at implementing
  * page sharing on these systems, just do enough to make it all work.
  *
+ * @note With 6.1 really dropping 32-bit support, the legacy mode is obsoleted
+ *       under the assumption that there is sufficient kernel virtual address
+ *       space to map all of the guest memory allocations.  So, we'll be using
+ *       #RTR0MemObjAllocPage on some platforms as an alternative to
+ *       #RTR0MemObjAllocPhysNC.
+ *
  *
  * @subsection sub_gmm_locking  Serializing
  *
@@ -151,14 +157,14 @@
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_GMM
 #include <VBox/rawpci.h>
-#include <VBox/vmm/vm.h>
 #include <VBox/vmm/gmm.h>
 #include "GMMR0Internal.h"
-#include <VBox/vmm/gvm.h>
+#include <VBox/vmm/vmcc.h>
 #include <VBox/vmm/pgm.h>
 #include <VBox/log.h>
 #include <VBox/param.h>
 #include <VBox/err.h>
+#include <VBox/VMMDev.h>
 #include <iprt/asm.h>
 #include <iprt/avl.h>
 #ifdef VBOX_STRICT
@@ -170,8 +176,14 @@
 #include <iprt/memobj.h>
 #include <iprt/mp.h>
 #include <iprt/semaphore.h>
+#include <iprt/spinlock.h>
 #include <iprt/string.h>
 #include <iprt/time.h>
+
+/* This is 64-bit only code now. */
+#if HC_ARCH_BITS != 64 || ARCH_BITS != 64
+# error "This is 64-bit only code"
+#endif
 
 
 /*********************************************************************************************************************************
@@ -182,7 +194,7 @@
  *
  * @remarks This is primarily a way of avoiding the deadlock checks in the
  *          windows driver verifier. */
-#if defined(RT_OS_WINDOWS) || defined(DOXYGEN_RUNNING)
+#if defined(RT_OS_WINDOWS) || defined(RT_OS_DARWIN) || defined(DOXYGEN_RUNNING)
 # define VBOX_USE_CRIT_SECT_FOR_GIANT
 #endif
 
@@ -196,16 +208,11 @@ typedef struct GMMCHUNKFREESET *PGMMCHUNKFREESET;
 /**
  * The per-page tracking structure employed by the GMM.
  *
- * On 32-bit hosts we'll some trickery is necessary to compress all
- * the information into 32-bits. When the fSharedFree member is set,
- * the 30th bit decides whether it's a free page or not.
- *
- * Because of the different layout on 32-bit and 64-bit hosts, macros
- * are used to get and set some of the data.
+ * Because of the different layout on 32-bit and 64-bit hosts in earlier
+ * versions of the code, macros are used to get and set some of the data.
  */
 typedef union GMMPAGE
 {
-#if HC_ARCH_BITS == 64
     /** Unsigned integer view. */
     uint64_t u;
 
@@ -256,50 +263,6 @@ typedef union GMMPAGE
         /** The page state. */
         uint32_t    u2State : 2;
     } Free;
-
-#else /* 32-bit */
-    /** Unsigned integer view. */
-    uint32_t u;
-
-    /** The common view. */
-    struct GMMPAGECOMMON
-    {
-        uint32_t    uStuff : 30;
-        /** The page state. */
-        uint32_t    u2State : 2;
-    } Common;
-
-    /** The view of a private page. */
-    struct GMMPAGEPRIVATE
-    {
-        /** The guest page frame number. (Max addressable: 2 ^ 36) */
-        uint32_t    pfn : 24;
-        /** The GVM handle. (127 VMs) */
-        uint32_t    hGVM : 7;
-        /** The top page state bit, MBZ. */
-        uint32_t    fZero : 1;
-    } Private;
-
-    /** The view of a shared page. */
-    struct GMMPAGESHARED
-    {
-        /** The reference count. */
-        uint32_t    cRefs : 30;
-        /** The page state. */
-        uint32_t    u2State : 2;
-    } Shared;
-
-    /** The view of a free page. */
-    struct GMMPAGEFREE
-    {
-        /** The index of the next page in the free list. UINT16_MAX is NIL. */
-        uint32_t    iNext : 16;
-        /** Reserved. Checksum or something? */
-        uint32_t    u14Reserved : 14;
-        /** The page state. */
-        uint32_t    u2State : 2;
-    } Free;
-#endif
 } GMMPAGE;
 AssertCompileSize(GMMPAGE, sizeof(RTHCUINTPTR));
 /** Pointer to a GMMPAGE. */
@@ -310,9 +273,6 @@ typedef GMMPAGE *PGMMPAGE;
  * @{ */
 /** A private page. */
 #define GMM_PAGE_STATE_PRIVATE          0
-/** A private page - alternative value used on the 32-bit implementation.
- * This will never be used on 64-bit hosts. */
-#define GMM_PAGE_STATE_PRIVATE_32       1
 /** A shared page. */
 #define GMM_PAGE_STATE_SHARED           2
 /** A free page. */
@@ -325,11 +285,7 @@ typedef GMMPAGE *PGMMPAGE;
  * @returns true if private, false if not.
  * @param   pPage       The GMM page.
  */
-#if HC_ARCH_BITS == 64
-# define GMM_PAGE_IS_PRIVATE(pPage) ( (pPage)->Common.u2State == GMM_PAGE_STATE_PRIVATE )
-#else
-# define GMM_PAGE_IS_PRIVATE(pPage) ( (pPage)->Private.fZero == 0 )
-#endif
+#define GMM_PAGE_IS_PRIVATE(pPage)  ( (pPage)->Common.u2State == GMM_PAGE_STATE_PRIVATE )
 
 /** @def GMM_PAGE_IS_SHARED
  *
@@ -350,21 +306,13 @@ typedef GMMPAGE *PGMMPAGE;
  * @remark Some of the values outside the range has special meaning,
  *         see GMM_PAGE_PFN_UNSHAREABLE.
  */
-#if HC_ARCH_BITS == 64
-# define GMM_PAGE_PFN_LAST           UINT32_C(0xfffffff0)
-#else
-# define GMM_PAGE_PFN_LAST           UINT32_C(0x00fffff0)
-#endif
-AssertCompile(GMM_PAGE_PFN_LAST        == (GMM_GCPHYS_LAST >> PAGE_SHIFT));
+#define GMM_PAGE_PFN_LAST            UINT32_C(0xfffffff0)
+AssertCompile(GMM_PAGE_PFN_LAST == (GMM_GCPHYS_LAST >> PAGE_SHIFT));
 
 /** @def GMM_PAGE_PFN_UNSHAREABLE
  * Indicates that this page isn't used for normal guest memory and thus isn't shareable.
  */
-#if HC_ARCH_BITS == 64
-# define GMM_PAGE_PFN_UNSHAREABLE   UINT32_C(0xfffffff1)
-#else
-# define GMM_PAGE_PFN_UNSHAREABLE   UINT32_C(0x00fffff1)
-#endif
+#define GMM_PAGE_PFN_UNSHAREABLE    UINT32_C(0xfffffff1)
 AssertCompile(GMM_PAGE_PFN_UNSHAREABLE == (GMM_GCPHYS_UNSHAREABLE >> PAGE_SHIFT));
 
 
@@ -399,6 +347,10 @@ typedef struct GMMCHUNK
      * what the host can dish up with.  (Chunk mtx protects mapping accesses
      * and related frees.) */
     RTR0MEMOBJ          hMemObj;
+#ifndef VBOX_WITH_LINEAR_HOST_PHYS_MEM
+    /** Pointer to the kernel mapping. */
+    uint8_t            *pbMapping;
+#endif
     /** Pointer to the next chunk in the free list.  (Giant mtx.) */
     PGMMCHUNK           pFreeNext;
     /** Pointer to the previous chunk in the free list. (Giant mtx.) */
@@ -412,11 +364,10 @@ typedef struct GMMCHUNK
     PGMMCHUNKMAP        paMappingsX;
     /** The number of mappings.  (Chunk mtx.) */
     uint16_t            cMappingsX;
-    /** The mapping lock this chunk is using using.  UINT16_MAX if nobody is
-     *  mapping or freeing anything.  (Giant mtx.) */
+    /** The mapping lock this chunk is using using.  UINT8_MAX if nobody is mapping
+     * or freeing anything.  (Giant mtx.) */
     uint8_t volatile    iChunkMtx;
-    /** Flags field reserved for future use (like eliminating enmType).
-     *  (Giant mtx.) */
+    /** GMM_CHUNK_FLAGS_XXX. (Giant mtx.) */
     uint8_t             fFlags;
     /** The head of the list of free pages. UINT16_MAX is the NIL value.
      *  (Giant mtx.) */
@@ -435,6 +386,9 @@ typedef struct GMMCHUNK
     uint16_t            cPrivate;
     /** The number of shared pages.  (Giant mtx.) */
     uint16_t            cShared;
+    /** The UID this chunk is associated with. */
+    RTUID               uidOwner;
+    uint32_t            u32Padding;
     /** The pages.  (Giant mtx.) */
     GMMPAGE             aPages[GMM_CHUNK_SIZE >> PAGE_SHIFT];
 } GMMCHUNK;
@@ -463,7 +417,7 @@ typedef struct GMMCHUNKTLBE
 typedef GMMCHUNKTLBE *PGMMCHUNKTLBE;
 
 
-/** The number of entries tin the allocation chunk TLB. */
+/** The number of entries in the allocation chunk TLB. */
 #define GMM_CHUNKTLB_ENTRIES        32
 /** Gets the TLB entry index for the given Chunk ID. */
 #define GMM_CHUNKTLB_IDX(idChunk)   ( (idChunk) & (GMM_CHUNKTLB_ENTRIES - 1) )
@@ -502,9 +456,20 @@ typedef struct GMM
     /** The current mutex owner. */
     RTNATIVETHREAD      hMtxOwner;
 #endif
-    /** The chunk tree. */
+    /** Spinlock protecting the AVL tree.
+     * @todo Make this a read-write spinlock as we should allow concurrent
+     *       lookups. */
+    RTSPINLOCK          hSpinLockTree;
+    /** The chunk tree.
+     * Protected by hSpinLockTree. */
     PAVLU32NODECORE     pChunks;
-    /** The chunk TLB. */
+    /** Chunk freeing generation - incremented whenever a chunk is freed.  Used
+     * for validating the per-VM chunk TLB entries.  Valid range is 1 to 2^62
+     * (exclusive), though higher numbers may temporarily occure while
+     * invalidating the individual TLBs during wrap-around processing. */
+    uint64_t volatile   idFreeGeneration;
+    /** The chunk TLB.
+     * Protected by hSpinLockTree. */
     GMMCHUNKTLB         ChunkTLB;
     /** The private free set. */
     GMMCHUNKFREESET     PrivateX;
@@ -517,7 +482,8 @@ typedef struct GMM
     /** Sharable modules (count of nodes in pGlobalSharedModuleTree). */
     uint32_t            cShareableModules;
 
-    /** The chunk list.  For simplifying the cleanup process. */
+    /** The chunk list.  For simplifying the cleanup process and avoid tree
+     * traversal. */
     RTLISTANCHOR        ChunkList;
 
     /** The maximum number of pages we're allowed to allocate.
@@ -544,9 +510,12 @@ typedef struct GMM
     /** The number of current ballooned pages. */
     uint64_t            cBalloonedPages;
 
-    /** The legacy allocation mode indicator.
-     * This is determined at initialization time. */
-    bool                fLegacyAllocationMode;
+#ifdef VBOX_WITH_LINEAR_HOST_PHYS_MEM
+    /** Whether #RTR0MemObjAllocPhysNC works.   */
+    bool                fHasWorkingAllocPhysNC;
+#else
+    bool                fPadding;
+#endif
     /** The bound memory mode indicator.
      * When set, the memory will be bound to a specific VM and never
      * shared. This is always set if fLegacyAllocationMode is set.
@@ -635,17 +604,6 @@ typedef struct GMMCHECKSHAREDMODULEINFO
     PGVM                    pGVM;
     VMCPUID                 idCpu;
 } GMMCHECKSHAREDMODULEINFO;
-
-/**
- * Argument packet for gmmR0FindDupPageInChunk by GMMR0FindDuplicatePage.
- */
-typedef struct GMMFINDDUPPAGEINFO
-{
-    PGVM                    pGVM;
-    PGMM                    pGMM;
-    uint8_t                *pSourcePage;
-    bool                    fFoundDuplicate;
-} GMMFINDDUPPAGEINFO;
 
 
 /*********************************************************************************************************************************
@@ -791,52 +749,55 @@ GMMR0DECL(int) GMMR0Init(void)
             if (RT_FAILURE(rc))
                 break;
         }
+        pGMM->hSpinLockTree = NIL_RTSPINLOCK;
+        if (RT_SUCCESS(rc))
+            rc = RTSpinlockCreate(&pGMM->hSpinLockTree, RTSPINLOCK_FLAGS_INTERRUPT_SAFE, "gmm-chunk-tree");
         if (RT_SUCCESS(rc))
         {
             /*
-             * Check and see if RTR0MemObjAllocPhysNC works.
+             * Figure out how we're going to allocate stuff (only applicable to
+             * host with linear physical memory mappings).
              */
-#if 0 /* later, see @bufref{3170}. */
-            RTR0MEMOBJ MemObj;
-            rc = RTR0MemObjAllocPhysNC(&MemObj, _64K, NIL_RTHCPHYS);
+            pGMM->fBoundMemoryMode = false;
+#ifdef VBOX_WITH_LINEAR_HOST_PHYS_MEM
+            pGMM->fHasWorkingAllocPhysNC = false;
+
+            RTR0MEMOBJ hMemObj;
+            rc = RTR0MemObjAllocPhysNC(&hMemObj, GMM_CHUNK_SIZE, NIL_RTHCPHYS);
             if (RT_SUCCESS(rc))
             {
-                rc = RTR0MemObjFree(MemObj, true);
+                rc = RTR0MemObjFree(hMemObj, true);
                 AssertRC(rc);
+                pGMM->fHasWorkingAllocPhysNC = true;
             }
-            else if (rc == VERR_NOT_SUPPORTED)
-                pGMM->fLegacyAllocationMode = pGMM->fBoundMemoryMode = true;
-            else
-                SUPR0Printf("GMMR0Init: RTR0MemObjAllocPhysNC(,64K,Any) -> %d!\n", rc);
-#else
-# if defined(RT_OS_WINDOWS) || (defined(RT_OS_SOLARIS) && ARCH_BITS == 64) || defined(RT_OS_LINUX) || defined(RT_OS_FREEBSD)
-            pGMM->fLegacyAllocationMode = false;
-#  if ARCH_BITS == 32
-            /* Don't reuse possibly partial chunks because of the virtual
-               address space limitation. */
-            pGMM->fBoundMemoryMode      = true;
-#  else
-            pGMM->fBoundMemoryMode      = false;
-#  endif
-# else
-            pGMM->fLegacyAllocationMode = true;
-            pGMM->fBoundMemoryMode      = true;
+            else if (rc != VERR_NOT_SUPPORTED)
+                SUPR0Printf("GMMR0Init: Warning! RTR0MemObjAllocPhysNC(, %u, NIL_RTHCPHYS) -> %d!\n", GMM_CHUNK_SIZE, rc);
 # endif
-#endif
 
             /*
              * Query system page count and guess a reasonable cMaxPages value.
              */
             pGMM->cMaxPages = UINT32_MAX; /** @todo IPRT function for query ram size and such. */
 
+            /*
+             * The idFreeGeneration value should be set so we actually trigger the
+             * wrap-around invalidation handling during a typical test run.
+             */
+            pGMM->idFreeGeneration = UINT64_MAX / 4 - 128;
+
             g_pGMM = pGMM;
-            LogFlow(("GMMInit: pGMM=%p fLegacyAllocationMode=%RTbool fBoundMemoryMode=%RTbool\n", pGMM, pGMM->fLegacyAllocationMode, pGMM->fBoundMemoryMode));
+#ifdef VBOX_WITH_LINEAR_HOST_PHYS_MEM
+            LogFlow(("GMMInit: pGMM=%p fBoundMemoryMode=%RTbool fHasWorkingAllocPhysNC=%RTbool\n", pGMM, pGMM->fBoundMemoryMode, pGMM->fHasWorkingAllocPhysNC));
+#else
+            LogFlow(("GMMInit: pGMM=%p fBoundMemoryMode=%RTbool\n", pGMM, pGMM->fBoundMemoryMode));
+#endif
             return VINF_SUCCESS;
         }
 
         /*
          * Bail out.
          */
+        RTSpinlockDestroy(pGMM->hSpinLockTree);
         while (iMtx-- > 0)
             RTSemFastMutexDestroy(pGMM->aChunkMtx[iMtx].hMtx);
 #ifdef VBOX_USE_CRIT_SECT_FOR_GIANT
@@ -864,7 +825,7 @@ GMMR0DECL(void) GMMR0Term(void)
      * Take care / be paranoid...
      */
     PGMM pGMM = g_pGMM;
-    if (!VALID_PTR(pGMM))
+    if (!RT_VALID_PTR(pGMM))
         return;
     if (pGMM->u32Magic != GMM_MAGIC)
     {
@@ -884,6 +845,8 @@ GMMR0DECL(void) GMMR0Term(void)
     RTSemFastMutexDestroy(pGMM->hMtx);
     pGMM->hMtx        = NIL_RTSEMFASTMUTEX;
 #endif
+    RTSpinlockDestroy(pGMM->hSpinLockTree);
+    pGMM->hSpinLockTree = NIL_RTSPINLOCK;
 
     /* Free any chunks still hanging around. */
     RTAvlU32Destroy(&pGMM->pChunks, gmmR0TermDestroyChunk, pGMM);
@@ -914,13 +877,13 @@ static DECLCALLBACK(int) gmmR0TermDestroyChunk(PAVLU32NODECORE pNode, void *pvGM
     PGMMCHUNK pChunk = (PGMMCHUNK)pNode;
 
     if (pChunk->cFree != (GMM_CHUNK_SIZE >> PAGE_SHIFT))
-        SUPR0Printf("GMMR0Term: %p/%#x: cFree=%d cPrivate=%d cShared=%d cMappings=%d\n", pChunk,
+        SUPR0Printf("GMMR0Term: %RKv/%#x: cFree=%d cPrivate=%d cShared=%d cMappings=%d\n", pChunk,
                     pChunk->Core.Key, pChunk->cFree, pChunk->cPrivate, pChunk->cShared, pChunk->cMappingsX);
 
     int rc = RTR0MemObjFree(pChunk->hMemObj, true /* fFreeMappings */);
     if (RT_FAILURE(rc))
     {
-        SUPR0Printf("GMMR0Term: %p/%#x: RTRMemObjFree(%p,true) -> %d (cMappings=%d)\n", pChunk,
+        SUPR0Printf("GMMR0Term: %RKv/%#x: RTRMemObjFree(%RKv,true) -> %d (cMappings=%d)\n", pChunk,
                     pChunk->Core.Key, pChunk->hMemObj, rc, pChunk->cMappingsX);
         AssertRC(rc);
     }
@@ -945,13 +908,19 @@ static DECLCALLBACK(int) gmmR0TermDestroyChunk(PAVLU32NODECORE pNode, void *pvGM
  *
  * @param   pGVM    Pointer to the Global VM structure.
  */
-GMMR0DECL(void) GMMR0InitPerVMData(PGVM pGVM)
+GMMR0DECL(int) GMMR0InitPerVMData(PGVM pGVM)
 {
     AssertCompile(RT_SIZEOFMEMB(GVM,gmm.s) <= RT_SIZEOFMEMB(GVM,gmm.padding));
 
     pGVM->gmm.s.Stats.enmPolicy = GMMOCPOLICY_INVALID;
     pGVM->gmm.s.Stats.enmPriority = GMMPRIORITY_INVALID;
     pGVM->gmm.s.Stats.fMayAllocate = false;
+
+    pGVM->gmm.s.hChunkTlbSpinLock = NIL_RTSPINLOCK;
+    int rc = RTSpinlockCreate(&pGVM->gmm.s.hChunkTlbSpinLock, RTSPINLOCK_FLAGS_INTERRUPT_SAFE, "per-vm-chunk-tlb");
+    AssertRCReturn(rc, rc);
+
+    return VINF_SUCCESS;
 }
 
 
@@ -1224,7 +1193,7 @@ static uint16_t gmmR0GetCurrentNumaNodeId(void)
  */
 GMMR0DECL(void) GMMR0CleanupVM(PGVM pGVM)
 {
-    LogFlow(("GMMR0CleanupVM: pGVM=%p:{.pVM=%p, .hSelf=%#x}\n", pGVM, pGVM->pVM, pGVM->hSelf));
+    LogFlow(("GMMR0CleanupVM: pGVM=%p:{.hSelf=%#x}\n", pGVM, pGVM->hSelf));
 
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE_VOID(pGMM);
@@ -1385,6 +1354,13 @@ GMMR0DECL(void) GMMR0CleanupVM(PGVM pGVM)
     GMM_CHECK_SANITY_UPON_LEAVING(pGMM);
     gmmR0MutexRelease(pGMM);
 
+    /*
+     * Destroy the spinlock.
+     */
+    RTSPINLOCK hSpinlock = NIL_RTSPINLOCK;
+    ASMAtomicXchgHandle(&pGVM->gmm.s.hChunkTlbSpinLock, NIL_RTSPINLOCK, &hSpinlock);
+    RTSpinlockDestroy(hSpinlock);
+
     LogFlow(("GMMR0CleanupVM: returns\n"));
 }
 
@@ -1458,7 +1434,7 @@ static bool gmmR0CleanupVMScanChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk)
                         ||  pChunk->cPrivate != cPrivate
                         ||  pChunk->cShared != cShared))
         {
-            SUPR0Printf("gmmR0CleanupVMScanChunk: Chunk %p/%#x has bogus stats - free=%d/%d private=%d/%d shared=%d/%d\n",
+            SUPR0Printf("gmmR0CleanupVMScanChunk: Chunk %RKv/%#x has bogus stats - free=%d/%d private=%d/%d shared=%d/%d\n",
                         pChunk, pChunk->Core.Key, pChunk->cFree, cFree, pChunk->cPrivate, cPrivate, pChunk->cShared, cShared);
             pChunk->cFree = cFree;
             pChunk->cPrivate = cPrivate;
@@ -1476,7 +1452,7 @@ static bool gmmR0CleanupVMScanChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk)
             pChunk->hGVM = NIL_GVM_HANDLE;
         else if (pChunk->cFree != GMM_CHUNK_NUM_PAGES)
         {
-            SUPR0Printf("gmmR0CleanupVMScanChunk: %p/%#x: cFree=%#x - it should be 0 in bound mode!\n",
+            SUPR0Printf("gmmR0CleanupVMScanChunk: %RKv/%#x: cFree=%#x - it should be 0 in bound mode!\n",
                         pChunk, pChunk->Core.Key, pChunk->cFree);
             AssertMsgFailed(("%p/%#x: cFree=%#x - it should be 0 in bound mode!\n", pChunk, pChunk->Core.Key, pChunk->cFree));
 
@@ -1510,7 +1486,7 @@ static bool gmmR0CleanupVMScanChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk)
             int rc = RTR0MemObjFree(hMemObj, false /* fFreeMappings (NA) */);
             if (RT_FAILURE(rc))
             {
-                SUPR0Printf("gmmR0CleanupVMScanChunk: %p/%#x: mapping #%x: RTRMemObjFree(%p,false) -> %d \n",
+                SUPR0Printf("gmmR0CleanupVMScanChunk: %RKv/%#x: mapping #%x: RTRMemObjFree(%RKv,false) -> %d \n",
                             pChunk, pChunk->Core.Key, i, hMemObj, rc);
                 AssertRC(rc);
             }
@@ -1539,8 +1515,8 @@ static bool gmmR0CleanupVMScanChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk)
  * @retval  VERR_GMM_MEMORY_RESERVATION_DECLINED
  * @retval  VERR_GMM_
  *
- * @param   pVM             The cross context VM structure.
- * @param   idCpu           The VCPU id.
+ * @param   pGVM            The global (ring-0) VM structure.
+ * @param   idCpu           The VCPU id - must be zero.
  * @param   cBasePages      The number of pages that may be allocated for the base RAM and ROMs.
  *                          This does not include MMIO2 and similar.
  * @param   cShadowPages    The number of pages that may be allocated for shadow paging structures.
@@ -1549,21 +1525,21 @@ static bool gmmR0CleanupVMScanChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk)
  * @param   enmPolicy       The OC policy to use on this VM.
  * @param   enmPriority     The priority in an out-of-memory situation.
  *
- * @thread  The creator thread / EMT.
+ * @thread  The creator thread / EMT(0).
  */
-GMMR0DECL(int) GMMR0InitialReservation(PVM pVM, VMCPUID idCpu, uint64_t cBasePages, uint32_t cShadowPages, uint32_t cFixedPages,
-                                       GMMOCPOLICY enmPolicy, GMMPRIORITY enmPriority)
+GMMR0DECL(int) GMMR0InitialReservation(PGVM pGVM, VMCPUID idCpu, uint64_t cBasePages, uint32_t cShadowPages,
+                                       uint32_t cFixedPages, GMMOCPOLICY enmPolicy, GMMPRIORITY enmPriority)
 {
-    LogFlow(("GMMR0InitialReservation: pVM=%p cBasePages=%#llx cShadowPages=%#x cFixedPages=%#x enmPolicy=%d enmPriority=%d\n",
-             pVM, cBasePages, cShadowPages, cFixedPages, enmPolicy, enmPriority));
+    LogFlow(("GMMR0InitialReservation: pGVM=%p cBasePages=%#llx cShadowPages=%#x cFixedPages=%#x enmPolicy=%d enmPriority=%d\n",
+             pGVM, cBasePages, cShadowPages, cFixedPages, enmPolicy, enmPriority));
 
     /*
      * Validate, get basics and take the semaphore.
      */
+    AssertReturn(idCpu == 0, VERR_INVALID_CPU_ID);
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -1616,20 +1592,21 @@ GMMR0DECL(int) GMMR0InitialReservation(PVM pVM, VMCPUID idCpu, uint64_t cBasePag
  * VMMR0 request wrapper for GMMR0InitialReservation.
  *
  * @returns see GMMR0InitialReservation.
- * @param   pVM             The cross context VM structure.
+ * @param   pGVM            The global (ring-0) VM structure.
  * @param   idCpu           The VCPU id.
  * @param   pReq            Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0InitialReservationReq(PVM pVM, VMCPUID idCpu, PGMMINITIALRESERVATIONREQ pReq)
+GMMR0DECL(int) GMMR0InitialReservationReq(PGVM pGVM, VMCPUID idCpu, PGMMINITIALRESERVATIONREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
+    AssertPtrReturn(pGVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(*pReq), ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
 
-    return GMMR0InitialReservation(pVM, idCpu, pReq->cBasePages, pReq->cShadowPages, pReq->cFixedPages, pReq->enmPolicy, pReq->enmPriority);
+    return GMMR0InitialReservation(pGVM, idCpu, pReq->cBasePages, pReq->cShadowPages,
+                                   pReq->cFixedPages, pReq->enmPolicy, pReq->enmPriority);
 }
 
 
@@ -1639,7 +1616,7 @@ GMMR0DECL(int) GMMR0InitialReservationReq(PVM pVM, VMCPUID idCpu, PGMMINITIALRES
  * @returns VBox status code.
  * @retval  VERR_GMM_MEMORY_RESERVATION_DECLINED
  *
- * @param   pVM             The cross context VM structure.
+ * @param   pGVM            The global (ring-0) VM structure.
  * @param   idCpu           The VCPU id.
  * @param   cBasePages      The number of pages that may be allocated for the base RAM and ROMs.
  *                          This does not include MMIO2 and similar.
@@ -1647,20 +1624,20 @@ GMMR0DECL(int) GMMR0InitialReservationReq(PVM pVM, VMCPUID idCpu, PGMMINITIALRES
  * @param   cFixedPages     The number of pages that may be allocated for fixed objects like the
  *                          hyper heap, MMIO2 and similar.
  *
- * @thread  EMT.
+ * @thread  EMT(idCpu)
  */
-GMMR0DECL(int) GMMR0UpdateReservation(PVM pVM, VMCPUID idCpu, uint64_t cBasePages, uint32_t cShadowPages, uint32_t cFixedPages)
+GMMR0DECL(int) GMMR0UpdateReservation(PGVM pGVM, VMCPUID idCpu, uint64_t cBasePages,
+                                      uint32_t cShadowPages, uint32_t cFixedPages)
 {
-    LogFlow(("GMMR0UpdateReservation: pVM=%p cBasePages=%#llx cShadowPages=%#x cFixedPages=%#x\n",
-             pVM, cBasePages, cShadowPages, cFixedPages));
+    LogFlow(("GMMR0UpdateReservation: pGVM=%p cBasePages=%#llx cShadowPages=%#x cFixedPages=%#x\n",
+             pGVM, cBasePages, cShadowPages, cFixedPages));
 
     /*
      * Validate, get basics and take the semaphore.
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -1710,20 +1687,19 @@ GMMR0DECL(int) GMMR0UpdateReservation(PVM pVM, VMCPUID idCpu, uint64_t cBasePage
  * VMMR0 request wrapper for GMMR0UpdateReservation.
  *
  * @returns see GMMR0UpdateReservation.
- * @param   pVM             The cross context VM structure.
+ * @param   pGVM            The global (ring-0) VM structure.
  * @param   idCpu           The VCPU id.
  * @param   pReq            Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0UpdateReservationReq(PVM pVM, VMCPUID idCpu, PGMMUPDATERESERVATIONREQ pReq)
+GMMR0DECL(int) GMMR0UpdateReservationReq(PGVM pGVM, VMCPUID idCpu, PGMMUPDATERESERVATIONREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(*pReq), ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
 
-    return GMMR0UpdateReservation(pVM, idCpu, pReq->cBasePages, pReq->cShadowPages, pReq->cFixedPages);
+    return GMMR0UpdateReservation(pGVM, idCpu, pReq->cBasePages, pReq->cShadowPages, pReq->cFixedPages);
 }
 
 #ifdef GMMR0_WITH_SANITY_CHECK
@@ -1798,6 +1774,8 @@ static uint32_t gmmR0SanityCheck(PGMM pGMM, const char *pszFunction, unsigned uL
  * @param   pGMM        Pointer to the GMM instance.
  * @param   idChunk     The ID of the chunk to find.
  * @param   pTlbe       Pointer to the TLB entry.
+ *
+ * @note    Caller owns spinlock.
  */
 static PGMMCHUNK gmmR0GetChunkSlow(PGMM pGMM, uint32_t idChunk, PGMMCHUNKTLBE pTlbe)
 {
@@ -1805,6 +1783,29 @@ static PGMMCHUNK gmmR0GetChunkSlow(PGMM pGMM, uint32_t idChunk, PGMMCHUNKTLBE pT
     AssertMsgReturn(pChunk, ("Chunk %#x not found!\n", idChunk), NULL);
     pTlbe->idChunk = idChunk;
     pTlbe->pChunk = pChunk;
+    return pChunk;
+}
+
+
+/**
+ * Finds a allocation chunk, spin-locked.
+ *
+ * This is not expected to fail and will bitch if it does.
+ *
+ * @returns Pointer to the allocation chunk, NULL if not found.
+ * @param   pGMM        Pointer to the GMM instance.
+ * @param   idChunk     The ID of the chunk to find.
+ */
+DECLINLINE(PGMMCHUNK) gmmR0GetChunkLocked(PGMM pGMM, uint32_t idChunk)
+{
+    /*
+     * Do a TLB lookup, branch if not in the TLB.
+     */
+    PGMMCHUNKTLBE pTlbe  = &pGMM->ChunkTLB.aEntries[GMM_CHUNKTLB_IDX(idChunk)];
+    PGMMCHUNK     pChunk = pTlbe->pChunk;
+    if (   pChunk == NULL
+        || pTlbe->idChunk != idChunk)
+        pChunk = gmmR0GetChunkSlow(pGMM, idChunk, pTlbe);
     return pChunk;
 }
 
@@ -1820,14 +1821,10 @@ static PGMMCHUNK gmmR0GetChunkSlow(PGMM pGMM, uint32_t idChunk, PGMMCHUNKTLBE pT
  */
 DECLINLINE(PGMMCHUNK) gmmR0GetChunk(PGMM pGMM, uint32_t idChunk)
 {
-    /*
-     * Do a TLB lookup, branch if not in the TLB.
-     */
-    PGMMCHUNKTLBE pTlbe = &pGMM->ChunkTLB.aEntries[GMM_CHUNKTLB_IDX(idChunk)];
-    if (    pTlbe->idChunk != idChunk
-        ||  !pTlbe->pChunk)
-        return gmmR0GetChunkSlow(pGMM, idChunk, pTlbe);
-    return pTlbe->pChunk;
+    RTSpinlockAcquire(pGMM->hSpinLockTree);
+    PGMMCHUNK pChunk = gmmR0GetChunkLocked(pGMM, idChunk);
+    RTSpinlockRelease(pGMM->hSpinLockTree);
+    return pChunk;
 }
 
 
@@ -2106,15 +2103,16 @@ static uint32_t gmmR0AllocatePagesFromChunk(PGMMCHUNK pChunk, uint16_t const hGV
 /**
  * Registers a new chunk of memory.
  *
- * This is called by both gmmR0AllocateOneChunk and GMMR0SeedChunk.
+ * This is called by gmmR0AllocateOneChunk.
  *
  * @returns VBox status code.  On success, the giant GMM lock will be held, the
  *          caller must release it (ugly).
  * @param   pGMM        Pointer to the GMM instance.
  * @param   pSet        Pointer to the set.
- * @param   MemObj      The memory object for the chunk.
+ * @param   hMemObj     The memory object for the chunk.
  * @param   hGVM        The affinity of the chunk. NIL_GVM_HANDLE for no
  *                      affinity.
+ * @param   pSession    Same as @a hGVM.
  * @param   fChunkFlags The chunk flags, GMM_CHUNK_FLAGS_XXX.
  * @param   ppChunk     Chunk address (out).  Optional.
  *
@@ -2122,13 +2120,33 @@ static uint32_t gmmR0AllocatePagesFromChunk(PGMMCHUNK pChunk, uint16_t const hGV
  *          The giant GMM mutex will be acquired and returned acquired in
  *          the success path.   On failure, no locks will be held.
  */
-static int gmmR0RegisterChunk(PGMM pGMM, PGMMCHUNKFREESET pSet, RTR0MEMOBJ MemObj, uint16_t hGVM, uint16_t fChunkFlags,
-                              PGMMCHUNK *ppChunk)
+static int gmmR0RegisterChunk(PGMM pGMM, PGMMCHUNKFREESET pSet, RTR0MEMOBJ hMemObj, uint16_t hGVM, PSUPDRVSESSION pSession,
+                              uint16_t fChunkFlags, PGMMCHUNK *ppChunk)
 {
     Assert(pGMM->hMtxOwner != RTThreadNativeSelf());
     Assert(hGVM != NIL_GVM_HANDLE || pGMM->fBoundMemoryMode);
     Assert(fChunkFlags == 0 || fChunkFlags == GMM_CHUNK_FLAGS_LARGE_PAGE);
 
+#ifndef VBOX_WITH_LINEAR_HOST_PHYS_MEM
+    /*
+     * Get a ring-0 mapping of the object.
+     */
+    uint8_t *pbMapping = (uint8_t *)RTR0MemObjAddress(hMemObj);
+    if (!pbMapping)
+    {
+        RTR0MEMOBJ hMapObj;
+        int rc = RTR0MemObjMapKernel(&hMapObj, hMemObj, (void *)-1, 0,  RTMEM_PROT_READ | RTMEM_PROT_WRITE);
+        if (RT_SUCCESS(rc))
+            pbMapping = (uint8_t *)RTR0MemObjAddress(hMapObj);
+        else
+            return rc;
+        AssertPtr(pbMapping);
+    }
+#endif
+
+    /*
+     * Allocate a chunk.
+     */
     int rc;
     PGMMCHUNK pChunk = (PGMMCHUNK)RTMemAllocZ(sizeof(*pChunk));
     if (pChunk)
@@ -2136,13 +2154,17 @@ static int gmmR0RegisterChunk(PGMM pGMM, PGMMCHUNKFREESET pSet, RTR0MEMOBJ MemOb
         /*
          * Initialize it.
          */
-        pChunk->hMemObj     = MemObj;
+        pChunk->hMemObj     = hMemObj;
+#ifndef VBOX_WITH_LINEAR_HOST_PHYS_MEM
+        pChunk->pbMapping   = pbMapping;
+#endif
         pChunk->cFree       = GMM_CHUNK_NUM_PAGES;
         pChunk->hGVM        = hGVM;
         /*pChunk->iFreeHead = 0;*/
         pChunk->idNumaNode  = gmmR0GetCurrentNumaNodeId();
         pChunk->iChunkMtx   = UINT8_MAX;
         pChunk->fFlags      = fChunkFlags;
+        pChunk->uidOwner    = pSession ? SUPR0GetSessionUid(pSession) : NIL_RTUID;
         for (unsigned iPage = 0; iPage < RT_ELEMENTS(pChunk->aPages) - 1; iPage++)
         {
             pChunk->aPages[iPage].Free.u2State = GMM_PAGE_STATE_FREE;
@@ -2161,19 +2183,26 @@ static int gmmR0RegisterChunk(PGMM pGMM, PGMMCHUNKFREESET pSet, RTR0MEMOBJ MemOb
             if (GMM_CHECK_SANITY_UPON_ENTERING(pGMM))
             {
                 pChunk->Core.Key = gmmR0AllocateChunkId(pGMM);
-                if (    pChunk->Core.Key != NIL_GMM_CHUNKID
-                    &&  pChunk->Core.Key <= GMM_CHUNKID_LAST
-                    &&  RTAvlU32Insert(&pGMM->pChunks, &pChunk->Core))
+                if (   pChunk->Core.Key != NIL_GMM_CHUNKID
+                    && pChunk->Core.Key <= GMM_CHUNKID_LAST)
                 {
-                    pGMM->cChunks++;
-                    RTListAppend(&pGMM->ChunkList, &pChunk->ListNode);
-                    gmmR0LinkChunk(pChunk, pSet);
-                    LogFlow(("gmmR0RegisterChunk: pChunk=%p id=%#x cChunks=%d\n", pChunk, pChunk->Core.Key, pGMM->cChunks));
+                    RTSpinlockAcquire(pGMM->hSpinLockTree);
+                    if (RTAvlU32Insert(&pGMM->pChunks, &pChunk->Core))
+                    {
+                        pGMM->cChunks++;
+                        RTListAppend(&pGMM->ChunkList, &pChunk->ListNode);
+                        RTSpinlockRelease(pGMM->hSpinLockTree);
 
-                    if (ppChunk)
-                        *ppChunk = pChunk;
-                    GMM_CHECK_SANITY_UPON_LEAVING(pGMM);
-                    return VINF_SUCCESS;
+                        gmmR0LinkChunk(pChunk, pSet);
+
+                        LogFlow(("gmmR0RegisterChunk: pChunk=%p id=%#x cChunks=%d\n", pChunk, pChunk->Core.Key, pGMM->cChunks));
+
+                        if (ppChunk)
+                            *ppChunk = pChunk;
+                        GMM_CHECK_SANITY_UPON_LEAVING(pGMM);
+                        return VINF_SUCCESS;
+                    }
+                    RTSpinlockRelease(pGMM->hSpinLockTree);
                 }
 
                 /* bail out */
@@ -2213,14 +2242,20 @@ static int gmmR0AllocateChunkNew(PGMM pGMM, PGVM pGVM, PGMMCHUNKFREESET pSet, ui
     gmmR0MutexRelease(pGMM);
 
     RTR0MEMOBJ hMemObj;
-    int rc = RTR0MemObjAllocPhysNC(&hMemObj, GMM_CHUNK_SIZE, NIL_RTHCPHYS);
+    int rc;
+#ifdef VBOX_WITH_LINEAR_HOST_PHYS_MEM
+    if (pGMM->fHasWorkingAllocPhysNC)
+        rc = RTR0MemObjAllocPhysNC(&hMemObj, GMM_CHUNK_SIZE, NIL_RTHCPHYS);
+    else
+#endif
+        rc = RTR0MemObjAllocPage(&hMemObj, GMM_CHUNK_SIZE, false /*fExecutable*/);
     if (RT_SUCCESS(rc))
     {
-/** @todo Duplicate gmmR0RegisterChunk here so we can avoid chaining up the
- *        free pages first and then unchaining them right afterwards. Instead
- *        do as much work as possible without holding the giant lock. */
+        /** @todo Duplicate gmmR0RegisterChunk here so we can avoid chaining up the
+         *        free pages first and then unchaining them right afterwards. Instead
+         *        do as much work as possible without holding the giant lock. */
         PGMMCHUNK pChunk;
-        rc = gmmR0RegisterChunk(pGMM, pSet, hMemObj, pGVM->hSelf, 0 /*fChunkFlags*/, &pChunk);
+        rc = gmmR0RegisterChunk(pGMM, pSet, hMemObj, pGVM->hSelf, pGVM->pSession, 0 /*fChunkFlags*/, &pChunk);
         if (RT_SUCCESS(rc))
         {
             *piPage = gmmR0AllocatePagesFromChunk(pChunk, pGVM->hSelf, *piPage, cPages, paPages);
@@ -2228,7 +2263,7 @@ static int gmmR0AllocateChunkNew(PGMM pGMM, PGVM pGVM, PGMMCHUNKFREESET pSet, ui
         }
 
         /* bail out */
-        RTR0MemObjFree(hMemObj, false /* fFreeMappings */);
+        RTR0MemObjFree(hMemObj, true /* fFreeMappings */);
     }
 
     int rc2 = gmmR0MutexAcquire(pGMM);
@@ -2244,11 +2279,12 @@ static int gmmR0AllocateChunkNew(PGMM pGMM, PGVM pGVM, PGMMCHUNKFREESET pSet, ui
  * @returns The new page descriptor table index.
  * @param   pSet        The set to pick from.
  * @param   pGVM        Pointer to the global VM structure.
+ * @param   uidSelf     The UID of the caller.
  * @param   iPage       The current page descriptor table index.
  * @param   cPages      The total number of pages to allocate.
  * @param   paPages     The page descriptor table (input + ouput).
  */
-static uint32_t gmmR0AllocatePagesIndiscriminately(PGMMCHUNKFREESET pSet, PGVM pGVM,
+static uint32_t gmmR0AllocatePagesIndiscriminately(PGMMCHUNKFREESET pSet, PGVM pGVM, RTUID uidSelf,
                                                    uint32_t iPage, uint32_t cPages, PGMMPAGEDESC paPages)
 {
     unsigned iList = RT_ELEMENTS(pSet->apLists);
@@ -2258,10 +2294,14 @@ static uint32_t gmmR0AllocatePagesIndiscriminately(PGMMCHUNKFREESET pSet, PGVM p
         while (pChunk)
         {
             PGMMCHUNK pNext = pChunk->pFreeNext;
-
-            iPage = gmmR0AllocatePagesFromChunk(pChunk, pGVM->hSelf, iPage, cPages, paPages);
-            if (iPage >= cPages)
-                return iPage;
+            if (   pChunk->uidOwner == uidSelf
+                || (   pChunk->cMappingsX == 0
+                    && pChunk->cFree == (GMM_CHUNK_SIZE >> PAGE_SHIFT)))
+            {
+                iPage = gmmR0AllocatePagesFromChunk(pChunk, pGVM->hSelf, iPage, cPages, paPages);
+                if (iPage >= cPages)
+                    return iPage;
+            }
 
             pChunk = pNext;
         }
@@ -2276,11 +2316,12 @@ static uint32_t gmmR0AllocatePagesIndiscriminately(PGMMCHUNKFREESET pSet, PGVM p
  * @returns The new page descriptor table index.
  * @param   pSet        The set to pick from.
  * @param   pGVM        Pointer to the global VM structure.
+ * @param   uidSelf     The UID of the caller.
  * @param   iPage       The current page descriptor table index.
  * @param   cPages      The total number of pages to allocate.
  * @param   paPages     The page descriptor table (input + ouput).
  */
-static uint32_t gmmR0AllocatePagesFromEmptyChunksOnSameNode(PGMMCHUNKFREESET pSet, PGVM pGVM,
+static uint32_t gmmR0AllocatePagesFromEmptyChunksOnSameNode(PGMMCHUNKFREESET pSet, PGVM pGVM, RTUID uidSelf,
                                                             uint32_t iPage, uint32_t cPages, PGMMPAGEDESC paPages)
 {
     PGMMCHUNK pChunk = pSet->apLists[GMM_CHUNK_FREE_SET_UNUSED_LIST];
@@ -2291,9 +2332,12 @@ static uint32_t gmmR0AllocatePagesFromEmptyChunksOnSameNode(PGMMCHUNKFREESET pSe
         {
             PGMMCHUNK pNext = pChunk->pFreeNext;
 
-            if (pChunk->idNumaNode == idNumaNode)
+            if (   pChunk->idNumaNode == idNumaNode
+                && (   pChunk->uidOwner == uidSelf
+                    || pChunk->cMappingsX == 0))
             {
-                pChunk->hGVM = pGVM->hSelf;
+                pChunk->hGVM     = pGVM->hSelf;
+                pChunk->uidOwner = uidSelf;
                 iPage = gmmR0AllocatePagesFromChunk(pChunk, pGVM->hSelf, iPage, cPages, paPages);
                 if (iPage >= cPages)
                 {
@@ -2315,11 +2359,12 @@ static uint32_t gmmR0AllocatePagesFromEmptyChunksOnSameNode(PGMMCHUNKFREESET pSe
  * @returns The new page descriptor table index.
  * @param   pSet        The set to pick from.
  * @param   pGVM        Pointer to the global VM structure.
+ * @param   uidSelf     The UID of the caller.
  * @param   iPage       The current page descriptor table index.
  * @param   cPages      The total number of pages to allocate.
  * @param   paPages     The page descriptor table (input + ouput).
  */
-static uint32_t gmmR0AllocatePagesFromSameNode(PGMMCHUNKFREESET pSet, PGVM pGVM,
+static uint32_t gmmR0AllocatePagesFromSameNode(PGMMCHUNKFREESET pSet, PGVM pGVM, RTUID const uidSelf,
                                                uint32_t iPage, uint32_t cPages, PGMMPAGEDESC paPages)
 {
     /** @todo start by picking from chunks with about the right size first?  */
@@ -2332,7 +2377,8 @@ static uint32_t gmmR0AllocatePagesFromSameNode(PGMMCHUNKFREESET pSet, PGVM pGVM,
         {
             PGMMCHUNK pNext = pChunk->pFreeNext;
 
-            if (pChunk->idNumaNode == idNumaNode)
+            if (   pChunk->idNumaNode == idNumaNode
+                && pChunk->uidOwner   == uidSelf)
             {
                 iPage = gmmR0AllocatePagesFromChunk(pChunk, pGVM->hSelf, iPage, cPages, paPages);
                 if (iPage >= cPages)
@@ -2459,7 +2505,7 @@ static bool gmmR0ShouldAllocatePagesInOtherChunksBecauseOfLimits(PGVM pGVM)
      * Check how close we're to the max memory limit and how many fragments
      * there are?...
      */
-    /** @todo.  */
+    /** @todo  */
 
     return false;
 }
@@ -2488,8 +2534,6 @@ static bool gmmR0ShouldAllocatePagesInOtherChunksBecauseOfLotsFree(PGMM pGMM)
  *
  * @returns VBox status code:
  * @retval  VINF_SUCCESS on success.
- * @retval  VERR_GMM_SEED_ME if seeding via GMMR0SeedChunk or
- *          gmmR0AllocateMoreChunks is necessary.
  * @retval  VERR_GMM_HIT_GLOBAL_LIMIT if we've exhausted the available pages.
  * @retval  VERR_GMM_HIT_VM_ACCOUNT_LIMIT if we've hit the VM account limit,
  *          that is we're trying to allocate more than we've reserved.
@@ -2510,14 +2554,18 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
     /*
      * Check allocation limits.
      */
-    if (RT_UNLIKELY(pGMM->cAllocatedPages + cPages > pGMM->cMaxPages))
+    if (RT_LIKELY(pGMM->cAllocatedPages + cPages <= pGMM->cMaxPages))
+    { /* likely */ }
+    else
         return VERR_GMM_HIT_GLOBAL_LIMIT;
 
     switch (enmAccount)
     {
         case GMMACCOUNT_BASE:
-            if (RT_UNLIKELY(  pGVM->gmm.s.Stats.Allocated.cBasePages + pGVM->gmm.s.Stats.cBalloonedPages + cPages
-                            > pGVM->gmm.s.Stats.Reserved.cBasePages))
+            if (RT_LIKELY(   pGVM->gmm.s.Stats.Allocated.cBasePages + pGVM->gmm.s.Stats.cBalloonedPages + cPages
+                          <= pGVM->gmm.s.Stats.Reserved.cBasePages))
+            { /* likely */ }
+            else
             {
                 Log(("gmmR0AllocatePages:Base: Reserved=%#llx Allocated+Ballooned+Requested=%#llx+%#llx+%#x!\n",
                      pGVM->gmm.s.Stats.Reserved.cBasePages, pGVM->gmm.s.Stats.Allocated.cBasePages,
@@ -2526,7 +2574,9 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
             }
             break;
         case GMMACCOUNT_SHADOW:
-            if (RT_UNLIKELY(pGVM->gmm.s.Stats.Allocated.cShadowPages + cPages > pGVM->gmm.s.Stats.Reserved.cShadowPages))
+            if (RT_LIKELY(pGVM->gmm.s.Stats.Allocated.cShadowPages + cPages <= pGVM->gmm.s.Stats.Reserved.cShadowPages))
+            { /* likely */ }
+            else
             {
                 Log(("gmmR0AllocatePages:Shadow: Reserved=%#x Allocated+Requested=%#x+%#x!\n",
                      pGVM->gmm.s.Stats.Reserved.cShadowPages, pGVM->gmm.s.Stats.Allocated.cShadowPages, cPages));
@@ -2534,7 +2584,9 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
             }
             break;
         case GMMACCOUNT_FIXED:
-            if (RT_UNLIKELY(pGVM->gmm.s.Stats.Allocated.cFixedPages + cPages > pGVM->gmm.s.Stats.Reserved.cFixedPages))
+            if (RT_LIKELY(pGVM->gmm.s.Stats.Allocated.cFixedPages + cPages <= pGVM->gmm.s.Stats.Reserved.cFixedPages))
+            { /* likely */ }
+            else
             {
                 Log(("gmmR0AllocatePages:Fixed: Reserved=%#x Allocated+Requested=%#x+%#x!\n",
                      pGVM->gmm.s.Stats.Reserved.cFixedPages, pGVM->gmm.s.Stats.Allocated.cFixedPages, cPages));
@@ -2543,17 +2595,6 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
             break;
         default:
             AssertMsgFailedReturn(("enmAccount=%d\n", enmAccount), VERR_IPE_NOT_REACHED_DEFAULT_CASE);
-    }
-
-    /*
-     * If we're in legacy memory mode, it's easy to figure if we have
-     * sufficient number of pages up-front.
-     */
-    if (   pGMM->fLegacyAllocationMode
-        && pGVM->gmm.s.Private.cFreePages < cPages)
-    {
-        Assert(pGMM->fBoundMemoryMode);
-        return VERR_GMM_SEED_ME;
     }
 
     /*
@@ -2572,19 +2613,9 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
     pGMM->cAllocatedPages           += cPages;
 
     /*
-     * Part two of it's-easy-in-legacy-memory-mode.
-     */
-    uint32_t iPage = 0;
-    if (pGMM->fLegacyAllocationMode)
-    {
-        iPage = gmmR0AllocatePagesInBoundMode(pGVM, iPage, cPages, paPages);
-        AssertReleaseReturn(iPage == cPages, VERR_GMM_ALLOC_PAGES_IPE);
-        return VINF_SUCCESS;
-    }
-
-    /*
      * Bound mode is also relatively straightforward.
      */
+    uint32_t iPage = 0;
     int rc = VINF_SUCCESS;
     if (pGMM->fBoundMemoryMode)
     {
@@ -2601,6 +2632,8 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
      */
     else
     {
+        RTUID const uidSelf = SUPR0GetSessionUid(pGVM->pSession);
+
         /* Pick the most optimal pages first. */
         iPage = gmmR0AllocatePagesAssociatedWithVM(pGMM, pGVM, &pGMM->PrivateX, iPage, cPages, paPages);
         if (iPage < cPages)
@@ -2610,26 +2643,26 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
             bool fTriedOnSameAlready = false;
             if (gmmR0ShouldAllocatePagesInOtherChunksBecauseOfLimits(pGVM))
             {
-                iPage = gmmR0AllocatePagesFromSameNode(&pGMM->PrivateX, pGVM, iPage, cPages, paPages);
+                iPage = gmmR0AllocatePagesFromSameNode(&pGMM->PrivateX, pGVM, uidSelf, iPage, cPages, paPages);
                 fTriedOnSameAlready = true;
             }
 
             /* Allocate memory from empty chunks. */
             if (iPage < cPages)
-                iPage = gmmR0AllocatePagesFromEmptyChunksOnSameNode(&pGMM->PrivateX, pGVM, iPage, cPages, paPages);
+                iPage = gmmR0AllocatePagesFromEmptyChunksOnSameNode(&pGMM->PrivateX, pGVM, uidSelf, iPage, cPages, paPages);
 
             /* Grab empty shared chunks. */
             if (iPage < cPages)
-                iPage = gmmR0AllocatePagesFromEmptyChunksOnSameNode(&pGMM->Shared, pGVM, iPage, cPages, paPages);
+                iPage = gmmR0AllocatePagesFromEmptyChunksOnSameNode(&pGMM->Shared, pGVM, uidSelf, iPage, cPages, paPages);
 
             /* If there is a lof of free pages spread around, try not waste
                system memory on more chunks. (Should trigger defragmentation.) */
             if (   !fTriedOnSameAlready
                 && gmmR0ShouldAllocatePagesInOtherChunksBecauseOfLotsFree(pGMM))
             {
-                iPage = gmmR0AllocatePagesFromSameNode(&pGMM->PrivateX, pGVM, iPage, cPages, paPages);
+                iPage = gmmR0AllocatePagesFromSameNode(&pGMM->PrivateX, pGVM, uidSelf, iPage, cPages, paPages);
                 if (iPage < cPages)
-                    iPage = gmmR0AllocatePagesIndiscriminately(&pGMM->PrivateX, pGVM, iPage, cPages, paPages);
+                    iPage = gmmR0AllocatePagesIndiscriminately(&pGMM->PrivateX, pGVM, uidSelf, iPage, cPages, paPages);
             }
 
             /*
@@ -2641,6 +2674,7 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
                     rc = gmmR0AllocateChunkNew(pGMM, pGVM, &pGMM->PrivateX, cPages, paPages, &iPage);
                 while (iPage < cPages && RT_SUCCESS(rc));
 
+#if 0 /* We cannot mix chunks with different UIDs. */
                 /* If the host is out of memory, take whatever we can get. */
                 if (   (rc == VERR_NO_MEMORY || rc == VERR_NO_PHYS_MEMORY)
                     && pGMM->PrivateX.cFreePages + pGMM->Shared.cFreePages >= cPages - iPage)
@@ -2651,6 +2685,7 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
                     AssertRelease(iPage == cPages);
                     rc = VINF_SUCCESS;
                 }
+#endif
             }
         }
     }
@@ -2659,7 +2694,9 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
      * Clean up on failure.  Since this is bound to be a low-memory condition
      * we will give back any empty chunks that might be hanging around.
      */
-    if (RT_FAILURE(rc))
+    if (RT_SUCCESS(rc))
+    { /* likely */ }
+    else
     {
         /* Update the statistics. */
         pGVM->gmm.s.Stats.cPrivatePages -= cPages;
@@ -2717,23 +2754,23 @@ static int gmmR0AllocatePagesNew(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMPAGE
  *          shared page.
  * @retval  VERR_GMM_NOT_PAGE_OWNER if one of the pages to be updated wasn't
  *          owned by the VM.
- * @retval  VERR_GMM_SEED_ME if seeding via GMMR0SeedChunk is necessary.
  * @retval  VERR_GMM_HIT_GLOBAL_LIMIT if we've exhausted the available pages.
  * @retval  VERR_GMM_HIT_VM_ACCOUNT_LIMIT if we've hit the VM account limit,
  *          that is we're trying to allocate more than we've reserved.
  *
- * @param   pVM                 The cross context VM structure.
+ * @param   pGVM                The global (ring-0) VM structure.
  * @param   idCpu               The VCPU id.
  * @param   cPagesToUpdate      The number of pages to update (starting from the head).
  * @param   cPagesToAlloc       The number of pages to allocate (starting from the head).
  * @param   paPages             The array of page descriptors.
  *                              See GMMPAGEDESC for details on what is expected on input.
- * @thread  EMT.
+ * @thread  EMT(idCpu)
  */
-GMMR0DECL(int) GMMR0AllocateHandyPages(PVM pVM, VMCPUID idCpu, uint32_t cPagesToUpdate, uint32_t cPagesToAlloc, PGMMPAGEDESC paPages)
+GMMR0DECL(int) GMMR0AllocateHandyPages(PGVM pGVM, VMCPUID idCpu, uint32_t cPagesToUpdate,
+                                       uint32_t cPagesToAlloc, PGMMPAGEDESC paPages)
 {
-    LogFlow(("GMMR0AllocateHandyPages: pVM=%p cPagesToUpdate=%#x cPagesToAlloc=%#x paPages=%p\n",
-             pVM, cPagesToUpdate, cPagesToAlloc, paPages));
+    LogFlow(("GMMR0AllocateHandyPages: pGVM=%p cPagesToUpdate=%#x cPagesToAlloc=%#x paPages=%p\n",
+             pGVM, cPagesToUpdate, cPagesToAlloc, paPages));
 
     /*
      * Validate, get basics and take the semaphore.
@@ -2741,8 +2778,7 @@ GMMR0DECL(int) GMMR0AllocateHandyPages(PVM pVM, VMCPUID idCpu, uint32_t cPagesTo
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -2764,8 +2800,8 @@ GMMR0DECL(int) GMMR0AllocateHandyPages(PVM pVM, VMCPUID idCpu, uint32_t cPagesTo
         AssertMsgReturn(    paPages[iPage].idPage <= GMM_PAGEID_LAST
                         /*||  paPages[iPage].idPage == NIL_GMM_PAGEID*/,
                         ("#%#x: %#x\n", iPage, paPages[iPage].idPage), VERR_INVALID_PARAMETER);
-        AssertMsgReturn(    paPages[iPage].idPage <= GMM_PAGEID_LAST
-                        /*||  paPages[iPage].idSharedPage == NIL_GMM_PAGEID*/,
+        AssertMsgReturn(   paPages[iPage].idSharedPage == NIL_GMM_PAGEID
+                        || paPages[iPage].idSharedPage <= GMM_PAGEID_LAST,
                         ("#%#x: %#x\n", iPage, paPages[iPage].idSharedPage), VERR_INVALID_PARAMETER);
     }
 
@@ -2832,7 +2868,9 @@ GMMR0DECL(int) GMMR0AllocateHandyPages(PVM pVM, VMCPUID idCpu, uint32_t cPagesTo
                     }
                 }
 
-                if (paPages[iPage].idSharedPage != NIL_GMM_PAGEID)
+                if (paPages[iPage].idSharedPage == NIL_GMM_PAGEID)
+                { /* likely */ }
+                else
                 {
                     PGMMPAGE pPage = gmmR0GetPage(pGMM, paPages[iPage].idSharedPage);
                     if (RT_LIKELY(pPage))
@@ -2912,12 +2950,11 @@ GMMR0DECL(int) GMMR0AllocateHandyPages(PVM pVM, VMCPUID idCpu, uint32_t cPagesTo
  * @returns VBox status code:
  * @retval  VINF_SUCCESS on success.
  * @retval  VERR_NOT_OWNER if the caller is not an EMT.
- * @retval  VERR_GMM_SEED_ME if seeding via GMMR0SeedChunk is necessary.
  * @retval  VERR_GMM_HIT_GLOBAL_LIMIT if we've exhausted the available pages.
  * @retval  VERR_GMM_HIT_VM_ACCOUNT_LIMIT if we've hit the VM account limit,
  *          that is we're trying to allocate more than we've reserved.
  *
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   cPages      The number of pages to allocate.
  * @param   paPages     Pointer to the page descriptors.
@@ -2927,17 +2964,16 @@ GMMR0DECL(int) GMMR0AllocateHandyPages(PVM pVM, VMCPUID idCpu, uint32_t cPagesTo
  *
  * @thread  EMT.
  */
-GMMR0DECL(int) GMMR0AllocatePages(PVM pVM, VMCPUID idCpu, uint32_t cPages, PGMMPAGEDESC paPages, GMMACCOUNT enmAccount)
+GMMR0DECL(int) GMMR0AllocatePages(PGVM pGVM, VMCPUID idCpu, uint32_t cPages, PGMMPAGEDESC paPages, GMMACCOUNT enmAccount)
 {
-    LogFlow(("GMMR0AllocatePages: pVM=%p cPages=%#x paPages=%p enmAccount=%d\n", pVM, cPages, paPages, enmAccount));
+    LogFlow(("GMMR0AllocatePages: pGVM=%p cPages=%#x paPages=%p enmAccount=%d\n", pGVM, cPages, paPages, enmAccount));
 
     /*
      * Validate, get basics and take the semaphore.
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -2983,25 +3019,24 @@ GMMR0DECL(int) GMMR0AllocatePages(PVM pVM, VMCPUID idCpu, uint32_t cPages, PGMMP
  * VMMR0 request wrapper for GMMR0AllocatePages.
  *
  * @returns see GMMR0AllocatePages.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0AllocatePagesReq(PVM pVM, VMCPUID idCpu, PGMMALLOCATEPAGESREQ pReq)
+GMMR0DECL(int) GMMR0AllocatePagesReq(PGVM pGVM, VMCPUID idCpu, PGMMALLOCATEPAGESREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq >= RT_UOFFSETOF(GMMALLOCATEPAGESREQ, aPages[0]),
                     ("%#x < %#x\n", pReq->Hdr.cbReq, RT_UOFFSETOF(GMMALLOCATEPAGESREQ, aPages[0])),
                     VERR_INVALID_PARAMETER);
-    AssertMsgReturn(pReq->Hdr.cbReq == RT_UOFFSETOF(GMMALLOCATEPAGESREQ, aPages[pReq->cPages]),
-                    ("%#x != %#x\n", pReq->Hdr.cbReq, RT_UOFFSETOF(GMMALLOCATEPAGESREQ, aPages[pReq->cPages])),
+    AssertMsgReturn(pReq->Hdr.cbReq == RT_UOFFSETOF_DYN(GMMALLOCATEPAGESREQ, aPages[pReq->cPages]),
+                    ("%#x != %#x\n", pReq->Hdr.cbReq, RT_UOFFSETOF_DYN(GMMALLOCATEPAGESREQ, aPages[pReq->cPages])),
                     VERR_INVALID_PARAMETER);
 
-    return GMMR0AllocatePages(pVM, idCpu, pReq->cPages, &pReq->aPages[0], pReq->enmAccount);
+    return GMMR0AllocatePages(pGVM, idCpu, pReq->cPages, &pReq->aPages[0], pReq->enmAccount);
 }
 
 
@@ -3013,21 +3048,21 @@ GMMR0DECL(int) GMMR0AllocatePagesReq(PVM pVM, VMCPUID idCpu, PGMMALLOCATEPAGESRE
  * @returns VBox status code:
  * @retval  VINF_SUCCESS on success.
  * @retval  VERR_NOT_OWNER if the caller is not an EMT.
- * @retval  VERR_GMM_SEED_ME if seeding via GMMR0SeedChunk is necessary.
  * @retval  VERR_GMM_HIT_GLOBAL_LIMIT if we've exhausted the available pages.
  * @retval  VERR_GMM_HIT_VM_ACCOUNT_LIMIT if we've hit the VM account limit,
  *          that is we're trying to allocate more than we've reserved.
+ * @retval  VERR_TRY_AGAIN if the host is temporarily out of large pages.
  * @returns see GMMR0AllocatePages.
  *
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   cbPage      Large page size.
  * @param   pIdPage     Where to return the GMM page ID of the page.
  * @param   pHCPhys     Where to return the host physical address of the page.
  */
-GMMR0DECL(int)  GMMR0AllocateLargePage(PVM pVM, VMCPUID idCpu, uint32_t cbPage, uint32_t *pIdPage, RTHCPHYS *pHCPhys)
+GMMR0DECL(int)  GMMR0AllocateLargePage(PGVM pGVM, VMCPUID idCpu, uint32_t cbPage, uint32_t *pIdPage, RTHCPHYS *pHCPhys)
 {
-    LogFlow(("GMMR0AllocateLargePage: pVM=%p cbPage=%x\n", pVM, cbPage));
+    LogFlow(("GMMR0AllocateLargePage: pGVM=%p cbPage=%x\n", pGVM, cbPage));
 
     AssertReturn(cbPage == GMM_CHUNK_SIZE, VERR_INVALID_PARAMETER);
     AssertPtrReturn(pIdPage, VERR_INVALID_PARAMETER);
@@ -3038,14 +3073,9 @@ GMMR0DECL(int)  GMMR0AllocateLargePage(PVM pVM, VMCPUID idCpu, uint32_t cbPage, 
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
-
-    /* Not supported in legacy mode where we allocate the memory in ring 3 and lock it in ring 0. */
-    if (pGMM->fLegacyAllocationMode)
-        return VERR_NOT_SUPPORTED;
 
     *pHCPhys = NIL_RTHCPHYS;
     *pIdPage = NIL_GMM_PAGEID;
@@ -3073,12 +3103,12 @@ GMMR0DECL(int)  GMMR0AllocateLargePage(PVM pVM, VMCPUID idCpu, uint32_t cbPage, 
         gmmR0MutexRelease(pGMM);
 
         RTR0MEMOBJ hMemObj;
-        rc = RTR0MemObjAllocPhysEx(&hMemObj, GMM_CHUNK_SIZE, NIL_RTHCPHYS, GMM_CHUNK_SIZE);
+        rc = RTR0MemObjAllocLarge(&hMemObj, GMM_CHUNK_SIZE, GMM_CHUNK_SIZE, RTMEMOBJ_ALLOC_LARGE_F_FAST);
         if (RT_SUCCESS(rc))
         {
             PGMMCHUNKFREESET pSet = pGMM->fBoundMemoryMode ? &pGVM->gmm.s.Private : &pGMM->PrivateX;
             PGMMCHUNK pChunk;
-            rc = gmmR0RegisterChunk(pGMM, pSet, hMemObj, pGVM->hSelf, GMM_CHUNK_FLAGS_LARGE_PAGE, &pChunk);
+            rc = gmmR0RegisterChunk(pGMM, pSet, hMemObj, pGVM->hSelf, pGVM->pSession, GMM_CHUNK_FLAGS_LARGE_PAGE, &pChunk);
             if (RT_SUCCESS(rc))
             {
                 /*
@@ -3106,9 +3136,10 @@ GMMR0DECL(int)  GMMR0AllocateLargePage(PVM pVM, VMCPUID idCpu, uint32_t cbPage, 
 
                 gmmR0LinkChunk(pChunk, pSet);
                 gmmR0MutexRelease(pGMM);
+                LogFlow(("GMMR0AllocateLargePage: returns VINF_SUCCESS\n"));
+                return VINF_SUCCESS;
             }
-            else
-                RTR0MemObjFree(hMemObj, false /* fFreeMappings */);
+            RTR0MemObjFree(hMemObj, true /* fFreeMappings */);
         }
     }
     else
@@ -3126,27 +3157,22 @@ GMMR0DECL(int)  GMMR0AllocateLargePage(PVM pVM, VMCPUID idCpu, uint32_t cbPage, 
  * Free a large page.
  *
  * @returns VBox status code:
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   idPage      The large page id.
  */
-GMMR0DECL(int)  GMMR0FreeLargePage(PVM pVM, VMCPUID idCpu, uint32_t idPage)
+GMMR0DECL(int)  GMMR0FreeLargePage(PGVM pGVM, VMCPUID idCpu, uint32_t idPage)
 {
-    LogFlow(("GMMR0FreeLargePage: pVM=%p idPage=%x\n", pVM, idPage));
+    LogFlow(("GMMR0FreeLargePage: pGVM=%p idPage=%x\n", pGVM, idPage));
 
     /*
      * Validate, get basics and take the semaphore.
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
-
-    /* Not supported in legacy mode where we allocate the memory in ring 3 and lock it in ring 0. */
-    if (pGMM->fLegacyAllocationMode)
-        return VERR_NOT_SUPPORTED;
 
     gmmR0MutexAcquire(pGMM);
     if (GMM_CHECK_SANITY_UPON_ENTERING(pGMM))
@@ -3193,22 +3219,78 @@ GMMR0DECL(int)  GMMR0FreeLargePage(PVM pVM, VMCPUID idCpu, uint32_t idPage)
  * VMMR0 request wrapper for GMMR0FreeLargePage.
  *
  * @returns see GMMR0FreeLargePage.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0FreeLargePageReq(PVM pVM, VMCPUID idCpu, PGMMFREELARGEPAGEREQ pReq)
+GMMR0DECL(int) GMMR0FreeLargePageReq(PGVM pGVM, VMCPUID idCpu, PGMMFREELARGEPAGEREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(GMMFREEPAGESREQ),
                     ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(GMMFREEPAGESREQ)),
                     VERR_INVALID_PARAMETER);
 
-    return GMMR0FreeLargePage(pVM, idCpu, pReq->idPage);
+    return GMMR0FreeLargePage(pGVM, idCpu, pReq->idPage);
+}
+
+
+/**
+ * @callback_method_impl{FNGVMMR0ENUMCALLBACK,
+ * Used by gmmR0FreeChunkFlushPerVmTlbs().}
+ */
+static DECLCALLBACK(int) gmmR0InvalidatePerVmChunkTlbCallback(PGVM pGVM, void *pvUser)
+{
+    RT_NOREF(pvUser);
+    if (pGVM->gmm.s.hChunkTlbSpinLock != NIL_RTSPINLOCK)
+    {
+        RTSpinlockAcquire(pGVM->gmm.s.hChunkTlbSpinLock);
+        uintptr_t i = RT_ELEMENTS(pGVM->gmm.s.aChunkTlbEntries);
+        while (i-- > 0)
+        {
+            pGVM->gmm.s.aChunkTlbEntries[i].idGeneration = UINT64_MAX;
+            pGVM->gmm.s.aChunkTlbEntries[i].pChunk       = NULL;
+        }
+        RTSpinlockRelease(pGVM->gmm.s.hChunkTlbSpinLock);
+    }
+    return VINF_SUCCESS;
+}
+
+
+/**
+ * Called by gmmR0FreeChunk when we reach the threshold for wrapping around the
+ * free generation ID value.
+ *
+ * This is done at 2^62 - 1, which allows us to drop all locks and as it will
+ * take a while before 12 exa (2 305 843 009 213 693 952) calls to
+ * gmmR0FreeChunk can be made and causes a real wrap-around.  We do two
+ * invalidation passes and resets the generation ID between then.  This will
+ * make sure there are no false positives.
+ *
+ * @param   pGMM        Pointer to the GMM instance.
+ */
+static void gmmR0FreeChunkFlushPerVmTlbs(PGMM pGMM)
+{
+    /*
+     * First invalidation pass.
+     */
+    int rc = GVMMR0EnumVMs(gmmR0InvalidatePerVmChunkTlbCallback, NULL);
+    AssertRCSuccess(rc);
+
+    /*
+     * Reset the generation number.
+     */
+    RTSpinlockAcquire(pGMM->hSpinLockTree);
+    ASMAtomicWriteU64(&pGMM->idFreeGeneration, 1);
+    RTSpinlockRelease(pGMM->hSpinLockTree);
+
+    /*
+     * Second invalidation pass.
+     */
+    rc = GVMMR0EnumVMs(gmmR0InvalidatePerVmChunkTlbCallback, NULL);
+    AssertRCSuccess(rc);
 }
 
 
@@ -3233,9 +3315,7 @@ static bool gmmR0FreeChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, bool fRelaxed
      * Cleanup hack! Unmap the chunk from the callers address space.
      * This shouldn't happen, so screw lock contention...
      */
-    if (    pChunk->cMappingsX
-        &&  !pGMM->fLegacyAllocationMode
-        &&  pGVM)
+    if (pChunk->cMappingsX && pGVM)
         gmmR0UnmapChunkLocked(pGMM, pGVM, pChunk);
 
     /*
@@ -3264,6 +3344,8 @@ static bool gmmR0FreeChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, bool fRelaxed
      */
     gmmR0UnlinkChunk(pChunk);
 
+    RTSpinlockAcquire(pGMM->hSpinLockTree);
+
     RTListNodeRemove(&pChunk->ListNode);
 
     PAVLU32NODECORE pCore = RTAvlU32Remove(&pGMM->pChunks, pChunk->Core.Key);
@@ -3279,6 +3361,10 @@ static bool gmmR0FreeChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, bool fRelaxed
     Assert(pGMM->cChunks > 0);
     pGMM->cChunks--;
 
+    uint64_t const idFreeGeneration = ASMAtomicIncU64(&pGMM->idFreeGeneration);
+
+    RTSpinlockRelease(pGMM->hSpinLockTree);
+
     /*
      * Free the Chunk ID before dropping the locks and freeing the rest.
      */
@@ -3291,12 +3377,19 @@ static bool gmmR0FreeChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, bool fRelaxed
     if (fRelaxedSem)
         gmmR0MutexRelease(pGMM);
 
+    if (idFreeGeneration == UINT64_MAX / 4)
+        gmmR0FreeChunkFlushPerVmTlbs(pGMM);
+
     RTMemFree(pChunk->paMappingsX);
     pChunk->paMappingsX = NULL;
 
     RTMemFree(pChunk);
 
+#ifndef VBOX_WITH_LINEAR_HOST_PHYS_MEM
+    int rc = RTR0MemObjFree(hMemObj, true /* fFreeMappings */);
+#else
     int rc = RTR0MemObjFree(hMemObj, false /* fFreeMappings */);
+#endif
     AssertLogRelRC(rc);
 
     if (fRelaxedSem)
@@ -3358,10 +3451,11 @@ static void gmmR0FreePageWorker(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, uint32_t
      * a bit...
      */
     /** @todo Do this on the way out. */
-    if (RT_UNLIKELY(   pChunk->cFree == GMM_CHUNK_NUM_PAGES
-                    && pChunk->pFreeNext
-                    && pChunk->pFreePrev /** @todo this is probably misfiring, see reset... */
-                    && !pGMM->fLegacyAllocationMode))
+    if (RT_LIKELY(   pChunk->cFree != GMM_CHUNK_NUM_PAGES
+                  || pChunk->pFreeNext == NULL
+                  || pChunk->pFreePrev == NULL /** @todo this is probably misfiring, see reset... */))
+    { /* likely */ }
+    else
         gmmR0FreeChunk(pGMM, NULL, pChunk, false);
 
 }
@@ -3492,7 +3586,7 @@ static int gmmR0FreePages(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMFREEPAGEDES
             {
                 Assert(pGVM->gmm.s.Stats.cSharedPages);
                 Assert(pPage->Shared.cRefs);
-#if defined(VBOX_WITH_PAGE_SHARING) && defined(VBOX_STRICT) && HC_ARCH_BITS == 64
+#if defined(VBOX_WITH_PAGE_SHARING) && defined(VBOX_STRICT)
                 if (pPage->Shared.u14Checksum)
                 {
                     uint32_t uChecksum = gmmR0StrictPageChecksum(pGMM, pGVM, idPage);
@@ -3554,7 +3648,7 @@ static int gmmR0FreePages(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMFREEPAGEDES
  * @returns VBox status code:
  * @retval  xxx
  *
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   cPages      The number of pages to allocate.
  * @param   paPages     Pointer to the page descriptors containing the page IDs
@@ -3562,17 +3656,16 @@ static int gmmR0FreePages(PGMM pGMM, PGVM pGVM, uint32_t cPages, PGMMFREEPAGEDES
  * @param   enmAccount  The account this relates to.
  * @thread  EMT.
  */
-GMMR0DECL(int) GMMR0FreePages(PVM pVM, VMCPUID idCpu, uint32_t cPages, PGMMFREEPAGEDESC paPages, GMMACCOUNT enmAccount)
+GMMR0DECL(int) GMMR0FreePages(PGVM pGVM, VMCPUID idCpu, uint32_t cPages, PGMMFREEPAGEDESC paPages, GMMACCOUNT enmAccount)
 {
-    LogFlow(("GMMR0FreePages: pVM=%p cPages=%#x paPages=%p enmAccount=%d\n", pVM, cPages, paPages, enmAccount));
+    LogFlow(("GMMR0FreePages: pGVM=%p cPages=%#x paPages=%p enmAccount=%d\n", pGVM, cPages, paPages, enmAccount));
 
     /*
      * Validate input and get the basics.
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -3606,25 +3699,24 @@ GMMR0DECL(int) GMMR0FreePages(PVM pVM, VMCPUID idCpu, uint32_t cPages, PGMMFREEP
  * VMMR0 request wrapper for GMMR0FreePages.
  *
  * @returns see GMMR0FreePages.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0FreePagesReq(PVM pVM, VMCPUID idCpu, PGMMFREEPAGESREQ pReq)
+GMMR0DECL(int) GMMR0FreePagesReq(PGVM pGVM, VMCPUID idCpu, PGMMFREEPAGESREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq >= RT_UOFFSETOF(GMMFREEPAGESREQ, aPages[0]),
                     ("%#x < %#x\n", pReq->Hdr.cbReq, RT_UOFFSETOF(GMMFREEPAGESREQ, aPages[0])),
                     VERR_INVALID_PARAMETER);
-    AssertMsgReturn(pReq->Hdr.cbReq == RT_UOFFSETOF(GMMFREEPAGESREQ, aPages[pReq->cPages]),
-                    ("%#x != %#x\n", pReq->Hdr.cbReq, RT_UOFFSETOF(GMMFREEPAGESREQ, aPages[pReq->cPages])),
+    AssertMsgReturn(pReq->Hdr.cbReq == RT_UOFFSETOF_DYN(GMMFREEPAGESREQ, aPages[pReq->cPages]),
+                    ("%#x != %#x\n", pReq->Hdr.cbReq, RT_UOFFSETOF_DYN(GMMFREEPAGESREQ, aPages[pReq->cPages])),
                     VERR_INVALID_PARAMETER);
 
-    return GMMR0FreePages(pVM, idCpu, pReq->cPages, &pReq->aPages[0], pReq->enmAccount);
+    return GMMR0FreePages(pGVM, idCpu, pReq->cPages, &pReq->aPages[0], pReq->enmAccount);
 }
 
 
@@ -3644,17 +3736,17 @@ GMMR0DECL(int) GMMR0FreePagesReq(PVM pVM, VMCPUID idCpu, PGMMFREEPAGESREQ pReq)
  *          balloon some other VM).  (For standard deflate we have little choice
  *          but to hope the VM won't use the memory that was returned to it.)
  *
- * @param   pVM                 The cross context VM structure.
+ * @param   pGVM                The global (ring-0) VM structure.
  * @param   idCpu               The VCPU id.
  * @param   enmAction           Inflate/deflate/reset.
  * @param   cBalloonedPages     The number of pages that was ballooned.
  *
- * @thread  EMT.
+ * @thread  EMT(idCpu)
  */
-GMMR0DECL(int) GMMR0BalloonedPages(PVM pVM, VMCPUID idCpu, GMMBALLOONACTION enmAction, uint32_t cBalloonedPages)
+GMMR0DECL(int) GMMR0BalloonedPages(PGVM pGVM, VMCPUID idCpu, GMMBALLOONACTION enmAction, uint32_t cBalloonedPages)
 {
-    LogFlow(("GMMR0BalloonedPages: pVM=%p enmAction=%d cBalloonedPages=%#x\n",
-             pVM, enmAction, cBalloonedPages));
+    LogFlow(("GMMR0BalloonedPages: pGVM=%p enmAction=%d cBalloonedPages=%#x\n",
+             pGVM, enmAction, cBalloonedPages));
 
     AssertMsgReturn(cBalloonedPages < RT_BIT(32 - PAGE_SHIFT), ("%#x\n", cBalloonedPages), VERR_INVALID_PARAMETER);
 
@@ -3663,8 +3755,7 @@ GMMR0DECL(int) GMMR0BalloonedPages(PVM pVM, VMCPUID idCpu, GMMBALLOONACTION enmA
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -3776,37 +3867,35 @@ GMMR0DECL(int) GMMR0BalloonedPages(PVM pVM, VMCPUID idCpu, GMMBALLOONACTION enmA
  * VMMR0 request wrapper for GMMR0BalloonedPages.
  *
  * @returns see GMMR0BalloonedPages.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0BalloonedPagesReq(PVM pVM, VMCPUID idCpu, PGMMBALLOONEDPAGESREQ pReq)
+GMMR0DECL(int) GMMR0BalloonedPagesReq(PGVM pGVM, VMCPUID idCpu, PGMMBALLOONEDPAGESREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(GMMBALLOONEDPAGESREQ),
                     ("%#x < %#x\n", pReq->Hdr.cbReq, sizeof(GMMBALLOONEDPAGESREQ)),
                     VERR_INVALID_PARAMETER);
 
-    return GMMR0BalloonedPages(pVM, idCpu, pReq->enmAction, pReq->cBalloonedPages);
+    return GMMR0BalloonedPages(pGVM, idCpu, pReq->enmAction, pReq->cBalloonedPages);
 }
+
 
 /**
  * Return memory statistics for the hypervisor
  *
- * @returns VBox status code:
- * @param   pVM         The cross context VM structure.
+ * @returns VBox status code.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0QueryHypervisorMemoryStatsReq(PVM pVM, PGMMMEMSTATSREQ pReq)
+GMMR0DECL(int) GMMR0QueryHypervisorMemoryStatsReq(PGMMMEMSTATSREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(GMMMEMSTATSREQ),
                     ("%#x < %#x\n", pReq->Hdr.cbReq, sizeof(GMMMEMSTATSREQ)),
@@ -3827,20 +3916,22 @@ GMMR0DECL(int) GMMR0QueryHypervisorMemoryStatsReq(PVM pVM, PGMMMEMSTATSREQ pReq)
     return VINF_SUCCESS;
 }
 
+
 /**
  * Return memory statistics for the VM
  *
- * @returns VBox status code:
- * @param   pVM         The cross context VM structure.
+ * @returns VBox status code.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       Cpu id.
  * @param   pReq        Pointer to the request packet.
+ *
+ * @thread  EMT(idCpu)
  */
-GMMR0DECL(int)  GMMR0QueryMemoryStatsReq(PVM pVM, VMCPUID idCpu, PGMMMEMSTATSREQ pReq)
+GMMR0DECL(int) GMMR0QueryMemoryStatsReq(PGVM pGVM, VMCPUID idCpu, PGMMMEMSTATSREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(GMMMEMSTATSREQ),
                     ("%#x < %#x\n", pReq->Hdr.cbReq, sizeof(GMMMEMSTATSREQ)),
@@ -3851,8 +3942,7 @@ GMMR0DECL(int)  GMMR0QueryMemoryStatsReq(PVM pVM, VMCPUID idCpu, PGMMMEMSTATSREQ
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -3888,7 +3978,7 @@ GMMR0DECL(int)  GMMR0QueryMemoryStatsReq(PVM pVM, VMCPUID idCpu, PGMMMEMSTATSREQ
  */
 static int gmmR0UnmapChunkLocked(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk)
 {
-    Assert(!pGMM->fLegacyAllocationMode); NOREF(pGMM);
+    RT_NOREF_PV(pGMM);
 
     /*
      * Find the mapping and try unmapping it.
@@ -3934,27 +4024,18 @@ static int gmmR0UnmapChunkLocked(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk)
  */
 static int gmmR0UnmapChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, bool fRelaxedSem)
 {
-    if (!pGMM->fLegacyAllocationMode)
+    /*
+     * Lock the chunk and if possible leave the giant GMM lock.
+     */
+    GMMR0CHUNKMTXSTATE MtxState;
+    int rc = gmmR0ChunkMutexAcquire(&MtxState, pGMM, pChunk,
+                                    fRelaxedSem ? GMMR0CHUNK_MTX_RETAKE_GIANT : GMMR0CHUNK_MTX_KEEP_GIANT);
+    if (RT_SUCCESS(rc))
     {
-        /*
-         * Lock the chunk and if possible leave the giant GMM lock.
-         */
-        GMMR0CHUNKMTXSTATE MtxState;
-        int rc = gmmR0ChunkMutexAcquire(&MtxState, pGMM, pChunk,
-                                        fRelaxedSem ? GMMR0CHUNK_MTX_RETAKE_GIANT : GMMR0CHUNK_MTX_KEEP_GIANT);
-        if (RT_SUCCESS(rc))
-        {
-            rc = gmmR0UnmapChunkLocked(pGMM, pGVM, pChunk);
-            gmmR0ChunkMutexRelease(&MtxState, pChunk);
-        }
-        return rc;
+        rc = gmmR0UnmapChunkLocked(pGMM, pGVM, pChunk);
+        gmmR0ChunkMutexRelease(&MtxState, pChunk);
     }
-
-    if (pChunk->hGVM == pGVM->hSelf)
-        return VINF_SUCCESS;
-
-    Log(("gmmR0UnmapChunk: Chunk %#x is not mapped into pGVM=%p/%#x (legacy)\n", pChunk->Core.Key, pGVM, pGVM->hSelf));
-    return VERR_GMM_CHUNK_NOT_MAPPED;
+    return rc;
 }
 
 
@@ -3971,20 +4052,7 @@ static int gmmR0UnmapChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, bool fRelaxed
  */
 static int gmmR0MapChunkLocked(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, PRTR3PTR ppvR3)
 {
-    /*
-     * If we're in legacy mode this is simple.
-     */
-    if (pGMM->fLegacyAllocationMode)
-    {
-        if (pChunk->hGVM != pGVM->hSelf)
-        {
-            Log(("gmmR0MapChunk: chunk %#x is already mapped at %p!\n", pChunk->Core.Key, *ppvR3));
-            return VERR_GMM_CHUNK_NOT_FOUND;
-        }
-
-        *ppvR3 = RTR0MemObjAddressR3(pChunk->hMemObj);
-        return VINF_SUCCESS;
-    }
+    RT_NOREF(pGMM);
 
     /*
      * Check to see if the chunk is already mapped.
@@ -4082,7 +4150,7 @@ static int gmmR0MapChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, bool fRelaxedSe
 
 
 
-#if defined(VBOX_WITH_PAGE_SHARING) || (defined(VBOX_STRICT) && HC_ARCH_BITS == 64)
+#if defined(VBOX_WITH_PAGE_SHARING) || defined(VBOX_STRICT)
 /**
  * Check if a chunk is mapped into the specified VM
  *
@@ -4110,7 +4178,7 @@ static bool gmmR0IsChunkMapped(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, PRTR3PTR 
     gmmR0ChunkMutexRelease(&MtxState, pChunk);
     return false;
 }
-#endif /* VBOX_WITH_PAGE_SHARING || (VBOX_STRICT && 64-BIT) */
+#endif /* VBOX_WITH_PAGE_SHARING || VBOX_STRICT */
 
 
 /**
@@ -4122,24 +4190,23 @@ static bool gmmR0IsChunkMapped(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, PRTR3PTR 
  * when the ring-3 mapping cache is full.
  *
  * @returns VBox status code.
- * @param   pVM             The cross context VM structure.
+ * @param   pGVM            The global (ring-0) VM structure.
  * @param   idChunkMap      The chunk to map. NIL_GMM_CHUNKID if nothing to map.
  * @param   idChunkUnmap    The chunk to unmap. NIL_GMM_CHUNKID if nothing to unmap.
  * @param   ppvR3           Where to store the address of the mapped chunk. NULL is ok if nothing to map.
- * @thread  EMT
+ * @thread  EMT ???
  */
-GMMR0DECL(int) GMMR0MapUnmapChunk(PVM pVM, uint32_t idChunkMap, uint32_t idChunkUnmap, PRTR3PTR ppvR3)
+GMMR0DECL(int) GMMR0MapUnmapChunk(PGVM pGVM, uint32_t idChunkMap, uint32_t idChunkUnmap, PRTR3PTR ppvR3)
 {
-    LogFlow(("GMMR0MapUnmapChunk: pVM=%p idChunkMap=%#x idChunkUnmap=%#x ppvR3=%p\n",
-             pVM, idChunkMap, idChunkUnmap, ppvR3));
+    LogFlow(("GMMR0MapUnmapChunk: pGVM=%p idChunkMap=%#x idChunkUnmap=%#x ppvR3=%p\n",
+             pGVM, idChunkMap, idChunkUnmap, ppvR3));
 
     /*
      * Validate input and get the basics.
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVM(pVM, &pGVM);
+    int rc = GVMMR0ValidateGVM(pGVM);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -4214,72 +4281,98 @@ GMMR0DECL(int) GMMR0MapUnmapChunk(PVM pVM, uint32_t idChunkMap, uint32_t idChunk
  * VMMR0 request wrapper for GMMR0MapUnmapChunk.
  *
  * @returns see GMMR0MapUnmapChunk.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int)  GMMR0MapUnmapChunkReq(PVM pVM, PGMMMAPUNMAPCHUNKREQ pReq)
+GMMR0DECL(int)  GMMR0MapUnmapChunkReq(PGVM pGVM, PGMMMAPUNMAPCHUNKREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(*pReq), ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
 
-    return GMMR0MapUnmapChunk(pVM, pReq->idChunkMap, pReq->idChunkUnmap, &pReq->pvR3);
+    return GMMR0MapUnmapChunk(pGVM, pReq->idChunkMap, pReq->idChunkUnmap, &pReq->pvR3);
 }
 
 
+#ifndef VBOX_WITH_LINEAR_HOST_PHYS_MEM
 /**
- * Legacy mode API for supplying pages.
+ * Gets the ring-0 virtual address for the given page.
  *
- * The specified user address points to a allocation chunk sized block that
- * will be locked down and used by the GMM when the GM asks for pages.
+ * This is used by PGM when IEM and such wants to access guest RAM from ring-0.
+ * One of the ASSUMPTIONS here is that the @a idPage is used by the VM and the
+ * corresponding chunk will remain valid beyond the call (at least till the EMT
+ * returns to ring-3).
  *
  * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
- * @param   idCpu       The VCPU id.
- * @param   pvR3        Pointer to the chunk size memory block to lock down.
+ * @param   pGVM        Pointer to the kernel-only VM instace data.
+ * @param   idPage      The page ID.
+ * @param   ppv         Where to store the address.
+ * @thread  EMT
  */
-GMMR0DECL(int) GMMR0SeedChunk(PVM pVM, VMCPUID idCpu, RTR3PTR pvR3)
+GMMR0DECL(int)  GMMR0PageIdToVirt(PGVM pGVM, uint32_t idPage, void **ppv)
 {
-    /*
-     * Validate input and get the basics.
-     */
+    *ppv = NULL;
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
-    if (RT_FAILURE(rc))
-        return rc;
 
-    AssertPtrReturn(pvR3, VERR_INVALID_POINTER);
-    AssertReturn(!(PAGE_OFFSET_MASK & pvR3), VERR_INVALID_POINTER);
-
-    if (!pGMM->fLegacyAllocationMode)
-    {
-        Log(("GMMR0SeedChunk: not in legacy allocation mode!\n"));
-        return VERR_NOT_SUPPORTED;
-    }
+    uint32_t const idChunk = idPage >> GMM_CHUNKID_SHIFT;
 
     /*
-     * Lock the memory and add it as new chunk with our hGVM.
-     * (The GMM locking is done inside gmmR0RegisterChunk.)
+     * Start with the per-VM TLB.
      */
-    RTR0MEMOBJ MemObj;
-    rc = RTR0MemObjLockUser(&MemObj, pvR3, GMM_CHUNK_SIZE, RTMEM_PROT_READ | RTMEM_PROT_WRITE, NIL_RTR0PROCESS);
-    if (RT_SUCCESS(rc))
+    RTSpinlockAcquire(pGVM->gmm.s.hChunkTlbSpinLock);
+
+    PGMMPERVMCHUNKTLBE pTlbe = &pGVM->gmm.s.aChunkTlbEntries[GMMPERVM_CHUNKTLB_IDX(idChunk)];
+    PGMMCHUNK pChunk = pTlbe->pChunk;
+    if (   pChunk              != NULL
+        && pTlbe->idGeneration == ASMAtomicUoReadU64(&pGMM->idFreeGeneration)
+        && pChunk->Core.Key    == idChunk)
+        pGVM->R0Stats.gmm.cChunkTlbHits++; /* hopefully this is a likely outcome */
+    else
     {
-        rc = gmmR0RegisterChunk(pGMM, &pGVM->gmm.s.Private, MemObj, pGVM->hSelf, 0 /*fChunkFlags*/, NULL);
-        if (RT_SUCCESS(rc))
-            gmmR0MutexRelease(pGMM);
+        pGVM->R0Stats.gmm.cChunkTlbMisses++;
+
+        /*
+         * Look it up in the chunk tree.
+         */
+        RTSpinlockAcquire(pGMM->hSpinLockTree);
+        pChunk = gmmR0GetChunkLocked(pGMM, idChunk);
+        if (RT_LIKELY(pChunk))
+        {
+            pTlbe->idGeneration = pGMM->idFreeGeneration;
+            RTSpinlockRelease(pGMM->hSpinLockTree);
+            pTlbe->pChunk       = pChunk;
+        }
         else
-            RTR0MemObjFree(MemObj, false /* fFreeMappings */);
+        {
+            RTSpinlockRelease(pGMM->hSpinLockTree);
+            RTSpinlockRelease(pGVM->gmm.s.hChunkTlbSpinLock);
+            AssertMsgFailed(("idPage=%#x\n", idPage));
+            return VERR_GMM_PAGE_NOT_FOUND;
+        }
     }
 
-    LogFlow(("GMMR0SeedChunk: rc=%d (pvR3=%p)\n", rc, pvR3));
-    return rc;
+    RTSpinlockRelease(pGVM->gmm.s.hChunkTlbSpinLock);
+
+    /*
+     * Got a chunk, now validate the page ownership and calcuate it's address.
+     */
+    const GMMPAGE * const pPage = &pChunk->aPages[idPage & GMM_PAGEID_IDX_MASK];
+    if (RT_LIKELY(   (   GMM_PAGE_IS_PRIVATE(pPage)
+                      && pPage->Private.hGVM == pGVM->hSelf)
+                  || GMM_PAGE_IS_SHARED(pPage)))
+    {
+        AssertPtr(pChunk->pbMapping);
+        *ppv = &pChunk->pbMapping[(idPage & GMM_PAGEID_IDX_MASK) << PAGE_SHIFT];
+        return VINF_SUCCESS;
+    }
+    AssertMsgFailed(("idPage=%#x is-private=%RTbool Private.hGVM=%u pGVM->hGVM=%u\n",
+                     idPage, GMM_PAGE_IS_PRIVATE(pPage), pPage->Private.hGVM, pGVM->hSelf));
+    return VERR_GMM_NOT_PAGE_OWNER;
 }
+#endif /* !VBOX_WITH_LINEAR_HOST_PHYS_MEM */
 
 #ifdef VBOX_WITH_PAGE_SHARING
 
@@ -4399,7 +4492,7 @@ static int gmmR0ShModNewGlobal(PGMM pGMM, uint32_t uHash, uint32_t cbModule, VBO
         return VERR_GMM_TOO_MANY_GLOBAL_MODULES;
     }
 
-    PGMMSHAREDMODULE pGblMod = (PGMMSHAREDMODULE)RTMemAllocZ(RT_OFFSETOF(GMMSHAREDMODULE, aRegions[cRegions]));
+    PGMMSHAREDMODULE pGblMod = (PGMMSHAREDMODULE)RTMemAllocZ(RT_UOFFSETOF_DYN(GMMSHAREDMODULE, aRegions[cRegions]));
     if (!pGblMod)
     {
         Log(("gmmR0ShModNewGlobal: No memory\n"));
@@ -4469,7 +4562,7 @@ static int gmmR0ShModNewPerVM(PGVM pGVM, RTGCPTR GCBaseAddr, uint32_t cRegions, 
         return VERR_GMM_TOO_MANY_PER_VM_MODULES;
 
     PGMMSHAREDMODULEPERVM pRecVM;
-    pRecVM = (PGMMSHAREDMODULEPERVM)RTMemAllocZ(RT_OFFSETOF(GMMSHAREDMODULEPERVM, aRegionsGCPtrs[cRegions]));
+    pRecVM = (PGMMSHAREDMODULEPERVM)RTMemAllocZ(RT_UOFFSETOF_DYN(GMMSHAREDMODULEPERVM, aRegionsGCPtrs[cRegions]));
     if (!pRecVM)
         return VERR_NO_MEMORY;
 
@@ -4521,7 +4614,7 @@ static void gmmR0ShModDeletePerVM(PGMM pGMM, PGVM pGVM, PGMMSHAREDMODULEPERVM pR
  * Registers a new shared module for the VM.
  *
  * @returns VBox status code.
- * @param   pVM             The cross context VM structure.
+ * @param   pGVM            The global (ring-0) VM structure.
  * @param   idCpu           The VCPU id.
  * @param   enmGuestOS      The guest OS type.
  * @param   pszModuleName   The module name.
@@ -4530,8 +4623,9 @@ static void gmmR0ShModDeletePerVM(PGMM pGMM, PGVM pGVM, PGMMSHAREDMODULEPERVM pR
  * @param   cbModule        The module size.
  * @param   cRegions        The mumber of shared region descriptors.
  * @param   paRegions       Pointer to an array of shared region(s).
+ * @thread  EMT(idCpu)
  */
-GMMR0DECL(int) GMMR0RegisterSharedModule(PVM pVM, VMCPUID idCpu, VBOXOSFAMILY enmGuestOS, char *pszModuleName,
+GMMR0DECL(int) GMMR0RegisterSharedModule(PGVM pGVM, VMCPUID idCpu, VBOXOSFAMILY enmGuestOS, char *pszModuleName,
                                          char *pszVersion, RTGCPTR GCPtrModBase, uint32_t cbModule,
                                          uint32_t cRegions, struct VMMDEVSHAREDREGIONDESC const *paRegions)
 {
@@ -4544,8 +4638,7 @@ GMMR0DECL(int) GMMR0RegisterSharedModule(PVM pVM, VMCPUID idCpu, VBOXOSFAMILY en
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -4657,7 +4750,7 @@ GMMR0DECL(int) GMMR0RegisterSharedModule(PVM pVM, VMCPUID idCpu, VBOXOSFAMILY en
     return rc;
 #else
 
-    NOREF(pVM); NOREF(idCpu); NOREF(enmGuestOS); NOREF(pszModuleName); NOREF(pszVersion);
+    NOREF(pGVM); NOREF(idCpu); NOREF(enmGuestOS); NOREF(pszModuleName); NOREF(pszVersion);
     NOREF(GCPtrModBase); NOREF(cbModule); NOREF(cRegions); NOREF(paRegions);
     return VERR_NOT_IMPLEMENTED;
 #endif
@@ -4668,21 +4761,22 @@ GMMR0DECL(int) GMMR0RegisterSharedModule(PVM pVM, VMCPUID idCpu, VBOXOSFAMILY en
  * VMMR0 request wrapper for GMMR0RegisterSharedModule.
  *
  * @returns see GMMR0RegisterSharedModule.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int)  GMMR0RegisterSharedModuleReq(PVM pVM, VMCPUID idCpu, PGMMREGISTERSHAREDMODULEREQ pReq)
+GMMR0DECL(int) GMMR0RegisterSharedModuleReq(PGVM pGVM, VMCPUID idCpu, PGMMREGISTERSHAREDMODULEREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
-    AssertMsgReturn(pReq->Hdr.cbReq >= sizeof(*pReq) && pReq->Hdr.cbReq == RT_UOFFSETOF(GMMREGISTERSHAREDMODULEREQ, aRegions[pReq->cRegions]), ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
+    AssertMsgReturn(   pReq->Hdr.cbReq >= sizeof(*pReq)
+                    && pReq->Hdr.cbReq == RT_UOFFSETOF_DYN(GMMREGISTERSHAREDMODULEREQ, aRegions[pReq->cRegions]),
+                    ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
 
     /* Pass back return code in the request packet to preserve informational codes. (VMMR3CallR0 chokes on them) */
-    pReq->rc = GMMR0RegisterSharedModule(pVM, idCpu, pReq->enmGuestOS, pReq->szName, pReq->szVersion,
+    pReq->rc = GMMR0RegisterSharedModule(pGVM, idCpu, pReq->enmGuestOS, pReq->szName, pReq->szVersion,
                                          pReq->GCBaseAddr, pReq->cbModule, pReq->cRegions, pReq->aRegions);
     return VINF_SUCCESS;
 }
@@ -4692,14 +4786,14 @@ GMMR0DECL(int)  GMMR0RegisterSharedModuleReq(PVM pVM, VMCPUID idCpu, PGMMREGISTE
  * Unregisters a shared module for the VM
  *
  * @returns VBox status code.
- * @param   pVM             The cross context VM structure.
+ * @param   pGVM            The global (ring-0) VM structure.
  * @param   idCpu           The VCPU id.
  * @param   pszModuleName   The module name.
  * @param   pszVersion      The module version.
  * @param   GCPtrModBase    The module base address.
  * @param   cbModule        The module size.
  */
-GMMR0DECL(int) GMMR0UnregisterSharedModule(PVM pVM, VMCPUID idCpu, char *pszModuleName, char *pszVersion,
+GMMR0DECL(int) GMMR0UnregisterSharedModule(PGVM pGVM, VMCPUID idCpu, char *pszModuleName, char *pszVersion,
                                            RTGCPTR GCPtrModBase, uint32_t cbModule)
 {
 #ifdef VBOX_WITH_PAGE_SHARING
@@ -4708,8 +4802,7 @@ GMMR0DECL(int) GMMR0UnregisterSharedModule(PVM pVM, VMCPUID idCpu, char *pszModu
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -4752,7 +4845,7 @@ GMMR0DECL(int) GMMR0UnregisterSharedModule(PVM pVM, VMCPUID idCpu, char *pszModu
     return rc;
 #else
 
-    NOREF(pVM); NOREF(idCpu); NOREF(pszModuleName); NOREF(pszVersion); NOREF(GCPtrModBase); NOREF(cbModule);
+    NOREF(pGVM); NOREF(idCpu); NOREF(pszModuleName); NOREF(pszVersion); NOREF(GCPtrModBase); NOREF(cbModule);
     return VERR_NOT_IMPLEMENTED;
 #endif
 }
@@ -4762,20 +4855,19 @@ GMMR0DECL(int) GMMR0UnregisterSharedModule(PVM pVM, VMCPUID idCpu, char *pszModu
  * VMMR0 request wrapper for GMMR0UnregisterSharedModule.
  *
  * @returns see GMMR0UnregisterSharedModule.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int)  GMMR0UnregisterSharedModuleReq(PVM pVM, VMCPUID idCpu, PGMMUNREGISTERSHAREDMODULEREQ pReq)
+GMMR0DECL(int)  GMMR0UnregisterSharedModuleReq(PGVM pGVM, VMCPUID idCpu, PGMMUNREGISTERSHAREDMODULEREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(*pReq), ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
 
-    return GMMR0UnregisterSharedModule(pVM, idCpu, pReq->szName, pReq->szVersion, pReq->GCBaseAddr, pReq->cbModule);
+    return GMMR0UnregisterSharedModule(pGVM, idCpu, pReq->szName, pReq->szVersion, pReq->GCBaseAddr, pReq->cbModule);
 }
 
 #ifdef VBOX_WITH_PAGE_SHARING
@@ -5069,10 +5161,10 @@ static void gmmR0SharedModuleCleanup(PGMM pGMM, PGVM pGVM)
  * Removes all shared modules for the specified VM
  *
  * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   idCpu       The VCPU id.
  */
-GMMR0DECL(int) GMMR0ResetSharedModules(PVM pVM, VMCPUID idCpu)
+GMMR0DECL(int) GMMR0ResetSharedModules(PGVM pGVM, VMCPUID idCpu)
 {
 #ifdef VBOX_WITH_PAGE_SHARING
     /*
@@ -5080,8 +5172,7 @@ GMMR0DECL(int) GMMR0ResetSharedModules(PVM pVM, VMCPUID idCpu)
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -5107,7 +5198,7 @@ GMMR0DECL(int) GMMR0ResetSharedModules(PVM pVM, VMCPUID idCpu)
     gmmR0MutexRelease(pGMM);
     return rc;
 #else
-    NOREF(pVM); NOREF(idCpu);
+    RT_NOREF(pGVM, idCpu);
     return VERR_NOT_IMPLEMENTED;
 #endif
 }
@@ -5126,69 +5217,23 @@ static DECLCALLBACK(int) gmmR0CheckSharedModule(PAVLGCPTRNODECORE pNode, void *p
     Log(("gmmR0CheckSharedModule: check %s %s base=%RGv size=%x\n",
          pGblMod->szName, pGblMod->szVersion, pGblMod->Core.Key, pGblMod->cbModule));
 
-    int rc = PGMR0SharedModuleCheck(pArgs->pGVM->pVM, pArgs->pGVM, pArgs->idCpu, pGblMod, pRecVM->aRegionsGCPtrs);
+    int rc = PGMR0SharedModuleCheck(pArgs->pGVM, pArgs->pGVM, pArgs->idCpu, pGblMod, pRecVM->aRegionsGCPtrs);
     if (RT_FAILURE(rc))
         return rc;
     return VINF_SUCCESS;
 }
 
 #endif /* VBOX_WITH_PAGE_SHARING */
-#ifdef DEBUG_sandervl
-
-/**
- * Setup for a GMMR0CheckSharedModules call (to allow log flush jumps back to ring 3)
- *
- * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
- */
-GMMR0DECL(int) GMMR0CheckSharedModulesStart(PVM pVM)
-{
-    /*
-     * Validate input and get the basics.
-     */
-    PGMM pGMM;
-    GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-
-    /*
-     * Take the semaphore and do some more validations.
-     */
-    gmmR0MutexAcquire(pGMM);
-    if (!GMM_CHECK_SANITY_UPON_ENTERING(pGMM))
-        rc = VERR_GMM_IS_NOT_SANE;
-    else
-        rc = VINF_SUCCESS;
-
-    return rc;
-}
-
-/**
- * Clean up after a GMMR0CheckSharedModules call (to allow log flush jumps back to ring 3)
- *
- * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
- */
-GMMR0DECL(int) GMMR0CheckSharedModulesEnd(PVM pVM)
-{
-    /*
-     * Validate input and get the basics.
-     */
-    PGMM pGMM;
-    GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-
-    gmmR0MutexRelease(pGMM);
-    return VINF_SUCCESS;
-}
-
-#endif /* DEBUG_sandervl */
 
 /**
  * Check all shared modules for the specified VM.
  *
  * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
- * @param   pVCpu       The cross context virtual CPU structure.
+ * @param   pGVM        The global (ring-0) VM structure.
+ * @param   idCpu       The calling EMT number.
+ * @thread  EMT(idCpu)
  */
-GMMR0DECL(int) GMMR0CheckSharedModules(PVM pVM, PVMCPU pVCpu)
+GMMR0DECL(int) GMMR0CheckSharedModules(PGVM pGVM, VMCPUID idCpu)
 {
 #ifdef VBOX_WITH_PAGE_SHARING
     /*
@@ -5196,8 +5241,7 @@ GMMR0DECL(int) GMMR0CheckSharedModules(PVM pVM, PVMCPU pVCpu)
      */
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
-    PGVM pGVM;
-    int rc = GVMMR0ByVMAndEMT(pVM, pVCpu->idCpu, &pGVM);
+    int rc = GVMMR0ValidateGVMandEMT(pGVM, idCpu);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -5216,7 +5260,7 @@ GMMR0DECL(int) GMMR0CheckSharedModules(PVM pVM, PVMCPU pVCpu)
 
         GMMCHECKSHAREDMODULEINFO Args;
         Args.pGVM     = pGVM;
-        Args.idCpu    = pVCpu->idCpu;
+        Args.idCpu    = idCpu;
         rc = RTAvlGCPtrDoWithAll(&pGVM->gmm.s.pSharedModuleTree, true /* fFromLeft */, gmmR0CheckSharedModule, &Args);
 
         Log(("GMMR0CheckSharedModules done (rc=%Rrc)!\n", rc));
@@ -5230,29 +5274,23 @@ GMMR0DECL(int) GMMR0CheckSharedModules(PVM pVM, PVMCPU pVCpu)
 # endif
     return rc;
 #else
-    NOREF(pVM); NOREF(pVCpu);
+    RT_NOREF(pGVM, idCpu);
     return VERR_NOT_IMPLEMENTED;
 #endif
 }
 
-#if defined(VBOX_STRICT) && HC_ARCH_BITS == 64
+#ifdef VBOX_STRICT
 
 /**
- * RTAvlU32DoWithAll callback.
+ * Worker for GMMR0FindDuplicatePageReq.
  *
- * @returns 0
- * @param   pNode       The node to search.
- * @param   pvUser      Pointer to the input argument packet.
+ * @returns true if duplicate, false if not.
  */
-static DECLCALLBACK(int) gmmR0FindDupPageInChunk(PAVLU32NODECORE pNode, void *pvUser)
+static bool gmmR0FindDupPageInChunk(PGMM pGMM, PGVM pGVM, PGMMCHUNK pChunk, uint8_t const *pbSourcePage)
 {
-    PGMMCHUNK           pChunk = (PGMMCHUNK)pNode;
-    GMMFINDDUPPAGEINFO *pArgs  = (GMMFINDDUPPAGEINFO *)pvUser;
-    PGVM                pGVM   = pArgs->pGVM;
-    PGMM                pGMM   = pArgs->pGMM;
-    uint8_t            *pbChunk;
-
+    bool fFoundDuplicate = false;
     /* Only take chunks not mapped into this VM process; not entirely correct. */
+    uint8_t *pbChunk;
     if (!gmmR0IsChunkMapped(pGMM, pGVM, pChunk, (PRTR3PTR)&pbChunk))
     {
         int rc = gmmR0MapChunk(pGMM, pGVM, pChunk, false /*fRelaxedSem*/, (PRTR3PTR)&pbChunk);
@@ -5261,16 +5299,15 @@ static DECLCALLBACK(int) gmmR0FindDupPageInChunk(PAVLU32NODECORE pNode, void *pv
             /*
              * Look for duplicate pages
              */
-            unsigned iPage = (GMM_CHUNK_SIZE >> PAGE_SHIFT);
+            uintptr_t iPage = (GMM_CHUNK_SIZE >> PAGE_SHIFT);
             while (iPage-- > 0)
             {
                 if (GMM_PAGE_IS_PRIVATE(&pChunk->aPages[iPage]))
                 {
                     uint8_t *pbDestPage = pbChunk + (iPage  << PAGE_SHIFT);
-
-                    if (!memcmp(pArgs->pSourcePage, pbDestPage, PAGE_SIZE))
+                    if (!memcmp(pbSourcePage, pbDestPage, PAGE_SIZE))
                     {
-                        pArgs->fFoundDuplicate = true;
+                        fFoundDuplicate = true;
                         break;
                     }
                 }
@@ -5278,7 +5315,7 @@ static DECLCALLBACK(int) gmmR0FindDupPageInChunk(PAVLU32NODECORE pNode, void *pv
             gmmR0UnmapChunk(pGMM, pGVM, pChunk, false /*fRelaxedSem*/);
         }
     }
-    return pArgs->fFoundDuplicate; /* (stops search if true) */
+    return fFoundDuplicate;
 }
 
 
@@ -5286,23 +5323,21 @@ static DECLCALLBACK(int) gmmR0FindDupPageInChunk(PAVLU32NODECORE pNode, void *pv
  * Find a duplicate of the specified page in other active VMs
  *
  * @returns VBox status code.
- * @param   pVM         The cross context VM structure.
+ * @param   pGVM        The global (ring-0) VM structure.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0FindDuplicatePageReq(PVM pVM, PGMMFINDDUPLICATEPAGEREQ pReq)
+GMMR0DECL(int) GMMR0FindDuplicatePageReq(PGVM pGVM, PGMMFINDDUPLICATEPAGEREQ pReq)
 {
     /*
      * Validate input and pass it on.
      */
-    AssertPtrReturn(pVM, VERR_INVALID_POINTER);
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(*pReq), ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
 
     PGMM pGMM;
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
 
-    PGVM pGVM;
-    int rc = GVMMR0ByVM(pVM, &pGVM);
+    int rc = GVMMR0ValidateGVM(pGVM);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -5322,14 +5357,18 @@ GMMR0DECL(int) GMMR0FindDuplicatePageReq(PVM pVM, PGMMFINDDUPLICATEPAGEREQ pReq)
                 PGMMPAGE pPage = gmmR0GetPage(pGMM, pReq->idPage);
                 if (pPage)
                 {
-                    GMMFINDDUPPAGEINFO Args;
-                    Args.pGVM            = pGVM;
-                    Args.pGMM            = pGMM;
-                    Args.pSourcePage     = pbSourcePage;
-                    Args.fFoundDuplicate = false;
-                    RTAvlU32DoWithAll(&pGMM->pChunks, true /* fFromLeft */, gmmR0FindDupPageInChunk, &Args);
-
-                    pReq->fDuplicate = Args.fFoundDuplicate;
+                    /*
+                     * Walk the chunks
+                     */
+                    pReq->fDuplicate = false;
+                    RTListForEach(&pGMM->ChunkList, pChunk, GMMCHUNK, ListNode)
+                    {
+                        if (gmmR0FindDupPageInChunk(pGMM, pGVM, pChunk, pbSourcePage))
+                        {
+                            pReq->fDuplicate = true;
+                            break;
+                        }
+                    }
                 }
                 else
                 {
@@ -5350,7 +5389,7 @@ GMMR0DECL(int) GMMR0FindDuplicatePageReq(PVM pVM, PGMMFINDDUPLICATEPAGEREQ pReq)
     return rc;
 }
 
-#endif /* VBOX_STRICT && HC_ARCH_BITS == 64 */
+#endif /* VBOX_STRICT */
 
 
 /**
@@ -5360,11 +5399,11 @@ GMMR0DECL(int) GMMR0FindDuplicatePageReq(PVM pVM, PGMMFINDDUPLICATEPAGEREQ pReq)
  *
  * @param   pStats      Where to put the statistics.
  * @param   pSession    The current session.
- * @param   pVM         The VM to obtain statistics for. Optional.
+ * @param   pGVM        The GVM to obtain statistics for. Optional.
  */
-GMMR0DECL(int) GMMR0QueryStatistics(PGMMSTATS pStats, PSUPDRVSESSION pSession, PVM pVM)
+GMMR0DECL(int) GMMR0QueryStatistics(PGMMSTATS pStats, PSUPDRVSESSION pSession, PGVM pGVM)
 {
-    LogFlow(("GVMMR0QueryStatistics: pStats=%p pSession=%p pVM=%p\n", pStats, pSession, pVM));
+    LogFlow(("GVMMR0QueryStatistics: pStats=%p pSession=%p pGVM=%p\n", pStats, pSession, pGVM));
 
     /*
      * Validate input.
@@ -5377,18 +5416,15 @@ GMMR0DECL(int) GMMR0QueryStatistics(PGMMSTATS pStats, PSUPDRVSESSION pSession, P
     GMM_GET_VALID_INSTANCE(pGMM, VERR_GMM_INSTANCE);
 
     /*
-     * Resolve the VM handle, if not NULL, and lock the GMM.
+     * Validate the VM handle, if not NULL, and lock the GMM.
      */
     int rc;
-    PGVM pGVM;
-    if (pVM)
+    if (pGVM)
     {
-        rc = GVMMR0ByVM(pVM, &pGVM);
+        rc = GVMMR0ValidateGVM(pGVM);
         if (RT_FAILURE(rc))
             return rc;
     }
-    else
-        pGVM = NULL;
 
     rc = gmmR0MutexAcquire(pGMM);
     if (RT_FAILURE(rc))
@@ -5408,6 +5444,7 @@ GMMR0DECL(int) GMMR0QueryStatistics(PGMMSTATS pStats, PSUPDRVSESSION pSession, P
     pStats->cChunks                     = pGMM->cChunks;
     pStats->cFreedChunks                = pGMM->cFreedChunks;
     pStats->cShareableModules           = pGMM->cShareableModules;
+    pStats->idFreeGeneration            = pGMM->idFreeGeneration;
     RT_ZERO(pStats->au64Reserved);
 
     /*
@@ -5427,10 +5464,10 @@ GMMR0DECL(int) GMMR0QueryStatistics(PGMMSTATS pStats, PSUPDRVSESSION pSession, P
  * VMMR0 request wrapper for GMMR0QueryStatistics.
  *
  * @returns see GMMR0QueryStatistics.
- * @param   pVM         The cross context VM structure. Optional.
+ * @param   pGVM        The global (ring-0) VM structure. Optional.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0QueryStatisticsReq(PVM pVM, PGMMQUERYSTATISTICSSREQ pReq)
+GMMR0DECL(int) GMMR0QueryStatisticsReq(PGVM pGVM, PGMMQUERYSTATISTICSSREQ pReq)
 {
     /*
      * Validate input and pass it on.
@@ -5438,7 +5475,7 @@ GMMR0DECL(int) GMMR0QueryStatisticsReq(PVM pVM, PGMMQUERYSTATISTICSSREQ pReq)
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(*pReq), ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
 
-    return GMMR0QueryStatistics(&pReq->Stats, pReq->pSession, pVM);
+    return GMMR0QueryStatistics(&pReq->Stats, pReq->pSession, pGVM);
 }
 
 
@@ -5450,11 +5487,11 @@ GMMR0DECL(int) GMMR0QueryStatisticsReq(PVM pVM, PGMMQUERYSTATISTICSSREQ pReq)
  * @param   pStats      Which statistics to reset, that is, non-zero fields
  *                      indicates which to reset.
  * @param   pSession    The current session.
- * @param   pVM         The VM to reset statistics for. Optional.
+ * @param   pGVM        The GVM to reset statistics for. Optional.
  */
-GMMR0DECL(int) GMMR0ResetStatistics(PCGMMSTATS pStats, PSUPDRVSESSION pSession, PVM pVM)
+GMMR0DECL(int) GMMR0ResetStatistics(PCGMMSTATS pStats, PSUPDRVSESSION pSession, PGVM pGVM)
 {
-    NOREF(pStats); NOREF(pSession); NOREF(pVM);
+    NOREF(pStats); NOREF(pSession); NOREF(pGVM);
     /* Currently nothing we can reset at the moment. */
     return VINF_SUCCESS;
 }
@@ -5464,10 +5501,10 @@ GMMR0DECL(int) GMMR0ResetStatistics(PCGMMSTATS pStats, PSUPDRVSESSION pSession, 
  * VMMR0 request wrapper for GMMR0ResetStatistics.
  *
  * @returns see GMMR0ResetStatistics.
- * @param   pVM         The cross context VM structure. Optional.
+ * @param   pGVM        The global (ring-0) VM structure. Optional.
  * @param   pReq        Pointer to the request packet.
  */
-GMMR0DECL(int) GMMR0ResetStatisticsReq(PVM pVM, PGMMRESETSTATISTICSSREQ pReq)
+GMMR0DECL(int) GMMR0ResetStatisticsReq(PGVM pGVM, PGMMRESETSTATISTICSSREQ pReq)
 {
     /*
      * Validate input and pass it on.
@@ -5475,6 +5512,6 @@ GMMR0DECL(int) GMMR0ResetStatisticsReq(PVM pVM, PGMMRESETSTATISTICSSREQ pReq)
     AssertPtrReturn(pReq, VERR_INVALID_POINTER);
     AssertMsgReturn(pReq->Hdr.cbReq == sizeof(*pReq), ("%#x != %#x\n", pReq->Hdr.cbReq, sizeof(*pReq)), VERR_INVALID_PARAMETER);
 
-    return GMMR0ResetStatistics(&pReq->Stats, pReq->pSession, pVM);
+    return GMMR0ResetStatistics(&pReq->Stats, pReq->pSession, pGVM);
 }
 

@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,12 +23,14 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_sup_h
-#define ___VBox_sup_h
+#ifndef VBOX_INCLUDED_sup_h
+#define VBOX_INCLUDED_sup_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
-#include <VBox/err.h>
 #include <iprt/assert.h>
 #include <iprt/stdarg.h>
 #include <iprt/cpuset.h>
@@ -100,10 +102,85 @@ typedef enum SUPPAGINGMODE
  * @{
  */
 /** GDT is read-only. */
-#define SUPKERNELFEATURES_GDT_READ_ONLY     RT_BIT(0)
+#define SUPKERNELFEATURES_GDT_READ_ONLY       RT_BIT(0)
 /** SMAP is possibly enabled. */
-#define SUPKERNELFEATURES_SMAP              RT_BIT(1)
+#define SUPKERNELFEATURES_SMAP                RT_BIT(1)
+/** GDT is read-only but the writable GDT can be fetched by SUPR0GetCurrentGdtRw(). */
+#define SUPKERNELFEATURES_GDT_NEED_WRITABLE   RT_BIT(2)
 /** @} */
+
+/**
+ * An VT-x control MSR.
+ * @sa  VMXCTLSMSR.
+ */
+typedef union SUPVMXCTLSMSR
+{
+    uint64_t            u;
+    struct
+    {
+        /** Bits set here _must_ be set in the corresponding VM-execution controls. */
+        uint32_t        allowed0;
+        /** Bits cleared here _must_ be cleared in the corresponding VM-execution controls. */
+        uint32_t        allowed1;
+    } n;
+} SUPVMXCTLSMSR;
+AssertCompileSize(SUPVMXCTLSMSR, sizeof(uint64_t));
+
+/**
+ * Hardware-virtualization MSRs.
+ */
+typedef struct SUPHWVIRTMSRS
+{
+    union
+    {
+        /** @sa VMXMSRS */
+        struct
+        {
+            uint64_t        u64FeatCtrl;
+            uint64_t        u64Basic;
+            /** Pin-based VM-execution controls. */
+            SUPVMXCTLSMSR   PinCtls;
+            /** Processor-based VM-execution controls. */
+            SUPVMXCTLSMSR   ProcCtls;
+            /** Secondary processor-based VM-execution controls. */
+            SUPVMXCTLSMSR   ProcCtls2;
+            /** VM-exit controls. */
+            SUPVMXCTLSMSR   ExitCtls;
+            /** VM-entry controls. */
+            SUPVMXCTLSMSR   EntryCtls;
+            /** True pin-based VM-execution controls. */
+            SUPVMXCTLSMSR   TruePinCtls;
+            /** True processor-based VM-execution controls. */
+            SUPVMXCTLSMSR   TrueProcCtls;
+            /** True VM-entry controls. */
+            SUPVMXCTLSMSR   TrueEntryCtls;
+            /** True VM-exit controls. */
+            SUPVMXCTLSMSR   TrueExitCtls;
+            uint64_t        u64Misc;
+            uint64_t        u64Cr0Fixed0;
+            uint64_t        u64Cr0Fixed1;
+            uint64_t        u64Cr4Fixed0;
+            uint64_t        u64Cr4Fixed1;
+            uint64_t        u64VmcsEnum;
+            uint64_t        u64VmFunc;
+            uint64_t        u64EptVpidCaps;
+            uint64_t        u64ProcCtls3;
+            uint64_t        au64Reserved[8];
+        } vmx;
+        struct
+        {
+            uint64_t        u64MsrHwcr;
+            uint64_t        u64MsrSmmAddr;
+            uint64_t        u64MsrSmmMask;
+            uint64_t        u64Padding[25];
+        } svm;
+    } u;
+} SUPHWVIRTMSRS;
+AssertCompileSize(SUPHWVIRTMSRS, 224);
+/** Pointer to a hardware-virtualization MSRs struct. */
+typedef SUPHWVIRTMSRS *PSUPHWVIRTMSRS;
+/** Pointer to a hardware-virtualization MSRs struct. */
+typedef const SUPHWVIRTMSRS *PCSUPHWVIRTMSRS;
 
 
 /**
@@ -375,6 +452,10 @@ typedef enum SUPGIPUSETSCDELTA
  *       it since we only support 256 CPUs/groups at the moment.
  */
 #define SUPGIPGETCPU_RDTSCP_GROUP_IN_CH_NUMBER_IN_CL RT_BIT_32(3)
+/** Can use CPUID[0xb].EDX and translate the result via aiCpuFromApicId. */
+#define SUPGIPGETCPU_APIC_ID_EXT_0B                  RT_BIT_32(4)
+/** Can use CPUID[0x8000001e].EAX and translate the result via aiCpuFromApicId. */
+#define SUPGIPGETCPU_APIC_ID_EXT_8000001E            RT_BIT_32(5)
 /** @} */
 
 /** @def SUPGIP_MAX_CPU_GROUPS
@@ -414,12 +495,6 @@ typedef struct SUPGLOBALINFOPAGE
     volatile uint64_t   u64NanoTSLastUpdateHz;
     /** The TSC frequency of the system. */
     uint64_t            u64CpuHz;
-    /** The set of online CPUs. */
-    RTCPUSET            OnlineCpuSet;
-    /** The set of present CPUs. */
-    RTCPUSET            PresentCpuSet;
-    /** The set of possible CPUs. */
-    RTCPUSET            PossibleCpuSet;
     /** The number of CPUs that are online. */
     volatile uint16_t   cOnlineCpus;
     /** The number of CPUs present in the system. */
@@ -437,19 +512,34 @@ typedef struct SUPGLOBALINFOPAGE
     uint32_t            fGetGipCpu;
     /** GIP flags, see SUPGIP_FLAGS_XXX. */
     volatile uint32_t   fFlags;
+    /** The set of online CPUs. */
+    RTCPUSET            OnlineCpuSet;
+#if RTCPUSET_MAX_CPUS < 1024
+    uint64_t            abOnlineCpuSetPadding[(1024 - RTCPUSET_MAX_CPUS) / 64];
+#endif
+    /** The set of present CPUs. */
+    RTCPUSET            PresentCpuSet;
+#if RTCPUSET_MAX_CPUS < 1024
+    uint64_t            abPresentCpuSetPadding[(1024 - RTCPUSET_MAX_CPUS) / 64];
+#endif
+    /** The set of possible CPUs. */
+    RTCPUSET            PossibleCpuSet;
+#if RTCPUSET_MAX_CPUS < 1024
+    uint64_t            abPossibleCpuSetPadding[(1024 - RTCPUSET_MAX_CPUS) / 64];
+#endif
 
     /** Padding / reserved space for future data. */
-    uint32_t            au32Padding1[24];
+    uint32_t            au32Padding1[48];
 
     /** Table indexed by the CPU APIC ID to get the CPU table index. */
-    uint16_t            aiCpuFromApicId[256];
+    uint16_t            aiCpuFromApicId[4096];
     /** CPU set index to CPU table index. */
-    uint16_t            aiCpuFromCpuSetIdx[RTCPUSET_MAX_CPUS];
+    uint16_t            aiCpuFromCpuSetIdx[1024];
     /** Table indexed by CPU group to containing offsets to SUPGIPCPUGROUP
-     * structures, invalid entries are set to UINT16_MAX.  The offsets are relative
+     * structures, invalid entries are set to UINT32_MAX.  The offsets are relative
      * to the start of this structure.
-     * @note Windows only. The other hosts sets all entries to UINT16_MAX! */
-    uint16_t            aoffCpuGroup[SUPGIP_MAX_CPU_GROUPS];
+     * @note Windows only. The other hosts sets all entries to UINT32_MAX! */
+    uint32_t            aoffCpuGroup[SUPGIP_MAX_CPU_GROUPS];
 
     /** Array of per-cpu data.
      * This is index by ApicId via the aiCpuFromApicId table.
@@ -461,12 +551,14 @@ typedef struct SUPGLOBALINFOPAGE
     SUPGIPCPU           aCPUs[1];
 } SUPGLOBALINFOPAGE;
 AssertCompileMemberAlignment(SUPGLOBALINFOPAGE, u64NanoTSLastUpdateHz, 8);
-#if defined(RT_ARCH_SPARC) || defined(RT_ARCH_SPARC64)
+AssertCompileMemberAlignment(SUPGLOBALINFOPAGE, OnlineCpuSet, 64);
+AssertCompileMemberAlignment(SUPGLOBALINFOPAGE, PresentCpuSet, 64);
+AssertCompileMemberAlignment(SUPGLOBALINFOPAGE, PossibleCpuSet, 64);
+#if defined(RT_ARCH_SPARC) || defined(RT_ARCH_SPARC64) /* ?? needed ?? */
 AssertCompileMemberAlignment(SUPGLOBALINFOPAGE, aCPUs, 32);
 #else
-AssertCompileMemberAlignment(SUPGLOBALINFOPAGE, aCPUs, 256);
+AssertCompileMemberAlignment(SUPGLOBALINFOPAGE, aCPUs, 128);
 #endif
-AssertCompile(sizeof(SUPGLOBALINFOPAGE) <= 0x1000); /* Keeping it less or equal to a page for raw-mode (saved state). */
 
 /** Pointer to the global info page.
  * @remark there is no const version of this typedef, see g_pSUPGlobalInfoPage for details. */
@@ -478,7 +570,7 @@ typedef SUPGLOBALINFOPAGE *PSUPGLOBALINFOPAGE;
 /** The GIP version.
  * Upper 16 bits is the major version. Major version is only changed with
  * incompatible changes in the GIP. */
-#define SUPGLOBALINFOPAGE_VERSION   0x00080000
+#define SUPGLOBALINFOPAGE_VERSION   0x000a0000
 
 /**
  * SUPGLOBALINFOPAGE::u32Mode values.
@@ -514,7 +606,7 @@ typedef enum SUPGIPMODE
 #if defined(IN_SUP_R3) || defined(IN_SUP_R0)
 extern DECLEXPORT(PSUPGLOBALINFOPAGE)   g_pSUPGlobalInfoPage;
 
-#elif !defined(IN_RING0) || defined(RT_OS_WINDOWS) || defined(RT_OS_SOLARIS)
+#elif !defined(IN_RING0) || defined(RT_OS_WINDOWS) || defined(RT_OS_SOLARIS) || defined(VBOX_WITH_KMOD_WRAPPED_R0_MODS)
 extern DECLIMPORT(PSUPGLOBALINFOPAGE)   g_pSUPGlobalInfoPage;
 
 #else /* IN_RING0 && !RT_OS_WINDOWS */
@@ -669,7 +761,7 @@ DECLINLINE(uint64_t) SUPReadTsc(void)
 #endif /* X86 || AMD64 */
 
 /** @internal */
-SUPDECL(uint64_t) SUPGetTscDeltaSlow(PSUPGLOBALINFOPAGE pGip);
+SUPDECL(int64_t) SUPGetTscDeltaSlow(PSUPGLOBALINFOPAGE pGip);
 
 /**
  * Gets the TSC delta for the current CPU.
@@ -774,7 +866,7 @@ DECLINLINE(const char *) SUPGetGIPTscDeltaModeName(PSUPGLOBALINFOPAGE pGip)
     {
         case SUPGIPUSETSCDELTA_NOT_APPLICABLE:   return "Not Applicable";
         case SUPGIPUSETSCDELTA_ZERO_CLAIMED:     return "Zero Claimed";
-        case SUPGIPUSETSCDELTA_PRACTICALLY_ZERO: return "Pratically Zero";
+        case SUPGIPUSETSCDELTA_PRACTICALLY_ZERO: return "Practically Zero";
         case SUPGIPUSETSCDELTA_ROUGHLY_ZERO:     return "Roughly Zero";
         case SUPGIPUSETSCDELTA_NOT_ZERO:         return "Not Zero";
         default:                                 return "???";
@@ -801,15 +893,15 @@ typedef SUPVMMR0REQHDR *PSUPVMMR0REQHDR;
 /** For the fast ioctl path.
  * @{
  */
-/** @see VMMR0_DO_RAW_RUN. */
-#define SUP_VMMR0_DO_RAW_RUN    0
 /** @see VMMR0_DO_HM_RUN. */
-#define SUP_VMMR0_DO_HM_RUN     1
+#define SUP_VMMR0_DO_HM_RUN     0
+/** @see VMMR0_DO_NEM_RUN */
+#define SUP_VMMR0_DO_NEM_RUN    1
 /** @see VMMR0_DO_NOP */
 #define SUP_VMMR0_DO_NOP        2
 /** @} */
 
-/** SUPR3QueryVTCaps capability flags
+/** SUPR3QueryVTCaps capability flags.
  * @{
  */
 /** AMD-V support. */
@@ -820,6 +912,10 @@ typedef SUPVMMR0REQHDR *PSUPVMMR0REQHDR;
 #define SUPVTCAPS_NESTED_PAGING             RT_BIT(2)
 /** VT-x: Unrestricted guest execution is supported. */
 #define SUPVTCAPS_VTX_UNRESTRICTED_GUEST    RT_BIT(3)
+/** VT-x: VMCS shadowing is supported. */
+#define SUPVTCAPS_VTX_VMCS_SHADOWING        RT_BIT(4)
+/** AMD-V: Virtualized VMSAVE/VMLOAD is supported. */
+#define SUPVTCAPS_AMDV_VIRT_VMSAVE_VMLOAD   RT_BIT(5)
 /** @} */
 
 /**
@@ -1048,7 +1144,7 @@ SUPR3DECL(int) SUPR3Uninstall(void);
  * @param   argv            The argument vector.
  * @param   envp            The environment vector.
  */
-typedef DECLCALLBACK(int) FNSUPTRUSTEDMAIN(int argc, char **argv, char **envp);
+typedef DECLCALLBACKTYPE(int, FNSUPTRUSTEDMAIN,(int argc, char **argv, char **envp));
 /** Pointer to FNSUPTRUSTEDMAIN(). */
 typedef FNSUPTRUSTEDMAIN *PFNSUPTRUSTEDMAIN;
 
@@ -1085,8 +1181,8 @@ typedef enum SUPINITOP
  * @param   pszMsgFmt       Error message format string.
  * @param   va              The message format arguments.
  */
-typedef DECLCALLBACK(void) FNSUPTRUSTEDERROR(const char *pszWhere, SUPINITOP enmWhat, int rc,
-                                             const char *pszMsgFmt, va_list va) RT_IPRT_FORMAT_ATTR(4, 0);
+typedef DECLCALLBACKTYPE(void, FNSUPTRUSTEDERROR,(const char *pszWhere, SUPINITOP enmWhat, int rc,
+                                                  const char *pszMsgFmt, va_list va)) RT_IPRT_FORMAT_ATTR(4, 0);
 /** Pointer to FNSUPTRUSTEDERROR. */
 typedef FNSUPTRUSTEDERROR *PFNSUPTRUSTEDERROR;
 
@@ -1118,16 +1214,23 @@ DECLHIDDEN(int) SUPR3HardenedMain(const char *pszProgName, uint32_t fFlags, int 
 #define SUPSECMAIN_FLAGS_DONT_OPEN_DEV      RT_BIT_32(0)
 /** The hardened DLL has a "TrustedError" function (see FNSUPTRUSTEDERROR). */
 #define SUPSECMAIN_FLAGS_TRUSTED_ERROR      RT_BIT_32(1)
-/** Hack for making VirtualBoxVM use VirtualBox.dylib on Mac OS X. */
+/** Hack for making VirtualBoxVM use VirtualBox.dylib on Mac OS X.
+ * @note Not used since 6.0  */
 #define SUPSECMAIN_FLAGS_OSX_VM_APP         RT_BIT_32(2)
 /** Program binary location mask. */
-#define SUPSECMAIN_FLAGS_LOC_MASK           UINT32_C(0x00000010)
+#define SUPSECMAIN_FLAGS_LOC_MASK           UINT32_C(0x00000030)
 /** Default binary location is the application binary directory.  Does
  * not need to be given explicitly (it's 0).  */
 #define SUPSECMAIN_FLAGS_LOC_APP_BIN        UINT32_C(0x00000000)
 /** The binary is located in the testcase directory instead of the
  * default application binary directory. */
 #define SUPSECMAIN_FLAGS_LOC_TESTCASE       UINT32_C(0x00000010)
+/** The binary is located in a nested application bundle under Resources/ in the
+ * main Mac OS X application (think Resources/VirtualBoxVM.app).  */
+#define SUPSECMAIN_FLAGS_LOC_OSX_HLP_APP    UINT32_C(0x00000020)
+/** The first process.
+ * @internal  */
+#define SUPSECMAIN_FLAGS_FIRST_PROCESS      UINT32_C(0x00000100)
 /** @} */
 
 /**
@@ -1481,8 +1584,11 @@ SUPR3DECL(int) SUPR3GetSymbolR0(void *pvImageBase, const char *pszSymbol, void *
  *
  * @returns VBox status code.
  * @deprecated  Use SUPR3LoadModule(pszFilename, "VMMR0.r0", &pvImageBase)
+ * @param   pszFilename     Full path to the VMMR0.r0 file (silly).
+ * @param   pErrInfo        Where to return extended error information.
+ *                          Optional.
  */
-SUPR3DECL(int) SUPR3LoadVMM(const char *pszFilename);
+SUPR3DECL(int) SUPR3LoadVMM(const char *pszFilename, PRTERRINFO pErrInfo);
 
 /**
  * Unloads R0 HC VMM code.
@@ -1640,8 +1746,9 @@ SUPR3DECL(int) SUPR3HardenedLdrLoadPlugIn(const char *pszFilename, PRTLDRMOD phL
  * Check if the host kernel can run in VMX root mode.
  *
  * @returns VINF_SUCCESS if supported, error code indicating why if not.
+ * @param   ppszWhy         Where to return an explanatory message on failure.
  */
-SUPR3DECL(int) SUPR3QueryVTxSupported(void);
+SUPR3DECL(int) SUPR3QueryVTxSupported(const char **ppszWhy);
 
 /**
  * Return VT-x/AMD-V capabilities.
@@ -1652,6 +1759,16 @@ SUPR3DECL(int) SUPR3QueryVTxSupported(void);
  *       when accessing certain vboxdrv functions.
  */
 SUPR3DECL(int) SUPR3QueryVTCaps(uint32_t *pfCaps);
+
+/**
+ * Check if NEM is supported when no VT-x/AMD-V is indicated by the CPU.
+ *
+ * This is really only for the windows case where we're running in a root
+ * partition and isn't allowed to use the hardware directly.
+ *
+ * @returns True if NEM API support, false if not.
+ */
+SUPR3DECL(bool) SUPR3IsNemSupportedWhenNoVtxOrAmdV(void);
 
 /**
  * Open the tracer.
@@ -1814,6 +1931,24 @@ SUPR3DECL(int) SUPR3ReadTsc(uint64_t *puTsc, uint16_t *pidApic);
  */
 SUPR3DECL(int) SUPR3GipSetFlags(uint32_t fOrMask, uint32_t fAndMask);
 
+/**
+ * Return processor microcode revision, if applicable.
+ *
+ * @returns VINF_SUCCESS if supported, error code indicating why if not.
+ * @param   puMicrocodeRev  Pointer to microcode revision dword (out).
+ */
+SUPR3DECL(int) SUPR3QueryMicrocodeRev(uint32_t *puMicrocodeRev);
+
+/**
+ * Gets hardware-virtualization MSRs of the CPU, if available.
+ *
+ * @returns VINF_SUCCESS if available, error code indicating why if not.
+ * @param   pHwvirtMsrs     Where to store the hardware-virtualization MSRs.
+ * @param   fForceRequery   Whether to force complete re-querying of MSRs (rather
+ *                          than fetching cached values when available).
+ */
+SUPR3DECL(int) SUPR3GetHwvirtMsrs(PSUPHWVIRTMSRS pHwvirtMsrs, bool fForceRequery);
+
 /** @} */
 #endif /* IN_RING3 */
 
@@ -1867,15 +2002,103 @@ typedef enum SUPDRVOBJTYPE
  * @param   pvUser1     The first user argument.
  * @param   pvUser2     The second user argument.
  */
-typedef DECLCALLBACK(void) FNSUPDRVDESTRUCTOR(void *pvObj, void *pvUser1, void *pvUser2);
+typedef DECLCALLBACKTYPE(void, FNSUPDRVDESTRUCTOR,(void *pvObj, void *pvUser1, void *pvUser2));
 /** Pointer to a FNSUPDRVDESTRUCTOR(). */
 typedef FNSUPDRVDESTRUCTOR *PFNSUPDRVDESTRUCTOR;
+
+/**
+ * Service request callback function.
+ *
+ * @returns VBox status code.
+ * @param   pSession    The caller's session.
+ * @param   uOperation  The operation identifier.
+ * @param   u64Arg      64-bit integer argument.
+ * @param   pReqHdr     The request header. Input / Output. Optional.
+ */
+typedef DECLCALLBACKTYPE(int, FNSUPR0SERVICEREQHANDLER,(PSUPDRVSESSION pSession, uint32_t uOperation,
+                                                        uint64_t u64Arg, PSUPR0SERVICEREQHDR pReqHdr));
+/** Pointer to a FNR0SERVICEREQHANDLER(). */
+typedef R0PTRTYPE(FNSUPR0SERVICEREQHANDLER *) PFNSUPR0SERVICEREQHANDLER;
+
+/**
+ * Symbol entry for a wrapped module (SUPLDRWRAPPEDMODULE).
+ */
+typedef struct SUPLDRWRAPMODSYMBOL
+{
+    /** The symbol namel. */
+    const char *pszSymbol;
+    /** The symbol address/value. */
+    PFNRT       pfnValue;
+} SUPLDRWRAPMODSYMBOL;
+/** Pointer to a symbol entry for a wrapped module. */
+typedef SUPLDRWRAPMODSYMBOL const *PCSUPLDRWRAPMODSYMBOL;
+
+/**
+ * Registration structure for SUPR0LdrRegisterWrapperModule.
+ *
+ * This is used to register a .r0 module when loaded manually as a native kernel
+ * module/extension/driver/whatever.
+ */
+typedef struct SUPLDRWRAPPEDMODULE
+{
+    /** Magic value (SUPLDRWRAPPEDMODULE_MAGIC). */
+    uint32_t                    uMagic;
+    /** The structure version. */
+    uint16_t                    uVersion;
+    /** SUPLDRWRAPPEDMODULE_F_XXX.   */
+    uint16_t                    fFlags;
+
+    /** As close as possible to the start of the image. */
+    void                       *pvImageStart;
+    /** As close as possible to the end of the image. */
+    void                       *pvImageEnd;
+
+    /** @name Standar entry points
+     * @{ */
+    /** Pointer to the module initialization function (optional). */
+    DECLCALLBACKMEMBER(int,     pfnModuleInit,(void *hMod));
+    /** Pointer to the module termination function (optional). */
+    DECLCALLBACKMEMBER(void,    pfnModuleTerm,(void *hMod));
+    /** The VMMR0EntryFast entry point for VMMR0. */
+    PFNRT                       pfnVMMR0EntryFast;
+    /** The VMMR0EntryEx entry point for VMMR0. */
+    PFNRT                       pfnVMMR0EntryEx;
+    /** The service request handler entry point. */
+    PFNSUPR0SERVICEREQHANDLER   pfnServiceReqHandler;
+    /** @} */
+
+    /** The symbol table. */
+    PCSUPLDRWRAPMODSYMBOL       paSymbols;
+    /** Number of symbols. */
+    uint32_t                    cSymbols;
+
+    /** The normal VBox module name. */
+    char                        szName[32];
+    /** Repeating the magic value here (SUPLDRWRAPPEDMODULE_MAGIC). */
+    uint32_t                    uEndMagic;
+} SUPLDRWRAPPEDMODULE;
+/** Pointer to the wrapped module registration structure. */
+typedef SUPLDRWRAPPEDMODULE const *PCSUPLDRWRAPPEDMODULE;
+
+/** Magic value for the wrapped module structure (Doris lessing). */
+#define SUPLDRWRAPPEDMODULE_MAGIC       UINT32_C(0x19191117)
+/** Current SUPLDRWRAPPEDMODULE structure version. */
+#define SUPLDRWRAPPEDMODULE_VERSION     UINT16_C(0x0001)
+
+/** Set if this is the VMMR0 module.   */
+#define SUPLDRWRAPPEDMODULE_F_VMMR0     UINT16_C(0x0001)
+
 
 SUPR0DECL(void *) SUPR0ObjRegister(PSUPDRVSESSION pSession, SUPDRVOBJTYPE enmType, PFNSUPDRVDESTRUCTOR pfnDestructor, void *pvUser1, void *pvUser2);
 SUPR0DECL(int) SUPR0ObjAddRef(void *pvObj, PSUPDRVSESSION pSession);
 SUPR0DECL(int) SUPR0ObjAddRefEx(void *pvObj, PSUPDRVSESSION pSession, bool fNoBlocking);
 SUPR0DECL(int) SUPR0ObjRelease(void *pvObj, PSUPDRVSESSION pSession);
 SUPR0DECL(int) SUPR0ObjVerifyAccess(void *pvObj, PSUPDRVSESSION pSession, const char *pszObjName);
+
+SUPR0DECL(PVM) SUPR0GetSessionVM(PSUPDRVSESSION pSession);
+SUPR0DECL(PGVM) SUPR0GetSessionGVM(PSUPDRVSESSION pSession);
+SUPR0DECL(int) SUPR0SetSessionVM(PSUPDRVSESSION pSession, PGVM pGVM, PVM pVM);
+SUPR0DECL(RTUID) SUPR0GetSessionUid(PSUPDRVSESSION pSession);
 
 SUPR0DECL(int) SUPR0LockMem(PSUPDRVSESSION pSession, RTR3PTR pvR3, uint32_t cPages, PRTHCPHYS paPages);
 SUPR0DECL(int) SUPR0UnlockMem(PSUPDRVSESSION pSession, RTR3PTR pvR3);
@@ -1891,10 +2114,24 @@ SUPR0DECL(int) SUPR0PageMapKernel(PSUPDRVSESSION pSession, RTR3PTR pvR3, uint32_
 SUPR0DECL(int) SUPR0PageProtect(PSUPDRVSESSION pSession, RTR3PTR pvR3, RTR0PTR pvR0, uint32_t offSub, uint32_t cbSub, uint32_t fProt);
 SUPR0DECL(int) SUPR0PageFree(PSUPDRVSESSION pSession, RTR3PTR pvR3);
 SUPR0DECL(int) SUPR0GipMap(PSUPDRVSESSION pSession, PRTR3PTR ppGipR3, PRTHCPHYS pHCPhysGip);
+SUPR0DECL(int) SUPR0LdrLock(PSUPDRVSESSION pSession);
+SUPR0DECL(int) SUPR0LdrUnlock(PSUPDRVSESSION pSession);
+SUPR0DECL(bool) SUPR0LdrIsLockOwnerByMod(void *hMod, bool fWantToHear);
+SUPR0DECL(int) SUPR0LdrModByName(PSUPDRVSESSION pSession, const char *pszName, void **phMod);
+SUPR0DECL(int) SUPR0LdrModRetain(PSUPDRVSESSION pSession, void *hMod);
+SUPR0DECL(int) SUPR0LdrModRelease(PSUPDRVSESSION pSession, void *hMod);
+#ifdef RT_OS_LINUX
+SUPR0DECL(int) SUPDrvLinuxLdrRegisterWrappedModule(PCSUPLDRWRAPPEDMODULE pWrappedModInfo, const char *pszLnxModName, void **phMod);
+SUPR0DECL(int) SUPDrvLinuxLdrDeregisterWrappedModule(PCSUPLDRWRAPPEDMODULE pWrappedModInfo, void **phMod);
+#endif
+SUPR0DECL(int) SUPR0GetVTSupport(uint32_t *pfCaps);
+SUPR0DECL(int) SUPR0GetHwvirtMsrs(PSUPHWVIRTMSRS pMsrs, uint32_t fCaps, bool fForce);
 SUPR0DECL(int) SUPR0GetSvmUsability(bool fInitSvm);
 SUPR0DECL(int) SUPR0GetVmxUsability(bool *pfIsSmxModeAmbiguous);
+SUPR0DECL(int) SUPR0GetCurrentGdtRw(RTHCUINTPTR *pGdtRw);
 SUPR0DECL(int) SUPR0QueryVTCaps(PSUPDRVSESSION pSession, uint32_t *pfCaps);
 SUPR0DECL(int) SUPR0GipUnmap(PSUPDRVSESSION pSession);
+SUPR0DECL(int) SUPR0QueryUcodeRev(PSUPDRVSESSION pSession, uint32_t *puMicrocodeRev);
 SUPR0DECL(SUPPAGINGMODE) SUPR0GetPagingMode(void);
 SUPR0DECL(RTCCUINTREG) SUPR0ChangeCR4(RTCCUINTREG fOrMask, RTCCUINTREG fAndMask);
 SUPR0DECL(int) SUPR0EnableVTx(bool fEnable);
@@ -1908,6 +2145,82 @@ SUPR0DECL(int) SUPR0TscDeltaMeasureBySetIndex(PSUPDRVSESSION pSession, uint32_t 
 
 SUPR0DECL(void) SUPR0BadContext(PSUPDRVSESSION pSession, const char *pszFile, uint32_t uLine, const char *pszExpr);
 
+#if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS) || defined(RT_OS_FREEBSD)
+/**
+ * Translates a physical address to a virtual mapping (valid up to end of page).
+ * @returns VBox status code.
+ * @param   HCPhys      The physical address, must be page aligned.
+ * @param   ppv         Where to store the mapping address on success.
+ */
+SUPR0DECL(int) SUPR0HCPhysToVirt(RTHCPHYS HCPhys, void **ppv);
+#endif
+
+/** Context structure returned by SUPR0IoCtlSetup for use with
+ * SUPR0IoCtlPerform and cleaned up by SUPR0IoCtlCleanup. */
+typedef struct SUPR0IOCTLCTX *PSUPR0IOCTLCTX;
+
+/**
+ * Sets up a I/O control context for the given handle.
+ *
+ * @returns VBox status code.
+ * @param   pSession        The support driver session.
+ * @param   hHandle         The handle.
+ * @param   fFlags          Flag, MBZ.
+ * @param   ppCtx           Where the context is returned.
+ */
+SUPR0DECL(int) SUPR0IoCtlSetupForHandle(PSUPDRVSESSION pSession, intptr_t hHandle, uint32_t fFlags, PSUPR0IOCTLCTX *ppCtx);
+
+/**
+ * Cleans up the I/O control context when done.
+ *
+ * This won't close the handle passed to SUPR0IoCtlSetupForHandle.
+ *
+ * @returns VBox status code.
+ * @param   pCtx            The I/O control context to cleanup.
+ */
+SUPR0DECL(int) SUPR0IoCtlCleanup(PSUPR0IOCTLCTX pCtx);
+
+/**
+ * Performs an I/O control operation.
+ *
+ * @returns VBox status code.
+ * @param   pCtx            The I/O control context returned by
+ *                          SUPR0IoCtlSetupForHandle.
+ * @param   uFunction       The I/O control function to perform.
+ * @param   pvInput         Pointer to input buffer (ring-0).
+ * @param   pvInputUser     Ring-3 pointer corresponding to @a pvInput.
+ * @param   cbInput         The amount of input.  If zero, both input pointers
+ *                          are expected to be NULL.
+ * @param   pvOutput        Pointer to output buffer (ring-0).
+ * @param   pvOutputUser    Ring-3 pointer corresponding to @a pvInput.
+ * @param   cbOutput        The amount of input.  If zero, both input pointers
+ *                          are expected to be NULL.
+ * @param   piNativeRc      Where to return the native return code.   When
+ *                          specified the VBox status code will typically be
+ *                          VINF_SUCCESS and the caller have to consult this for
+ *                          the actual result of the operation.  (This saves
+ *                          pointless status code conversion.)  Optional.
+ *
+ * @note    On unix systems where there is only one set of buffers possible,
+ *          pass the same pointers as input and output.
+ */
+SUPR0DECL(int)  SUPR0IoCtlPerform(PSUPR0IOCTLCTX pCtx, uintptr_t uFunction,
+                                  void *pvInput, RTR3PTR pvInputUser, size_t cbInput,
+                                  void *pvOutput, RTR3PTR pvOutputUser, size_t cbOutput,
+                                  int32_t *piNativeRc);
+
+/**
+ * Writes to the debugger and/or kernel log, va_list version.
+ *
+ * The length of the formatted message is somewhat limited, so keep things short
+ * and to the point.
+ *
+ * @returns Number of bytes written, mabye.
+ * @param   pszFormat       IPRT format string.
+ * @param   va              Arguments referenced by the format string.
+ */
+SUPR0DECL(int)  SUPR0PrintfV(const char *pszFormat, va_list va) RT_IPRT_FORMAT_ATTR(1, 0);
+
 /**
  * Writes to the debugger and/or kernel log.
  *
@@ -1918,7 +2231,35 @@ SUPR0DECL(void) SUPR0BadContext(PSUPDRVSESSION pSession, const char *pszFile, ui
  * @param   pszFormat       IPRT format string.
  * @param   ...             Arguments referenced by the format string.
  */
-SUPR0DECL(int)  SUPR0Printf(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2);
+#if defined(__GNUC__) && defined(__inline__)
+/* Define it as static for GCC as it cannot inline functions using va_start() anyway,
+   and linux redefines __inline__ to always inlining forcing gcc to issue an error. */
+static int __attribute__((__unused__))
+#else
+DECLINLINE(int)
+#endif
+RT_IPRT_FORMAT_ATTR(1, 2) SUPR0Printf(const char *pszFormat, ...)
+{
+    va_list va;
+    va_start(va, pszFormat);
+    SUPR0PrintfV(pszFormat, va);
+    va_end(va);
+    return 0;
+}
+
+/* HACK ALERT! See above. */
+#ifdef SUPR0PRINTF_UNDO_INLINE_HACK
+# define __inline__ inline
+#endif
+
+#ifdef IN_RING0
+/** Debug printf macro. This also exist in SUPLib, see SUPLibInternal.h. */
+# ifdef DEBUG
+#  define SUP_DPRINTF(a) SUPR0Printf a
+# else
+#  define SUP_DPRINTF(a) do { } while (0)
+# endif
+#endif
 
 /**
  * Returns configuration flags of the host kernel.
@@ -1926,6 +2267,16 @@ SUPR0DECL(int)  SUPR0Printf(const char *pszFormat, ...) RT_IPRT_FORMAT_ATTR(1, 2
  * @returns Combination of SUPKERNELFEATURES_XXX flags.
  */
 SUPR0DECL(uint32_t) SUPR0GetKernelFeatures(void);
+
+/** @copydoc RTLogDefaultInstanceEx
+ * @remarks To allow overriding RTLogDefaultInstanceEx locally. */
+SUPR0DECL(struct RTLOGGER *) SUPR0DefaultLogInstanceEx(uint32_t fFlagsAndGroup);
+/** @copydoc RTLogGetDefaultInstanceEx
+ * @remarks To allow overriding RTLogGetDefaultInstanceEx locally. */
+SUPR0DECL(struct RTLOGGER *) SUPR0GetDefaultLogInstanceEx(uint32_t fFlagsAndGroup);
+/** @copydoc RTLogRelGetDefaultInstanceEx
+ * @remarks To allow overriding RTLogRelGetDefaultInstanceEx locally. */
+SUPR0DECL(struct RTLOGGER *) SUPR0GetDefaultLogRelInstanceEx(uint32_t fFlagsAndGroup);
 
 
 /** @name Absolute symbols
@@ -2238,21 +2589,6 @@ SUPR0DECL(void) SUPR0TracerUmodProbeFire(PSUPDRVSESSION pSession, PSUPDRVTRACERU
 /** @}  */
 
 
-/**
- * Service request callback function.
- *
- * @returns VBox status code.
- * @param   pSession    The caller's session.
- * @param   uOperation  The operation identifier.
- * @param   u64Arg      64-bit integer argument.
- * @param   pReqHdr     The request header. Input / Output. Optional.
- */
-typedef DECLCALLBACK(int) FNSUPR0SERVICEREQHANDLER(PSUPDRVSESSION pSession, uint32_t uOperation,
-                                                   uint64_t u64Arg, PSUPR0SERVICEREQHDR pReqHdr);
-/** Pointer to a FNR0SERVICEREQHANDLER(). */
-typedef R0PTRTYPE(FNSUPR0SERVICEREQHANDLER *) PFNSUPR0SERVICEREQHANDLER;
-
-
 /** @defgroup   grp_sup_r0_idc  The IDC Interface
  * @{
  */
@@ -2341,6 +2677,11 @@ extern SUPTAENTRY const             g_aSUPTimestampTAs[];
 /** Number of entries in g_aSUPTimestampTAs. */
 extern unsigned const               g_cSUPTimestampTAs;
 
+/** Root certificates trusted by Apple code signing. */
+extern SUPTAENTRY const             g_aSUPAppleRootTAs[];
+/** Number of entries in g_cSUPAppleRootTAs. */
+extern unsigned const               g_cSUPAppleRootTAs;
+
 /** TAs we trust (the build certificate, Oracle VirtualBox). */
 extern SUPTAENTRY const             g_aSUPTrustedTAs[];
 /** Number of entries in g_aSUPTrustedTAs. */
@@ -2363,5 +2704,5 @@ extern const unsigned               g_cbSUPBuildCert;
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_sup_h */
 

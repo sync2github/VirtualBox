@@ -1,6 +1,10 @@
-/* $Id$ */
-#ifndef ____H_AUTOSTATEDEP
-#define ____H_AUTOSTATEDEP
+/* $Id: AutoStateDep.h 82968 2020-02-04 10:35:17Z vboxsync $ */
+
+#ifndef MAIN_INCLUDED_AutoStateDep_h
+#define MAIN_INCLUDED_AutoStateDep_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /** @file
  *
@@ -10,7 +14,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -196,5 +200,5 @@
      */
     typedef AutoStateDependency<Machine::MutableOrSavedOrRunningStateDep> AutoMutableOrSavedOrRunningStateDependency;
 
-#endif // ____H_AUTOSTATEDEP
+#endif /* !MAIN_INCLUDED_AutoStateDep_h */
 

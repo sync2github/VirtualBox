@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIPopupPaneButtonPane.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIPopupPaneButtonPane class implementation.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,22 +15,17 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
 /* Qt includes: */
-# include <QApplication>
-# include <QHBoxLayout>
-# include <QVBoxLayout>
-# include <QKeyEvent>
+#include <QApplication>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QVBoxLayout>
 
 /* GUI includes: */
-# include "UIPopupPaneButtonPane.h"
-# include "UIIconPool.h"
-# include "QIToolButton.h"
-# include "QIMessageBox.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "QIMessageBox.h"
+#include "QIToolButton.h"
+#include "UIIconPool.h"
+#include "UIPopupPaneButtonPane.h"
 
 
 UIPopupPaneButtonPane::UIPopupPaneButtonPane(QWidget *pParent /* = 0*/)
@@ -50,6 +45,7 @@ void UIPopupPaneButtonPane::setButtons(const QMap<int, QString> &buttonDescripti
 
     /* Assign new button-descriptions: */
     m_buttonDescriptions = buttonDescriptions;
+
     /* Recreate buttons: */
     cleanupButtons();
     prepareButtons();
@@ -79,15 +75,29 @@ void UIPopupPaneButtonPane::prepare()
 
 void UIPopupPaneButtonPane::prepareLayouts()
 {
-    /* Create layouts: */
-    m_pButtonLayout = new QHBoxLayout;
-    m_pButtonLayout->setContentsMargins(0, 0, 0, 0);
-    m_pButtonLayout->setSpacing(0);
+    /* Create main-layout: */
     QVBoxLayout *pMainLayout = new QVBoxLayout(this);
-    pMainLayout->setContentsMargins(0, 0, 0, 0);
-    pMainLayout->setSpacing(0);
-    pMainLayout->addLayout(m_pButtonLayout);
-    pMainLayout->addStretch();
+    if (pMainLayout)
+    {
+        /* Configure layout: */
+        pMainLayout->setSpacing(0);
+        pMainLayout->setContentsMargins(0, 0, 0, 0);
+
+        /* Create button-layout: */
+        m_pButtonLayout = new QHBoxLayout;
+        if (m_pButtonLayout)
+        {
+            /* Configure layout: */
+            m_pButtonLayout->setSpacing(0);
+            m_pButtonLayout->setContentsMargins(0, 0, 0, 0);
+
+            /* Add into layout: */
+            pMainLayout->addLayout(m_pButtonLayout);
+        }
+
+        /* Add stretch: */
+        pMainLayout->addStretch();
+    }
 }
 
 void UIPopupPaneButtonPane::prepareButtons()
@@ -99,7 +109,7 @@ void UIPopupPaneButtonPane::prepareButtons()
         {
             m_pButtonLayout->addWidget(pButton);
             m_buttons[iButtonID] = pButton;
-            connect(pButton, SIGNAL(clicked(bool)), this, SLOT(sltButtonClicked()));
+            connect(pButton, &QIToolButton::clicked, this, &UIPopupPaneButtonPane::sltButtonClicked);
             if (pButton->property("default").toBool())
                 m_iDefaultButton = iButtonID;
             if (pButton->property("escape").toBool())
@@ -152,20 +162,24 @@ void UIPopupPaneButtonPane::keyPressEvent(QKeyEvent *pEvent)
 }
 
 /* static */
-QIToolButton* UIPopupPaneButtonPane::addButton(int iButtonID, const QString &strToolTip)
+QIToolButton *UIPopupPaneButtonPane::addButton(int iButtonID, const QString &strToolTip)
 {
     /* Create button: */
     QIToolButton *pButton = new QIToolButton;
-    pButton->removeBorder();
-    pButton->setToolTip(strToolTip.isEmpty() ? defaultToolTip(iButtonID) : strToolTip);
-    pButton->setIcon(defaultIcon(iButtonID));
+    if (pButton)
+    {
+        /* Configure button: */
+        pButton->removeBorder();
+        pButton->setToolTip(strToolTip.isEmpty() ? defaultToolTip(iButtonID) : strToolTip);
+        pButton->setIcon(defaultIcon(iButtonID));
 
-    /* Sign the 'default' button: */
-    if (iButtonID & AlertButtonOption_Default)
-        pButton->setProperty("default", true);
-    /* Sign the 'escape' button: */
-    if (iButtonID & AlertButtonOption_Escape)
-        pButton->setProperty("escape", true);
+        /* Sign the 'default' button: */
+        if (iButtonID & AlertButtonOption_Default)
+            pButton->setProperty("default", true);
+        /* Sign the 'escape' button: */
+        if (iButtonID & AlertButtonOption_Escape)
+            pButton->setProperty("escape", true);
+    }
 
     /* Return button: */
     return pButton;
@@ -216,4 +230,3 @@ QIcon UIPopupPaneButtonPane::defaultIcon(int iButtonID)
     }
     return icon;
 }
-

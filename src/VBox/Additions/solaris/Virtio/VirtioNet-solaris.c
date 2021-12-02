@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VirtioNet-solaris.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Guest Additions - Virtio Network Driver for Solaris.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -39,7 +39,7 @@
 
 #include <iprt/assert.h>
 #include <iprt/initterm.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 #include <iprt/mem.h>
 #include <iprt/rand.h>
@@ -323,7 +323,7 @@ int _info(struct modinfo *pModInfo)
  * Attach entry point, to attach a device to the system or resume it.
  *
  * @param   pDip            The module structure instance.
- * @param   enmCmd          Operation type (attach/resume).
+ * @param   Cmd             Operation type (attach/resume).
  *
  * @return corresponding solaris error code.
  */
@@ -337,7 +337,7 @@ static int VirtioNetAttach(dev_info_t *pDip, ddi_attach_cmd_t Cmd)
  * Detach entry point, to detach a device to the system or suspend it.
  *
  * @param   pDip            The module structure instance.
- * @param   enmCmd          Operation type (detach/suspend).
+ * @param   Cmd             Operation type (detach/suspend).
  *
  * @return corresponding solaris error code.
  */

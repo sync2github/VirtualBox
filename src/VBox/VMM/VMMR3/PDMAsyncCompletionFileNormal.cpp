@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMAsyncCompletionFileNormal.cpp 90784 2021-08-23 09:42:32Z vboxsync $ */
 /** @file
  * PDM Async I/O - Async File I/O manager.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,6 +30,10 @@
 
 #include "PDMAsyncCompletionFileInternal.h"
 
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
 /** The update period for the I/O load statistics in ms. */
 #define PDMACEPFILEMGR_LOAD_UPDATE_PERIOD   1000
 /** Maximum number of requests a manager will handle. */
@@ -999,7 +1003,7 @@ static int pdmacFileAioMgrNormalProcessTaskList(PPDMACTASKFILE pTaskHead,
 
         pCurr->pNext = NULL;
 
-        AssertMsg(VALID_PTR(pCurr->pEndpoint) && (pCurr->pEndpoint == pEndpoint),
+        AssertMsg(RT_VALID_PTR(pCurr->pEndpoint) && pCurr->pEndpoint == pEndpoint,
                   ("Endpoints do not match\n"));
 
         switch (pCurr->enmTransferType)
@@ -1193,7 +1197,7 @@ static int pdmacFileAioMgrNormalProcessBlockingEvent(PPDMACEPFILEMGR pAioMgr)
         case PDMACEPFILEAIOMGRBLOCKINGEVENT_ADD_ENDPOINT:
         {
             PPDMASYNCCOMPLETIONENDPOINTFILE pEndpointNew = ASMAtomicReadPtrT(&pAioMgr->BlockingEventData.AddEndpoint.pEndpoint, PPDMASYNCCOMPLETIONENDPOINTFILE);
-            AssertMsg(VALID_PTR(pEndpointNew), ("Adding endpoint event without a endpoint to add\n"));
+            AssertMsg(RT_VALID_PTR(pEndpointNew), ("Adding endpoint event without a endpoint to add\n"));
 
             pEndpointNew->enmState = PDMASYNCCOMPLETIONENDPOINTFILESTATE_ACTIVE;
 
@@ -1212,7 +1216,7 @@ static int pdmacFileAioMgrNormalProcessBlockingEvent(PPDMACEPFILEMGR pAioMgr)
         case PDMACEPFILEAIOMGRBLOCKINGEVENT_REMOVE_ENDPOINT:
         {
             PPDMASYNCCOMPLETIONENDPOINTFILE pEndpointRemove = ASMAtomicReadPtrT(&pAioMgr->BlockingEventData.RemoveEndpoint.pEndpoint, PPDMASYNCCOMPLETIONENDPOINTFILE);
-            AssertMsg(VALID_PTR(pEndpointRemove), ("Removing endpoint event without a endpoint to remove\n"));
+            AssertMsg(RT_VALID_PTR(pEndpointRemove), ("Removing endpoint event without a endpoint to remove\n"));
 
             pEndpointRemove->enmState = PDMASYNCCOMPLETIONENDPOINTFILESTATE_REMOVING;
             fNotifyWaiter = !pdmacFileAioMgrNormalRemoveEndpoint(pEndpointRemove);
@@ -1221,7 +1225,7 @@ static int pdmacFileAioMgrNormalProcessBlockingEvent(PPDMACEPFILEMGR pAioMgr)
         case PDMACEPFILEAIOMGRBLOCKINGEVENT_CLOSE_ENDPOINT:
         {
             PPDMASYNCCOMPLETIONENDPOINTFILE pEndpointClose = ASMAtomicReadPtrT(&pAioMgr->BlockingEventData.CloseEndpoint.pEndpoint, PPDMASYNCCOMPLETIONENDPOINTFILE);
-            AssertMsg(VALID_PTR(pEndpointClose), ("Close endpoint event without a endpoint to close\n"));
+            AssertMsg(RT_VALID_PTR(pEndpointClose), ("Close endpoint event without a endpoint to close\n"));
 
             if (pEndpointClose->enmState == PDMASYNCCOMPLETIONENDPOINTFILESTATE_ACTIVE)
             {
@@ -1464,9 +1468,11 @@ static void pdmacFileAioMgrNormalReqCompleteRc(PPDMACEPFILEMGR pAioMgr, RTFILEAI
              * but to get the cause of the error (disk full, file too big, I/O error, ...)
              * the transfer needs to be continued.
              */
-            if (RT_UNLIKELY(   cbTransfered < pTask->DataSeg.cbSeg
+            pTask->cbTransfered += cbTransfered;
+
+            if (RT_UNLIKELY(   pTask->cbTransfered < pTask->DataSeg.cbSeg
                             || (   pTask->cbBounceBuffer
-                                && cbTransfered < pTask->cbBounceBuffer)))
+                                && pTask->cbTransfered < pTask->cbBounceBuffer)))
             {
                 RTFOFF offStart;
                 size_t cbToTransfer;
@@ -1479,16 +1485,16 @@ static void pdmacFileAioMgrNormalReqCompleteRc(PPDMACEPFILEMGR pAioMgr, RTFILEAI
                 if (pTask->cbBounceBuffer)
                 {
                     AssertPtr(pTask->pvBounceBuffer);
-                    offStart     = (pTask->Off & ~((RTFOFF)512-1)) + cbTransfered;
-                    cbToTransfer = pTask->cbBounceBuffer - cbTransfered;
-                    pbBuf        = (uint8_t *)pTask->pvBounceBuffer + cbTransfered;
+                    offStart     = (pTask->Off & ~((RTFOFF)512-1)) + pTask->cbTransfered;
+                    cbToTransfer = pTask->cbBounceBuffer - pTask->cbTransfered;
+                    pbBuf        = (uint8_t *)pTask->pvBounceBuffer + pTask->cbTransfered;
                 }
                 else
                 {
                     Assert(!pTask->pvBounceBuffer);
-                    offStart     = pTask->Off + cbTransfered;
-                    cbToTransfer = pTask->DataSeg.cbSeg - cbTransfered;
-                    pbBuf        = (uint8_t *)pTask->DataSeg.pvSeg + cbTransfered;
+                    offStart     = pTask->Off + pTask->cbTransfered;
+                    cbToTransfer = pTask->DataSeg.cbSeg - pTask->cbTransfered;
+                    pbBuf        = (uint8_t *)pTask->DataSeg.pvSeg + pTask->cbTransfered;
                 }
 
                 if (pTask->fPrefetch || pTask->enmTransferType == PDMACTASKFILETRANSFER_READ)
@@ -1523,6 +1529,8 @@ static void pdmacFileAioMgrNormalReqCompleteRc(PPDMACEPFILEMGR pAioMgr, RTFILEAI
                 pTask->fPrefetch = false;
                 RTFOFF offStart = pTask->Off & ~(RTFOFF)(512-1);
                 size_t cbToTransfer = RT_ALIGN_Z(pTask->DataSeg.cbSeg + (pTask->Off - offStart), 512);
+
+                pTask->cbTransfered = 0;
 
                 /* Grow the file if needed. */
                 if (RT_UNLIKELY((uint64_t)(pTask->Off + pTask->DataSeg.cbSeg) > pEndpoint->cbFile))

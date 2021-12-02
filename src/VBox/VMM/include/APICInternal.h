@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: APICInternal.h 88557 2021-04-16 03:36:25Z vboxsync $ */
 /** @file
  * APIC - Advanced Programmable Interrupt Controller.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,12 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___APICInternal_h
-#define ___APICInternal_h
+#ifndef VMM_INCLUDED_SRC_include_APICInternal_h
+#define VMM_INCLUDED_SRC_include_APICInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
+#include <VBox/apic.h>
 #include <VBox/sup.h>
-#include <VBox/types.h>
-#include <VBox/vmm/apic.h>
+#include <VBox/vmm/pdmdev.h>
 
 /** @defgroup grp_apic_int       Internal
  * @ingroup grp_apic
@@ -28,22 +31,15 @@
  * @{
  */
 
-/** The APIC hardware version number for Pentium 4. */
-#define XAPIC_HARDWARE_VERSION_P4            UINT8_C(0x14)
-/** Maximum number of LVT entries for Pentium 4. */
-#define XAPIC_MAX_LVT_ENTRIES_P4             UINT8_C(6)
-/** Size of the APIC ID bits for Pentium 4. */
-#define XAPIC_APIC_ID_BIT_COUNT_P4           UINT8_C(8)
-
-/** The APIC hardware version number for Pentium 6. */
-#define XAPIC_HARDWARE_VERSION_P6            UINT8_C(0x10)
-/** Maximum number of LVT entries for Pentium 6. */
-#define XAPIC_MAX_LVT_ENTRIES_P6             UINT8_C(4)
-/** Size of the APIC ID bits for Pentium 6. */
-#define XAPIC_APIC_ID_BIT_COUNT_P6           UINT8_C(4)
-
 /** The APIC hardware version we are emulating. */
 #define XAPIC_HARDWARE_VERSION               XAPIC_HARDWARE_VERSION_P4
+
+#if XAPIC_HARDWARE_VERSION == XAPIC_HARDWARE_VERSION_P4
+#define XAPIC_SVR_VALID                      XAPIC_SVR_VALID_P4
+#define XAPIC_ID_BROADCAST_MASK              XAPIC_ID_BROADCAST_MASK_P4
+#else
+# error "Implement Pentium and P6 family APIC architectures"
+#endif
 
 #define VMCPU_TO_XAPICPAGE(a_pVCpu)          ((PXAPICPAGE)(CTX_SUFF((a_pVCpu)->apic.s.pvApicPage)))
 #define VMCPU_TO_CXAPICPAGE(a_pVCpu)         ((PCXAPICPAGE)(CTX_SUFF((a_pVCpu)->apic.s.pvApicPage)))
@@ -54,28 +50,14 @@
 #define VMCPU_TO_APICCPU(a_pVCpu)            (&(a_pVCpu)->apic.s)
 #define VM_TO_APIC(a_pVM)                    (&(a_pVM)->apic.s)
 #define VM_TO_APICDEV(a_pVM)                 CTX_SUFF(VM_TO_APIC(a_pVM)->pApicDev)
+#ifdef IN_RING3
+# define VMCPU_TO_DEVINS(a_pVCpu)           ((a_pVCpu)->pVMR3->apic.s.pDevInsR3)
+#elif defined(IN_RING0)
+# define VMCPU_TO_DEVINS(a_pVCpu)           ((a_pVCpu)->pGVM->apicr0.s.pDevInsR0)
+#endif
 
 #define APICCPU_TO_XAPICPAGE(a_ApicCpu)      ((PXAPICPAGE)(CTX_SUFF((a_ApicCpu)->pvApicPage)))
 #define APICCPU_TO_CXAPICPAGE(a_ApicCpu)     ((PCXAPICPAGE)(CTX_SUFF((a_ApicCpu)->pvApicPage)))
-
-/** Whether the APIC is in X2APIC mode or not. */
-#define XAPIC_IN_X2APIC_MODE(a_pVCpu)        (   (  ((a_pVCpu)->apic.s.uApicBaseMsr) \
-                                                  & (MSR_IA32_APICBASE_EN | MSR_IA32_APICBASE_EXTD)) \
-                                              ==    (MSR_IA32_APICBASE_EN | MSR_IA32_APICBASE_EXTD) )
-
-/** Get an xAPIC page offset for an x2APIC MSR value. */
-#define X2APIC_GET_XAPIC_OFF(a_uMsr)         ((((a_uMsr) - MSR_IA32_X2APIC_START) << 4) & UINT32_C(0xff0))
-/** Get an x2APIC MSR for an xAPIC page offset. */
-#define XAPIC_GET_X2APIC_MSR(a_offReg)       ((((a_offReg) & UINT32_C(0xff0)) >> 4) | MSR_IA32_X2APIC_START)
-
-/** Illegal APIC vector value start. */
-#define XAPIC_ILLEGAL_VECTOR_START           UINT8_C(0)
-/** Illegal APIC vector value end (inclusive). */
-#define XAPIC_ILLEGAL_VECTOR_END             UINT8_C(15)
-/** Reserved APIC vector value start. */
-#define XAPIC_RSVD_VECTOR_START              UINT8_C(16)
-/** Reserved APIC vector value end (inclusive). */
-#define XAPIC_RSVD_VECTOR_END                UINT8_C(31)
 
 /** Vector offset in an APIC 256-bit sparse register. */
 #define XAPIC_REG256_VECTOR_OFF(a_Vector)    (((a_Vector) & UINT32_C(0xe0)) >> 1)
@@ -85,194 +67,10 @@
 /** Maximum valid offset for a register (16-byte aligned, 4 byte wide access). */
 #define XAPIC_OFF_MAX_VALID                  (sizeof(XAPICPAGE) - 4 * sizeof(uint32_t))
 
-#if XAPIC_HARDWARE_VERSION == XAPIC_HARDWARE_VERSION_P6
-/** ESR - Send checksum error. */
-# define XAPIC_ESR_SEND_CHKSUM_ERROR         RT_BIT(0)
-/** ESR - Send accept error. */
-# define XAPIC_ESR_RECV_CHKSUM_ERROR         RT_BIT(1)
-/** ESR - Send accept error. */
-# define XAPIC_ESR_SEND_ACCEPT_ERROR         RT_BIT(2)
-/** ESR - Receive accept error. */
-# define XAPIC_ESR_RECV_ACCEPT_ERROR         RT_BIT(3)
-#endif
-/** ESR - Redirectable IPI. */
-#define XAPIC_ESR_REDIRECTABLE_IPI           RT_BIT(4)
-/** ESR - Send accept error. */
-#define XAPIC_ESR_SEND_ILLEGAL_VECTOR        RT_BIT(5)
-/** ESR - Send accept error. */
-#define XAPIC_ESR_RECV_ILLEGAL_VECTOR        RT_BIT(6)
-/** ESR - Send accept error. */
-#define XAPIC_ESR_ILLEGAL_REG_ADDRESS        RT_BIT(7)
-/** ESR - Valid write-only bits. */
-#define XAPIC_ESR_WO_VALID                   UINT32_C(0x0)
-
-/** TPR - Valid bits. */
-#define XAPIC_TPR_VALID                      UINT32_C(0xff)
-/** TPR - Task-priority class. */
-#define XAPIC_TPR_TP                         UINT32_C(0xf0)
-/** TPR - Task-priority subclass. */
-#define XAPIC_TPR_TP_SUBCLASS                UINT32_C(0x0f)
-/** TPR - Gets the task-priority class. */
-#define XAPIC_TPR_GET_TP(a_Tpr)              ((a_Tpr) & XAPIC_TPR_TP)
-/** TPR - Gets the task-priority subclass. */
-#define XAPIC_TPR_GET_TP_SUBCLASS(a_Tpr)     ((a_Tpr) & XAPIC_TPR_TP_SUBCLASS)
-
-/** PPR - Valid bits. */
-#define XAPIC_PPR_VALID                      UINT32_C(0xff)
-/** PPR - Processor-priority class. */
-#define XAPIC_PPR_PP                         UINT32_C(0xf0)
-/** PPR - Processor-priority subclass. */
-#define XAPIC_PPR_PP_SUBCLASS                UINT32_C(0x0f)
-/** PPR - Get the processor-priority class. */
-#define XAPIC_PPR_GET_PP(a_Ppr)              ((a_Ppr) & XAPIC_PPR_PP)
-/** PPR - Get the processor-priority subclass. */
-#define XAPIC_PPR_GET_PP_SUBCLASS(a_Ppr)     ((a_Ppr) & XAPIC_PPR_PP_SUBCLASS)
-
-/** Timer mode - One-shot. */
-#define XAPIC_TIMER_MODE_ONESHOT             UINT32_C(0)
-/** Timer mode - Periodic. */
-#define XAPIC_TIMER_MODE_PERIODIC            UINT32_C(1)
-/** Timer mode - TSC deadline. */
-#define XAPIC_TIMER_MODE_TSC_DEADLINE        UINT32_C(2)
-
-/** LVT - The vector. */
-#define XAPIC_LVT_VECTOR                     UINT32_C(0xff)
-/** LVT - Gets the vector from an LVT entry. */
-#define XAPIC_LVT_GET_VECTOR(a_Lvt)          ((a_Lvt) & XAPIC_LVT_VECTOR)
-/** LVT - The mask. */
-#define XAPIC_LVT_MASK                       RT_BIT(16)
-/** LVT - Is the LVT masked? */
-#define XAPIC_LVT_IS_MASKED(a_Lvt)           RT_BOOL((a_Lvt) & XAPIC_LVT_MASK)
-/** LVT - Timer mode. */
-#define XAPIC_LVT_TIMER_MODE                 RT_BIT(17)
-/** LVT - Timer TSC-deadline timer mode. */
-#define XAPIC_LVT_TIMER_TSCDEADLINE          RT_BIT(18)
-/** LVT - Gets the timer mode. */
-#define XAPIC_LVT_GET_TIMER_MODE(a_Lvt)      (XAPICTIMERMODE)(((a_Lvt) >> 17) & UINT32_C(3))
-/** LVT - Delivery mode. */
-#define XAPIC_LVT_DELIVERY_MODE              (RT_BIT(8) | RT_BIT(9) | RT_BIT(10))
-/** LVT - Gets the delivery mode. */
-#define XAPIC_LVT_GET_DELIVERY_MODE(a_Lvt)   (XAPICDELIVERYMODE)(((a_Lvt) >> 8) & UINT32_C(7))
-/** LVT - Delivery status. */
-#define XAPIC_LVT_DELIVERY_STATUS            RT_BIT(12)
-/** LVT - Trigger mode. */
-#define XAPIC_LVT_TRIGGER_MODE               RT_BIT(15)
-/** LVT - Gets the trigger mode. */
-#define XAPIC_LVT_GET_TRIGGER_MODE(a_Lvt)    (XAPICTRIGGERMODE)(((a_Lvt) >> 15) & UINT32_C(1))
-/** LVT - Remote IRR. */
-#define XAPIC_LVT_REMOTE_IRR                 RT_BIT(14)
-/** LVT - Gets the Remote IRR. */
-#define XAPIC_LVT_GET_REMOTE_IRR(a_Lvt)      (((a_Lvt) >> 14) & 1)
-/** LVT - Interrupt Input Pin Polarity. */
-#define XAPIC_LVT_POLARITY                   RT_BIT(13)
-/** LVT - Gets the Interrupt Input Pin Polarity. */
-#define XAPIC_LVT_GET_POLARITY(a_Lvt)        (((a_Lvt) >> 13) & 1)
-/** LVT - Valid bits common to all LVTs. */
-#define XAPIC_LVT_COMMON_VALID               (XAPIC_LVT_VECTOR | XAPIC_LVT_DELIVERY_STATUS | XAPIC_LVT_MASK)
-/** LVT CMCI - Valid bits. */
-#define XAPIC_LVT_CMCI_VALID                 (XAPIC_LVT_COMMON_VALID | XAPIC_LVT_DELIVERY_MODE)
-/** LVT Timer - Valid bits. */
-#define XAPIC_LVT_TIMER_VALID                (XAPIC_LVT_COMMON_VALID | XAPIC_LVT_TIMER_MODE | XAPIC_LVT_TIMER_TSCDEADLINE)
-/** LVT Thermal - Valid bits. */
-#define XAPIC_LVT_THERMAL_VALID              (XAPIC_LVT_COMMON_VALID | XAPIC_LVT_DELIVERY_MODE)
-/** LVT Perf - Valid bits. */
-#define XAPIC_LVT_PERF_VALID                 (XAPIC_LVT_COMMON_VALID | XAPIC_LVT_DELIVERY_MODE)
-/** LVT LINTx - Valid bits. */
-#define XAPIC_LVT_LINT_VALID                 (  XAPIC_LVT_COMMON_VALID | XAPIC_LVT_DELIVERY_MODE | XAPIC_LVT_DELIVERY_STATUS \
-                                              | XAPIC_LVT_POLARITY | XAPIC_LVT_REMOTE_IRR | XAPIC_LVT_TRIGGER_MODE)
-/** LVT Error - Valid bits. */
-#define XAPIC_LVT_ERROR_VALID                (XAPIC_LVT_COMMON_VALID)
-
-/** SVR - The vector. */
-#define XAPIC_SVR_VECTOR                     UINT32_C(0xff)
-/** SVR - APIC Software enable. */
-#define XAPIC_SVR_SOFTWARE_ENABLE            RT_BIT(8)
-/** SVR - Supress EOI broadcast. */
-#define XAPIC_SVR_SUPRESS_EOI_BROADCAST      RT_BIT(12)
-#if XAPIC_HARDWARE_VERSION == XAPIC_HARDWARE_VERSION_P4
-/** SVR - Valid bits. */
-# define XAPIC_SVR_VALID                     (XAPIC_SVR_VECTOR | XAPIC_SVR_SOFTWARE_ENABLE)
-#else
-# error "Implement Pentium and P6 family APIC architectures"
-#endif
-
-/** DFR - Valid bits. */
-#define XAPIC_DFR_VALID                      UINT32_C(0xf0000000)
-/** DFR - Reserved bits that must always remain set. */
-#define XAPIC_DFR_RSVD_MB1                   UINT32_C(0x0fffffff)
-/** DFR - The model. */
-#define XAPIC_DFR_MODEL                      UINT32_C(0xf)
-/** DFR - Gets the destination model. */
-#define XAPIC_DFR_GET_MODEL(a_uReg)          (((a_uReg) >> 28) & XAPIC_DFR_MODEL)
-
-/** LDR - Valid bits. */
-#define XAPIC_LDR_VALID                      UINT32_C(0xff000000)
-/** LDR - Cluster ID mask (x2APIC). */
-#define X2APIC_LDR_CLUSTER_ID                UINT32_C(0xffff0000)
-/** LDR - Mask of the LDR cluster ID (x2APIC). */
-#define X2APIC_LDR_GET_CLUSTER_ID(a_uReg)    ((a_uReg) & X2APIC_LDR_CLUSTER_ID)
-/** LDR - Mask of the LDR logical ID (x2APIC). */
-#define X2APIC_LDR_LOGICAL_ID                UINT32_C(0x0000ffff)
-
-/** LDR - Flat mode logical ID mask. */
-#define XAPIC_LDR_FLAT_LOGICAL_ID            UINT32_C(0xff)
-/** LDR - Clustered mode cluster ID mask. */
-#define XAPIC_LDR_CLUSTERED_CLUSTER_ID       UINT32_C(0xf0)
-/** LDR - Clustered mode logical ID mask. */
-#define XAPIC_LDR_CLUSTERED_LOGICAL_ID       UINT32_C(0x0f)
-/** LDR - Gets the clustered mode cluster ID. */
-#define XAPIC_LDR_CLUSTERED_GET_CLUSTER_ID(a_uReg)   ((a_uReg) & XAPIC_LDR_CLUSTERED_CLUSTER_ID)
-
-
-/** EOI - Valid write-only bits. */
-#define XAPIC_EOI_WO_VALID                   UINT32_C(0x0)
-/** Timer ICR - Valid bits. */
-#define XAPIC_TIMER_ICR_VALID                UINT32_C(0xffffffff)
-/** Timer DCR - Valid bits. */
-#define XAPIC_TIMER_DCR_VALID                (RT_BIT(0) | RT_BIT(1) | RT_BIT(3))
-
-/** Self IPI - Valid bits. */
-#define XAPIC_SELF_IPI_VALID                 UINT32_C(0xff)
-/** Self IPI - The vector. */
-#define XAPIC_SELF_IPI_VECTOR                UINT32_C(0xff)
-/** Self IPI - Gets the vector. */
-#define XAPIC_SELF_IPI_GET_VECTOR(a_uReg)    ((a_uReg) & XAPIC_SELF_IPI_VECTOR)
-
-/** ICR Low - The Vector. */
-#define XAPIC_ICR_LO_VECTOR                  UINT32_C(0xff)
-/** ICR Low - Gets the vector. */
-#define XAPIC_ICR_LO_GET_VECTOR(a_uIcr)      ((a_uIcr) & XAPIC_ICR_LO_VECTOR)
-/** ICR Low - The delivery mode. */
-#define XAPIC_ICR_LO_DELIVERY_MODE           (RT_BIT(8) | RT_BIT(9) | RT_BIT(10))
-/** ICR Low - The destination mode. */
-#define XAPIC_ICR_LO_DEST_MODE               RT_BIT(11)
-/** ICR Low - The delivery status. */
-#define XAPIC_ICR_LO_DELIVERY_STATUS         RT_BIT(12)
-/** ICR Low - The level. */
-#define XAPIC_ICR_LO_LEVEL                   RT_BIT(14)
-/** ICR Low - The trigger mode. */
-#define XAPIC_ICR_TRIGGER_MODE               RT_BIT(15)
-/** ICR Low - The destination shorthand. */
-#define XAPIC_ICR_LO_DEST_SHORTHAND          (RT_BIT(18) | RT_BIT(19))
-/** ICR Low - Valid write bits. */
-#define XAPIC_ICR_LO_WR_VALID                (  XAPIC_ICR_LO_VECTOR | XAPIC_ICR_LO_DELIVERY_MODE | XAPIC_ICR_LO_DEST_MODE \
-                                              | XAPIC_ICR_LO_LEVEL | XAPIC_ICR_TRIGGER_MODE | XAPIC_ICR_LO_DEST_SHORTHAND)
-
-/** ICR High - The destination field. */
-#define XAPIC_ICR_HI_DEST                    UINT32_C(0xff000000)
-/** ICR High - Get the destination field. */
-#define XAPIC_ICR_HI_GET_DEST(a_u32IcrHi)    (((a_u32IcrHi) >> 24) & XAPIC_ICR_HI_DEST)
-/** ICR High - Valid write bits in xAPIC mode. */
-#define XAPIC_ICR_HI_WR_VALID                XAPIC_ICR_HI_DEST
-
-/** APIC ID broadcast mask - x2APIC mode. */
-#define X2APIC_ID_BROADCAST_MASK             UINT32_C(0xffffffff)
-#if XAPIC_HARDWARE_VERSION == XAPIC_HARDWARE_VERSION_P4
-/** APIC ID broadcast mask - xAPIC mode. */
-# define XAPIC_ID_BROADCAST_MASK             UINT32_C(0xff)
-#else
-# error "Implement Pentium and P6 family APIC architectures"
-#endif
+/** Whether the APIC is in X2APIC mode or not. */
+#define XAPIC_IN_X2APIC_MODE(a_pVCpu)        (   (  ((a_pVCpu)->apic.s.uApicBaseMsr) \
+                                                  & (MSR_IA32_APICBASE_EN | MSR_IA32_APICBASE_EXTD)) \
+                                              ==    (MSR_IA32_APICBASE_EN | MSR_IA32_APICBASE_EXTD) )
 
 /**
  * The xAPIC sparse 256-bit register.
@@ -1021,100 +819,32 @@ AssertCompileMemberOffset(X2APICPAGE, self_ipi,    X2APIC_OFF_SELF_IPI);
  */
 typedef enum APICMSRACCESS
 {
-    /* MSR read while not in x2APIC. */
+    /** MSR read while not in x2APIC. */
     APICMSRACCESS_INVALID_READ_MODE = 0,
-    /* MSR write while not in x2APIC. */
+    /** MSR write while not in x2APIC. */
     APICMSRACCESS_INVALID_WRITE_MODE,
-    /* MSR read for a reserved/unknown/invalid MSR. */
+    /** MSR read for a reserved/unknown/invalid MSR. */
     APICMSRACCESS_READ_RSVD_OR_UNKNOWN,
-    /* MSR write for a reserved/unknown/invalid MSR. */
+    /** MSR write for a reserved/unknown/invalid MSR. */
     APICMSRACCESS_WRITE_RSVD_OR_UNKNOWN,
-    /* MSR read for a write-only MSR. */
+    /** MSR read for a write-only MSR. */
     APICMSRACCESS_READ_WRITE_ONLY,
-    /* MSR write for a read-only MSR. */
+    /** MSR write for a read-only MSR. */
     APICMSRACCESS_WRITE_READ_ONLY,
-    /* MSR read to reserved bits. */
+    /** MSR read to reserved bits. */
     APICMSRACCESS_READ_RSVD_BITS,
-    /* MSR write to reserved bits. */
+    /** MSR write to reserved bits. */
     APICMSRACCESS_WRITE_RSVD_BITS,
-    /* MSR write with invalid value. */
+    /** MSR write with invalid value. */
     APICMSRACCESS_WRITE_INVALID,
     /** MSR write disallowed due to incompatible config. */
     APICMSRACCESS_WRITE_DISALLOWED_CONFIG,
     /** MSR read disallowed due to incompatible config. */
     APICMSRACCESS_READ_DISALLOWED_CONFIG,
-    /* Count of enum members (don't use). */
+    /** Count of enum members (don't use). */
     APICMSRACCESS_COUNT
 } APICMSRACCESS;
 
-/** @name xAPIC Destination Format Register bits.
- * See Intel spec. 10.6.2.2 "Logical Destination Mode".
- * @{ */
-typedef enum XAPICDESTFORMAT
-{
-    XAPICDESTFORMAT_FLAT    = 0xf,
-    XAPICDESTFORMAT_CLUSTER = 0
-} XAPICDESTFORMAT;
-/** @} */
-
-/** @name xAPIC Timer Mode bits.
- * See Intel spec. 10.5.1 "Local Vector Table".
- * @{ */
-typedef enum XAPICTIMERMODE
-{
-    XAPICTIMERMODE_ONESHOT      = XAPIC_TIMER_MODE_ONESHOT,
-    XAPICTIMERMODE_PERIODIC     = XAPIC_TIMER_MODE_PERIODIC,
-    XAPICTIMERMODE_TSC_DEADLINE = XAPIC_TIMER_MODE_TSC_DEADLINE
-} XAPICTIMERMODE;
-/** @} */
-
-/** @name xAPIC Interrupt Command Register bits.
- * See Intel spec. 10.6.1 "Interrupt Command Register (ICR)".
- * See Intel spec. 10.5.1 "Local Vector Table".
- * @{ */
-/**
- * xAPIC destination shorthand.
- */
-typedef enum XAPICDESTSHORTHAND
-{
-    XAPICDESTSHORTHAND_NONE = 0,
-    XAPICDESTSHORTHAND_SELF,
-    XAPIDDESTSHORTHAND_ALL_INCL_SELF,
-    XAPICDESTSHORTHAND_ALL_EXCL_SELF
-} XAPICDESTSHORTHAND;
-
-/**
- * xAPIC INIT level de-assert delivery mode.
- */
-typedef enum XAPICINITLEVEL
-{
-    XAPICINITLEVEL_DEASSERT = 0,
-    XAPICINITLEVEL_ASSERT
-} XAPICLEVEL;
-
-/**
- * xAPIC destination mode.
- */
-typedef enum XAPICDESTMODE
-{
-    XAPICDESTMODE_PHYSICAL = 0,
-    XAPICDESTMODE_LOGICAL
-} XAPICDESTMODE;
-
-/**
- * xAPIC delivery mode type.
- */
-typedef enum XAPICDELIVERYMODE
-{
-    XAPICDELIVERYMODE_FIXED               = 0,
-    XAPICDELIVERYMODE_LOWEST_PRIO         = 1,
-    XAPICDELIVERYMODE_SMI                 = 2,
-    XAPICDELIVERYMODE_NMI                 = 4,
-    XAPICDELIVERYMODE_INIT                = 5,
-    XAPICDELIVERYMODE_STARTUP             = 6,
-    XAPICDELIVERYMODE_EXTINT              = 7
-} XAPICDELIVERYMODE;
-/** @} */
 
 /** @def APIC_CACHE_LINE_SIZE
  * Padding (in bytes) for aligning data in different cache lines. Present
@@ -1150,40 +880,32 @@ typedef const APICPIB *PCAPICPIB;
  */
 typedef struct APICDEV
 {
-    /** The device instance - R3 Ptr. */
-    PPDMDEVINSR3                pDevInsR3;
-    /** Alignment padding. */
-    R3PTRTYPE(void *)           pvAlignment0;
-
-    /** The device instance - R0 Ptr. */
-    PPDMDEVINSR0                pDevInsR0;
-    /** Alignment padding. */
-    R0PTRTYPE(void *)           pvAlignment1;
-
-    /** The device instance - RC Ptr. */
-    PPDMDEVINSRC                pDevInsRC;
+    /** The MMIO handle. */
+    IOMMMIOHANDLE               hMmio;
 } APICDEV;
 /** Pointer to an APIC device. */
 typedef APICDEV *PAPICDEV;
 /** Pointer to a const APIC device. */
 typedef APICDEV const *PCAPICDEV;
 
+
+/**
+ * The APIC GVM instance data.
+ */
+typedef struct APICR0PERVM
+{
+    /** The ring-0 device instance. */
+    PPDMDEVINSR0                pDevInsR0;
+} APICR0PERVM;
+
+
 /**
  * APIC VM Instance data.
  */
 typedef struct APIC
 {
-    /** @name The APIC PDM device instance.
-     * @{ */
-    /** The APIC device - R0 ptr. */
-    R0PTRTYPE(PAPICDEV)         pApicDevR0;
-    /** The APIC device - R3 ptr. */
-    R3PTRTYPE(PAPICDEV)         pApicDevR3;
-    /** The APIC device - RC ptr. */
-    RCPTRTYPE(PAPICDEV)         pApicDevRC;
-    /** Alignment padding. */
-    RTRCPTR                     RCPtrAlignment0;
-    /** @} */
+    /** The ring-3 device instance. */
+    PPDMDEVINSR3                pDevInsR3;
 
     /** @name The APIC pending-interrupt bitmap (PIB).
      * @{ */
@@ -1197,14 +919,8 @@ typedef struct APIC
     R0PTRTYPE(void *)           pvApicPibR0;
     /** The APIC PIB virtual address - R3 ptr. */
     R3PTRTYPE(void *)           pvApicPibR3;
-    /** The APIC PIB virtual address - RC ptr. */
-    RCPTRTYPE(void *)           pvApicPibRC;
-    /** Alignment padding. */
-    RTRCPTR                     RCPtrAlignment1;
     /** The size of the page in bytes. */
     uint32_t                    cbApicPib;
-    /** Alignment padding. */
-    uint32_t                    u32Aligment0;
     /** @} */
 
     /** @name Other miscellaneous data.
@@ -1217,16 +933,20 @@ typedef struct APIC
     bool                        fSupportsTscDeadline;
     /** Whether this VM has an IO-APIC. */
     bool                        fIoApicPresent;
-    /** Whether RZ is enabled or not (applies to MSR handling as well). */
-    bool                        fRZEnabled;
+    /** Whether R0 is enabled or not (applies to MSR handling as well). */
+    bool                        fR0Enabled;
+    /** Whether RC is enabled or not (applies to MSR handling as well). */
+    bool                        fRCEnabled;
     /** Whether Hyper-V x2APIC compatibility mode is enabled. */
     bool                        fHyperVCompatMode;
-    /** Alignment padding. */
-    bool                        afAlignment[2];
+    /** Enable horrible macOS workaround where the ID register has the value
+     * shifted up 24 bits to be compatible with buggy code in
+     * i386_init.c/vstart().  Only applied if we're in typical macOS 64-bit
+     * kernel load area and macOS kernel selector value (8), as we must not ever
+     * apply this to the EFI code. */
+    bool                        fMacOSWorkaround;
     /** The max supported APIC mode from CFGM.  */
     PDMAPICMODE                 enmMaxMode;
-    /** Alignment padding. */
-    uint32_t                    u32Alignment1;
     /** @} */
 } APIC;
 /** Pointer to APIC VM instance data. */
@@ -1234,8 +954,6 @@ typedef APIC *PAPIC;
 /** Pointer to const APIC VM instance data. */
 typedef APIC const *PCAPIC;
 AssertCompileMemberAlignment(APIC, cbApicPib, 8);
-AssertCompileMemberAlignment(APIC, fVirtApicRegsEnabled, 8);
-AssertCompileMemberAlignment(APIC, enmMaxMode, 8);
 AssertCompileSizeAlignment(APIC, 8);
 
 /**
@@ -1255,10 +973,6 @@ typedef struct APICCPU
     R0PTRTYPE(void *)           pvApicPageR0;
     /** The APIC page virtual address - R3 ptr. */
     R3PTRTYPE(void *)           pvApicPageR3;
-    /** The APIC page virtual address - RC ptr. */
-    RCPTRTYPE(void *)           pvApicPageRC;
-    /** Alignment padding. */
-    RTRCPTR                     RCPtrAlignment0;
     /** The size of the page in bytes. */
     uint32_t                    cbApicPage;
     /** @} */
@@ -1279,10 +993,6 @@ typedef struct APICCPU
     R0PTRTYPE(void *)           pvApicPibR0;
     /** The APIC PIB virtual address - R3 ptr. */
     R3PTRTYPE(void *)           pvApicPibR3;
-    /** The APIC PIB virtual address - RC ptr. */
-    RCPTRTYPE(void *)           pvApicPibRC;
-    /** Alignment padding. */
-    RTRCPTR                     RCPtrAlignment1;
     /** The APIC PIB for level-sensitive interrupts. */
     APICPIB                     ApicPibLevel;
     /** @} */
@@ -1294,34 +1004,37 @@ typedef struct APICCPU
     /** Whether the LINT1 interrupt line is active. */
     bool volatile               fActiveLint1;
     /** Alignment padding. */
-    uint8_t                     auAlignment0[6];
+    uint8_t                     auAlignment2[6];
+    /** The source tags corresponding to each interrupt vector (debugging). */
+    uint32_t                    auSrcTags[256];
     /** @} */
 
     /** @name The APIC timer.
      * @{ */
-    /** The timer - R0 ptr. */
-    PTMTIMERR0                  pTimerR0;
-    /** The timer - R3 ptr. */
-    PTMTIMERR3                  pTimerR3;
-    /** The timer - RC ptr. */
-    PTMTIMERRC                  pTimerRC;
-    /** Alignment padding. */
-    RTRCPTR                     RCPtrAlignment2;
-    /** The timer critical sect protecting @a u64TimerInitial  */
-    PDMCRITSECT                 TimerCritSect;
-    /** The time stamp when the timer was initialized. */
+    /** The timer. */
+    TMTIMERHANDLE               hTimer;
+    /** The time stamp when the timer was initialized.
+     * @note Access protected by the timer critsect.  */
     uint64_t                    u64TimerInitial;
     /** Cache of timer initial count of the frequency hint to TM. */
     uint32_t                    uHintedTimerInitialCount;
     /** Cache of timer shift of the frequency hint to TM. */
     uint32_t                    uHintedTimerShift;
     /** The timer description. */
-    char                        szTimerDesc[32];
+    char                        szTimerDesc[16];
     /** @} */
 
-#ifdef VBOX_WITH_STATISTICS
+    /** @name Log Max counters
+     * @{ */
+    uint32_t                    cLogMaxAccessError;
+    uint32_t                    cLogMaxSetApicBaseAddr;
+    uint32_t                    cLogMaxGetApicBaseAddr;
+    uint32_t                    uAlignment4;
+    /** @} */
+
     /** @name APIC statistics.
      * @{ */
+#ifdef VBOX_WITH_STATISTICS
     /** Number of MMIO reads in RZ. */
     STAMCOUNTER                 StatMmioReadRZ;
     /** Number of MMIO reads in R3. */
@@ -1369,8 +1082,22 @@ typedef struct APICCPU
     STAMCOUNTER                 StatIcrHiWrite;
     /** Number of times the full ICR (x2APIC send IPI) is written. */
     STAMCOUNTER                 StatIcrFullWrite;
-    /** @} */
+    /** Number of times the DCR is written. */
+    STAMCOUNTER                 StatDcrWrite;
+    /** Number of times the DFR is written. */
+    STAMCOUNTER                 StatDfrWrite;
+    /** Number of times the LDR is written. */
+    STAMCOUNTER                 StatLdrWrite;
+    /** Number of times the APIC-ID MSR is read. */
+    STAMCOUNTER                 StatIdMsrRead;
+    /** Number of times the LVT timer is written. */
+    STAMCOUNTER                 StatLvtTimerWrite;
 #endif
+    /** Number of apicPostInterrupt() calls. */
+    STAMCOUNTER                 StatPostIntrCnt;
+    /** Number of interrupts broken down by vector. */
+    STAMCOUNTER                 aStatVectors[256];
+    /** @} */
 } APICCPU;
 /** Pointer to APIC VMCPU instance data. */
 typedef APICCPU *PAPICCPU;
@@ -1405,17 +1132,6 @@ DECLINLINE(uint8_t) apicGetTimerShift(PCXAPICPAGE pXApicPage)
     return (uShift + 1) & 7;
 }
 
-RT_C_DECLS_BEGIN
-
-
-/** @def APICBOTHCBDECL
- * Macro for declaring a callback which is static in HC and exported in GC.
- */
-#if defined(IN_RC) || defined(IN_RING0)
-# define APICBOTHCBDECL(type)    DECLEXPORT(type)
-#else
-# define APICBOTHCBDECL(type)    DECLCALLBACK(type)
-#endif
 
 const char                   *apicGetModeName(APICMODE enmMode);
 const char                   *apicGetDestFormatName(XAPICDESTFORMAT enmDestFormat);
@@ -1424,36 +1140,25 @@ const char                   *apicGetDestModeName(XAPICDESTMODE enmDestMode);
 const char                   *apicGetTriggerModeName(XAPICTRIGGERMODE enmTriggerMode);
 const char                   *apicGetDestShorthandName(XAPICDESTSHORTHAND enmDestShorthand);
 const char                   *apicGetTimerModeName(XAPICTIMERMODE enmTimerMode);
-void                          apicHintTimerFreq(PAPICCPU pApicCpu, uint32_t uInitialCount, uint8_t uTimerShift);
+void                          apicHintTimerFreq(PPDMDEVINS pDevIns, PAPICCPU pApicCpu, uint32_t uInitialCount, uint8_t uTimerShift);
 APICMODE                      apicGetMode(uint64_t uApicBaseMsr);
 
-APICBOTHCBDECL(uint64_t)      apicGetBaseMsr(PPDMDEVINS pDevIns, PVMCPU pVCpu);
-APICBOTHCBDECL(VBOXSTRICTRC)  apicSetBaseMsr(PPDMDEVINS pDevIns, PVMCPU pVCpu, uint64_t uBase);
-APICBOTHCBDECL(uint8_t)       apicGetTpr(PPDMDEVINS pDevIns, PVMCPU pVCpu, bool *pfPending, uint8_t *pu8PendingIntr);
-APICBOTHCBDECL(void)          apicSetTpr(PPDMDEVINS pDevIns, PVMCPU pVCpu, uint8_t u8Tpr);
-APICBOTHCBDECL(uint64_t)      apicGetTimerFreq(PPDMDEVINS pDevIns);
-APICBOTHCBDECL(int)           apicReadMmio(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS GCPhysAddr, void *pv, unsigned cb);
-APICBOTHCBDECL(int)           apicWriteMmio(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS GCPhysAddr, void const *pv, unsigned cb);
-APICBOTHCBDECL(VBOXSTRICTRC)  apicReadMsr(PPDMDEVINS pDevIns,  PVMCPU pVCpu, uint32_t u32Reg, uint64_t *pu64Val);
-APICBOTHCBDECL(VBOXSTRICTRC)  apicWriteMsr(PPDMDEVINS pDevIns, PVMCPU pVCpu, uint32_t u32Reg, uint64_t u64Val);
-APICBOTHCBDECL(int)           apicGetInterrupt(PPDMDEVINS pDevIns,  PVMCPU pVCpu, uint8_t *puVector, uint32_t *puTagSrc);
-APICBOTHCBDECL(VBOXSTRICTRC)  apicLocalInterrupt(PPDMDEVINS pDevIns, PVMCPU pVCpu, uint8_t u8Pin, uint8_t u8Level, int rcRZ);
-APICBOTHCBDECL(int)           apicBusDeliver(PPDMDEVINS pDevIns, uint8_t uDest, uint8_t uDestMode, uint8_t uDeliveryMode,
-                                             uint8_t uVector, uint8_t uPolarity, uint8_t uTriggerMode, uint32_t uTagSrc);
+DECLCALLBACK(VBOXSTRICTRC)    apicReadMmio(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS off, void *pv, unsigned cb);
+DECLCALLBACK(VBOXSTRICTRC)    apicWriteMmio(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS off, void const *pv, unsigned cb);
 
-VMM_INT_DECL(bool)            apicPostInterrupt(PVMCPU pVCpu, uint8_t uVector, XAPICTRIGGERMODE enmTriggerMode);
-VMM_INT_DECL(void)            apicStartTimer(PVMCPU pVCpu, uint32_t uInitialCount);
-VMM_INT_DECL(void)            apicStopTimer(PVMCPU pVCpu);
-VMM_INT_DECL(void)            apicSetInterruptFF(PVMCPU pVCpu, PDMAPICIRQ enmType);
-VMM_INT_DECL(void)            apicClearInterruptFF(PVMCPU pVCpu, PDMAPICIRQ enmType);
+bool                          apicPostInterrupt(PVMCPUCC pVCpu, uint8_t uVector, XAPICTRIGGERMODE enmTriggerMode, uint32_t uSrcTag);
+void                          apicStartTimer(PVMCPUCC pVCpu, uint32_t uInitialCount);
+void                          apicClearInterruptFF(PVMCPUCC pVCpu, PDMAPICIRQ enmType);
+void                          apicInitIpi(PVMCPUCC pVCpu);
+void                          apicResetCpu(PVMCPUCC pVCpu, bool fResetApicBaseMsr);
 
-#ifdef IN_RING3
-VMMR3_INT_DECL(void)          apicR3ResetCpu(PVMCPU pVCpu, bool fResetApicBaseMsr);
-#endif
-
-RT_C_DECLS_END
+DECLCALLBACK(int)             apicR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFGMNODE pCfg);
+DECLCALLBACK(int)             apicR3Destruct(PPDMDEVINS pDevIns);
+DECLCALLBACK(void)            apicR3Relocate(PPDMDEVINS pDevIns, RTGCINTPTR offDelta);
+DECLCALLBACK(void)            apicR3Reset(PPDMDEVINS pDevIns);
+DECLCALLBACK(int)             apicR3InitComplete(PPDMDEVINS pDevIns);
 
 /** @} */
 
-#endif
+#endif /* !VMM_INCLUDED_SRC_include_APICInternal_h */
 

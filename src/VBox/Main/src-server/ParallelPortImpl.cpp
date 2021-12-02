@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ParallelPortImpl.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_PARALLELPORT
 #include "ParallelPortImpl.h"
 #include "MachineImpl.h"
 #include "VirtualBoxImpl.h"
@@ -26,7 +27,7 @@
 
 #include "AutoStateDep.h"
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -71,6 +72,7 @@ void ParallelPort::FinalRelease()
  *  Initializes the Parallel Port object.
  *
  *  @param aParent  Handle of the parent object.
+ *  @param aSlot    Slotnumber this parallel port is plugged into.
  */
 HRESULT ParallelPort::init(Machine *aParent, ULONG aSlot)
 {
@@ -370,7 +372,7 @@ HRESULT ParallelPort::setPath(const com::Utf8Str &aPath)
  *  Loads settings from the given port node.
  *  May be called once right after this object creation.
  *
- *  @param aPortNode <Port> node.
+ *  @param data Configuration settings.
  *
  *  @note Locks this object for writing.
  */
@@ -392,7 +394,7 @@ HRESULT ParallelPort::i_loadSettings(const settings::ParallelPort &data)
  *
  *  Note that the given Port node is completely empty on input.
  *
- *  @param  <data> node.
+ *  @param  data Configuration settings.
  *
  *  @note Locks this object for reading.
  */
@@ -488,7 +490,10 @@ void ParallelPort::i_copyFrom(ParallelPort *aThat)
 }
 
 /**
- * Applies the defaults for the given parallel port.
+ * Applies the defaults for this parallel port.
+ *
+ * @note This method currently assumes that the object is in the state after
+ * calling init(), it does not set defaults from an arbitrary state.
  */
 void ParallelPort::i_applyDefaults()
 {

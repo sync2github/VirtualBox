@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPR3HardenedMain.cpp 87593 2021-02-03 20:21:54Z vboxsync $ */
 /** @file
  * VirtualBox Support Library - Hardened main().
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -403,6 +403,9 @@
 # include <iprt/nt/nt-and-windows.h>
 
 #else /* UNIXes */
+# ifdef RT_OS_DARWIN
+#  define _POSIX_C_SOURCE 1 /* pick the correct prototype for unsetenv. */
+# endif
 # include <iprt/types.h> /* stdint fun on darwin. */
 
 # include <stdio.h>
@@ -442,11 +445,13 @@
 #include <VBox/err.h>
 #ifdef RT_OS_WINDOWS
 # include <VBox/version.h>
+# include <iprt/utf16.h>
 #endif
 #include <iprt/ctype.h>
 #include <iprt/string.h>
 #include <iprt/initterm.h>
 #include <iprt/param.h>
+#include <iprt/path.h>
 
 #include "SUPLibInternal.h"
 
@@ -454,13 +459,15 @@
 /*********************************************************************************************************************************
 *   Defined Constants And Macros                                                                                                 *
 *********************************************************************************************************************************/
-/** @def SUP_HARDENED_SUID
- * Whether we're employing set-user-ID-on-execute in the hardening.
- */
+/* This mess is temporary after eliminating a define duplicated in SUPLibInternal.h. */
 #if !defined(RT_OS_OS2) && !defined(RT_OS_WINDOWS) && !defined(RT_OS_L4)
-# define SUP_HARDENED_SUID
+# ifndef SUP_HARDENED_SUID
+#  error "SUP_HARDENED_SUID is NOT defined?!?"
+# endif
 #else
-# undef  SUP_HARDENED_SUID
+# ifdef SUP_HARDENED_SUID
+#  error "SUP_HARDENED_SUID is defined?!?"
+# endif
 #endif
 
 /** @def SUP_HARDENED_SYM
@@ -477,13 +484,50 @@
 *   Structures and Typedefs                                                                                                      *
 *********************************************************************************************************************************/
 /** @see RTR3InitEx */
-typedef DECLCALLBACK(int) FNRTR3INITEX(uint32_t iVersion, uint32_t fFlags, int cArgs,
-                                       char **papszArgs, const char *pszProgramPath);
+typedef DECLCALLBACKTYPE(int, FNRTR3INITEX,(uint32_t iVersion, uint32_t fFlags, int cArgs,
+                                            char **papszArgs, const char *pszProgramPath));
 typedef FNRTR3INITEX *PFNRTR3INITEX;
 
 /** @see RTLogRelPrintf */
-typedef DECLCALLBACK(void) FNRTLOGRELPRINTF(const char *pszFormat, ...);
+typedef DECLCALLBACKTYPE(void, FNRTLOGRELPRINTF,(const char *pszFormat, ...));
 typedef FNRTLOGRELPRINTF *PFNRTLOGRELPRINTF;
+
+
+/**
+ * Descriptor of an environment variable to purge.
+ */
+typedef struct SUPENVPURGEDESC
+{
+    /** Name of the environment variable to purge. */
+    const char         *pszEnv;
+    /** The length of the variable name. */
+    uint8_t             cchEnv;
+    /** Flag whether a failure in purging the variable leads to
+     * a fatal error resulting in an process exit. */
+    bool                fPurgeErrFatal;
+} SUPENVPURGEDESC;
+/** Pointer to a environment variable purge descriptor. */
+typedef SUPENVPURGEDESC *PSUPENVPURGEDESC;
+/** Pointer to a const environment variable purge descriptor. */
+typedef const SUPENVPURGEDESC *PCSUPENVPURGEDESC;
+
+/**
+ * Descriptor of an command line argument to purge.
+ */
+typedef struct SUPARGPURGEDESC
+{
+    /** Name of the argument to purge. */
+    const char         *pszArg;
+    /** The length of the argument name. */
+    uint8_t             cchArg;
+    /** Flag whether the argument is followed by an extra argument
+     * which must be purged too */
+    bool                fTakesValue;
+} SUPARGPURGEDESC;
+/** Pointer to a environment variable purge descriptor. */
+typedef SUPARGPURGEDESC *PSUPARGPURGEDESC;
+/** Pointer to a const environment variable purge descriptor. */
+typedef const SUPARGPURGEDESC *PCSUPARGPURGEDESC;
 
 
 /*********************************************************************************************************************************
@@ -498,6 +542,10 @@ static
 char                    g_szSupLibHardenedExePath[RTPATH_MAX];
 /** The application bin directory path. */
 static char             g_szSupLibHardenedAppBinPath[RTPATH_MAX];
+/** The offset into g_szSupLibHardenedExePath of the executable name. */
+static size_t           g_offSupLibHardenedExecName;
+/** The length of the executable name in g_szSupLibHardenedExePath. */
+static size_t           g_cchSupLibHardenedExecName;
 
 /** The program name. */
 static const char      *g_pszSupLibHardenedProgName;
@@ -535,6 +583,28 @@ static PFNRTLOGRELPRINTF g_pfnRTLogRelPrintf = NULL;
 /** Log volume name (for attempting volume flush). */
 static RTUTF16          g_wszStartupLogVol[16];
 #endif
+
+/** Environment variables to purge from the process because
+ * they are known to be harmful. */
+static const SUPENVPURGEDESC g_aSupEnvPurgeDescs[] =
+{
+    /* pszEnv                                       fPurgeErrFatal */
+    /* Qt related environment variables: */
+    { RT_STR_TUPLE("QT_QPA_PLATFORM_PLUGIN_PATH"),  true },
+    { RT_STR_TUPLE("QT_PLUGIN_PATH"),               true },
+    /* ALSA related environment variables: */
+    { RT_STR_TUPLE("ALSA_MIXER_SIMPLE_MODULES"),    true },
+    { RT_STR_TUPLE("LADSPA_PATH"),                  true },
+};
+
+/** Arguments to purge from the argument vector because
+ * they are known to be harmful. */
+static const SUPARGPURGEDESC g_aSupArgPurgeDescs[] =
+{
+    /* pszArg                        fTakesValue */
+    /* Qt related environment variables: */
+    { RT_STR_TUPLE("-platformpluginpath"),          true },
+};
 
 
 /*********************************************************************************************************************************
@@ -600,7 +670,7 @@ static int suplibHardenedStrCopyEx(char *pszDst, size_t cbDst, ...)
  *
  * @param   rcExit      The exit code.
  */
-DECLNORETURN(void) suplibHardenedExit(RTEXITCODE rcExit)
+DECLHIDDEN(DECL_NO_RETURN(void)) suplibHardenedExit(RTEXITCODE rcExit)
 {
     for (;;)
     {
@@ -980,6 +1050,7 @@ DECLHIDDEN(void) suplibHardenedPrintFV(const char *pszFormat, va_list va)
                             break;
                         case 'X':
                             fFlags |= RTSTR_F_CAPITAL;
+                            RT_FALL_THRU();
                         case 'x':
                             uBase = 16;
                             break;
@@ -1020,7 +1091,7 @@ DECLHIDDEN(void) suplibHardenedPrintFV(const char *pszFormat, va_list va)
                         pszFormat += 2;
                         break;
                     }
-                    /* fall thru */
+                    RT_FALL_THRU();
 
                 /*
                  * Custom format.
@@ -1262,6 +1333,8 @@ static void supR3HardenedGetFullExePath(void)
     if (!cchImageName || cchImageName >= sizeof(g_szSupLibHardenedExePath))
         supR3HardenedFatal("supR3HardenedExecDir: _dyld_get_image_name(0) failed, cchImageName=%d\n", cchImageName);
     suplibHardenedMemCopy(g_szSupLibHardenedExePath, pszImageName, cchImageName + 1);
+    /** @todo abspath the string or this won't work:
+     * cd /Applications/VirtualBox.app/Contents/Resources/VirtualBoxVM.app/Contents/MacOS/ && ./VirtualBoxVM --startvm name */
 
 #elif defined(RT_OS_WINDOWS)
     char *pszDst = g_szSupLibHardenedExePath;
@@ -1278,6 +1351,11 @@ static void supR3HardenedGetFullExePath(void)
     suplibHardenedStrCopy(g_szSupLibHardenedAppBinPath, g_szSupLibHardenedExePath);
     suplibHardenedPathStripFilename(g_szSupLibHardenedAppBinPath);
 
+    g_offSupLibHardenedExecName = suplibHardenedStrLen(g_szSupLibHardenedAppBinPath);
+    while (RTPATH_IS_SEP(g_szSupLibHardenedExePath[g_offSupLibHardenedExecName]))
+           g_offSupLibHardenedExecName++;
+    g_cchSupLibHardenedExecName = suplibHardenedStrLen(&g_szSupLibHardenedExePath[g_offSupLibHardenedExecName]);
+
     if (g_enmSupR3HardenedMainState < SUPR3HARDENEDMAINSTATE_HARDENED_MAIN_CALLED)
         supR3HardenedFatal("supR3HardenedExecDir: Called before SUPR3HardenedMain! (%d)\n", g_enmSupR3HardenedMainState);
     switch (g_fSupHardenedMain & SUPSECMAIN_FLAGS_LOC_MASK)
@@ -1287,6 +1365,43 @@ static void supR3HardenedGetFullExePath(void)
         case SUPSECMAIN_FLAGS_LOC_TESTCASE:
             suplibHardenedPathStripFilename(g_szSupLibHardenedAppBinPath);
             break;
+#ifdef RT_OS_DARWIN
+        case SUPSECMAIN_FLAGS_LOC_OSX_HLP_APP:
+        {
+            /* We must ascend to the parent bundle's Contents directory then decend into its MacOS: */
+            static const RTSTRTUPLE s_aComponentsToSkip[] =
+            { { RT_STR_TUPLE("MacOS") }, { RT_STR_TUPLE("Contents") }, { NULL /*some.app*/, 0 }, { RT_STR_TUPLE("Resources") } };
+            size_t cchPath = suplibHardenedStrLen(g_szSupLibHardenedAppBinPath);
+            for (uintptr_t i = 0; i < RT_ELEMENTS(s_aComponentsToSkip); i++)
+            {
+                while (cchPath > 1 && g_szSupLibHardenedAppBinPath[cchPath - 1] == '/')
+                    cchPath--;
+                size_t const cchMatch = s_aComponentsToSkip[i].cch;
+                if (cchMatch > 0)
+                {
+                    if (   cchPath >= cchMatch + sizeof("VirtualBox.app/Contents")
+                        && g_szSupLibHardenedAppBinPath[cchPath - cchMatch - 1] == '/'
+                        && suplibHardenedMemComp(&g_szSupLibHardenedAppBinPath[cchPath - cchMatch],
+                                                 s_aComponentsToSkip[i].psz, cchMatch) == 0)
+                        cchPath -= cchMatch;
+                    else
+                        supR3HardenedFatal("supR3HardenedExecDir: Bad helper app path (tail component #%u '%s'): %s\n",
+                                           i, s_aComponentsToSkip[i].psz, g_szSupLibHardenedAppBinPath);
+                }
+                else if (   cchPath > g_cchSupLibHardenedExecName  + sizeof("VirtualBox.app/Contents/Resources/.app")
+                         && suplibHardenedMemComp(&g_szSupLibHardenedAppBinPath[cchPath - 4], ".app", 4) == 0
+                         && suplibHardenedMemComp(&g_szSupLibHardenedAppBinPath[cchPath - 4 - g_cchSupLibHardenedExecName],
+                                                  &g_szSupLibHardenedExePath[g_offSupLibHardenedExecName],
+                                                  g_cchSupLibHardenedExecName) == 0)
+                    cchPath -= g_cchSupLibHardenedExecName + 4;
+                else
+                    supR3HardenedFatal("supR3HardenedExecDir: Bad helper app path (tail component #%u '%s.app'): %s\n",
+                                       i, &g_szSupLibHardenedExePath[g_offSupLibHardenedExecName], g_szSupLibHardenedAppBinPath);
+            }
+            suplibHardenedMemCopy(&g_szSupLibHardenedAppBinPath[cchPath], "MacOS", sizeof("MacOS"));
+            break;
+        }
+#endif /* RT_OS_DARWIN */
         default:
             supR3HardenedFatal("supR3HardenedExecDir: Unknown program binary location: %#x\n", g_fSupHardenedMain);
     }
@@ -1313,7 +1428,6 @@ static bool supR3HardenedMainIsProcSelfExeAccssible(void)
 
 
 /**
- * @copydoc RTPathExecDir
  * @remarks not quite like RTPathExecDir actually...
  */
 DECLHIDDEN(int) supR3HardenedPathAppBin(char *pszPath, size_t cchPath)
@@ -1361,7 +1475,7 @@ DECLHIDDEN(void) supR3HardenedOpenLog(int *pcArgs, char **papszArgs)
             /*
              * Drop the argument from the vector (has trailing NULL entry).
              */
-            memmove(&papszArgs[iArg], &papszArgs[iArg + 1], (cArgs - iArg) * sizeof(papszArgs[0]));
+//            memmove(&papszArgs[iArg], &papszArgs[iArg + 1], (cArgs - iArg) * sizeof(papszArgs[0]));
             *pcArgs -= 1;
             cArgs   -= 1;
 
@@ -1383,8 +1497,8 @@ DECLHIDDEN(void) supR3HardenedOpenLog(int *pcArgs, char **papszArgs)
                                       NULL);
                 if (RT_SUCCESS(rc))
                 {
-                    SUP_DPRINTF(("Log file opened: " VBOX_VERSION_STRING "r%u g_hStartupLog=%p g_uNtVerCombined=%#x\n",
-                                 VBOX_SVN_REV, g_hStartupLog, g_uNtVerCombined));
+//                    SUP_DPRINTF(("Log file opened: " VBOX_VERSION_STRING "r%u g_hStartupLog=%p g_uNtVerCombined=%#x\n",
+//                                 VBOX_SVN_REV, g_hStartupLog, g_uNtVerCombined));
 
                     /*
                      * If the path contains a drive volume, save it so we can
@@ -1392,7 +1506,7 @@ DECLHIDDEN(void) supR3HardenedOpenLog(int *pcArgs, char **papszArgs)
                      */
                     if (RT_C_IS_ALPHA(pszLogFile[0]) && pszLogFile[1] == ':')
                     {
-                        RTUtf16CopyAscii(g_wszStartupLogVol, RT_ELEMENTS(g_wszStartupLogVol), "\\??\\");
+//                        RTUtf16CopyAscii(g_wszStartupLogVol, RT_ELEMENTS(g_wszStartupLogVol), "\\??\\");
                         g_wszStartupLogVol[sizeof("\\??\\") - 1] = RT_C_TO_UPPER(pszLogFile[0]);
                         g_wszStartupLogVol[sizeof("\\??\\") + 0] = ':';
                         g_wszStartupLogVol[sizeof("\\??\\") + 1] = '\0';
@@ -1596,35 +1710,40 @@ DECL_NO_RETURN(DECLHIDDEN(void)) supR3HardenedFatalMsgV(const char *pszWhere, SU
     if (g_enmSupR3HardenedMainState >= SUPR3HARDENEDMAINSTATE_WIN_IMPORTS_RESOLVED)
     {
 #ifdef SUP_HARDENED_SUID
-        /*
-         * Drop any root privileges we might be holding, this won't return
-         * if it fails but end up calling supR3HardenedFatal[V].
-         */
+        /* Drop any root privileges we might be holding, this won't return
+           if it fails but end up calling supR3HardenedFatal[V]. */
         supR3HardenedMainDropPrivileges();
 #endif
+        /* Close the driver, if we succeeded opening it.  Both because
+           TrustedError may be untrustworthy and because the driver deosn't
+           like us if we fork().  @bugref{8838} */
+        suplibOsTerm(&g_SupPreInitData.Data);
 
         /*
-         * Now try resolve and call the TrustedError entry point if we can
-         * find it.  We'll fork before we attempt this because that way the
-         * session management in main will see us exiting immediately (if
-         * it's involved with us).
+         * Now try resolve and call the TrustedError entry point if we can find it.
+         * Note! Loader involved, so we must guard against loader hooks calling us.
          */
-#if !defined(RT_OS_WINDOWS) && !defined(RT_OS_OS2)
-        int pid = fork();
-        if (pid <= 0)
-#endif
+        static volatile bool s_fRecursive = false;
+        if (!s_fRecursive)
         {
-            static volatile bool s_fRecursive = false; /* Loader hooks may cause recursion. */
-            if (!s_fRecursive)
+            s_fRecursive = true;
+
+            PFNSUPTRUSTEDERROR pfnTrustedError = supR3HardenedMainGetTrustedError(g_pszSupLibHardenedProgName);
+            if (pfnTrustedError)
             {
-                s_fRecursive = true;
-
-                PFNSUPTRUSTEDERROR pfnTrustedError = supR3HardenedMainGetTrustedError(g_pszSupLibHardenedProgName);
-                if (pfnTrustedError)
+                /* We'll fork before we make the call because that way the session management
+                   in main will see us exiting immediately (if it's involved with us) and possibly
+                   get an error back to the API / user. */
+#if !defined(RT_OS_WINDOWS) && !defined(RT_OS_OS2)
+                int pid = fork();
+                if (pid <= 0)
+#endif
+                {
                     pfnTrustedError(pszWhere, enmWhat, rc, pszMsgFmt, va);
-
-                s_fRecursive = false;
+                }
             }
+
+            s_fRecursive = false;
         }
     }
 #if defined(RT_OS_WINDOWS)
@@ -1788,7 +1907,8 @@ DECLHIDDEN(void) supR3HardenedMainOpenDevice(void)
 /**
  * Grabs extra non-root capabilities / privileges that we might require.
  *
- * This is currently only used for being able to do ICMP from the NAT engine.
+ * This is currently only used for being able to do ICMP from the NAT engine
+ * and for being able to raise thread scheduling priority
  *
  * @note We still have root privileges at the time of this call.
  */
@@ -1797,13 +1917,14 @@ static void supR3HardenedMainGrabCapabilites(void)
 # if defined(RT_OS_LINUX)
     /*
      * We are about to drop all our privileges. Remove all capabilities but
-     * keep the cap_net_raw capability for ICMP sockets for the NAT stack.
+     * keep the cap_net_raw capability for ICMP sockets for the NAT stack,
+     * also keep cap_sys_nice capability for priority tweaking.
      */
     if (g_uCaps != 0)
     {
 #  ifdef USE_LIB_PCAP
         /* XXX cap_net_bind_service */
-        if (!cap_set_proc(cap_from_text("all-eip cap_net_raw+ep")))
+        if (!cap_set_proc(cap_from_text("all-eip cap_net_raw+ep cap_sys_nice+ep")))
             prctl(PR_SET_KEEPCAPS, 1 /*keep=*/, 0, 0, 0);
         prctl(PR_SET_DUMPABLE, 1 /*dump*/, 0, 0, 0);
 #  else
@@ -1905,6 +2026,16 @@ static void supR3GrabOptions(void)
         if (   pszOpt
             && memcmp(pszOpt, "0", sizeof("0")) != 0)
             g_uCaps |= CAP_TO_MASK(CAP_NET_BIND_SERVICE);
+
+        /*
+         * CAP_SYS_NICE.
+         * Default: enabled.
+         * Can be disabled with 'export VBOX_HARD_CAP_SYS_NICE=0'.
+         */
+        pszOpt = getenv("VBOX_HARD_CAP_SYS_NICE");
+        if (   !pszOpt
+            || memcmp(pszOpt, "0", sizeof("0")) != 0)
+            g_uCaps |= CAP_TO_MASK(CAP_SYS_NICE);
     }
 # endif
 }
@@ -1977,14 +2108,14 @@ static void supR3HardenedMainDropPrivileges(void)
 
 # if RT_OS_LINUX
     /*
-     * Re-enable the cap_net_raw capability which was disabled during setresuid.
+     * Re-enable the cap_net_raw and cap_sys_nice capabilities which were disabled during setresuid.
      */
     if (g_uCaps != 0)
     {
 #  ifdef USE_LIB_PCAP
         /** @todo Warn if that does not work? */
         /* XXX cap_net_bind_service */
-        cap_set_proc(cap_from_text("cap_net_raw+ep"));
+        cap_set_proc(cap_from_text("cap_net_raw+ep cap_sys_nice+ep"));
 #  else
         cap_user_header_t hdr = (cap_user_header_t)alloca(sizeof(*hdr));
         cap_user_data_t   cap = (cap_user_data_t)alloca(2 /* _LINUX_CAPABILITY_U32S_3 */ * sizeof(*cap));
@@ -2001,6 +2132,137 @@ static void supR3HardenedMainDropPrivileges(void)
 }
 
 #endif /* SUP_HARDENED_SUID */
+
+/**
+ * Purge the process environment from any environment vairable which can lead
+ * to loading untrusted binaries compromising the process address space.
+ *
+ * @param   envp        The initial environment vector. (Can be NULL.)
+ */
+static void supR3HardenedMainPurgeEnvironment(char **envp)
+{
+    for (unsigned i = 0; i < RT_ELEMENTS(g_aSupEnvPurgeDescs); i++)
+    {
+        /*
+         * Update the initial environment vector, just in case someone actually cares about it.
+         */
+        if (envp)
+        {
+            const char * const  pszEnv = g_aSupEnvPurgeDescs[i].pszEnv;
+            size_t const        cchEnv = g_aSupEnvPurgeDescs[i].cchEnv;
+            unsigned            iSrc   = 0;
+            unsigned            iDst   = 0;
+            char               *pszTmp;
+
+            while ((pszTmp = envp[iSrc]) != NULL)
+            {
+                if (   memcmp(pszTmp, pszEnv, cchEnv) != 0
+                    || (pszTmp[cchEnv] != '=' && pszTmp[cchEnv] != '\0'))
+                {
+                    if (iDst != iSrc)
+                        envp[iDst] = pszTmp;
+                    iDst++;
+                }
+                else
+                    SUP_DPRINTF(("supR3HardenedMainPurgeEnvironment: dropping envp[%d]=%s\n", iSrc, pszTmp));
+                iSrc++;
+            }
+
+            if (iDst != iSrc)
+                while (iDst <= iSrc)
+                    envp[iDst++] = NULL;
+        }
+
+        /*
+         * Remove from the process environment if present.
+         */
+#ifndef RT_OS_WINDOWS
+        const char *pszTmp = getenv(g_aSupEnvPurgeDescs[i].pszEnv);
+        if (pszTmp != NULL)
+        {
+            if (unsetenv((char *)g_aSupEnvPurgeDescs[i].pszEnv) == 0)
+                SUP_DPRINTF(("supR3HardenedMainPurgeEnvironment: dropped %s\n", pszTmp));
+            else
+                if (g_aSupEnvPurgeDescs[i].fPurgeErrFatal)
+                    supR3HardenedFatal("SUPR3HardenedMain: failed to purge %s environment variable! (errno=%d %s)\n",
+                                       g_aSupEnvPurgeDescs[i].pszEnv, errno, strerror(errno));
+                else
+                    SUP_DPRINTF(("supR3HardenedMainPurgeEnvironment: dropping %s failed! errno=%d\n", pszTmp, errno));
+        }
+#else
+        /** @todo Call NT API to do the same. */
+#endif
+    }
+}
+
+
+/**
+ * Returns the argument purge descriptor of the given argument if available.
+ *
+ * @retval 0 if it should not be purged.
+ * @retval 1 if it only the current argument should be purged.
+ * @retval 2 if the argument and the following (if present) should be purged.
+ * @param   pszArg           The argument to look for.
+ */
+static unsigned supR3HardenedMainShouldPurgeArg(const char *pszArg)
+{
+    for (unsigned i = 0; i < RT_ELEMENTS(g_aSupArgPurgeDescs); i++)
+    {
+        size_t const cchPurge = g_aSupArgPurgeDescs[i].cchArg;
+        if (!memcmp(pszArg, g_aSupArgPurgeDescs[i].pszArg, cchPurge))
+        {
+            if (pszArg[cchPurge] == '\0')
+                return 1 + g_aSupArgPurgeDescs[i].fTakesValue;
+            if (   g_aSupArgPurgeDescs[i].fTakesValue
+                && (pszArg[cchPurge] == ':' || pszArg[cchPurge] == '='))
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
+
+/**
+ * Purges any command line arguments considered harmful.
+ *
+ * @returns nothing.
+ * @param   cArgsOrig        The original number of arguments.
+ * @param   papszArgsOrig    The original argument vector.
+ * @param   pcArgsNew        Where to store the new number of arguments on success.
+ * @param   ppapszArgsNew    Where to store the pointer to the purged argument vector.
+ */
+static void supR3HardenedMainPurgeArgs(int cArgsOrig, char **papszArgsOrig, int *pcArgsNew, char ***ppapszArgsNew)
+{
+    int    iDst = 0;
+#ifdef RT_OS_WINDOWS
+    char **papszArgsNew = papszArgsOrig; /* We allocated this, no need to allocate again. */
+#else
+    char **papszArgsNew = (char **)malloc((cArgsOrig + 1) * sizeof(char *));
+#endif
+    if (papszArgsNew)
+    {
+        for (int iSrc = 0; iSrc < cArgsOrig; iSrc++)
+        {
+            unsigned cPurgedArgs = supR3HardenedMainShouldPurgeArg(papszArgsOrig[iSrc]);
+            if (!cPurgedArgs)
+                papszArgsNew[iDst++] = papszArgsOrig[iSrc];
+            else
+                iSrc += cPurgedArgs - 1;
+        }
+
+        papszArgsNew[iDst] = NULL; /* The array is NULL terminated, just like envp. */
+    }
+    else
+        supR3HardenedFatal("SUPR3HardenedMain: failed to allocate memory for purged command line!\n");
+    *pcArgsNew     = iDst;
+    *ppapszArgsNew = papszArgsNew;
+
+#ifdef RT_OS_WINDOWS
+    /** @todo Update command line pointers in PEB, wont really work without it. */
+#endif
+}
+
 
 /**
  * Loads the VBoxRT DLL/SO/DYLIB, hands it the open driver,
@@ -2111,6 +2373,9 @@ static int supR3HardenedMainGetTrustedLib(const char *pszProgName, uint32_t fMai
     switch (g_fSupHardenedMain & SUPSECMAIN_FLAGS_LOC_MASK)
     {
         case SUPSECMAIN_FLAGS_LOC_APP_BIN:
+#ifdef RT_OS_DARWIN
+        case SUPSECMAIN_FLAGS_LOC_OSX_HLP_APP:
+#endif
             pszSubDirSlash = "/";
             break;
         case SUPSECMAIN_FLAGS_LOC_TESTCASE:
@@ -2305,7 +2570,7 @@ DECLHIDDEN(int) SUPR3HardenedMain(const char *pszProgName, uint32_t fFlags, int 
         && supR3HardenedWinIsReSpawnNeeded(1 /*iWhich*/, argc, argv))
     {
         SUP_DPRINTF(("SUPR3HardenedMain: Respawn #1\n"));
-        supR3HardenedWinInit(SUPSECMAIN_FLAGS_DONT_OPEN_DEV, false /*fAvastKludge*/);
+        supR3HardenedWinInit(SUPSECMAIN_FLAGS_DONT_OPEN_DEV | SUPSECMAIN_FLAGS_FIRST_PROCESS, false /*fAvastKludge*/);
         supR3HardenedVerifyAll(true /* fFatal */, pszProgName, g_szSupLibHardenedExePath, fFlags);
         return supR3HardenedWinReSpawn(1 /*iWhich*/);
     }
@@ -2367,7 +2632,16 @@ DECLHIDDEN(int) SUPR3HardenedMain(const char *pszProgName, uint32_t fFlags, int 
     supR3HardenedWinFlushLoaderCache();
     supR3HardenedWinResolveVerifyTrustApiAndHookThreadCreation(g_pszSupLibHardenedProgName);
     g_enmSupR3HardenedMainState = SUPR3HARDENEDMAINSTATE_WIN_VERIFY_TRUST_READY;
-#endif
+#else /* !RT_OS_WINDOWS */
+# if defined(RT_OS_DARWIN)
+    supR3HardenedDarwinInit();
+# elif !defined(RT_OS_FREEBSD) /** @todo Portme. */
+    /*
+     * Posix: Hook the load library interface interface.
+     */
+    supR3HardenedPosixInit();
+# endif
+#endif /* !RT_OS_WINDOWS */
 
 #ifdef SUP_HARDENED_SUID
     /*
@@ -2380,6 +2654,13 @@ DECLHIDDEN(int) SUPR3HardenedMain(const char *pszProgName, uint32_t fFlags, int 
      */
     supR3HardenedMainDropPrivileges();
 #endif
+
+    /*
+     * Purge any environment variables and command line arguments considered harmful.
+     */
+    /** @todo May need to move this to a much earlier stage on windows.  */
+    supR3HardenedMainPurgeEnvironment(envp);
+    supR3HardenedMainPurgeArgs(argc, argv, &argc, &argv);
 
     /*
      * Load the IPRT, hand the SUPLib part the open driver and

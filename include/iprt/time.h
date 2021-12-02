@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,11 +23,15 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_time_h
-#define ___iprt_time_h
+#ifndef IPRT_INCLUDED_time_h
+#define IPRT_INCLUDED_time_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
+#include <iprt/assertcompile.h>
 
 RT_C_DECLS_BEGIN
 
@@ -351,10 +355,32 @@ DECLINLINE(void) RTTimeSpecGetSecondsAndNano(PRTTIMESPEC pTime, int32_t *pi32Sec
     *pi32Nano    = i32Nano;
 }
 
+/** @def RTTIME_LINUX_KERNEL_PREREQ
+ * Prerequisite minimum linux kernel version.
+ * @note Cannot really be moved to iprt/cdefs.h, see the-linux-kernel.h */
+/** @def RTTIME_LINUX_KERNEL_PREREQ_LT
+ * Prerequisite maxium linux kernel version (LT=less-than).
+ * @note Cannot really be moved to iprt/cdefs.h, see the-linux-kernel.h */
+#if defined(RT_OS_LINUX) && defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION)
+# define RTTIME_LINUX_KERNEL_PREREQ(a, b, c)    (LINUX_VERSION_CODE >= KERNEL_VERSION(a, b, c))
+# define RTTIME_LINUX_KERNEL_PREREQ_LT(a, b, c) (!RTTIME_LINUX_KERNEL_PREREQ(a, b, c))
+#else
+# define RTTIME_LINUX_KERNEL_PREREQ(a, b, c)    0
+# define RTTIME_LINUX_KERNEL_PREREQ_LT(a, b, c) 0
+#endif
 
 /* PORTME: Add struct timeval guard macro here. */
-#if defined(RTTIME_INCL_TIMEVAL) || defined(_STRUCT_TIMEVAL) || defined(_SYS__TIMEVAL_H_) || defined(_SYS_TIME_H) || defined(_TIMEVAL) || defined(_LINUX_TIME_H) \
+#if defined(RTTIME_INCL_TIMEVAL) \
+ || defined(_SYS__TIMEVAL_H_) \
+ || defined(_SYS_TIME_H) \
+ || defined(_TIMEVAL) \
+ || defined(_STRUCT_TIMEVAL) \
+ || (   defined(RT_OS_LINUX) \
+     && defined(_LINUX_TIME_H) \
+     && (   !defined(__KERNEL__) \
+         || RTTIME_LINUX_KERNEL_PREREQ_LT(5,6,0) /* @bugref{9757} */ ) ) \
  || (defined(RT_OS_NETBSD) && defined(_SYS_TIME_H_))
+
 /**
  * Gets the time as POSIX timeval.
  *
@@ -388,16 +414,25 @@ DECLINLINE(PRTTIMESPEC) RTTimeSpecSetTimeval(PRTTIMESPEC pTime, const struct tim
 {
     return RTTimeSpecAddMicro(RTTimeSpecSetSeconds(pTime, pTimeval->tv_sec), pTimeval->tv_usec);
 }
+
 #endif /* various ways of detecting struct timeval */
 
 
 /* PORTME: Add struct timespec guard macro here. */
-#if defined(RTTIME_INCL_TIMESPEC) || defined(_STRUCT_TIMESPEC) || defined(_SYS__TIMESPEC_H_) || defined(TIMEVAL_TO_TIMESPEC) || defined(_TIMESPEC) \
+#if defined(RTTIME_INCL_TIMESPEC) \
+ || defined(_SYS__TIMESPEC_H_) \
+ || defined(TIMEVAL_TO_TIMESPEC) \
+ || defined(_TIMESPEC) \
+ || (   defined(_STRUCT_TIMESPEC) \
+     && (   !defined(RT_OS_LINUX) \
+         || !defined(__KERNEL__) \
+         || RTTIME_LINUX_KERNEL_PREREQ_LT(5,6,0) /* @bugref{9757} */ ) ) \
  || (defined(RT_OS_NETBSD) && defined(_SYS_TIME_H_))
+
 /**
  * Gets the time as POSIX timespec.
  *
- * @returns pTime.
+ * @returns pTimespec.
  * @param   pTime       The time spec to interpret.
  * @param   pTimespec   Where to store the time as POSIX timespec.
  */
@@ -427,8 +462,45 @@ DECLINLINE(PRTTIMESPEC) RTTimeSpecSetTimespec(PRTTIMESPEC pTime, const struct ti
 {
     return RTTimeSpecAddNano(RTTimeSpecSetSeconds(pTime, pTimespec->tv_sec), pTimespec->tv_nsec);
 }
+
 #endif /* various ways of detecting struct timespec */
 
+
+#if defined(RT_OS_LINUX) && defined(_LINUX_TIME64_H) /* since linux 3.17 */
+
+/**
+ * Gets the time a linux 64-bit timespec structure.
+ * @returns pTimespec.
+ * @param   pTime       The time spec to modify.
+ * @param   pTimespec   Where to store the time as linux 64-bit timespec.
+ */
+DECLINLINE(struct timespec64 *) RTTimeSpecGetTimespec64(PCRTTIMESPEC pTime, struct timespec64 *pTimespec)
+{
+    int64_t i64 = RTTimeSpecGetNano(pTime);
+    int32_t i32Nano = (int32_t)(i64 % RT_NS_1SEC);
+    i64 /= RT_NS_1SEC;
+    if (i32Nano < 0)
+    {
+        i32Nano += RT_NS_1SEC;
+        i64--;
+    }
+    pTimespec->tv_sec = i64;
+    pTimespec->tv_nsec = i32Nano;
+    return pTimespec;
+}
+
+/**
+ * Sets the time from a linux 64-bit timespec structure.
+ * @returns pTime.
+ * @param   pTime       The time spec to modify.
+ * @param   pTimespec   Pointer to the linux 64-bit timespec struct with the new time.
+ */
+DECLINLINE(PRTTIMESPEC) RTTimeSpecSetTimespec64(PRTTIMESPEC pTime, const struct timespec64 *pTimespec)
+{
+    return RTTimeSpecAddNano(RTTimeSpecSetSeconds(pTime, pTimespec->tv_sec), pTimespec->tv_nsec);
+}
+
+#endif /* RT_OS_LINUX && _LINUX_TIME64_H */
 
 
 /** The offset of the unix epoch and the base for NT time (in 100ns units).
@@ -439,10 +511,10 @@ DECLINLINE(PRTTIMESPEC) RTTimeSpecSetTimespec(PRTTIMESPEC pTime, const struct ti
 /**
  * Gets the time as NT time.
  *
- * @returns Nt time.
+ * @returns NT time.
  * @param   pTime       The time spec to interpret.
  */
-DECLINLINE(uint64_t) RTTimeSpecGetNtTime(PCRTTIMESPEC pTime)
+DECLINLINE(int64_t) RTTimeSpecGetNtTime(PCRTTIMESPEC pTime)
 {
     return pTime->i64NanosecondsRelativeToUnixEpoch / 100
         + RTTIME_NT_TIME_OFFSET_UNIX;
@@ -465,6 +537,7 @@ DECLINLINE(PRTTIMESPEC) RTTimeSpecSetNtTime(PRTTIMESPEC pTime, uint64_t u64NtTim
 
 
 #ifdef _FILETIME_
+
 /**
  * Gets the time as NT file time.
  *
@@ -489,7 +562,8 @@ DECLINLINE(PRTTIMESPEC) RTTimeSpecSetNtFileTime(PRTTIMESPEC pTime, const FILETIM
 {
     return RTTimeSpecSetNtTime(pTime, *(const uint64_t *)pFileTime);
 }
-#endif
+
+#endif /* _FILETIME_ */
 
 
 /** The offset to the start of DOS time.
@@ -585,7 +659,6 @@ RTDECL(PRTTIMESPEC) RTTimeSpecFromString(PRTTIMESPEC pTime, const char *pszStrin
 /**
  * Exploded time.
  */
-#pragma pack(1)
 typedef struct RTTIME
 {
     /** The year number. */
@@ -609,11 +682,12 @@ typedef struct RTTIME
     uint32_t    u32Nanosecond;
     /** Flags, of the RTTIME_FLAGS_* \#defines. */
     uint32_t    fFlags;
-    /** UCT time offset in minutes (-840-840).
-     * @remarks The implementation of RTTimeLocal* isn't quite there yet, so this might not be 100% correct. */
+    /** UTC time offset in minutes (-840-840).  Positive for timezones east of
+     * UTC, negative for zones to the west.  Same as what RTTimeLocalDeltaNano
+     * & RTTimeLocalDeltaNanoFor returns, just different unit. */
     int32_t     offUTC;
 } RTTIME;
-#pragma pack()
+AssertCompileSize(RTTIME, 24);
 /** Pointer to a exploded time structure. */
 typedef RTTIME *PRTTIME;
 /** Pointer to a const exploded time structure. */
@@ -721,7 +795,7 @@ RTDECL(PRTTIME) RTTimeNormalize(PRTTIME pTime);
 RTDECL(PRTTIMESPEC) RTTimeLocalNow(PRTTIMESPEC pTime);
 
 /**
- * Gets the delta between UTC and local time.
+ * Gets the current delta between UTC and local time.
  *
  * @code
  *      RTTIMESPEC LocalTime;
@@ -731,6 +805,20 @@ RTDECL(PRTTIMESPEC) RTTimeLocalNow(PRTTIMESPEC pTime);
  * @returns Returns the nanosecond delta between UTC and local time.
  */
 RTDECL(int64_t) RTTimeLocalDeltaNano(void);
+
+/**
+ * Gets the delta between UTC and local time at the given time.
+ *
+ * @code
+ *      RTTIMESPEC LocalTime;
+ *      RTTimeNow(&LocalTime);
+ *      RTTimeSpecAddNano(&LocalTime, RTTimeLocalDeltaNanoFor(&LocalTime));
+ * @endcode
+ *
+ * @param   pTimeSpec   The time spec giving the time to get the delta for.
+ * @returns Returns the nanosecond delta between UTC and local time.
+ */
+RTDECL(int64_t) RTTimeLocalDeltaNanoFor(PCRTTIMESPEC pTimeSpec);
 
 /**
  * Explodes a time spec to the localized timezone.
@@ -753,6 +841,16 @@ RTDECL(PRTTIME) RTTimeLocalExplode(PRTTIME pTime, PCRTTIMESPEC pTimeSpec);
 RTDECL(PRTTIME) RTTimeLocalNormalize(PRTTIME pTime);
 
 /**
+ * Converts a time structure to UTC, relying on UTC offset information
+ * if it contains local time.
+ *
+ * @returns pTime on success.
+ * @returns NULL if the data is invalid.
+ * @param   pTime       The time structure to convert.
+ */
+RTDECL(PRTTIME) RTTimeConvertToZulu(PRTTIME pTime);
+
+/**
  * Converts a time spec to a ISO date string.
  *
  * @returns psz on success.
@@ -762,6 +860,21 @@ RTDECL(PRTTIME) RTTimeLocalNormalize(PRTTIME pTime);
  * @param   cb          The size of the buffer.
  */
 RTDECL(char *) RTTimeToString(PCRTTIME pTime, char *psz, size_t cb);
+
+/**
+ * Converts a time spec to a ISO date string, extended version.
+ *
+ * @returns Output string length on success (positive), VERR_BUFFER_OVERFLOW
+ *          (negative) or VERR_OUT_OF_RANGE (negative) on failure.
+ * @param   pTime           The time. Caller should've normalized this.
+ * @param   psz             Where to store the string.
+ * @param   cb              The size of the buffer.
+ * @param   cFractionDigits Number of digits in the fraction.  Max is 9.
+ */
+RTDECL(ssize_t) RTTimeToStringEx(PCRTTIME pTime, char *psz, size_t cb, unsigned cFractionDigits);
+
+/** Suggested buffer length for RTTimeToString and RTTimeToStringEx output, including terminator. */
+#define RTTIME_STR_LEN      40
 
 /**
  * Attempts to convert an ISO date string to a time structure.
@@ -777,6 +890,41 @@ RTDECL(char *) RTTimeToString(PCRTTIME pTime, char *psz, size_t cb);
 RTDECL(PRTTIME) RTTimeFromString(PRTTIME pTime, const char *pszString);
 
 /**
+ * Formats the given time on a RTC-2822 compliant format.
+ *
+ * @returns Output string length on success (positive), VERR_BUFFER_OVERFLOW
+ *          (negative) on failure.
+ * @param   pTime       The time. Caller should've normalized this.
+ * @param   psz         Where to store the string.
+ * @param   cb          The size of the buffer.
+ * @param   fFlags      RTTIME_RFC2822_F_XXX
+ * @sa      RTTIME_RFC2822_LEN
+ */
+RTDECL(ssize_t) RTTimeToRfc2822(PRTTIME pTime, char *psz, size_t cb, uint32_t fFlags);
+
+/** Suggested buffer length for RTTimeToRfc2822 output, including terminator. */
+#define RTTIME_RFC2822_LEN      40
+/** @name RTTIME_RFC2822_F_XXX
+ * @{ */
+/** Use the deprecated GMT timezone instead of +/-0000.
+ * This is required by the HTTP RFC-7231 7.1.1.1. */
+#define RTTIME_RFC2822_F_GMT    RT_BIT_32(0)
+/** @} */
+
+/**
+ * Attempts to convert an RFC-2822 date string to a time structure.
+ *
+ * We're a little forgiving with zero padding, unspecified parts, and leading
+ * and trailing spaces.
+ *
+ * @retval  pTime on success,
+ * @retval  NULL on failure.
+ * @param   pTime       Where to store the time on success.
+ * @param   pszString   The ISO date string to convert.
+ */
+RTDECL(PRTTIME) RTTimeFromRfc2822(PRTTIME pTime, const char *pszString);
+
+/**
  * Checks if a year is a leap year or not.
  *
  * @returns true if it's a leap year.
@@ -784,6 +932,21 @@ RTDECL(PRTTIME) RTTimeFromString(PRTTIME pTime, const char *pszString);
  * @param   i32Year     The year in question.
  */
 RTDECL(bool) RTTimeIsLeapYear(int32_t i32Year);
+
+/**
+ * Compares two normalized time structures.
+ *
+ * @retval  0 if equal.
+ * @retval  -1 if @a pLeft is earlier than @a pRight.
+ * @retval  1 if @a pRight is earlier than @a pLeft.
+ *
+ * @param   pLeft       The left side time.  NULL is accepted.
+ * @param   pRight      The right side time.  NULL is accepted.
+ *
+ * @note    A NULL time is considered smaller than anything else.  If both are
+ *          NULL, they are considered equal.
+ */
+RTDECL(int) RTTimeCompare(PCRTTIME pLeft, PCRTTIME pRight);
 
 /**
  * Gets the current nanosecond timestamp.
@@ -827,8 +990,22 @@ RTDECL(uint32_t) RTTimeDbgBad(void);
  */
 RTDECL(uint32_t) RTTimeDbgRaces(void);
 
+
+RTDECL(const char *) RTTimeNanoTSWorkerName(void);
+
+
 /** @name RTTimeNanoTS GIP worker functions, for TM.
  * @{ */
+
+/** Extra info optionally returned by the RTTimeNanoTS GIP workers. */
+typedef struct RTITMENANOTSEXTRA
+{
+    /** The TSC value used (delta adjusted). */
+    uint64_t    uTSCValue;
+} RTITMENANOTSEXTRA;
+/** Pointer to extra info optionally returned by the RTTimeNanoTS GIP workers. */
+typedef RTITMENANOTSEXTRA *PRTITMENANOTSEXTRA;
+
 /** Pointer to a RTTIMENANOTSDATA structure. */
 typedef struct RTTIMENANOTSDATA *PRTTIMENANOTSDATA;
 
@@ -854,28 +1031,31 @@ typedef struct RTTIMENANOTSDATA
      * @param   u64DeltaPrev    The delta relative to the previously returned timestamp.
      * @param   u64PrevNanoTS   The previously returned timestamp (as it was read it).
      */
-    DECLCALLBACKMEMBER(void, pfnBad)(PRTTIMENANOTSDATA pData, uint64_t u64NanoTS, uint64_t u64DeltaPrev, uint64_t u64PrevNanoTS);
+    DECLCALLBACKMEMBER(void, pfnBad,(PRTTIMENANOTSDATA pData, uint64_t u64NanoTS, uint64_t u64DeltaPrev, uint64_t u64PrevNanoTS));
 
     /**
      * Callback for when rediscovery is required.
      *
      * @returns Nanosecond timestamp.
      * @param   pData           Pointer to this structure.
+     * @param   pExtra          Where to return extra time info. Optional.
      */
-    DECLCALLBACKMEMBER(uint64_t, pfnRediscover)(PRTTIMENANOTSDATA pData);
+    DECLCALLBACKMEMBER(uint64_t, pfnRediscover,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra));
 
     /**
      * Callback for when some CPU index related stuff goes wrong.
      *
      * @returns Nanosecond timestamp.
      * @param   pData           Pointer to this structure.
+     * @param   pExtra          Where to return extra time info. Optional.
      * @param   idApic          The APIC ID if available, otherwise (UINT16_MAX-1).
      * @param   iCpuSet         The CPU set index if available, otherwise
      *                          (UINT16_MAX-1).
      * @param   iGipCpu         The GIP CPU array index if available, otherwise
      *                          (UINT16_MAX-1).
      */
-    DECLCALLBACKMEMBER(uint64_t, pfnBadCpuIndex)(PRTTIMENANOTSDATA pData, uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu);
+    DECLCALLBACKMEMBER(uint64_t, pfnBadCpuIndex,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra,
+                                                 uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu));
 
     /** Number of 1ns steps because of overshooting the period. */
     uint32_t            c1nsSteps;
@@ -895,8 +1075,9 @@ typedef struct RTTIMENANOTSDATAR3
 {
     R3PTRTYPE(uint64_t volatile  *) pu64Prev;
     DECLR3CALLBACKMEMBER(void, pfnBad,(PRTTIMENANOTSDATA pData, uint64_t u64NanoTS, uint64_t u64DeltaPrev, uint64_t u64PrevNanoTS));
-    DECLR3CALLBACKMEMBER(uint64_t, pfnRediscover,(PRTTIMENANOTSDATA pData));
-    DECLR3CALLBACKMEMBER(uint64_t, pfnBadCpuIndex,(PRTTIMENANOTSDATA pData, uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu));
+    DECLR3CALLBACKMEMBER(uint64_t, pfnRediscover,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra));
+    DECLR3CALLBACKMEMBER(uint64_t, pfnBadCpuIndex,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra,
+                                                   uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu));
     uint32_t            c1nsSteps;
     uint32_t            cExpired;
     uint32_t            cBadPrev;
@@ -914,8 +1095,9 @@ typedef struct RTTIMENANOTSDATAR0
 {
     R0PTRTYPE(uint64_t volatile  *) pu64Prev;
     DECLR0CALLBACKMEMBER(void, pfnBad,(PRTTIMENANOTSDATA pData, uint64_t u64NanoTS, uint64_t u64DeltaPrev, uint64_t u64PrevNanoTS));
-    DECLR0CALLBACKMEMBER(uint64_t, pfnRediscover,(PRTTIMENANOTSDATA pData));
-    DECLR0CALLBACKMEMBER(uint64_t, pfnBadCpuIndex,(PRTTIMENANOTSDATA pData, uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu));
+    DECLR0CALLBACKMEMBER(uint64_t, pfnRediscover,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra));
+    DECLR0CALLBACKMEMBER(uint64_t, pfnBadCpuIndex,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra,
+                                                   uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu));
     uint32_t            c1nsSteps;
     uint32_t            cExpired;
     uint32_t            cBadPrev;
@@ -933,8 +1115,9 @@ typedef struct RTTIMENANOTSDATARC
 {
     RCPTRTYPE(uint64_t volatile  *) pu64Prev;
     DECLRCCALLBACKMEMBER(void, pfnBad,(PRTTIMENANOTSDATA pData, uint64_t u64NanoTS, uint64_t u64DeltaPrev, uint64_t u64PrevNanoTS));
-    DECLRCCALLBACKMEMBER(uint64_t, pfnRediscover,(PRTTIMENANOTSDATA pData));
-    DECLRCCALLBACKMEMBER(uint64_t, pfnBadCpuIndex,(PRTTIMENANOTSDATA pData, uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu));
+    DECLRCCALLBACKMEMBER(uint64_t, pfnRediscover,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra));
+    DECLRCCALLBACKMEMBER(uint64_t, pfnBadCpuIndex,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra,
+                                                   uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu));
     uint32_t            c1nsSteps;
     uint32_t            cExpired;
     uint32_t            cBadPrev;
@@ -945,31 +1128,39 @@ typedef RTTIMENANOTSDATA RTTIMENANOTSDATARC;
 #endif
 
 /** Internal RTTimeNanoTS worker (assembly). */
-typedef DECLCALLBACK(uint64_t) FNTIMENANOTSINTERNAL(PRTTIMENANOTSDATA pData);
+typedef DECLCALLBACKTYPE(uint64_t, FNTIMENANOTSINTERNAL,(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra));
 /** Pointer to an internal RTTimeNanoTS worker (assembly). */
 typedef FNTIMENANOTSINTERNAL *PFNTIMENANOTSINTERNAL;
-RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarNoDelta(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarNoDelta(PRTTIMENANOTSDATA pData);
+RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarNoDelta(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarNoDelta(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
 #ifdef IN_RING3
-RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseApicId(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseRdtscp(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseRdtscpGroupChNumCl(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseIdtrLim(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDeltaUseApicId(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDeltaUseRdtscp(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDeltaUseIdtrLim(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseApicId(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseRdtscp(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseRdtscpGroupChNumCl(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseIdtrLim(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDeltaUseApicId(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDeltaUseRdtscp(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDeltaUseIdtrLim(PRTTIMENANOTSDATA pData);
+RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseApicId(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseApicIdExt0B(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseApicIdExt8000001E(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseRdtscp(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseRdtscpGroupChNumCl(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacyAsyncUseIdtrLim(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDeltaUseApicId(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDeltaUseApicIdExt0B(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDeltaUseApicIdExt8000001E(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDeltaUseRdtscp(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDeltaUseIdtrLim(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseApicId(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseApicIdExt0B(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseApicIdExt8000001E(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseRdtscp(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseRdtscpGroupChNumCl(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceAsyncUseIdtrLim(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDeltaUseApicId(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDeltaUseApicIdExt0B(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDeltaUseApicIdExt8000001E(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDeltaUseRdtscp(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDeltaUseIdtrLim(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
 #else
-RTDECL(uint64_t) RTTimeNanoTSLegacyAsync(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDelta(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceAsync(PRTTIMENANOTSDATA pData);
-RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDelta(PRTTIMENANOTSDATA pData);
+RTDECL(uint64_t) RTTimeNanoTSLegacyAsync(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLegacySyncInvarWithDelta(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceAsync(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+RTDECL(uint64_t) RTTimeNanoTSLFenceSyncInvarWithDelta(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
 #endif
 
 /** @} */
@@ -1030,9 +1221,81 @@ RTDECL(uint32_t)  RTTimeProgramSecTS(void);
  */
 RTDECL(uint64_t) RTTimeProgramStartNanoTS(void);
 
+
+/**
+ * Time zone information.
+ */
+typedef struct RTTIMEZONEINFO
+{
+    /** Unix time zone name (continent/country[/city]|). */
+    const char     *pszUnixName;
+    /** Windows time zone name.   */
+    const char     *pszWindowsName;
+    /** The length of the unix time zone name. */
+    uint8_t         cchUnixName;
+    /** The length of the windows time zone name. */
+    uint8_t         cchWindowsName;
+    /** Two letter country/territory code if applicable, otherwise 'ZZ'. */
+    char            szCountry[3];
+    /** Two letter windows country/territory code if applicable.
+     * Empty string if no windows mapping. */
+    char            szWindowsCountry[3];
+#if 0 /* Add when needed and it's been extracted. */
+    /** The standard delta in minutes (add to UTC). */
+    int16_t         cMinStdDelta;
+    /** The daylight saving time delta in minutes (add to UTC). */
+    int16_t         cMinDstDelta;
+#endif
+    /** closest matching windows time zone index. */
+    uint32_t        idxWindows;
+    /** Flags, RTTIMEZONEINFO_F_XXX. */
+    uint32_t        fFlags;
+} RTTIMEZONEINFO;
+/** Pointer to time zone info.   */
+typedef RTTIMEZONEINFO const *PCRTTIMEZONEINFO;
+
+/** @name RTTIMEZONEINFO_F_XXX - time zone info flags.
+ *  @{ */
+/** Indicates golden mapping entry for a windows time zone name. */
+#define RTTIMEZONEINFO_F_GOLDEN         RT_BIT_32(0)
+/** @} */
+
+/**
+ * Looks up static time zone information by unix name.
+ *
+ * @returns Pointer to info entry if found, NULL if not.
+ * @param   pszName     The unix zone name (TZ).
+ */
+RTDECL(PCRTTIMEZONEINFO) RTTimeZoneGetInfoByUnixName(const char *pszName);
+
+/**
+ * Looks up static time zone information by window name.
+ *
+ * @returns Pointer to info entry if found, NULL if not.
+ * @param   pszName     The windows zone name (reg key).
+ */
+RTDECL(PCRTTIMEZONEINFO) RTTimeZoneGetInfoByWindowsName(const char *pszName);
+
+/**
+ * Looks up static time zone information by windows index.
+ *
+ * @returns Pointer to info entry if found, NULL if not.
+ * @param   idxZone     The windows timezone index.
+ */
+RTDECL(PCRTTIMEZONEINFO) RTTimeZoneGetInfoByWindowsIndex(uint32_t idxZone);
+
+/**
+ * Get the current time zone (TZ).
+ *
+ * @returns IPRT status code.
+ * @param   pszName     Where to return the time zone name.
+ * @param   cbName      The size of the name buffer.
+ */
+RTDECL(int) RTTimeZoneGetCurrent(char *pszName, size_t cbName);
+
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_time_h */
 

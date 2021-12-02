@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-StrFormatV.c 83022 2020-02-07 13:49:18Z vboxsync $ */
 /** @file
  * BS3Kit - Bs3StrFormatV
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -76,7 +76,7 @@ typedef struct BS3FMTSTATE
     char            szTmp[BS3FMT_TMP_SIZE];
 } BS3FMTSTATE;
 /** Pointer to a BS3Kit string formatter state. */
-typedef BS3FMTSTATE *PBS3FMTSTATE;
+typedef BS3FMTSTATE BS3_FAR *PBS3FMTSTATE;
 
 
 
@@ -97,7 +97,7 @@ static size_t bs3StrFormatU32(PBS3FMTSTATE pState, uint32_t uValue);
  * @param   pszNumber           The formatted number string.
  * @param   cchNumber           The length of the number.
  */
-static size_t bs3StrFormatNumberString(PBS3FMTSTATE pState, char const *pszNumber, size_t cchNumber)
+static size_t bs3StrFormatNumberString(PBS3FMTSTATE pState, char const BS3_FAR *pszNumber, size_t cchNumber)
 {
     /*
      * Calc the length of the core number with prefixes.
@@ -214,16 +214,18 @@ static size_t bs3StrFormatU64(PBS3FMTSTATE pState, uint64_t uValue)
 {
 #if ARCH_BITS != 64
     /* Avoid 64-bit division by formatting 64-bit numbers as hex if they're higher than _4G. */
-    if (   pState->uBase == 10
-        && !(uValue >> 32)) /* uValue <= UINT32_MAX does not work, trouble with 64-bit compile time math! */
-        return bs3StrFormatU32(pState, uValue);
-    pState->fFlags |= STR_F_SPECIAL;
-    pState->uBase = 16;
+    if (pState->uBase == 10)
+    {
+        if (!(uValue >> 32)) /* uValue <= UINT32_MAX does not work, trouble with 64-bit compile time math! */
+            return bs3StrFormatU32(pState, uValue);
+        pState->fFlags |= STR_F_SPECIAL;
+        pState->uBase   = 16;
+    }
 #endif
 
     {
-        const char *pachDigits = !(pState->fFlags & STR_F_CAPITAL) ? g_achBs3HexDigits : g_achBs3HexDigitsUpper;
-        char       *psz = &pState->szTmp[BS3FMT_TMP_SIZE];
+        const char BS3_FAR *pachDigits = !(pState->fFlags & STR_F_CAPITAL) ? g_achBs3HexDigits : g_achBs3HexDigitsUpper;
+        char       BS3_FAR *psz = &pState->szTmp[BS3FMT_TMP_SIZE];
 
         *--psz = '\0';
 #if ARCH_BITS == 64
@@ -260,8 +262,8 @@ static size_t bs3StrFormatU64(PBS3FMTSTATE pState, uint64_t uValue)
 static size_t bs3StrFormatU32(PBS3FMTSTATE pState, uint32_t uValue)
 {
 #if ARCH_BITS < 64
-    const char *pachDigits = !(pState->fFlags & STR_F_CAPITAL) ? g_achBs3HexDigits : g_achBs3HexDigitsUpper;
-    char       *psz = &pState->szTmp[BS3FMT_TMP_SIZE];
+    const char BS3_FAR *pachDigits = !(pState->fFlags & STR_F_CAPITAL) ? g_achBs3HexDigits : g_achBs3HexDigitsUpper;
+    char       BS3_FAR *psz = &pState->szTmp[BS3FMT_TMP_SIZE];
 
     *--psz = '\0';
     if (pState->uBase == 10)
@@ -302,9 +304,9 @@ static size_t bs3StrFormatU16(PBS3FMTSTATE pState, uint16_t uValue)
 {
     if (pState->uBase == 10)
     {
-        const char *pachDigits = !(pState->fFlags & STR_F_CAPITAL)
-                               ? g_achBs3HexDigits : g_achBs3HexDigitsUpper;
-        char       *psz = &pState->szTmp[BS3FMT_TMP_SIZE];
+        const char BS3_FAR *pachDigits = !(pState->fFlags & STR_F_CAPITAL)
+                                       ? g_achBs3HexDigits : g_achBs3HexDigitsUpper;
+        char       BS3_FAR *psz = &pState->szTmp[BS3FMT_TMP_SIZE];
 
         *--psz = '\0';
         do
@@ -359,12 +361,15 @@ static size_t bs3StrFormatS16(PBS3FMTSTATE pState, int16_t iValue)
 
 
 #undef Bs3StrFormatV
-BS3_CMN_DEF(size_t, Bs3StrFormatV,(const char BS3_FAR *pszFormat, va_list va,
+BS3_CMN_DEF(size_t, Bs3StrFormatV,(const char BS3_FAR *pszFormat, va_list BS3_FAR va,
                                    PFNBS3STRFORMATOUTPUT pfnOutput, void BS3_FAR *pvUser))
 {
     BS3FMTSTATE State;
     size_t      cchRet = 0;
     char        ch;
+#if ARCH_BITS == 16
+    typedef int SIZE_CHECK_TYPE1[sizeof(va) == 4 && sizeof(va[0]) == 4];
+#endif
 
     State.pfnOutput = pfnOutput;
     State.pvUser    = pvUser;
@@ -535,7 +540,6 @@ BS3_CMN_DEF(size_t, Bs3StrFormatV,(const char BS3_FAR *pszFormat, va_list va,
                     while (--State.cchWidth >= cch)
                         cchRet += State.pfnOutput(' ', State.pvUser);
 
-                cchRet += cch;
                 while (cch-- > 0)
                     cchRet += State.pfnOutput(*psz++, State.pvUser);
 
@@ -735,7 +739,7 @@ BS3_CMN_DEF(size_t, Bs3StrFormatV,(const char BS3_FAR *pszFormat, va_list va,
              */
             case 'P':
                 State.fFlags |= STR_F_CAPITAL;
-                /* fall thru */
+                RT_FALL_THRU();
             case 'p':
             {
                 void BS3_FAR *pv = va_arg(va, void BS3_FAR *);

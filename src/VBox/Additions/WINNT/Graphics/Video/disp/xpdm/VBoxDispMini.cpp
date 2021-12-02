@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxDispMini.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox XPDM Display driver, helper functions which interacts with our miniport driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -278,6 +277,7 @@ int VBoxDispMPHGSMIQueryPortProcs(HANDLE hDriver, HGSMIQUERYCPORTPROCS *pPortPro
     return VINF_SUCCESS;
 }
 
+#ifdef VBOX_WITH_VIDEOHWACCEL
 int VBoxDispMPVHWAQueryInfo(HANDLE hDriver, VHWAQUERYINFO *pInfo)
 {
     DWORD dwrc;
@@ -293,6 +293,7 @@ int VBoxDispMPVHWAQueryInfo(HANDLE hDriver, VHWAQUERYINFO *pInfo)
     LOGF_LEAVE();
     return VINF_SUCCESS;
 }
+#endif
 
 int VBoxDispMPSetColorRegisters(HANDLE hDriver, PVIDEO_CLUT pClut, DWORD cbClut)
 {

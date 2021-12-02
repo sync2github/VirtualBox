@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMainEventListener.cpp 86545 2020-10-12 14:54:02Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMainEventListener class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,49 +15,62 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QThread>
-# include <QMutex>
+#include <QMutex>
+#include <QThread>
 
 /* GUI includes: */
-# include "UIMainEventListener.h"
-# include "VBoxGlobal.h"
+#include "UICommon.h"
+#include "UIMainEventListener.h"
+#include "UIMousePointerShapeData.h"
 
 /* COM includes: */
-# include "COMEnums.h"
-# include "CEvent.h"
-# include "CEventSource.h"
-# include "CEventListener.h"
-# include "CVBoxSVCAvailabilityChangedEvent.h"
-# include "CVirtualBoxErrorInfo.h"
-# include "CMachineStateChangedEvent.h"
-# include "CMachineDataChangedEvent.h"
-# include "CMachineRegisteredEvent.h"
-# include "CSessionStateChangedEvent.h"
-# include "CSnapshotTakenEvent.h"
-# include "CSnapshotDeletedEvent.h"
-# include "CSnapshotChangedEvent.h"
-# include "CSnapshotRestoredEvent.h"
-# include "CExtraDataCanChangeEvent.h"
-# include "CExtraDataChangedEvent.h"
-# include "CMousePointerShapeChangedEvent.h"
-# include "CMouseCapabilityChangedEvent.h"
-# include "CKeyboardLedsChangedEvent.h"
-# include "CStateChangedEvent.h"
-# include "CNetworkAdapterChangedEvent.h"
-# include "CStorageDeviceChangedEvent.h"
-# include "CMediumChangedEvent.h"
-# include "CUSBDevice.h"
-# include "CUSBDeviceStateChangedEvent.h"
-# include "CGuestMonitorChangedEvent.h"
-# include "CRuntimeErrorEvent.h"
-# include "CCanShowWindowEvent.h"
-# include "CShowWindowEvent.h"
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "COMEnums.h"
+#include "CCanShowWindowEvent.h"
+#include "CClipboardModeChangedEvent.h"
+#include "CCloudProfileChangedEvent.h"
+#include "CCloudProfileRegisteredEvent.h"
+#include "CCloudProviderListChangedEvent.h"
+#include "CCloudProviderUninstallEvent.h"
+#include "CCursorPositionChangedEvent.h"
+#include "CDnDModeChangedEvent.h"
+#include "CEvent.h"
+#include "CEventSource.h"
+#include "CEventListener.h"
+#include "CExtraDataCanChangeEvent.h"
+#include "CExtraDataChangedEvent.h"
+#include "CGuestMonitorChangedEvent.h"
+#include "CGuestProcessIOEvent.h"
+#include "CGuestProcessRegisteredEvent.h"
+#include "CGuestProcessStateChangedEvent.h"
+#include "CGuestSessionRegisteredEvent.h"
+#include "CGuestSessionStateChangedEvent.h"
+#include "CKeyboardLedsChangedEvent.h"
+#include "CMachineDataChangedEvent.h"
+#include "CMachineStateChangedEvent.h"
+#include "CMachineRegisteredEvent.h"
+#include "CMediumChangedEvent.h"
+#include "CMediumConfigChangedEvent.h"
+#include "CMediumRegisteredEvent.h"
+#include "CMouseCapabilityChangedEvent.h"
+#include "CMousePointerShapeChangedEvent.h"
+#include "CNetworkAdapterChangedEvent.h"
+#include "CProgressPercentageChangedEvent.h"
+#include "CProgressTaskCompletedEvent.h"
+#include "CRuntimeErrorEvent.h"
+#include "CSessionStateChangedEvent.h"
+#include "CShowWindowEvent.h"
+#include "CSnapshotChangedEvent.h"
+#include "CSnapshotDeletedEvent.h"
+#include "CSnapshotRestoredEvent.h"
+#include "CSnapshotTakenEvent.h"
+#include "CStateChangedEvent.h"
+#include "CStorageControllerChangedEvent.h"
+#include "CStorageDeviceChangedEvent.h"
+#include "CUSBDevice.h"
+#include "CUSBDeviceStateChangedEvent.h"
+#include "CVBoxSVCAvailabilityChangedEvent.h"
+#include "CVirtualBoxErrorInfo.h"
 
 
 /** Private QThread extension allowing to listen for Main events in separate thread.
@@ -68,10 +81,15 @@ class UIMainEventListeningThread : public QThread
 
 public:
 
-    /** Constructs Main events listener thread redirecting events from @a source to @a listener. */
-    UIMainEventListeningThread(const CEventSource &source, const CEventListener &listener);
+    /** Constructs Main events listener thread redirecting events from @a comSource to @a comListener.
+      * @param  comSource         Brings event source we are creating this thread for.
+      * @param  comListener       Brings event listener we are creating this thread for.
+      * @param  escapeEventTypes  Brings a set of escape event types which commands this thread to finish. */
+    UIMainEventListeningThread(const CEventSource &comSource,
+                               const CEventListener &comListener,
+                               const QSet<KVBoxEventType> &escapeEventTypes);
     /** Destructs Main events listener thread. */
-    ~UIMainEventListeningThread();
+    virtual ~UIMainEventListeningThread() /* override */;
 
 protected:
 
@@ -86,9 +104,11 @@ protected:
 private:
 
     /** Holds the Main event source reference. */
-    CEventSource m_source;
+    CEventSource          m_comSource;
     /** Holds the Main event listener reference. */
-    CEventListener m_listener;
+    CEventListener        m_comListener;
+    /** Holds a set of event types this thread should finish job on. */
+    QSet<KVBoxEventType>  m_escapeEventTypes;
 
     /** Holds the mutex instance which protects thread access. */
     mutable QMutex m_mutex;
@@ -101,11 +121,15 @@ private:
 *   Class UIMainEventListeningThread implementation.                                                                             *
 *********************************************************************************************************************************/
 
-UIMainEventListeningThread::UIMainEventListeningThread(const CEventSource &source, const CEventListener &listener)
-    : m_source(source)
-    , m_listener(listener)
+UIMainEventListeningThread::UIMainEventListeningThread(const CEventSource &comSource,
+                                                       const CEventListener &comListener,
+                                                       const QSet<KVBoxEventType> &escapeEventTypes)
+    : m_comSource(comSource)
+    , m_comListener(comListener)
+    , m_escapeEventTypes(escapeEventTypes)
     , m_fShutdown(false)
 {
+    setObjectName("UIMainEventListeningThread");
 }
 
 UIMainEventListeningThread::~UIMainEventListeningThread()
@@ -113,8 +137,12 @@ UIMainEventListeningThread::~UIMainEventListeningThread()
     /* Make a request to shutdown: */
     setShutdown(true);
 
-    /* And wait 30 seconds for run() to finish: */
-    wait(30000);
+    /* And wait 30 seconds for run() to finish (1 sec increments to help with
+       delays incurred debugging and prevent suicidal use-after-free behaviour): */
+    uint32_t i = 30000;
+    do
+        wait(1000);
+    while (i-- > 0 && !isFinished());
 }
 
 void UIMainEventListeningThread::run()
@@ -123,21 +151,28 @@ void UIMainEventListeningThread::run()
     COMBase::InitializeCOM(false);
 
     /* Copy source wrapper to this thread: */
-    CEventSource source = m_source;
+    CEventSource comSource = m_comSource;
     /* Copy listener wrapper to this thread: */
-    CEventListener listener = m_listener;
+    CEventListener comListener = m_comListener;
 
     /* While we are not in shutdown: */
     while (!isShutdown())
     {
         /* Fetch the event from the queue: */
-        CEvent event = source.GetEvent(listener, 500);
-        if (!event.isNull())
+        CEvent comEvent = comSource.GetEvent(comListener, 500);
+        if (!comEvent.isNull())
         {
             /* Process the event and tell the listener: */
-            listener.HandleEvent(event);
-            if (event.GetWaitable())
-                source.EventProcessed(listener, event);
+            comListener.HandleEvent(comEvent);
+            if (comEvent.GetWaitable())
+            {
+                comSource.EventProcessed(comListener, comEvent);
+                LogRel(("GUI: UIMainEventListener/ThreadRun: EventProcessed set for waitable event\n"));
+            }
+
+            /* Check whether we should finish our job on this event: */
+            if (m_escapeEventTypes.contains(comEvent.GetType()))
+                setShutdown(true);
         }
     }
 
@@ -168,142 +203,243 @@ void UIMainEventListeningThread::setShutdown(bool fShutdown)
 UIMainEventListener::UIMainEventListener()
 {
     /* Register meta-types for required enums. */
+    qRegisterMetaType<KDeviceType>("KDeviceType");
     qRegisterMetaType<KMachineState>("KMachineState");
     qRegisterMetaType<KSessionState>("KSessionState");
     qRegisterMetaType< QVector<uint8_t> >("QVector<uint8_t>");
     qRegisterMetaType<CNetworkAdapter>("CNetworkAdapter");
+    qRegisterMetaType<CMedium>("CMedium");
     qRegisterMetaType<CMediumAttachment>("CMediumAttachment");
     qRegisterMetaType<CUSBDevice>("CUSBDevice");
     qRegisterMetaType<CVirtualBoxErrorInfo>("CVirtualBoxErrorInfo");
     qRegisterMetaType<KGuestMonitorChangedEventType>("KGuestMonitorChangedEventType");
+    qRegisterMetaType<CGuestSession>("CGuestSession");
 }
 
-void UIMainEventListener::registerSource(const CEventSource &source, const CEventListener &listener)
+void UIMainEventListener::registerSource(const CEventSource &comSource,
+                                         const CEventListener &comListener,
+                                         const QSet<KVBoxEventType> &escapeEventTypes /* = QSet<KVBoxEventType>() */)
 {
     /* Make sure source and listener are valid: */
-    AssertReturnVoid(!source.isNull());
-    AssertReturnVoid(!listener.isNull());
+    AssertReturnVoid(!comSource.isNull());
+    AssertReturnVoid(!comListener.isNull());
 
     /* Create thread for passed source: */
-    m_threads << new UIMainEventListeningThread(source, listener);
-    /* And start it: */
-    m_threads.last()->start();
+    UIMainEventListeningThread *pThread = new UIMainEventListeningThread(comSource, comListener, escapeEventTypes);
+    if (pThread)
+    {
+        /* Listen for thread finished signal: */
+        connect(pThread, &UIMainEventListeningThread::finished,
+                this, &UIMainEventListener::sltHandleThreadFinished);
+        /* Register & start it: */
+        m_threads << pThread;
+        pThread->start();
+    }
 }
 
 void UIMainEventListener::unregisterSources()
 {
+    /* Stop listening for thread finished thread signals,
+     * we are about to destroy these threads anyway: */
+    foreach (UIMainEventListeningThread *pThread, m_threads)
+        disconnect(pThread, &UIMainEventListeningThread::finished,
+                   this, &UIMainEventListener::sltHandleThreadFinished);
+
     /* Wipe out the threads: */
+    /** @todo r=bird: The use of qDeleteAll here is unsafe because it won't take
+     * QThread::wait() timeouts into account, and may delete the QThread object
+     * while the thread is still running, causing heap corruption/crashes once
+     * the thread awakens and gets on with its termination.
+     * Observed with debugger + paged heap.
+     *
+     * Should use specialized thread list which only deletes the threads after
+     * isFinished() returns true, leaving them alone on timeout failures. */
     qDeleteAll(m_threads);
 }
 
-STDMETHODIMP UIMainEventListener::HandleEvent(VBoxEventType_T /* type */, IEvent *pEvent)
+STDMETHODIMP UIMainEventListener::HandleEvent(VBoxEventType_T, IEvent *pEvent)
 {
     /* Try to acquire COM cleanup protection token first: */
-    if (!vboxGlobal().comTokenTryLockForRead())
+    if (!uiCommon().comTokenTryLockForRead())
         return S_OK;
 
-    CEvent event(pEvent);
-    // printf("Event received: %d\n", event.GetType());
-    switch (event.GetType())
+    CEvent comEvent(pEvent);
+    //printf("Event received: %d\n", comEvent.GetType());
+    switch (comEvent.GetType())
     {
         case KVBoxEventType_OnVBoxSVCAvailabilityChanged:
         {
-            CVBoxSVCAvailabilityChangedEvent es(pEvent);
-            emit sigVBoxSVCAvailabilityChange(es.GetAvailable());
+            CVBoxSVCAvailabilityChangedEvent comEventSpecific(pEvent);
+            emit sigVBoxSVCAvailabilityChange(comEventSpecific.GetAvailable());
             break;
         }
 
         case KVBoxEventType_OnMachineStateChanged:
         {
-            CMachineStateChangedEvent es(pEvent);
-            emit sigMachineStateChange(es.GetMachineId(), es.GetState());
+            CMachineStateChangedEvent comEventSpecific(pEvent);
+            emit sigMachineStateChange(comEventSpecific.GetMachineId(), comEventSpecific.GetState());
             break;
         }
         case KVBoxEventType_OnMachineDataChanged:
         {
-            CMachineDataChangedEvent es(pEvent);
-            emit sigMachineDataChange(es.GetMachineId());
+            CMachineDataChangedEvent comEventSpecific(pEvent);
+            emit sigMachineDataChange(comEventSpecific.GetMachineId());
             break;
         }
         case KVBoxEventType_OnMachineRegistered:
         {
-            CMachineRegisteredEvent es(pEvent);
-            emit sigMachineRegistered(es.GetMachineId(), es.GetRegistered());
+            CMachineRegisteredEvent comEventSpecific(pEvent);
+            emit sigMachineRegistered(comEventSpecific.GetMachineId(), comEventSpecific.GetRegistered());
             break;
         }
         case KVBoxEventType_OnSessionStateChanged:
         {
-            CSessionStateChangedEvent es(pEvent);
-            emit sigSessionStateChange(es.GetMachineId(), es.GetState());
+            CSessionStateChangedEvent comEventSpecific(pEvent);
+            emit sigSessionStateChange(comEventSpecific.GetMachineId(), comEventSpecific.GetState());
             break;
         }
         case KVBoxEventType_OnSnapshotTaken:
         {
-            CSnapshotTakenEvent es(pEvent);
-            emit sigSnapshotTake(es.GetMachineId(), es.GetSnapshotId());
+            CSnapshotTakenEvent comEventSpecific(pEvent);
+            emit sigSnapshotTake(comEventSpecific.GetMachineId(), comEventSpecific.GetSnapshotId());
             break;
         }
         case KVBoxEventType_OnSnapshotDeleted:
         {
-            CSnapshotDeletedEvent es(pEvent);
-            emit sigSnapshotDelete(es.GetMachineId(), es.GetSnapshotId());
+            CSnapshotDeletedEvent comEventSpecific(pEvent);
+            emit sigSnapshotDelete(comEventSpecific.GetMachineId(), comEventSpecific.GetSnapshotId());
             break;
         }
         case KVBoxEventType_OnSnapshotChanged:
         {
-            CSnapshotChangedEvent es(pEvent);
-            emit sigSnapshotChange(es.GetMachineId(), es.GetSnapshotId());
+            CSnapshotChangedEvent comEventSpecific(pEvent);
+            emit sigSnapshotChange(comEventSpecific.GetMachineId(), comEventSpecific.GetSnapshotId());
             break;
         }
         case KVBoxEventType_OnSnapshotRestored:
         {
-            CSnapshotRestoredEvent es(pEvent);
-            emit sigSnapshotRestore(es.GetMachineId(), es.GetSnapshotId());
+            CSnapshotRestoredEvent comEventSpecific(pEvent);
+            emit sigSnapshotRestore(comEventSpecific.GetMachineId(), comEventSpecific.GetSnapshotId());
             break;
         }
-//        case KVBoxEventType_OnMediumRegistered:
-//        case KVBoxEventType_OnGuestPropertyChange:
+        case KVBoxEventType_OnCloudProviderListChanged:
+        {
+            emit sigCloudProviderListChanged();
+            break;
+        }
+        case KVBoxEventType_OnCloudProviderUninstall:
+        {
+            LogRel(("GUI: UIMainEventListener/HandleEvent: KVBoxEventType_OnCloudProviderUninstall event came\n"));
+            CCloudProviderUninstallEvent comEventSpecific(pEvent);
+            emit sigCloudProviderUninstall(comEventSpecific.GetId());
+            LogRel(("GUI: UIMainEventListener/HandleEvent: KVBoxEventType_OnCloudProviderUninstall event done\n"));
+            break;
+        }
+        case KVBoxEventType_OnCloudProfileRegistered:
+        {
+            CCloudProfileRegisteredEvent comEventSpecific(pEvent);
+            emit sigCloudProfileRegistered(comEventSpecific.GetProviderId(), comEventSpecific.GetName(), comEventSpecific.GetRegistered());
+            break;
+        }
+        case KVBoxEventType_OnCloudProfileChanged:
+        {
+            CCloudProfileChangedEvent comEventSpecific(pEvent);
+            emit sigCloudProfileChanged(comEventSpecific.GetProviderId(), comEventSpecific.GetName());
+            break;
+        }
 
         case KVBoxEventType_OnExtraDataCanChange:
         {
-            CExtraDataCanChangeEvent es(pEvent);
+            CExtraDataCanChangeEvent comEventSpecific(pEvent);
             /* Has to be done in place to give an answer: */
             bool fVeto = false;
             QString strReason;
-            emit sigExtraDataCanChange(es.GetMachineId(), es.GetKey(), es.GetValue(), fVeto, strReason);
+            emit sigExtraDataCanChange(comEventSpecific.GetMachineId(), comEventSpecific.GetKey(),
+                                       comEventSpecific.GetValue(), fVeto, strReason);
             if (fVeto)
-                es.AddVeto(strReason);
+                comEventSpecific.AddVeto(strReason);
             break;
         }
         case KVBoxEventType_OnExtraDataChanged:
         {
-            CExtraDataChangedEvent es(pEvent);
-            emit sigExtraDataChange(es.GetMachineId(), es.GetKey(), es.GetValue());
+            CExtraDataChangedEvent comEventSpecific(pEvent);
+            emit sigExtraDataChange(comEventSpecific.GetMachineId(), comEventSpecific.GetKey(), comEventSpecific.GetValue());
+            break;
+        }
+
+        case KVBoxEventType_OnStorageControllerChanged:
+        {
+            CStorageControllerChangedEvent comEventSpecific(pEvent);
+            emit sigStorageControllerChange(comEventSpecific.GetMachinId(),
+                                            comEventSpecific.GetControllerName());
+            break;
+        }
+        case KVBoxEventType_OnStorageDeviceChanged:
+        {
+            CStorageDeviceChangedEvent comEventSpecific(pEvent);
+            emit sigStorageDeviceChange(comEventSpecific.GetStorageDevice(),
+                                        comEventSpecific.GetRemoved(),
+                                        comEventSpecific.GetSilent());
+            break;
+        }
+        case KVBoxEventType_OnMediumChanged:
+        {
+            CMediumChangedEvent comEventSpecific(pEvent);
+            emit sigMediumChange(comEventSpecific.GetMediumAttachment());
+            break;
+        }
+        case KVBoxEventType_OnMediumConfigChanged:
+        {
+            CMediumConfigChangedEvent comEventSpecific(pEvent);
+            emit sigMediumConfigChange(comEventSpecific.GetMedium());
+            break;
+        }
+        case KVBoxEventType_OnMediumRegistered:
+        {
+            CMediumRegisteredEvent comEventSpecific(pEvent);
+            emit sigMediumRegistered(comEventSpecific.GetMediumId(),
+                                     comEventSpecific.GetMediumType(),
+                                     comEventSpecific.GetRegistered());
             break;
         }
 
         case KVBoxEventType_OnMousePointerShapeChanged:
         {
-            CMousePointerShapeChangedEvent es(pEvent);
-            emit sigMousePointerShapeChange(es.GetVisible(), es.GetAlpha(), QPoint(es.GetXhot(), es.GetYhot()), QSize(es.GetWidth(), es.GetHeight()), es.GetShape());
+            CMousePointerShapeChangedEvent comEventSpecific(pEvent);
+            UIMousePointerShapeData shapeData(comEventSpecific.GetVisible(),
+                                              comEventSpecific.GetAlpha(),
+                                              QPoint(comEventSpecific.GetXhot(), comEventSpecific.GetYhot()),
+                                              QSize(comEventSpecific.GetWidth(), comEventSpecific.GetHeight()),
+                                              comEventSpecific.GetShape());
+            emit sigMousePointerShapeChange(shapeData);
             break;
         }
         case KVBoxEventType_OnMouseCapabilityChanged:
         {
-            CMouseCapabilityChangedEvent es(pEvent);
-            emit sigMouseCapabilityChange(es.GetSupportsAbsolute(), es.GetSupportsRelative(), es.GetSupportsMultiTouch(), es.GetNeedsHostCursor());
+            CMouseCapabilityChangedEvent comEventSpecific(pEvent);
+            emit sigMouseCapabilityChange(comEventSpecific.GetSupportsAbsolute(), comEventSpecific.GetSupportsRelative(),
+                                          comEventSpecific.GetSupportsMultiTouch(), comEventSpecific.GetNeedsHostCursor());
+            break;
+        }
+        case KVBoxEventType_OnCursorPositionChanged:
+        {
+            CCursorPositionChangedEvent comEventSpecific(pEvent);
+            emit sigCursorPositionChange(comEventSpecific.GetHasData(),
+                                         (unsigned long)comEventSpecific.GetX(), (unsigned long)comEventSpecific.GetY());
             break;
         }
         case KVBoxEventType_OnKeyboardLedsChanged:
         {
-            CKeyboardLedsChangedEvent es(pEvent);
-            emit sigKeyboardLedsChangeEvent(es.GetNumLock(), es.GetCapsLock(), es.GetScrollLock());
+            CKeyboardLedsChangedEvent comEventSpecific(pEvent);
+            emit sigKeyboardLedsChangeEvent(comEventSpecific.GetNumLock(),
+                                            comEventSpecific.GetCapsLock(),
+                                            comEventSpecific.GetScrollLock());
             break;
         }
         case KVBoxEventType_OnStateChanged:
         {
-            CStateChangedEvent es(pEvent);
-            emit sigStateChange(es.GetState());
+            CStateChangedEvent comEventSpecific(pEvent);
+            emit sigStateChange(comEventSpecific.GetState());
             break;
         }
         case KVBoxEventType_OnAdditionsStateChanged:
@@ -313,20 +449,8 @@ STDMETHODIMP UIMainEventListener::HandleEvent(VBoxEventType_T /* type */, IEvent
         }
         case KVBoxEventType_OnNetworkAdapterChanged:
         {
-            CNetworkAdapterChangedEvent es(pEvent);
-            emit sigNetworkAdapterChange(es.GetNetworkAdapter());
-            break;
-        }
-        case KVBoxEventType_OnStorageDeviceChanged:
-        {
-            CStorageDeviceChangedEvent es(pEvent);
-            emit sigStorageDeviceChange(es.GetStorageDevice(), es.GetRemoved(), es.GetSilent());
-            break;
-        }
-        case KVBoxEventType_OnMediumChanged:
-        {
-            CMediumChangedEvent es(pEvent);
-            emit sigMediumChange(es.GetMediumAttachment());
+            CNetworkAdapterChangedEvent comEventSpecific(pEvent);
+            emit sigNetworkAdapterChange(comEventSpecific.GetNetworkAdapter());
             break;
         }
         case KVBoxEventType_OnVRDEServerChanged:
@@ -335,9 +459,9 @@ STDMETHODIMP UIMainEventListener::HandleEvent(VBoxEventType_T /* type */, IEvent
             emit sigVRDEChange();
             break;
         }
-        case KVBoxEventType_OnVideoCaptureChanged:
+        case KVBoxEventType_OnRecordingChanged:
         {
-            emit sigVideoCaptureChange();
+            emit sigRecordingChange();
             break;
         }
         case KVBoxEventType_OnUSBControllerChanged:
@@ -347,8 +471,10 @@ STDMETHODIMP UIMainEventListener::HandleEvent(VBoxEventType_T /* type */, IEvent
         }
         case KVBoxEventType_OnUSBDeviceStateChanged:
         {
-            CUSBDeviceStateChangedEvent es(pEvent);
-            emit sigUSBDeviceStateChange(es.GetDevice(), es.GetAttached(), es.GetError());
+            CUSBDeviceStateChangedEvent comEventSpecific(pEvent);
+            emit sigUSBDeviceStateChange(comEventSpecific.GetDevice(),
+                                         comEventSpecific.GetAttached(),
+                                         comEventSpecific.GetError());
             break;
         }
         case KVBoxEventType_OnSharedFolderChanged:
@@ -363,54 +489,141 @@ STDMETHODIMP UIMainEventListener::HandleEvent(VBoxEventType_T /* type */, IEvent
         }
         case KVBoxEventType_OnGuestMonitorChanged:
         {
-            CGuestMonitorChangedEvent es(pEvent);
-            emit sigGuestMonitorChange(es.GetChangeType(), es.GetScreenId(),
-                                       QRect(es.GetOriginX(), es.GetOriginY(), es.GetWidth(), es.GetHeight()));
+            CGuestMonitorChangedEvent comEventSpecific(pEvent);
+            emit sigGuestMonitorChange(comEventSpecific.GetChangeType(), comEventSpecific.GetScreenId(),
+                                       QRect(comEventSpecific.GetOriginX(), comEventSpecific.GetOriginY(),
+                                             comEventSpecific.GetWidth(), comEventSpecific.GetHeight()));
             break;
         }
         case KVBoxEventType_OnRuntimeError:
         {
-            CRuntimeErrorEvent es(pEvent);
-            emit sigRuntimeError(es.GetFatal(), es.GetId(), es.GetMessage());
+            CRuntimeErrorEvent comEventSpecific(pEvent);
+            emit sigRuntimeError(comEventSpecific.GetFatal(), comEventSpecific.GetId(), comEventSpecific.GetMessage());
             break;
         }
         case KVBoxEventType_OnCanShowWindow:
         {
-            CCanShowWindowEvent es(pEvent);
+            CCanShowWindowEvent comEventSpecific(pEvent);
             /* Has to be done in place to give an answer: */
             bool fVeto = false;
             QString strReason;
             emit sigCanShowWindow(fVeto, strReason);
             if (fVeto)
-                es.AddVeto(strReason);
+                comEventSpecific.AddVeto(strReason);
             else
-                es.AddApproval(strReason);
+                comEventSpecific.AddApproval(strReason);
             break;
         }
         case KVBoxEventType_OnShowWindow:
         {
-            CShowWindowEvent es(pEvent);
+            CShowWindowEvent comEventSpecific(pEvent);
             /* Has to be done in place to give an answer: */
-            qint64 winId = es.GetWinId();
+            qint64 winId = comEventSpecific.GetWinId();
             if (winId != 0)
                 break; /* Already set by some listener. */
             emit sigShowWindow(winId);
-            es.SetWinId(winId);
+            comEventSpecific.SetWinId(winId);
             break;
         }
-//        case KVBoxEventType_OnSerialPortChanged:
-//        case KVBoxEventType_OnParallelPortChanged:
-//        case KVBoxEventType_OnStorageControllerChanged:
-//        case KVBoxEventType_OnCPUChange:
+        case KVBoxEventType_OnAudioAdapterChanged:
+        {
+            emit sigAudioAdapterChange();
+            break;
+        }
 
+        case KVBoxEventType_OnProgressPercentageChanged:
+        {
+            CProgressPercentageChangedEvent comEventSpecific(pEvent);
+            emit sigProgressPercentageChange(comEventSpecific.GetProgressId(), (int)comEventSpecific.GetPercent());
+            break;
+        }
+        case KVBoxEventType_OnProgressTaskCompleted:
+        {
+            CProgressTaskCompletedEvent comEventSpecific(pEvent);
+            emit sigProgressTaskComplete(comEventSpecific.GetProgressId());
+            break;
+        }
+
+        case KVBoxEventType_OnGuestSessionRegistered:
+        {
+            CGuestSessionRegisteredEvent comEventSpecific(pEvent);
+            if (comEventSpecific.GetRegistered())
+                emit sigGuestSessionRegistered(comEventSpecific.GetSession());
+            else
+                emit sigGuestSessionUnregistered(comEventSpecific.GetSession());
+            break;
+        }
+        case KVBoxEventType_OnGuestProcessRegistered:
+        {
+            CGuestProcessRegisteredEvent comEventSpecific(pEvent);
+            if (comEventSpecific.GetRegistered())
+                emit sigGuestProcessRegistered(comEventSpecific.GetProcess());
+            else
+                emit sigGuestProcessUnregistered(comEventSpecific.GetProcess());
+            break;
+        }
+        case KVBoxEventType_OnGuestSessionStateChanged:
+        {
+            CGuestSessionStateChangedEvent comEventSpecific(pEvent);
+            emit sigGuestSessionStatedChanged(comEventSpecific);
+            break;
+        }
+        case KVBoxEventType_OnGuestProcessInputNotify:
+        case KVBoxEventType_OnGuestProcessOutput:
+        {
+            break;
+        }
+        case KVBoxEventType_OnGuestProcessStateChanged:
+        {
+            CGuestProcessStateChangedEvent comEventSpecific(pEvent);
+            comEventSpecific.GetError();
+            emit sigGuestProcessStateChanged(comEventSpecific);
+            break;
+        }
+        case KVBoxEventType_OnGuestFileRegistered:
+        case KVBoxEventType_OnGuestFileStateChanged:
+        case KVBoxEventType_OnGuestFileOffsetChanged:
+        case KVBoxEventType_OnGuestFileRead:
+        case KVBoxEventType_OnGuestFileWrite:
+        {
+            break;
+        }
+        case KVBoxEventType_OnClipboardModeChanged:
+        {
+            CClipboardModeChangedEvent comEventSpecific(pEvent);
+            emit sigClipboardModeChange(comEventSpecific.GetClipboardMode());
+            break;
+        }
+        case KVBoxEventType_OnDnDModeChanged:
+        {
+            CDnDModeChangedEvent comEventSpecific(pEvent);
+            emit sigDnDModeChange(comEventSpecific.GetDndMode());
+            break;
+        }
         default: break;
     }
 
     /* Unlock COM cleanup protection token: */
-    vboxGlobal().comTokenUnlock();
+    uiCommon().comTokenUnlock();
 
     return S_OK;
 }
 
-#include "UIMainEventListener.moc"
+void UIMainEventListener::sltHandleThreadFinished()
+{
+    /* We have received a signal about thread finished, that means we were
+     * patiently waiting for it, instead of killing UIMainEventListener object. */
+    UIMainEventListeningThread *pSender = qobject_cast<UIMainEventListeningThread*>(sender());
+    AssertPtrReturnVoid(pSender);
 
+    /* We should remove corresponding thread from the list: */
+    const int iIndex = m_threads.indexOf(pSender);
+    delete m_threads.value(iIndex);
+    m_threads.removeAt(iIndex);
+
+    /* And notify listeners we have really finished: */
+    if (m_threads.isEmpty())
+        emit sigListeningFinished();
+}
+
+#include "UIMainEventListener.moc"

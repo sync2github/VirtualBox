@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPDrv-win.cpp 92203 2021-11-04 00:29:20Z vboxsync $ */
 /** @file
  * VBoxDrv - The VirtualBox Support Driver - Windows NT specifics.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,7 +28,9 @@
 /*********************************************************************************************************************************
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
-#define IPRT_NT_MAP_TO_ZW
+#ifndef IPRT_NT_MAP_TO_ZW
+# define IPRT_NT_MAP_TO_ZW
+#endif
 #define LOG_GROUP LOG_GROUP_SUP_DRV
 #include "../SUPDrvInternal.h"
 #include <excpt.h>
@@ -45,6 +47,8 @@
 #include <iprt/semaphore.h>
 #include <iprt/spinlock.h>
 #include <iprt/string.h>
+#include <iprt/utf16.h>
+#include <iprt/x86.h>
 #include <VBox/log.h>
 #include <VBox/err.h>
 
@@ -85,10 +89,44 @@
 /** Enables the fast I/O control code path. */
 #define VBOXDRV_WITH_FAST_IO
 
+/** Enables generating UID from NT SIDs so the GMM can share free memory
+ *  among VMs running as the same user. */
+#define VBOXDRV_WITH_SID_TO_UID_MAPPING
+
+/* Missing if we're compiling against older WDKs. */
+#ifndef NonPagedPoolNx
+# define NonPagedPoolNx     ((POOL_TYPE)512)
+#endif
+
 
 /*********************************************************************************************************************************
 *   Structures and Typedefs                                                                                                      *
 *********************************************************************************************************************************/
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+/**
+ * SID to User ID mapping.
+ *
+ * This is used to generate a RTUID value for a NT security identifier.
+ * Normally, the UID is the hash of the SID string, but due to collisions it may
+ * differ.  See g_NtUserIdHashTree and g_NtUserIdUidTree.
+ */
+typedef struct SUPDRVNTUSERID
+{
+    /** Hash tree node, key: RTStrHash1 of szSid. */
+    AVLLU32NODECORE     HashCore;
+    /** UID three node, key: The UID. */
+    AVLU32NODECORE      UidCore;
+    /** Reference counter. */
+    uint32_t volatile   cRefs;
+    /** The length of the SID string. */
+    uint16_t            cchSid;
+    /** The SID string for the user. */
+    char                szSid[RT_FLEXIBLE_ARRAY];
+} SUPDRVNTUSERID;
+/** Pointer to a SID to UID mapping. */
+typedef SUPDRVNTUSERID *PSUPDRVNTUSERID;
+#endif
+
 /**
  * Device extension used by VBoxDrvU.
  */
@@ -319,6 +357,8 @@ RT_C_DECLS_END
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
+/** The non-paged pool type to use, NonPagedPool or NonPagedPoolNx. */
+static POOL_TYPE      g_enmNonPagedPoolType = NonPagedPool;
 /** Pointer to the system device instance. */
 static PDEVICE_OBJECT g_pDevObjSys = NULL;
 /** Pointer to the user device instance. */
@@ -391,6 +431,15 @@ static PFNKEQUERYMAXIMUMGROUPCOUNT      g_pfnKeQueryMaximumGroupCount = NULL;
 static PFNKEGETPROCESSORINDEXFROMNUMBER g_pfnKeGetProcessorIndexFromNumber = NULL;
 /** Pointer to KeGetProcessorNumberFromIndex. */
 static PFNKEGETPROCESSORNUMBERFROMINDEX g_pfnKeGetProcessorNumberFromIndex = NULL;
+
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+/** Spinlock protecting g_NtUserIdHashTree and g_NtUserIdUidTree. */
+static RTSPINLOCK                   g_hNtUserIdLock     = NIL_RTSPINLOCK;
+/** AVL tree of SUPDRVNTUSERID structures by hash value. */
+static PAVLLU32NODECORE             g_NtUserIdHashTree  = NULL;
+/** AVL tree of SUPDRVNTUSERID structures by UID. */
+static PAVLU32NODECORE              g_NtUserIdUidTree   = NULL;
+#endif
 
 #ifdef VBOX_WITH_HARDENING
 /** Pointer to the stub device instance. */
@@ -497,9 +546,9 @@ static NTSTATUS vboxdrvNtCreateDevices(PDRIVER_OBJECT pDrvObj)
 
                         if (NT_SUCCESS(rcNt))
                         {
-                            PSUPDRVDEVEXTERRORINFO pDevExtStub = (PSUPDRVDEVEXTERRORINFO)g_pDevObjStub->DeviceExtension;
-                            pDevExtStub->Common.pMainDrvExt = (PSUPDRVDEVEXT)g_pDevObjSys->DeviceExtension;
-                            pDevExtStub->Common.u32Cookie   = SUPDRVDEVEXTERRORINFO_COOKIE;
+                            PSUPDRVDEVEXTERRORINFO pDevExtErrInf = (PSUPDRVDEVEXTERRORINFO)g_pDevObjStub->DeviceExtension;
+                            pDevExtErrInf->Common.pMainDrvExt = (PSUPDRVDEVEXT)g_pDevObjSys->DeviceExtension;
+                            pDevExtErrInf->Common.u32Cookie   = SUPDRVDEVEXTERRORINFO_COOKIE;
 
 #endif
                             /* Done. */
@@ -587,6 +636,14 @@ NTSTATUS _stdcall DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING pRegPath)
 #endif
 
     /*
+     * Figure out if we can use NonPagedPoolNx or not.
+     */
+    ULONG ulMajorVersion, ulMinorVersion, ulBuildNumber;
+    PsGetVersion(&ulMajorVersion, &ulMinorVersion, &ulBuildNumber, NULL);
+    if (ulMajorVersion > 6 || (ulMajorVersion == 6 && ulMinorVersion >= 2)) /* >= 6.2 (W8)*/
+        g_enmNonPagedPoolType = NonPagedPoolNx;
+
+    /*
      * Query options first so any overflows on unpatched machines will do less
      * harm (see MS11-011 / 2393802 / 2011-03-18).
      *
@@ -594,7 +651,7 @@ NTSTATUS _stdcall DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING pRegPath)
      * quite likely always is, so we have to make a copy here.
      */
     NTSTATUS rcNt;
-    PWSTR pwszCopy = (PWSTR)ExAllocatePoolWithTag(NonPagedPool, pRegPath->Length + sizeof(WCHAR), 'VBox');
+    PWSTR pwszCopy = (PWSTR)ExAllocatePoolWithTag(g_enmNonPagedPoolType, pRegPath->Length + sizeof(WCHAR), 'VBox');
     if (pwszCopy)
     {
         memcpy(pwszCopy, pRegPath->Buffer, pRegPath->Length);
@@ -637,68 +694,88 @@ NTSTATUS _stdcall DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING pRegPath)
         if (NT_SUCCESS(rcNt))
 #endif
         {
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
             /*
-             * Create device.
-             * (That means creating a device object and a symbolic link so the DOS
-             * subsystems (OS/2, win32, ++) can access the device.)
+             * Create the spinlock for the SID -> UID mappings.
              */
-            rcNt = vboxdrvNtCreateDevices(pDrvObj);
-            if (NT_SUCCESS(rcNt))
+            vrc = RTSpinlockCreate(&g_hNtUserIdLock, RTSPINLOCK_FLAGS_INTERRUPT_UNSAFE, "NtUserId");
+            if (RT_SUCCESS(vrc))
+#endif
             {
                 /*
-                 * Initialize the device extension.
+                 * Create device.
+                 * (That means creating a device object and a symbolic link so the DOS
+                 * subsystems (OS/2, win32, ++) can access the device.)
                  */
-                PSUPDRVDEVEXT pDevExt = (PSUPDRVDEVEXT)g_pDevObjSys->DeviceExtension;
-                memset(pDevExt, 0, sizeof(*pDevExt));
-
-                vrc = supdrvInitDevExt(pDevExt, sizeof(SUPDRVSESSION));
-                if (!vrc)
+                rcNt = vboxdrvNtCreateDevices(pDrvObj);
+                if (NT_SUCCESS(rcNt))
                 {
                     /*
-                     * Setup the driver entry points in pDrvObj.
+                     * Initialize the device extension.
                      */
-                    pDrvObj->DriverUnload                                   = VBoxDrvNtUnload;
-                    pDrvObj->MajorFunction[IRP_MJ_CREATE]                   = VBoxDrvNtCreate;
-                    pDrvObj->MajorFunction[IRP_MJ_CLEANUP]                  = VBoxDrvNtCleanup;
-                    pDrvObj->MajorFunction[IRP_MJ_CLOSE]                    = VBoxDrvNtClose;
-                    pDrvObj->MajorFunction[IRP_MJ_DEVICE_CONTROL]           = VBoxDrvNtDeviceControl;
-                    pDrvObj->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL]  = VBoxDrvNtInternalDeviceControl;
-                    pDrvObj->MajorFunction[IRP_MJ_READ]                     = VBoxDrvNtRead;
-                    pDrvObj->MajorFunction[IRP_MJ_WRITE]                    = VBoxDrvNtNotSupportedStub;
+                    PSUPDRVDEVEXT pDevExt = (PSUPDRVDEVEXT)g_pDevObjSys->DeviceExtension;
+                    memset(pDevExt, 0, sizeof(*pDevExt));
+
+                    vrc = supdrvInitDevExt(pDevExt, sizeof(SUPDRVSESSION));
+                    if (!vrc)
+                    {
+                        /*
+                         * Setup the driver entry points in pDrvObj.
+                         */
+                        pDrvObj->DriverUnload                                   = VBoxDrvNtUnload;
+                        pDrvObj->MajorFunction[IRP_MJ_CREATE]                   = VBoxDrvNtCreate;
+                        pDrvObj->MajorFunction[IRP_MJ_CLEANUP]                  = VBoxDrvNtCleanup;
+                        pDrvObj->MajorFunction[IRP_MJ_CLOSE]                    = VBoxDrvNtClose;
+                        pDrvObj->MajorFunction[IRP_MJ_DEVICE_CONTROL]           = VBoxDrvNtDeviceControl;
+                        pDrvObj->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL]  = VBoxDrvNtInternalDeviceControl;
+                        pDrvObj->MajorFunction[IRP_MJ_READ]                     = VBoxDrvNtRead;
+                        pDrvObj->MajorFunction[IRP_MJ_WRITE]                    = VBoxDrvNtNotSupportedStub;
 
 #ifdef VBOXDRV_WITH_FAST_IO
-                    /* Fast I/O to speed up guest execution roundtrips. */
-                    pDrvObj->FastIoDispatch = (PFAST_IO_DISPATCH)&g_VBoxDrvFastIoDispatch;
+                        /* Fast I/O to speed up guest execution roundtrips. */
+                        pDrvObj->FastIoDispatch = (PFAST_IO_DISPATCH)&g_VBoxDrvFastIoDispatch;
 #endif
 
+                        /*
+                         * Register ourselves for power state changes.  We don't
+                         * currently care if this fails.
+                         */
+                        UNICODE_STRING      CallbackName;
+                        RtlInitUnicodeString(&CallbackName, L"\\Callback\\PowerState");
+
+                        OBJECT_ATTRIBUTES   Attr;
+                        InitializeObjectAttributes(&Attr, &CallbackName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+                        rcNt = ExCreateCallback(&pDevExt->pObjPowerCallback, &Attr, TRUE, TRUE);
+                        if (rcNt == STATUS_SUCCESS)
+                            pDevExt->hPowerCallback = ExRegisterCallback(pDevExt->pObjPowerCallback,
+                                                                         VBoxPowerDispatchCallback,
+                                                                         g_pDevObjSys);
+
+                        /*
+                         * Done! Returning success!
+                         */
+                        Log(("VBoxDrv::DriverEntry returning STATUS_SUCCESS\n"));
+                        return STATUS_SUCCESS;
+                    }
+
                     /*
-                     * Register ourselves for power state changes.  We don't
-                     * currently care if this fails.
+                     * Failed. Clean up.
                      */
-                    UNICODE_STRING      CallbackName;
-                    RtlInitUnicodeString(&CallbackName, L"\\Callback\\PowerState");
+                    Log(("supdrvInitDevExit failed with vrc=%d!\n", vrc));
+                    rcNt = VBoxDrvNtErr2NtStatus(vrc);
 
-                    OBJECT_ATTRIBUTES   Attr;
-                    InitializeObjectAttributes(&Attr, &CallbackName, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-                    rcNt = ExCreateCallback(&pDevExt->pObjPowerCallback, &Attr, TRUE, TRUE);
-                    if (rcNt == STATUS_SUCCESS)
-                        pDevExt->hPowerCallback = ExRegisterCallback(pDevExt->pObjPowerCallback,
-                                                                     VBoxPowerDispatchCallback,
-                                                                     g_pDevObjSys);
-
-                    /*
-                     * Done! Returning success!
-                     */
-                    Log(("VBoxDrv::DriverEntry returning STATUS_SUCCESS\n"));
-                    return STATUS_SUCCESS;
+                    vboxdrvNtDestroyDevices();
                 }
-
-                Log(("supdrvInitDevExit failed with vrc=%d!\n", vrc));
-                rcNt = VBoxDrvNtErr2NtStatus(vrc);
-
-                vboxdrvNtDestroyDevices();
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+                RTSpinlockDestroy(g_hNtUserIdLock);
+                g_hNtUserIdLock = NIL_RTSPINLOCK;
+#endif
             }
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+            else
+                rcNt = VBoxDrvNtErr2NtStatus(vrc);
+#endif
 #ifdef VBOX_WITH_HARDENING
             supdrvNtProtectTerm();
 #endif
@@ -738,6 +815,10 @@ void _stdcall VBoxDrvNtUnload(PDRIVER_OBJECT pDrvObj)
      * We ASSUME that it's not possible to unload a driver with open handles.
      */
     supdrvDeleteDevExt(pDevExt);
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+    RTSpinlockDestroy(g_hNtUserIdLock);
+    g_hNtUserIdLock = NIL_RTSPINLOCK;
+#endif
 #ifdef VBOX_WITH_HARDENING
     supdrvNtProtectTerm();
 #endif
@@ -748,6 +829,194 @@ void _stdcall VBoxDrvNtUnload(PDRIVER_OBJECT pDrvObj)
     NOREF(pDrvObj);
 }
 
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+
+/**
+ * Worker for supdrvNtUserIdMakeForSession.
+ */
+static bool supdrvNtUserIdMakeUid(PSUPDRVNTUSERID pNtUserId)
+{
+    pNtUserId->UidCore.Key = pNtUserId->HashCore.Key;
+    for (uint32_t cTries = 0; cTries < _4K; cTries++)
+    {
+        bool fRc = RTAvlU32Insert(&g_NtUserIdUidTree, &pNtUserId->UidCore);
+        if (fRc)
+            return true;
+        pNtUserId->UidCore.Key += pNtUserId->cchSid | 1;
+    }
+    return false;
+}
+
+
+/**
+ * Try create a RTUID value for the session.
+ *
+ * @returns VBox status code.
+ * @param   pSession    The session to try set SUPDRVSESSION::Uid for.
+ */
+static int supdrvNtUserIdMakeForSession(PSUPDRVSESSION pSession)
+{
+    /*
+     * Get the current security context and query the User SID for it.
+     */
+    SECURITY_SUBJECT_CONTEXT Ctx = { NULL, SecurityIdentification, NULL, NULL };
+    SeCaptureSubjectContext(&Ctx);
+
+    int         rc;
+    TOKEN_USER *pTokenUser = NULL;
+    NTSTATUS    rcNt = SeQueryInformationToken(SeQuerySubjectContextToken(&Ctx) /* or always PrimaryToken?*/,
+                                               TokenUser, (PVOID *)&pTokenUser);
+    if (NT_SUCCESS(rcNt))
+    {
+        /*
+         * Convert the user SID to a string to make it easier to handle, then prepare
+         * a user ID entry for it as that way we can combine lookup and insertion and
+         * avoid needing to deal with races.
+         */
+        UNICODE_STRING UniStr = RTNT_NULL_UNISTR();
+        rcNt = RtlConvertSidToUnicodeString(&UniStr, pTokenUser->User.Sid, TRUE /*AllocateDesitnationString*/);
+        if (NT_SUCCESS(rcNt))
+        {
+            size_t cchSid = 0;
+            rc = RTUtf16CalcUtf8LenEx(UniStr.Buffer, UniStr.Length / sizeof(RTUTF16), &cchSid);
+            if (RT_SUCCESS(rc))
+            {
+                PSUPDRVNTUSERID const pNtUserIdNew = (PSUPDRVNTUSERID)RTMemAlloc(RT_UOFFSETOF_DYN(SUPDRVNTUSERID, szSid[cchSid + 1]));
+                if (pNtUserIdNew)
+                {
+                    char *pszSid = pNtUserIdNew->szSid;
+                    rc = RTUtf16ToUtf8Ex(UniStr.Buffer, UniStr.Length / sizeof(RTUTF16), &pszSid, cchSid + 1, NULL);
+                    if (RT_SUCCESS(rc))
+                    {
+                        pNtUserIdNew->HashCore.Key = RTStrHash1(pNtUserIdNew->szSid);
+                        pNtUserIdNew->cchSid       = (uint16_t)cchSid;
+                        pNtUserIdNew->cRefs        = 1;
+                        Log5Func(("pNtUserId=%p cchSid=%u hash=%#x '%s'\n", pNtUserIdNew, cchSid, pNtUserIdNew->HashCore.Key, pszSid));
+
+                        /*
+                         * Do the lookup / insert.
+                         */
+                        RTSpinlockAcquire(g_hNtUserIdLock);
+                        AssertCompileMemberOffset(SUPDRVNTUSERID, HashCore, 0);
+                        PSUPDRVNTUSERID pNtUserId = (PSUPDRVNTUSERID)RTAvllU32Get(&g_NtUserIdHashTree, pNtUserIdNew->HashCore.Key);
+                        if (pNtUserId)
+                        {
+                            /* Match the strings till we reach the end of the collision list. */
+                            PSUPDRVNTUSERID const pNtUserIdHead = pNtUserId;
+                            while (   pNtUserId
+                                   && (   pNtUserId->cchSid != cchSid
+                                       || memcmp(pNtUserId->szSid, pNtUserId->szSid, cchSid) != 0))
+                                pNtUserId = (PSUPDRVNTUSERID)pNtUserId->HashCore.pList;
+                            if (pNtUserId)
+                            {
+                                /* Found matching: Retain reference and free the new entry we prepared. */
+                                uint32_t const cRefs = ASMAtomicIncU32(&pNtUserId->cRefs);
+                                Assert(cRefs < _16K); RT_NOREF(cRefs);
+                                RTSpinlockRelease(g_hNtUserIdLock);
+                                Log5Func(("Using %p / %#x instead\n", pNtUserId, pNtUserId->UidCore.Key));
+                            }
+                            else
+                            {
+                                /* No match: Try insert prepared entry after the head node. */
+                                if (supdrvNtUserIdMakeUid(pNtUserIdNew))
+                                {
+                                    pNtUserIdNew->HashCore.pList  = pNtUserIdHead->HashCore.pList;
+                                    pNtUserIdHead->HashCore.pList = &pNtUserIdNew->HashCore;
+                                    pNtUserId = pNtUserIdNew;
+                                }
+                                RTSpinlockRelease(g_hNtUserIdLock);
+                                if (pNtUserId)
+                                    Log5Func(("Using %p / %#x (the prepared one)\n", pNtUserId, pNtUserId->UidCore.Key));
+                                else
+                                    LogRelFunc(("supdrvNtUserIdMakeForSession: failed to insert new\n"));
+                            }
+                        }
+                        else
+                        {
+                            /* No matching hash: Try insert the prepared entry. */
+                            pNtUserIdNew->UidCore.Key = pNtUserIdNew->HashCore.Key;
+                            if (supdrvNtUserIdMakeUid(pNtUserIdNew))
+                            {
+                                RTAvllU32Insert(&g_NtUserIdHashTree, &pNtUserIdNew->HashCore);
+                                pNtUserId = pNtUserIdNew;
+                            }
+                            RTSpinlockRelease(g_hNtUserIdLock);
+                            if (pNtUserId)
+                                Log5Func(("Using %p / %#x (the prepared one, no conflict)\n", pNtUserId, pNtUserId->UidCore.Key));
+                            else
+                                LogRelFunc(("failed to insert!! WTF!?!\n"));
+                        }
+
+                        if (pNtUserId != pNtUserIdNew)
+                            RTMemFree(pNtUserIdNew);
+
+                        /*
+                         * Update the session info.
+                         */
+                        pSession->pNtUserId = pNtUserId;
+                        pSession->Uid       = pNtUserId ? (RTUID)pNtUserId->UidCore.Key : NIL_RTUID;
+                    }
+                    else
+                        RTMemFree(pNtUserIdNew);
+                }
+                else
+                    rc = VERR_NO_MEMORY;
+            }
+            RtlFreeUnicodeString(&UniStr);
+        }
+        else
+        {
+            rc = RTErrConvertFromNtStatus(rcNt);
+            LogFunc(("RtlConvertSidToUnicodeString failed: %#x / %Rrc\n", rcNt, rc));
+        }
+        ExFreePool(pTokenUser);
+    }
+    else
+    {
+        rc = RTErrConvertFromNtStatus(rcNt);
+        LogFunc(("SeQueryInformationToken failed: %#x / %Rrc\n", rcNt, rc));
+    }
+
+    SeReleaseSubjectContext(&Ctx);
+    return rc;
+}
+
+
+/**
+ * Releases a reference to @a pNtUserId.
+ *
+ * @param   pNtUserId   The NT user ID entry to release.
+ */
+static void supdrvNtUserIdRelease(PSUPDRVNTUSERID pNtUserId)
+{
+    if (pNtUserId)
+    {
+        uint32_t const cRefs = ASMAtomicDecU32(&pNtUserId->cRefs);
+        Log5Func(("%p / %#x: cRefs=%d\n", pNtUserId, pNtUserId->cRefs));
+        Assert(cRefs < _8K);
+        if (cRefs == 0)
+        {
+            RTSpinlockAcquire(g_hNtUserIdLock);
+            if (pNtUserId->cRefs == 0)
+            {
+                PAVLLU32NODECORE pAssert1 = RTAvllU32RemoveNode(&g_NtUserIdHashTree, &pNtUserId->HashCore);
+                PAVLU32NODECORE  pAssert2 = RTAvlU32Remove(&g_NtUserIdUidTree, pNtUserId->UidCore.Key);
+
+                RTSpinlockRelease(g_hNtUserIdLock);
+
+                Assert(pAssert1 == &pNtUserId->HashCore);
+                Assert(pAssert2 == &pNtUserId->UidCore);
+                RT_NOREF(pAssert1, pAssert2);
+
+                RTMemFree(pNtUserId);
+            }
+            else
+                RTSpinlockRelease(g_hNtUserIdLock);
+        }
+    }
+}
+
+#endif /* VBOXDRV_WITH_SID_TO_UID_MAPPING */
 
 /**
  * For simplifying request completion into a simple return statement, extended
@@ -892,7 +1161,11 @@ NTSTATUS _stdcall VBoxDrvNtCreate(PDEVICE_OBJECT pDevObj, PIRP pIrp)
                                                      &pSession);
                             if (RT_SUCCESS(rc))
                             {
-                                rc = supdrvSessionHashTabInsert(pDevExt, pSession, (PSUPDRVSESSION *)&pFileObj->FsContext, NULL);
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+                                rc = supdrvNtUserIdMakeForSession(pSession);
+                                if (RT_SUCCESS(rc))
+#endif
+                                    rc = supdrvSessionHashTabInsert(pDevExt, pSession, (PSUPDRVSESSION *)&pFileObj->FsContext, NULL);
                                 supdrvSessionRelease(pSession);
                                 if (RT_SUCCESS(rc))
                                 {
@@ -937,7 +1210,11 @@ NTSTATUS _stdcall VBoxDrvNtCreate(PDEVICE_OBJECT pDevObj, PIRP pIrp)
                 rc = supdrvCreateSession(pDevExt, true /*fUser*/, false /*fUnrestricted*/, &pSession);
                 if (RT_SUCCESS(rc))
                 {
-                    rc = supdrvSessionHashTabInsert(pDevExt, pSession, (PSUPDRVSESSION *)&pFileObj->FsContext, NULL);
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+                    rc = supdrvNtUserIdMakeForSession(pSession);
+                    if (RT_SUCCESS(rc))
+#endif
+                        rc = supdrvSessionHashTabInsert(pDevExt, pSession, (PSUPDRVSESSION *)&pFileObj->FsContext, NULL);
                     supdrvSessionRelease(pSession);
                     if (RT_SUCCESS(rc))
                     {
@@ -957,7 +1234,11 @@ NTSTATUS _stdcall VBoxDrvNtCreate(PDEVICE_OBJECT pDevObj, PIRP pIrp)
             rc = supdrvCreateSession(pDevExt, true /*fUser*/, pDevObj == g_pDevObjSys /*fUnrestricted*/, &pSession);
             if (RT_SUCCESS(rc))
             {
-                rc = supdrvSessionHashTabInsert(pDevExt, pSession, (PSUPDRVSESSION *)&pFileObj->FsContext, NULL);
+# ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+                rc = supdrvNtUserIdMakeForSession(pSession);
+                if (RT_SUCCESS(rc))
+# endif
+                    rc = supdrvSessionHashTabInsert(pDevExt, pSession, (PSUPDRVSESSION *)&pFileObj->FsContext, NULL);
                 supdrvSessionRelease(pSession);
                 if (RT_SUCCESS(rc))
                     return supdrvNtCompleteRequestEx(STATUS_SUCCESS, FILE_OPENED, pIrp);
@@ -978,6 +1259,10 @@ NTSTATUS _stdcall VBoxDrvNtCreate(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 
 /**
  * Clean up file handle entry point.
+ *
+ * This is called when the last handle reference is released, or something like
+ * that.  In the case of IoGetDeviceObjectPointer, this is called as it closes
+ * the handle, however it will go on using the file object afterwards...
  *
  * @param   pDevObj     Device object.
  * @param   pIrp        Request packet.
@@ -1123,11 +1408,12 @@ static BOOLEAN _stdcall VBoxDrvNtFastIoDeviceControl(PFILE_OBJECT pFileObj, BOOL
          * Deal with the 2-3 high-speed IOCtl that takes their arguments from
          * the session and iCmd, and does not return anything.
          */
-        if (   uCmd == SUP_IOCTL_FAST_DO_RAW_RUN
-            || uCmd == SUP_IOCTL_FAST_DO_HM_RUN
-            || uCmd == SUP_IOCTL_FAST_DO_NOP)
+        if (   (uCmd & 3) == METHOD_NEITHER
+            && (uint32_t)((uCmd - SUP_IOCTL_FAST_DO_FIRST) >> 2) < (uint32_t)32)
         {
-            int rc = supdrvIOCtlFast(uCmd, (unsigned)(uintptr_t)pvOutput/* VMCPU id */, pDevExt, pSession);
+            int rc = supdrvIOCtlFast((uCmd - SUP_IOCTL_FAST_DO_FIRST) >> 2,
+                                     (unsigned)(uintptr_t)pvOutput/* VMCPU id */,
+                                     pDevExt, pSession);
             pIoStatus->Status      = RT_SUCCESS(rc) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
             pIoStatus->Information = 0; /* Could be used to pass rc if we liked. */
             supdrvSessionRelease(pSession);
@@ -1185,7 +1471,7 @@ static BOOLEAN _stdcall VBoxDrvNtFastIoDeviceControl(PFILE_OBJECT pFileObj, BOOL
                     && cbBuf < _1M*16)
                 {
                     /* Allocate a buffer and copy all the input into it. */
-                    PSUPREQHDR pHdr = (PSUPREQHDR)ExAllocatePoolWithTag(NonPagedPool, cbBuf, 'VBox');
+                    PSUPREQHDR pHdr = (PSUPREQHDR)ExAllocatePoolWithTag(g_enmNonPagedPoolType, cbBuf, 'VBox');
                     if (pHdr)
                     {
                         __try
@@ -1312,12 +1598,13 @@ NTSTATUS _stdcall VBoxDrvNtDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
         }
 #endif
 
-        ULONG ulCmd = pStack->Parameters.DeviceIoControl.IoControlCode;
-        if (   ulCmd == SUP_IOCTL_FAST_DO_RAW_RUN
-            || ulCmd == SUP_IOCTL_FAST_DO_HM_RUN
-            || ulCmd == SUP_IOCTL_FAST_DO_NOP)
+        ULONG uCmd = pStack->Parameters.DeviceIoControl.IoControlCode;
+        if (   (uCmd & 3) == METHOD_NEITHER
+            && (uint32_t)((uCmd - SUP_IOCTL_FAST_DO_FIRST) >> 2) < (uint32_t)32)
         {
-            int rc = supdrvIOCtlFast(ulCmd, (unsigned)(uintptr_t)pIrp->UserBuffer /* VMCPU id */, pDevExt, pSession);
+            int rc = supdrvIOCtlFast((uCmd - SUP_IOCTL_FAST_DO_FIRST) >> 2,
+                                     (unsigned)(uintptr_t)pIrp->UserBuffer /* VMCPU id */,
+                                     pDevExt, pSession);
 
             /* Complete the I/O request. */
             supdrvSessionRelease(pSession);
@@ -1342,7 +1629,7 @@ NTSTATUS _stdcall VBoxDrvNtDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 static int VBoxDrvNtDeviceControlSlow(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, PIRP pIrp, PIO_STACK_LOCATION pStack)
 {
     NTSTATUS    rcNt;
-    unsigned    cbOut = 0;
+    uint32_t    cbOut = 0;
     int         rc = 0;
     Log2(("VBoxDrvNtDeviceControlSlow(%p,%p): ioctl=%#x pBuf=%p cbIn=%#x cbOut=%#x pSession=%p\n",
           pDevExt, pIrp, pStack->Parameters.DeviceIoControl.IoControlCode,
@@ -1379,7 +1666,7 @@ static int VBoxDrvNtDeviceControlSlow(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSes
                     if (cbOut > pStack->Parameters.DeviceIoControl.OutputBufferLength)
                     {
                         cbOut = pStack->Parameters.DeviceIoControl.OutputBufferLength;
-                        OSDBGPRINT(("VBoxDrvLinuxIOCtl: too much output! %#x > %#x; uCmd=%#x!\n",
+                        OSDBGPRINT(("VBoxDrvNtDeviceControlSlow: too much output! %#x > %#x; uCmd=%#x!\n",
                                     pHdr->cbOut, cbOut, pStack->Parameters.DeviceIoControl.IoControlCode));
                     }
                 }
@@ -1449,7 +1736,7 @@ NTSTATUS _stdcall VBoxDrvNtInternalDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pI
     {
         /* Verify the pDevExt in the session. */
         if (  pStack->Parameters.DeviceIoControl.IoControlCode != SUPDRV_IDC_REQ_CONNECT
-            ? VALID_PTR(pSession) && pSession->pDevExt == pDevExt
+            ? RT_VALID_PTR(pSession) && pSession->pDevExt == pDevExt
             : !pSession
            )
         {
@@ -1548,32 +1835,36 @@ NTSTATUS _stdcall VBoxDrvNtRead(PDEVICE_OBJECT pDevObj, PIRP pIrp)
             int rc = RTSemMutexRequestNoResume(g_hErrorInfoLock, RT_INDEFINITE_WAIT);
             if (RT_SUCCESS(rc))
             {
-                PSUPDRVNTERRORINFO  pCur;
+                PSUPDRVNTERRORINFO pMatch = NULL;
+                PSUPDRVNTERRORINFO pCur;
                 RTListForEach(&g_ErrorInfoHead, pCur, SUPDRVNTERRORINFO, ListEntry)
                 {
                     if (   pCur->hProcessId == hCurProcessId
                         && pCur->hThreadId  == hCurThreadId)
+                    {
+                        pMatch = pCur;
                         break;
+                    }
                 }
 
                 /*
                  * Did we find error info and is the caller requesting data within it?
                  * If so, check the destination buffer and copy the data into it.
                  */
-                if (   pCur
-                    && pStack->Parameters.Read.ByteOffset.QuadPart < pCur->cchErrorInfo
+                if (   pMatch
+                    && pStack->Parameters.Read.ByteOffset.QuadPart < pMatch->cchErrorInfo
                     && pStack->Parameters.Read.ByteOffset.QuadPart >= 0)
                 {
                     PVOID pvDstBuf = pIrp->AssociatedIrp.SystemBuffer;
                     if (pvDstBuf)
                     {
                         uint32_t offRead  = (uint32_t)pStack->Parameters.Read.ByteOffset.QuadPart;
-                        uint32_t cbToRead = pCur->cchErrorInfo - offRead;
+                        uint32_t cbToRead = pMatch->cchErrorInfo - offRead;
                         if (cbToRead < pStack->Parameters.Read.Length)
                             RT_BZERO((uint8_t *)pvDstBuf + cbToRead, pStack->Parameters.Read.Length - cbToRead);
                         else
                             cbToRead = pStack->Parameters.Read.Length;
-                        memcpy(pvDstBuf, &pCur->szErrorInfo[offRead], cbToRead);
+                        memcpy(pvDstBuf, &pMatch->szErrorInfo[offRead], cbToRead);
                         pIrp->IoStatus.Information = cbToRead;
 
                         rcNt = STATUS_SUCCESS;
@@ -1584,10 +1875,10 @@ NTSTATUS _stdcall VBoxDrvNtRead(PDEVICE_OBJECT pDevObj, PIRP pIrp)
                 /*
                  * End of file. Free the info.
                  */
-                else if (pCur)
+                else if (pMatch)
                 {
-                    RTListNodeRemove(&pCur->ListEntry);
-                    RTMemFree(pCur);
+                    RTListNodeRemove(&pMatch->ListEntry);
+                    RTMemFree(pMatch);
                     rcNt = STATUS_END_OF_FILE;
                 }
                 /*
@@ -1695,6 +1986,13 @@ void VBOXCALL supdrvOSCleanupSession(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSess
 #else
     RT_NOREF2(pDevExt, pSession);
 #endif
+#ifdef VBOXDRV_WITH_SID_TO_UID_MAPPING
+    if (pSession->pNtUserId)
+    {
+        supdrvNtUserIdRelease(pSession->pNtUserId);
+        pSession->pNtUserId = NULL;
+    }
+#endif
 }
 
 
@@ -1716,7 +2014,7 @@ size_t VBOXCALL supdrvOSGipGetGroupTableSize(PSUPDRVDEVEXT pDevExt)
     uint32_t cMaxCpus = RTMpGetCount();
     uint32_t cGroups  = RTMpGetMaxCpuGroupCount();
 
-    return cGroups * RT_OFFSETOF(SUPGIPCPUGROUP, aiCpuSetIdxs)
+    return cGroups * RT_UOFFSETOF(SUPGIPCPUGROUP, aiCpuSetIdxs)
          + RT_SIZEOFMEMB(SUPGIPCPUGROUP, aiCpuSetIdxs[0]) * cMaxCpus;
 }
 
@@ -1732,13 +2030,15 @@ int VBOXCALL supdrvOSInitGipGroupTable(PSUPDRVDEVEXT pDevExt, PSUPGLOBALINFOPAGE
     PSUPGIPCPUGROUP pGroup = (PSUPGIPCPUGROUP)&pGip->aCPUs[pGip->cCpus];
     for (uint32_t idxGroup = 0; idxGroup < cGroups; idxGroup++)
     {
-        uint32_t cActive  = 0;
-        uint32_t cMax     = RTMpGetCpuGroupCounts(idxGroup, &cActive);
-        uint32_t cbNeeded = RT_OFFSETOF(SUPGIPCPUGROUP, aiCpuSetIdxs[cMax]);
+        uint32_t        cActive  = 0;
+        uint32_t  const cMax     = RTMpGetCpuGroupCounts(idxGroup, &cActive);
+        uint32_t  const cbNeeded = RT_UOFFSETOF_DYN(SUPGIPCPUGROUP, aiCpuSetIdxs[cMax]);
+        uintptr_t const offGroup = (uintptr_t)pGroup - (uintptr_t)pGip;
         AssertReturn(cbNeeded <= cbGipCpuGroups, VERR_INTERNAL_ERROR_3);
         AssertReturn(cActive <= cMax, VERR_INTERNAL_ERROR_4);
+        AssertReturn(offGroup == (uint32_t)offGroup, VERR_INTERNAL_ERROR_5);
 
-        pGip->aoffCpuGroup[idxGroup] = (uint16_t)((uintptr_t)pGroup - (uintptr_t)pGip);
+        pGip->aoffCpuGroup[idxGroup] = offGroup;
         pGroup->cMembers    = cActive;
         pGroup->cMaxMembers = cMax;
         for (uint32_t idxMember = 0; idxMember < cMax; idxMember++)
@@ -1763,7 +2063,7 @@ void VBOXCALL supdrvOSGipInitGroupBitsForCpu(PSUPDRVDEVEXT pDevExt, PSUPGLOBALIN
     /*
      * Translate the CPU index into a group and member.
      */
-    PROCESSOR_NUMBER ProcNum = { 0, pGipCpu->iCpuSet, 0 };
+    PROCESSOR_NUMBER ProcNum = { 0, (UCHAR)pGipCpu->iCpuSet, 0 };
     if (g_pfnKeGetProcessorNumberFromIndex)
     {
         NTSTATUS rcNt = g_pfnKeGetProcessorNumberFromIndex(pGipCpu->iCpuSet, &ProcNum);
@@ -1783,16 +2083,18 @@ void VBOXCALL supdrvOSGipInitGroupBitsForCpu(PSUPDRVDEVEXT pDevExt, PSUPGLOBALIN
      * Update the group info.  Just do this wholesale for now (doesn't scale well).
      */
     for (uint32_t idxGroup = 0; idxGroup < pGip->cPossibleCpuGroups; idxGroup++)
-        if (pGip->aoffCpuGroup[idxGroup] != UINT16_MAX)
+    {
+        uint32_t offGroup = pGip->aoffCpuGroup[idxGroup];
+        if (offGroup != UINT32_MAX)
         {
-            PSUPGIPCPUGROUP pGroup = (PSUPGIPCPUGROUP)((uintptr_t)pGip + pGip->aoffCpuGroup[idxGroup]);
+            PSUPGIPCPUGROUP pGroup   = (PSUPGIPCPUGROUP)((uintptr_t)pGip + offGroup);
+            uint32_t        cActive  = 0;
+            uint32_t        cMax     = RTMpGetCpuGroupCounts(idxGroup, &cActive);
 
-            uint32_t cActive  = 0;
-            uint32_t cMax     = RTMpGetCpuGroupCounts(idxGroup, &cActive);
             AssertStmt(cMax == pGroup->cMaxMembers, cMax = pGroup->cMaxMembers);
             AssertStmt(cActive <= cMax, cActive = cMax);
             if (pGroup->cMembers != cActive)
-                pGroup->cMembers = cActive;
+                ASMAtomicWriteU16(&pGroup->cMembers, cActive);
 
             for (uint32_t idxMember = 0; idxMember < cMax; idxMember++)
             {
@@ -1801,9 +2103,10 @@ void VBOXCALL supdrvOSGipInitGroupBitsForCpu(PSUPDRVDEVEXT pDevExt, PSUPGLOBALIN
                           ("%d vs %d for %u.%u\n", idxCpuSet, pGip->cPossibleCpus, idxGroup, idxMember));
 
                 if (pGroup->aiCpuSetIdxs[idxMember] != idxCpuSet)
-                    pGroup->aiCpuSetIdxs[idxMember] = idxCpuSet;
+                    ASMAtomicWriteS16(&pGroup->aiCpuSetIdxs[idxMember], idxCpuSet);
             }
         }
+    }
 }
 
 
@@ -1935,7 +2238,7 @@ int  VBOXCALL   supdrvOSLdrOpen(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
             Log(("ImageAddress=%p SectionPointer=%p ImageLength=%#x cbImageBits=%#x rcNt=%#x '%ls'\n",
                  Info.ImageAddress, Info.SectionPointer, Info.ImageLength, pImage->cbImageBits, rcNt, Info.Name.Buffer));
 # ifdef DEBUG_bird
-            SUPR0Printf("ImageAddress=%p SectionPointer=%p ImageLength=%#x cbImageBits=%#x rcNt=%#x '%ws'\n",
+            SUPR0Printf("ImageAddress=%p SectionPointer=%p ImageLength=%#x cbImageBits=%#x rcNt=%#x '%ls'\n",
                         Info.ImageAddress, Info.SectionPointer, Info.ImageLength, pImage->cbImageBits, rcNt, Info.Name.Buffer);
 # endif
             if (pImage->cbImageBits == Info.ImageLength)
@@ -2010,15 +2313,170 @@ void VBOXCALL   supdrvOSLdrNotifyOpened(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE p
     NOREF(pDevExt); NOREF(pImage); NOREF(pszFilename);
 }
 
+
 void VBOXCALL   supdrvOSLdrNotifyUnloaded(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
 {
     NOREF(pDevExt); NOREF(pImage);
 }
 
-int  VBOXCALL   supdrvOSLdrValidatePointer(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, void *pv, const uint8_t *pbImageBits)
+
+/**
+ * Common worker for supdrvOSLdrQuerySymbol and supdrvOSLdrValidatePointer.
+ *
+ * @note    Similar code in rtR0DbgKrnlNtParseModule.
+ */
+static int supdrvOSLdrValidatePointerOrQuerySymbol(PSUPDRVLDRIMAGE pImage, void *pv, const char *pszSymbol,
+                                                   size_t cchSymbol, void **ppvSymbol)
 {
-    NOREF(pDevExt); NOREF(pImage); NOREF(pv); NOREF(pbImageBits);
+    AssertReturn(pImage->pvNtSectionObj, VERR_INVALID_STATE);
+    Assert(pszSymbol || !ppvSymbol);
+
+    /*
+     * Locate the export directory in the loaded image.
+     */
+    uint8_t const  *pbMapping      = (uint8_t const  *)pImage->pvImage;
+    uint32_t const  cbMapping      = pImage->cbImageBits;
+    uint32_t const  uRvaToValidate = (uint32_t)((uintptr_t)pv - (uintptr_t)pbMapping);
+    AssertReturn(uRvaToValidate < cbMapping || ppvSymbol, VERR_INTERNAL_ERROR_3);
+
+    uint32_t const  offNtHdrs = *(uint16_t *)pbMapping == IMAGE_DOS_SIGNATURE
+                              ? ((IMAGE_DOS_HEADER const *)pbMapping)->e_lfanew
+                              : 0;
+    AssertLogRelReturn(offNtHdrs + sizeof(IMAGE_NT_HEADERS) < cbMapping, VERR_INTERNAL_ERROR_5);
+
+    IMAGE_NT_HEADERS const *pNtHdrs = (IMAGE_NT_HEADERS const *)((uintptr_t)pbMapping + offNtHdrs);
+    AssertLogRelReturn(pNtHdrs->Signature == IMAGE_NT_SIGNATURE, VERR_INVALID_EXE_SIGNATURE);
+    AssertLogRelReturn(pNtHdrs->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR_MAGIC, VERR_BAD_EXE_FORMAT);
+    AssertLogRelReturn(pNtHdrs->OptionalHeader.NumberOfRvaAndSizes == IMAGE_NUMBEROF_DIRECTORY_ENTRIES, VERR_BAD_EXE_FORMAT);
+
+    uint32_t const offEndSectHdrs = offNtHdrs
+                                  + sizeof(*pNtHdrs)
+                                  + pNtHdrs->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER);
+    AssertReturn(offEndSectHdrs < cbMapping, VERR_BAD_EXE_FORMAT);
+
+    /*
+     * Find the export directory.
+     */
+    IMAGE_DATA_DIRECTORY ExpDir = pNtHdrs->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!ExpDir.Size)
+    {
+        SUPR0Printf("SUPDrv: No exports in %s!\n", pImage->szName);
+        return ppvSymbol ? VERR_SYMBOL_NOT_FOUND : VERR_NOT_FOUND;
+    }
+    AssertReturn(   ExpDir.Size >= sizeof(IMAGE_EXPORT_DIRECTORY)
+                 && ExpDir.VirtualAddress >= offEndSectHdrs
+                 && ExpDir.VirtualAddress < cbMapping
+                 && ExpDir.VirtualAddress + ExpDir.Size <= cbMapping, VERR_BAD_EXE_FORMAT);
+
+    IMAGE_EXPORT_DIRECTORY const *pExpDir = (IMAGE_EXPORT_DIRECTORY const *)&pbMapping[ExpDir.VirtualAddress];
+
+    uint32_t const cNamedExports = pExpDir->NumberOfNames;
+    AssertReturn(cNamedExports              < _1M, VERR_BAD_EXE_FORMAT);
+    AssertReturn(pExpDir->NumberOfFunctions < _1M, VERR_BAD_EXE_FORMAT);
+    if (pExpDir->NumberOfFunctions == 0 || cNamedExports == 0)
+    {
+        SUPR0Printf("SUPDrv: No exports in %s!\n", pImage->szName);
+        return ppvSymbol ? VERR_SYMBOL_NOT_FOUND : VERR_NOT_FOUND;
+    }
+
+    uint32_t const cExports = RT_MAX(cNamedExports, pExpDir->NumberOfFunctions);
+
+    AssertReturn(   pExpDir->AddressOfFunctions >= offEndSectHdrs
+                 && pExpDir->AddressOfFunctions < cbMapping
+                 && pExpDir->AddressOfFunctions + cExports * sizeof(uint32_t) <= cbMapping,
+                 VERR_BAD_EXE_FORMAT);
+    uint32_t const * const paoffExports = (uint32_t const *)&pbMapping[pExpDir->AddressOfFunctions];
+
+    AssertReturn(   pExpDir->AddressOfNames >= offEndSectHdrs
+                 && pExpDir->AddressOfNames < cbMapping
+                 && pExpDir->AddressOfNames + cNamedExports * sizeof(uint32_t) <= cbMapping,
+                 VERR_BAD_EXE_FORMAT);
+    uint32_t const * const paoffNamedExports = (uint32_t const *)&pbMapping[pExpDir->AddressOfNames];
+
+    AssertReturn(   pExpDir->AddressOfNameOrdinals >= offEndSectHdrs
+                 && pExpDir->AddressOfNameOrdinals < cbMapping
+                 && pExpDir->AddressOfNameOrdinals + cNamedExports * sizeof(uint32_t) <= cbMapping,
+                 VERR_BAD_EXE_FORMAT);
+    uint16_t const * const pau16NameOrdinals = (uint16_t const *)&pbMapping[pExpDir->AddressOfNameOrdinals];
+
+    /*
+     * Validate the entrypoint RVA by scanning the export table.
+     */
+    uint32_t iExportOrdinal = UINT32_MAX;
+    if (!ppvSymbol)
+    {
+        for (uint32_t i = 0; i < cExports; i++)
+            if (paoffExports[i] == uRvaToValidate)
+            {
+                iExportOrdinal = i;
+                break;
+            }
+        if (iExportOrdinal == UINT32_MAX)
+        {
+            SUPR0Printf("SUPDrv: No export with rva %#x (%s) in %s!\n", uRvaToValidate, pszSymbol, pImage->szName);
+            return VERR_NOT_FOUND;
+        }
+    }
+
+    /*
+     * Can we validate the symbol name too or should we find a name?
+     * If so, just do a linear search.
+     */
+    if (pszSymbol && (RT_C_IS_UPPER(*pszSymbol) || ppvSymbol))
+    {
+        for (uint32_t i = 0; i < cNamedExports; i++)
+        {
+            uint32_t const     offName = paoffNamedExports[i];
+            AssertReturn(offName < cbMapping, VERR_BAD_EXE_FORMAT);
+            uint32_t const     cchMaxName = cbMapping - offName;
+            const char * const pszName    = (const char *)&pbMapping[offName];
+            const char * const pszEnd     = (const char *)memchr(pszName, '\0', cchMaxName);
+            AssertReturn(pszEnd, VERR_BAD_EXE_FORMAT);
+
+            if (   cchSymbol == (size_t)(pszEnd - pszName)
+                && memcmp(pszName, pszSymbol, cchSymbol) == 0)
+            {
+                if (ppvSymbol)
+                {
+                    iExportOrdinal = pau16NameOrdinals[i];
+                    if (   iExportOrdinal < cExports
+                        && paoffExports[iExportOrdinal] < cbMapping)
+                    {
+                        *ppvSymbol = (void *)(paoffExports[iExportOrdinal] + pbMapping);
+                        return VINF_SUCCESS;
+                    }
+                }
+                else if (pau16NameOrdinals[i] == iExportOrdinal)
+                    return VINF_SUCCESS;
+                else
+                    SUPR0Printf("SUPDrv: Different exports found for %s and rva %#x in %s: %#x vs %#x\n",
+                                pszSymbol, uRvaToValidate, pImage->szName, pau16NameOrdinals[i], iExportOrdinal);
+                return VERR_LDR_BAD_FIXUP;
+            }
+        }
+        if (!ppvSymbol)
+            SUPR0Printf("SUPDrv: No export named %s (%#x) in %s!\n", pszSymbol, uRvaToValidate, pImage->szName);
+        return VERR_SYMBOL_NOT_FOUND;
+    }
     return VINF_SUCCESS;
+}
+
+
+int  VBOXCALL   supdrvOSLdrValidatePointer(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, void *pv,
+                                           const uint8_t *pbImageBits, const char *pszSymbol)
+{
+    RT_NOREF(pDevExt, pbImageBits);
+    return supdrvOSLdrValidatePointerOrQuerySymbol(pImage, pv, pszSymbol, pszSymbol ? strlen(pszSymbol) : 0, NULL);
+}
+
+
+int  VBOXCALL   supdrvOSLdrQuerySymbol(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage,
+                                       const char *pszSymbol, size_t cchSymbol, void **ppvSymbol)
+{
+    RT_NOREF(pDevExt);
+    AssertReturn(ppvSymbol, VERR_INVALID_PARAMETER);
+    AssertReturn(pszSymbol, VERR_INVALID_PARAMETER);
+    return supdrvOSLdrValidatePointerOrQuerySymbol(pImage, NULL, pszSymbol, cchSymbol, ppvSymbol);
 }
 
 
@@ -2060,6 +2518,38 @@ static int supdrvNtCompare(PSUPDRVLDRIMAGE pImage, const uint8_t *pbImageBits, u
     return iDiff;
 }
 
+/** Image compare exclusion regions. */
+typedef struct SUPDRVNTEXCLREGIONS
+{
+    /** Number of regions.   */
+    uint32_t        cRegions;
+    /** The regions. */
+    struct SUPDRVNTEXCLREGION
+    {
+        uint32_t    uRva;
+        uint32_t    cb;
+    }               aRegions[16];
+} SUPDRVNTEXCLREGIONS;
+
+/**
+ * Adds an exclusion region to the collection.
+ */
+static bool supdrvNtAddExclRegion(SUPDRVNTEXCLREGIONS *pRegions, uint32_t uRvaRegion, uint32_t cbRegion)
+{
+    uint32_t const cRegions = pRegions->cRegions;
+    AssertReturn(cRegions + 1 <= RT_ELEMENTS(pRegions->aRegions), false);
+    uint32_t i = 0;
+    for (; i < cRegions; i++)
+        if (uRvaRegion < pRegions->aRegions[i].uRva)
+            break;
+    if (i != cRegions)
+        memmove(&pRegions->aRegions[i + 1], &pRegions->aRegions[i], (cRegions - i) * sizeof(pRegions->aRegions[0]));
+    pRegions->aRegions[i].uRva = uRvaRegion;
+    pRegions->aRegions[i].cb   = cbRegion;
+    pRegions->cRegions++;
+    return true;
+}
+
 
 int  VBOXCALL   supdrvOSLdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, const uint8_t *pbImageBits, PSUPLDRLOAD pReq)
 {
@@ -2074,8 +2564,9 @@ int  VBOXCALL   supdrvOSLdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
 
         /*
          * On Windows 10 the ImageBase member of the optional header is sometimes
-         * updated with the actual load address and sometimes not.  Try compare
-         *
+         * updated with the actual load address and sometimes not.
+         * On older windows versions (builds <= 9200?), a user mode address is
+         * sometimes found in the image base field after upgrading to VC++ 14.2.
          */
         uint32_t const  offNtHdrs = *(uint16_t *)pbImageBits == IMAGE_DOS_SIGNATURE
                                   ? ((IMAGE_DOS_HEADER const *)pbImageBits)->e_lfanew
@@ -2084,11 +2575,9 @@ int  VBOXCALL   supdrvOSLdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
         IMAGE_NT_HEADERS const *pNtHdrsIprt = (IMAGE_NT_HEADERS const *)(pbImageBits + offNtHdrs);
         IMAGE_NT_HEADERS const *pNtHdrsNtLd = (IMAGE_NT_HEADERS const *)((uintptr_t)pImage->pvImage + offNtHdrs);
 
-        uint32_t const  offImageBase = offNtHdrs + RT_OFFSETOF(IMAGE_NT_HEADERS, OptionalHeader.ImageBase);
+        uint32_t const  offImageBase = offNtHdrs + RT_UOFFSETOF(IMAGE_NT_HEADERS, OptionalHeader.ImageBase);
         uint32_t const  cbImageBase  = RT_SIZEOFMEMB(IMAGE_NT_HEADERS, OptionalHeader.ImageBase);
         if (   pNtHdrsNtLd->OptionalHeader.ImageBase != pNtHdrsIprt->OptionalHeader.ImageBase
-            && (   pNtHdrsNtLd->OptionalHeader.ImageBase == (uintptr_t)pImage->pvImage
-                || pNtHdrsIprt->OptionalHeader.ImageBase == (uintptr_t)pImage->pvImage)
             && pNtHdrsIprt->Signature == IMAGE_NT_SIGNATURE
             && pNtHdrsIprt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR_MAGIC
             && !memcmp(pImage->pvImage, pbImageBits, offImageBase)
@@ -2113,22 +2602,12 @@ int  VBOXCALL   supdrvOSLdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
             &&  pNtHdrsIprt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress < pImage->cbImageBits
             )
         {
-            struct MyRegion
-            {
-                uint32_t uRva;
-                uint32_t cb;
-            }           aExcludeRgns[16];
-            unsigned    cExcludeRgns = 0;
+            SUPDRVNTEXCLREGIONS ExcludeRegions;
+            ExcludeRegions.cRegions = 0;
 
             /* ImageBase: */
-            if (   pNtHdrsNtLd->OptionalHeader.ImageBase != pNtHdrsIprt->OptionalHeader.ImageBase
-                && (   pNtHdrsNtLd->OptionalHeader.ImageBase == (uintptr_t)pImage->pvImage
-                    || pNtHdrsIprt->OptionalHeader.ImageBase == (uintptr_t)pImage->pvImage) )
-            {
-                aExcludeRgns[cExcludeRgns].uRva = offImageBase;
-                aExcludeRgns[cExcludeRgns].cb   = cbImageBase;
-                cExcludeRgns++;
-            }
+            if (pNtHdrsNtLd->OptionalHeader.ImageBase != pNtHdrsIprt->OptionalHeader.ImageBase)
+                supdrvNtAddExclRegion(&ExcludeRegions, offImageBase, cbImageBase);
 
             /* Imports: */
             uint32_t    cImpsLeft    = pNtHdrsIprt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size
@@ -2137,12 +2616,12 @@ int  VBOXCALL   supdrvOSLdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
             AssertLogRelReturn(offImps + cImpsLeft * sizeof(IMAGE_IMPORT_DESCRIPTOR) <= pImage->cbImageBits, VERR_INTERNAL_ERROR_3);
             IMAGE_IMPORT_DESCRIPTOR const *pImp = (IMAGE_IMPORT_DESCRIPTOR const *)(pbImageBits + offImps);
             while (   cImpsLeft-- > 0
-                   && cExcludeRgns < RT_ELEMENTS(aExcludeRgns))
+                   && ExcludeRegions.cRegions < RT_ELEMENTS(ExcludeRegions.aRegions))
             {
                 uint32_t uRvaThunk = pImp->OriginalFirstThunk;
-                if (    uRvaThunk >  sizeof(IMAGE_NT_HEADERS)
-                    &&  uRvaThunk <= pImage->cbImageBits - sizeof(IMAGE_THUNK_DATA)
-                    &&  uRvaThunk != pImp->FirstThunk)
+                if (   uRvaThunk >  sizeof(IMAGE_NT_HEADERS)
+                    && uRvaThunk <= pImage->cbImageBits - sizeof(IMAGE_THUNK_DATA)
+                    && uRvaThunk != pImp->FirstThunk)
                 {
                     /* Find the size of the thunk table. */
                     IMAGE_THUNK_DATA const *paThunk    = (IMAGE_THUNK_DATA const *)(pbImageBits + uRvaThunk);
@@ -2150,18 +2629,30 @@ int  VBOXCALL   supdrvOSLdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
                     uint32_t                cThunks    = 0;
                     while (cThunks < cMaxThunks && paThunk[cThunks].u1.Function != 0)
                         cThunks++;
-
-                    /* Ordered table insert. */
-                    unsigned i = 0;
-                    for (; i < cExcludeRgns; i++)
-                        if (uRvaThunk < aExcludeRgns[i].uRva)
-                            break;
-                    if (i != cExcludeRgns)
-                        memmove(&aExcludeRgns[i + 1], &aExcludeRgns[i], (cExcludeRgns - i) * sizeof(aExcludeRgns[0]));
-                    aExcludeRgns[i].uRva = uRvaThunk;
-                    aExcludeRgns[i].cb   = cThunks * sizeof(IMAGE_THUNK_DATA);
-                    cExcludeRgns++;
+                    supdrvNtAddExclRegion(&ExcludeRegions, uRvaThunk, cThunks * sizeof(IMAGE_THUNK_DATA));
                 }
+
+#if 0 /* Useful for VMMR0 hacking, not for production use.  See also SUPDrvLdr.cpp. */
+                /* Exclude the other thunk table if ntoskrnl.exe. */
+                uint32_t uRvaName = pImp->Name;
+                if (   uRvaName > sizeof(IMAGE_NT_HEADERS)
+                    && uRvaName < pImage->cbImageBits - sizeof("ntoskrnl.exe")
+                    && memcmp(&pbImageBits[uRvaName], RT_STR_TUPLE("ntoskrnl.exe")) == 0)
+                {
+                    uRvaThunk = pImp->FirstThunk;
+                    if (   uRvaThunk >  sizeof(IMAGE_NT_HEADERS)
+                        && uRvaThunk <= pImage->cbImageBits - sizeof(IMAGE_THUNK_DATA))
+                    {
+                        /* Find the size of the thunk table. */
+                        IMAGE_THUNK_DATA const *paThunk    = (IMAGE_THUNK_DATA const *)(pbImageBits + uRvaThunk);
+                        uint32_t                cMaxThunks = (pImage->cbImageBits - uRvaThunk) / sizeof(IMAGE_THUNK_DATA);
+                        uint32_t                cThunks    = 0;
+                        while (cThunks < cMaxThunks && paThunk[cThunks].u1.Function != 0)
+                            cThunks++;
+                        supdrvNtAddExclRegion(&ExcludeRegions, uRvaThunk, cThunks * sizeof(IMAGE_THUNK_DATA));
+                    }
+                }
+#endif
 
                 /* advance */
                 pImp++;
@@ -2172,11 +2663,11 @@ int  VBOXCALL   supdrvOSLdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage, c
              */
             int         iDiff    = 0;
             uint32_t    uRvaNext = 0;
-            for (unsigned i = 0; !iDiff && i < cExcludeRgns; i++)
+            for (unsigned i = 0; !iDiff && i < ExcludeRegions.cRegions; i++)
             {
-                if (uRvaNext < aExcludeRgns[i].uRva)
-                    iDiff = supdrvNtCompare(pImage, pbImageBits, uRvaNext, aExcludeRgns[i].uRva - uRvaNext, pReq);
-                uRvaNext = aExcludeRgns[i].uRva + aExcludeRgns[i].cb;
+                if (uRvaNext < ExcludeRegions.aRegions[i].uRva)
+                    iDiff = supdrvNtCompare(pImage, pbImageBits, uRvaNext, ExcludeRegions.aRegions[i].uRva - uRvaNext, pReq);
+                uRvaNext = ExcludeRegions.aRegions[i].uRva + ExcludeRegions.aRegions[i].cb;
             }
             if (!iDiff && uRvaNext < pImage->cbImageBits)
                 iDiff = supdrvNtCompare(pImage, pbImageBits, uRvaNext, pImage->cbImageBits - uRvaNext, pReq);
@@ -2208,6 +2699,20 @@ void VBOXCALL   supdrvOSLdrUnload(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
         pImage->pvNtSectionObj = NULL;
     }
     NOREF(pDevExt);
+}
+
+
+void VBOXCALL   supdrvOSLdrRetainWrapperModule(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
+{
+    RT_NOREF(pDevExt, pImage);
+    AssertFailed();
+}
+
+
+void VBOXCALL   supdrvOSLdrReleaseWrapperModule(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage)
+{
+    RT_NOREF(pDevExt, pImage);
+    AssertFailed();
 }
 
 
@@ -2463,32 +2968,244 @@ static NTSTATUS     VBoxDrvNtErr2NtStatus(int rc)
 }
 
 
-#if 0 /* See alternative in SUPDrvA-win.asm */
-/**
- * Alternative version of SUPR0Printf for Windows.
- *
- * @returns 0.
- * @param   pszFormat   The format string.
- */
-SUPR0DECL(int) SUPR0Printf(const char *pszFormat, ...)
+SUPR0DECL(int) SUPR0PrintfV(const char *pszFormat, va_list va)
 {
-    va_list va;
-    char    szMsg[512];
-
-    va_start(va, pszFormat);
+    char szMsg[384];
     size_t cch = RTStrPrintfV(szMsg, sizeof(szMsg) - 1, pszFormat, va);
     szMsg[sizeof(szMsg) - 1] = '\0';
-    va_end(va);
 
     RTLogWriteDebugger(szMsg, cch);
     return 0;
 }
-#endif
 
 
 SUPR0DECL(uint32_t) SUPR0GetKernelFeatures(void)
 {
     return 0;
+}
+
+
+SUPR0DECL(int) SUPR0IoCtlSetupForHandle(PSUPDRVSESSION pSession, intptr_t hHandle, uint32_t fFlags, PSUPR0IOCTLCTX *ppCtx)
+{
+    /*
+     * Validate input.
+     */
+    AssertPtrReturn(ppCtx, VERR_INVALID_POINTER);
+    *ppCtx = NULL;
+    AssertReturn(SUP_IS_SESSION_VALID(pSession), VERR_INVALID_PARAMETER);
+    AssertReturn(!fFlags, VERR_INVALID_FLAGS);
+
+    /*
+     * Turn the partition handle into a file object and related device object
+     * so that we can issue direct I/O control calls to the pair later.
+     */
+    PFILE_OBJECT pFileObject = NULL;
+    OBJECT_HANDLE_INFORMATION HandleInfo = { 0, 0 };
+    NTSTATUS rcNt = ObReferenceObjectByHandle((HANDLE)hHandle, /*FILE_WRITE_DATA*/0, *IoFileObjectType,
+                                              UserMode, (void **)&pFileObject, &HandleInfo);
+    if (!NT_SUCCESS(rcNt))
+        return RTErrConvertFromNtStatus(rcNt);
+    AssertPtrReturn(pFileObject, VERR_INTERNAL_ERROR_3);
+
+    PDEVICE_OBJECT pDevObject = IoGetRelatedDeviceObject(pFileObject);
+    AssertMsgReturnStmt(RT_VALID_PTR(pDevObject), ("pDevObject=%p\n", pDevObject),
+                        ObDereferenceObject(pFileObject), VERR_INTERNAL_ERROR_2);
+
+    /*
+     * Allocate a context structure and fill it in.
+     */
+    PSUPR0IOCTLCTX pCtx = (PSUPR0IOCTLCTX)RTMemAllocZ(sizeof(*pCtx));
+    if (pCtx)
+    {
+        pCtx->u32Magic      = SUPR0IOCTLCTX_MAGIC;
+        pCtx->cRefs         = 1;
+        pCtx->pFileObject   = pFileObject;
+        pCtx->pDeviceObject = pDevObject;
+
+        PDRIVER_OBJECT pDrvObject = pDevObject->DriverObject;
+        if (   RT_VALID_PTR(pDrvObject->FastIoDispatch)
+            && RT_VALID_PTR(pDrvObject->FastIoDispatch->FastIoDeviceControl))
+            pCtx->pfnFastIoDeviceControl = pDrvObject->FastIoDispatch->FastIoDeviceControl;
+        else
+            pCtx->pfnFastIoDeviceControl = NULL;
+        *ppCtx = pCtx;
+        return VINF_SUCCESS;
+    }
+
+    ObDereferenceObject(pFileObject);
+    return VERR_NO_MEMORY;
+}
+
+
+/**
+ * I/O control destructor for NT.
+ *
+ * @param   pCtx    The context to destroy.
+ */
+static void supdrvNtIoCtlContextDestroy(PSUPR0IOCTLCTX pCtx)
+{
+    PFILE_OBJECT pFileObject = pCtx->pFileObject;
+    pCtx->pfnFastIoDeviceControl = NULL;
+    pCtx->pFileObject            = NULL;
+    pCtx->pDeviceObject          = NULL;
+    ASMAtomicWriteU32(&pCtx->u32Magic, ~SUPR0IOCTLCTX_MAGIC);
+
+    if (RT_VALID_PTR(pFileObject))
+        ObDereferenceObject(pFileObject);
+    RTMemFree(pCtx);
+}
+
+
+SUPR0DECL(int) SUPR0IoCtlCleanup(PSUPR0IOCTLCTX pCtx)
+{
+    if (pCtx != NULL)
+    {
+        AssertPtrReturn(pCtx, VERR_INVALID_POINTER);
+        AssertReturn(pCtx->u32Magic == SUPR0IOCTLCTX_MAGIC, VERR_INVALID_PARAMETER);
+
+        uint32_t cRefs = ASMAtomicDecU32(&pCtx->cRefs);
+        Assert(cRefs < _4K);
+        if (cRefs == 0)
+            supdrvNtIoCtlContextDestroy(pCtx);
+    }
+    return VINF_SUCCESS;
+}
+
+
+SUPR0DECL(int)  SUPR0IoCtlPerform(PSUPR0IOCTLCTX pCtx, uintptr_t uFunction,
+                                  void *pvInput, RTR3PTR pvInputUser, size_t cbInput,
+                                  void *pvOutput, RTR3PTR pvOutputUser, size_t cbOutput,
+                                  int32_t *piNativeRc)
+{
+    AssertPtrReturn(pCtx, VERR_INVALID_POINTER);
+    AssertReturn(pCtx->u32Magic == SUPR0IOCTLCTX_MAGIC, VERR_INVALID_PARAMETER);
+
+    /* Reference the context. */
+    uint32_t cRefs = ASMAtomicIncU32(&pCtx->cRefs);
+    Assert(cRefs > 1 && cRefs < _4K);
+
+    /*
+     * Try fast I/O control path first.
+     */
+    IO_STATUS_BLOCK Ios = RTNT_IO_STATUS_BLOCK_INITIALIZER;
+    if (pCtx->pfnFastIoDeviceControl)
+    {
+        /* Must pass user addresses here as that's what's being expected. */
+        BOOLEAN fHandled = pCtx->pfnFastIoDeviceControl(pCtx->pFileObject,
+                                                        TRUE /*Wait*/,
+                                                        (void *)pvInputUser,  (ULONG)cbInput,
+                                                        (void *)pvOutputUser, (ULONG)cbOutput,
+                                                        uFunction,
+                                                        &Ios,
+                                                        pCtx->pDeviceObject);
+        if (fHandled)
+        {
+            /* Relase the context. */
+            cRefs = ASMAtomicDecU32(&pCtx->cRefs);
+            Assert(cRefs < _4K);
+            if (cRefs == 0)
+                supdrvNtIoCtlContextDestroy(pCtx);
+
+            /* Set/convert status and return. */
+            if (piNativeRc)
+            {
+                *piNativeRc = Ios.Status;
+                return VINF_SUCCESS;
+            }
+            if (NT_SUCCESS(Ios.Status))
+                return VINF_SUCCESS;
+            return RTErrConvertFromNtStatus(Ios.Status);
+        }
+
+        /*
+         * Fall back on IRP if not handled.
+         *
+         * Note! Perhaps we should rather fail, because VID.SYS will crash getting
+         *       the partition ID with the code below.  It tries to zero the output
+         *       buffer as if it were as system buffer...
+         */
+        RTNT_IO_STATUS_BLOCK_REINIT(&Ios);
+    }
+
+    /*
+     * For directly accessed buffers we must supply user mode addresses or
+     * we'll fail ProbeForWrite validation.
+     */
+    switch (uFunction & 3)
+    {
+        case METHOD_BUFFERED:
+            /* For buffered accesses, we can supply kernel buffers. */
+            break;
+
+        case METHOD_IN_DIRECT:
+            pvInput  = (void *)pvInputUser;
+            break;
+
+        case METHOD_NEITHER:
+            pvInput  = (void *)pvInputUser;
+            RT_FALL_THRU();
+
+        case METHOD_OUT_DIRECT:
+            pvOutput = (void *)pvOutputUser;
+            break;
+    }
+
+    /*
+     * Build the request.
+     */
+    int rc;
+    KEVENT Event;
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    PIRP pIrp = IoBuildDeviceIoControlRequest(uFunction, pCtx->pDeviceObject,
+                                              pvInput, (ULONG)cbInput, pvOutput, (ULONG)cbOutput,
+                                              FALSE /* InternalDeviceControl */, &Event, &Ios);
+    if (pIrp)
+    {
+        IoGetNextIrpStackLocation(pIrp)->FileObject = pCtx->pFileObject;
+
+        /*
+         * Make the call.
+         */
+        NTSTATUS rcNt = IoCallDriver(pCtx->pDeviceObject, pIrp);
+        if (rcNt == STATUS_PENDING)
+        {
+            rcNt = KeWaitForSingleObject(&Event,            /* Object */
+                                         Executive,         /* WaitReason */
+                                         KernelMode,        /* WaitMode */
+                                         FALSE,             /* Alertable */
+                                         NULL);             /* TimeOut */
+            AssertMsg(rcNt == STATUS_SUCCESS, ("rcNt=%#x\n", rcNt));
+            rcNt = Ios.Status;
+        }
+        else if (NT_SUCCESS(rcNt) && Ios.Status != STATUS_SUCCESS)
+            rcNt = Ios.Status;
+
+        /* Set/convert return code. */
+        if (piNativeRc)
+        {
+            *piNativeRc = rcNt;
+            rc = VINF_SUCCESS;
+        }
+        else if (NT_SUCCESS(rcNt))
+            rc = VINF_SUCCESS;
+        else
+            rc = RTErrConvertFromNtStatus(rcNt);
+    }
+    else
+    {
+        if (piNativeRc)
+            *piNativeRc = STATUS_NO_MEMORY;
+        rc = VERR_NO_MEMORY;
+    }
+
+    /* Relase the context. */
+    cRefs = ASMAtomicDecU32(&pCtx->cRefs);
+    Assert(cRefs < _4K);
+    if (cRefs == 0)
+        supdrvNtIoCtlContextDestroy(pCtx);
+
+    return rc;
 }
 
 
@@ -2730,7 +3447,7 @@ static POBJECT_TYPE supdrvNtProtectGetAlpcPortObjectType(uint32_t uSessionId, co
             rc |= RTUtf16CatAscii(wszPortNm, RT_ELEMENTS(wszPortNm), szTmp);
             AssertRCSuccess(rc);
 
-            bool fDone = supdrvNtProtectGetAlpcPortObjectType2(wszPortNm, &pObjType);
+            fDone = supdrvNtProtectGetAlpcPortObjectType2(wszPortNm, &pObjType);
             if (!fDone)
             {
                 wszPortNm[offRand] = '\0';
@@ -4225,7 +4942,7 @@ static int supdrvNtProtectRestrictHandlesToProcessAndThread(PSUPDRVNTPROTECT pNt
 
     SYSTEM_HANDLE_INFORMATION_EX const *pInfo = (SYSTEM_HANDLE_INFORMATION_EX const *)pbBuf;
     ULONG_PTR i = pInfo->NumberOfHandles;
-    AssertRelease(RT_OFFSETOF(SYSTEM_HANDLE_INFORMATION_EX, Handles[i]) == cbNeeded);
+    AssertRelease(RT_UOFFSETOF_DYN(SYSTEM_HANDLE_INFORMATION_EX, Handles[i]) == cbNeeded);
     while (i-- > 0)
     {
         const char *pszType;
@@ -4293,7 +5010,7 @@ static int supdrvNtProtectRestrictHandlesToProcessAndThread(PSUPDRVNTPROTECT pNt
         if (pHandleInfo->UniqueProcessId == idLastDebugger)
             continue;
         PEPROCESS pDbgProc;
-        NTSTATUS rcNt = PsLookupProcessByProcessId(pHandleInfo->UniqueProcessId, &pDbgProc);
+        rcNt = PsLookupProcessByProcessId(pHandleInfo->UniqueProcessId, &pDbgProc);
         if (NT_SUCCESS(rcNt))
         {
             bool fIsDebugger = supdrvNtProtectIsWhitelistedDebugger(pDbgProc);

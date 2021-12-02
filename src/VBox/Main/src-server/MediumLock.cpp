@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: MediumLock.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  *
  * Medium lock management helper classes
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -323,13 +323,12 @@ HRESULT MediumLockListMap::Clear()
     HRESULT rc = Unlock();
     for (MediumLockListMap::Base::iterator it = mMediumLocks.begin();
          it != mMediumLocks.end();
-         )
+         ++it)
     {
         MediumLockList *pMediumLockList = it->second;
-        // need an incremented iterator as otherwise erasing invalidates it
-        mMediumLocks.erase(it++);
         delete pMediumLockList;
     }
+    mMediumLocks.clear();
     return rc;
 }
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFCpu.cpp 84710 2020-06-05 18:32:02Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, CPU State Accessors.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,12 +20,13 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #define LOG_GROUP LOG_GROUP_DBGF
+#define VMCPU_INCL_CPUM_GST_CTX /* For CPUM_IMPORT_EXTRN_RET(). */
 #include <VBox/vmm/dbgf.h>
 #include <VBox/vmm/cpum.h>
 #include "DBGFInternal.h"
 #include <VBox/vmm/vm.h>
 #include <VBox/vmm/uvm.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <VBox/log.h>
 #include <VBox/param.h>
 #include <iprt/assert.h>
@@ -43,6 +44,7 @@ static DECLCALLBACK(int) dbgfR3CpuGetMode(PVM pVM, VMCPUID idCpu, CPUMMODE *penm
 {
     Assert(idCpu == VMMGetCpuId(pVM));
     PVMCPU pVCpu = VMMGetCpuById(pVM, idCpu);
+    CPUM_IMPORT_EXTRN_RET(pVCpu, CPUMCTX_EXTRN_CR0 | CPUMCTX_EXTRN_EFER);
     *penmMode = CPUMGetGuestMode(pVCpu);
     return VINF_SUCCESS;
 }
@@ -81,6 +83,7 @@ static DECLCALLBACK(int) dbgfR3CpuIn64BitCode(PVM pVM, VMCPUID idCpu, bool *pfIn
 {
     Assert(idCpu == VMMGetCpuId(pVM));
     PVMCPU pVCpu = VMMGetCpuById(pVM, idCpu);
+    CPUM_IMPORT_EXTRN_RET(pVCpu, CPUMCTX_EXTRN_CS | CPUMCTX_EXTRN_EFER);
     *pfIn64BitCode = CPUMIsGuestIn64BitCode(pVCpu);
     return VINF_SUCCESS;
 }
@@ -119,6 +122,7 @@ static DECLCALLBACK(int) dbgfR3CpuInV86Code(PVM pVM, VMCPUID idCpu, bool *pfInV8
 {
     Assert(idCpu == VMMGetCpuId(pVM));
     PVMCPU pVCpu = VMMGetCpuById(pVM, idCpu);
+    CPUM_IMPORT_EXTRN_RET(pVCpu, CPUMCTX_EXTRN_RFLAGS);
     *pfInV86Code = CPUMIsGuestInV86ModeEx(CPUMQueryGuestCtxPtr(pVCpu));
     return VINF_SUCCESS;
 }
@@ -155,5 +159,40 @@ VMMR3DECL(VMCPUID) DBGFR3CpuGetCount(PUVM pUVM)
 {
     UVM_ASSERT_VALID_EXT_RETURN(pUVM, 1);
     return pUVM->cCpus;
+}
+
+
+/**
+ * Returns the state of the given CPU as a human readable string.
+ *
+ * @returns Pointer to the human readable CPU state string.
+ * @param   pUVM        The user mode VM handle.
+ * @param   idCpu       The target CPU ID.
+ */
+VMMR3DECL(const char *) DBGFR3CpuGetState(PUVM pUVM, VMCPUID idCpu)
+{
+    UVM_ASSERT_VALID_EXT_RETURN(pUVM, NULL);
+    VM_ASSERT_VALID_EXT_RETURN(pUVM->pVM, NULL);
+    AssertReturn(idCpu < pUVM->pVM->cCpus, NULL);
+
+    PVMCPU pVCpu = VMMGetCpuById(pUVM->pVM, idCpu);
+    VMCPUSTATE enmCpuState = (VMCPUSTATE)ASMAtomicReadU32((volatile uint32_t *)&pVCpu->enmState);
+
+    switch (enmCpuState)
+    {
+        case VMCPUSTATE_INVALID:                   return "<INVALID>";
+        case VMCPUSTATE_STOPPED:                   return "Stopped";
+        case VMCPUSTATE_STARTED:                   return "Started";
+        case VMCPUSTATE_STARTED_HM:                return "Started (HM)";
+        case VMCPUSTATE_STARTED_EXEC:              return "Started (Exec)";
+        case VMCPUSTATE_STARTED_EXEC_NEM:          return "Started (Exec NEM)";
+        case VMCPUSTATE_STARTED_EXEC_NEM_WAIT:     return "Started (Exec NEM Wait)";
+        case VMCPUSTATE_STARTED_EXEC_NEM_CANCELED: return "Started (Exec NEM Canceled)";
+        case VMCPUSTATE_STARTED_HALTED:            return "Started (Halted)";
+        case VMCPUSTATE_END:                       return "END";
+        default: break;
+    }
+
+    AssertMsgFailedReturn(("Unknown CPU state %u\n", enmCpuState), "<UNKNOWN>");
 }
 

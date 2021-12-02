@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIKeyboardHandlerSeamless.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIKeyboardHandlerSeamless class implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,24 +15,18 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
-# ifndef VBOX_WS_MAC
+#ifndef VBOX_WS_MAC
 /* Qt includes: */
-#  include <QKeyEvent>
-#  include <QTimer>
-# endif /* !VBOX_WS_MAC */
+# include <QKeyEvent>
+# include <QTimer>
+#endif /* !VBOX_WS_MAC */
 
 /* GUI includes: */
-# include "UIKeyboardHandlerSeamless.h"
-# ifndef VBOX_WS_MAC
-#  include "UIMachineLogic.h"
-#  include "UIShortcutPool.h"
-# endif /* !VBOX_WS_MAC */
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "UIKeyboardHandlerSeamless.h"
+#ifndef VBOX_WS_MAC
+# include "UIMachineLogic.h"
+# include "UIShortcutPool.h"
+#endif /* !VBOX_WS_MAC */
 
 
 #ifndef VBOX_WS_MAC
@@ -66,7 +60,8 @@ bool UIKeyboardHandlerSeamless::eventFilter(QObject *pWatchedObject, QEvent *pEv
                 /* Get key-event: */
                 QKeyEvent *pKeyEvent = static_cast<QKeyEvent*>(pEvent);
                 /* Process Host+Home for menu popup: */
-                if (isHostKeyPressed() && QKeySequence(pKeyEvent->key()) == gShortcutPool->shortcut(GUI_Input_MachineShortcuts, QString("PopupMenu")).sequence())
+                if (   isHostKeyPressed()
+                    && gShortcutPool->shortcut(GUI_Input_MachineShortcuts, QString("PopupMenu")).sequences().contains(QKeySequence(pKeyEvent->key())))
                 {
                     /* Post request to show popup-menu: */
                     QTimer::singleShot(0, m_pMachineLogic, SLOT(sltInvokePopupMenu()));

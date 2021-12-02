@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: path.cpp 83991 2020-04-27 10:08:37Z vboxsync $ */
 /** @file
  * IPRT - Path Manipulation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,10 +29,10 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include "internal/iprt.h"
-#include <iprt/assert.h>
-#include <iprt/env.h>
-#include <iprt/err.h>
 #include <iprt/path.h>
+
+#include <iprt/assert.h>
+#include <iprt/errcore.h>
 #include <iprt/string.h>
 #include "internal/path.h"
 #include "internal/process.h"
@@ -137,43 +137,6 @@ RTDECL(int) RTPathAppDocs(char *pszPath, size_t cchPath)
 #else
     return RTPathExecDir(pszPath, cchPath);
 #endif
-}
-
-
-RTDECL(int) RTPathTemp(char *pszPath, size_t cchPath)
-{
-    /*
-     * Try get it from the environment first.
-     */
-    static const char * const s_apszVars[] =
-    {
-        "IPRT_TMPDIR"
-#if defined(RT_OS_WINDOWS)
-        , "TMP", "TEMP", "USERPROFILE"
-#elif defined(RT_OS_OS2)
-        , "TMP", "TEMP", "TMPDIR"
-#else
-        , "TMPDIR"
-#endif
-    };
-    for (size_t iVar = 0; iVar < RT_ELEMENTS(s_apszVars); iVar++)
-    {
-        int rc = RTEnvGetEx(RTENV_DEFAULT, s_apszVars[iVar], pszPath, cchPath, NULL);
-        if (rc != VERR_ENV_VAR_NOT_FOUND)
-            return rc;
-    }
-
-    /*
-     * Here we should use some sane system default, instead we just use
-     * the typical unix temp dir for now.
-     */
-    /** @todo Windows should default to the windows directory, see GetTempPath.
-     * Some unixes has path.h and _PATH_TMP. There is also a question about
-     * whether /var/tmp wouldn't be a better place...  */
-    if (cchPath < sizeof("/tmp") )
-        return VERR_BUFFER_OVERFLOW;
-    memcpy(pszPath, "/tmp", sizeof("/tmp"));
-    return VINF_SUCCESS;
 }
 
 

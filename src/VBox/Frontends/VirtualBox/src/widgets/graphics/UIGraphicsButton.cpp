@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIGraphicsButton.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
- * VBox Qt GUI - UIGraphicsButton class definition.
+ * VBox Qt GUI - UIGraphicsButton class implementation.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,187 +15,190 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QPainter>
-# include <QGraphicsSceneMouseEvent>
+#include <QApplication>
+#include <QGraphicsScene>
+#include <QGraphicsSceneMouseEvent>
+#include <QGraphicsView>
+#include <QPainter>
+#include <QStyle>
+#include <QTimerEvent>
 
 /* GUI includes: */
-# include "UIGraphicsButton.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "UIGraphicsButton.h"
 
 
 UIGraphicsButton::UIGraphicsButton(QIGraphicsWidget *pParent, const QIcon &icon)
     : QIGraphicsWidget(pParent)
     , m_icon(icon)
-    , m_buttonType(UIGraphicsButtonType_Iconified)
-    , m_fParentSelected(false)
+    , m_enmClickPolicy(ClickPolicy_OnRelease)
+    , m_iDelayId(0)
+    , m_iRepeatId(0)
+    , m_dIconScaleIndex(0)
 {
-    /* Refresh finally: */
     refresh();
 }
 
-UIGraphicsButton::UIGraphicsButton(QIGraphicsWidget *pParent, UIGraphicsButtonType buttonType)
-    : QIGraphicsWidget(pParent)
-    , m_buttonType(buttonType)
-    , m_fParentSelected(false)
+void UIGraphicsButton::setIconScaleIndex(double dIndex)
 {
-    /* Refresh finally: */
-    refresh();
+    if (dIndex >= 0)
+        m_dIconScaleIndex = dIndex;
 }
 
-void UIGraphicsButton::setParentSelected(bool fParentSelected)
+double UIGraphicsButton::iconScaleIndex() const
 {
-    if (m_fParentSelected == fParentSelected)
-        return;
-    m_fParentSelected = fParentSelected;
-    update();
+    return m_dIconScaleIndex;
+}
+
+void UIGraphicsButton::setClickPolicy(ClickPolicy enmPolicy)
+{
+    m_enmClickPolicy = enmPolicy;
+}
+
+UIGraphicsButton::ClickPolicy UIGraphicsButton::clickPolicy() const
+{
+    return m_enmClickPolicy;
 }
 
 QVariant UIGraphicsButton::data(int iKey) const
 {
     switch (iKey)
     {
-        case GraphicsButton_Margin: return 0;
-        case GraphicsButton_IconSize: return m_icon.isNull() ? QSize(16, 16) : m_icon.availableSizes().first();
-        case GraphicsButton_Icon: return m_icon;
-        default: break;
+        case GraphicsButton_Margin:
+            return 0;
+        case GraphicsButton_IconSize:
+        {
+            int iMetric = QApplication::style()->pixelMetric(QStyle::PM_SmallIconSize);
+            if (m_dIconScaleIndex > 0)
+                iMetric *= m_dIconScaleIndex;
+            return QSize(iMetric, iMetric);
+        }
+        case GraphicsButton_Icon:
+            return m_icon;
+        default:
+            break;
     }
     return QVariant();
 }
 
-QSizeF UIGraphicsButton::sizeHint(Qt::SizeHint which, const QSizeF &constraint /* = QSizeF() */) const
+QSizeF UIGraphicsButton::sizeHint(Qt::SizeHint enmType, const QSizeF &constraint /* = QSizeF() */) const
 {
-    /* Calculations for minimum size: */
-    if (which == Qt::MinimumSize)
+    /* For minimum size-hint: */
+    if (enmType == Qt::MinimumSize)
     {
-        /* Variables: */
-        int iMargin = data(GraphicsButton_Margin).toInt();
-        QSize iconSize = data(GraphicsButton_IconSize).toSize();
-        /* Calculations: */
+        /* Prepare variables: */
+        const int iMargin = data(GraphicsButton_Margin).toInt();
+        const QSize iconSize = data(GraphicsButton_IconSize).toSize();
+        /* Perform calculations: */
         int iWidth = 2 * iMargin + iconSize.width();
         int iHeight = 2 * iMargin + iconSize.height();
         return QSize(iWidth, iHeight);
     }
+
     /* Call to base-class: */
-    return QIGraphicsWidget::sizeHint(which, constraint);
+    return QIGraphicsWidget::sizeHint(enmType, constraint);
 }
 
 void UIGraphicsButton::paint(QPainter *pPainter, const QStyleOptionGraphicsItem* /* pOption */, QWidget* /* pWidget = 0 */)
 {
     /* Prepare variables: */
-    int iMargin = data(GraphicsButton_Margin).toInt();
-    QIcon icon = data(GraphicsButton_Icon).value<QIcon>();
-    QSize iconSize = data(GraphicsButton_IconSize).toSize();
+    const int iMargin = data(GraphicsButton_Margin).toInt();
+    const QIcon icon = data(GraphicsButton_Icon).value<QIcon>();
+    const QSize expectedIconSize = data(GraphicsButton_IconSize).toSize();
 
-    /* Which type button has: */
-    switch (m_buttonType)
+    /* Determine which QWindow this QGraphicsWidget belongs to.
+     * This is required for proper HiDPI-aware pixmap calculations. */
+    QWindow *pWindow = 0;
+    if (   scene()
+        && !scene()->views().isEmpty()
+        && scene()->views().first()
+        && scene()->views().first()->window())
+        pWindow = scene()->views().first()->window()->windowHandle();
+
+    /* Acquire pixmap, adjust it to be in center of button if necessary: */
+    const QPixmap pixmap = icon.pixmap(pWindow, expectedIconSize);
+    const QSize actualIconSize = pixmap.size() / pixmap.devicePixelRatio();
+    QPoint position = QPoint(iMargin, iMargin);
+    if (actualIconSize != expectedIconSize)
     {
-        case UIGraphicsButtonType_Iconified:
-        {
-            /* Just draw the pixmap: */
-            pPainter->drawPixmap(QRect(QPoint(iMargin, iMargin), iconSize), icon.pixmap(iconSize));
-            break;
-        }
-        case UIGraphicsButtonType_DirectArrow:
-        {
-            /* Prepare variables: */
-            QPalette pal = palette();
-            QColor buttonColor = pal.color(m_fParentSelected ? QPalette::HighlightedText : QPalette::Mid);
-#ifdef VBOX_WS_MAC
-            /* Mac is using only light standard highlight colors, keeping highlight-text color always black.
-             * User can choose a darker (non-standard) highlight color but it will be his visibility problem.
-             * I think using highlight-text color (black) for arrow-buttons is too ugly,
-             * so the corresponding color will be received from the highlight color: */
-            if (m_fParentSelected)
-                buttonColor = pal.color(QPalette::Highlight).darker(150);
-#endif /* VBOX_WS_MAC */
-
-            /* Setup: */
-            pPainter->setRenderHint(QPainter::Antialiasing);
-            QPen pen = pPainter->pen();
-            pen.setColor(buttonColor);
-            pen.setWidth(2);
-            pen.setCapStyle(Qt::RoundCap);
-
-            /* Draw path: */
-            QPainterPath circlePath;
-            circlePath.moveTo(iMargin, iMargin);
-            circlePath.lineTo(iMargin + iconSize.width() / 2, iMargin);
-            circlePath.arcTo(QRectF(circlePath.currentPosition(), iconSize).translated(-iconSize.width() / 2, 0), 90, -180);
-            circlePath.lineTo(iMargin, iMargin + iconSize.height());
-            circlePath.closeSubpath();
-            pPainter->strokePath(circlePath, pen);
-
-            /* Draw triangle: */
-            QPainterPath linePath;
-            linePath.moveTo(iMargin + 5, iMargin + 5);
-            linePath.lineTo(iMargin + iconSize.height() - 5, iMargin + iconSize.width() / 2);
-            linePath.lineTo(iMargin + 5, iMargin + iconSize.width() - 5);
-            pPainter->strokePath(linePath, pen);
-            break;
-        }
-        case UIGraphicsButtonType_RoundArrow:
-        {
-            /* Prepare variables: */
-            QPalette pal = palette();
-            QColor buttonColor = pal.color(m_fParentSelected ? QPalette::HighlightedText : QPalette::Mid);
-#ifdef VBOX_WS_MAC
-            /* Mac is using only light standard highlight colors, keeping highlight-text color always black.
-             * User can choose a darker (non-standard) highlight color but it will be his visibility problem.
-             * I think using highlight-text color (black) for arrow-buttons is too ugly,
-             * so the corresponding color will be received from the highlight color: */
-            if (m_fParentSelected)
-                buttonColor = pal.color(QPalette::Highlight).darker(150);
-#endif /* VBOX_WS_MAC */
-
-            /* Setup: */
-            pPainter->setRenderHint(QPainter::Antialiasing);
-            QPen pen = pPainter->pen();
-            pen.setColor(buttonColor);
-            pen.setWidth(2);
-            pen.setCapStyle(Qt::RoundCap);
-
-            /* Draw circle: */
-            QPainterPath circlePath;
-            circlePath.moveTo(iMargin, iMargin);
-            circlePath.addEllipse(QRectF(circlePath.currentPosition(), iconSize));
-            pPainter->strokePath(circlePath, pen);
-
-            /* Draw triangle: */
-            QPainterPath linePath;
-            linePath.moveTo(iMargin + 5, iMargin + 5);
-            linePath.lineTo(iMargin + iconSize.height() - 5, iMargin + iconSize.width() / 2);
-            linePath.lineTo(iMargin + 5, iMargin + iconSize.width() - 5);
-            pPainter->strokePath(linePath, pen);
-            break;
-        }
+        const int iDx = (expectedIconSize.width() - actualIconSize.width()) / 2;
+        const int iDy = (expectedIconSize.height() - actualIconSize.height()) / 2;
+        position += QPoint(iDx, iDy);
     }
+
+    /* Draw the pixmap finally: */
+    pPainter->drawPixmap(position, pixmap);
 }
 
 void UIGraphicsButton::mousePressEvent(QGraphicsSceneMouseEvent *pEvent)
 {
+    /* Call to base-class: */
+    QIGraphicsWidget::mousePressEvent(pEvent);
+
     /* Accepting this event allows to get release-event: */
     pEvent->accept();
+
+    /* For click-on-press policy: */
+    if (m_enmClickPolicy == ClickPolicy_OnPress)
+    {
+        /* Notify listeners about button click: */
+        emit sigButtonClicked();
+        /* Start delay timer: */
+        m_iDelayId = startTimer(500);
+    }
 }
 
 void UIGraphicsButton::mouseReleaseEvent(QGraphicsSceneMouseEvent *pEvent)
 {
     /* Call to base-class: */
     QIGraphicsWidget::mouseReleaseEvent(pEvent);
-    /* Notify listeners about button click: */
-    emit sigButtonClicked();
+
+    /* Depending on click policy: */
+    switch (m_enmClickPolicy)
+    {
+        /* For click-on-release policy: */
+        case ClickPolicy_OnRelease:
+        {
+            /* Notify listeners about button click: */
+            emit sigButtonClicked();
+            break;
+        }
+        /* For click-on-press policy: */
+        case ClickPolicy_OnPress:
+        {
+            /* We should stop all timers: */
+            killTimer(m_iDelayId);
+            killTimer(m_iRepeatId);
+            m_iDelayId = 0;
+            m_iRepeatId = 0;
+            break;
+        }
+    }
+}
+
+void UIGraphicsButton::timerEvent(QTimerEvent *pEvent)
+{
+    /* For click-on-press policy: */
+    if (m_enmClickPolicy == ClickPolicy_OnPress)
+    {
+        /* We should auto-repeat button click: */
+        emit sigButtonClicked();
+
+        /* For delay timer: */
+        if (pEvent->timerId() == m_iDelayId)
+        {
+            /* We should stop it and start repeat timer: */
+            killTimer(m_iDelayId);
+            m_iDelayId = 0;
+            m_iRepeatId = startTimer(90);
+        }
+    }
 }
 
 void UIGraphicsButton::refresh()
 {
     /* Refresh geometry: */
     updateGeometry();
-    /* Resize to minimum size: */
+    /* Resize to minimum size-hint: */
     resize(minimumSizeHint());
 }
-

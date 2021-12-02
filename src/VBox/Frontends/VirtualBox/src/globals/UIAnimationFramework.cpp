@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIAnimationFramework.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIAnimationFramework class implementation.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,30 +15,28 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QWidget>
-# include <QStateMachine>
-# include <QPropertyAnimation>
-# include <QSignalTransition>
+#include <QPropertyAnimation>
+#include <QSignalTransition>
+#include <QStateMachine>
+#include <QWidget>
 
 /* GUI includes: */
-# include "UIAnimationFramework.h"
+#include "UIAnimationFramework.h"
 
 /* Other VBox includes: */
-# include "iprt/assert.h"
+#include "iprt/assert.h"
 
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
 
+/*********************************************************************************************************************************
+*   Class UIAnimation implementation.                                                                                            *
+*********************************************************************************************************************************/
 
 /* static */
 UIAnimation* UIAnimation::installPropertyAnimation(QWidget *pTarget, const char *pszPropertyName,
                                                    const char *pszValuePropertyNameStart, const char *pszValuePropertyNameFinal,
                                                    const char *pszSignalForward, const char *pszSignalReverse,
-                                                   bool fReverse /* = false*/, int iAnimationDuration /* = 300*/)
+                                                   bool fReverse /* = false */, int iAnimationDuration /* = 300 */)
 {
     /* Return newly created animation-machine: */
     return new UIAnimation(pTarget, pszPropertyName,
@@ -47,17 +45,17 @@ UIAnimation* UIAnimation::installPropertyAnimation(QWidget *pTarget, const char 
                            fReverse, iAnimationDuration);
 }
 
-/* static */
-UIAnimationLoop* UIAnimationLoop::installAnimationLoop(QWidget *pTarget, const char *pszPropertyName,
-                                                       const char *pszValuePropertyNameStart, const char *pszValuePropertyNameFinal,
-                                                       int iAnimationDuration /* = 300*/)
+void UIAnimation::update()
 {
-    /* Return newly created animation-loop: */
-    return new UIAnimationLoop(pTarget, pszPropertyName,
-                               pszValuePropertyNameStart, pszValuePropertyNameFinal,
-                               iAnimationDuration);
+    /* Update 'forward' animation: */
+    m_pForwardAnimation->setStartValue(parent()->property(m_pszValuePropertyNameStart));
+    m_pForwardAnimation->setEndValue(parent()->property(m_pszValuePropertyNameFinal));
+    m_pStateStart->assignProperty(parent(), m_pszPropertyName, parent()->property(m_pszValuePropertyNameStart));
+    /* Update 'reverse' animation: */
+    m_pReverseAnimation->setStartValue(parent()->property(m_pszValuePropertyNameFinal));
+    m_pReverseAnimation->setEndValue(parent()->property(m_pszValuePropertyNameStart));
+    m_pStateFinal->assignProperty(parent(), m_pszPropertyName, parent()->property(m_pszValuePropertyNameFinal));
 }
-
 
 UIAnimation::UIAnimation(QWidget *pParent, const char *pszPropertyName,
                          const char *pszValuePropertyNameStart, const char *pszValuePropertyNameFinal,
@@ -84,11 +82,11 @@ void UIAnimation::prepare()
     /* Create 'start' state: */
     m_pStateStart = new QState(m_pAnimationMachine);
     m_pStateStart->assignProperty(parent(), "AnimationState", QString("Start"));
-    connect(m_pStateStart, SIGNAL(propertiesAssigned()), this, SIGNAL(sigStateEnteredStart()));
+    connect(m_pStateStart, &QState::propertiesAssigned, this, &UIAnimation::sigStateEnteredStart);
     /* Create 'final' state: */
     m_pStateFinal = new QState(m_pAnimationMachine);
     m_pStateFinal->assignProperty(parent(), "AnimationState", QString("Final"));
-    connect(m_pStateFinal, SIGNAL(propertiesAssigned()), this, SIGNAL(sigStateEnteredFinal()));
+    connect(m_pStateFinal, &QState::propertiesAssigned, this, &UIAnimation::sigStateEnteredFinal);
 
     /* Prepare 'forward' animation: */
     m_pForwardAnimation = new QPropertyAnimation(parent(), m_pszPropertyName, m_pAnimationMachine);
@@ -101,8 +99,10 @@ void UIAnimation::prepare()
 
     /* Prepare state-transitions: */
     QSignalTransition *pStartToFinal = m_pStateStart->addTransition(parent(), m_pszSignalForward, m_pStateFinal);
+    AssertPtrReturnVoid(pStartToFinal);
     pStartToFinal->addAnimation(m_pForwardAnimation);
     QSignalTransition *pFinalToStart = m_pStateFinal->addTransition(parent(), m_pszSignalReverse, m_pStateStart);
+    AssertPtrReturnVoid(pFinalToStart);
     pFinalToStart->addAnimation(m_pReverseAnimation);
 
     /* Fetch animation-borders: */
@@ -114,18 +114,40 @@ void UIAnimation::prepare()
     m_pAnimationMachine->start();
 }
 
-void UIAnimation::update()
+
+/*********************************************************************************************************************************
+*   Class UIAnimation implementation.                                                                                            *
+*********************************************************************************************************************************/
+
+/* static */
+UIAnimationLoop* UIAnimationLoop::installAnimationLoop(QWidget *pTarget, const char *pszPropertyName,
+                                                       const char *pszValuePropertyNameStart, const char *pszValuePropertyNameFinal,
+                                                       int iAnimationDuration /* = 300*/)
 {
-    /* Update 'forward' animation: */
-    m_pForwardAnimation->setStartValue(parent()->property(m_pszValuePropertyNameStart));
-    m_pForwardAnimation->setEndValue(parent()->property(m_pszValuePropertyNameFinal));
-    m_pStateStart->assignProperty(parent(), m_pszPropertyName, parent()->property(m_pszValuePropertyNameStart));
-    /* Update 'reverse' animation: */
-    m_pReverseAnimation->setStartValue(parent()->property(m_pszValuePropertyNameFinal));
-    m_pReverseAnimation->setEndValue(parent()->property(m_pszValuePropertyNameStart));
-    m_pStateFinal->assignProperty(parent(), m_pszPropertyName, parent()->property(m_pszValuePropertyNameFinal));
+    /* Return newly created animation-loop: */
+    return new UIAnimationLoop(pTarget, pszPropertyName,
+                               pszValuePropertyNameStart, pszValuePropertyNameFinal,
+                               iAnimationDuration);
 }
 
+void UIAnimationLoop::update()
+{
+    /* Update animation: */
+    m_pAnimation->setStartValue(parent()->property(m_pszValuePropertyNameStart));
+    m_pAnimation->setEndValue(parent()->property(m_pszValuePropertyNameFinal));
+}
+
+void UIAnimationLoop::start()
+{
+    /* Start animation: */
+    m_pAnimation->start();
+}
+
+void UIAnimationLoop::stop()
+{
+    /* Stop animation: */
+    m_pAnimation->stop();
+}
 
 UIAnimationLoop::UIAnimationLoop(QWidget *pParent, const char *pszPropertyName,
                                  const char *pszValuePropertyNameStart, const char *pszValuePropertyNameFinal,
@@ -149,24 +171,5 @@ void UIAnimationLoop::prepare()
 
     /* Fetch animation-borders: */
     update();
-}
-
-void UIAnimationLoop::update()
-{
-    /* Update animation: */
-    m_pAnimation->setStartValue(parent()->property(m_pszValuePropertyNameStart));
-    m_pAnimation->setEndValue(parent()->property(m_pszValuePropertyNameFinal));
-}
-
-void UIAnimationLoop::start()
-{
-    /* Start animation: */
-    m_pAnimation->start();
-}
-
-void UIAnimationLoop::stop()
-{
-    /* Stop animation: */
-    m_pAnimation->stop();
 }
 

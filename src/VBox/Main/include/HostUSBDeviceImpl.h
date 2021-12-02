@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HostUSBDeviceImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox IHostUSBDevice COM interface implementation.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,13 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_HOSTUSBDEVICEIMPL
-#define ____H_HOSTUSBDEVICEIMPL
+#ifndef MAIN_INCLUDED_HostUSBDeviceImpl_h
+#define MAIN_INCLUDED_HostUSBDeviceImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "VirtualBoxBase.h"
 #include "USBDeviceFilterImpl.h"
 #include <VBox/usb.h>
-#include "Logging.h"
 #include "HostUSBDeviceWrap.h"
 
 class SessionMachine;
@@ -169,7 +171,7 @@ class ATL_NO_VTABLE HostUSBDevice :
     public HostUSBDeviceWrap
 {
 public:
-    DECLARE_EMPTY_CTOR_DTOR(HostUSBDevice)
+    DECLARE_COMMON_CLASS_METHODS(HostUSBDevice)
 
     HRESULT FinalConstruct();
     void FinalRelease();
@@ -256,6 +258,7 @@ private:
     HRESULT getSerialNumber(com::Utf8Str &aSerialNumber);
     HRESULT getAddress(com::Utf8Str &aAddress);
     HRESULT getPort(USHORT *aPort);
+    HRESULT getPortPath(com::Utf8Str &aPortPath);
     HRESULT getVersion(USHORT *aVersion);
     HRESULT getPortVersion(USHORT *aPortVersion);
     HRESULT getSpeed(USBConnectionSpeed_T *aSpeed);
@@ -310,5 +313,5 @@ private:
     void        *m_pvBackendUser;
 };
 
-#endif // ____H_HOSTUSBDEVICEIMPL
+#endif /* !MAIN_INCLUDED_HostUSBDeviceImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

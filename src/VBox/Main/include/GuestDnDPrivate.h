@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: GuestDnDPrivate.h 91312 2021-09-20 11:06:57Z vboxsync $ */
 /** @file
  * Private guest drag and drop code, used by GuestDnDTarget +
  * GuestDnDSource.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_GUESTDNDPRIVATE
-#define ____H_GUESTDNDPRIVATE
+#ifndef MAIN_INCLUDED_GuestDnDPrivate_h
+#define MAIN_INCLUDED_GuestDnDPrivate_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/dir.h>
 #include <iprt/file.h>
@@ -25,20 +28,15 @@
 
 #include <VBox/hgcmsvc.h> /* For PVBOXHGCMSVCPARM. */
 #include <VBox/GuestHost/DragAndDrop.h>
+#include <VBox/GuestHost/DragAndDropDefs.h>
 #include <VBox/HostServices/DragAndDropSvc.h>
-
-#ifdef LOG_GROUP
- #undef LOG_GROUP
-#endif
-#define LOG_GROUP LOG_GROUP_GUEST_DND
-#include <VBox/log.h>
 
 /**
  * Forward prototype declarations.
  */
 class Guest;
 class GuestDnDBase;
-class GuestDnDResponse;
+class GuestDnDState;
 class GuestDnDSource;
 class GuestDnDTarget;
 class Progress;
@@ -50,17 +48,16 @@ class Progress;
 /** List (vector) of MIME types. */
 typedef std::vector<com::Utf8Str> GuestDnDMIMEList;
 
-/*
- ** @todo Put most of the implementations below in GuestDnDPrivate.cpp!
+/**
+ * Class to handle a guest DnD callback event.
  */
-
 class GuestDnDCallbackEvent
 {
 public:
 
     GuestDnDCallbackEvent(void)
-        : mSemEvent(NIL_RTSEMEVENT)
-        , mRc(VINF_SUCCESS) { }
+        : m_SemEvent(NIL_RTSEMEVENT)
+        , m_Rc(VINF_SUCCESS) { }
 
     virtual ~GuestDnDCallbackEvent(void);
 
@@ -70,58 +67,73 @@ public:
 
     int Notify(int rc = VINF_SUCCESS);
 
-    int Result(void) const { return mRc; }
+    int Result(void) const { return m_Rc; }
 
     int Wait(RTMSINTERVAL msTimeout);
 
 protected:
 
     /** Event semaphore to notify on error/completion. */
-    RTSEMEVENT mSemEvent;
+    RTSEMEVENT m_SemEvent;
     /** Callback result. */
-    int        mRc;
+    int        m_Rc;
 };
 
 /**
- * Class for handling the (raw) meta data.
+ * Struct for handling the (raw) meta data.
  */
-class GuestDnDMetaData
+struct GuestDnDMetaData
 {
-public:
-
     GuestDnDMetaData(void)
         : pvData(NULL)
         , cbData(0)
-        , cbDataUsed(0) { }
+        , cbAllocated(0)
+        , cbAnnounced(0) { }
 
     virtual ~GuestDnDMetaData(void)
     {
         reset();
     }
 
-public:
-
-    uint32_t add(const void *pvDataAdd, uint32_t cbDataAdd)
+    /**
+     * Adds new meta data.
+     *
+     * @returns New (total) meta data size in bytes.
+     * @param   pvDataAdd       Pointer of data to add.
+     * @param   cbDataAdd       Size (in bytes) of data to add.
+     */
+    size_t add(const void *pvDataAdd, size_t cbDataAdd)
     {
-        LogFlowThisFunc(("pvDataAdd=%p, cbDataAdd=%zu\n", pvDataAdd, cbDataAdd));
-
+        LogFlowThisFunc(("cbAllocated=%zu, cbAnnounced=%zu, pvDataAdd=%p, cbDataAdd=%zu\n",
+                         cbAllocated, cbAnnounced, pvDataAdd, cbDataAdd));
         if (!cbDataAdd)
             return 0;
         AssertPtrReturn(pvDataAdd, 0);
 
-        int rc = resize(cbData + cbDataAdd);
-        if (RT_FAILURE(rc))
-            return 0;
+        const size_t cbAllocatedTmp = cbData + cbDataAdd;
+        if (cbAllocatedTmp > cbAllocated)
+        {
+            int rc = resize(cbAllocatedTmp);
+            if (RT_FAILURE(rc))
+                return 0;
+        }
 
-        Assert(cbData >= cbDataUsed + cbDataAdd);
-        memcpy((uint8_t *)pvData + cbDataUsed, pvDataAdd, cbDataAdd);
+        Assert(cbAllocated >= cbData + cbDataAdd);
+        memcpy((uint8_t *)pvData + cbData, pvDataAdd, cbDataAdd);
 
-        cbDataUsed += cbDataAdd;
+        cbData     += cbDataAdd;
+        cbAnnounced = cbData;
 
-        return cbDataAdd;
+        return cbData;
     }
 
-    uint32_t add(const std::vector<BYTE> &vecAdd)
+    /**
+     * Adds new meta data.
+     *
+     * @returns New (total) meta data size in bytes.
+     * @param   vecAdd          Meta data to add.
+     */
+    size_t add(const std::vector<BYTE> &vecAdd)
     {
         if (!vecAdd.size())
             return 0;
@@ -132,50 +144,32 @@ public:
         return add(&vecAdd.front(), (uint32_t)vecAdd.size());
     }
 
+    /**
+     * Resets (clears) all data.
+     */
     void reset(void)
     {
+        strFmt = "";
+
         if (pvData)
         {
-            Assert(cbData);
+            Assert(cbAllocated);
             RTMemFree(pvData);
             pvData = NULL;
         }
 
-        cbData     = 0;
-        cbDataUsed = 0;
+        cbData      = 0;
+        cbAllocated = 0;
+        cbAnnounced = 0;
     }
 
-    const void *getData(void) const { return pvData; }
-
-    void *getDataMutable(void) { return pvData; }
-
-    uint32_t getSize(void) const { return cbDataUsed; }
-
-public:
-
-    int fromString(const RTCString &strData)
-    {
-        int rc = VINF_SUCCESS;
-
-        if (strData.isNotEmpty())
-        {
-            const uint32_t cbStrData = (uint32_t)strData.length() + 1; /* Include terminating zero. */
-            rc = resize(cbStrData);
-            if (RT_SUCCESS(rc))
-                memcpy(pvData, strData.c_str(), cbStrData);
-        }
-
-        return rc;
-    }
-
-    int fromURIList(const DnDURIList &lstURI)
-    {
-        return fromString(lstURI.RootToString());
-    }
-
-protected:
-
-    int resize(uint32_t cbSize)
+    /**
+     * Resizes the allocation size.
+     *
+     * @returns VBox status code.
+     * @param   cbSize          New allocation size (in bytes).
+     */
+    int resize(size_t cbSize)
     {
         if (!cbSize)
         {
@@ -183,313 +177,205 @@ protected:
             return VINF_SUCCESS;
         }
 
-        if (cbSize == cbData)
+        if (cbSize == cbAllocated)
             return VINF_SUCCESS;
 
+        cbSize = RT_ALIGN_Z(cbSize, PAGE_SIZE);
+
+        if (cbSize > _32M) /* Meta data can be up to 32MB. */
+            return VERR_BUFFER_OVERFLOW;
+
         void *pvTmp = NULL;
-        if (!cbData)
+        if (!cbAllocated)
         {
-            Assert(cbDataUsed == 0);
+            Assert(cbData == 0);
             pvTmp = RTMemAllocZ(cbSize);
         }
         else
         {
             AssertPtr(pvData);
             pvTmp = RTMemRealloc(pvData, cbSize);
-            RT_BZERO(pvTmp, cbSize);
         }
 
         if (pvTmp)
         {
-            pvData = pvTmp;
-            cbData = cbSize;
+            pvData      = pvTmp;
+            cbAllocated = cbSize;
             return VINF_SUCCESS;
         }
 
         return VERR_NO_MEMORY;
     }
 
-protected:
-
-    void     *pvData;
-    uint32_t  cbData;
-    uint32_t  cbDataUsed;
+    /** Format string of this meta data. */
+    com::Utf8Str strFmt;
+    /** Pointer to allocated meta data. */
+    void        *pvData;
+    /** Used bytes of meta data. Must not exceed cbAllocated. */
+    size_t       cbData;
+    /** Size (in bytes) of allocated meta data. */
+    size_t       cbAllocated;
+    /** Size (in bytes) of announced meta data. */
+    size_t       cbAnnounced;
 };
 
 /**
- * Class for keeping drag and drop (meta) data
- * to be sent/received.
+ * Struct for accounting shared DnD data to be sent/received.
  */
-class GuestDnDData
+struct GuestDnDData
 {
-public:
-
     GuestDnDData(void)
-        : cbEstTotal(0)
-        , cbEstMeta(0)
-        , cbProcessed(0)
-    {
-        RT_ZERO(dataHdr);
-    }
+        : cbExtra(0)
+        , cbProcessed(0) { }
 
     virtual ~GuestDnDData(void)
     {
         reset();
     }
 
-public:
-
-    uint64_t addProcessed(uint32_t cbDataAdd)
+    /**
+     * Adds processed data to the internal accounting.
+     *
+     * @returns New processed data size.
+     * @param   cbDataAdd       Bytes to add as done processing.
+     */
+    size_t addProcessed(size_t cbDataAdd)
     {
-        const uint64_t cbTotal = getTotal(); NOREF(cbTotal);
-        Assert(cbProcessed + cbDataAdd <= cbTotal);
+        const size_t cbTotal = getTotalAnnounced(); RT_NOREF(cbTotal);
+        AssertReturn(cbProcessed + cbDataAdd <= cbTotal, 0);
         cbProcessed += cbDataAdd;
         return cbProcessed;
     }
 
+    /**
+     * Returns whether all data has been processed or not.
+     *
+     * @returns \c true if all data has been processed, \c false if not.
+     */
     bool isComplete(void) const
     {
-        const uint64_t cbTotal = getTotal();
-        LogFlowFunc(("cbProcessed=%RU64, cbTotal=%RU64\n", cbProcessed, cbTotal));
-        Assert(cbProcessed <= cbTotal);
+        const size_t cbTotal = getTotalAnnounced();
+        LogFlowFunc(("cbProcessed=%zu, cbTotal=%zu\n", cbProcessed, cbTotal));
+        AssertReturn(cbProcessed <= cbTotal, true);
         return (cbProcessed == cbTotal);
     }
 
-    void *getChkSumMutable(void) { return dataHdr.pvChecksum; }
-
-    uint32_t getChkSumSize(void) const { return dataHdr.cbChecksum; }
-
-    void *getFmtMutable(void) { return dataHdr.pvMetaFmt; }
-
-    uint32_t getFmtSize(void) const { return dataHdr.cbMetaFmt; }
-
-    GuestDnDMetaData &getMeta(void) { return dataMeta; }
-
+    /**
+     * Returns the percentage (0-100) of the already processed data.
+     *
+     * @returns Percentage (0-100) of the already processed data.
+     */
     uint8_t getPercentComplete(void) const
     {
-        int64_t cbTotal = RT_MAX(getTotal(), 1);
-        return (uint8_t)(cbProcessed * 100 / cbTotal);
+        const size_t cbTotal = getTotalAnnounced();
+        return (uint8_t)(cbProcessed * 100 / RT_MAX(cbTotal, 1));
     }
 
-    uint64_t getProcessed(void) const { return cbProcessed; }
-
-    uint64_t getRemaining(void) const
+    /**
+     * Returns the remaining (outstanding) data left for processing.
+     *
+     * @returns Remaining (outstanding) data (in bytes) left for processing.
+     */
+    size_t getRemaining(void) const
     {
-        const uint64_t cbTotal = getTotal();
-        Assert(cbProcessed <= cbTotal);
+        const size_t cbTotal = getTotalAnnounced();
+        AssertReturn(cbProcessed <= cbTotal, 0);
         return cbTotal - cbProcessed;
     }
 
-    uint64_t getTotal(void) const { return cbEstTotal; }
+    /**
+     * Returns the total data size (in bytes) announced.
+     *
+     * @returns Total data size (in bytes) announced.
+     */
+    size_t getTotalAnnounced(void) const
+    {
+        return Meta.cbAnnounced + cbExtra;
+    }
 
+    /**
+     * Returns the total data size (in bytes) available.
+     * For receiving data, this represents the already received data.
+     * For sending data, this represents the data left to send.
+     *
+     * @returns Total data size (in bytes) available.
+     */
+    size_t getTotalAvailable(void) const
+    {
+        return Meta.cbData + cbExtra;
+    }
+
+    /**
+     * Resets all data.
+     */
     void reset(void)
     {
-        clearFmt();
-        clearChkSum();
+        Meta.reset();
 
-        RT_ZERO(dataHdr);
-
-        dataMeta.reset();
-
-        cbEstTotal  = 0;
-        cbEstMeta   = 0;
+        cbExtra     = 0;
         cbProcessed = 0;
     }
 
-    int setFmt(const void *pvFmt, uint32_t cbFmt)
-    {
-        if (cbFmt)
-        {
-            AssertPtrReturn(pvFmt, VERR_INVALID_POINTER);
-            void *pvFmtTmp = RTMemAlloc(cbFmt);
-            if (!pvFmtTmp)
-                return VERR_NO_MEMORY;
-
-            clearFmt();
-
-            memcpy(pvFmtTmp, pvFmt, cbFmt);
-
-            dataHdr.pvMetaFmt = pvFmtTmp;
-            dataHdr.cbMetaFmt = cbFmt;
-        }
-        else
-            clearFmt();
-
-        return VINF_SUCCESS;
-    }
-
-    void setEstimatedSize(uint64_t cbTotal, uint32_t cbMeta)
-    {
-        Assert(cbMeta <= cbTotal);
-
-        LogFlowFunc(("cbTotal=%RU64, cbMeta=%RU32\n", cbTotal, cbMeta));
-
-        cbEstTotal = cbTotal;
-        cbEstMeta  = cbMeta;
-    }
-
-protected:
-
-    void clearChkSum(void)
-    {
-        if (dataHdr.pvChecksum)
-        {
-            Assert(dataHdr.cbChecksum);
-            RTMemFree(dataHdr.pvChecksum);
-            dataHdr.pvChecksum = NULL;
-        }
-
-        dataHdr.cbChecksum = 0;
-    }
-
-    void clearFmt(void)
-    {
-        if (dataHdr.pvMetaFmt)
-        {
-            Assert(dataHdr.cbMetaFmt);
-            RTMemFree(dataHdr.pvMetaFmt);
-            dataHdr.pvMetaFmt = NULL;
-        }
-
-        dataHdr.cbMetaFmt = 0;
-    }
-
-protected:
-
-    /** The data header. */
-    VBOXDNDDATAHDR    dataHdr;
     /** For storing the actual meta data.
      *  This might be an URI list or just plain raw data,
      *  according to the format being sent. */
-    GuestDnDMetaData  dataMeta;
-    /** Estimated total data size when receiving data. */
-    uint64_t          cbEstTotal;
-    /** Estimated meta data size when receiving data. */
-    uint32_t          cbEstMeta;
+    GuestDnDMetaData   Meta;
+    /** Extra data to send/receive (in bytes). Can be 0 for raw data.
+     *  For (file) transfers this is the total size for all files. */
+    size_t             cbExtra;
     /** Overall size (in bytes) of processed data. */
-    uint64_t          cbProcessed;
+    size_t             cbProcessed;
 };
 
-/** Initial state. */
-#define DND_OBJCTX_STATE_NONE           0
-/** The header was received/sent. */
-#define DND_OBJCTX_STATE_HAS_HDR        RT_BIT(0)
+/** Initial object context state / no state set. */
+#define DND_OBJ_STATE_NONE           0
+/** The header was received / sent. */
+#define DND_OBJ_STATE_HAS_HDR        RT_BIT(0)
+/** Validation mask for object context state. */
+#define DND_OBJ_STATE_VALID_MASK     UINT32_C(0x00000001)
 
 /**
- * Structure for keeping a DnDURIObject context around.
+ * Base class for keeping around DnD (file) transfer data.
+ * Used for sending / receiving transfer data.
  */
-class GuestDnDURIObjCtx
-{
-public:
-
-    GuestDnDURIObjCtx(void)
-        : pObjURI(NULL)
-        , fIntermediate(false)
-        , fState(DND_OBJCTX_STATE_NONE) { }
-
-    virtual ~GuestDnDURIObjCtx(void)
-    {
-        destroy();
-    }
-
-public:
-
-    int createIntermediate(DnDURIObject::Type enmType = DnDURIObject::Unknown)
-    {
-        reset();
-
-        int rc;
-
-        try
-        {
-            pObjURI       = new DnDURIObject(enmType);
-            fIntermediate = true;
-
-            rc = VINF_SUCCESS;
-        }
-        catch (std::bad_alloc &)
-        {
-            rc = VERR_NO_MEMORY;
-        }
-
-        LogThisFunc(("Returning %Rrc\n", rc));
-        return rc;
-    }
-
-    void destroy(void)
-    {
-        LogFlowThisFuncEnter();
-
-        if (   pObjURI
-            && fIntermediate)
-        {
-            delete pObjURI;
-        }
-
-        pObjURI       = NULL;
-        fIntermediate = false;
-    }
-
-    DnDURIObject *getObj(void) const { return pObjURI; }
-
-    bool isIntermediate(void) { return fIntermediate; }
-
-    bool isValid(void) const { return (pObjURI != NULL); }
-
-    uint32_t getState(void) const { return fState; }
-
-    void reset(void)
-    {
-        LogFlowThisFuncEnter();
-
-        destroy();
-
-        fIntermediate = false;
-        fState        = 0;
-    }
-
-    void setObj(DnDURIObject *pObj)
-    {
-        LogFlowThisFunc(("%p\n", pObj));
-
-        destroy();
-
-        pObjURI = pObj;
-    }
-
-    uint32_t setState(uint32_t fStateNew)
-    {
-        /** @todo Add validation. */
-        fState = fStateNew;
-        return fState;
-    }
-
-protected:
-
-    /** Pointer to current object being handled. */
-    DnDURIObject             *pObjURI;
-    /** Flag whether pObjURI needs deletion after use. */
-    bool                      fIntermediate;
-    /** Internal context state, corresponding to DND_OBJCTX_STATE_XXX. */
-    uint32_t                  fState;
-    /** @todo Add more statistics / information here. */
-};
-
-/**
- * Structure for keeping around an URI (data) transfer.
- */
-class GuestDnDURIData
+struct GuestDnDTransferData
 {
 
 public:
 
-    GuestDnDURIData(void)
+    GuestDnDTransferData(void)
         : cObjToProcess(0)
         , cObjProcessed(0)
         , pvScratchBuf(NULL)
         , cbScratchBuf(0) { }
 
-    virtual ~GuestDnDURIData(void)
+    virtual ~GuestDnDTransferData(void)
+    {
+        destroy();
+    }
+
+    /**
+     * Initializes a transfer data object.
+     *
+     * @param   cbBuf           Scratch buffer size (in bytes) to use.
+     *                          If not specified, DND_DEFAULT_CHUNK_SIZE will be used.
+     */
+    int init(size_t cbBuf = DND_DEFAULT_CHUNK_SIZE)
+    {
+        reset();
+
+        pvScratchBuf = RTMemAlloc(cbBuf);
+        if (!pvScratchBuf)
+            return VERR_NO_MEMORY;
+
+        cbScratchBuf = cbBuf;
+        return VINF_SUCCESS;
+    }
+
+    /**
+     * Destroys a transfer data object.
+     */
+    void destroy(void)
     {
         reset();
 
@@ -502,294 +388,181 @@ public:
         cbScratchBuf = 0;
     }
 
-    DnDDroppedFiles &getDroppedFiles(void) { return droppedFiles; }
-
-    DnDURIList &getURIList(void) { return lstURI; }
-
-    int init(size_t cbBuf = _64K)
-    {
-        reset();
-
-        pvScratchBuf = RTMemAlloc(cbBuf);
-        if (!pvScratchBuf)
-            return VERR_NO_MEMORY;
-
-        cbScratchBuf = cbBuf;
-        return VINF_SUCCESS;
-    }
-
-    bool isComplete(void) const
-    {
-        LogFlowFunc(("cObjProcessed=%RU64, cObjToProcess=%RU64\n", cObjProcessed, cObjToProcess));
-
-        if (!cObjToProcess) /* Always return true if we don't have an object count. */
-            return true;
-
-        Assert(cObjProcessed <= cObjToProcess);
-        return (cObjProcessed == cObjToProcess);
-    }
-
-    const void *getBuffer(void) const { return pvScratchBuf; }
-
-    void *getBufferMutable(void) { return pvScratchBuf; }
-
-    size_t getBufferSize(void) const { return cbScratchBuf; }
-
-    GuestDnDURIObjCtx &getObj(uint64_t uID = 0)
-    {
-        RT_NOREF(uID);
-        AssertMsg(uID == 0, ("Other objects than object 0 is not supported yet\n"));
-        return objCtx;
-    }
-
-    GuestDnDURIObjCtx &getObjCurrent(void)
-    {
-        DnDURIObject *pCurObj = lstURI.First();
-        if (   !lstURI.IsEmpty()
-            && pCurObj)
-        {
-            /* Point the context object to the current DnDURIObject to process. */
-            objCtx.setObj(pCurObj);
-        }
-        else
-            objCtx.reset();
-
-        return objCtx;
-    }
-
-    uint64_t getObjToProcess(void) const { return cObjToProcess; }
-
-    uint64_t getObjProcessed(void) const { return cObjProcessed; }
-
-    int processObject(const DnDURIObject &Obj)
-    {
-        int rc;
-
-        /** @todo Find objct in lstURI first! */
-        switch (Obj.GetType())
-        {
-            case DnDURIObject::Directory:
-            case DnDURIObject::File:
-                rc = VINF_SUCCESS;
-                break;
-
-            default:
-                rc = VERR_NOT_IMPLEMENTED;
-                break;
-        }
-
-        if (RT_SUCCESS(rc))
-        {
-            if (cObjToProcess)
-            {
-                cObjProcessed++;
-                Assert(cObjProcessed <= cObjToProcess);
-            }
-        }
-
-        return rc;
-    }
-
-    void removeObjCurrent(void)
-    {
-        if (cObjToProcess)
-        {
-            cObjProcessed++;
-            Assert(cObjProcessed <= cObjToProcess);
-        }
-
-        lstURI.RemoveFirst();
-        objCtx.reset();
-    }
-
+    /**
+     * Resets a transfer data object.
+     */
     void reset(void)
     {
         LogFlowFuncEnter();
 
         cObjToProcess = 0;
         cObjProcessed = 0;
-
-        droppedFiles.Close();
-
-        lstURI.Clear();
-        objCtx.reset();
     }
 
-    void setEstimatedObjects(uint64_t cObjs)
+    /**
+     * Returns whether this transfer object is complete or not.
+     *
+     * @returns \c true if complete, \c false if not.
+     */
+    bool isComplete(void) const
     {
-        Assert(cObjToProcess == 0);
-        cObjToProcess = cObjs;
-        LogFlowFunc(("cObjToProcess=%RU64\n", cObjs));
+        return (cObjProcessed == cObjToProcess);
     }
-
-public:
-
-    int fromLocalMetaData(const GuestDnDMetaData &Data)
-    {
-        reset();
-
-        if (!Data.getSize())
-            return VINF_SUCCESS;
-
-        char *pszList;
-        int rc = RTStrCurrentCPToUtf8(&pszList, (const char *)Data.getData());
-        if (RT_FAILURE(rc))
-        {
-            LogFlowThisFunc(("String conversion failed with rc=%Rrc\n", rc));
-            return rc;
-        }
-
-        const size_t cbList = Data.getSize();
-        LogFlowThisFunc(("metaData=%p, cbList=%zu\n", &Data, cbList));
-
-        if (cbList)
-        {
-            RTCList<RTCString> lstURIOrg = RTCString(pszList, cbList).split("\r\n");
-            if (!lstURIOrg.isEmpty())
-            {
-                /* Note: All files to be transferred will be kept open during the entire DnD
-                 *       operation, also to keep the accounting right. */
-                rc = lstURI.AppendURIPathsFromList(lstURIOrg, DNDURILIST_FLAGS_KEEP_OPEN);
-                if (RT_SUCCESS(rc))
-                    cObjToProcess = lstURI.TotalCount();
-            }
-        }
-
-        RTStrFree(pszList);
-        return rc;
-    }
-
-    int fromRemoteMetaData(const GuestDnDMetaData &Data)
-    {
-        LogFlowFuncEnter();
-
-        int rc = lstURI.RootFromURIData(Data.getData(), Data.getSize(), 0 /* uFlags */);
-        if (RT_SUCCESS(rc))
-        {
-            const size_t cRootCount = lstURI.RootCount();
-            LogFlowFunc(("cRootCount=%zu, cObjToProcess=%RU64\n", cRootCount, cObjToProcess));
-            if (cRootCount > cObjToProcess)
-                rc = VERR_INVALID_PARAMETER;
-        }
-
-        return rc;
-    }
-
-    int toMetaData(std::vector<BYTE> &vecData)
-    {
-        const char *pszDroppedFilesDir = droppedFiles.GetDirAbs();
-
-        Utf8Str strURIs = lstURI.RootToString(RTCString(pszDroppedFilesDir));
-        size_t cbData = strURIs.length();
-
-        LogFlowFunc(("%zu root URIs (%zu bytes)\n", lstURI.RootCount(), cbData));
-
-        int rc;
-
-        try
-        {
-            vecData.resize(cbData + 1 /* Include termination */);
-            memcpy(&vecData.front(), strURIs.c_str(), cbData);
-
-            rc = VINF_SUCCESS;
-        }
-        catch (std::bad_alloc &)
-        {
-            rc = VERR_NO_MEMORY;
-        }
-
-        return rc;
-    }
-
-protected:
-
-    int processDirectory(const char *pszPath, uint32_t fMode)
-    {
-        /** @todo Find directory in lstURI first! */
-        int rc;
-
-        const char *pszDroppedFilesDir = droppedFiles.GetDirAbs();
-        char *pszDir = RTPathJoinA(pszDroppedFilesDir, pszPath);
-        if (pszDir)
-        {
-            rc = RTDirCreateFullPath(pszDir, fMode);
-            if (cObjToProcess)
-            {
-                cObjProcessed++;
-                Assert(cObjProcessed <= cObjToProcess);
-            }
-
-            RTStrFree(pszDir);
-        }
-        else
-             rc = VERR_NO_MEMORY;
-
-        return rc;
-    }
-
-protected:
 
     /** Number of objects to process. */
-    uint64_t                        cObjToProcess;
+    uint64_t cObjToProcess;
     /** Number of objects already processed. */
-    uint64_t                        cObjProcessed;
-    /** Handles all drop files for this operation. */
-    DnDDroppedFiles                 droppedFiles;
-    /** (Non-recursive) List of URI objects to handle. */
-    DnDURIList                      lstURI;
-    /** Context to current object being handled.
-     *  As we currently do all transfers one after another we
-     *  only have one context at a time. */
-    GuestDnDURIObjCtx               objCtx;
+    uint64_t cObjProcessed;
     /** Pointer to an optional scratch buffer to use for
      *  doing the actual chunk transfers. */
-    void                           *pvScratchBuf;
+    void    *pvScratchBuf;
     /** Size (in bytes) of scratch buffer. */
-    size_t                          cbScratchBuf;
+    size_t   cbScratchBuf;
+};
+
+/**
+ * Class for keeping around DnD transfer send data (Host -> Guest).
+ */
+struct GuestDnDTransferSendData : public GuestDnDTransferData
+{
+    GuestDnDTransferSendData()
+        : fObjState(0)
+    {
+        RT_ZERO(List);
+        int rc2 = DnDTransferListInit(&List);
+        AssertRC(rc2);
+    }
+
+    virtual ~GuestDnDTransferSendData()
+    {
+        destroy();
+    }
+
+    /**
+     * Destroys the object.
+     */
+    void destroy(void)
+    {
+        DnDTransferListDestroy(&List);
+    }
+
+    /**
+     * Resets the object.
+     */
+    void reset(void)
+    {
+        DnDTransferListReset(&List);
+        fObjState = 0;
+
+        GuestDnDTransferData::reset();
+    }
+
+    /** Transfer List to handle. */
+    DNDTRANSFERLIST                     List;
+    /** Current state of object in transfer.
+     *  This is needed for keeping compatibility to old(er) DnD HGCM protocols.
+     *
+     *  At the moment we only support transferring one object at a time. */
+    uint32_t                            fObjState;
 };
 
 /**
  * Context structure for sending data to the guest.
  */
-typedef struct SENDDATACTX
+struct GuestDnDSendCtx : public GuestDnDData
 {
-    /** Pointer to guest target class this context belongs to. */
-    GuestDnDTarget                     *mpTarget;
-    /** Pointer to guest response class this context belongs to. */
-    GuestDnDResponse                   *mpResp;
-    /** Flag indicating whether a file transfer is active and
-     *  initiated by the host. */
-    bool                                mIsActive;
-    /** Target (VM) screen ID. */
-    uint32_t                            mScreenID;
-    /** Drag'n drop format requested by the guest. */
-    com::Utf8Str                        mFmtReq;
-    /** Drag'n drop data to send.
-     *  This can be arbitrary data or an URI list. */
-    GuestDnDData                        mData;
-    /** URI data structure. */
-    GuestDnDURIData                     mURI;
-    /** Callback event to use. */
-    GuestDnDCallbackEvent               mCBEvent;
+    GuestDnDSendCtx(void);
 
-} SENDDATACTX, *PSENDDATACTX;
+    /**
+     * Resets the object.
+     */
+    void reset(void);
+
+    /** Pointer to guest target class this context belongs to. */
+    GuestDnDTarget                     *pTarget;
+    /** Pointer to guest state this context belongs to. */
+    GuestDnDState                      *pState;
+    /** Target (VM) screen ID. */
+    uint32_t                            uScreenID;
+    /** Transfer data structure. */
+    GuestDnDTransferSendData            Transfer;
+    /** Callback event to use. */
+    GuestDnDCallbackEvent               EventCallback;
+};
+
+struct GuestDnDTransferRecvData : public GuestDnDTransferData
+{
+    GuestDnDTransferRecvData()
+    {
+        RT_ZERO(DroppedFiles);
+        int rc2 = DnDDroppedFilesInit(&DroppedFiles);
+        AssertRC(rc2);
+
+        RT_ZERO(List);
+        rc2 = DnDTransferListInit(&List);
+        AssertRC(rc2);
+
+        RT_ZERO(ObjCur);
+        rc2 = DnDTransferObjectInit(&ObjCur);
+        AssertRC(rc2);
+    }
+
+    virtual ~GuestDnDTransferRecvData()
+    {
+        destroy();
+    }
+
+    /**
+     * Destroys the object.
+     */
+    void destroy(void)
+    {
+        DnDTransferListDestroy(&List);
+    }
+
+    /**
+     * Resets the object.
+     */
+    void reset(void)
+    {
+        DnDDroppedFilesClose(&DroppedFiles);
+        DnDTransferListReset(&List);
+        DnDTransferObjectReset(&ObjCur);
+
+        GuestDnDTransferData::reset();
+    }
+
+    /** The "VirtualBox Dropped Files" directory on the host we're going
+     *  to utilize for transferring files from guest to the host. */
+    DNDDROPPEDFILES                     DroppedFiles;
+    /** Transfer List to handle.
+     *  Currently we only support one transfer list at a time. */
+    DNDTRANSFERLIST                     List;
+    /** Current transfer object being handled.
+     *  Currently we only support one transfer object at a time. */
+    DNDTRANSFEROBJECT                   ObjCur;
+};
 
 /**
  * Context structure for receiving data from the guest.
  */
-typedef struct RECVDATACTX
+struct GuestDnDRecvCtx : public GuestDnDData
 {
+    GuestDnDRecvCtx(void);
+
+    /**
+     * Resets the object.
+     */
+    void reset(void);
+
     /** Pointer to guest source class this context belongs to. */
-    GuestDnDSource                     *mpSource;
-    /** Pointer to guest response class this context belongs to. */
-    GuestDnDResponse                   *mpResp;
-    /** Flag indicating whether a file transfer is active and
-     *  initiated by the host. */
-    bool                                mIsActive;
+    GuestDnDSource                     *pSource;
+    /** Pointer to guest state this context belongs to. */
+    GuestDnDState                      *pState;
     /** Formats offered by the guest (and supported by the host). */
-    GuestDnDMIMEList                    mFmtOffered;
+    GuestDnDMIMEList                    lstFmtOffered;
     /** Original drop format requested to receive from the guest. */
-    com::Utf8Str                        mFmtReq;
+    com::Utf8Str                        strFmtReq;
     /** Intermediate drop format to be received from the guest.
      *  Some original drop formats require a different intermediate
      *  drop format:
@@ -798,23 +571,19 @@ typedef struct RECVDATACTX
      *  receive the file from the guest as "text/uri-list" first,
      *  then pointing to the file path on the host with the data
      *  in "text/plain" format returned. */
-    com::Utf8Str                        mFmtRecv;
+    com::Utf8Str                        strFmtRecv;
     /** Desired drop action to perform on the host.
      *  Needed to tell the guest if data has to be
      *  deleted e.g. when moving instead of copying. */
-    uint32_t                            mAction;
-    /** Drag'n drop received from the guest.
-     *  This can be arbitrary data or an URI list. */
-    GuestDnDData                        mData;
-    /** URI data structure. */
-    GuestDnDURIData                     mURI;
+    VBOXDNDACTION                       enmAction;
+    /** Transfer data structure. */
+    GuestDnDTransferRecvData            Transfer;
     /** Callback event to use. */
-    GuestDnDCallbackEvent               mCBEvent;
-
-} RECVDATACTX, *PRECVDATACTX;
+    GuestDnDCallbackEvent               EventCallback;
+};
 
 /**
- * Simple structure for a buffered guest DnD message.
+ * Class for maintainig a (buffered) guest DnD message.
  */
 class GuestDnDMsg
 {
@@ -833,6 +602,9 @@ public:
 
 public:
 
+    /**
+     * Appends a new HGCM parameter to the message and returns the pointer to it.
+     */
     PVBOXHGCMSVCPARM getNextParam(void)
     {
         if (cParms >= cParmsAlloc)
@@ -850,10 +622,30 @@ public:
         return &paParms[cParms++];
     }
 
+    /**
+     * Returns the current parameter count.
+     *
+     * @returns Current parameter count.
+     */
     uint32_t getCount(void) const { return cParms; }
+
+    /**
+     * Returns the pointer to the beginning of the HGCM parameters array. Use with care.
+     *
+     * @returns Pointer to the beginning of the HGCM parameters array.
+     */
     PVBOXHGCMSVCPARM getParms(void) const { return paParms; }
+
+    /**
+     * Returns the message type.
+     *
+     * @returns Message type.
+     */
     uint32_t getType(void) const { return uMsg; }
 
+    /**
+     * Resets the object.
+     */
     void reset(void)
     {
         if (paParms)
@@ -876,26 +668,39 @@ public:
         uMsg = cParms = cParmsAlloc = 0;
     }
 
-    int setNextPointer(void *pvBuf, uint32_t cbBuf)
+    /**
+     * Appends a new message parameter of type pointer.
+     *
+     * @returns VBox status code.
+     * @param   pvBuf           Pointer to data to use.
+     * @param   cbBuf           Size (in bytes) of data to use.
+     */
+    int appendPointer(void *pvBuf, uint32_t cbBuf)
     {
         PVBOXHGCMSVCPARM pParm = getNextParam();
         if (!pParm)
             return VERR_NO_MEMORY;
 
         void *pvTmp = NULL;
-        if (pvBuf)
+        if (cbBuf)
         {
-            Assert(cbBuf);
+            AssertPtr(pvBuf);
             pvTmp = RTMemDup(pvBuf, cbBuf);
             if (!pvTmp)
                 return VERR_NO_MEMORY;
         }
 
-        pParm->setPointer(pvTmp, cbBuf);
+        HGCMSvcSetPv(pParm, pvTmp, cbBuf);
         return VINF_SUCCESS;
     }
 
-    int setNextString(const char *pszString)
+    /**
+     * Appends a new message parameter of type string.
+     *
+     * @returns VBox status code.
+     * @param   pszString       Pointer to string data to use.
+     */
+    int appendString(const char *pszString)
     {
         PVBOXHGCMSVCPARM pParm = getNextParam();
         if (!pParm)
@@ -905,30 +710,47 @@ public:
         if (!pszTemp)
             return VERR_NO_MEMORY;
 
-        pParm->setString(pszTemp);
+        HGCMSvcSetStr(pParm, pszTemp);
         return VINF_SUCCESS;
     }
 
-    int setNextUInt32(uint32_t u32Val)
+    /**
+     * Appends a new message parameter of type uint32_t.
+     *
+     * @returns VBox status code.
+     * @param   u32Val          uint32_t value to use.
+     */
+    int appendUInt32(uint32_t u32Val)
     {
         PVBOXHGCMSVCPARM pParm = getNextParam();
         if (!pParm)
             return VERR_NO_MEMORY;
 
-        pParm->setUInt32(u32Val);
+        HGCMSvcSetU32(pParm, u32Val);
         return VINF_SUCCESS;
     }
 
-    int setNextUInt64(uint64_t u64Val)
+    /**
+     * Appends a new message parameter of type uint64_t.
+     *
+     * @returns VBox status code.
+     * @param   u64Val          uint64_t value to use.
+     */
+    int appendUInt64(uint64_t u64Val)
     {
         PVBOXHGCMSVCPARM pParm = getNextParam();
         if (!pParm)
             return VERR_NO_MEMORY;
 
-        pParm->setUInt64(u64Val);
+        HGCMSvcSetU64(pParm, u64Val);
         return VINF_SUCCESS;
     }
 
+    /**
+     * Sets the HGCM message type (function number).
+     *
+     * @param   uMsgType        Message type to set.
+     */
     void setType(uint32_t uMsgType) { uMsg = uMsgType; }
 
 protected:
@@ -944,7 +766,7 @@ protected:
 };
 
 /** Guest DnD callback function definition. */
-typedef DECLCALLBACKPTR(int, PFNGUESTDNDCALLBACK) (uint32_t uMsg, void *pvParms, size_t cbParms, void *pvUser);
+typedef DECLCALLBACKPTR(int, PFNGUESTDNDCALLBACK,(uint32_t uMsg, void *pvParms, size_t cbParms, void *pvUser));
 
 /**
  * Structure for keeping a guest DnD callback.
@@ -969,33 +791,33 @@ typedef struct GuestDnDCallback
     PFNGUESTDNDCALLBACK  pfnCallback;
     /** Pointer to user-supplied data. */
     void                *pvUser;
-
 } GuestDnDCallback;
 
 /** Contains registered callback pointers for specific HGCM message types. */
 typedef std::map<uint32_t, GuestDnDCallback> GuestDnDCallbackMap;
 
-/** @todo r=andy This class needs to go, as this now is too inflexible when it comes to all
- *               the callback handling/dispatching. It's part of the initial code and only adds
- *               unnecessary complexity. */
-class GuestDnDResponse
+/**
+ * Class for keeping a DnD guest state around.
+ */
+class GuestDnDState
 {
 
 public:
+    DECLARE_TRANSLATE_METHODS(GuestDnDState)
 
-    GuestDnDResponse(const ComObjPtr<Guest>& pGuest);
-    virtual ~GuestDnDResponse(void);
+    GuestDnDState(const ComObjPtr<Guest>& pGuest);
+    virtual ~GuestDnDState(void);
 
 public:
 
     int notifyAboutGuestResponse(void) const;
     int waitForGuestResponse(RTMSINTERVAL msTimeout = 500) const;
 
-    void setAllActions(uint32_t a) { m_allActions = a; }
-    uint32_t allActions(void) const { return m_allActions; }
+    void setActionsAllowed(VBOXDNDACTIONLIST a) { m_dndLstActionsAllowed = a; }
+    VBOXDNDACTIONLIST getActionsAllowed(void) const { return m_dndLstActionsAllowed; }
 
-    void setDefAction(uint32_t a) { m_defAction = a; }
-    uint32_t defAction(void) const { return m_defAction; }
+    void setActionDefault(VBOXDNDACTION a) { m_dndActionDefault = a; }
+    VBOXDNDACTION getActionDefault(void) const { return m_dndActionDefault; }
 
     void setFormats(const GuestDnDMIMEList &lstFormats) { m_lstFormats = lstFormats; }
     GuestDnDMIMEList formats(void) const { return m_lstFormats; }
@@ -1015,18 +837,23 @@ public:
     int onDispatch(uint32_t u32Function, void *pvParms, uint32_t cbParms);
     /** @}  */
 
-protected:
+public:
 
     /** Pointer to context this class is tied to. */
     void                 *m_pvCtx;
+    /** The DnD protocol version to use, depending on the
+     *  installed Guest Additions. See DragAndDropSvc.h for
+     *  a protocol changelog. */
+    uint32_t              m_uProtocolVersion;
+    /** The guest feature flags reported to the host (VBOX_DND_GF_XXX).  */
+    uint64_t              m_fGuestFeatures0;
     /** Event for waiting for response. */
     RTSEMEVENT            m_EventSem;
     /** Default action to perform in case of a
      *  successful drop. */
-    uint32_t              m_defAction;
-    /** Actions supported by the guest in case of
-     *  a successful drop. */
-    uint32_t              m_allActions;
+    VBOXDNDACTION         m_dndActionDefault;
+    /** Actions supported by the guest in case of a successful drop. */
+    VBOXDNDACTIONLIST     m_dndLstActionsAllowed;
     /** Format(s) requested/supported from the guest. */
     GuestDnDMIMEList      m_lstFormats;
     /** Pointer to IGuest parent object. */
@@ -1038,16 +865,20 @@ protected:
 };
 
 /**
- * Private singleton class for the guest's DnD
- * implementation. Can't be instanciated directly, only via
- * the factory pattern.
+ * Private singleton class for the guest's DnD implementation.
  *
- ** @todo Move this into GuestDnDBase.
+ * Can't be instanciated directly, only via the factory pattern.
+ * Keeps track of all ongoing DnD transfers.
  */
 class GuestDnD
 {
 public:
 
+    /**
+     * Creates the Singleton GuestDnD object.
+     *
+     * @returns Newly created Singleton object, or NULL on failure.
+     */
     static GuestDnD *createInstance(const ComObjPtr<Guest>& pGuest)
     {
         Assert(NULL == GuestDnD::s_pInstance);
@@ -1055,6 +886,9 @@ public:
         return GuestDnD::s_pInstance;
     }
 
+    /**
+     * Destroys the Singleton GuestDnD object.
+     */
     static void destroyInstance(void)
     {
         if (GuestDnD::s_pInstance)
@@ -1064,6 +898,11 @@ public:
         }
     }
 
+    /**
+     * Returns the Singleton GuestDnD object.
+     *
+     * @returns Pointer to Singleton GuestDnD object, or NULL if not created yet.
+     */
     static inline GuestDnD *getInstance(void)
     {
         AssertPtr(GuestDnD::s_pInstance);
@@ -1072,6 +911,12 @@ public:
 
 protected:
 
+    /** List of registered DnD sources. */
+    typedef std::list< ComObjPtr<GuestDnDSource> > GuestDnDSrcList;
+    /** List of registered DnD targets. */
+    typedef std::list< ComObjPtr<GuestDnDTarget> > GuestDnDTgtList;
+
+    /** Constructor; will throw rc on failure. */
     GuestDnD(const ComObjPtr<Guest>& pGuest);
     virtual ~GuestDnD(void);
 
@@ -1080,9 +925,20 @@ public:
     /** @name Public helper functions.
      * @{ */
     HRESULT           adjustScreenCoordinates(ULONG uScreenId, ULONG *puX, ULONG *puY) const;
+    GuestDnDState    *getState(uint32_t = 0) const;
     int               hostCall(uint32_t u32Function, uint32_t cParms, PVBOXHGCMSVCPARM paParms) const;
-    GuestDnDResponse *response(void) { return m_pResponse; }
     GuestDnDMIMEList  defaultFormats(void) const { return m_strDefaultFormats; }
+    /** @}  */
+
+    /** @name Source / target management.
+     * @{ */
+    int               registerSource(const ComObjPtr<GuestDnDSource> &Source);
+    int               unregisterSource(const ComObjPtr<GuestDnDSource> &Source);
+    size_t            getSourceCount(void);
+
+    int               registerTarget(const ComObjPtr<GuestDnDTarget> &Target);
+    int               unregisterTarget(const ComObjPtr<GuestDnDTarget> &Target);
+    size_t            getTargetCount(void);
     /** @}  */
 
 public:
@@ -1095,14 +951,14 @@ public:
     /** @name Static helper methods.
      * @{ */
     static bool                     isFormatInFormatList(const com::Utf8Str &strFormat, const GuestDnDMIMEList &lstFormats);
-    static GuestDnDMIMEList         toFormatList(const com::Utf8Str &strFormats);
+    static GuestDnDMIMEList         toFormatList(const com::Utf8Str &strFormats, const com::Utf8Str &strSep = DND_FORMATS_SEPARATOR_STR);
     static com::Utf8Str             toFormatString(const GuestDnDMIMEList &lstFormats);
     static GuestDnDMIMEList         toFilteredFormatList(const GuestDnDMIMEList &lstFormatsSupported, const GuestDnDMIMEList &lstFormatsWanted);
     static GuestDnDMIMEList         toFilteredFormatList(const GuestDnDMIMEList &lstFormatsSupported, const com::Utf8Str &strFormatsWanted);
-    static DnDAction_T              toMainAction(uint32_t uAction);
-    static std::vector<DnDAction_T> toMainActions(uint32_t uActions);
-    static uint32_t                 toHGCMAction(DnDAction_T enmAction);
-    static void                     toHGCMActions(DnDAction_T enmDefAction, uint32_t *puDefAction, const std::vector<DnDAction_T> vecAllowedActions, uint32_t *puAllowedActions);
+    static DnDAction_T              toMainAction(VBOXDNDACTION dndAction);
+    static std::vector<DnDAction_T> toMainActions(VBOXDNDACTIONLIST dndActionList);
+    static VBOXDNDACTION            toHGCMAction(DnDAction_T enmAction);
+    static void                     toHGCMActions(DnDAction_T enmDefAction, VBOXDNDACTION *pDefAction, const std::vector<DnDAction_T> vecAllowedActions, VBOXDNDACTIONLIST *pLstAllowedActions);
     /** @}  */
 
 protected:
@@ -1110,24 +966,27 @@ protected:
     /** @name Singleton properties.
      * @{ */
     /** List of supported default MIME/Content-type formats. */
-    GuestDnDMIMEList           m_strDefaultFormats;
+    GuestDnDMIMEList            m_strDefaultFormats;
     /** Pointer to guest implementation. */
-    const ComObjPtr<Guest>     m_pGuest;
-    /** The current (last) response from the guest. At the
-     *  moment we only support only response a time (ARQ-style). */
-    GuestDnDResponse          *m_pResponse;
+    const ComObjPtr<Guest>      m_pGuest;
+    /** The current state from the guest. At the
+     *  moment we only support only state a time (ARQ-style). */
+    GuestDnDState              *m_pState;
+    /** Critical section to serialize access. */
+    RTCRITSECT                  m_CritSect;
+    /** Number of active transfers (guest->host or host->guest). */
+    uint32_t                    m_cTransfersPending;
+    GuestDnDSrcList             m_lstSrc;
+    GuestDnDTgtList             m_lstTgt;
     /** @}  */
 
 private:
 
-    /** Staic pointer to singleton instance. */
+    /** Static pointer to singleton instance. */
     static GuestDnD           *s_pInstance;
 };
 
-/** Access to the GuestDnD's singleton instance.
- * @todo r=bird: Please add a 'Get' or something to this as it currently looks
- *       like a class instantiation rather than a getter.  Alternatively, use
- *       UPPER_CASE like the coding guideline suggest for macros. */
+/** Access to the GuestDnD's singleton instance. */
 #define GuestDnDInst() GuestDnD::getInstance()
 
 /** List of pointers to guest DnD Messages. */
@@ -1147,17 +1006,13 @@ protected:
 
     /** Shared (internal) IDnDBase method implementations.
      * @{ */
-    HRESULT i_isFormatSupported(const com::Utf8Str &aFormat, BOOL *aSupported);
-    HRESULT i_getFormats(GuestDnDMIMEList &aFormats);
+    bool i_isFormatSupported(const com::Utf8Str &aFormat) const;
+    const GuestDnDMIMEList &i_getFormats(void) const;
     HRESULT i_addFormats(const GuestDnDMIMEList &aFormats);
     HRESULT i_removeFormats(const GuestDnDMIMEList &aFormats);
-
-    HRESULT i_getProtocolVersion(ULONG *puVersion);
     /** @}  */
 
 protected:
-
-    int getProtocolVersion(uint32_t *puVersion);
 
     /** @name Functions for handling a simple host HGCM message queue.
      * @{ */
@@ -1168,8 +1023,8 @@ protected:
     /** @}  */
 
     int sendCancel(void);
-    int updateProgress(GuestDnDData *pData, GuestDnDResponse *pResp, uint32_t cbDataAdd = 0);
-    int waitForEvent(GuestDnDCallbackEvent *pEvent, GuestDnDResponse *pResp, RTMSINTERVAL msTimeout);
+    int updateProgress(GuestDnDData *pData, GuestDnDState *pState, size_t cbDataAdd = 0);
+    int waitForEvent(GuestDnDCallbackEvent *pEvent, GuestDnDState *pState, RTMSINTERVAL msTimeout);
 
 protected:
 
@@ -1181,6 +1036,10 @@ protected:
     GuestDnDMIMEList                m_lstFmtSupported;
     /** List of offered MIME types to the counterpart. */
     GuestDnDMIMEList                m_lstFmtOffered;
+    /** Whether the object still is in pending state. */
+    bool                            m_fIsPending;
+    /** Pointer to state bound to this object. */
+    GuestDnDState                  *m_pState;
     /** @}  */
 
     /**
@@ -1188,15 +1047,9 @@ protected:
      */
     struct
     {
-        /** Number of active transfers (guest->host or host->guest). */
-        uint32_t                    m_cTransfersPending;
-        /** The DnD protocol version to use, depending on the
-         *  installed Guest Additions. See DragAndDropSvc.h for
-         *  a protocol changelog. */
-        uint32_t                    m_uProtocolVersion;
         /** Outgoing message queue (FIFO). */
-        GuestDnDMsgList             m_lstMsgOut;
-    } mDataBase;
+        GuestDnDMsgList             lstMsgOut;
+    } m_DataBase;
 };
-#endif /* ____H_GUESTDNDPRIVATE */
+#endif /* !MAIN_INCLUDED_GuestDnDPrivate_h */
 

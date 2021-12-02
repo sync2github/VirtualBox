@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: AMD_FX_8150_Eight_Core.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * CPU database entry "AMD FX-8150 Eight-Core".
  * Generated at 2013-12-09T11:27:04Z by VBoxCpuReport v4.3.51r91084 on win.amd64.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef VBOX_CPUDB_AMD_FX_8150_Eight_Core
-#define VBOX_CPUDB_AMD_FX_8150_Eight_Core
+#ifndef VBOX_CPUDB_AMD_FX_8150_Eight_Core_h
+#define VBOX_CPUDB_AMD_FX_8150_Eight_Core_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 #ifndef CPUM_DB_STANDALONE
@@ -366,6 +369,7 @@ static CPUMDBENTRY const g_Entry_AMD_FX_8150_Eight_Core =
     /*.uScalableBusFreq = */ CPUM_SBUSFREQ_UNKNOWN,
     /*.fFlags           = */ 0,
     /*.cMaxPhysAddrWidth= */ 48,
+    /*.fMxCsrMask       = */ 0x2ffff,
     /*.paCpuIdLeaves    = */ NULL_ALONE(g_aCpuIdLeaves_AMD_FX_8150_Eight_Core),
     /*.cCpuIdLeaves     = */ ZERO_ALONE(RT_ELEMENTS(g_aCpuIdLeaves_AMD_FX_8150_Eight_Core)),
     /*.enmUnknownCpuId  = */ CPUMUNKNOWNCPUID_DEFAULTS,
@@ -375,5 +379,5 @@ static CPUMDBENTRY const g_Entry_AMD_FX_8150_Eight_Core =
     /*.paMsrRanges      = */ NULL_ALONE(g_aMsrRanges_AMD_FX_8150_Eight_Core),
 };
 
-#endif /* !VBOX_DB_AMD_FX_8150_Eight_Core */
+#endif /* !VBOX_CPUDB_AMD_FX_8150_Eight_Core_h */
 

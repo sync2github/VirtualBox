@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,11 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___iprt_asn1_generator_pass_h
+#ifndef ___iprt_asn1_generator_pass_h /* (special, only part of the file) */
 #define ___iprt_asn1_generator_pass_h
 
 #include <iprt/formats/asn1.h>
+#include <iprt/err.h>
 
 
 /** @def RTASN1TMPL_MEMBER_OPT_ANY
@@ -108,13 +108,13 @@
  * Internal header file.
  *
  */
-# define RTASN1TMPL_BEGIN_COMMON() extern DECLHIDDEN(RTASN1COREVTABLE const) RT_CONCAT3(g_,RTASN1TMPL_INT_NAME,_Vtable)
+# define RTASN1TMPL_BEGIN_COMMON() extern DECL_HIDDEN_DATA(RTASN1COREVTABLE const) RT_CONCAT3(g_,RTASN1TMPL_INT_NAME,_Vtable)
 
 # define RTASN1TMPL_BEGIN_SEQCORE()                 RTASN1TMPL_BEGIN_COMMON()
 # define RTASN1TMPL_BEGIN_SETCORE()                 RTASN1TMPL_BEGIN_COMMON()
 # define RTASN1TMPL_MEMBER_EX(a_Name, a_Type, a_Api, a_Constraints)                                 RTASN1TMPL_SEMICOLON_DUMMY()
 # define RTASN1TMPL_MEMBER_OPT_XTAG_EX(a_TnNm, a_CtxTagN, a_Name, a_Type, a_Api, a_uTag, a_Constraints) \
-    extern "C" DECLHIDDEN(RTASN1COREVTABLE const)   RT_CONCAT5(g_,RTASN1TMPL_INT_NAME,_XTAG_,a_Name,_Vtable)
+    extern "C" DECL_HIDDEN_DATA(RTASN1COREVTABLE const) RT_CONCAT5(g_,RTASN1TMPL_INT_NAME,_XTAG_,a_Name,_Vtable)
 
 # define RTASN1TMPL_MEMBER_DYN_BEGIN(a_enmType, a_enmMembNm, a_Allocation)                          RTASN1TMPL_SEMICOLON_DUMMY()
 # define RTASN1TMPL_MEMBER_DYN_END(a_enmType, a_enmMembNm, a_Allocation)                            RTASN1TMPL_SEMICOLON_DUMMY()
@@ -126,7 +126,7 @@
 # define RTASN1TMPL_PCHOICE_ITAG_EX(a_uTag, a_enmChoice, a_PtrName, a_Name, a_Type, a_Api, a_fClue, a_Constraints) \
                                                                                                     RTASN1TMPL_SEMICOLON_DUMMY()
 # define RTASN1TMPL_PCHOICE_XTAG_EX(a_uTag, a_enmChoice, a_PtrTnNm, a_CtxTagN, a_Name, a_Type, a_Api, a_Constraints) \
-    extern "C" DECLHIDDEN(RTASN1COREVTABLE const)   RT_CONCAT5(g_,RTASN1TMPL_INT_NAME,_PCHOICE_XTAG_,a_Name,_Vtable)
+    extern "C" DECL_HIDDEN_DATA(RTASN1COREVTABLE const) RT_CONCAT5(g_,RTASN1TMPL_INT_NAME,_PCHOICE_XTAG_,a_Name,_Vtable)
 
 # define RTASN1TMPL_END_PCHOICE()                   RTASN1TMPL_SEMICOLON_DUMMY()
 
@@ -489,14 +489,19 @@ RTASN1TMPL_DECL(int) RT_CONCAT(RTASN1TMPL_EXT_NAME,_DecodeAsn1)(PRTASN1CURSOR pC
         RTASN1TMPL_MEMBER_EX(a_Name, a_Type, a_Api, RT_NOTHING)
 
 # define RTASN1TMPL_END_SEQCORE() \
-   if (RT_SUCCESS(rc)) \
-       rc = RTAsn1CursorCheckEnd(&ThisCursor); \
-   if (RT_SUCCESS(rc)) \
-       return VINF_SUCCESS; \
-   RT_CONCAT(RTASN1TMPL_EXT_NAME,_Delete)(pThis); \
-   RTASN1TMPL_END_COMMON()
-# define RTASN1TMPL_END_SETCORE() RTASN1TMPL_END_SEQCORE()
-
+    if (RT_SUCCESS(rc)) \
+        rc = RTAsn1CursorCheckSeqEnd(&ThisCursor, &pThis->SeqCore); \
+    if (RT_SUCCESS(rc)) \
+        return VINF_SUCCESS; \
+    RT_CONCAT(RTASN1TMPL_EXT_NAME,_Delete)(pThis); \
+    RTASN1TMPL_END_COMMON()
+# define RTASN1TMPL_END_SETCORE() \
+    if (RT_SUCCESS(rc)) \
+        rc = RTAsn1CursorCheckSetEnd(&ThisCursor, &pThis->SetCore); \
+    if (RT_SUCCESS(rc)) \
+        return VINF_SUCCESS; \
+    RT_CONCAT(RTASN1TMPL_EXT_NAME,_Delete)(pThis); \
+    RTASN1TMPL_END_COMMON()
 
 # define RTASN1TMPL_BEGIN_PCHOICE() \
     RTASN1TMPL_BEGIN_COMMON(); \
@@ -748,7 +753,8 @@ RTASN1TMPL_DECL(int) RT_CONCAT(RTASN1TMPL_EXT_NAME,_Clone)(RT_CONCAT(P,RTASN1TMP
         case a_enmChoice: \
             rc = RTAsn1MemAllocZ(&pThis->Allocation, (void **)&pThis->a_PtrName, sizeof(*pThis->a_PtrName)); \
             if (RT_SUCCESS(rc)) \
-                rc = RT_CONCAT(a_Api,_Clone)(pThis->a_PtrName, pSrc->a_PtrName, pAllocator); break
+                rc = RT_CONCAT(a_Api,_Clone)(pThis->a_PtrName, pSrc->a_PtrName, pAllocator); \
+            break
 # define RTASN1TMPL_PCHOICE_XTAG_EX(a_uTag, a_enmChoice, a_PtrTnNm, a_CtxTagN, a_Name, a_Type, a_Api, a_Constraints) \
         case a_enmChoice: /* A bit of presence paranoia here, but better safe than sorry... */ \
             rc = RTAsn1MemAllocZ(&pThis->Allocation, (void **)&pThis->a_PtrTnNm, sizeof(*pThis->a_PtrTnNm)); \

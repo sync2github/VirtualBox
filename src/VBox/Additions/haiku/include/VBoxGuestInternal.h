@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,7 +20,7 @@
  *
  * VirtualBox Guest Additions for Haiku.
  * Copyright (c) 2011 Mike Smith <mike@scgtrp.net>
- *                    François Revol <revol@free.fr>
+ *                    FranÃ§ois Revol <revol@free.fr>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -44,8 +44,11 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef ___VBoxGuestInternal_h_
-#define ___VBoxGuestInternal_h_
+#ifndef GA_INCLUDED_HAIKU_VBoxGuestInternal_h
+#define GA_INCLUDED_HAIKU_VBoxGuestInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /** The MIME signature of the VBoxGuest application. */
 #define VBOX_GUEST_APP_SIG                       "application/x-vnd.Oracle-VBoxGuest"
@@ -57,5 +60,5 @@
 /** The code used for messages sent by and to the system tray. */
 #define VBOX_GUEST_APP_ACTION                    'vbox'
 
-#endif /* ___VBoxGuestInternal_h_ */
+#endif /* !GA_INCLUDED_HAIKU_VBoxGuestInternal_h */
 

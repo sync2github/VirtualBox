@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fs.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Internal RTFs header.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,12 +24,18 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___internal_fs_h
-#define ___internal_fs_h
+#ifndef IPRT_INCLUDED_INTERNAL_fs_h
+#define IPRT_INCLUDED_INTERNAL_fs_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 #ifndef RT_OS_WINDOWS
 # include <sys/stat.h>
+#endif
+#ifdef RT_OS_FREEBSD
+# include <osreldate.h>
 #endif
 
 RT_C_DECLS_BEGIN
@@ -37,9 +43,9 @@ RT_C_DECLS_BEGIN
 /** IO_REPARSE_TAG_SYMLINK */
 #define RTFSMODE_SYMLINK_REPARSE_TAG UINT32_C(0xa000000c)
 
-RTFMODE rtFsModeFromDos(RTFMODE fMode, const char *pszName, size_t cbName, uint32_t uReparseTag);
-RTFMODE rtFsModeFromUnix(RTFMODE fMode, const char *pszName, size_t cbName);
-RTFMODE rtFsModeNormalize(RTFMODE fMode, const char *pszName, size_t cbName);
+RTFMODE rtFsModeFromDos(RTFMODE fMode, const char *pszName, size_t cbName, uint32_t uReparseTag, RTFMODE fType);
+RTFMODE rtFsModeFromUnix(RTFMODE fMode, const char *pszName, size_t cbName, RTFMODE fType);
+RTFMODE rtFsModeNormalize(RTFMODE fMode, const char *pszName, size_t cbName, RTFMODE fType);
 bool    rtFsModeIsValid(RTFMODE fMode);
 bool    rtFsModeIsValidPermissions(RTFMODE fMode);
 
@@ -47,7 +53,11 @@ bool    rtFsModeIsValidPermissions(RTFMODE fMode);
 void    rtFsConvertStatToObjInfo(PRTFSOBJINFO pObjInfo, const struct stat *pStat, const char *pszName, unsigned cbName);
 void    rtFsObjInfoAttrSetUnixOwner(PRTFSOBJINFO pObjInfo, RTUID uid);
 void    rtFsObjInfoAttrSetUnixGroup(PRTFSOBJINFO pObjInfo, RTUID gid);
-#endif
+#else  /* RT_OS_WINDOWS */
+# ifdef DECLARE_HANDLE
+int     rtNtQueryFsType(HANDLE hHandle, PRTFSTYPE penmType);
+# endif
+#endif /* RT_OS_WINDOWS */
 
 #ifdef RT_OS_LINUX
 # ifdef __USE_MISC
@@ -57,6 +67,20 @@ void    rtFsObjInfoAttrSetUnixGroup(PRTFSOBJINFO pObjInfo, RTUID gid);
 # endif
 #endif
 
+#ifdef RT_OS_FREEBSD
+# if __FreeBSD_version >= 500000 /* 5.0 */
+#  define HAVE_STAT_BIRTHTIME
+# endif
+# if __FreeBSD_version >= 900000 /* 9.0 */
+#  define HAVE_STAT_TIMESPEC_BRIEF
+# else
+#  ifndef __BSD_VISIBLE
+#   define __BSD_VISIBLE
+#  endif
+#  define HAVE_STAT_TIMESPEC
+# endif
+#endif
+
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_INTERNAL_fs_h */

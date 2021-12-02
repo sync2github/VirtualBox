@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_udp_h
-#define ___iprt_udp_h
+#ifndef IPRT_INCLUDED_udp_h
+#define IPRT_INCLUDED_udp_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -55,7 +58,7 @@ RT_C_DECLS_BEGIN
  * @param   Sock        The socket on which the datagram needs to be received.
  * @param   pvUser      User argument.
  */
-typedef DECLCALLBACK(int) FNRTUDPSERVE(RTSOCKET Sock, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNRTUDPSERVE,(RTSOCKET Sock, void *pvUser));
 /** Pointer to a RTUDPSERVE(). */
 typedef FNRTUDPSERVE *PFNRTUDPSERVE;
 
@@ -164,5 +167,5 @@ RTR3DECL(int) RTUdpCreateClientSocket(const char *pszAddress, uint32_t uPort, PR
 /** @} */
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_udp_h */
 

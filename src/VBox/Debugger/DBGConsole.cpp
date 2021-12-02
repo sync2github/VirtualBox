@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGConsole.cpp 90680 2021-08-13 11:14:23Z vboxsync $ */
 /** @file
  * DBGC - Debugger Console.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -164,6 +164,7 @@
 #include <VBox/vmm/dbgf.h>
 #include <VBox/vmm/vmapi.h> /* VMR3GetVM() */
 #include <VBox/vmm/hm.h>    /* HMR3IsEnabled */
+#include <VBox/vmm/nem.h>   /* NEMR3IsEnabled */
 #include <VBox/err.h>
 #include <VBox/log.h>
 
@@ -408,10 +409,10 @@ static int dbgcInputOverflow(PDBGC pDbgc)
      * Eat input till no more or there is a '\n'.
      * When finding a '\n' we'll continue normal processing.
      */
-    while (pDbgc->pBack->pfnInput(pDbgc->pBack, 0))
+    while (pDbgc->pIo->pfnInput(pDbgc->pIo, 0))
     {
         size_t cbRead;
-        int rc = pDbgc->pBack->pfnRead(pDbgc->pBack, &pDbgc->achInput[0], sizeof(pDbgc->achInput) - 1, &cbRead);
+        int rc = pDbgc->pIo->pfnRead(pDbgc->pIo, &pDbgc->achInput[0], sizeof(pDbgc->achInput) - 1, &cbRead);
         if (RT_FAILURE(rc))
             return rc;
         char *psz = (char *)memchr(&pDbgc->achInput[0], '\n', cbRead);
@@ -467,7 +468,7 @@ static int dbgcInputRead(PDBGC pDbgc)
          */
         char    achRead[128];
         size_t  cbRead;
-        rc = pDbgc->pBack->pfnRead(pDbgc->pBack, &achRead[0], RT_MIN(cbLeft, sizeof(achRead)), &cbRead);
+        rc = pDbgc->pIo->pfnRead(pDbgc->pIo, &achRead[0], RT_MIN(cbLeft, sizeof(achRead)), &cbRead);
         if (RT_FAILURE(rc))
             return rc;
         char *psz = &achRead[0];
@@ -513,6 +514,7 @@ static int dbgcInputRead(PDBGC pDbgc)
                         case '\t': ch = ' '; break;
                         case '\n': pDbgc->cInputLines++; break;
                     }
+                    RT_FALL_THRU();
                 default:
                     Log2(("DBGC: ch=%02x\n", (unsigned char)ch));
                     pDbgc->achInput[pDbgc->iWrite] = ch;
@@ -524,7 +526,7 @@ static int dbgcInputRead(PDBGC pDbgc)
 
         /* Terminate it to make it easier to read in the debugger. */
         pDbgc->achInput[pDbgc->iWrite] = '\0';
-    } while (pDbgc->pBack->pfnInput(pDbgc->pBack, 0));
+    } while (pDbgc->pIo->pfnInput(pDbgc->pIo, 0));
 
     return rc;
 }
@@ -551,7 +553,7 @@ int dbgcProcessInput(PDBGC pDbgc, bool fNoExecute)
      */
     if (pDbgc->cInputLines)
     {
-        pDbgc->pBack->pfnSetReady(pDbgc->pBack, false);
+        pDbgc->pIo->pfnSetReady(pDbgc->pIo, false);
         pDbgc->fReady = false;
         rc = dbgcProcessCommands(pDbgc, fNoExecute);
         if (RT_SUCCESS(rc) && rc != VWRN_DBGC_CMD_PENDING)
@@ -564,7 +566,7 @@ int dbgcProcessInput(PDBGC pDbgc, bool fNoExecute)
 
         if (    RT_SUCCESS(rc)
             &&  pDbgc->fReady)
-            pDbgc->pBack->pfnSetReady(pDbgc->pBack, true);
+            pDbgc->pIo->pfnSetReady(pDbgc->pIo, true);
     }
     /*
      * else - we have incomplete line, so leave it in the buffer and
@@ -585,7 +587,7 @@ int dbgcProcessInput(PDBGC pDbgc, bool fNoExecute)
  * @returns Read only string.
  * @param   enmCtx          The context.
  */
-static const char *dbgcGetEventCtx(DBGFEVENTCTX enmCtx)
+DECLHIDDEN(const char *) dbgcGetEventCtx(DBGFEVENTCTX enmCtx)
 {
     switch (enmCtx)
     {
@@ -609,7 +611,7 @@ static const char *dbgcGetEventCtx(DBGFEVENTCTX enmCtx)
  * @returns Pointer to DBGCSXEVT structure if found, otherwise NULL.
  * @param   enmType     The possibly generic event to find the descriptor for.
  */
-static PCDBGCSXEVT dbgcEventLookup(DBGFEVENTTYPE enmType)
+DECLHIDDEN(PCDBGCSXEVT) dbgcEventLookup(DBGFEVENTTYPE enmType)
 {
     uint32_t i = g_cDbgcSxEvents;
     while (i-- > 0)
@@ -645,6 +647,7 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
     pDbgc->iArg       = 0;
     bool fPrintPrompt = true;
     int rc = VINF_SUCCESS;
+    VMCPUID const idCpuSaved = pDbgc->idCpu;
     switch (pEvent->enmType)
     {
         /*
@@ -652,11 +655,12 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
          */
         case DBGFEVENT_HALT_DONE:
         {
-            rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: VM %p is halted! (%s)\n",
-                                         pDbgc->pVM, dbgcGetEventCtx(pEvent->enmCtx));
-            pDbgc->fRegCtxGuest = true; /* we're always in guest context when halted. */
+            /** @todo add option to suppress this on CPUs that aren't selected (like
+             *        fRegTerse). */
+            rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: CPU %u has halted! (%s)\n",
+                                         pEvent->idCpu, pEvent->idCpu, dbgcGetEventCtx(pEvent->enmCtx));
             if (RT_SUCCESS(rc))
-                rc = pDbgc->CmdHlp.pfnExec(&pDbgc->CmdHlp, "r");
+                rc = DBGCCmdHlpRegPrintf(&pDbgc->CmdHlp, pEvent->idCpu, -1, pDbgc->fRegTerse);
             break;
         }
 
@@ -666,11 +670,11 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
          */
         case DBGFEVENT_FATAL_ERROR:
         {
-            rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbf event: Fatal error! (%s)\n",
-                                         dbgcGetEventCtx(pEvent->enmCtx));
-            pDbgc->fRegCtxGuest = false; /* fatal errors are always in hypervisor. */
+            pDbgc->idCpu = pEvent->idCpu;
+            rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbf event/%u: Fatal error! (%s)\n",
+                                         pEvent->idCpu, dbgcGetEventCtx(pEvent->enmCtx));
             if (RT_SUCCESS(rc))
-                rc = pDbgc->CmdHlp.pfnExec(&pDbgc->CmdHlp, "r");
+                rc = DBGCCmdHlpRegPrintf(&pDbgc->CmdHlp, pEvent->idCpu, -1, pDbgc->fRegTerse);
             break;
         }
 
@@ -679,54 +683,58 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
         case DBGFEVENT_BREAKPOINT_MMIO:
         case DBGFEVENT_BREAKPOINT_HYPER:
         {
-            bool fRegCtxGuest = pDbgc->fRegCtxGuest;
-            pDbgc->fRegCtxGuest = pEvent->enmType != DBGFEVENT_BREAKPOINT_HYPER;
-
-            rc = dbgcBpExec(pDbgc, pEvent->u.Bp.iBp);
+            pDbgc->idCpu = pEvent->idCpu;
+            rc = dbgcBpExec(pDbgc, pEvent->u.Bp.hBp);
             switch (rc)
             {
                 case VERR_DBGC_BP_NOT_FOUND:
-                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: Unknown breakpoint %u! (%s)\n",
-                                                 pEvent->u.Bp.iBp, dbgcGetEventCtx(pEvent->enmCtx));
+                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: Unknown breakpoint %u! (%s)\n",
+                                                 pEvent->idCpu, pEvent->u.Bp.hBp, dbgcGetEventCtx(pEvent->enmCtx));
                     break;
 
                 case VINF_DBGC_BP_NO_COMMAND:
-                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: Breakpoint %u! (%s)\n",
-                                                 pEvent->u.Bp.iBp, dbgcGetEventCtx(pEvent->enmCtx));
+                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: Breakpoint %u! (%s)\n",
+                                                 pEvent->idCpu, pEvent->u.Bp.hBp, dbgcGetEventCtx(pEvent->enmCtx));
                     break;
 
                 case VINF_BUFFER_OVERFLOW:
-                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: Breakpoint %u! Command too long to execute! (%s)\n",
-                                                 pEvent->u.Bp.iBp, dbgcGetEventCtx(pEvent->enmCtx));
+                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: Breakpoint %u! Command too long to execute! (%s)\n",
+                                                 pEvent->idCpu, pEvent->u.Bp.hBp, dbgcGetEventCtx(pEvent->enmCtx));
                     break;
 
                 default:
                     break;
             }
-            if (RT_SUCCESS(rc) && DBGFR3IsHalted(pDbgc->pUVM))
-                rc = pDbgc->CmdHlp.pfnExec(&pDbgc->CmdHlp, "r");
+            if (RT_SUCCESS(rc) && DBGFR3IsHalted(pDbgc->pUVM, pEvent->idCpu))
+            {
+                rc = DBGCCmdHlpRegPrintf(&pDbgc->CmdHlp, pEvent->idCpu, -1, pDbgc->fRegTerse);
+
+                /* Set the resume flag to ignore the breakpoint when resuming execution. */
+                if (   RT_SUCCESS(rc)
+                    && pEvent->enmType == DBGFEVENT_BREAKPOINT)
+                    rc = pDbgc->CmdHlp.pfnExec(&pDbgc->CmdHlp, "r eflags.rf = 1");
+            }
             else
-                pDbgc->fRegCtxGuest = fRegCtxGuest;
+                pDbgc->idCpu = idCpuSaved;
             break;
         }
 
         case DBGFEVENT_STEPPED:
         case DBGFEVENT_STEPPED_HYPER:
         {
-            pDbgc->fRegCtxGuest = pEvent->enmType == DBGFEVENT_STEPPED;
-
-            rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: Single step! (%s)\n", dbgcGetEventCtx(pEvent->enmCtx));
+            if (!pDbgc->cMultiStepsLeft || pEvent->idCpu != idCpuSaved)
+                rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: Single step! (%s)\n",
+                                             pEvent->idCpu, dbgcGetEventCtx(pEvent->enmCtx));
+            else
+                pDbgc->cMultiStepsLeft -= 1;
             if (RT_SUCCESS(rc))
             {
                 if (pDbgc->fStepTraceRegs)
-                    rc = pDbgc->CmdHlp.pfnExec(&pDbgc->CmdHlp, "r");
+                    rc = DBGCCmdHlpRegPrintf(&pDbgc->CmdHlp, pEvent->idCpu, -1, pDbgc->fRegTerse);
                 else
                 {
                     char szCmd[80];
-                    if (!pDbgc->fRegCtxGuest)
-                        rc = DBGFR3RegPrintf(pDbgc->pUVM, pDbgc->idCpu | DBGFREG_HYPER_VMCPUID, szCmd, sizeof(szCmd),
-                                             "u %VR{cs}:%VR{eip} L 0");
-                    else if (DBGFR3CpuIsIn64BitCode(pDbgc->pUVM, pDbgc->idCpu))
+                    if (DBGFR3CpuIsIn64BitCode(pDbgc->pUVM, pDbgc->idCpu))
                         rc = DBGFR3RegPrintf(pDbgc->pUVM, pDbgc->idCpu, szCmd, sizeof(szCmd), "u %016VR{rip} L 0");
                     else if (DBGFR3CpuIsInV86Code(pDbgc->pUVM, pDbgc->idCpu))
                         rc = DBGFR3RegPrintf(pDbgc->pUVM, pDbgc->idCpu, szCmd, sizeof(szCmd), "uv86 %04VR{cs}:%08VR{eip} L 0");
@@ -736,34 +744,48 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
                         rc = pDbgc->CmdHlp.pfnExec(&pDbgc->CmdHlp, "%s", szCmd);
                 }
             }
+
+            /* If multi-stepping, take the next step: */
+            if (pDbgc->cMultiStepsLeft > 0 && pEvent->idCpu == idCpuSaved)
+            {
+                int rc2 = DBGFR3StepEx(pDbgc->pUVM, pDbgc->idCpu, DBGF_STEP_F_INTO, NULL, NULL, 0, pDbgc->uMultiStepStrideLength);
+                if (RT_SUCCESS(rc2))
+                    fPrintPrompt = false;
+                else
+                    DBGCCmdHlpFailRc(&pDbgc->CmdHlp, pDbgc->pMultiStepCmd, rc2, "DBGFR3StepEx(,,DBGF_STEP_F_INTO,) failed");
+            }
+            else
+                pDbgc->idCpu = pEvent->idCpu;
             break;
         }
 
         case DBGFEVENT_ASSERTION_HYPER:
         {
-            pDbgc->fRegCtxGuest = false;
-
+            pDbgc->idCpu = pEvent->idCpu;
             rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL,
-                                         "\ndbgf event: Hypervisor Assertion! (%s)\n"
+                                         "\ndbgf event/%u: Hypervisor Assertion! (%s)\n"
                                          "%s"
                                          "%s"
                                          "\n",
+                                         pEvent->idCpu,
                                          dbgcGetEventCtx(pEvent->enmCtx),
                                          pEvent->u.Assert.pszMsg1,
                                          pEvent->u.Assert.pszMsg2);
             if (RT_SUCCESS(rc))
-                rc = pDbgc->CmdHlp.pfnExec(&pDbgc->CmdHlp, "r");
+                rc = DBGCCmdHlpRegPrintf(&pDbgc->CmdHlp, pEvent->idCpu, -1, pDbgc->fRegTerse);
             break;
         }
 
         case DBGFEVENT_DEV_STOP:
         {
+            pDbgc->idCpu = pEvent->idCpu;
             rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL,
                                          "\n"
-                                         "dbgf event: DBGFSTOP (%s)\n"
+                                         "dbgf event/%u: DBGFSTOP (%s)\n"
                                          "File:     %s\n"
                                          "Line:     %d\n"
                                          "Function: %s\n",
+                                         pEvent->idCpu,
                                          dbgcGetEventCtx(pEvent->enmCtx),
                                          pEvent->u.Src.pszFile,
                                          pEvent->u.Src.uLine,
@@ -773,7 +795,7 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
                                              "Message:  %s\n",
                                              pEvent->u.Src.pszMessage);
             if (RT_SUCCESS(rc))
-                rc = pDbgc->CmdHlp.pfnExec(&pDbgc->CmdHlp, "r");
+                rc = DBGCCmdHlpRegPrintf(&pDbgc->CmdHlp, pEvent->idCpu, -1, pDbgc->fRegTerse);
             break;
         }
 
@@ -787,7 +809,7 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
         case DBGFEVENT_POWERING_OFF:
         {
             pDbgc->fReady = false;
-            pDbgc->pBack->pfnSetReady(pDbgc->pBack, false);
+            pDbgc->pIo->pfnSetReady(pDbgc->pIo, false);
             pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\nVM is powering off!\n");
             fPrintPrompt = false;
             rc = VERR_GENERAL_FAILURE;
@@ -806,30 +828,54 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
                 if (pEvtDesc->enmKind == kDbgcSxEventKind_Interrupt)
                 {
                     Assert(pEvtDesc->pszDesc);
-                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: %s no %#llx! (%s)\n",
-                                                 pEvtDesc->pszDesc, pEvent->u.Generic.uArg, pEvtDesc->pszName);
+                    Assert(pEvent->u.Generic.cArgs == 1);
+                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: %s no %#llx! (%s)\n",
+                                                 pEvent->idCpu, pEvtDesc->pszDesc, pEvent->u.Generic.auArgs[0], pEvtDesc->pszName);
+                }
+                else if (pEvtDesc->fFlags & DBGCSXEVT_F_BUGCHECK)
+                {
+                    Assert(pEvent->u.Generic.cArgs >= 5);
+                    char szDetails[512];
+                    DBGFR3FormatBugCheck(pDbgc->pUVM, szDetails, sizeof(szDetails), pEvent->u.Generic.auArgs[0],
+                                         pEvent->u.Generic.auArgs[1], pEvent->u.Generic.auArgs[2],
+                                         pEvent->u.Generic.auArgs[3], pEvent->u.Generic.auArgs[4]);
+                    rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: %s %s%s!\n%s", pEvent->idCpu,
+                                                 pEvtDesc->pszName, pEvtDesc->pszDesc ? "- " : "",
+                                                 pEvtDesc->pszDesc ? pEvtDesc->pszDesc : "", szDetails);
                 }
                 else if (   (pEvtDesc->fFlags & DBGCSXEVT_F_TAKE_ARG)
-                         || pEvent->u.Generic.uArg != 0)
+                         || pEvent->u.Generic.cArgs > 1
+                         || (   pEvent->u.Generic.cArgs == 1
+                             && pEvent->u.Generic.auArgs[0] != 0))
                 {
                     if (pEvtDesc->pszDesc)
-                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: %s - %s! arg=%#llx\n",
-                                                     pEvtDesc->pszName, pEvtDesc->pszDesc, pEvent->u.Generic.uArg);
+                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: %s - %s!",
+                                                     pEvent->idCpu, pEvtDesc->pszName, pEvtDesc->pszDesc);
                     else
-                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: %s! arg=%#llx\n",
-                                                     pEvtDesc->pszName, pEvent->u.Generic.uArg);
+                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: %s!",
+                                                     pEvent->idCpu, pEvtDesc->pszName);
+                    if (pEvent->u.Generic.cArgs <= 1)
+                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, " arg=%#llx\n", pEvent->u.Generic.auArgs[0]);
+                    else
+                    {
+                        for (uint32_t i = 0; i < pEvent->u.Generic.cArgs; i++)
+                            rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, " args[%u]=%#llx", i, pEvent->u.Generic.auArgs[i]);
+                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\n");
+                    }
                 }
                 else
                 {
                     if (pEvtDesc->pszDesc)
-                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: %s - %s!\n",
-                                                     pEvtDesc->pszName, pEvtDesc->pszDesc);
+                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: %s - %s!\n",
+                                                     pEvent->idCpu, pEvtDesc->pszName, pEvtDesc->pszDesc);
                     else
-                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event: %s!\n", pEvtDesc->pszName);
+                        rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf event/%u: %s!\n",
+                                                     pEvent->idCpu, pEvtDesc->pszName);
                 }
             }
             else
-                rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf/dbgc error: Unknown event %d!\n", pEvent->enmType);
+                rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "\ndbgf/dbgc error: Unknown event %d on CPU %u!\n",
+                                             pEvent->enmType, pEvent->idCpu);
             break;
         }
     }
@@ -839,10 +885,12 @@ static int dbgcProcessEvent(PDBGC pDbgc, PCDBGFEVENT pEvent)
      */
     if (fPrintPrompt && RT_SUCCESS(rc))
     {
+        /** @todo add CPU indicator to the prompt if an SMP VM? */
         rc = pDbgc->CmdHlp.pfnPrintf(&pDbgc->CmdHlp, NULL, "VBoxDbg> ");
         pDbgc->fReady = true;
         if (RT_SUCCESS(rc))
-            pDbgc->pBack->pfnSetReady(pDbgc->pBack, true);
+            pDbgc->pIo->pfnSetReady(pDbgc->pIo, true);
+        pDbgc->cMultiStepsLeft = 0;
     }
 
     return rc;
@@ -886,7 +934,7 @@ int dbgcRun(PDBGC pDbgc)
      * We're ready for commands now.
      */
     pDbgc->fReady = true;
-    pDbgc->pBack->pfnSetReady(pDbgc->pBack, true);
+    pDbgc->pIo->pfnSetReady(pDbgc->pIo, true);
 
     /*
      * Main Debugger Loop.
@@ -907,11 +955,11 @@ int dbgcRun(PDBGC pDbgc)
             /*
              * Wait for a debug event.
              */
-            PCDBGFEVENT pEvent;
-            rc = DBGFR3EventWait(pDbgc->pUVM, pDbgc->fLog ? 1 : 32, &pEvent);
+            DBGFEVENT Event;
+            rc = DBGFR3EventWait(pDbgc->pUVM, pDbgc->fLog ? 1 : 32, &Event);
             if (RT_SUCCESS(rc))
             {
-                rc = dbgcProcessEvent(pDbgc, pEvent);
+                rc = dbgcProcessEvent(pDbgc, &Event);
                 if (RT_FAILURE(rc))
                     break;
             }
@@ -921,7 +969,7 @@ int dbgcRun(PDBGC pDbgc)
             /*
              * Check for input.
              */
-            if (pDbgc->pBack->pfnInput(pDbgc->pBack, 0))
+            if (pDbgc->pIo->pfnInput(pDbgc->pIo, 0))
             {
                 rc = dbgcProcessInput(pDbgc, false /* fNoExecute */);
                 if (RT_FAILURE(rc))
@@ -933,7 +981,7 @@ int dbgcRun(PDBGC pDbgc)
             /*
              * Wait for input. If Logging is enabled we'll only wait very briefly.
              */
-            if (pDbgc->pBack->pfnInput(pDbgc->pBack, pDbgc->fLog ? 1 : 1000))
+            if (pDbgc->pIo->pfnInput(pDbgc->pIo, pDbgc->fLog ? 1 : 1000))
             {
                 rc = dbgcProcessInput(pDbgc, false /* fNoExecute */);
                 if (RT_FAILURE(rc))
@@ -1003,8 +1051,8 @@ static int dbgcReadConfig(PDBGC pDbgc, PUVM pUVM)
                                   "Enabled|"
                                   "HistoryFile|"
                                   "LocalInitScript|"
-                                  "GlobalInitScript",
-                                  "", "DBGC", 0);
+                                  "GlobalInitScript|",
+                                  "*", "DBGC", 0);
     AssertRCReturn(rc, rc);
 
     /*
@@ -1057,21 +1105,30 @@ static int dbgcReadConfig(PDBGC pDbgc, PUVM pUVM)
 }
 
 
+/**
+ * @copydoc DBGC::pfnOutput
+ */
+static DECLCALLBACK(int) dbgcOutputNative(void *pvUser, const char *pachChars, size_t cbChars)
+{
+    PDBGC pDbgc = (PDBGC)pvUser;
+    return pDbgc->pIo->pfnWrite(pDbgc->pIo, pachChars, cbChars, NULL /*pcbWritten*/);
+}
+
 
 /**
  * Creates a a new instance.
  *
  * @returns VBox status code.
  * @param   ppDbgc      Where to store the pointer to the instance data.
- * @param   pBack       Pointer to the backend.
+ * @param   pIo         Pointer to the I/O callback table.
  * @param   fFlags      The flags.
  */
-int dbgcCreate(PDBGC *ppDbgc, PDBGCBACK pBack, unsigned fFlags)
+int dbgcCreate(PDBGC *ppDbgc, PCDBGCIO pIo, unsigned fFlags)
 {
     /*
      * Validate input.
      */
-    AssertPtrReturn(pBack, VERR_INVALID_POINTER);
+    AssertPtrReturn(pIo, VERR_INVALID_POINTER);
     AssertMsgReturn(!fFlags, ("%#x", fFlags), VERR_INVALID_PARAMETER);
 
     /*
@@ -1082,7 +1139,9 @@ int dbgcCreate(PDBGC *ppDbgc, PDBGCBACK pBack, unsigned fFlags)
         return VERR_NO_MEMORY;
 
     dbgcInitCmdHlp(pDbgc);
-    pDbgc->pBack            = pBack;
+    pDbgc->pIo              = pIo;
+    pDbgc->pfnOutput        = dbgcOutputNative;
+    pDbgc->pvOutputUser     = pDbgc;
     pDbgc->pVM              = NULL;
     pDbgc->pUVM             = NULL;
     pDbgc->idCpu            = 0;
@@ -1093,7 +1152,6 @@ int dbgcCreate(PDBGC *ppDbgc, PDBGCBACK pBack, unsigned fFlags)
     pDbgc->paEmulationFuncs = &g_aFuncsCodeView[0];
     pDbgc->cEmulationFuncs  = g_cFuncsCodeView;
     //pDbgc->fLog             = false;
-    pDbgc->fRegCtxGuest     = true;
     pDbgc->fRegTerse        = true;
     pDbgc->fStepTraceRegs   = true;
     //pDbgc->cPagingHierarchyDumps = 0;
@@ -1106,6 +1164,7 @@ int dbgcCreate(PDBGC *ppDbgc, PDBGCBACK pBack, unsigned fFlags)
     //pDbgc->paVars           = NULL;
     //pDbgc->pPlugInHead      = NULL;
     //pDbgc->pFirstBp         = NULL;
+    RTListInit(&pDbgc->LstTraceFlowMods);
     //pDbgc->abSearch         = {0};
     //pDbgc->cbSearch         = 0;
     pDbgc->cbSearchUnit       = 1;
@@ -1176,13 +1235,13 @@ void dbgcDestroy(PDBGC pDbgc)
  * @returns The VBox status code causing the console termination.
  *
  * @param   pUVM        The user mode VM handle.
- * @param   pBack       Pointer to the backend structure. This must contain
+ * @param   pIo         Pointer to the I/O callback structure. This must contain
  *                      a full set of function pointers to service the console.
  * @param   fFlags      Reserved, must be zero.
  * @remarks A forced termination of the console is easiest done by forcing the
  *          callbacks to return fatal failures.
  */
-DBGDECL(int) DBGCCreate(PUVM pUVM, PDBGCBACK pBack, unsigned fFlags)
+DBGDECL(int) DBGCCreate(PUVM pUVM, PCDBGCIO pIo, unsigned fFlags)
 {
     /*
      * Validate input.
@@ -1199,10 +1258,10 @@ DBGDECL(int) DBGCCreate(PUVM pUVM, PDBGCBACK pBack, unsigned fFlags)
      * Allocate and initialize instance data
      */
     PDBGC pDbgc;
-    int rc = dbgcCreate(&pDbgc, pBack, fFlags);
+    int rc = dbgcCreate(&pDbgc, pIo, fFlags);
     if (RT_FAILURE(rc))
         return rc;
-    if (!HMR3IsEnabled(pUVM))
+    if (!HMR3IsEnabled(pUVM) && !NEMR3IsEnabled(pUVM))
         pDbgc->hDbgAs = DBGF_AS_RC_AND_GC_GLOBAL;
 
     /*

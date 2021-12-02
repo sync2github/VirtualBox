@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxUtils-win.cpp 91079 2021-09-01 19:26:19Z vboxsync $ */
 /** @file
- * VBox Qt GUI - Utility classes and functions for handling Win specific tasks.
+ * VBox Qt GUI - Declarations of utility classes and functions for handling Windows specific tasks.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,20 +15,20 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-/* Includes: */
+/* GUI includes: */
 #include "VBoxUtils-win.h"
 
-/* Namespace for native window sub-system functions: */
+
+/** Namespace for native window sub-system functions. */
 namespace NativeWindowSubsystem
 {
-    /* Enumerates visible always-on-top (top-most) windows: */
-    BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam);
-    /* Contain visible top-most-window rectangles: */
+    /** Enumerates visible always-on-top (top-most) windows. */
+    BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam) RT_NOTHROW_PROTO;
+    /** Contains visible top-most-window rectangles. */
     QList<QRect> topMostRects;
 }
 
-/* Enumerates visible always-on-top (top-most) windows: */
-BOOL CALLBACK NativeWindowSubsystem::EnumWindowsProc(HWND hWnd, LPARAM /* lParam */)
+BOOL CALLBACK NativeWindowSubsystem::EnumWindowsProc(HWND hWnd, LPARAM) RT_NOTHROW_DEF
 {
     /* Ignore NULL HWNDs: */
     if (!hWnd)
@@ -59,7 +59,6 @@ BOOL CALLBACK NativeWindowSubsystem::EnumWindowsProc(HWND hWnd, LPARAM /* lParam
     return TRUE;
 }
 
-/* Returns area covered by visible always-on-top (top-most) windows: */
 const QRegion NativeWindowSubsystem::areaCoveredByTopMostWindows()
 {
     /* Prepare the top-most region: */
@@ -75,3 +74,45 @@ const QRegion NativeWindowSubsystem::areaCoveredByTopMostWindows()
     return topMostRegion;
 }
 
+const void NativeWindowSubsystem::setScreenSaverActive(BOOL fDisableScreenSaver)
+{
+    BOOL fIsActive;
+    SystemParametersInfo(SPI_GETSCREENSAVEACTIVE, 0, &fIsActive, 0);
+    if (fIsActive == !fDisableScreenSaver)
+        return;
+    //printf("before %d\n", fIsActive);
+
+    SystemParametersInfo(SPI_SETSCREENSAVEACTIVE, !fDisableScreenSaver, NULL, 0);
+
+    SystemParametersInfo(SPI_GETSCREENSAVEACTIVE, 0, &fIsActive, 0);
+    /*if (fIsActive == !fDisableScreenSaver)
+        printf("success %d %d\n", fIsActive, fDisableScreenSaver);
+*/
+}
+
+BOOL NativeWindowSubsystem::ShutdownBlockReasonCreateAPI(HWND hWnd, LPCWSTR pwszReason)
+{
+    BOOL fResult = FALSE;
+    typedef BOOL(WINAPI *PFNSHUTDOWNBLOCKREASONCREATE)(HWND hWnd, LPCWSTR pwszReason);
+
+    PFNSHUTDOWNBLOCKREASONCREATE pfn = (PFNSHUTDOWNBLOCKREASONCREATE)GetProcAddress(
+        GetModuleHandle(L"User32.dll"), "ShutdownBlockReasonCreate");
+    _ASSERTE(pfn);
+    if (pfn)
+        fResult = pfn(hWnd, pwszReason);
+    return fResult;
+}
+
+bool NativeWindowSubsystem::WinActivateWindow(WId wId, bool)
+{
+    bool fResult = true;
+    HWND handle = (HWND)wId;
+
+    if (IsIconic(handle))
+        fResult &= !!ShowWindow(handle, SW_RESTORE);
+    else if (!IsWindowVisible(handle))
+        fResult &= !!ShowWindow(handle, SW_SHOW);
+
+    fResult &= !!SetForegroundWindow(handle);
+    return fResult;
+}

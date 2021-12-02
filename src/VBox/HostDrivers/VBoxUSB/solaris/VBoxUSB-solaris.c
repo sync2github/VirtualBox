@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxUSB-solaris.c 90804 2021-08-23 19:08:53Z vboxsync $ */
 /** @file
  * VirtualBox USB Client Driver, Solaris Hosts.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -482,6 +482,8 @@ LOCAL int vboxUsbSolarisQuerySymbols(void)
 
         RTR0DbgKrnlInfoRelease(hKrnlDbgInfo);
     }
+
+    return rc;
 }
 
 
@@ -509,7 +511,10 @@ int _init(void)
     {
         rc = vboxUsbSolarisQuerySymbols();
         if (RT_FAILURE(rc))
+        {
+            RTR0Term();
             return EINVAL;
+        }
 
         rc = ddi_soft_state_init(&g_pVBoxUSBSolarisState, sizeof(vboxusb_state_t), 4 /* pre-alloc */);
         if (!rc)
@@ -1352,13 +1357,13 @@ LOCAL int vboxUsbSolarisProcessIOCtl(int iFunction, void *pvState, int Mode, PVB
 
 #define CHECKRET_MIN_SIZE(mnemonic, cbMin) \
     do { \
-        if (cbData < (cbMin)) \
+        if (RT_UNLIKELY(cbData < (cbMin))) \
         { \
             LogRel((DEVICE_NAME ": vboxUsbSolarisProcessIOCtl: " mnemonic ": cbData=%#zx (%zu) min is %#zx (%zu)\n", \
                  cbData, cbData, (size_t)(cbMin), (size_t)(cbMin))); \
             return VERR_BUFFER_OVERFLOW; \
         } \
-        if ((cbMin) != 0 && !VALID_PTR(pvBuf)) \
+        if (RT_UNLIKELY((cbMin) != 0 && !RT_VALID_PTR(pvBuf))) \
         { \
             LogRel((DEVICE_NAME ": vboxUsbSolarisProcessIOCtl: " mnemonic ": Invalid pointer %p\n", pvBuf)); \
             return VERR_INVALID_PARAMETER; \

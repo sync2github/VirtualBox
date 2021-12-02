@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pkzipvfs.cpp 84192 2020-05-07 20:56:01Z vboxsync $ */
 /** @file
  * IPRT - PKZIP Virtual Filesystem.
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -716,7 +716,7 @@ static int rtZipPkzipFssIosReadEocb(PRTZIPPKZIPFSSTREAM pThis)
                 if (eocd.u32Magic == RTZIPPKZIPENDOFCENTRDIRREC_MAGIC)
                 {
                     /* sanity check */
-                    if (off + RT_OFFSETOF(RTZIPPKZIPENDOFCENTRDIRREC, u8Comment) + eocd.cbComment == cbFile)
+                    if (off + RT_UOFFSETOF(RTZIPPKZIPENDOFCENTRDIRREC, u8Comment) + eocd.cbComment == cbFile)
                     {
                         pThis->offFirstCdh = eocd.offCentrDir;
                         pThis->offNextCdh = eocd.offCentrDir;
@@ -1238,6 +1238,9 @@ static const RTVFSFSSTREAMOPS rtZipPkzipFssOps =
     RTVFSFSSTREAMOPS_VERSION,
     0,
     rtZipPkzipFss_Next,
+    NULL,
+    NULL,
+    NULL,
     RTVFSFSSTREAMOPS_VERSION
 };
 
@@ -1260,8 +1263,8 @@ RTDECL(int) RTZipPkzipFsStreamFromIoStream(RTVFSIOSTREAM hVfsIosIn, uint32_t fFl
      */
     PRTZIPPKZIPFSSTREAM pThis;
     RTVFSFSSTREAM     hVfsFss;
-    int rc = RTVfsNewFsStream(&rtZipPkzipFssOps, sizeof(*pThis),
-                              NIL_RTVFS, NIL_RTVFSLOCK, &hVfsFss, (void **)&pThis);
+    int rc = RTVfsNewFsStream(&rtZipPkzipFssOps, sizeof(*pThis), NIL_RTVFS, NIL_RTVFSLOCK, RTFILE_O_READ,
+                              &hVfsFss, (void **)&pThis);
     if (RT_SUCCESS(rc))
     {
         pThis->hVfsIos              = hVfsIosIn;

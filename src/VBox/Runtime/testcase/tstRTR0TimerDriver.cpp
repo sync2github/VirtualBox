@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTR0TimerDriver.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT R0 Testcase - Timers, driver program.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 *********************************************************************************************************************************/
 #include <iprt/initterm.h>
 
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/path.h>
 #include <iprt/param.h>
 #include <iprt/stream.h>
@@ -109,7 +109,7 @@ extern "C" DECLEXPORT(int) TrustedMain(int argc, char **argv, char **envp)
 #  endif
             RTR3TestR0SimpleTest(TSTRTR0TIMER_ONE_SHOT_SPECIFIC_HIRES, "One shot hires cpu specific");
             RTR3TestR0SimpleTest(TSTRTR0TIMER_PERIODIC_SPECIFIC_HIRES, "Periodic hires cpu specific");
-            RTR3TestR0SimpleTest(TSTRTR0TIMER_PERIODIC_OMNI, "Periodic omni hires timer");
+            RTR3TestR0SimpleTest(TSTRTR0TIMER_PERIODIC_OMNI_HIRES, "Periodic omni hires timer");
         }
 # endif
     }

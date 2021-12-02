@@ -1,10 +1,10 @@
-; $Id$
+; $Id: bs3-cmn-SelFlatDataToProtFar16.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; BS3Kit - Bs3SelFlatDataToProtFar16.
 ;
 
 ;
-; Copyright (C) 2007-2016 Oracle Corporation
+; Copyright (C) 2007-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -65,7 +65,8 @@ BS3_PROC_BEGIN_CMN Bs3SelFlatDataToProtFar16, BS3_PBC_NEAR      ; Far stub gener
         jnz     .not_stack
         mov     dx, BS3_SEL_R0_SS16
 %else
-        mov     eax, [xBP + xCB + cbCurRetAddr]
+TNOT64  mov     eax, [xBP + xCB + cbCurRetAddr]
+TONLY64 mov     eax, ecx
         test    eax, 0ffff0000h
         jnz     .not_stack
         or      eax, BS3_SEL_R0_SS16 << 16
@@ -110,11 +111,8 @@ BS3_PROC_BEGIN_CMN Bs3SelFlatDataToProtFar16, BS3_PBC_NEAR      ; Far stub gener
 
 %else
         ; Convert upper 16-bit to tiled selector.
- %if TMPL_BITS == 32
-        mov     eax, [xBP + xCB + cbCurRetAddr]
- %else
-        mov     rax, rcx
- %endif
+TNOT64  mov     eax, [xBP + xCB + cbCurRetAddr]
+TONLY64 mov     rax, rcx
  %ifdef BS3_STRICT
         cmp     xAX, BS3_SEL_TILED_AREA_SIZE
         jb      .address_ok
@@ -131,5 +129,4 @@ BS3_PROC_BEGIN_CMN Bs3SelFlatDataToProtFar16, BS3_PBC_NEAR      ; Far stub gener
         pop     xBP
         BS3_HYBRID_RET
 BS3_PROC_END_CMN   Bs3SelFlatDataToProtFar16
-
 

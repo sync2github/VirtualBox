@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UsbMouse.cpp 91881 2021-10-20 11:37:30Z vboxsync $ */
 /** @file
  * UsbMouse - USB Human Interface Device Emulation (Mouse).
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -299,6 +299,15 @@ typedef struct USBHIDMT_REPORT_POINTER
     uint16_t    x;
     uint16_t    y;
 } USBHIDMT_REPORT_POINTER;
+
+typedef union USBHIDALL_REPORT
+{
+    USBHIDM_REPORT          m;
+    USBHIDT_REPORT          t;
+    USBHIDMT_REPORT         mt;
+    USBHIDMT_REPORT_POINTER mp;
+} USBHIDALL_REPORT, *PUSBHIDALL_REPORT;
+
 #pragma pack()
 
 
@@ -857,6 +866,8 @@ static const VUSBDESCCONFIGEX g_UsbHidMConfigDesc =
         /* .MaxPower = */           50 /* 100mA */
     },
     NULL,                           /* pvMore */
+    NULL,                           /* pvClass */
+    0,                              /* cbClass */
     &g_aUsbHidMInterfaces[0],
     NULL                            /* pvOriginal */
 };
@@ -874,6 +885,8 @@ static const VUSBDESCCONFIGEX g_UsbHidTConfigDesc =
         /* .MaxPower = */           50 /* 100mA */
     },
     NULL,                           /* pvMore */
+    NULL,                           /* pvClass */
+    0,                              /* cbClass */
     &g_aUsbHidTInterfaces[0],
     NULL                            /* pvOriginal */
 };
@@ -891,6 +904,8 @@ static const VUSBDESCCONFIGEX g_UsbHidMTConfigDesc =
         /* .MaxPower = */           50 /* 100mA */
     },
     NULL,                           /* pvMore */
+    NULL,                           /* pvClass */
+    0,                              /* cbClass */
     &g_aUsbHidMTInterfaces[0],
     NULL                            /* pvOriginal */
 };
@@ -1128,15 +1143,47 @@ static int usbHidCompleteStall(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb, cons
 
 
 /**
- * Completes the URB with a OK state.
+ * Completes the URB after device successfully processed it. Optionally copies data
+ * into the URB. May still generate an error if the URB is not big enough.
  */
-static int usbHidCompleteOk(PUSBHID pThis, PVUSBURB pUrb, size_t cbData)
+static int usbHidCompleteOk(PUSBHID pThis, PVUSBURB pUrb, const void *pSrc, size_t cbSrc)
 {
-    LogRelFlow(("usbHidCompleteOk/#%u: pUrb=%p:%s cbData=%#zx\n",
-                pThis->pUsbIns->iInstance, pUrb, pUrb->pszDesc, cbData));
+    Log(("usbHidCompleteOk/#%u: pUrb=%p:%s (cbData=%#x) cbSrc=%#zx\n", pThis->pUsbIns->iInstance, pUrb, pUrb->pszDesc, pUrb->cbData, cbSrc));
 
     pUrb->enmStatus = VUSBSTATUS_OK;
-    pUrb->cbData    = (uint32_t)cbData;
+    size_t  cbCopy  = 0;
+    size_t  cbSetup = 0;
+
+    if (pSrc)   /* Can be NULL if not copying anything. */
+    {
+        Assert(cbSrc);
+        uint8_t *pDst = pUrb->abData;
+
+        /* Returned data is written after the setup message in control URBs. */
+        if (pUrb->enmType == VUSBXFERTYPE_MSG)
+            cbSetup = sizeof(VUSBSETUP);
+
+        Assert(pUrb->cbData >= cbSetup);    /* Only triggers if URB is corrupted. */
+
+        if (pUrb->cbData > cbSetup)
+        {
+            /* There is at least one byte of room in the URB. */
+            cbCopy = RT_MIN(pUrb->cbData - cbSetup, cbSrc);
+            memcpy(pDst + cbSetup, pSrc, cbCopy);
+            pUrb->cbData = (uint32_t)(cbCopy + cbSetup);
+            Log(("Copied %zu bytes to pUrb->abData[%zu], source had %zu bytes\n", cbCopy, cbSetup, cbSrc));
+        }
+
+        /* Need to check length differences. If cbSrc is less than what
+         * the URB has space for, it'll be resolved as a short packet. But
+         * if cbSrc is bigger, there is a real problem and the host needs
+         * to see an overrun/babble error.
+         */
+        if (RT_UNLIKELY(cbSrc > cbCopy))
+            pUrb->enmStatus = VUSBSTATUS_DATA_OVERRUN;
+    }
+    else
+        Assert(cbSrc == 0); /* Make up your mind, caller! */
 
     usbHidLinkDone(pThis, pUrb);
     return VINF_SUCCESS;
@@ -1186,7 +1233,7 @@ static int usbHidResetWorker(PUSBHID pThis, PVUSBURB pUrb, bool fSetConfig)
     }
 
     if (pUrb)
-        return usbHidCompleteOk(pThis, pUrb, 0);
+        return usbHidCompleteOk(pThis, pUrb, NULL, 0);
     return VINF_SUCCESS;
 }
 
@@ -1334,7 +1381,8 @@ static int usbHidSendMultiTouchReport(PUSBHID pThis, PVUSBURB pUrb)
     }
 
     /* Report current state. */
-    USBHIDMT_REPORT *p = (USBHIDMT_REPORT *)&pUrb->abData[0];
+    USBHIDMT_REPORT r;
+    USBHIDMT_REPORT *p = &r;
     RT_ZERO(*p);
 
     p->idReport = REPORTID_TOUCH_EVENT;
@@ -1392,7 +1440,7 @@ static int usbHidSendMultiTouchReport(PUSBHID pThis, PVUSBURB pUrb)
     }
 
     LogRel3(("usbHid: reporting touch contact:\n%.*Rhxd\n", sizeof(USBHIDMT_REPORT), p));
-    return usbHidCompleteOk(pThis, pUrb, sizeof(USBHIDMT_REPORT));
+    return usbHidCompleteOk(pThis, pUrb, p, sizeof(USBHIDMT_REPORT));
 }
 
 /**
@@ -1412,12 +1460,13 @@ static int usbHidSendReport(PUSBHID pThis)
 
     if (pUrb)
     {
-        PUSBHIDTM_REPORT    pReport = (PUSBHIDTM_REPORT)&pUrb->abData[0];
+        USBHIDTM_REPORT     report;
+        PUSBHIDTM_REPORT    pReport = &report;
         size_t              cbCopy;
 
         cbCopy = usbHidFillReport(pReport, &pThis->PtrDelta, pThis->enmMode);
         pThis->fHasPendingChanges = false;
-        return usbHidCompleteOk(pThis, pUrb, cbCopy);
+        return usbHidCompleteOk(pThis, pUrb, pReport, cbCopy);
     }
     else
     {
@@ -1757,7 +1806,7 @@ static int usbHidHandleIntrDevToHost(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb
         {
             AssertFailed();
             LogRelFlow(("usbHidHandleIntrDevToHost: Entering STATUS\n"));
-            return usbHidCompleteOk(pThis, pUrb, 0);
+            return usbHidCompleteOk(pThis, pUrb, NULL, 0);
         }
 
         /*
@@ -1768,7 +1817,7 @@ static int usbHidHandleIntrDevToHost(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb
             AssertFailed();
             LogRelFlow(("usbHidHandleIntrDevToHost: Entering READY\n"));
             pThis->enmState = USBHIDREQSTATE_READY;
-            return usbHidCompleteOk(pThis, pUrb, 0);
+            return usbHidCompleteOk(pThis, pUrb, NULL, 0);
         }
 
         case USBHIDREQSTATE_READY:
@@ -1797,8 +1846,9 @@ static int usbHidHandleIntrDevToHost(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb
 #define SET_IDLE     0x0A
 #define SET_PROTOCOL 0x0B
 
-static uint8_t const g_abQASampleBlob[256] =
+static uint8_t const g_abQASampleBlob[256 + 1] =
 {
+    REPORTID_TOUCH_QABLOB,  /* Report Id. */
     0xfc, 0x28, 0xfe, 0x84, 0x40, 0xcb, 0x9a, 0x87,
     0x0d, 0xbe, 0x57, 0x3c, 0xb6, 0x70, 0x09, 0x88,
     0x07, 0x97, 0x2d, 0x2b, 0xe3, 0x38, 0x34, 0xb6,
@@ -1860,11 +1910,13 @@ static int usbHidRequestClass(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb)
                         pUrb->cbData - sizeof(VUSBSETUP), &pUrb->abData[sizeof(VUSBSETUP)]));
             if (pSetup->bRequest == GET_REPORT)
             {
-                uint32_t cbData = 0; /* 0 means that the report is unsupported. */
+                uint8_t     abData[sizeof(USBHIDALL_REPORT)];
+                uint8_t     *pData = (uint8_t *)&abData;
+                uint32_t    cbData = 0; /* 0 means that the report is unsupported. */
 
                 if (u8ReportType == 1 && u8ReportID == REPORTID_TOUCH_POINTER)
                 {
-                    USBHIDMT_REPORT_POINTER *p = (USBHIDMT_REPORT_POINTER *)&pUrb->abData[sizeof(VUSBSETUP)];
+                    USBHIDMT_REPORT_POINTER *p = (USBHIDMT_REPORT_POINTER *)&abData;
                     /* The actual state should be reported here. */
                     p->idReport = REPORTID_TOUCH_POINTER;
                     p->fButtons = 0;
@@ -1874,7 +1926,7 @@ static int usbHidRequestClass(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb)
                 }
                 else if (u8ReportType == 1 && u8ReportID == REPORTID_TOUCH_EVENT)
                 {
-                    USBHIDMT_REPORT *p = (USBHIDMT_REPORT *)&pUrb->abData[sizeof(VUSBSETUP)];
+                    USBHIDMT_REPORT *p = (USBHIDMT_REPORT *)&abData;
                     /* The actual state should be reported here. */
                     RT_ZERO(*p);
                     p->idReport = REPORTID_TOUCH_EVENT;
@@ -1882,32 +1934,30 @@ static int usbHidRequestClass(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb)
                 }
                 else if (u8ReportType == 3 && u8ReportID == REPORTID_TOUCH_MAX_COUNT)
                 {
-                    pUrb->abData[sizeof(VUSBSETUP) + 0] = REPORTID_TOUCH_MAX_COUNT;
-                    pUrb->abData[sizeof(VUSBSETUP) + 1] = MT_CONTACT_MAX_COUNT; /* Contact count maximum. */
-                    pUrb->abData[sizeof(VUSBSETUP) + 2] = 0;  /* Device identifier */
+                    abData[0] = REPORTID_TOUCH_MAX_COUNT;
+                    abData[1] = MT_CONTACT_MAX_COUNT;   /* Contact count maximum. */
+                    abData[2] = 0;                      /* Device identifier */
                     cbData = 3;
                 }
                 else if (u8ReportType == 3 && u8ReportID == REPORTID_TOUCH_QABLOB)
                 {
-                    pUrb->abData[sizeof(VUSBSETUP) + 0] = REPORTID_TOUCH_QABLOB;  /* Report Id. */
-                    memcpy(&pUrb->abData[sizeof(VUSBSETUP) + 1],
-                           g_abQASampleBlob, sizeof(g_abQASampleBlob));
-                    cbData = sizeof(g_abQASampleBlob) + 1;
+                    pData  = (uint8_t *)&g_abQASampleBlob;
+                    cbData = sizeof(g_abQASampleBlob);
                 }
                 else if (u8ReportType == 3 && u8ReportID == REPORTID_TOUCH_DEVCONFIG)
                 {
-                    pUrb->abData[sizeof(VUSBSETUP) + 0] = REPORTID_TOUCH_DEVCONFIG;
-                    pUrb->abData[sizeof(VUSBSETUP) + 1] = 2;  /* Device mode:
-                                                               * "HID touch device supporting contact
-                                                               * identifier and contact count maximum."
-                                                               */
-                    pUrb->abData[sizeof(VUSBSETUP) + 2] = 0;  /* Device identifier */
+                    abData[0] = REPORTID_TOUCH_DEVCONFIG;
+                    abData[1] = 2;  /* Device mode:
+                                     * "HID touch device supporting contact
+                                     * identifier and contact count maximum."
+                                     */
+                    abData[2] = 0;  /* Device identifier */
                     cbData = 3;
                 }
 
                 if (cbData > 0)
                 {
-                    rc = usbHidCompleteOk(pThis, pUrb, sizeof(VUSBSETUP) + cbData);
+                    rc = usbHidCompleteOk(pThis, pUrb, pData, cbData);
                 }
                 else
                 {
@@ -1917,7 +1967,7 @@ static int usbHidRequestClass(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb)
             else
             {
                 /* SET_REPORT */
-                rc = usbHidCompleteOk(pThis, pUrb, pUrb->cbData);
+                rc = usbHidCompleteOk(pThis, pUrb, NULL, 0);
             }
         } break;
         default:
@@ -1994,13 +2044,11 @@ static int usbHidHandleDefaultPipe(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb)
                                         break;
                                 }
                                 /* Returned data is written after the setup message. */
-                                cbCopy = pUrb->cbData - sizeof(*pSetup);
-                                cbCopy = RT_MIN(cbCopy, cbDesc);
+                                cbCopy = RT_MIN(pSetup->wValue, cbDesc);
                                 LogRelFlow(("usbHidMouse: GET_DESCRIPTOR DT_IF_HID_DESCRIPTOR wValue=%#x wIndex=%#x cbCopy=%#x\n",
                                             pSetup->wValue, pSetup->wIndex,
                                             cbCopy));
-                                memcpy(&pUrb->abData[sizeof(*pSetup)], pDesc, cbCopy);
-                                return usbHidCompleteOk(pThis, pUrb, cbCopy + sizeof(*pSetup));
+                                return usbHidCompleteOk(pThis, pUrb, pDesc, cbCopy);
                             }
 
                             case DT_IF_HID_REPORT:
@@ -2025,13 +2073,11 @@ static int usbHidHandleDefaultPipe(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb)
                                         break;
                                 }
                                 /* Returned data is written after the setup message. */
-                                cbCopy = pUrb->cbData - sizeof(*pSetup);
-                                cbCopy = RT_MIN(cbCopy, cbDesc);
+                                cbCopy = RT_MIN(pSetup->wLength, cbDesc);
                                 LogRelFlow(("usbHid: GET_DESCRIPTOR DT_IF_HID_REPORT wValue=%#x wIndex=%#x cbCopy=%#x\n",
                                             pSetup->wValue, pSetup->wIndex,
                                             cbCopy));
-                                memcpy(&pUrb->abData[sizeof(*pSetup)], pDesc, cbCopy);
-                                return usbHidCompleteOk(pThis, pUrb, cbCopy + sizeof(*pSetup));
+                                return usbHidCompleteOk(pThis, pUrb, pDesc, cbCopy);
                             }
 
                             default:
@@ -2068,22 +2114,16 @@ static int usbHidHandleDefaultPipe(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb)
                         Assert(pSetup->wIndex == 0);
                         LogRelFlow(("usbHid: GET_STATUS (device)\n"));
                         wRet = 0;   /* Not self-powered, no remote wakeup. */
-                        memcpy(&pUrb->abData[sizeof(*pSetup)], &wRet, sizeof(wRet));
-                        return usbHidCompleteOk(pThis, pUrb, sizeof(wRet) + sizeof(*pSetup));
+                        return usbHidCompleteOk(pThis, pUrb, &wRet, sizeof(wRet));
                     }
 
                     case VUSB_TO_INTERFACE | VUSB_REQ_STANDARD | VUSB_DIR_TO_HOST:
                     {
                         if (pSetup->wIndex == 0)
                         {
-                            memcpy(&pUrb->abData[sizeof(*pSetup)], &wRet, sizeof(wRet));
-                            return usbHidCompleteOk(pThis, pUrb, sizeof(wRet) + sizeof(*pSetup));
+                            return usbHidCompleteOk(pThis, pUrb, &wRet, sizeof(wRet));
                         }
-                        else
-                        {
-                            LogRelFlow(("usbHid: GET_STATUS (interface) invalid, wIndex=%#x\n",
-                                        pSetup->wIndex));
-                        }
+                        LogRelFlow(("usbHid: GET_STATUS (interface) invalid, wIndex=%#x\n", pSetup->wIndex));
                         break;
                     }
 
@@ -2092,14 +2132,9 @@ static int usbHidHandleDefaultPipe(PUSBHID pThis, PUSBHIDEP pEp, PVUSBURB pUrb)
                         if (pSetup->wIndex < RT_ELEMENTS(pThis->aEps))
                         {
                             wRet = pThis->aEps[pSetup->wIndex].fHalted ? 1 : 0;
-                            memcpy(&pUrb->abData[sizeof(*pSetup)], &wRet, sizeof(wRet));
-                            return usbHidCompleteOk(pThis, pUrb, sizeof(wRet) + sizeof(*pSetup));
+                            return usbHidCompleteOk(pThis, pUrb, &wRet, sizeof(wRet));
                         }
-                        else
-                        {
-                            LogRelFlow(("usbHid: GET_STATUS (endpoint) invalid, wIndex=%#x\n",
-                                        pSetup->wIndex));
-                        }
+                        LogRelFlow(("usbHid: GET_STATUS (endpoint) invalid, wIndex=%#x\n", pSetup->wIndex));
                         break;
                     }
 
@@ -2169,6 +2204,7 @@ static DECLCALLBACK(int) usbHidQueue(PPDMUSBINS pUsbIns, PVUSBURB pUrb)
 
         case 0x81:
             AssertFailed();
+            RT_FALL_THRU();
         case 0x01:
             rc = usbHidHandleIntrDevToHost(pThis, &pThis->aEps[1], pUrb);
             break;
@@ -2280,6 +2316,9 @@ static DECLCALLBACK(int) usbHidUsbReset(PPDMUSBINS pUsbIns, bool fResetOnLinux)
     LogRelFlow(("usbHidUsbReset/#%u:\n", pUsbIns->iInstance));
     RTCritSectEnter(&pThis->CritSect);
 
+    /* We can not handle any input until device is configured again. */
+    pThis->Lun0.pDrv->pfnReportModes(pThis->Lun0.pDrv, false, false, false);
+
     int rc = usbHidResetWorker(pThis, NULL, false /*fSetConfig*/);
 
     RTCritSectLeave(&pThis->CritSect);
@@ -2318,7 +2357,9 @@ static DECLCALLBACK(int) usbHidConstruct(PPDMUSBINS pUsbIns, int iInstance, PCFG
 {
     RT_NOREF1(pCfgGlobal);
     PDMUSB_CHECK_VERSIONS_RETURN(pUsbIns);
-    PUSBHID pThis = PDMINS_2_DATA(pUsbIns, PUSBHID);
+    PUSBHID     pThis = PDMINS_2_DATA(pUsbIns, PUSBHID);
+    PCPDMUSBHLP pHlp  = pUsbIns->pHlpR3;
+
     LogRelFlow(("usbHidConstruct/#%u:\n", iInstance));
 
     /*
@@ -2339,11 +2380,11 @@ static DECLCALLBACK(int) usbHidConstruct(PPDMUSBINS pUsbIns, int iInstance, PCFG
     /*
      * Validate and read the configuration.
      */
-    rc = CFGMR3ValidateConfig(pCfg, "/", "Mode|CoordShift", "Config", "UsbHid", iInstance);
+    rc = pHlp->pfnCFGMValidateConfig(pCfg, "/", "Mode|CoordShift", "Config", "UsbHid", iInstance);
     if (RT_FAILURE(rc))
         return rc;
     char szMode[64];
-    rc = CFGMR3QueryStringDef(pCfg, "Mode", szMode, sizeof(szMode), "relative");
+    rc = pHlp->pfnCFGMQueryStringDef(pCfg, "Mode", szMode, sizeof(szMode), "relative");
     if (RT_FAILURE(rc))
         return PDMUsbHlpVMSetError(pUsbIns, rc, RT_SRC_POS, N_("HID failed to query settings"));
     if (!RTStrCmp(szMode, "relative"))
@@ -2374,7 +2415,7 @@ static DECLCALLBACK(int) usbHidConstruct(PPDMUSBINS pUsbIns, int iInstance, PCFG
     if (!pThis->Lun0.pDrv)
         return PDMUsbHlpVMSetError(pUsbIns, VERR_PDM_MISSING_INTERFACE, RT_SRC_POS, N_("HID failed to query mouse interface"));
 
-    rc = CFGMR3QueryU8Def(pCfg, "CoordShift", &pThis->u8CoordShift, 1);
+    rc = pHlp->pfnCFGMQueryU8Def(pCfg, "CoordShift", &pThis->u8CoordShift, 1);
     if (RT_FAILURE(rc))
         return PDMUsbHlpVMSetError(pUsbIns, rc, RT_SRC_POS, N_("HID failed to query shift factor"));
 

@@ -3,8 +3,7 @@
 #
 
 #
-#
-# Copyright (C) 2009-2012 Oracle Corporation
+# Copyright (C) 2009-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -15,32 +14,43 @@
 # hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 #
 
-ifneq ($(KBUILD_EXTMOD),)
+ifneq ($(KERNELRELEASE),)
 
-# Building from kBuild (make -C <kernel_directory> M=`pwd`).
-# KBUILD_EXTMOD is set to $(M) in this case.
+# Building from kBuild (make -C <kernel_directory> M=`pwd`)
+# or inside a kernel source tree.
 
 obj-m = vboxguest/ vboxsf/ vboxvideo/
 
-else # ! KBUILD_EXTMOD
+else # ! KERNELRELEASE
 
 KBUILD_VERBOSE =
+ ifeq ($(KBUILD_VERBOSE),)
+VBOX_QUIET    := @
+VBOX_QUIET_SH := @
+ else
+VBOX_QUIET    :=
+VBOX_QUIET_SH := set -x;
+ endif
 
-all:
-	@echo "*** Building 'vboxguest' module ***"
-	@$(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxguest
-	@if [ -f vboxguest/vboxguest.ko ]; then \
+all: vboxguest vboxsf vboxvideo
+
+vboxguest:
+	@echo "=== Building 'vboxguest' module ==="
+	+ $(VBOX_QUIET)$(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxguest
+	$(VBOX_QUIET_SH)if [ -f vboxguest/vboxguest.ko ]; then \
 	    cp vboxguest/vboxguest.ko .; \
 	 else \
 	    cp vboxguest/vboxguest.o .; \
 	 fi
 	@echo
-	@if [ -d vboxsf ]; then \
+
+vboxsf: vboxguest
+	+ $(VBOX_QUIET_SH)if [ -d vboxsf ]; then \
 	    if [ -f vboxguest/Module.symvers ]; then \
 	        cp vboxguest/Module.symvers vboxsf; \
 	    fi; \
-	    echo "*** Building 'vboxsf' module ***"; \
-	    $(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxsf; \
+	    echo "=== Building 'vboxsf' module ==="; \
+	    $(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) KBUILD_EXTRA_SYMBOLS=$(abspath vboxsf/Module.symvers) -C vboxsf || exit 1; \
 	    if [ -f vboxsf/vboxsf.ko ]; then \
 	        cp vboxsf/vboxsf.ko .; \
 	    else \
@@ -48,49 +58,69 @@ all:
 	    fi; \
 	    echo; \
 	fi
-	@if [ -d vboxvideo ]; then \
-	    if [ -f vboxguest/Module.symvers ]; then \
-	        cp vboxguest/Module.symvers vboxvideo; \
-	    fi; \
-	    echo "*** Building 'vboxvideo' module ***"; \
-	    $(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxvideo; \
+
+vboxvideo:
+	+ $(VBOX_QUIET_SH)if [ -d vboxvideo ]; then \
+	    echo "=== Building 'vboxvideo' module ==="; \
+	    $(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxvideo || exit 1; \
 	    if [ -f vboxvideo/vboxvideo.ko ]; then \
 	        cp vboxvideo/vboxvideo.ko .; \
-	    else \
+	    elif [ -f vboxvideo/vboxvideo.o ]; then \
 	        cp vboxvideo/vboxvideo.o .; \
 	    fi; \
 	    echo; \
 	fi
 
-install:
-	@$(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxguest install
-	@if [ -d vboxsf ]; then \
+install-vboxguest:
+	+ $(VBOX_QUIET)$(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxguest install
+
+install-vboxsf:
+	+ $(VBOX_QUIET_SH)if [ -d vboxsf ]; then \
 	    $(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxsf install; \
 	fi
-	@if [ -d vboxvideo ]; then \
+
+install-vboxvideo:
+	+ $(VBOX_QUIET_SH)if [ -d vboxvideo ]; then \
 	    $(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxvideo install; \
 	fi
 
-clean:
-	@$(MAKE) -C vboxguest clean
-	@if [ -d vboxsf ]; then \
+install: install-vboxguest install-vboxsf install-vboxvideo
+
+clean-vboxguest:
+	+ $(VBOX_QUIET)$(MAKE) -C vboxguest clean
+	rm -f vboxguest.*o
+
+clean-vboxsf:
+	+ $(VBOX_QUIET_SH)if [ -d vboxsf ]; then \
 	    $(MAKE) -C vboxsf clean; \
 	fi
-	@if [ -d vboxvideo ]; then \
+	rm -f vboxsf.*o
+
+clean-vboxvideo:
+	+ $(VBOX_QUIET_SH)if [ -d vboxvideo ]; then \
 	    $(MAKE) -C vboxvideo clean; \
 	fi
-	rm -f vboxguest.*o vboxsf.*o vboxvideo.*o
+	rm -f vboxvideo.*o
+
+clean: clean-vboxguest clean-vboxsf clean-vboxvideo
 
 check:
-	@$(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxguest check
+	$(VBOX_QUIET)$(MAKE) KBUILD_VERBOSE=$(KBUILD_VERBOSE) -C vboxguest check
 
-load:
-	@/sbin/rmmod vboxvideo || true
-	@/sbin/rmmod vboxvfs || true
-	@/sbin/rmmod vboxsf || true
-	@/sbin/rmmod vboxguest || true
-	@/sbin/insmod vboxguest.ko
-	@if [ -f vboxsf.ko ]; then /sbin/insmod vboxsf.ko; fi
-	@if [ -f vboxvideo.ko ]; then /sbin/insmod vboxvideo.ko; fi
+unload:
+	$(VBOX_QUIET)/sbin/rmmod vboxvideo || true
+	$(VBOX_QUIET)/sbin/rmmod vboxvfs || true
+	$(VBOX_QUIET)/sbin/rmmod vboxsf || true
+	$(VBOX_QUIET)/sbin/rmmod vboxguest || true
 
-endif # ! KBUILD_EXTMOD
+load: unload
+	$(VBOX_QUIET)/sbin/insmod vboxguest.ko
+	$(VBOX_QUIET)if [ -f vboxsf.ko ]; then /sbin/insmod vboxsf.ko; fi
+	$(VBOX_QUIET)if [ -f vboxvideo.ko ]; then /sbin/insmod vboxvideo.ko; fi
+
+.PHONY: all install clean check unload load \
+    vboxguest vboxsf vboxvideo \
+    install-vboxguest install-vboxsf install-vboxvideo \
+    clean-vboxguest clean-vboxsf clean-vboxvideo
+
+endif # ! KERNELRELEASE

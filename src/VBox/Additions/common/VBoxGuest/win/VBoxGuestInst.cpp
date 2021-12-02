@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxGuestInst.cpp 83844 2020-04-20 09:36:02Z vboxsync $ */
 /** @file
  * Small tool to (un)install the VBoxGuest device driver.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 
@@ -25,14 +34,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <VBox/VBoxGuest.h>
+#include <VBox/VBoxGuest.h> /* for VBOXGUEST_SERVICE_NAME */
+#include <iprt/err.h>
 
 
 //#define TESTMODE
 
 
 
-static int installDriver(void)
+static int installDriver(bool fStartIt)
 {
     /*
      * Assume it didn't exist, so we'll create the service.
@@ -40,28 +50,58 @@ static int installDriver(void)
     SC_HANDLE   hSMgrCreate = OpenSCManager(NULL, NULL, SERVICE_CHANGE_CONFIG);
     if (!hSMgrCreate)
     {
-        printf("OpenSCManager(,,create) failed rc=%d\n", GetLastError());
+        printf("OpenSCManager(,,create) failed rc=%lu\n", GetLastError());
         return -1;
     }
 
-    char szDriver[MAX_PATH];
-    GetSystemDirectory(szDriver, sizeof(szDriver));
-    strcat(szDriver, "\\drivers\\VBoxGuestNT.sys");
+    const char    *pszSlashName = "\\VBoxGuest.sys";
+    char szDriver[MAX_PATH * 2];
+    GetCurrentDirectory(MAX_PATH, szDriver);
+    strcat(szDriver, pszSlashName);
+    if (GetFileAttributesA(szDriver) == INVALID_FILE_ATTRIBUTES)
+    {
+        GetSystemDirectory(szDriver, sizeof(szDriver));
+        strcat(strcat(szDriver, "\\drivers"), pszSlashName);
+
+        /* Try FAT name abbreviation. */
+        if (GetFileAttributesA(szDriver) == INVALID_FILE_ATTRIBUTES)
+        {
+            pszSlashName = "\\VBoxGst.sys";
+            GetCurrentDirectory(MAX_PATH, szDriver);
+            strcat(szDriver, pszSlashName);
+            if (GetFileAttributesA(szDriver) == INVALID_FILE_ATTRIBUTES)
+            {
+                GetSystemDirectory(szDriver, sizeof(szDriver));
+                strcat(strcat(szDriver, "\\drivers"), pszSlashName);
+
+            }
+        }
+    }
 
     SC_HANDLE hService = CreateService(hSMgrCreate,
                                        VBOXGUEST_SERVICE_NAME,
                                        "VBoxGuest Support Driver",
-                                       SERVICE_QUERY_STATUS,
+                                       SERVICE_QUERY_STATUS | (fStartIt ? SERVICE_START : 0),
                                        SERVICE_KERNEL_DRIVER,
                                        SERVICE_BOOT_START,
                                        SERVICE_ERROR_NORMAL,
                                        szDriver,
                                        "System",
                                        NULL, NULL, NULL, NULL);
-    if (!hService)
-        printf("CreateService failed! lasterr=%d\n", GetLastError());
-    else
+    if (hService)
+    {
+        printf("Successfully created service '%s' for driver '%s'.\n", VBOXGUEST_SERVICE_NAME, szDriver);
+        if (fStartIt)
+        {
+            if (StartService(hService, 0, NULL))
+                printf("successfully started driver '%s'\n", szDriver);
+            else
+                printf("StartService failed: %lu\n", GetLastError());
+        }
         CloseServiceHandle(hService);
+    }
+    else
+        printf("CreateService failed! lasterr=%lu (szDriver=%s)\n", GetLastError(), szDriver);
     CloseServiceHandle(hSMgrCreate);
     return hService ? 0 : -1;
 }
@@ -72,25 +112,68 @@ static int uninstallDriver(void)
     SC_HANDLE   hSMgr = OpenSCManager(NULL, NULL, SERVICE_CHANGE_CONFIG);
     if (!hSMgr)
     {
-        printf("OpenSCManager(,,delete) failed rc=%d\n", GetLastError());
+        printf("OpenSCManager(,,delete) failed rc=%lu\n", GetLastError());
         return -1;
     }
-    SC_HANDLE hService = OpenService(hSMgr, VBOXGUEST_SERVICE_NAME, DELETE);
+    SC_HANDLE hService = OpenService(hSMgr, VBOXGUEST_SERVICE_NAME, SERVICE_STOP | SERVICE_QUERY_STATUS | DELETE);
     if (hService)
     {
         /*
+         * Try stop it if it's running.
+         */
+        SERVICE_STATUS  Status = { 0, 0, 0, 0, 0, 0, 0 };
+        QueryServiceStatus(hService, &Status);
+        if (Status.dwCurrentState == SERVICE_STOPPED)
+            rc = VINF_SUCCESS;
+        else if (ControlService(hService, SERVICE_CONTROL_STOP, &Status))
+        {
+            int iWait = 100;
+            while (Status.dwCurrentState == SERVICE_STOP_PENDING && iWait-- > 0)
+            {
+                Sleep(100);
+                QueryServiceStatus(hService, &Status);
+            }
+            if (Status.dwCurrentState == SERVICE_STOPPED)
+                rc = VINF_SUCCESS;
+            else
+            {
+                printf("Failed to stop service. status=%ld (%#lx)\n", Status.dwCurrentState, Status.dwCurrentState);
+                rc = VERR_GENERAL_FAILURE;
+            }
+        }
+        else
+        {
+            DWORD dwErr = GetLastError();
+            if (   Status.dwCurrentState == SERVICE_STOP_PENDING
+                && dwErr == ERROR_SERVICE_CANNOT_ACCEPT_CTRL)
+                rc = VERR_RESOURCE_BUSY;    /* better than VERR_GENERAL_FAILURE */
+            else
+            {
+                printf("ControlService failed with dwErr=%ld. status=%lu (%#lx)\n",
+                       dwErr, Status.dwCurrentState, Status.dwCurrentState);
+                rc = -1;
+            }
+        }
+
+        /*
          * Delete the service.
          */
-        if (DeleteService(hService))
-            rc = 0;
-        else
-            printf("DeleteService failed lasterr=%d\n", GetLastError());
+        if (RT_SUCCESS(rc))
+        {
+            if (DeleteService(hService))
+                rc = 0;
+            else
+            {
+                printf("DeleteService failed lasterr=%lu\n", GetLastError());
+                rc = -1;
+            }
+        }
         CloseServiceHandle(hService);
     }
     else if (GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST)
         rc = 0;
     else
-        printf("OpenService failed lasterr=%d\n", GetLastError());
+        printf("OpenService failed lasterr=%lu\n", GetLastError());
     CloseServiceHandle(hSMgr);
     return rc;
 }
@@ -110,7 +193,7 @@ static HANDLE openDriver(void)
                          NULL);
     if (hDevice == INVALID_HANDLE_VALUE)
     {
-        printf("CreateFile did not work. GetLastError() 0x%x\n", GetLastError());
+        printf("CreateFile did not work. GetLastError() %lu\n", GetLastError());
     }
     return hDevice;
 }
@@ -172,7 +255,7 @@ int main(int argc, char **argv)
     else
 #endif
     if (installMode)
-        rc = installDriver();
+        rc = installDriver(true);
     else
         rc = uninstallDriver();
 

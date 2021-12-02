@@ -1,16 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0301
+# $Id: del_build.py 82968 2020-02-04 10:35:17Z vboxsync $
+# pylint: disable=line-too-long
 
 """
 Interface used by the tinderbox server side software to mark build binaries
 deleted.
 """
 
+from __future__ import print_function;
+
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -29,12 +31,12 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 # Standard python imports
 import sys
 import os
-from optparse import OptionParser
+from optparse import OptionParser;  # pylint: disable=deprecated-module
 
 # Add Test Manager's modules path
 g_ksTestManagerDir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -55,7 +57,7 @@ def markBuildsDeleted():
                        help='Quiet execution');
 
     (oConfig, asArgs) = oParser.parse_args()
-    if len(asArgs) == 0:
+    if not asArgs:
         if not oConfig.fQuiet:
             sys.stderr.write('syntax error: No builds binaries specified\n');
         return 1;
@@ -73,7 +75,7 @@ def markBuildsDeleted():
             raise;
         else:
             if not oConfig.fQuiet:
-                print "del_build.py: Marked %u builds associated with '%s' as deleted." % (cBuilds, sBuildBin,);
+                print("del_build.py: Marked %u builds associated with '%s' as deleted." % (cBuilds, sBuildBin,));
 
     oDb.close()
     return 0;

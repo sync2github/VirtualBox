@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTR0ThreadPreemption.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT R0 Testcase - Thread Preemption, common header.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,6 +24,12 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
+#ifndef IPRT_INCLUDED_SRC_testcase_tstRTR0ThreadPreemption_h
+#define IPRT_INCLUDED_SRC_testcase_tstRTR0ThreadPreemption_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
 #ifdef IN_RING0
 RT_C_DECLS_BEGIN
 DECLEXPORT(int) TSTRTR0ThreadPreemptionSrvReqHandler(PSUPDRVSESSION pSession, uint32_t uOperation,
@@ -41,4 +47,6 @@ typedef enum TSTRTR0THREADPREEMPTION
     TSTRTR0THREADPREEMPTION_NESTED,
     TSTRTR0THREADPREEMPTION_CTXHOOKS
 } TSTRTR0THREADPREEMPTION;
+
+#endif /* !IPRT_INCLUDED_SRC_testcase_tstRTR0ThreadPreemption_h */
 

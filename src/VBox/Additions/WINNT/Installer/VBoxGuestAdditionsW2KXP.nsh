@@ -1,10 +1,10 @@
-; $Id$
+; $Id: VBoxGuestAdditionsW2KXP.nsh 89709 2021-06-15 14:30:12Z vboxsync $
 ;; @file
 ; VBoxGuestAdditionsW2KXP.nsh - Guest Additions installation for Windows 2000/XP.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -196,6 +196,10 @@ Function W2K_CopyFiles
   FILE "$%PATH_OUT%\bin\additions\VBoxTray.exe"
   FILE "$%PATH_OUT%\bin\additions\VBoxControl.exe" ; Not used by W2K and up, but required by the .INF file
 
+!ifdef VBOX_WITH_ADDITIONS_SHIPPING_AUDIO_TEST
+  FILE "$%PATH_OUT%\bin\additions\VBoxAudioTest.exe"
+!endif
+
   ; WHQL fake
 !ifdef WHQL_FAKE
   FILE "$%PATH_OUT%\bin\additions\VBoxWHQLFake.exe"
@@ -232,98 +236,33 @@ Function W2K_CopyFiles
     ; WDDM Video driver
     SetOutPath "$INSTDIR"
 
-  !if $%VBOX_WITH_WDDM_W8% == "1"
-    ${If} $g_strWinVersion == "8"
-    ${OrIf} $g_strWinVersion == "8_1"
-    ${OrIf} $g_strWinVersion == "10"
-      !ifdef VBOX_SIGN_ADDITIONS
-        FILE "$%PATH_OUT%\bin\additions\VBoxVideoW8.cat"
-      !endif
-      FILE "$%PATH_OUT%\bin\additions\VBoxVideoW8.sys"
-      FILE "$%PATH_OUT%\bin\additions\VBoxVideoW8.inf"
-    ${Else}
-  !endif
-      !ifdef VBOX_SIGN_ADDITIONS
-        FILE "$%PATH_OUT%\bin\additions\VBoxVideoWddm.cat"
-      !endif
-      FILE "$%PATH_OUT%\bin\additions\VBoxVideoWddm.sys"
-      FILE "$%PATH_OUT%\bin\additions\VBoxVideoWddm.inf"
-  !if $%VBOX_WITH_WDDM_W8% == "1"
-    ${EndIf}
-  !endif
+    !ifdef VBOX_SIGN_ADDITIONS
+      FILE "$%PATH_OUT%\bin\additions\VBoxWddm.cat"
+    !endif
+    FILE "$%PATH_OUT%\bin\additions\VBoxWddm.sys"
+    FILE "$%PATH_OUT%\bin\additions\VBoxWddm.inf"
 
     FILE "$%PATH_OUT%\bin\additions\VBoxDispD3D.dll"
+    !if $%VBOX_WITH_MESA3D% == "1"
+      FILE "$%PATH_OUT%\bin\additions\VBoxNine.dll"
+      FILE "$%PATH_OUT%\bin\additions\VBoxSVGA.dll"
+      FILE "$%PATH_OUT%\bin\additions\VBoxICD.dll"
+      FILE "$%PATH_OUT%\bin\additions\VBoxGL.dll"
+    !endif
 
-    !if $%VBOX_WITH_CROGL% == "1"
-      FILE "$%PATH_OUT%\bin\additions\VBoxOGLarrayspu.dll"
-      FILE "$%PATH_OUT%\bin\additions\VBoxOGLcrutil.dll"
-      FILE "$%PATH_OUT%\bin\additions\VBoxOGLerrorspu.dll"
-      FILE "$%PATH_OUT%\bin\additions\VBoxOGLpackspu.dll"
-      FILE "$%PATH_OUT%\bin\additions\VBoxOGLpassthroughspu.dll"
-      FILE "$%PATH_OUT%\bin\additions\VBoxOGLfeedbackspu.dll"
-      FILE "$%PATH_OUT%\bin\additions\VBoxOGL.dll"
-
-      FILE "$%PATH_OUT%\bin\additions\VBoxD3D9wddm.dll"
-      FILE "$%PATH_OUT%\bin\additions\wined3dwddm.dll"
-    !endif ; $%VBOX_WITH_CROGL% == "1"
-
-    !if $%BUILD_TARGET_ARCH% == "amd64"
+    !if $%KBUILD_TARGET_ARCH% == "amd64"
       FILE "$%PATH_OUT%\bin\additions\VBoxDispD3D-x86.dll"
-
-      !if $%VBOX_WITH_CROGL% == "1"
-        FILE "$%PATH_OUT%\bin\additions\VBoxOGLarrayspu-x86.dll"
-        FILE "$%PATH_OUT%\bin\additions\VBoxOGLcrutil-x86.dll"
-        FILE "$%PATH_OUT%\bin\additions\VBoxOGLerrorspu-x86.dll"
-        FILE "$%PATH_OUT%\bin\additions\VBoxOGLpackspu-x86.dll"
-        FILE "$%PATH_OUT%\bin\additions\VBoxOGLpassthroughspu-x86.dll"
-        FILE "$%PATH_OUT%\bin\additions\VBoxOGLfeedbackspu-x86.dll"
-        FILE "$%PATH_OUT%\bin\additions\VBoxOGL-x86.dll"
-
-        FILE "$%PATH_OUT%\bin\additions\VBoxD3D9wddm-x86.dll"
-        FILE "$%PATH_OUT%\bin\additions\wined3dwddm-x86.dll"
-      !endif ; $%VBOX_WITH_CROGL% == "1"
-    !endif ; $%BUILD_TARGET_ARCH% == "amd64"
+      !if $%VBOX_WITH_MESA3D% == "1"
+        FILE "$%PATH_OUT%\bin\additions\VBoxNine-x86.dll"
+        FILE "$%PATH_OUT%\bin\additions\VBoxSVGA-x86.dll"
+        FILE "$%PATH_OUT%\bin\additions\VBoxICD-x86.dll"
+        FILE "$%PATH_OUT%\bin\additions\VBoxGL-x86.dll"
+      !endif
+    !endif ; $%KBUILD_TARGET_ARCH% == "amd64"
 
     Goto doneCr
   ${EndIf}
 !endif ; $%VBOX_WITH_WDDM% == "1"
-
-!if $%VBOX_WITH_CROGL% == "1"
-  ; crOpenGL
-  !if $%BUILD_TARGET_ARCH% == "amd64"
-    !define LIBRARY_X64 ; Enable installation of 64-bit libraries
-  !endif
-  StrCpy $0 "$TEMP\VBoxGuestAdditions\VBoxOGL"
-  CreateDirectory "$0"
-  !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%PATH_OUT%\bin\additions\VBoxOGLarrayspu.dll"       "$g_strSystemDir\VBoxOGLarrayspu.dll"       "$0"
-  !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%PATH_OUT%\bin\additions\VBoxOGLcrutil.dll"         "$g_strSystemDir\VBoxOGLcrutil.dll"         "$0"
-  !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%PATH_OUT%\bin\additions\VBoxOGLerrorspu.dll"       "$g_strSystemDir\VBoxOGLerrorspu.dll"       "$0"
-  !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%PATH_OUT%\bin\additions\VBoxOGLpackspu.dll"        "$g_strSystemDir\VBoxOGLpackspu.dll"        "$0"
-  !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%PATH_OUT%\bin\additions\VBoxOGLpassthroughspu.dll" "$g_strSystemDir\VBoxOGLpassthroughspu.dll" "$0"
-  !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%PATH_OUT%\bin\additions\VBoxOGLfeedbackspu.dll"    "$g_strSystemDir\VBoxOGLfeedbackspu.dll"    "$0"
-  !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%PATH_OUT%\bin\additions\VBoxOGL.dll"               "$g_strSystemDir\VBoxOGL.dll"               "$0"
-  !if $%BUILD_TARGET_ARCH% == "amd64"
-    !undef LIBRARY_X64 ; Disable installation of 64-bit libraries
-  !endif
-
-  !if $%BUILD_TARGET_ARCH% == "amd64"
-    StrCpy $0 "$TEMP\VBoxGuestAdditions\VBoxOGL32"
-    CreateDirectory "$0"
-    ; Only 64-bit installer: Also copy 32-bit DLLs on 64-bit target arch in
-    ; Wow64 node (32-bit sub system). Note that $SYSDIR contains the 32-bit
-    ; path after calling EnableX64FSRedirection
-    ${EnableX64FSRedirection}
-    !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxOGLarrayspu.dll"       "$SYSDIR\VBoxOGLarrayspu.dll"       "$0"
-    !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxOGLcrutil.dll"         "$SYSDIR\VBoxOGLcrutil.dll"         "$0"
-    !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxOGLerrorspu.dll"       "$SYSDIR\VBoxOGLerrorspu.dll"       "$0"
-    !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxOGLpackspu.dll"        "$SYSDIR\VBoxOGLpackspu.dll"        "$0"
-    !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxOGLpassthroughspu.dll" "$SYSDIR\VBoxOGLpassthroughspu.dll" "$0"
-    !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxOGLfeedbackspu.dll"    "$SYSDIR\VBoxOGLfeedbackspu.dll"    "$0"
-    !insertmacro InstallLib DLL NOTSHARED REBOOT_PROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\VBoxOGL.dll"               "$SYSDIR\VBoxOGL.dll"               "$0"
-    ${DisableX64FSRedirection}
-  !endif
-
-!endif ; VBOX_WITH_CROGL
 
 doneCr:
 
@@ -366,10 +305,23 @@ FunctionEnd
 Function W2K_InstallFiles
 
   ; The Shared Folder IFS goes to the system directory
-  FILE /oname=$g_strSystemDir\drivers\VBoxSF.sys "$%PATH_OUT%\bin\additions\VBoxSF.sys"
+  !if $%BUILD_TARGET_ARCH% == "x86"
+    ; On x86 we have to use a different shared folder driver linked against an older RDBSS for Windows 7 and older.
+    ${If} $g_strWinVersion == "2000"
+    ${OrIf} $g_strWinVersion == "Vista"
+    ${OrIf} $g_strWinVersion == "XP"
+    ${OrIf} $g_strWinVersion == "7"
+      !insertmacro ReplaceDLL "$%PATH_OUT%\bin\additions\VBoxSFW2K.sys" "$g_strSystemDir\drivers\VBoxSF.sys" "$INSTDIR"
+    ${Else}
+      !insertmacro ReplaceDLL "$%PATH_OUT%\bin\additions\VBoxSF.sys" "$g_strSystemDir\drivers\VBoxSF.sys" "$INSTDIR"
+    ${EndIf}
+  !else
+    !insertmacro ReplaceDLL "$%PATH_OUT%\bin\additions\VBoxSF.sys" "$g_strSystemDir\drivers\VBoxSF.sys" "$INSTDIR"
+  !endif
+
   !insertmacro ReplaceDLL "$%PATH_OUT%\bin\additions\VBoxMRXNP.dll" "$g_strSystemDir\VBoxMRXNP.dll" "$INSTDIR"
   AccessControl::GrantOnFile "$g_strSystemDir\VBoxMRXNP.dll" "(BU)" "GenericRead"
-  !if $%BUILD_TARGET_ARCH% == "amd64"
+  !if $%KBUILD_TARGET_ARCH% == "amd64"
     ; Only 64-bit installer: Copy the 32-bit DLL for 32 bit applications.
     !insertmacro ReplaceDLL "$%PATH_OUT%\bin\additions\VBoxMRXNP-x86.dll" "$g_strSysWow64\VBoxMRXNP.dll" "$INSTDIR"
     AccessControl::GrantOnFile "$g_strSysWow64\VBoxMRXNP.dll" "(BU)" "GenericRead"
@@ -394,19 +346,8 @@ Function W2K_InstallFiles
 
   ${If} $g_bNoVideoDrv == "false"
     ${If} $g_bWithWDDM == "true"
-  !if $%VBOX_WITH_WDDM_W8% == "1"
-      ${If} $g_strWinVersion == "8"
-      ${OrIf} $g_strWinVersion == "8_1"
-      ${OrIf} $g_strWinVersion == "10"
-        ${LogVerbose} "Installing WDDM video driver for Windows 8 or newer..."
-        ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver install $\"$INSTDIR\VBoxVideoW8.inf$\" $\"$INSTDIR\install_drivers.log$\"" "false"
-      ${Else}
-  !endif
-        ${LogVerbose} "Installing WDDM video driver for Windows Vista and 7..."
-        ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver install $\"$INSTDIR\VBoxVideoWddm.inf$\" $\"$INSTDIR\install_drivers.log$\"" "false"
-  !if $%VBOX_WITH_WDDM_W8% == "1"
-      ${EndIf}
-  !endif
+      ${LogVerbose} "Installing WDDM video driver..."
+      ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver install $\"$INSTDIR\VBoxWddm.inf$\" $\"$INSTDIR\install_drivers.log$\"" "false"
     ${Else}
       ${LogVerbose} "Installing video driver ..."
       ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver install $\"$INSTDIR\VBoxVideo.inf$\" $\"$INSTDIR\install_drivers.log$\"" "false"
@@ -420,7 +361,7 @@ Function W2K_InstallFiles
     ; The mouse filter does not contain any device IDs but a "DefaultInstall" section;
     ; so this .INF file needs to be installed using "InstallHinfSection" which is implemented
     ; with VBoxDrvInst's "driver executeinf" routine
-    ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver executeinf $\"$INSTDIR\VBoxMouse.inf$\"" "false"
+    ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver install $\"$INSTDIR\VBoxMouse.inf$\"" "false"
   ${Else}
     ${LogVerbose} "Mouse driver installation skipped!"
   ${EndIf}
@@ -454,35 +395,6 @@ sf:
   ; Add the shared folders network provider
   ${LogVerbose} "Adding network provider (Order = $g_iSfOrder) ..."
   ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" netprovider add VBoxSF $g_iSfOrder" "false"
-
-!if $%VBOX_WITH_CROGL% == "1"
-cropengl:
-  ${If} $g_bWithWDDM == "true"
-    ; Nothing to do here
-  ${Else}
-    ${LogVerbose} "Installing 3D OpenGL support ..."
-    WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL" "Version" 2
-    WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL" "DriverVersion" 1
-    WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL" "Flags" 1
-    WriteRegStr   HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL" "Dll" "VBoxOGL.dll"
-!if $%BUILD_TARGET_ARCH% == "amd64"
-    SetRegView 32
-    ; Write additional keys required for Windows XP, Vista and 7 64-bit (but for 32-bit stuff)
-    ${If} $g_strWinVersion   == '10'
-    ${OrIf} $g_strWinVersion == '8_1'
-    ${OrIf} $g_strWinVersion == '8'
-    ${OrIf} $g_strWinVersion == '7'
-    ${OrIf} $g_strWinVersion == 'Vista'
-    ${OrIf} $g_strWinVersion == '2003' ; Windows XP 64-bit is a renamed Windows 2003 really
-      WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL" "Version" 2
-      WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL" "DriverVersion" 1
-      WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL" "Flags" 1
-      WriteRegStr   HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL" "Dll" "VBoxOGL.dll"
-    ${EndIf}
-    SetRegView 64
-!endif
-  ${Endif}
-!endif
 
   Goto done
 
@@ -537,43 +449,42 @@ Function ${un}W2K_UninstallInstDir
   Delete /REBOOTOK "$INSTDIR\VBoxService.exe" ; Deprecated, does not get installed anymore
 
 !if $%VBOX_WITH_WDDM% == "1"
-  Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxVideoWddm.cat"
-  Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxVideoWddm.sys"
-  Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxVideoWddm.inf"
-  !if $%VBOX_WITH_WDDM_W8% == "1"
-  Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxVideoW8.cat"
-  Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxVideoW8.sys"
-  Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxVideoW8.inf"
+  Delete /REBOOTOK "$INSTDIR\VBoxWddm.cat"
+  Delete /REBOOTOK "$INSTDIR\VBoxWddm.sys"
+  Delete /REBOOTOK "$INSTDIR\VBoxWddm.inf"
+  ; Obsolete files begin
+  Delete /REBOOTOK "$INSTDIR\VBoxVideoWddm.cat"
+  Delete /REBOOTOK "$INSTDIR\VBoxVideoWddm.sys"
+  Delete /REBOOTOK "$INSTDIR\VBoxVideoWddm.inf"
+  Delete /REBOOTOK "$INSTDIR\VBoxVideoW8.cat"
+  Delete /REBOOTOK "$INSTDIR\VBoxVideoW8.sys"
+  Delete /REBOOTOK "$INSTDIR\VBoxVideoW8.inf"
+  ; Obsolete files end
+  Delete /REBOOTOK "$INSTDIR\VBoxDispD3D.dll"
+  !if $%VBOX_WITH_MESA3D% == "1"
+    Delete /REBOOTOK "$INSTDIR\VBoxNine.dll"
+    Delete /REBOOTOK "$INSTDIR\VBoxSVGA.dll"
+    Delete /REBOOTOK "$INSTDIR\VBoxICD.dll"
+    Delete /REBOOTOK "$INSTDIR\VBoxGL.dll"
   !endif
-  Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxDispD3D.dll"
 
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLarrayspu.dll"
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLcrutil.dll"
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLerrorspu.dll"
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLpackspu.dll"
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLpassthroughspu.dll"
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLfeedbackspu.dll"
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGL.dll"
-
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxD3D9wddm.dll"
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\wined3dwddm.dll"
+    Delete /REBOOTOK "$INSTDIR\VBoxD3D9wddm.dll"
+    Delete /REBOOTOK "$INSTDIR\wined3dwddm.dll"
     ; Try to delete libWine in case it is there from old installation
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\libWine.dll"
+    Delete /REBOOTOK "$INSTDIR\libWine.dll"
 
-  !if $%BUILD_TARGET_ARCH% == "amd64"
-    Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxDispD3D-x86.dll"
+  !if $%KBUILD_TARGET_ARCH% == "amd64"
+    Delete /REBOOTOK "$INSTDIR\VBoxDispD3D-x86.dll"
+    !if $%VBOX_WITH_MESA3D% == "1"
+      Delete /REBOOTOK "$INSTDIR\VBoxNine-x86.dll"
+      Delete /REBOOTOK "$INSTDIR\VBoxSVGA-x86.dll"
+      Delete /REBOOTOK "$INSTDIR\VBoxICD-x86.dll"
+      Delete /REBOOTOK "$INSTDIR\VBoxGL-x86.dll"
+    !endif
 
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLarrayspu-x86.dll"
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLcrutil-x86.dll"
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLerrorspu-x86.dll"
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLpackspu-x86.dll"
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLpassthroughspu-x86.dll"
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGLfeedbackspu-x86.dll"
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxOGL-x86.dll"
-
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\VBoxD3D9wddm-x86.dll"
-      Delete /REBOOTOK "$%PATH_OUT%\bin\additions\wined3dwddm-x86.dll"
-  !endif ; $%BUILD_TARGET_ARCH% == "amd64"
+      Delete /REBOOTOK "$INSTDIR\VBoxD3D9wddm-x86.dll"
+      Delete /REBOOTOK "$INSTDIR\wined3dwddm-x86.dll"
+  !endif ; $%KBUILD_TARGET_ARCH% == "amd64"
 !endif ; $%VBOX_WITH_WDDM% == "1"
 
   ; WHQL fake
@@ -605,14 +516,20 @@ Function ${un}W2K_Uninstall
   ; Remove video driver
 !if $%VBOX_WITH_WDDM% == "1"
 
-  !if $%VBOX_WITH_WDDM_W8% == "1"
+  ${LogVerbose} "Uninstalling WDDM video driver..."
+  ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver uninstall $\"$INSTDIR\VBoxWddm.inf$\"" "true"
+  ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" service delete VBoxWddm" "true"
+  ;misha> @todo driver file removal (as well as service removal) should be done as driver package uninstall
+  ;       could be done with "VBoxDrvInst.exe /u", e.g. by passing additional arg to it denoting that driver package is to be uninstalled
+  Delete /REBOOTOK "$g_strSystemDir\drivers\VBoxWddm.sys"
+
+  ; Obsolete files begin
   ${LogVerbose} "Uninstalling WDDM video driver for Windows 8..."
   ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver uninstall $\"$INSTDIR\VBoxVideoW8.inf$\"" "true"
   ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" service delete VBoxVideoW8" "true"
   ;misha> @todo driver file removal (as well as service removal) should be done as driver package uninstall
   ;       could be done with "VBoxDrvInst.exe /u", e.g. by passing additional arg to it denoting that driver package is to be uninstalled
   Delete /REBOOTOK "$g_strSystemDir\drivers\VBoxVideoW8.sys"
-  !endif ; $%VBOX_WITH_WDDM_W8% == "1"
 
   ${LogVerbose} "Uninstalling WDDM video driver for Windows Vista and 7..."
   ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" driver uninstall $\"$INSTDIR\VBoxVideoWddm.inf$\"" "true"
@@ -621,97 +538,27 @@ Function ${un}W2K_Uninstall
   ;misha> @todo driver file removal (as well as service removal) should be done as driver package uninstall
   ;       could be done with "VBoxDrvInst.exe /u", e.g. by passing additional arg to it denoting that driver package is to be uninstalled
   Delete /REBOOTOK "$g_strSystemDir\drivers\VBoxVideoWddm.sys"
+  ; Obsolete files end
+
   Delete /REBOOTOK "$g_strSystemDir\VBoxDispD3D.dll"
+  !if $%KBUILD_TARGET_ARCH% == "amd64"
+    Delete /REBOOTOK "$g_strSysWow64\VBoxDispD3D-x86.dll"
+  !endif
+
+  !if $%VBOX_WITH_MESA3D% == "1"
+    Delete /REBOOTOK "$g_strSystemDir\VBoxNine.dll"
+    Delete /REBOOTOK "$g_strSystemDir\VBoxSVGA.dll"
+    Delete /REBOOTOK "$g_strSystemDir\VBoxICD.dll"
+    Delete /REBOOTOK "$g_strSystemDir\VBoxGL.dll"
+
+    !if $%KBUILD_TARGET_ARCH% == "amd64"
+      Delete /REBOOTOK "$g_strSysWow64\VBoxNine-x86.dll"
+      Delete /REBOOTOK "$g_strSysWow64\VBoxSVGA-x86.dll"
+      Delete /REBOOTOK "$g_strSysWow64\VBoxICD-x86.dll"
+      Delete /REBOOTOK "$g_strSysWow64\VBoxGL-x86.dll"
+    !endif
+  !endif
 !endif ; $%VBOX_WITH_WDDM% == "1"
-
-!if $%VBOX_WITH_CROGL% == "1"
-
-  ${LogVerbose} "Removing Direct3D support ..."
-
-  ; Do file validation before we uninstall
-  Call ${un}ValidateD3DFiles
-  Pop $0
-  ${If} $0 == "1" ; D3D files are invalid
-    ${LogVerbose} $(VBOX_UNINST_INVALID_D3D)
-    MessageBox MB_ICONSTOP|MB_OK $(VBOX_UNINST_INVALID_D3D) /SD IDOK
-    Goto d3d_uninstall_end
-  ${EndIf}
-
-  Delete /REBOOTOK "$g_strSystemDir\VBoxOGLarrayspu.dll"
-  Delete /REBOOTOK "$g_strSystemDir\VBoxOGLcrutil.dll"
-  Delete /REBOOTOK "$g_strSystemDir\VBoxOGLerrorspu.dll"
-  Delete /REBOOTOK "$g_strSystemDir\VBoxOGLpackspu.dll"
-  Delete /REBOOTOK "$g_strSystemDir\VBoxOGLpassthroughspu.dll"
-  Delete /REBOOTOK "$g_strSystemDir\VBoxOGLfeedbackspu.dll"
-  Delete /REBOOTOK "$g_strSystemDir\VBoxOGL.dll"
-
-  ; Remove D3D stuff
-  ; @todo add a feature flag to only remove if installed explicitly
-  Delete /REBOOTOK "$g_strSystemDir\libWine.dll"
-  Delete /REBOOTOK "$g_strSystemDir\VBoxD3D8.dll"
-  Delete /REBOOTOK "$g_strSystemDir\VBoxD3D9.dll"
-  Delete /REBOOTOK "$g_strSystemDir\wined3d.dll"
-  ; Update DLL cache
-  ${If} ${FileExists} "$g_strSystemDir\dllcache\msd3d8.dll"
-    Delete /REBOOTOK "$g_strSystemDir\dllcache\d3d8.dll"
-    Rename /REBOOTOK "$g_strSystemDir\dllcache\msd3d8.dll" "$g_strSystemDir\dllcache\d3d8.dll"
-  ${EndIf}
-  ${If} ${FileExists} "$g_strSystemDir\dllcache\msd3d9.dll"
-    Delete /REBOOTOK "$g_strSystemDir\dllcache\d3d9.dll"
-    Rename /REBOOTOK "$g_strSystemDir\dllcache\msd3d9.dll" "$g_strSystemDir\dllcache\d3d9.dll"
-  ${EndIf}
-  ; Restore original DX DLLs
-  ${If} ${FileExists} "$g_strSystemDir\msd3d8.dll"
-    Delete /REBOOTOK "$g_strSystemDir\d3d8.dll"
-    Rename /REBOOTOK "$g_strSystemDir\msd3d8.dll" "$g_strSystemDir\d3d8.dll"
-  ${EndIf}
-  ${If} ${FileExists} "$g_strSystemDir\msd3d9.dll"
-    Delete /REBOOTOK "$g_strSystemDir\d3d9.dll"
-    Rename /REBOOTOK "$g_strSystemDir\msd3d9.dll" "$g_strSystemDir\d3d9.dll"
-  ${EndIf}
-
-  !if $%BUILD_TARGET_ARCH% == "amd64"
-    ; Only 64-bit installer: Also remove 32-bit DLLs on 64-bit target arch in Wow64 node
-    Delete /REBOOTOK "$g_strSysWow64\VBoxOGLarrayspu.dll"
-    Delete /REBOOTOK "$g_strSysWow64\VBoxOGLcrutil.dll"
-    Delete /REBOOTOK "$g_strSysWow64\VBoxOGLerrorspu.dll"
-    Delete /REBOOTOK "$g_strSysWow64\VBoxOGLpackspu.dll"
-    Delete /REBOOTOK "$g_strSysWow64\VBoxOGLpassthroughspu.dll"
-    Delete /REBOOTOK "$g_strSysWow64\VBoxOGLfeedbackspu.dll"
-    Delete /REBOOTOK "$g_strSysWow64\VBoxOGL.dll"
-
-    ; Remove D3D stuff
-    ; @todo add a feature flag to only remove if installed explicitly
-    Delete /REBOOTOK "$g_strSysWow64\libWine.dll"
-    Delete /REBOOTOK "$g_strSysWow64\VBoxD3D8.dll"
-    Delete /REBOOTOK "$g_strSysWow64\VBoxD3D9.dll"
-    Delete /REBOOTOK "$g_strSysWow64\wined3d.dll"
-    ; Update DLL cache
-    ${If} ${FileExists} "$g_strSysWow64\dllcache\msd3d8.dll"
-      Delete /REBOOTOK "$g_strSysWow64\dllcache\d3d8.dll"
-      Rename /REBOOTOK "$g_strSysWow64\dllcache\msd3d8.dll" "$g_strSysWow64\dllcache\d3d8.dll"
-    ${EndIf}
-    ${If} ${FileExists} "$g_strSysWow64\dllcache\msd3d9.dll"
-      Delete /REBOOTOK "$g_strSysWow64\dllcache\d3d9.dll"
-      Rename /REBOOTOK "$g_strSysWow64\dllcache\msd3d9.dll" "$g_strSysWow64\dllcache\d3d9.dll"
-    ${EndIf}
-    ; Restore original DX DLLs
-    ${If} ${FileExists} "$g_strSysWow64\msd3d8.dll"
-      Delete /REBOOTOK "$g_strSysWow64\d3d8.dll"
-      Rename /REBOOTOK "$g_strSysWow64\msd3d8.dll" "$g_strSysWow64\d3d8.dll"
-    ${EndIf}
-    ${If} ${FileExists} "$g_strSysWow64\msd3d9.dll"
-      Delete /REBOOTOK "$g_strSysWow64\d3d9.dll"
-      Rename /REBOOTOK "$g_strSysWow64\msd3d9.dll" "$g_strSysWow64\d3d9.dll"
-    ${EndIf}
-    DeleteRegKey HKLM "SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL"
-  !endif ; amd64
-
-  DeleteRegKey HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VBoxOGL"
-
-d3d_uninstall_end:
-
-!endif ; VBOX_WITH_CROGL
 
   ; Remove mouse driver
   ${LogVerbose} "Removing mouse driver ..."
@@ -755,7 +602,7 @@ d3d_uninstall_end:
   ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" netprovider remove VBoxSF" "true"
   ${CmdExecute} "$\"$INSTDIR\VBoxDrvInst.exe$\" service delete VBoxSF" "true"
   Delete /REBOOTOK "$g_strSystemDir\VBoxMRXNP.dll" ; The network provider DLL will be locked
-  !if $%BUILD_TARGET_ARCH% == "amd64"
+  !if $%KBUILD_TARGET_ARCH% == "amd64"
     ; Only 64-bit installer: Also remove 32-bit DLLs on 64-bit target arch in Wow64 node
     Delete /REBOOTOK "$g_strSysWow64\VBoxMRXNP.dll"
   !endif ; amd64
@@ -767,4 +614,3 @@ FunctionEnd
 !macroend
 !insertmacro W2K_Uninstall ""
 !insertmacro W2K_Uninstall "un."
-

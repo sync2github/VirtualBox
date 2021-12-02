@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: GMMR0Internal.h 82991 2020-02-05 11:46:05Z vboxsync $ */
 /** @file
  * GMM - The Global Memory Manager, Internal Header.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___GMMR0Internal_h
-#define ___GMMR0Internal_h
+#ifndef VMM_INCLUDED_SRC_VMMR0_GMMR0Internal_h
+#define VMM_INCLUDED_SRC_VMMR0_GMMR0Internal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vmm/gmm.h>
 #include <iprt/avl.h>
@@ -67,6 +70,24 @@ typedef struct GMMCHUNKFREESET
 } GMMCHUNKFREESET;
 
 
+/**
+ * A per-VM allocation chunk lookup TLB entry (for GMMR0PageIdToVirt).
+ */
+typedef struct GMMPERVMCHUNKTLBE
+{
+    /** The GMM::idFreeGeneration value this is valid for. */
+    uint64_t            idGeneration;
+    /** The chunk. */
+    PGMMCHUNK           pChunk;
+} GMMPERVMCHUNKTLBE;
+/** Poitner to a per-VM allocation chunk TLB entry. */
+typedef GMMPERVMCHUNKTLBE *PGMMPERVMCHUNKTLBE;
+
+/** The number of entries in the allocation chunk lookup TLB. */
+#define GMMPERVM_CHUNKTLB_ENTRIES           32
+/** Gets the TLB entry index for the given Chunk ID. */
+#define GMMPERVM_CHUNKTLB_IDX(a_idChunk)    ( (a_idChunk) & (GMMPERVM_CHUNKTLB_ENTRIES - 1) )
+
 
 /**
  * The per-VM GMM data.
@@ -81,9 +102,15 @@ typedef struct GMMPERVM
     PAVLGCPTRNODECORE   pSharedModuleTree;
     /** Hints at the last chunk we allocated some memory from. */
     uint32_t            idLastChunkHint;
+    uint32_t            u32Padding;
+
+    /** Spinlock protecting the chunk lookup TLB. */
+    RTSPINLOCK          hChunkTlbSpinLock;
+    /** The chunk lookup TLB used by GMMR0PageIdToVirt. */
+    GMMPERVMCHUNKTLBE   aChunkTlbEntries[GMMPERVM_CHUNKTLB_ENTRIES];
 } GMMPERVM;
 /** Pointer to the per-VM GMM data. */
 typedef GMMPERVM *PGMMPERVM;
 
-#endif
+#endif /* !VMM_INCLUDED_SRC_VMMR0_GMMR0Internal_h */
 

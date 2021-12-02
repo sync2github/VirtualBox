@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxAutostartStop.cpp 83797 2020-04-18 13:52:37Z vboxsync $ */
 /** @file
  * VBoxAutostart - VirtualBox Autostart service, stop machines during system shutdown.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -28,9 +28,7 @@
 #include <iprt/assert.h>
 #include <iprt/message.h>
 
-#include <algorithm>
 #include <list>
-#include <string>
 
 #include "VBoxAutostart.h"
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MachineImplCloneVM.h 91312 2021-09-20 11:06:57Z vboxsync $ */
 /** @file
  * Definition of MachineCloneVM
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_MACHINEIMPLCLONEVM
-#define ____H_MACHINEIMPLCLONEVM
+#ifndef MAIN_INCLUDED_MachineImplCloneVM_h
+#define MAIN_INCLUDED_MachineImplCloneVM_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "MachineImpl.h"
 #include "ProgressImpl.h"
@@ -27,6 +30,8 @@ struct MachineCloneVMPrivate;
 class MachineCloneVM
 {
 public:
+    DECLARE_TRANSLATE_METHODS(MachineCloneVM)
+
     MachineCloneVM(ComObjPtr<Machine> pSrcMachine, ComObjPtr<Machine> pTrgMachine, CloneMode_T mode, const RTCList<CloneOptions_T> &opts);
     ~MachineCloneVM();
 
@@ -43,6 +48,6 @@ protected:
     friend struct MachineCloneVMPrivate;
 };
 
-#endif // ____H_MACHINEIMPLCLONEVM
+#endif /* !MAIN_INCLUDED_MachineImplCloneVM_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */
 

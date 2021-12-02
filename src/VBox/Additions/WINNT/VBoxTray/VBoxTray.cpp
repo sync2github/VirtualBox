@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxTray.cpp 90862 2021-08-25 00:37:59Z vboxsync $ */
 /** @file
  * VBoxTray - Guest Additions Tray Application
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -30,29 +30,25 @@
 #include "VBoxDisplay.h"
 #include "VBoxVRDP.h"
 #include "VBoxHostVersion.h"
-#include "VBoxSharedFolders.h"
 #ifdef VBOX_WITH_DRAG_AND_DROP
 # include "VBoxDnD.h"
 #endif
 #include "VBoxIPC.h"
 #include "VBoxLA.h"
 #include <VBoxHook.h>
-#include "resource.h"
 
 #include <sddl.h>
 
 #include <iprt/asm.h>
 #include <iprt/buildconfig.h>
 #include <iprt/ldr.h>
+#include <iprt/path.h>
 #include <iprt/process.h>
 #include <iprt/system.h>
 #include <iprt/time.h>
 
-#ifdef DEBUG
-# define LOG_ENABLED
-# define LOG_GROUP LOG_GROUP_DEFAULT
-#endif
 #include <VBox/log.h>
+#include <VBox/err.h>
 
 /* Default desktop state tracking */
 #include <Wtsapi32.h>
@@ -135,29 +131,35 @@ static int VBoxAcquireGuestCaps(uint32_t fOr, uint32_t fNot, bool fCfg);
 /*********************************************************************************************************************************
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
-HANDLE                g_hVBoxDriver;
 HANDLE                g_hStopSem;
 HANDLE                g_hSeamlessWtNotifyEvent = 0;
 HANDLE                g_hSeamlessKmNotifyEvent = 0;
 HINSTANCE             g_hInstance;
 HWND                  g_hwndToolWindow;
 NOTIFYICONDATA        g_NotifyIconData;
-DWORD                 g_dwMajorVersion;
 
 uint32_t              g_fGuestDisplaysChanged = 0;
 
-static PRTLOGGER      g_pLoggerRelease = NULL;
-static uint32_t       g_cHistory = 10;                   /* Enable log rotation, 10 files. */
-static uint32_t       g_uHistoryFileTime = RT_SEC_1DAY;  /* Max 1 day per file. */
-static uint64_t       g_uHistoryFileSize = 100 * _1M;    /* Max 100MB per file. */
+static PRTLOGGER      g_pLoggerRelease = NULL;           /**< This is actually the debug logger in DEBUG builds! */
+static uint32_t       g_cHistory = 10;                   /**< Enable log rotation, 10 files. */
+static uint32_t       g_uHistoryFileTime = RT_SEC_1DAY;  /**< Max 1 day per file. */
+static uint64_t       g_uHistoryFileSize = 100 * _1M;    /**< Max 100MB per file. */
 
+#ifdef DEBUG_andy
+static VBOXSERVICEINFO g_aServices[] =
+{
+    {&g_SvcDescDnD,      NIL_RTTHREAD, NULL, false, false, false, false, true }
+};
+#else
 /**
  * The details of the services that has been compiled in.
  */
 static VBOXSERVICEINFO g_aServices[] =
 {
     { &g_SvcDescDisplay,        NIL_RTTHREAD, NULL, false, false, false, false, true },
+#ifdef VBOX_WITH_SHARED_CLIPBOARD
     { &g_SvcDescClipboard,      NIL_RTTHREAD, NULL, false, false, false, false, true },
+#endif
     { &g_SvcDescSeamless,       NIL_RTTHREAD, NULL, false, false, false, false, true },
     { &g_SvcDescVRDP,           NIL_RTTHREAD, NULL, false, false, false, false, true },
     { &g_SvcDescIPC,            NIL_RTTHREAD, NULL, false, false, false, false, true },
@@ -166,6 +168,7 @@ static VBOXSERVICEINFO g_aServices[] =
     { &g_SvcDescDnD,            NIL_RTTHREAD, NULL, false, false, false, false, true }
 #endif
 };
+#endif
 
 /* The global message table. */
 static VBOXGLOBALMESSAGE g_vboxGlobalMessageTable[] =
@@ -200,7 +203,7 @@ static int vboxTrayGlMsgTaskbarCreated(WPARAM wParam, LPARAM lParam)
 
 static int vboxTrayCreateTrayIcon(void)
 {
-    HICON hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VIRTUALBOX));
+    HICON hIcon = LoadIcon(g_hInstance, "IDI_ICON1"); /* see Artwork/win/TemplateR3.rc */
     if (hIcon == NULL)
     {
         DWORD dwErr = GetLastError();
@@ -305,13 +308,22 @@ static int vboxTrayServicesStart(PVBOXSERVICEENV pEnv)
 
         if (RT_FAILURE(rc2))
         {
-            LogRel(("Failed to initialize service '%s', rc=%Rrc\n", pSvc->pDesc->pszName, rc2));
-            if (rc2 == VERR_NOT_SUPPORTED)
+            switch (rc2)
             {
-                LogRel(("Service '%s' is not supported on this system\n", pSvc->pDesc->pszName));
-                rc2 = VINF_SUCCESS;
+                case VERR_NOT_SUPPORTED:
+                    LogRel(("Service '%s' is not supported on this system\n", pSvc->pDesc->pszName));
+                    rc2 = VINF_SUCCESS; /* Keep going. */
+                    break;
+
+                case VERR_HGCM_SERVICE_NOT_FOUND:
+                    LogRel(("Service '%s' is not available on the host\n", pSvc->pDesc->pszName));
+                    rc2 = VINF_SUCCESS; /* Keep going. */
+                    break;
+
+                default:
+                    LogRel(("Failed to initialize service '%s', rc=%Rrc\n", pSvc->pDesc->pszName, rc2));
+                    break;
             }
-            /* Keep going. */
         }
         else
         {
@@ -413,7 +425,8 @@ static int vboxTrayServicesStop(VBOXSERVICEENV *pEnv)
             }
         }
 
-        if (pSvc->pDesc->pfnDestroy)
+        if (   pSvc->pDesc->pfnDestroy
+            && pSvc->pInstance) /* pInstance might be NULL if initialization of a service failed. */
         {
             LogRel2(("Terminating service '%s' ...\n", pSvc->pDesc->pszName));
             pSvc->pDesc->pfnDestroy(pSvc->pInstance);
@@ -470,34 +483,6 @@ static bool vboxTrayHandleGlobalMessages(PVBOXGLOBALMESSAGE pTable, UINT uMsg,
     return false;
 }
 
-static int vboxTrayOpenBaseDriver(void)
-{
-    /* Open VBox guest driver. */
-    DWORD dwErr = ERROR_SUCCESS;
-    g_hVBoxDriver = CreateFile(VBOXGUEST_DEVICE_NAME,
-                             GENERIC_READ | GENERIC_WRITE,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             NULL,
-                             OPEN_EXISTING,
-                             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
-                             NULL);
-    if (g_hVBoxDriver == INVALID_HANDLE_VALUE)
-    {
-        dwErr = GetLastError();
-        LogRel(("Could not open VirtualBox Guest Additions driver! Please install / start it first! Error = %08X\n", dwErr));
-    }
-    return RTErrConvertFromWin32(dwErr);
-}
-
-static void vboxTrayCloseBaseDriver(void)
-{
-    if (g_hVBoxDriver)
-    {
-        CloseHandle(g_hVBoxDriver);
-        g_hVBoxDriver = NULL;
-    }
-}
-
 /**
  * Release logger callback.
  *
@@ -506,7 +491,7 @@ static void vboxTrayCloseBaseDriver(void)
  * @param   enmPhase
  * @param   pfnLog
  */
-static void vboxTrayLogHeaderFooter(PRTLOGGER pLoggerRelease, RTLOGPHASE enmPhase, PFNRTLOGPHASEMSG pfnLog)
+static DECLCALLBACK(void) vboxTrayLogHeaderFooter(PRTLOGGER pLoggerRelease, RTLOGPHASE enmPhase, PFNRTLOGPHASEMSG pfnLog)
 {
     /* Some introductory information. */
     static RTTIMESPEC s_TimeSpec;
@@ -576,31 +561,33 @@ static void vboxTrayLogHeaderFooter(PRTLOGGER pLoggerRelease, RTLOGPHASE enmPhas
  * Pass NULL for disabled logging.
  *
  * @return  IPRT status code.
- * @param   pszLogFile              Filename for log output.  Optional.
  */
-static int vboxTrayLogCreate(const char *pszLogFile)
+static int vboxTrayLogCreate(void)
 {
-    /* Create release logger (stdout + file). */
+    /* Create release (or debug) logger (stdout + file). */
     static const char * const s_apszGroups[] = VBOX_LOGGROUP_NAMES;
-    RTUINT fFlags = RTLOGFLAGS_PREFIX_THREAD | RTLOGFLAGS_PREFIX_TIME_PROG;
-#if defined(RT_OS_WINDOWS) || defined(RT_OS_OS2)
-    fFlags |= RTLOGFLAGS_USECRLF;
-#endif
-    char szError[RTPATH_MAX + 128] = "";
-    int rc = RTLogCreateEx(&g_pLoggerRelease, fFlags,
-#ifdef DEBUG
-                           "all.e.l.f",
-                           "VBOXTRAY_LOG",
+#ifdef DEBUG /* See below, debug logger not release. */
+    static const char s_szEnvVarPfx[] = "VBOXTRAY_LOG";
+    static const char s_szGroupSettings[] = "all.e.l.f";
 #else
-                           "all",
-                           "VBOXTRAY_RELEASE_LOG",
+    static const char s_szEnvVarPfx[] = "VBOXTRAY_RELEASE_LOG";
+    static const char s_szGroupSettings[] = "all";
 #endif
-                           RT_ELEMENTS(s_apszGroups), s_apszGroups, RTLOGDEST_STDOUT,
+    RTERRINFOSTATIC ErrInfo;
+    int rc = RTLogCreateEx(&g_pLoggerRelease, s_szEnvVarPfx,
+                           RTLOGFLAGS_PREFIX_THREAD | RTLOGFLAGS_PREFIX_TIME_PROG | RTLOGFLAGS_USECRLF,
+                           s_szGroupSettings, RT_ELEMENTS(s_apszGroups), s_apszGroups, UINT32_MAX,
+                           0 /*cBufDescs*/, NULL /*paBufDescs*/, RTLOGDEST_STDOUT,
                            vboxTrayLogHeaderFooter, g_cHistory, g_uHistoryFileSize, g_uHistoryFileTime,
-                           szError, sizeof(szError), pszLogFile);
+                           RTErrInfoInitStatic(&ErrInfo), NULL /*pszFilenameFmt*/);
     if (RT_SUCCESS(rc))
     {
 #ifdef DEBUG
+        /* Register this logger as the _debug_ logger.
+           Note! This means any Log() statement preceeding this may cause a
+                 20yy-*VBoxTray*.log file to have been created and it will stay
+                 open till the process quits as we don't destroy it when
+                 replacing it here. */
         RTLogSetDefaultInstance(g_pLoggerRelease);
 #else
         /* Register this logger as the release logger. */
@@ -610,15 +597,41 @@ static int vboxTrayLogCreate(const char *pszLogFile)
         RTLogFlush(g_pLoggerRelease);
     }
     else
-        MessageBox(GetDesktopWindow(),
-                   szError, "VBoxTray - Logging Error", MB_OK | MB_ICONERROR);
+        VBoxTrayShowError(ErrInfo.szMsg);
 
     return rc;
 }
 
 static void vboxTrayLogDestroy(void)
 {
+    /* Only want to destroy the release logger before calling exit(). The debug
+       logger can be useful after that point... */
     RTLogDestroy(RTLogRelSetDefaultInstance(NULL));
+}
+
+/**
+ * Displays an error message.
+ *
+ * @returns RTEXITCODE_FAILURE.
+ * @param   pszFormat   The message text.
+ * @param   ...         Format arguments.
+ */
+RTEXITCODE VBoxTrayShowError(const char *pszFormat, ...)
+{
+    va_list args;
+    va_start(args, pszFormat);
+    char *psz = NULL;
+    RTStrAPrintfV(&psz, pszFormat, args);
+    va_end(args);
+
+    AssertPtr(psz);
+    LogRel(("Error: %s", psz));
+
+    MessageBox(GetDesktopWindow(), psz, "VBoxTray - Error", MB_OK | MB_ICONERROR);
+
+    RTStrFree(psz);
+
+    return RTEXITCODE_FAILURE;
 }
 
 static void vboxTrayDestroyToolWindow(void)
@@ -687,15 +700,6 @@ static int vboxTrayCreateToolWindow(void)
 
 static int vboxTraySetupSeamless(void)
 {
-    OSVERSIONINFO info;
-    g_dwMajorVersion = 5; /* Default to Windows XP. */
-    info.dwOSVersionInfoSize = sizeof(info);
-    if (GetVersionEx(&info))
-    {
-        Log(("Windows version %ld.%ld\n", info.dwMajorVersion, info.dwMinorVersion));
-        g_dwMajorVersion = info.dwMajorVersion;
-    }
-
     /* We need to setup a security descriptor to allow other processes modify access to the seamless notification event semaphore. */
     SECURITY_ATTRIBUTES     SecAttr;
     DWORD                   dwErr = ERROR_SUCCESS;
@@ -715,12 +719,14 @@ static int vboxTraySetupSeamless(void)
     else
     {
         /* For Vista and up we need to change the integrity of the security descriptor, too. */
-        if (g_dwMajorVersion >= 6)
+        uint64_t const uNtVersion = RTSystemGetNtVersion();
+        if (uNtVersion >= RTSYSTEM_MAKE_NT_VERSION(6, 0, 0))
         {
             BOOL (WINAPI * pfnConvertStringSecurityDescriptorToSecurityDescriptorA)(LPCSTR StringSecurityDescriptor, DWORD StringSDRevision, PSECURITY_DESCRIPTOR  *SecurityDescriptor, PULONG  SecurityDescriptorSize);
             *(void **)&pfnConvertStringSecurityDescriptorToSecurityDescriptorA =
                 RTLdrGetSystemSymbol("advapi32.dll", "ConvertStringSecurityDescriptorToSecurityDescriptorA");
-            Log(("pfnConvertStringSecurityDescriptorToSecurityDescriptorA = %x\n", pfnConvertStringSecurityDescriptorToSecurityDescriptorA));
+            Log(("pfnConvertStringSecurityDescriptorToSecurityDescriptorA = %p\n",
+                 RT_CB_LOG_CAST(pfnConvertStringSecurityDescriptorToSecurityDescriptorA)));
             if (pfnConvertStringSecurityDescriptorToSecurityDescriptorA)
             {
                 PSECURITY_DESCRIPTOR    pSD;
@@ -757,7 +763,7 @@ static int vboxTraySetupSeamless(void)
         }
 
         if (   dwErr == ERROR_SUCCESS
-            && g_dwMajorVersion >= 5) /* Only for W2K and up ... */
+            && uNtVersion >= RTSYSTEM_MAKE_NT_VERSION(5, 0, 0)) /* Only for W2K and up ... */
         {
             g_hSeamlessWtNotifyEvent = CreateEvent(&SecAttr, FALSE, FALSE, VBOXHOOK_GLOBAL_WT_EVENT_NAME);
             if (g_hSeamlessWtNotifyEvent == NULL)
@@ -820,7 +826,6 @@ static int vboxTrayServiceMain(void)
          */
         VBOXSERVICEENV svcEnv;
         svcEnv.hInstance = g_hInstance;
-        svcEnv.hDriver   = g_hVBoxDriver;
 
         /* Initializes disp-if to default (XPDM) mode. */
         VBoxDispIfInit(&svcEnv.dispIf); /* Cannot fail atm. */
@@ -840,9 +845,10 @@ static int vboxTrayServiceMain(void)
         }
         else
         {
+            uint64_t const uNtVersion = RTSystemGetNtVersion();
             rc = vboxTrayCreateTrayIcon();
             if (   RT_SUCCESS(rc)
-                && g_dwMajorVersion >= 5) /* Only for W2K and up ... */
+                && uNtVersion >= RTSYSTEM_MAKE_NT_VERSION(5, 0, 0)) /* Only for W2K and up ... */
             {
                 /* We're ready to create the tooltip balloon.
                    Check in 10 seconds (@todo make seconds configurable) ... */
@@ -854,13 +860,8 @@ static int vboxTrayServiceMain(void)
 
             if (RT_SUCCESS(rc))
             {
-                /* Do the Shared Folders auto-mounting stuff. */
-                rc = VBoxSharedFoldersAutoMount();
-                if (RT_SUCCESS(rc))
-                {
-                    /* Report the host that we're up and running! */
-                    hlpReportStatus(VBoxGuestFacilityStatus_Active);
-                }
+                /* Report the host that we're up and running! */
+                hlpReportStatus(VBoxGuestFacilityStatus_Active);
             }
 
             if (RT_SUCCESS(rc))
@@ -982,6 +983,9 @@ static int vboxTrayServiceMain(void)
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
     RT_NOREF(hPrevInstance, lpCmdLine, nCmdShow);
+    int rc = RTR3InitExeNoArguments(0);
+    if (RT_FAILURE(rc))
+        return RTEXITCODE_INIT;
 
     /* Note: Do not use a global namespace ("Global\\") for mutex name here,
      * will blow up NT4 compatibility! */
@@ -997,82 +1001,83 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
     LogRel(("%s r%s\n", RTBldCfgVersion(), RTBldCfgRevisionStr()));
 
-    int rc = RTR3InitExeNoArguments(0);
-    if (RT_SUCCESS(rc))
-        rc = vboxTrayLogCreate(NULL /* pszLogFile */);
-
+    rc = vboxTrayLogCreate();
     if (RT_SUCCESS(rc))
     {
         rc = VbglR3Init();
         if (RT_SUCCESS(rc))
-            rc = vboxTrayOpenBaseDriver();
-    }
-
-    if (RT_SUCCESS(rc))
-    {
-        /* Save instance handle. */
-        g_hInstance = hInstance;
-
-        hlpReportStatus(VBoxGuestFacilityStatus_Init);
-        rc = vboxTrayCreateToolWindow();
-        if (RT_SUCCESS(rc))
         {
-            VBoxCapsInit();
+            /* Log the major windows NT version: */
+            uint64_t const uNtVersion = RTSystemGetNtVersion();
+            LogRel(("Windows version %u.%u build %u (uNtVersion=%#RX64)\n", RTSYSTEM_NT_VERSION_GET_MAJOR(uNtVersion),
+                    RTSYSTEM_NT_VERSION_GET_MINOR(uNtVersion), RTSYSTEM_NT_VERSION_GET_BUILD(uNtVersion), uNtVersion ));
 
-            rc = vboxStInit(g_hwndToolWindow);
-            if (!RT_SUCCESS(rc))
-            {
-                LogFlowFunc(("vboxStInit failed, rc=%Rrc\n", rc));
-                /* ignore the St Init failure. this can happen for < XP win that do not support WTS API
-                 * in that case the session is treated as active connected to the physical console
-                 * (i.e. fallback to the old behavior that was before introduction of VBoxSt) */
-                Assert(vboxStIsActiveConsole());
-            }
+            /* Save instance handle. */
+            g_hInstance = hInstance;
 
-            rc = vboxDtInit();
-            if (!RT_SUCCESS(rc))
-            {
-                LogFlowFunc(("vboxDtInit failed, rc=%Rrc\n", rc));
-                /* ignore the Dt Init failure. this can happen for < XP win that do not support WTS API
-                 * in that case the session is treated as active connected to the physical console
-                 * (i.e. fallback to the old behavior that was before introduction of VBoxSt) */
-                Assert(vboxDtIsInputDesktop());
-            }
-
-            rc = VBoxAcquireGuestCaps(VMMDEV_GUEST_SUPPORTS_SEAMLESS | VMMDEV_GUEST_SUPPORTS_GRAPHICS, 0, true);
-            if (!RT_SUCCESS(rc))
-                LogFlowFunc(("VBoxAcquireGuestCaps failed with rc=%Rrc, ignoring ...\n", rc));
-
-            rc = vboxTraySetupSeamless(); /** @todo r=andy Do we really want to be this critical for the whole application? */
+            hlpReportStatus(VBoxGuestFacilityStatus_Init);
+            rc = vboxTrayCreateToolWindow();
             if (RT_SUCCESS(rc))
             {
-                rc = vboxTrayServiceMain();
+                VBoxCapsInit();
+
+                rc = vboxStInit(g_hwndToolWindow);
+                if (!RT_SUCCESS(rc))
+                {
+                    LogFlowFunc(("vboxStInit failed, rc=%Rrc\n", rc));
+                    /* ignore the St Init failure. this can happen for < XP win that do not support WTS API
+                     * in that case the session is treated as active connected to the physical console
+                     * (i.e. fallback to the old behavior that was before introduction of VBoxSt) */
+                    Assert(vboxStIsActiveConsole());
+                }
+
+                rc = vboxDtInit();
+                if (!RT_SUCCESS(rc))
+                {
+                    LogFlowFunc(("vboxDtInit failed, rc=%Rrc\n", rc));
+                    /* ignore the Dt Init failure. this can happen for < XP win that do not support WTS API
+                     * in that case the session is treated as active connected to the physical console
+                     * (i.e. fallback to the old behavior that was before introduction of VBoxSt) */
+                    Assert(vboxDtIsInputDesktop());
+                }
+
+                rc = VBoxAcquireGuestCaps(VMMDEV_GUEST_SUPPORTS_SEAMLESS | VMMDEV_GUEST_SUPPORTS_GRAPHICS, 0, true);
+                if (!RT_SUCCESS(rc))
+                    LogFlowFunc(("VBoxAcquireGuestCaps failed with rc=%Rrc, ignoring ...\n", rc));
+
+                rc = vboxTraySetupSeamless(); /** @todo r=andy Do we really want to be this critical for the whole application? */
                 if (RT_SUCCESS(rc))
-                    hlpReportStatus(VBoxGuestFacilityStatus_Terminating);
-                vboxTrayShutdownSeamless();
+                {
+                    rc = vboxTrayServiceMain();
+                    if (RT_SUCCESS(rc))
+                        hlpReportStatus(VBoxGuestFacilityStatus_Terminating);
+                    vboxTrayShutdownSeamless();
+                }
+
+                /* it should be safe to call vboxDtTerm even if vboxStInit above failed */
+                vboxDtTerm();
+
+                /* it should be safe to call vboxStTerm even if vboxStInit above failed */
+                vboxStTerm();
+
+                VBoxCapsTerm();
+
+                vboxTrayDestroyToolWindow();
+            }
+            if (RT_SUCCESS(rc))
+                hlpReportStatus(VBoxGuestFacilityStatus_Terminated);
+            else
+            {
+                LogRel(("Error while starting, rc=%Rrc\n", rc));
+                hlpReportStatus(VBoxGuestFacilityStatus_Failed);
             }
 
-            /* it should be safe to call vboxDtTerm even if vboxStInit above failed */
-            vboxDtTerm();
-
-            /* it should be safe to call vboxStTerm even if vboxStInit above failed */
-            vboxStTerm();
-
-            VBoxCapsTerm();
-
-            vboxTrayDestroyToolWindow();
+            LogRel(("Ended\n"));
+            VbglR3Term();
         }
-        if (RT_SUCCESS(rc))
-            hlpReportStatus(VBoxGuestFacilityStatus_Terminated);
+        else
+            LogRel(("VbglR3Init failed: %Rrc\n", rc));
     }
-
-    if (RT_FAILURE(rc))
-    {
-        LogRel(("Error while starting, rc=%Rrc\n", rc));
-        hlpReportStatus(VBoxGuestFacilityStatus_Failed);
-    }
-    LogRel(("Ended\n"));
-    vboxTrayCloseBaseDriver();
 
     /* Release instance mutex. */
     if (hMutexAppRunning != NULL)
@@ -1080,8 +1085,6 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
         CloseHandle(hMutexAppRunning);
         hMutexAppRunning = NULL;
     }
-
-    VbglR3Term();
 
     vboxTrayLogDestroy();
 
@@ -1145,13 +1148,49 @@ static LRESULT CALLBACK vboxToolWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
 
         case WM_VBOXTRAY_TRAY_ICON:
         {
-            switch (lParam)
+            switch (LOWORD(lParam))
             {
                 case WM_LBUTTONDBLCLK:
                     break;
-
+#ifdef DEBUG
                 case WM_RBUTTONDOWN:
+                {
+                    POINT lpCursor;
+                    if (GetCursorPos(&lpCursor))
+                    {
+                        HMENU hContextMenu = CreatePopupMenu();
+                        if (hContextMenu)
+                        {
+                            UINT_PTR uMenuItem = 9999;
+                            UINT     fMenuItem = MF_BYPOSITION | MF_STRING;
+                            if (InsertMenuW(hContextMenu, UINT_MAX, fMenuItem, uMenuItem, L"Exit"))
+                            {
+                                SetForegroundWindow(hWnd);
+
+                                const bool fBlockWhileTracking = true;
+
+                                UINT fTrack = TPM_LEFTALIGN | TPM_LEFTBUTTON | TPM_BOTTOMALIGN;
+
+                                if (fBlockWhileTracking)
+                                    fTrack |= TPM_RETURNCMD | TPM_NONOTIFY;
+
+                                uMsg = TrackPopupMenu(hContextMenu, fTrack, lpCursor.x, lpCursor.y, 0, hWnd, NULL);
+                                if (   uMsg
+                                    && fBlockWhileTracking)
+                                {
+                                    if (uMsg == uMenuItem)
+                                        PostMessage(g_hwndToolWindow, WM_QUIT, 0, 0);
+                                }
+                                else if (!uMsg)
+                                    LogFlowFunc(("Tracking popup menu failed with %ld\n", GetLastError()));
+                            }
+
+                            DestroyMenu(hContextMenu);
+                        }
+                    }
                     break;
+                }
+#endif
             }
             return 0;
         }
@@ -1159,6 +1198,8 @@ static LRESULT CALLBACK vboxToolWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
         case WM_VBOX_SEAMLESS_ENABLE:
         {
             VBoxCapsEntryFuncStateSet(VBOXCAPS_ENTRY_IDX_SEAMLESS, VBOXCAPS_ENTRY_FUNCSTATE_STARTED);
+            if (VBoxCapsEntryIsEnabled(VBOXCAPS_ENTRY_IDX_SEAMLESS))
+                VBoxSeamlessCheckWindows(true);
             return 0;
         }
 
@@ -1474,18 +1515,9 @@ static BOOL vboxDtCheckTimer(WPARAM wParam)
 
 static int vboxDtInit()
 {
-    int rc = VINF_SUCCESS;
-    OSVERSIONINFO info;
-    g_dwMajorVersion = 5; /* Default to Windows XP. */
-    info.dwOSVersionInfoSize = sizeof(info);
-    if (GetVersionEx(&info))
-    {
-        LogRel(("Windows version %ld.%ld\n", info.dwMajorVersion, info.dwMinorVersion));
-        g_dwMajorVersion = info.dwMajorVersion;
-    }
-
     RT_ZERO(gVBoxDt);
 
+    int rc;
     gVBoxDt.hNotifyEvent = CreateEvent(NULL, FALSE, FALSE, VBOXHOOK_GLOBAL_DT_EVENT_NAME);
     if (gVBoxDt.hNotifyEvent != NULL)
     {
@@ -1532,7 +1564,8 @@ static int vboxDtInit()
                 {
                     BOOL fRc = FALSE;
                     /* For Vista and up we need to change the integrity of the security descriptor, too. */
-                    if (g_dwMajorVersion >= 6)
+                    uint64_t const uNtVersion = RTSystemGetNtVersion();
+                    if (uNtVersion >= RTSYSTEM_MAKE_NT_VERSION(6, 0, 0))
                     {
                         HMODULE hModHook = (HMODULE)RTLdrGetNativeHandle(gVBoxDt.hLdrModHook);
                         Assert((uintptr_t)hModHook != ~(uintptr_t)0);
@@ -1621,27 +1654,10 @@ static BOOL vboxDtIsInputDesktop()
  * */
 static int VBoxAcquireGuestCaps(uint32_t fOr, uint32_t fNot, bool fCfg)
 {
-    DWORD cbReturned = 0;
-    VBoxGuestCapsAquire Info;
     Log(("VBoxAcquireGuestCaps or(0x%x), not(0x%x), cfx(%d)\n", fOr, fNot, fCfg));
-    Info.enmFlags = fCfg ? VBOXGUESTCAPSACQUIRE_FLAGS_CONFIG_ACQUIRE_MODE : VBOXGUESTCAPSACQUIRE_FLAGS_NONE;
-    Info.rc = VERR_NOT_IMPLEMENTED;
-    Info.u32OrMask = fOr;
-    Info.u32NotMask = fNot;
-    if (!DeviceIoControl(g_hVBoxDriver, VBOXGUEST_IOCTL_GUEST_CAPS_ACQUIRE, &Info, sizeof(Info), &Info, sizeof(Info), &cbReturned, NULL))
-    {
-        DWORD LastErr = GetLastError();
-        LogFlowFunc(("DeviceIoControl VBOXGUEST_IOCTL_GUEST_CAPS_ACQUIRE failed LastErr %d\n", LastErr));
-        return RTErrConvertFromWin32(LastErr);
-    }
-
-    int rc = Info.rc;
-    if (!RT_SUCCESS(rc))
-    {
-        LogFlowFunc(("VBOXGUEST_IOCTL_GUEST_CAPS_ACQUIRE failed rc %d\n", rc));
-        return rc;
-    }
-
+    int rc = VbglR3AcquireGuestCaps(fOr, fNot, fCfg);
+    if (RT_FAILURE(rc))
+        LogFlowFunc(("VBOXGUEST_IOCTL_GUEST_CAPS_ACQUIRE failed: %Rrc\n", rc));
     return rc;
 }
 
@@ -1659,7 +1675,7 @@ typedef enum VBOXCAPS_ENTRY_ACSTATE
 struct VBOXCAPS_ENTRY;
 struct VBOXCAPS;
 
-typedef DECLCALLBACKPTR(void, PFNVBOXCAPS_ENTRY_ON_ENABLE)(struct VBOXCAPS *pConsole, struct VBOXCAPS_ENTRY *pCap, BOOL fEnabled);
+typedef DECLCALLBACKPTR(void, PFNVBOXCAPS_ENTRY_ON_ENABLE,(struct VBOXCAPS *pConsole, struct VBOXCAPS_ENTRY *pCap, BOOL fEnabled));
 
 typedef struct VBOXCAPS_ENTRY
 {

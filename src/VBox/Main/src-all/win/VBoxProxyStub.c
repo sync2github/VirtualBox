@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: VBoxProxyStub.c 83820 2020-04-19 01:08:36Z vboxsync $ */
 /** @file
  * VBoxProxyStub - Proxy Stub and Typelib, COM DLL exports and DLL init/term.
  *
@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -39,6 +39,7 @@
 #include <iprt/path.h>
 #include <iprt/string.h>
 #include <iprt/uuid.h>
+#include <iprt/utf16.h>
 
 
 /*********************************************************************************************************************************
@@ -168,6 +169,7 @@ BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID lpReserved)
 
             /* Init IPRT. */
             RTR3InitDll(RTR3INIT_FLAGS_UNOBTRUSIVE);
+            Log12(("VBoxProxyStub[%u]/DllMain: DLL_PROCESS_ATTACH\n", GetCurrentProcessId()));
 
 #ifdef VBOX_STRICT
             {
@@ -193,6 +195,7 @@ BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID lpReserved)
             break;
 
         case DLL_PROCESS_DETACH:
+            Log12(("VBoxProxyStub[%u]/DllMain: DLL_PROCESS_DETACH\n", GetCurrentProcessId()));
             break;
     }
 
@@ -208,6 +211,7 @@ void RPC_ENTRY GetProxyDllInfo(const ProxyFileInfo ***ppapInfo, const CLSID **pp
 {
     *ppapInfo = &g_apProxyFiles[0];
     *ppClsid  = &g_ProxyClsId;
+    Log12(("VBoxProxyStub[%u]/GetProxyDllInfo:\n", GetCurrentProcessId()));
 }
 
 
@@ -235,6 +239,8 @@ HRESULT STDAPICALLTYPE DllGetClassObject(REFCLSID rclsid, REFIID riid, void **pp
      * /target being set to NT51.
      */
     AssertLogRelMsg(hrc == S_OK, ("%Rhrc\n",  hrc));
+    Log12(("VBoxProxyStub[%u]/DllGetClassObject(%RTuuid, %RTuuid, %p): %#x + *ppv=%p\n",
+           GetCurrentProcessId(), rclsid, riid, ppv, hrc, ppv ? *ppv : NULL));
     return hrc;
 }
 
@@ -246,7 +252,9 @@ HRESULT STDAPICALLTYPE DllGetClassObject(REFCLSID rclsid, REFIID riid, void **pp
  */
 HRESULT STDAPICALLTYPE DllCanUnloadNow(void)
 {
-    return NdrDllCanUnloadNow(&g_ProxyStubFactory);                                        /* see DLLCANUNLOADNOW in RpcProxy.h */
+    HRESULT hrc = NdrDllCanUnloadNow(&g_ProxyStubFactory);                                 /* see DLLCANUNLOADNOW in RpcProxy.h */
+    Log12(("VBoxProxyStub[%u]/DllCanUnloadNow: %Rhrc\n", GetCurrentProcessId(), hrc));
+    return hrc;
 }
 
 
@@ -260,7 +268,9 @@ HRESULT STDAPICALLTYPE DllCanUnloadNow(void)
  */
 ULONG STDMETHODCALLTYPE CStdStubBuffer_Release(IRpcStubBuffer *pThis)                /* see CSTDSTUBBUFFERRELEASE in RpcProxy.h */
 {
-    return NdrCStdStubBuffer_Release(pThis, (IPSFactoryBuffer *)&g_ProxyStubFactory);
+    ULONG cRefs =  NdrCStdStubBuffer_Release(pThis, (IPSFactoryBuffer *)&g_ProxyStubFactory);
+    Log12(("VBoxProxyStub[%u]/CStdStubBuffer_Release: %p -> %#x\n", GetCurrentProcessId(), pThis, cRefs));
+    return cRefs;
 }
 
 
@@ -273,15 +283,14 @@ ULONG STDMETHODCALLTYPE CStdStubBuffer_Release(IRpcStubBuffer *pThis)           
  */
 ULONG WINAPI CStdStubBuffer2_Release(IRpcStubBuffer *pThis)                         /* see CSTDSTUBBUFFER2RELEASE in RpcProxy.h */
 {
-    return NdrCStdStubBuffer2_Release(pThis, (IPSFactoryBuffer *)&g_ProxyStubFactory);
+    ULONG cRefs = NdrCStdStubBuffer2_Release(pThis, (IPSFactoryBuffer *)&g_ProxyStubFactory);
+    Log12(("VBoxProxyStub[%u]/CStdStubBuffer2_Release: %p -> %#x\n", GetCurrentProcessId(), pThis, cRefs));
+    return cRefs;
 }
 
 
 /**
  * Pure virtual method implementation referenced by VirtualBox_p.c
- *
- * @returns New reference count.
- * @param   pThis               Buffer to release.
  */
 void __cdecl _purecall(void)                                                              /* see DLLDUMMYPURECALL in RpcProxy.h */
 {
@@ -369,10 +378,6 @@ typedef struct VBPSREGSTATE
  * @param   hkeyRoot        The registry root tree constant.
  * @param   pszSubRoot      The path to the where the classes are registered,
  *                          NULL if @a hkeyRoot.
- * @param   hkeyAltRoot     The registry root tree constant for the alternative
- *                          registrations (remove only).
- * @param   pszAltSubRoot   The path to where classes could also be registered,
- *                          but shouldn't be in our setup.
  * @param   fDelete         Whether to delete registrations first.
  * @param   fUpdate         Whether to update registrations.
  * @param   fSamWow         KEY_WOW64_32KEY or 0.
@@ -565,6 +570,11 @@ static LSTATUS vbpsRegOpenInterfaceKeys(VBPSREGSTATE *pState)
         else
             rc = RegOpenKeyExW(pState->hkeyClassesRootDst, L"Interface", 0 /*fOptions*/, pState->fSamBoth,
                                &pState->hkeyClsidRootDst);
+        if (rc == ERROR_ACCESS_DENIED)
+        {
+            pState->hkeyInterfaceRootDst = NULL;
+            return pState->rc = rc;
+        }
         AssertLogRelMsgReturnStmt(rc == ERROR_SUCCESS, ("%u\n", rc), pState->hkeyInterfaceRootDst = NULL,  pState->rc = rc);
     }
 
@@ -579,7 +589,7 @@ static LSTATUS vbpsRegOpenInterfaceKeys(VBPSREGSTATE *pState)
                                &pState->aAltDeletes[i].hkeyInterface);
             if (rc != ERROR_SUCCESS)
             {
-                AssertMsgStmt(rc == ERROR_FILE_NOT_FOUND || ERROR_ACCESS_DENIED, ("%u\n", rc), pState->rc = rc);
+                AssertMsgStmt(rc == ERROR_FILE_NOT_FOUND || rc == ERROR_ACCESS_DENIED, ("%u\n", rc), pState->rc = rc);
                 pState->aAltDeletes[i].hkeyInterface = NULL;
             }
         }
@@ -1022,10 +1032,14 @@ static LSTATUS vbpsDeleteKeyRecursiveW(VBPSREGSTATE *pState, HKEY hkeyParent, PC
  *
  * @returns Windows error code (errors are rememberd in the state).
  * @param   pState              The registry modifier state.
+ * @param   pszModuleName       The module name.
  * @param   pszAppId            The application UUID string.
  * @param   pszDescription      The description string.
+ * @param   pszServiceName      The window service name if the application is a
+ *                              service, otherwise this must be NULL.
  */
-LSTATUS VbpsRegisterAppId(VBPSREGSTATE *pState, const char *pszAppId, const char *pszDescription)
+LSTATUS VbpsRegisterAppId(VBPSREGSTATE *pState, const char *pszModuleName, const char *pszAppId,
+                          const char *pszDescription, const char *pszServiceName)
 {
     LSTATUS rc;
     HKEY hkeyAppIds;
@@ -1050,25 +1064,51 @@ LSTATUS VbpsRegisterAppId(VBPSREGSTATE *pState, const char *pszAppId, const char
     }
 
     if (pState->fUpdate)
+    {
         rc = RegCreateKeyExW(pState->hkeyClassesRootDst, L"AppID", 0 /*Reserved*/, NULL /*pszClass*/, 0 /*fOptions*/,
                              pState->fSamBoth, NULL /*pSecAttr*/, &hkeyAppIds, NULL /*pdwDisposition*/);
-
+        if (rc == ERROR_ACCESS_DENIED)
+            return ERROR_SUCCESS;
+    }
     else
     {
         rc = RegOpenKeyExW(pState->hkeyClassesRootDst, L"AppID", 0 /*fOptions*/, pState->fSamBoth, &hkeyAppIds);
-        if (rc == ERROR_FILE_NOT_FOUND)
+        if (rc == ERROR_FILE_NOT_FOUND || rc == ERROR_ACCESS_DENIED)
             return ERROR_SUCCESS;
     }
+    if (rc == ERROR_ACCESS_DENIED)
+        return pState->rc = rc;
     AssertLogRelMsgReturn(rc == ERROR_SUCCESS, ("%u\n", rc), pState->rc = rc);
 
     if (pState->fDelete)
+    {
         vbpsDeleteKeyRecursiveA(pState, hkeyAppIds, pszAppId, __LINE__);
+        vbpsDeleteKeyRecursiveA(pState, hkeyAppIds, pszModuleName, __LINE__);
+    }
 
     /*
-     * Update.
+     * Register / update.
      */
     if (pState->fUpdate)
-        vbpsCreateRegKeyWithDefaultValueAA(pState, hkeyAppIds, pszAppId, pszDescription, __LINE__);
+    {
+        HKEY hkey;
+        rc = vbpsCreateRegKeyA(pState, hkeyAppIds, pszAppId, &hkey, __LINE__);
+        if (rc == ERROR_SUCCESS)
+        {
+            vbpsSetRegValueAA(pState, hkey, NULL /*pszValueNm*/, pszDescription, __LINE__);
+            if (pszServiceName)
+                vbpsSetRegValueAA(pState, hkey, "LocalService", pszServiceName, __LINE__);
+            vbpsCloseKey(pState, hkey, __LINE__);
+        }
+
+        rc = vbpsCreateRegKeyA(pState, hkeyAppIds, pszModuleName, &hkey, __LINE__);
+        if (rc == ERROR_SUCCESS)
+        {
+            vbpsSetRegValueAA(pState, hkey, NULL /*pszValueNm*/, "", __LINE__);
+            vbpsSetRegValueAA(pState, hkey, "AppID", pszAppId, __LINE__);
+            vbpsCloseKey(pState, hkey, __LINE__);
+        }
+    }
 
     vbpsCloseKey(pState, hkeyAppIds, __LINE__);
 
@@ -1201,6 +1241,7 @@ LSTATUS VbpsRegisterClassId(VBPSREGSTATE *pState, const CLSID *pClsId, const cha
                                                   &hkeyClass, __LINE__);
         if (rc == ERROR_SUCCESS)
         {
+            bool const fIsLocalServer32 = strcmp(pszServerType, "LocalServer32") == 0;
             HKEY hkeyServerType;
             char szCurClassNameVer[128];
 
@@ -1210,8 +1251,7 @@ LSTATUS VbpsRegisterClassId(VBPSREGSTATE *pState, const CLSID *pClsId, const cha
             {
                 RTUTF16 wszModule[MAX_PATH * 2];
                 PRTUTF16 pwszCur = wszModule;
-                bool fQuoteIt = strcmp(pszServerType, "LocalServer32") == 0;
-                if (fQuoteIt)
+                if (fIsLocalServer32)
                     *pwszCur++ = '"';
 
                 rc = RTUtf16Copy(pwszCur, MAX_PATH, pwszVBoxDir); AssertRC(rc);
@@ -1219,7 +1259,7 @@ LSTATUS VbpsRegisterClassId(VBPSREGSTATE *pState, const CLSID *pClsId, const cha
                 rc = RTUtf16CopyAscii(pwszCur, MAX_PATH - 3, pszServerSubPath); AssertRC(rc);
                 pwszCur += RTUtf16Len(pwszCur);
 
-                if (fQuoteIt)
+                if (fIsLocalServer32)
                     *pwszCur++ = '"';
                 *pwszCur++ = '\0';      /* included, so ++. */
 
@@ -1254,6 +1294,10 @@ LSTATUS VbpsRegisterClassId(VBPSREGSTATE *pState, const CLSID *pClsId, const cha
                                                    vbpsFormatUuidInCurly(szTypeLibId, pTypeLibId), __LINE__);
             }
 
+            /* AppID = pszAppId */
+            if (pszAppId && fIsLocalServer32)
+                vbpsSetRegValueAA(pState, hkeyClass, "AppID", pszAppId, __LINE__);
+
             vbpsCloseKey(pState, hkeyClass, __LINE__);
         }
     }
@@ -1266,6 +1310,7 @@ LSTATUS VbpsRegisterClassId(VBPSREGSTATE *pState, const CLSID *pClsId, const cha
  * Register modules and classes from the VirtualBox.xidl file.
  *
  * @returns COM status code.
+ * @param   pState
  * @param   pwszVBoxDir         The VirtualBox application directory.
  * @param   fIs32On64           Set if this is the 32-bit on 64-bit component.
  *
@@ -1273,16 +1318,21 @@ LSTATUS VbpsRegisterClassId(VBPSREGSTATE *pState, const CLSID *pClsId, const cha
  */
 void RegisterXidlModulesAndClassesGenerated(VBPSREGSTATE *pState, PCRTUTF16 pwszVBoxDir, bool fIs32On64)
 {
-    const char *pszAppId = "{819B4D85-9CEE-493C-B6FC-64FFE759B3C9}";
-    const char *pszInprocDll = !fIs32On64 ? "VBoxC.dll" : "x86\\VBoxClient-x86.dll";
-
-    VbpsRegisterAppId(pState, pszAppId, "VirtualBox Application");
+    const char *pszAppId            = "{819B4D85-9CEE-493C-B6FC-64FFE759B3C9}";
+    const char *pszInprocDll        = !fIs32On64 ? "VBoxC.dll" : "x86\\VBoxClient-x86.dll";
+    const char *pszLocalServer      = "VBoxSVC.exe";
+#ifdef VBOX_WITH_SDS
+    const char *pszSdsAppId         = "{EC0E78E8-FA43-43E8-AC0A-02C784C4A4FA}";
+    const char *pszSdsExe           = "VBoxSDS.exe";
+    const char *pszSdsServiceName   = "VBoxSDS";
+#endif
 
     /* VBoxSVC */
+    VbpsRegisterAppId(pState, pszLocalServer, pszAppId, "VirtualBox Application", NULL);
     VbpsRegisterClassName(pState, "VirtualBox.VirtualBox.1", "VirtualBox Class", &CLSID_VirtualBox, NULL);
     VbpsRegisterClassName(pState, "VirtualBox.VirtualBox",   "VirtualBox Class", &CLSID_VirtualBox, ".1");
     VbpsRegisterClassId(pState, &CLSID_VirtualBox, "VirtualBox Class", pszAppId, "VirtualBox.VirtualBox", ".1",
-                        &LIBID_VirtualBox, "LocalServer32", pwszVBoxDir, "VBoxSVC.exe", NULL /*N/A*/);
+                        &LIBID_VirtualBox, "LocalServer32", pwszVBoxDir, pszLocalServer, NULL /*N/A*/);
     /* VBoxC */
     VbpsRegisterClassName(pState, "VirtualBox.Session.1", "Session Class", &CLSID_Session, NULL);
     VbpsRegisterClassName(pState, "VirtualBox.Session", "Session Class", &CLSID_Session, ".1");
@@ -1294,6 +1344,15 @@ void RegisterXidlModulesAndClassesGenerated(VBPSREGSTATE *pState, PCRTUTF16 pwsz
     VbpsRegisterClassId(pState, &CLSID_VirtualBoxClient, "VirtualBoxClient Class", pszAppId,
                         "VirtualBox.VirtualBoxClient", ".1",
                         &LIBID_VirtualBox, "InprocServer32", pwszVBoxDir, pszInprocDll, "Free");
+
+#ifdef VBOX_WITH_SDS
+    /* VBoxSDS */
+    VbpsRegisterAppId(pState, pszSdsExe, pszSdsAppId, "VirtualBox System Service", pszSdsServiceName);
+    VbpsRegisterClassName(pState, "VirtualBox.VirtualBoxSDS.1", "VirtualBoxSDS Class", &CLSID_VirtualBoxSDS, NULL);
+    VbpsRegisterClassName(pState, "VirtualBox.VirtualBoxSDS", "VirtualBoxSDS Class", &CLSID_VirtualBoxSDS, ".1");
+    VbpsRegisterClassId(pState, &CLSID_VirtualBoxSDS, "VirtualBoxSDS Class", pszSdsAppId, "VirtualBox.VirtualBoxSDS", ".1",
+                        &LIBID_VirtualBox, "LocalServer32", pwszVBoxDir, pszSdsExe, NULL /*N/A*/);
+#endif
 }
 
 
@@ -1422,10 +1481,6 @@ static void vbpsUpdateProxyStubRegistration(VBPSREGSTATE *pState, PCRTUTF16 pwsz
  * and NdrDllUnregisterProxy.
  *
  * @param   pState              The registry modifier state.
- * @param   pwszVBoxDir         The VirtualBox install directory (unicode),
- *                              trailing slash.
- * @param   fIs32On64           Set if we're registering the 32-bit proxy stub
- *                              on a 64-bit system.
  */
 static void vbpsUpdateInterfaceRegistrations(VBPSREGSTATE *pState)
 {
@@ -2057,7 +2112,7 @@ static void vbpsRemoveOldTypeLibs(VBPSREGSTATE *pState)
          * Open the TypeLib key, if it exists.
          */
         HKEY hkeyTypeLibs;
-        LRESULT rc;
+        LSTATUS rc;
         rc = RegOpenKeyExW(pState->aAltDeletes[iAlt].hkeyClasses, L"TypeLib", 0 /*fOptions*/, pState->fSamDelete, &hkeyTypeLibs);
         if (rc == ERROR_SUCCESS)
         {
@@ -2068,7 +2123,7 @@ static void vbpsRemoveOldTypeLibs(VBPSREGSTATE *pState)
             while (iTlb-- > 0)
             {
                 HKEY hkeyTypeLibId;
-                LONG rc = RegOpenKeyExW(hkeyTypeLibs, g_apwszTypeLibIds[iTlb], 0 /*fOptions*/, pState->fSamDelete, &hkeyTypeLibId);
+                rc = RegOpenKeyExW(hkeyTypeLibs, g_apwszTypeLibIds[iTlb], 0 /*fOptions*/, pState->fSamDelete, &hkeyTypeLibId);
                 if (rc == ERROR_SUCCESS)
                 {
                     unsigned iVer = RT_ELEMENTS(g_apwszTypelibVersions);
@@ -2248,6 +2303,217 @@ HRESULT STDAPICALLTYPE DllUnregisterServer(void)
 }
 
 
+#ifdef VBOX_WITH_SDS
+/**
+ * Update a SCM service.
+ *
+ * @param   pState              The state.
+ * @param   pwszVBoxDir         The VirtualBox install directory (unicode),
+ *                              trailing slash.
+ * @param   pwszModule          The service module.
+ * @param   pwszServiceName     The service name.
+ * @param   pwszDisplayName     The service display name.
+ * @param   pwszDescription     The service description.
+ */
+static void vbpsUpdateWindowsService(VBPSREGSTATE *pState, const WCHAR *pwszVBoxDir, const WCHAR *pwszModule,
+                                     const WCHAR *pwszServiceName, const WCHAR *pwszDisplayName, const WCHAR *pwszDescription)
+{
+    SC_HANDLE           hSCM;
+
+    /* Configuration options that are currently standard. */
+    uint32_t const      uServiceType         = SERVICE_WIN32_OWN_PROCESS;
+    uint32_t const      uStartType           = SERVICE_DEMAND_START;
+    uint32_t const      uErrorControl        = SERVICE_ERROR_NORMAL;
+    WCHAR const * const pwszServiceStartName = L"LocalSystem";
+    static WCHAR const  wszzDependencies[]   = L"RPCSS\0";
+
+    /*
+     * Make double quoted executable file path. ASSUMES pwszVBoxDir ends with a slash!
+     */
+    WCHAR wszFilePath[MAX_PATH + 2];
+    int rc = RTUtf16CopyAscii(wszFilePath, RT_ELEMENTS(wszFilePath), "\"");
+    if (RT_SUCCESS(rc))
+        rc = RTUtf16Cat(wszFilePath, RT_ELEMENTS(wszFilePath), pwszVBoxDir);
+    if (RT_SUCCESS(rc))
+        rc = RTUtf16Cat(wszFilePath, RT_ELEMENTS(wszFilePath), pwszModule);
+    if (RT_SUCCESS(rc))
+        rc = RTUtf16CatAscii(wszFilePath, RT_ELEMENTS(wszFilePath), "\"");
+    AssertLogRelRCReturnVoid(rc);
+
+    /*
+     * Open the service manager for the purpose of checking the configuration.
+     */
+    hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (hSCM != NULL)
+    {
+        union
+        {
+            QUERY_SERVICE_CONFIGW   Config;
+            SERVICE_STATUS          Status;
+            SERVICE_DESCRIPTIONW     Desc;
+            uint8_t                 abPadding[sizeof(QUERY_SERVICE_CONFIGW) + 5 * _1K];
+        } uBuf;
+        SC_HANDLE   hService;
+        bool        fCreateIt = pState->fUpdate;
+        bool        fDeleteIt = true;
+
+        /*
+         * Step #1: Open the service and validate the configuration.
+         */
+        if (pState->fUpdate)
+        {
+            hService = OpenServiceW(hSCM, pwszServiceName, SERVICE_QUERY_CONFIG);
+            if (hService != NULL)
+            {
+                DWORD cbNeeded = 0;
+                if (QueryServiceConfigW(hService, &uBuf.Config, sizeof(uBuf), &cbNeeded))
+                {
+                    if (uBuf.Config.dwErrorControl)
+                    {
+                        uint32_t cErrors = 0;
+                        if (uBuf.Config.dwServiceType != uServiceType)
+                        {
+                            LogRel(("update service '%ls': dwServiceType %u, expected %u\n",
+                                    pwszServiceName, uBuf.Config.dwServiceType, uServiceType));
+                            cErrors++;
+                        }
+                        if (uBuf.Config.dwStartType != uStartType)
+                        {
+                            LogRel(("update service '%ls': dwStartType %u, expected %u\n",
+                                    pwszServiceName, uBuf.Config.dwStartType, uStartType));
+                            cErrors++;
+                        }
+                        if (uBuf.Config.dwErrorControl != uErrorControl)
+                        {
+                            LogRel(("update service '%ls': dwErrorControl %u, expected %u\n",
+                                    pwszServiceName, uBuf.Config.dwErrorControl, uErrorControl));
+                            cErrors++;
+                        }
+                        if (RTUtf16ICmp(uBuf.Config.lpBinaryPathName, wszFilePath) != 0)
+                        {
+                            LogRel(("update service '%ls': lpBinaryPathName '%ls', expected '%ls'\n",
+                                    pwszServiceName, uBuf.Config.lpBinaryPathName, wszFilePath));
+                            cErrors++;
+                        }
+                        if (   uBuf.Config.lpServiceStartName != NULL
+                            && *uBuf.Config.lpServiceStartName != L'\0'
+                            && RTUtf16ICmp(uBuf.Config.lpServiceStartName, pwszServiceStartName) != 0)
+                        {
+                            LogRel(("update service '%ls': lpServiceStartName '%ls', expected '%ls'\n",
+                                    pwszServiceName, uBuf.Config.lpBinaryPathName, pwszServiceStartName));
+                            cErrors++;
+                        }
+
+                        fDeleteIt = fCreateIt = cErrors > 0;
+                    }
+                }
+                else
+                    AssertLogRelMsgFailed(("QueryServiceConfigW returned %u (cbNeeded=%u vs %zu)\n",
+                                           GetLastError(), cbNeeded, sizeof(uBuf)));
+            }
+            else
+            {
+                DWORD dwErr = GetLastError();
+                fDeleteIt = dwErr != ERROR_SERVICE_DOES_NOT_EXIST;
+                AssertLogRelMsg(dwErr == ERROR_SERVICE_DOES_NOT_EXIST, ("OpenServiceW('%ls') -> %u\n", pwszServiceName, dwErr));
+            }
+            CloseServiceHandle(hService);
+        }
+
+        /*
+         * Step #2: Stop and delete the service if needed.
+         *          We can do this without reopening the service manager.
+         */
+        if (fDeleteIt)
+        {
+            hService = OpenServiceW(hSCM, pwszServiceName, SERVICE_STOP | DELETE);
+            if (hService)
+            {
+                BOOL            fRet;
+                DWORD           dwErr;
+                RT_ZERO(uBuf.Status);
+                SetLastError(ERROR_SERVICE_NOT_ACTIVE);
+                fRet = ControlService(hService, SERVICE_CONTROL_STOP, &uBuf.Status);
+                dwErr = GetLastError();
+                if (   fRet
+                    || dwErr == ERROR_SERVICE_NOT_ACTIVE
+                    || (   dwErr == ERROR_SERVICE_CANNOT_ACCEPT_CTRL
+                        && uBuf.Status.dwCurrentState == SERVICE_STOP_PENDING) )
+                {
+                    if (DeleteService(hService))
+                        LogRel(("update service '%ls': deleted\n", pwszServiceName));
+                    else
+                        AssertLogRelMsgFailed(("Failed to not delete service %ls: %u\n", pwszServiceName, GetLastError()));
+                }
+                else
+                    AssertMsg(dwErr == ERROR_ACCESS_DENIED,
+                              ("Failed to stop service %ls: %u (state=%u)\n", pwszServiceName, dwErr, uBuf.Status.dwCurrentState));
+                CloseServiceHandle(hService);
+            }
+            else
+            {
+                pState->rc = GetLastError();
+                LogRel(("Failed to not open service %ls for stop+delete: %u\n", pwszServiceName, pState->rc));
+                hService = OpenServiceW(hSCM, pwszServiceName, SERVICE_CHANGE_CONFIG);
+            }
+            CloseServiceHandle(hService);
+        }
+
+        CloseServiceHandle(hSCM);
+
+        /*
+         * Step #3: Create the service (if requested).
+         *          Need to have the SC_MANAGER_CREATE_SERVICE access right for this.
+         */
+        if (fCreateIt)
+        {
+            Assert(pState->fUpdate);
+            hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
+            if (hSCM)
+            {
+                hService = CreateServiceW(hSCM,
+                                          pwszServiceName,
+                                          pwszDisplayName,
+                                          SERVICE_CHANGE_CONFIG  /* dwDesiredAccess */,
+                                          uServiceType,
+                                          uStartType,
+                                          uErrorControl,
+                                          wszFilePath,
+                                          NULL /* pwszLoadOrderGroup */,
+                                          NULL /* pdwTagId */,
+                                          wszzDependencies,
+                                          NULL /* pwszServiceStartName */,
+                                          NULL /* pwszPassword */);
+                if (hService != NULL)
+                {
+                    uBuf.Desc.lpDescription = (WCHAR *)pwszDescription;
+                    if (ChangeServiceConfig2W(hService, SERVICE_CONFIG_DESCRIPTION, &uBuf.Desc))
+                        LogRel(("update service '%ls': created\n", pwszServiceName));
+                    else
+                        AssertMsgFailed(("Failed to set service description for %ls: %u\n", pwszServiceName, GetLastError()));
+                    CloseServiceHandle(hService);
+                }
+                else
+                {
+                    pState->rc = GetLastError();
+                    AssertMsgFailed(("Failed to create service '%ls': %u\n", pwszServiceName, pState->rc));
+                }
+                CloseServiceHandle(hSCM);
+            }
+            else
+            {
+                pState->rc = GetLastError();
+                LogRel(("Failed to open service manager with create service access: %u\n", pState->rc));
+            }
+        }
+    }
+    else
+        AssertLogRelMsgFailed(("OpenSCManagerW failed: %u\n", GetLastError()));
+}
+#endif /* VBOX_WITH_SDS */
+
+
+
 /**
  * Gently update the COM registrations for VirtualBox.
  *
@@ -2283,6 +2549,11 @@ DECLEXPORT(uint32_t) VbpsUpdateRegistrations(void)
     rc = vbpsRegInit(&State, HKEY_CLASSES_ROOT, NULL, false /*fDelete*/, true /*fUpdate*/, 0);
     if (rc == ERROR_SUCCESS && !vbpsIsUpToDate(&State))
     {
+
+#ifdef VBOX_WITH_SDS
+        vbpsUpdateWindowsService(&State, wszVBoxDir, L"VBoxSDS.exe", L"VBoxSDS",
+                                 L"VirtualBox system service", L"Used as a COM server for VirtualBox API.");
+#endif
         vbpsUpdateTypeLibRegistration(&State, wszVBoxDir, fIs32On64);
         vbpsUpdateProxyStubRegistration(&State, wszVBoxDir, fIs32On64);
         vbpsUpdateInterfaceRegistrations(&State);
@@ -2316,4 +2587,3 @@ DECLEXPORT(uint32_t) VbpsUpdateRegistrations(void)
 
     return VINF_SUCCESS;
 }
-

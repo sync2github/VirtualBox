@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: failurereason.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 Test Manager - Failure Reasons.
@@ -7,7 +7,7 @@ Test Manager - Failure Reasons.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,14 +26,20 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
+
+# Standard Python imports.
+import sys;
 
 # Validation Kit imports.
 from testmanager.core.base              import ModelDataBase, ModelLogicBase, TMRowNotFound, TMInvalidData, TMRowInUse, \
                                                AttributeChangeEntry, ChangeLogEntry;
 from testmanager.core.useraccount       import UserAccountLogic;
 
+# Python 3 hacks:
+if sys.version_info[0] >= 3:
+    xrange = range; # pylint: disable=redefined-builtin,invalid-name
 
 
 class FailureReasonData(ModelDataBase):
@@ -136,7 +142,7 @@ class FailureReasonDataEx(FailureReasonData):
         return self;
 
 
-class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
+class FailureReasonLogic(ModelLogicBase): # pylint: disable=too-few-public-methods
     """
     Failure Reason logic.
     """
@@ -148,13 +154,14 @@ class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
         self.oCategoryLogic = None;
         self.oUserAccountLogic = None;
 
-    def fetchForListing(self, iStart, cMaxRows, tsNow):
+    def fetchForListing(self, iStart, cMaxRows, tsNow, aiSortColumns = None):
         """
         Fetches Failure Category records.
 
         Returns an array (list) of FailureReasonDataEx items, empty list if none.
         Raises exception on error.
         """
+        _ = aiSortColumns;
         self._ensureCachesPresent();
 
         if tsNow is None:
@@ -187,13 +194,14 @@ class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
             aoRows.append(FailureReasonDataEx().initFromDbRowEx(aoRow, self.oCategoryLogic, self.oUserAccountLogic));
         return aoRows
 
-    def fetchForListingInCategory(self, iStart, cMaxRows, tsNow, idFailureCategory):
+    def fetchForListingInCategory(self, iStart, cMaxRows, tsNow, idFailureCategory, aiSortColumns = None):
         """
         Fetches Failure Category records.
 
         Returns an array (list) of FailureReasonDataEx items, empty list if none.
         Raises exception on error.
         """
+        _ = aiSortColumns;
         self._ensureCachesPresent();
 
         if tsNow is None:
@@ -212,7 +220,7 @@ class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
                               '     AND tsEffective      <= %s\n'
                               'ORDER BY sShort ASC\n'
                               'LIMIT %s OFFSET %s\n'
-                              , ( tsNow, tsNow, idFailureCategory, cMaxRows, iStart,));
+                              , ( idFailureCategory, tsNow, tsNow, cMaxRows, iStart,));
 
         aoRows = []
         for aoRow in self._oDb.fetchAll():
@@ -267,7 +275,7 @@ class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
         return [(-1, sFirstEntry, '')] + aoRows;
 
 
-    def fetchForChangeLog(self, idFailureReason, iStart, cMaxRows, tsNow): # pylint: disable=R0914
+    def fetchForChangeLog(self, idFailureReason, iStart, cMaxRows, tsNow): # pylint: disable=too-many-locals
         """
         Fetches change log entries for a failure reason.
 
@@ -313,7 +321,7 @@ class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
             aoEntries.append(ChangeLogEntry(oNew.uidAuthor, None, oNew.tsEffective, oNew.tsExpire, oNew, oOld, aoChanges));
 
         # If we're at the end of the log, add the initial entry.
-        if len(aoRows) <= cMaxRows and len(aoRows) > 0:
+        if len(aoRows) <= cMaxRows and aoRows:
             oNew = aoRows[-1];
             aoEntries.append(ChangeLogEntry(oNew.uidAuthor, None, oNew.tsEffective, oNew.tsExpire, oNew, None, []));
 
@@ -345,7 +353,7 @@ class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
         # Validate.
         #
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Add);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('addEntry invalid input: %s' % (dErrors,));
 
         #
@@ -366,7 +374,7 @@ class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
         #
         assert isinstance(oData, FailureReasonData);
         dErrors = oData.validateAndConvert(self._oDb, oData.ksValidateFor_Edit);
-        if len(dErrors) > 0:
+        if dErrors:
             raise TMInvalidData('editEntry invalid input: %s' % (dErrors,));
 
         oOldData = FailureReasonData().initFromDbWithId(self._oDb, oData.idFailureReason);
@@ -402,7 +410,7 @@ class FailureReasonLogic(ModelLogicBase): # pylint: disable=R0903
                           '    AND  tsExpire = \'infinity\'::TIMESTAMP\n'
                           , (idFailureReason, idFailureReason,));
         aaoRows = self._oDb.fetchAll();
-        if len(aaoRows) > 0:
+        if aaoRows:
             raise TMRowInUse('Cannot remove failure reason %u because its being used by: %s'
                              % (idFailureReason, ', '.join(aoRow[0] for aoRow in aaoRows),));
 

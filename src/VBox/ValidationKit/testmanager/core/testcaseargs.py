@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: testcaseargs.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 Test Manager - Test Case Arguments Variations.
@@ -7,7 +7,7 @@ Test Manager - Test Case Arguments Variations.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,7 +26,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 
 # Standard python imports.
@@ -41,7 +41,7 @@ from testmanager.core.testcase          import TestCaseData, TestCaseDependencyL
 
 # Python 3 hacks:
 if sys.version_info[0] >= 3:
-    long = int;     # pylint: disable=W0622,C0103
+    long = int;     # pylint: disable=redefined-builtin,invalid-name
 
 
 class TestCaseArgsData(ModelDataBase):
@@ -134,7 +134,7 @@ class TestCaseArgsData(ModelDataBase):
         oDb.execute('SELECT * FROM TestCaseArgs WHERE idGenTestCaseArgs = %s', (idGenTestCaseArgs,));
         return self.initFromDbRow(oDb.fetchOne());
 
-    def initFromValues(self, sArgs, cSecTimeout = None, sTestBoxReqExpr = None, sBuildReqExpr = None,  # pylint: disable=R0913
+    def initFromValues(self, sArgs, cSecTimeout = None, sTestBoxReqExpr = None, sBuildReqExpr = None,  # pylint: disable=too-many-arguments
                        cGangMembers = 1, idTestCase = None, idTestCaseArgs = None, tsEffective = None, tsExpire = None,
                        uidAuthor = None, idGenTestCaseArgs = None, sSubName = None):
         """
@@ -272,7 +272,7 @@ class TestCaseArgsLogic(ModelLogicBase):
         """
 
         # Create a set of global resource IDs.
-        if len(oDataEx.aoGlobalRsrc) == 0:
+        if not oDataEx.aoGlobalRsrc:
             return True;
         asIdRsrcs = [str(oDep.idGlobalRsrc) for oDep, _ in oDataEx.aoGlobalRsrc];
 
@@ -350,7 +350,7 @@ class TestCaseArgsLogic(ModelLogicBase):
 
     def addTestCaseArgs(self, oTestCaseArgsData):
         """Add Test Case Args record into DB"""
-        pass
+        pass;                               # pylint: disable=unnecessary-pass
 
     def cachedLookup(self, idTestCaseArgs):
         """
@@ -385,7 +385,7 @@ class TestCaseArgsLogic(ModelLogicBase):
             if self._oDb.getRowCount() == 1:
                 aaoRow = self._oDb.fetchOne();
                 oEntry = TestCaseArgsDataEx();
-                tsNow  = oEntry.initFromDbRow(aaoRow).tsEffective if fNeedTsNow else None;
+                tsNow  = TestCaseArgsData().initFromDbRow(aaoRow).tsEffective if fNeedTsNow else None;
                 oEntry.initFromDbRowEx(aaoRow, self._oDb, tsNow, tsNow);
                 self.dCache[idTestCaseArgs] = oEntry;
         return oEntry;
@@ -395,7 +395,7 @@ class TestCaseArgsLogic(ModelLogicBase):
 # Unit testing.
 #
 
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 class TestCaseArgsDataTestCase(ModelDataBaseTestCase):
     def setUp(self):
         self.aoSamples = [TestCaseArgsData(),];

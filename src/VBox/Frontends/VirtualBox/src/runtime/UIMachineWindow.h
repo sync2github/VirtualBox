@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMachineWindow.h 90567 2021-08-07 11:50:28Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMachineWindow class declaration.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIMachineWindow_h__
-#define __UIMachineWindow_h__
+#ifndef FEQT_INCLUDED_SRC_runtime_UIMachineWindow_h
+#define FEQT_INCLUDED_SRC_runtime_UIMachineWindow_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QMainWindow>
@@ -34,18 +37,16 @@
 
 /* Forward declarations: */
 class QCloseEvent;
+class QEvent;
+class QHideEvent;
 class QGridLayout;
+class QShowEvent;
 class QSpacerItem;
 class UIActionPool;
 class UISession;
 class UIMachineLogic;
 class UIMachineView;
 class CSession;
-#ifdef VBOX_WS_X11
-# if QT_VERSION < 0x050000
-typedef union _XEvent XEvent;
-# endif /* QT_VERSION < 0x050000 */
-#endif /* VBOX_WS_X11 */
 
 
 /* Machine-window interface: */
@@ -85,14 +86,19 @@ public:
     /** Returns the machine name. */
     const QString& machineName() const;
 
+    /** Returns whether the machine-window should resize to fit to the guest display.
+      * @note Relevant only to normal (windowed) case. */
+    bool shouldResizeToGuestDisplay() const;
+
     /** Restores cached window geometry.
       * @note Reimplemented in sub-classes. Base implementation does nothing. */
     virtual void restoreCachedGeometry() {}
 
     /** Adjusts machine-window size to correspond current machine-view size.
       * @param fAdjustPosition determines whether is it necessary to adjust position too.
+      * @param fResizeToGuestDisplay determines if is it necessary to resize the window to fit to guest display size.
       * @note  Reimplemented in sub-classes. Base implementation does nothing. */
-    virtual void normalizeGeometry(bool fAdjustPosition) { Q_UNUSED(fAdjustPosition); }
+    virtual void normalizeGeometry(bool fAdjustPosition, bool fResizeToGuestDisplay) { Q_UNUSED(fAdjustPosition); Q_UNUSED(fResizeToGuestDisplay); }
 
     /** Adjusts machine-view size to correspond current machine-window size. */
     virtual void adjustMachineViewSize();
@@ -109,7 +115,7 @@ protected slots:
 
 #ifdef VBOX_WS_X11
     /** X11: Performs machine-window geometry normalization. */
-    void sltNormalizeGeometry() { normalizeGeometry(true /* adjust position */); }
+    void sltNormalizeGeometry() { normalizeGeometry(true /* adjust position */, shouldResizeToGuestDisplay()); }
 #endif /* VBOX_WS_X11 */
 
     /** Performs machine-window activation. */
@@ -129,16 +135,13 @@ protected:
     /* Translate stuff: */
     void retranslateUi();
 
-    /* Event handlers: */
-#ifdef VBOX_WS_X11
-# if QT_VERSION < 0x050000
-    /** X11: Qt4: Handles all native events. */
-    bool x11Event(XEvent *pEvent);
-# endif /* QT_VERSION < 0x050000 */
-#endif /* VBOX_WS_X11 */
+    /** Handles any Qt @a pEvent. */
+    virtual bool event(QEvent *pEvent) /* override */;
 
-    /** Show event handler. */
-    void showEvent(QShowEvent *pShowEvent);
+    /** Handles show @a pEvent. */
+    virtual void showEvent(QShowEvent *pEvent) /* override */;
+    /** Handles hide @a pEvent. */
+    virtual void hideEvent(QHideEvent *pEvent) /* override */;
 
     /** Close event handler. */
     void closeEvent(QCloseEvent *pCloseEvent);
@@ -160,6 +163,7 @@ protected:
     virtual void prepareMenu() {}
     virtual void prepareStatusBar() {}
     virtual void prepareMachineView();
+    virtual void prepareNotificationCenter();
     virtual void prepareVisualState() {}
     virtual void prepareHandlers();
     virtual void loadSettings() {}
@@ -168,6 +172,7 @@ protected:
     virtual void saveSettings() {}
     virtual void cleanupHandlers();
     virtual void cleanupVisualState() {}
+    virtual void cleanupNotificationCenter();
     virtual void cleanupMachineView();
     virtual void cleanupStatusBar() {}
     virtual void cleanupMenu() {}
@@ -214,5 +219,5 @@ protected:
     friend class UIMachineLogicSeamless;
 };
 
-#endif // __UIMachineWindow_h__
+#endif /* !FEQT_INCLUDED_SRC_runtime_UIMachineWindow_h */
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: semevent-r0drv-solaris.c 90488 2021-08-03 09:17:59Z vboxsync $ */
 /** @file
  * IPRT - Single Release Event Semaphores, Ring-0 Driver, Solaris.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -343,5 +343,12 @@ RTDECL(int)  RTSemEventWaitExDebug(RTSEMEVENT hEventSem, uint32_t fFlags, uint64
 RTDECL(uint32_t) RTSemEventGetResolution(void)
 {
     return rtR0SemSolWaitGetResolution();
+}
+
+
+RTR0DECL(bool) RTSemEventIsSignalSafe(void)
+{
+    /* I don't trust Solaris not to preempt us. */
+    return false;
 }
 

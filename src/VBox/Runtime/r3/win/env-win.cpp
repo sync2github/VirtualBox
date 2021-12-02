@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: env-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Environment, Posix.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,8 +32,10 @@
 
 #include <iprt/alloca.h>
 #include <iprt/assert.h>
+#include <iprt/err.h>
 #include <iprt/string.h>
 #include <iprt/mem.h>
+#include <iprt/utf16.h>
 
 #include <stdlib.h>
 #include <errno.h>
@@ -170,22 +172,24 @@ RTDECL(int) RTEnvSet(const char *pszVar, const char *pszValue)
     return RTEnvSetBad(pszVar, pszValue);
 }
 
-RTDECL(int) RTEnvSetUtf8(const char *pszVar, const char *pszValue)
-{
-    AssertReturn(strchr(pszVar, '=') == NULL, VERR_ENV_INVALID_VAR_NAME);
 
+/**
+ * Worker common to RTEnvSetUtf8() and rtEnvSetExWorker().
+ */
+int rtEnvSetUtf8Worker(const char *pchVar, size_t cchVar, const char *pszValue)
+{
     size_t cwcVar;
-    int rc = RTStrCalcUtf16LenEx(pszVar, RTSTR_MAX, &cwcVar);
+    int rc = RTStrCalcUtf16LenEx(pchVar, cchVar, &cwcVar);
     if (RT_SUCCESS(rc))
     {
         size_t cwcValue;
-        rc = RTStrCalcUtf16LenEx(pszVar, RTSTR_MAX, &cwcValue);
+        rc = RTStrCalcUtf16LenEx(pszValue, RTSTR_MAX, &cwcValue);
         if (RT_SUCCESS(rc))
         {
             PRTUTF16 pwszTmp = (PRTUTF16)RTMemTmpAlloc((cwcVar + 1 + cwcValue + 1) * sizeof(RTUTF16));
             if (pwszTmp)
             {
-                rc = RTStrToUtf16Ex(pszVar, RTSTR_MAX, &pwszTmp, cwcVar + 1, NULL);
+                rc = RTStrToUtf16Ex(pchVar, cchVar, &pwszTmp, cwcVar + 1, NULL);
                 if (RT_SUCCESS(rc))
                 {
                     PRTUTF16 pwszTmpValue = &pwszTmp[cwcVar];
@@ -206,6 +210,14 @@ RTDECL(int) RTEnvSetUtf8(const char *pszVar, const char *pszValue)
         }
     }
     return rc;
+}
+
+
+RTDECL(int) RTEnvSetUtf8(const char *pszVar, const char *pszValue)
+{
+    size_t cchVar = strlen(pszVar);
+    AssertReturn(memchr(pszVar, '=', cchVar) == NULL, VERR_ENV_INVALID_VAR_NAME);
+    return rtEnvSetUtf8Worker(pszVar, cchVar, pszValue);
 }
 
 

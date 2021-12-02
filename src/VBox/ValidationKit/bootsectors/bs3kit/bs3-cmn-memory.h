@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-memory.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - Internal Memory Structures, Variables and Functions.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___bs3_cmn_memory_h
-#define ___bs3_cmn_memory_h
+#ifndef BS3KIT_INCLUDED_bs3_cmn_memory_h
+#define BS3KIT_INCLUDED_bs3_cmn_memory_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "bs3kit.h"
 #include <iprt/asm.h>
@@ -92,5 +95,5 @@ DECLINLINE(uint8_t) bs3MemSizeToSlabListIndex(size_t cbRequest)
 
 RT_C_DECLS_END;
 
-#endif
+#endif /* !BS3KIT_INCLUDED_bs3_cmn_memory_h */
 

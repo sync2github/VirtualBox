@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: proxy.h 87637 2021-02-08 13:18:11Z vboxsync $ */
 /** @file
  * NAT Network - common definitions and declarations.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___nat_proxy_h___
-#define ___nat_proxy_h___
+#ifndef VBOX_INCLUDED_SRC_NAT_proxy_h
+#define VBOX_INCLUDED_SRC_NAT_proxy_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #if !defined(VBOX)
 #include "vbox-compat.h"
@@ -47,6 +50,9 @@ struct ip4_lomap_desc
 };
 
 struct proxy_options {
+    ip_addr_t ipv4_addr;
+    ip_addr_t ipv4_mask;
+    ip6_addr_t ipv6_addr;
     int ipv6_enabled;
     int ipv6_defroute;
     SOCKET icmpsock4;
@@ -64,6 +70,9 @@ extern struct netif *g_proxy_netif;
 void proxy_init(struct netif *, struct proxy_options *);
 SOCKET proxy_connected_socket(int, int, ipX_addr_t *, u16_t);
 SOCKET proxy_bound_socket(int, int, struct sockaddr *);
+#ifdef RT_OS_LINUX
+int proxy_fixup_accepted_socket(SOCKET);
+#endif
 void proxy_reset_socket(SOCKET);
 int proxy_sendto(SOCKET, struct pbuf *, void *, size_t);
 void proxy_lwip_post(struct tcpip_msg *);
@@ -114,5 +123,5 @@ err_t pxping_init(struct netif *, SOCKET, SOCKET);
 #define DPRINTF1(a) Log2(a)
 #define DPRINTF2(a) Log3(a)
 
-#endif /* !___nat_proxy_h___ */
+#endif /* !VBOX_INCLUDED_SRC_NAT_proxy_h */
 

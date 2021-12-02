@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 1999-2012 knut st. osmundsen <bird-src-spam@anduin.net>
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_avl_h
-#define ___iprt_avl_h
+#ifndef IPRT_INCLUDED_avl_h
+#define IPRT_INCLUDED_avl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
@@ -37,7 +40,7 @@ RT_C_DECLS_BEGIN
  */
 
 
-/** AVL tree of void pointers.
+/** @name AVL tree of void pointers.
  * @{
  */
 
@@ -64,7 +67,7 @@ typedef PPAVLPVNODECORE    PAVLPVTREE;
 
 /** Callback function for AVLPVDoWithAll().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int) AVLPVCALLBACK(PAVLPVNODECORE, void *);
+typedef DECLCALLBACKTYPE(int, AVLPVCALLBACK,(PAVLPVNODECORE, void *));
 /** Pointer to callback function for AVLPVDoWithAll(). */
 typedef AVLPVCALLBACK *PAVLPVCALLBACK;
 
@@ -82,7 +85,7 @@ RTDECL(int)             RTAvlPVDestroy(PAVLPVTREE ppTree, PAVLPVCALLBACK pfnCall
 /** @} */
 
 
-/** AVL tree of unsigned long.
+/** @name AVL tree of unsigned long.
  * @{
  */
 
@@ -105,7 +108,7 @@ typedef struct _AVLULNodeCore
 
 /** Callback function for AVLULDoWithAll().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int) AVLULCALLBACK(PAVLULNODECORE, void*);
+typedef DECLCALLBACKTYPE(int, AVLULCALLBACK,(PAVLULNODECORE, void*));
 /** Pointer to callback function for AVLULDoWithAll(). */
 typedef AVLULCALLBACK *PAVLULCALLBACK;
 
@@ -125,7 +128,7 @@ RTDECL(int)             RTAvlULDestroy(PPAVLULNODECORE pTree, PAVLULCALLBACK pfn
 
 
 
-/** AVL tree of void pointer ranges.
+/** @name AVL tree of void pointer ranges.
  * @{
  */
 
@@ -153,7 +156,7 @@ typedef PPAVLRPVNODECORE   PAVLRPVTREE;
 
 /** Callback function for AVLPVDoWithAll().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int) AVLRPVCALLBACK(PAVLRPVNODECORE, void *);
+typedef DECLCALLBACKTYPE(int, AVLRPVCALLBACK,(PAVLRPVNODECORE, void *));
 /** Pointer to callback function for AVLPVDoWithAll(). */
 typedef AVLRPVCALLBACK *PAVLRPVCALLBACK;
 
@@ -174,7 +177,7 @@ RTDECL(int)             RTAvlrPVDestroy(PAVLRPVTREE ppTree, PAVLRPVCALLBACK pfnC
 
 
 
-/** AVL tree of uint32_t
+/** @name AVL tree of uint32_t
  * @{
  */
 
@@ -184,20 +187,20 @@ typedef uint32_t    AVLU32KEY;
 /** AVL Core node. */
 typedef struct _AVLU32NodeCore
 {
-    AVLU32KEY               Key;        /**< Key value. */
     struct _AVLU32NodeCore *pLeft;      /**< Pointer to left leaf node. */
     struct _AVLU32NodeCore *pRight;     /**< Pointer to right leaf node. */
+    AVLU32KEY               Key;        /**< Key value. */
     unsigned char           uchHeight;  /**< Height of this tree: max(height(left), height(right)) + 1 */
 } AVLU32NODECORE, *PAVLU32NODECORE, **PPAVLU32NODECORE;
 
-/** A tree with void pointer keys. */
+/** A tree with uint32_t keys. */
 typedef PAVLU32NODECORE     AVLU32TREE;
-/** Pointer to a tree with void pointer keys. */
+/** Pointer to a tree with uint32_t keys. */
 typedef PPAVLU32NODECORE    PAVLU32TREE;
 
 /** Callback function for AVLU32DoWithAll() & AVLU32Destroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int) AVLU32CALLBACK(PAVLU32NODECORE, void*);
+typedef DECLCALLBACKTYPE(int, AVLU32CALLBACK,(PAVLU32NODECORE, void*));
 /** Pointer to callback function for AVLU32DoWithAll() & AVLU32Destroy(). */
 typedef AVLU32CALLBACK *PAVLU32CALLBACK;
 
@@ -214,6 +217,10 @@ RTDECL(int)             RTAvlU32DoWithAll(PAVLU32TREE pTree, int fFromLeft, PAVL
 RTDECL(int)             RTAvlU32Destroy(PAVLU32TREE pTree, PAVLU32CALLBACK pfnCallBack, void *pvParam);
 
 /** @} */
+
+/** @name AVL tree of uint32_t, offset based
+ * @{
+ */
 
 /**
  * AVL uint32_t type for the relative offset pointer scheme.
@@ -248,7 +255,7 @@ typedef AVLOU32TREE    *PPAVLOU32NODECORE;
 
 /** Callback function for RTAvloU32DoWithAll().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLOU32CALLBACK(PAVLOU32NODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLOU32CALLBACK,(PAVLOU32NODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvloU32DoWithAll(). */
 typedef AVLOU32CALLBACK *PAVLOU32CALLBACK;
 
@@ -263,7 +270,7 @@ RTDECL(int)                   RTAvloU32Destroy(PAVLOU32TREE pTree, PAVLOU32CALLB
 /** @} */
 
 
-/** AVL tree of uint32_t, list duplicates.
+/** @name AVL tree of uint32_t, list duplicates.
  * @{
  */
 
@@ -282,7 +289,7 @@ typedef struct _AVLLU32NodeCore
 
 /** Callback function for RTAvllU32DoWithAll() & RTAvllU32Destroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int) AVLLU32CALLBACK(PAVLLU32NODECORE, void*);
+typedef DECLCALLBACKTYPE(int, AVLLU32CALLBACK,(PAVLLU32NODECORE, void*));
 /** Pointer to callback function for RTAvllU32DoWithAll() & RTAvllU32Destroy(). */
 typedef AVLLU32CALLBACK *PAVLLU32CALLBACK;
 
@@ -302,8 +309,49 @@ RTDECL(int)                 RTAvllU32Destroy(PPAVLLU32NODECORE pTree, PAVLLU32CA
 /** @} */
 
 
+/** @name AVL tree of uint64_t
+ * @{
+ */
 
-/** AVL tree of uint64_t ranges.
+/** AVL key type. */
+typedef uint64_t    AVLU64KEY;
+
+/** AVL Core node. */
+typedef struct _AVLU64NodeCore
+{
+    struct _AVLU64NodeCore *pLeft;      /**< Pointer to left leaf node. */
+    struct _AVLU64NodeCore *pRight;     /**< Pointer to right leaf node. */
+    AVLU64KEY               Key;        /**< Key value. */
+    unsigned char           uchHeight;  /**< Height of this tree: max(height(left), height(right)) + 1 */
+} AVLU64NODECORE, *PAVLU64NODECORE, **PPAVLU64NODECORE;
+
+/** A tree with uint64_t keys. */
+typedef PAVLU64NODECORE     AVLU64TREE;
+/** Pointer to a tree with uint64_t keys. */
+typedef PPAVLU64NODECORE    PAVLU64TREE;
+
+/** Callback function for AVLU64DoWithAll() & AVLU64Destroy().
+ *  @returns IPRT status codes. */
+typedef DECLCALLBACKTYPE(int, AVLU64CALLBACK,(PAVLU64NODECORE, void*));
+/** Pointer to callback function for AVLU64DoWithAll() & AVLU64Destroy(). */
+typedef AVLU64CALLBACK *PAVLU64CALLBACK;
+
+
+/*
+ * Functions.
+ */
+RTDECL(bool)            RTAvlU64Insert(PAVLU64TREE pTree, PAVLU64NODECORE pNode);
+RTDECL(PAVLU64NODECORE) RTAvlU64Remove(PAVLU64TREE pTree, AVLU64KEY Key);
+RTDECL(PAVLU64NODECORE) RTAvlU64Get(PAVLU64TREE pTree, AVLU64KEY Key);
+RTDECL(PAVLU64NODECORE) RTAvlU64GetBestFit(PAVLU64TREE pTree, AVLU64KEY Key, bool fAbove);
+RTDECL(PAVLU64NODECORE) RTAvlU64RemoveBestFit(PAVLU64TREE pTree, AVLU64KEY Key, bool fAbove);
+RTDECL(int)             RTAvlU64DoWithAll(PAVLU64TREE pTree, int fFromLeft, PAVLU64CALLBACK pfnCallBack, void *pvParam);
+RTDECL(int)             RTAvlU64Destroy(PAVLU64TREE pTree, PAVLU64CALLBACK pfnCallBack, void *pvParam);
+
+/** @} */
+
+
+/** @name AVL tree of uint64_t ranges.
  * @{
  */
 
@@ -324,14 +372,14 @@ typedef struct AVLRU64NodeCore
     unsigned char            uchHeight;  /**< Height of this tree: max(height(left), height(right)) + 1 */
 } AVLRU64NODECORE, *PAVLRU64NODECORE, **PPAVLRU64NODECORE;
 
-/** A tree with void pointer keys. */
+/** A tree with uint64_t keys. */
 typedef PAVLRU64NODECORE    AVLRU64TREE;
-/** Pointer to a tree with void pointer keys. */
+/** Pointer to a tree with uint64_t keys. */
 typedef PPAVLRU64NODECORE   PAVLRU64TREE;
 
 /** Callback function for AVLRU64DoWithAll().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int) AVLRU64CALLBACK(PAVLRU64NODECORE, void *);
+typedef DECLCALLBACKTYPE(int, AVLRU64CALLBACK,(PAVLRU64NODECORE, void *));
 /** Pointer to callback function for AVLU64DoWithAll(). */
 typedef AVLRU64CALLBACK *PAVLRU64CALLBACK;
 
@@ -352,7 +400,7 @@ RTDECL(int)              RTAvlrU64Destroy(PAVLRU64TREE ppTree, PAVLRU64CALLBACK 
 
 
 
-/** AVL tree of RTGCPHYSes - using relative offsets internally.
+/** @name AVL tree of RTGCPHYSes - using relative offsets internally.
  * @{
  */
 
@@ -389,7 +437,7 @@ typedef AVLOGCPHYSTREE    *PPAVLOGCPHYSNODECORE;
 
 /** Callback function for RTAvloGCPhysDoWithAll() and RTAvloGCPhysDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLOGCPHYSCALLBACK(PAVLOGCPHYSNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLOGCPHYSCALLBACK,(PAVLOGCPHYSNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvloGCPhysDoWithAll() and RTAvloGCPhysDestroy(). */
 typedef AVLOGCPHYSCALLBACK *PAVLOGCPHYSCALLBACK;
 
@@ -404,7 +452,7 @@ RTDECL(int)                     RTAvloGCPhysDestroy(PAVLOGCPHYSTREE pTree, PAVLO
 /** @} */
 
 
-/** AVL tree of RTGCPHYS ranges - using relative offsets internally.
+/** @name AVL tree of RTGCPHYS ranges - using relative offsets internally.
  * @{
  */
 
@@ -443,7 +491,7 @@ typedef AVLROGCPHYSTREE    *PPAVLROGCPHYSNODECORE;
 
 /** Callback function for RTAvlroGCPhysDoWithAll() and RTAvlroGCPhysDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLROGCPHYSCALLBACK(PAVLROGCPHYSNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLROGCPHYSCALLBACK,(PAVLROGCPHYSNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlroGCPhysDoWithAll() and RTAvlroGCPhysDestroy(). */
 typedef AVLROGCPHYSCALLBACK *PAVLROGCPHYSCALLBACK;
 
@@ -462,7 +510,7 @@ RTDECL(PAVLROGCPHYSNODECORE)    RTAvlroGCPhysGetRight(PAVLROGCPHYSNODECORE pNode
 /** @} */
 
 
-/** AVL tree of RTGCPTRs.
+/** @name AVL tree of RTGCPTRs.
  * @{
  */
 
@@ -488,7 +536,7 @@ typedef PPAVLGCPTRNODECORE    PAVLGCPTRTREE;
 
 /** Callback function for RTAvlGCPtrDoWithAll().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLGCPTRCALLBACK(PAVLGCPTRNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLGCPTRCALLBACK,(PAVLGCPTRNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlGCPtrDoWithAll(). */
 typedef AVLGCPTRCALLBACK *PAVLGCPTRCALLBACK;
 
@@ -503,7 +551,7 @@ RTDECL(int)                     RTAvlGCPtrDestroy(PAVLGCPTRTREE pTree, PAVLGCPTR
 /** @} */
 
 
-/** AVL tree of RTGCPTRs - using relative offsets internally.
+/** @name AVL tree of RTGCPTRs - using relative offsets internally.
  * @{
  */
 
@@ -539,7 +587,7 @@ typedef AVLOGCPTRTREE    *PPAVLOGCPTRNODECORE;
 
 /** Callback function for RTAvloGCPtrDoWithAll().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLOGCPTRCALLBACK(PAVLOGCPTRNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLOGCPTRCALLBACK,(PAVLOGCPTRNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvloGCPtrDoWithAll(). */
 typedef AVLOGCPTRCALLBACK *PAVLOGCPTRCALLBACK;
 
@@ -554,7 +602,7 @@ RTDECL(int)                     RTAvloGCPtrDestroy(PAVLOGCPTRTREE pTree, PAVLOGC
 /** @} */
 
 
-/** AVL tree of RTGCPTR ranges.
+/** @name AVL tree of RTGCPTR ranges.
  * @{
  */
 
@@ -586,7 +634,7 @@ typedef AVLRGCPTRTREE    *PPAVLRGCPTRNODECORE;
 
 /** Callback function for RTAvlrGCPtrDoWithAll() and RTAvlrGCPtrDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLRGCPTRCALLBACK(PAVLRGCPTRNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLRGCPTRCALLBACK,(PAVLRGCPTRNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlrGCPtrDoWithAll() and RTAvlrGCPtrDestroy(). */
 typedef AVLRGCPTRCALLBACK *PAVLRGCPTRCALLBACK;
 
@@ -605,7 +653,7 @@ RTDECL(PAVLRGCPTRNODECORE)     RTAvlrGCPtrGetRight(     PAVLRGCPTRNODECORE pNode
 /** @} */
 
 
-/** AVL tree of RTGCPTR ranges - using relative offsets internally.
+/** @name AVL tree of RTGCPTR ranges - using relative offsets internally.
  * @{
  */
 
@@ -643,7 +691,7 @@ typedef AVLROGCPTRTREE    *PPAVLROGCPTRNODECORE;
 
 /** Callback function for RTAvlroGCPtrDoWithAll() and RTAvlroGCPtrDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLROGCPTRCALLBACK(PAVLROGCPTRNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLROGCPTRCALLBACK,(PAVLROGCPTRNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlroGCPtrDoWithAll() and RTAvlroGCPtrDestroy(). */
 typedef AVLROGCPTRCALLBACK *PAVLROGCPTRCALLBACK;
 
@@ -662,7 +710,8 @@ RTDECL(PAVLROGCPTRNODECORE)     RTAvlroGCPtrGetRight(PAVLROGCPTRNODECORE pNode);
 /** @} */
 
 
-/** AVL tree of RTGCPTR ranges (overlapping supported) - using relative offsets internally.
+/** @name AVL tree of RTGCPTR ranges (overlapping supported) - using relative
+ *        offsets internally.
  * @{
  */
 
@@ -701,7 +750,7 @@ typedef AVLROOGCPTRTREE    *PPAVLROOGCPTRNODECORE;
 
 /** Callback function for RTAvlrooGCPtrDoWithAll() and RTAvlrooGCPtrDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLROOGCPTRCALLBACK(PAVLROOGCPTRNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLROOGCPTRCALLBACK,(PAVLROOGCPTRNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlrooGCPtrDoWithAll() and RTAvlrooGCPtrDestroy(). */
 typedef AVLROOGCPTRCALLBACK *PAVLROOGCPTRCALLBACK;
 
@@ -721,7 +770,7 @@ RTDECL(PAVLROOGCPTRNODECORE)    RTAvlrooGCPtrGetNextEqual(PAVLROOGCPTRNODECORE p
 /** @} */
 
 
-/** AVL tree of RTUINTPTR.
+/** @name AVL tree of RTUINTPTR.
  * @{
  */
 
@@ -753,7 +802,7 @@ typedef AVLUINTPTRTREE     *PPAVLUINTPTRNODECORE;
 
 /** Callback function for RTAvlUIntPtrDoWithAll() and RTAvlUIntPtrDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)    AVLUINTPTRCALLBACK(PAVLUINTPTRNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLUINTPTRCALLBACK,(PAVLUINTPTRNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlUIntPtrDoWithAll() and RTAvlUIntPtrDestroy(). */
 typedef AVLUINTPTRCALLBACK *PAVLUINTPTRCALLBACK;
 
@@ -770,7 +819,7 @@ RTDECL(PAVLUINTPTRNODECORE)     RTAvlUIntPtrGetRight(  PAVLUINTPTRNODECORE pNode
 /** @} */
 
 
-/** AVL tree of RTUINTPTR ranges.
+/** @name AVL tree of RTUINTPTR ranges.
  * @{
  */
 
@@ -804,7 +853,7 @@ typedef AVLRUINTPTRTREE     *PPAVLRUINTPTRNODECORE;
 
 /** Callback function for RTAvlrUIntPtrDoWithAll() and RTAvlrUIntPtrDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)    AVLRUINTPTRCALLBACK(PAVLRUINTPTRNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLRUINTPTRCALLBACK,(PAVLRUINTPTRNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlrUIntPtrDoWithAll() and RTAvlrUIntPtrDestroy(). */
 typedef AVLRUINTPTRCALLBACK *PAVLRUINTPTRCALLBACK;
 
@@ -823,7 +872,7 @@ RTDECL(PAVLRUINTPTRNODECORE)   RTAvlrUIntPtrGetRight(   PAVLRUINTPTRNODECORE pNo
 /** @} */
 
 
-/** AVL tree of RTHCPHYSes - using relative offsets internally.
+/** @name AVL tree of RTHCPHYSes - using relative offsets internally.
  * @{
  */
 
@@ -861,7 +910,7 @@ typedef AVLOHCPHYSTREE    *PPAVLOHCPHYSNODECORE;
 
 /** Callback function for RTAvloHCPhysDoWithAll() and RTAvloHCPhysDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLOHCPHYSCALLBACK(PAVLOHCPHYSNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLOHCPHYSCALLBACK,(PAVLOHCPHYSNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvloHCPhysDoWithAll() and RTAvloHCPhysDestroy(). */
 typedef AVLOHCPHYSCALLBACK *PAVLOHCPHYSCALLBACK;
 
@@ -877,7 +926,7 @@ RTDECL(int)                     RTAvloHCPhysDestroy(PAVLOHCPHYSTREE pTree, PAVLO
 
 
 
-/** AVL tree of RTIOPORTs - using relative offsets internally.
+/** @name AVL tree of RTIOPORTs - using relative offsets internally.
  * @{
  */
 
@@ -912,7 +961,7 @@ typedef AVLOIOPORTTREE    *PPAVLOIOPORTNODECORE;
 
 /** Callback function for RTAvloIOPortDoWithAll() and RTAvloIOPortDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLOIOPORTCALLBACK(PAVLOIOPORTNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLOIOPORTCALLBACK,(PAVLOIOPORTNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvloIOPortDoWithAll() and RTAvloIOPortDestroy(). */
 typedef AVLOIOPORTCALLBACK *PAVLOIOPORTCALLBACK;
 
@@ -927,7 +976,7 @@ RTDECL(int)                     RTAvloIOPortDestroy(PAVLOIOPORTTREE pTree, PAVLO
 /** @} */
 
 
-/** AVL tree of RTIOPORT ranges - using relative offsets internally.
+/** @name AVL tree of RTIOPORT ranges - using relative offsets internally.
  * @{
  */
 
@@ -964,7 +1013,7 @@ typedef AVLROIOPORTTREE    *PPAVLROIOPORTNODECORE;
 
 /** Callback function for RTAvlroIOPortDoWithAll() and RTAvlroIOPortDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLROIOPORTCALLBACK(PAVLROIOPORTNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLROIOPORTCALLBACK,(PAVLROIOPORTNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlroIOPortDoWithAll() and RTAvlroIOPortDestroy(). */
 typedef AVLROIOPORTCALLBACK *PAVLROIOPORTCALLBACK;
 
@@ -979,7 +1028,7 @@ RTDECL(int)                     RTAvlroIOPortDestroy(PAVLROIOPORTTREE pTree, PAV
 /** @} */
 
 
-/** AVL tree of RTHCPHYSes.
+/** @name AVL tree of RTHCPHYSes.
  * @{
  */
 
@@ -1014,7 +1063,7 @@ typedef AVLHCPHYSTREE    *PPAVLHCPHYSNODECORE;
 
 /** Callback function for RTAvlHCPhysDoWithAll() and RTAvlHCPhysDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLHCPHYSCALLBACK(PAVLHCPHYSNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLHCPHYSCALLBACK,(PAVLHCPHYSNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlHCPhysDoWithAll() and RTAvlHCPhysDestroy(). */
 typedef AVLHCPHYSCALLBACK *PAVLHCPHYSCALLBACK;
 
@@ -1028,7 +1077,7 @@ RTDECL(int)                     RTAvlHCPhysDestroy(PAVLHCPHYSTREE pTree, PAVLHCP
 
 /** @} */
 
-/** AVL tree of RTGCPHYSes.
+/** @name AVL tree of RTGCPHYSes.
  * @{
  */
 
@@ -1063,7 +1112,7 @@ typedef AVLGCPHYSTREE    *PPAVLGCPHYSNODECORE;
 
 /** Callback function for RTAvlGCPhysDoWithAll() and RTAvlGCPhysDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLGCPHYSCALLBACK(PAVLGCPHYSNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLGCPHYSCALLBACK,(PAVLGCPHYSNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlGCPhysDoWithAll() and RTAvlGCPhysDestroy(). */
 typedef AVLGCPHYSCALLBACK *PAVLGCPHYSCALLBACK;
 
@@ -1078,7 +1127,7 @@ RTDECL(int)                     RTAvlGCPhysDestroy(PAVLGCPHYSTREE pTree, PAVLGCP
 /** @} */
 
 
-/** AVL tree of RTFOFF ranges.
+/** @name AVL tree of RTFOFF ranges.
  * @{
  */
 
@@ -1110,7 +1159,7 @@ typedef AVLRFOFFTREE    *PPAVLRFOFFNODECORE;
 
 /** Callback function for RTAvlrGCPtrDoWithAll() and RTAvlrGCPtrDestroy().
  *  @returns IPRT status codes. */
-typedef DECLCALLBACK(int)   AVLRFOFFCALLBACK(PAVLRFOFFNODECORE pNode, void *pvUser);
+typedef DECLCALLBACKTYPE(int, AVLRFOFFCALLBACK,(PAVLRFOFFNODECORE pNode, void *pvUser));
 /** Pointer to callback function for RTAvlrGCPtrDoWithAll() and RTAvlrGCPtrDestroy(). */
 typedef AVLRFOFFCALLBACK *PAVLRFOFFCALLBACK;
 
@@ -1132,5 +1181,5 @@ RTDECL(PAVLRFOFFNODECORE)     RTAvlrFileOffsetGetRight(     PAVLRFOFFNODECORE pN
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_avl_h */
 

@@ -1,9 +1,9 @@
-/* $Id$ */
+/* $Id: VBoxNetLwf-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxNetLwf-win.cpp - NDIS6 Bridged Networking Driver, Windows-specific code.
  */
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -12,6 +12,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 #define LOG_GROUP LOG_GROUP_NET_FLT_DRV
 
@@ -168,8 +177,12 @@ typedef struct _VBOXNETLWF_MODULE {
 #endif /* !VBOXNETLWF_SYNC_SEND */
     /** MAC address of underlying adapter */
     RTMAC MacAddr;
+    /** Size of offload config structure */
+    USHORT cbOffloadConfig;
     /** Saved offload configuration */
-    NDIS_OFFLOAD SavedOffloadConfig;
+    PNDIS_OFFLOAD pSavedOffloadConfig;
+    /** Temporary buffer for disabling offload configuration */
+    PNDIS_OFFLOAD pDisabledOffloadConfig;
     /** the cloned request we have passed down */
     PNDIS_OID_REQUEST pPendingRequest;
     /** true if the underlying miniport supplied offloading config */
@@ -178,6 +191,8 @@ typedef struct _VBOXNETLWF_MODULE {
     bool fActive;
     /** true if the host wants the adapter to be in promisc mode */
     bool fHostPromisc;
+    /** true if the user wants packets being sent or received by VMs to be visible to the host in promisc mode */
+    bool fPassVmTrafficToHost;
     /** Name of underlying adapter */
     char szMiniportName[1];
 } VBOXNETLWF_MODULE;
@@ -462,7 +477,7 @@ static void vboxNetLwfWinDumpPackets(const char *pszMsg, PNET_BUFFER_LIST pBufLi
     {
         for (PNET_BUFFER pBuf = NET_BUFFER_LIST_FIRST_NB(pList); pBuf; pBuf = NET_BUFFER_NEXT_NB(pBuf))
         {
-            Log6(("%s packet: cb=%d offset=%d", pszMsg, NET_BUFFER_DATA_LENGTH(pBuf), NET_BUFFER_DATA_OFFSET(pBuf)));
+            Log6(("%s packet: src=%p cb=%d offset=%d", pszMsg, pList->SourceHandle, NET_BUFFER_DATA_LENGTH(pBuf), NET_BUFFER_DATA_OFFSET(pBuf)));
             for (PMDL pMdl = NET_BUFFER_FIRST_MDL(pBuf);
                  pMdl != NULL;
                  pMdl = NDIS_MDL_LINKAGE(pMdl))
@@ -989,9 +1004,39 @@ static void vboxNetLwfWinDevDestroy(PVBOXNETLWFGLOBALS pGlobals)
     pGlobals->pDevObj = NULL;
 }
 
+static void vboxNetLwfWinDisableOffloading(PNDIS_OFFLOAD pOffloadConfig)
+{
+    pOffloadConfig->Checksum.IPv4Transmit.Encapsulation               = NDIS_ENCAPSULATION_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv4Transmit.IpOptionsSupported          = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv4Transmit.TcpOptionsSupported         = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv4Transmit.TcpChecksum                 = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv4Transmit.UdpChecksum                 = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv4Transmit.IpChecksum                  = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv6Transmit.Encapsulation               = NDIS_ENCAPSULATION_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv6Transmit.IpExtensionHeadersSupported = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv6Transmit.TcpOptionsSupported         = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv6Transmit.TcpChecksum                 = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->Checksum.IPv6Transmit.UdpChecksum                 = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->LsoV1.IPv4.Encapsulation                          = NDIS_ENCAPSULATION_NOT_SUPPORTED;
+    pOffloadConfig->LsoV1.IPv4.TcpOptions                             = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->LsoV1.IPv4.IpOptions                              = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->LsoV2.IPv4.Encapsulation                          = NDIS_ENCAPSULATION_NOT_SUPPORTED;
+    pOffloadConfig->LsoV2.IPv6.Encapsulation                          = NDIS_ENCAPSULATION_NOT_SUPPORTED;
+    pOffloadConfig->LsoV2.IPv6.IpExtensionHeadersSupported            = NDIS_OFFLOAD_NOT_SUPPORTED;
+    pOffloadConfig->LsoV2.IPv6.TcpOptionsSupported                    = NDIS_OFFLOAD_NOT_SUPPORTED;
+}
+
 static void vboxNetLwfWinUpdateSavedOffloadConfig(PVBOXNETLWF_MODULE pModuleCtx, PNDIS_OFFLOAD pOffload)
 {
-    pModuleCtx->SavedOffloadConfig = *pOffload;
+    if (pModuleCtx->cbOffloadConfig < pOffload->Header.Size)
+    {
+        vboxNetLwfLogErrorEvent(IO_ERR_INTERNAL_ERROR, STATUS_SUCCESS, 10);
+        return;
+    }
+
+    NdisMoveMemory(pModuleCtx->pSavedOffloadConfig, pOffload, pOffload->Header.Size);
+    NdisMoveMemory(pModuleCtx->pDisabledOffloadConfig, pOffload, pOffload->Header.Size);
+    vboxNetLwfWinDisableOffloading(pModuleCtx->pDisabledOffloadConfig);
     pModuleCtx->fOffloadConfigValid = true;
 }
 
@@ -1003,11 +1048,35 @@ static void vboxNetLwfWinFreePools(PVBOXNETLWF_MODULE pModuleCtx, int cPools)
         if (pModuleCtx->hPool[i])
         {
             NdisFreeNetBufferListPool(pModuleCtx->hPool[i]);
-            Log4(("vboxNetLwfWinAttach: freeed NBL+NB pool 0x%p\n", pModuleCtx->hPool[i]));
+            Log4(("vboxNetLwfWinFreePools: freed NBL+NB pool 0x%p\n", pModuleCtx->hPool[i]));
         }
     }
 }
 #endif /* VBOXNETLWF_FIXED_SIZE_POOLS */
+
+
+static void vboxNetLwfWinFreeModuleResources(PVBOXNETLWF_MODULE pModuleCtx)
+{
+#ifdef VBOXNETLWF_FIXED_SIZE_POOLS
+    vboxNetLwfWinFreePools(pModuleCtx, RT_ELEMENTS(g_cbPool));
+#else /* !VBOXNETLWF_FIXED_SIZE_POOLS */
+    if (pModuleCtx->hPool)
+    {
+        NdisFreeNetBufferListPool(pModuleCtx->hPool);
+        Log4(("vboxNetLwfWinFreeModuleResources: freed NBL+NB pool 0x%p\n", pModuleCtx->hPool));
+    }
+#endif /* !VBOXNETLWF_FIXED_SIZE_POOLS */
+    if (pModuleCtx->pDisabledOffloadConfig)
+        NdisFreeMemory(pModuleCtx->pDisabledOffloadConfig, 0, 0);
+    if (pModuleCtx->pSavedOffloadConfig)
+        NdisFreeMemory(pModuleCtx->pSavedOffloadConfig, 0, 0);
+    if (pModuleCtx->hWorkItem)
+        NdisFreeIoWorkItem(pModuleCtx->hWorkItem);
+    NdisFreeMemory(pModuleCtx, 0, 0);
+}
+
+
+DECLARE_GLOBAL_CONST_UNICODE_STRING(g_strHostOnlyMiniportName, L"VirtualBox Host-Only");
 
 static NDIS_STATUS vboxNetLwfWinAttach(IN NDIS_HANDLE hFilter, IN NDIS_HANDLE hDriverCtx,
                                        IN PNDIS_FILTER_ATTACH_PARAMETERS pParameters)
@@ -1018,6 +1087,21 @@ static NDIS_STATUS vboxNetLwfWinAttach(IN NDIS_HANDLE hFilter, IN NDIS_HANDLE hD
     if (!pGlobals)
     {
         vboxNetLwfLogErrorEvent(IO_ERR_INTERNAL_ERROR, NDIS_STATUS_FAILURE, 1);
+        return NDIS_STATUS_FAILURE;
+    }
+
+    /*
+     * We need a copy of NDIS_STRING structure as we are going to modify length
+     * of the base miniport instance name since RTL does not support comparing
+     * first n characters of two strings. We check if miniport names start with
+     * "Virtual Host-Only" to detect host-only adapters. It is a waste of resources
+     * to bind our filter to host-only adapters since they now operate independently.
+     */
+    NDIS_STRING strTruncatedInstanceName = *pParameters->BaseMiniportInstanceName; /* Do not copy data, only the structure itself */
+    strTruncatedInstanceName.Length = g_strHostOnlyMiniportName.Length; /* Truncate instance name */
+    if (RtlEqualUnicodeString(&strTruncatedInstanceName, &g_strHostOnlyMiniportName, TRUE /* Case insensitive */))
+    {
+        DbgPrint("vboxNetLwfWinAttach: won't attach to %wZ\n", pParameters->BaseMiniportInstanceName);
         return NDIS_STATUS_FAILURE;
     }
 
@@ -1066,8 +1150,38 @@ static NDIS_STATUS vboxNetLwfWinAttach(IN NDIS_HANDLE hFilter, IN NDIS_HANDLE hD
 
     Assert(pParameters->MacAddressLength == sizeof(RTMAC));
     NdisMoveMemory(&pModuleCtx->MacAddr, pParameters->CurrentMacAddress, RT_MIN(sizeof(RTMAC), pParameters->MacAddressLength));
+
+    pModuleCtx->cbOffloadConfig = sizeof(NDIS_OFFLOAD) * 2; /* Best guess to accomodate future expansion. */
+    /* Get the exact size, if possible. */
+    if (pParameters->DefaultOffloadConfiguration)
+        pModuleCtx->cbOffloadConfig = pParameters->DefaultOffloadConfiguration->Header.Size;
+    else
+        vboxNetLwfLogErrorEvent(IO_ERR_INTERNAL_ERROR, STATUS_SUCCESS, 8);
+
+    pModuleCtx->pSavedOffloadConfig =
+        (PNDIS_OFFLOAD)NdisAllocateMemoryWithTagPriority(hFilter, pModuleCtx->cbOffloadConfig,
+                                                         VBOXNETLWF_MEM_TAG, LowPoolPriority);
+    pModuleCtx->pDisabledOffloadConfig =
+        (PNDIS_OFFLOAD)NdisAllocateMemoryWithTagPriority(hFilter, pModuleCtx->cbOffloadConfig,
+                                                         VBOXNETLWF_MEM_TAG, LowPoolPriority);
+    if (!pModuleCtx->pSavedOffloadConfig || !pModuleCtx->pDisabledOffloadConfig)
+    {
+        LogError(("vboxNetLwfWinAttach: Failed to allocate offload config buffers for %ls\n",
+                pParameters->BaseMiniportName));
+        vboxNetLwfWinFreeModuleResources(pModuleCtx);
+        vboxNetLwfLogErrorEvent(IO_ERR_INSUFFICIENT_RESOURCES, NDIS_STATUS_RESOURCES, 9);
+        return NDIS_STATUS_RESOURCES;
+    }
+
     if (pParameters->DefaultOffloadConfiguration)
         vboxNetLwfWinUpdateSavedOffloadConfig(pModuleCtx, pParameters->DefaultOffloadConfiguration);
+    else
+    {
+        NdisZeroMemory(pModuleCtx->pDisabledOffloadConfig, pModuleCtx->cbOffloadConfig);
+        pModuleCtx->pDisabledOffloadConfig->Header.Type = NDIS_OBJECT_TYPE_OFFLOAD;
+        pModuleCtx->pDisabledOffloadConfig->Header.Revision = NDIS_OFFLOAD_REVISION_1;
+        pModuleCtx->pDisabledOffloadConfig->Header.Size = NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_1;
+    }
 
     pModuleCtx->pGlobals  = pGlobals;
     pModuleCtx->hFilter   = hFilter;
@@ -1100,9 +1214,8 @@ static NDIS_STATUS vboxNetLwfWinAttach(IN NDIS_HANDLE hFilter, IN NDIS_HANDLE hD
         if (!pModuleCtx->hPool[i])
         {
             LogError(("vboxNetLwfWinAttach: NdisAllocateNetBufferListPool failed\n"));
-            vboxNetLwfWinFreePools(pModuleCtx, i);
-            NdisFreeIoWorkItem(pModuleCtx->hWorkItem);
-            NdisFreeMemory(pModuleCtx, 0, 0);
+            vboxNetLwfWinFreeModuleResources(pModuleCtx);
+            vboxNetLwfLogErrorEvent(IO_ERR_INSUFFICIENT_RESOURCES, NDIS_STATUS_RESOURCES, 7);
             return NDIS_STATUS_RESOURCES;
         }
         Log4(("vboxNetLwfWinAttach: allocated NBL+NB pool (data size=%u) 0x%p\n",
@@ -1123,8 +1236,8 @@ static NDIS_STATUS vboxNetLwfWinAttach(IN NDIS_HANDLE hFilter, IN NDIS_HANDLE hD
     if (!pModuleCtx->hPool)
     {
         LogError(("vboxNetLwfWinAttach: NdisAllocateNetBufferListPool failed\n"));
-        NdisFreeIoWorkItem(pModuleCtx->hWorkItem);
-        NdisFreeMemory(pModuleCtx, 0, 0);
+        vboxNetLwfWinFreeModuleResources(pModuleCtx);
+        vboxNetLwfLogErrorEvent(IO_ERR_INSUFFICIENT_RESOURCES, NDIS_STATUS_RESOURCES, 7);
         return NDIS_STATUS_RESOURCES;
     }
     Log4(("vboxNetLwfWinAttach: allocated NBL+NB pool 0x%p\n", pModuleCtx->hPool));
@@ -1140,14 +1253,7 @@ static NDIS_STATUS vboxNetLwfWinAttach(IN NDIS_HANDLE hFilter, IN NDIS_HANDLE hD
     if (Status != NDIS_STATUS_SUCCESS)
     {
         LogError(("vboxNetLwfWinAttach: NdisFSetAttributes failed with 0x%x\n", Status));
-#ifdef VBOXNETLWF_FIXED_SIZE_POOLS
-        vboxNetLwfWinFreePools(pModuleCtx, RT_ELEMENTS(g_cbPool));
-#else /* !VBOXNETLWF_FIXED_SIZE_POOLS */
-        NdisFreeNetBufferListPool(pModuleCtx->hPool);
-        Log4(("vboxNetLwfWinAttach: freed NBL+NB pool 0x%p\n", pModuleCtx->hPool));
-#endif /* !VBOXNETLWF_FIXED_SIZE_POOLS */
-        NdisFreeIoWorkItem(pModuleCtx->hWorkItem);
-        NdisFreeMemory(pModuleCtx, 0, 0);
+        vboxNetLwfWinFreeModuleResources(pModuleCtx);
         vboxNetLwfLogErrorEvent(IO_ERR_INTERNAL_ERROR, NDIS_STATUS_RESOURCES, 5);
         return NDIS_STATUS_RESOURCES;
     }
@@ -1195,17 +1301,7 @@ static VOID vboxNetLwfWinDetach(IN NDIS_HANDLE hModuleCtx)
      * it does not require us to do anything here since it has already been taken care of
      * by vboxNetLwfWinPause().
      */
-#ifdef VBOXNETLWF_FIXED_SIZE_POOLS
-    vboxNetLwfWinFreePools(pModuleCtx, RT_ELEMENTS(g_cbPool));
-#else /* !VBOXNETLWF_FIXED_SIZE_POOLS */
-    if (pModuleCtx->hPool)
-    {
-        NdisFreeNetBufferListPool(pModuleCtx->hPool);
-        Log4(("vboxNetLwfWinDetach: freed NBL+NB pool 0x%p\n", pModuleCtx->hPool));
-    }
-#endif /* !VBOXNETLWF_FIXED_SIZE_POOLS */
-    NdisFreeIoWorkItem(pModuleCtx->hWorkItem);
-    NdisFreeMemory(hModuleCtx, 0, 0);
+    vboxNetLwfWinFreeModuleResources(pModuleCtx);
     Log4(("vboxNetLwfWinDetach: freed module context 0x%p\n", pModuleCtx));
     LogFlow(("<==vboxNetLwfWinDetach\n"));
 }
@@ -1241,7 +1337,7 @@ static void vboxNetLwfWinIndicateOffload(PVBOXNETLWF_MODULE pModuleCtx, PNDIS_OF
     OffloadingIndication.SourceHandle = pModuleCtx->hFilter;
     OffloadingIndication.StatusCode = NDIS_STATUS_TASK_OFFLOAD_CURRENT_CONFIG;
     OffloadingIndication.StatusBuffer = pOffload;
-    OffloadingIndication.StatusBufferSize = sizeof(NDIS_OFFLOAD);
+    OffloadingIndication.StatusBufferSize = pOffload->Header.Size;
     NdisFIndicateStatus(pModuleCtx->hFilter, &OffloadingIndication);
 }
 
@@ -1252,10 +1348,37 @@ static NDIS_STATUS vboxNetLwfWinRestart(IN NDIS_HANDLE hModuleCtx, IN PNDIS_FILT
     LogFlow(("==>vboxNetLwfWinRestart: module=%p\n", hModuleCtx));
     PVBOXNETLWF_MODULE pModuleCtx = (PVBOXNETLWF_MODULE)hModuleCtx;
     vboxNetLwfWinChangeState(pModuleCtx, LwfState_Restarting, LwfState_Paused);
+
+    /* By default the packets that go between VMs and wire are invisible to the host. */
+    pModuleCtx->fPassVmTrafficToHost = false;
+
+    NDIS_HANDLE hConfig;
+    NDIS_CONFIGURATION_OBJECT cfgObj;
+    cfgObj.Header.Type = NDIS_OBJECT_TYPE_CONFIGURATION_OBJECT;
+    cfgObj.Header.Revision = NDIS_CONFIGURATION_OBJECT_REVISION_1;
+    cfgObj.Header.Size = sizeof(NDIS_CONFIGURATION_OBJECT);
+    cfgObj.NdisHandle = g_VBoxNetLwfGlobals.hFilterDriver;
+
+    NDIS_STATUS Status = NdisOpenConfigurationEx(&cfgObj, &hConfig);
+    if (Status == NDIS_STATUS_SUCCESS)
+    {
+        NDIS_STRING strCfgParam = NDIS_STRING_CONST("PassVmTrafficToHost");
+        PNDIS_CONFIGURATION_PARAMETER pParam = NULL;
+        NdisReadConfiguration(&Status, &pParam, hConfig, &strCfgParam, NdisParameterInteger);
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            Log(("vboxNetLwfWinRestart: Failed to read 'PassVmTrafficToHost' from the registry.\n"));
+        }
+        else if (pParam->ParameterData.IntegerData != 0)
+        {
+            Log(("vboxNetLwfWinRestart: Allowing the host to see VM traffic in promisc mode by user request.\n"));
+            pModuleCtx->fPassVmTrafficToHost = true;
+        }
+        NdisCloseConfiguration(hConfig);
+    }
     vboxNetLwfWinChangeState(pModuleCtx, LwfState_Running, LwfState_Restarting);
-    NDIS_STATUS Status = NDIS_STATUS_SUCCESS;
-    LogFlow(("<==vboxNetLwfWinRestart: Status = 0x%x\n", Status));
-    return Status;
+    LogFlow(("<==vboxNetLwfWinRestart: Status = 0x%x, returning NDIS_STATUS_SUCCESS nontheless.\n", Status));
+    return NDIS_STATUS_SUCCESS;
 }
 
 
@@ -1265,11 +1388,20 @@ static void vboxNetLwfWinDestroySG(PINTNETSG pSG)
     Log4(("vboxNetLwfWinDestroySG: freed SG 0x%p\n", pSG));
 }
 
+/**
+ * Worker for vboxNetLwfWinNBtoSG() that gets the max segment count needed.
+ * @note vboxNetLwfWinNBtoSG may use fewer depending on cbPacket and offset!
+ * @note vboxNetAdpWinCalcSegments() is a copy of this code.
+ */
 DECLINLINE(ULONG) vboxNetLwfWinCalcSegments(PNET_BUFFER pNetBuf)
 {
     ULONG cSegs = 0;
     for (PMDL pMdl = NET_BUFFER_CURRENT_MDL(pNetBuf); pMdl; pMdl = NDIS_MDL_LINKAGE(pMdl))
-        cSegs++;
+    {
+        /* Skip empty MDLs (see @bugref{9233}) */
+        if (MmGetMdlByteCount(pMdl))
+            cSegs++;
+    }
     return cSegs;
 }
 
@@ -1376,8 +1508,20 @@ static PNET_BUFFER_LIST vboxNetLwfWinSGtoNB(PVBOXNETLWF_MODULE pModule, PINTNETS
         LogFlow(("<==vboxNetLwfWinSGtoNB: return NULL\n"));
         return NULL;
     }
+    const ULONG cbAlignmentMask = sizeof(USHORT) - 1; /* Microsoft LB/FO provider expects packets to be aligned at word boundary. */
+    ULONG cbAlignedFrame = (pSG->cbTotal + cbAlignmentMask) & ~cbAlignmentMask;
+    Assert(cbAlignedFrame >= pSG->cbTotal);
+    Assert(cbFrame >= cbAlignedFrame);
     NET_BUFFER *pBuffer = NET_BUFFER_LIST_FIRST_NB(pBufList);
-    NDIS_STATUS Status = NdisRetreatNetBufferDataStart(pBuffer, pSG->cbTotal, 0 /** @todo DataBackfill */, NULL);
+    NDIS_STATUS Status = NdisRetreatNetBufferDataStart(pBuffer, cbAlignedFrame, 0 /** @todo DataBackfill */, NULL);
+    if (cbAlignedFrame - pSG->cbTotal > 0)
+    {
+        /* Make sure padding zeros do not get to the wire. */
+        if (NET_BUFFER_DATA_LENGTH(pBuffer) != cbAlignedFrame)
+            vboxNetLwfLogErrorEvent(IO_ERR_INTERNAL_ERROR, STATUS_SUCCESS, 11);
+        else
+            NET_BUFFER_DATA_LENGTH(pBuffer) = pSG->cbTotal;
+    }
     if (Status == NDIS_STATUS_SUCCESS)
     {
         uint8_t *pDst = (uint8_t*)NdisGetDataBuffer(pBuffer, pSG->cbTotal, NULL, 1, 0);
@@ -1394,7 +1538,7 @@ static PNET_BUFFER_LIST vboxNetLwfWinSGtoNB(PVBOXNETLWF_MODULE pModule, PINTNETS
         else
         {
             LogError(("vboxNetLwfWinSGtoNB: failed to obtain the buffer pointer (size=%u)\n", pSG->cbTotal));
-            NdisAdvanceNetBufferDataStart(pBuffer, pSG->cbTotal, false, NULL); /** @todo why bother? */
+            NdisAdvanceNetBufferDataStart(pBuffer, cbAlignedFrame, false, NULL); /** @todo why bother? */
             NdisFreeNetBufferList(pBufList);
             pBufList = NULL;
         }
@@ -1458,44 +1602,61 @@ static PNET_BUFFER_LIST vboxNetLwfWinSGtoNB(PVBOXNETLWF_MODULE pModule, PINTNETS
     return pBufList;
 }
 
+/**
+ * @note vboxNetAdpWinNBtoSG() is a copy of this code.
+ */
 static PINTNETSG vboxNetLwfWinNBtoSG(PVBOXNETLWF_MODULE pModule, PNET_BUFFER pNetBuf)
 {
     ULONG cbPacket = NET_BUFFER_DATA_LENGTH(pNetBuf);
-    UINT cSegs = vboxNetLwfWinCalcSegments(pNetBuf);
+    ULONG cSegs = vboxNetLwfWinCalcSegments(pNetBuf);
     /* Allocate and initialize SG */
     PINTNETSG pSG = (PINTNETSG)NdisAllocateMemoryWithTagPriority(pModule->hFilter,
-                                                                 RT_OFFSETOF(INTNETSG, aSegs[cSegs]),
+                                                                 RT_UOFFSETOF_DYN(INTNETSG, aSegs[cSegs]),
                                                                  VBOXNETLWF_MEM_TAG,
                                                                  NormalPoolPriority);
     AssertReturn(pSG, pSG);
     Log4(("vboxNetLwfWinNBtoSG: allocated SG 0x%p\n", pSG));
     IntNetSgInitTempSegs(pSG, cbPacket /*cbTotal*/, cSegs, cSegs /*cSegsUsed*/);
 
-    int rc = NDIS_STATUS_SUCCESS;
     ULONG uOffset = NET_BUFFER_CURRENT_MDL_OFFSET(pNetBuf);
     cSegs = 0;
     for (PMDL pMdl = NET_BUFFER_CURRENT_MDL(pNetBuf);
          pMdl != NULL && cbPacket > 0;
          pMdl = NDIS_MDL_LINKAGE(pMdl))
     {
+        ULONG cbSrc = MmGetMdlByteCount(pMdl);
+        if (cbSrc == 0)
+            continue; /* Skip empty MDLs (see @bugref{9233}) */
+
         PUCHAR pSrc = (PUCHAR)MmGetSystemAddressForMdlSafe(pMdl, LowPagePriority);
         if (!pSrc)
         {
-            rc = NDIS_STATUS_RESOURCES;
-            break;
-        }
-        ULONG cbSrc = MmGetMdlByteCount(pMdl);
-        if (uOffset)
-        {
-            Assert(uOffset < cbSrc);
-            pSrc  += uOffset;
-            cbSrc -= uOffset;
-            uOffset = 0;
+            vboxNetLwfWinDestroySG(pSG);
+            return NULL;
         }
 
+        /* Handle the offset in the current (which is the first for us) MDL */
+        if (uOffset)
+        {
+            if (uOffset < cbSrc)
+            {
+                pSrc  += uOffset;
+                cbSrc -= uOffset;
+                uOffset = 0;
+            }
+            else
+            {
+                /* This is an invalid MDL chain */
+                vboxNetLwfWinDestroySG(pSG);
+                return NULL;
+            }
+        }
+
+        /* Do not read the last MDL beyond packet's end */
         if (cbSrc > cbPacket)
             cbSrc = cbPacket;
 
+        Assert(cSegs < pSG->cSegsAlloc);
         pSG->aSegs[cSegs].pv = pSrc;
         pSG->aSegs[cSegs].cb = cbSrc;
         pSG->aSegs[cSegs].Phys = NIL_RTHCPHYS;
@@ -1503,41 +1664,13 @@ static PINTNETSG vboxNetLwfWinNBtoSG(PVBOXNETLWF_MODULE pModule, PNET_BUFFER pNe
         cbPacket -= cbSrc;
     }
 
-    Assert(cSegs <= pSG->cSegsAlloc);
+    Assert(cbPacket == 0);
+    Assert(cSegs <= pSG->cSegsUsed);
 
-    if (RT_FAILURE(rc))
-    {
-        vboxNetLwfWinDestroySG(pSG);
-        pSG = NULL;
-    }
-    else
-    {
-        Assert(cbPacket == 0);
-        Assert(pSG->cSegsUsed == cSegs);
-    }
+    /* Update actual segment count in case we used fewer than anticipated. */
+    pSG->cSegsUsed = (uint16_t)cSegs;
+
     return pSG;
-}
-
-static void vboxNetLwfWinDisableOffloading(PNDIS_OFFLOAD pOffloadConfig)
-{
-    pOffloadConfig->Checksum.IPv4Transmit.Encapsulation               = NDIS_ENCAPSULATION_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv4Transmit.IpOptionsSupported          = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv4Transmit.TcpOptionsSupported         = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv4Transmit.TcpChecksum                 = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv4Transmit.UdpChecksum                 = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv4Transmit.IpChecksum                  = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv6Transmit.Encapsulation               = NDIS_ENCAPSULATION_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv6Transmit.IpExtensionHeadersSupported = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv6Transmit.TcpOptionsSupported         = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv6Transmit.TcpChecksum                 = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->Checksum.IPv6Transmit.UdpChecksum                 = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->LsoV1.IPv4.Encapsulation                          = NDIS_ENCAPSULATION_NOT_SUPPORTED;
-    pOffloadConfig->LsoV1.IPv4.TcpOptions                             = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->LsoV1.IPv4.IpOptions                              = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->LsoV2.IPv4.Encapsulation                          = NDIS_ENCAPSULATION_NOT_SUPPORTED;
-    pOffloadConfig->LsoV2.IPv6.Encapsulation                          = NDIS_ENCAPSULATION_NOT_SUPPORTED;
-    pOffloadConfig->LsoV2.IPv6.IpExtensionHeadersSupported            = NDIS_OFFLOAD_NOT_SUPPORTED;
-    pOffloadConfig->LsoV2.IPv6.TcpOptionsSupported                    = NDIS_OFFLOAD_NOT_SUPPORTED;
 }
 
 VOID vboxNetLwfWinStatus(IN NDIS_HANDLE hModuleCtx, IN PNDIS_STATUS_INDICATION pIndication)
@@ -1573,6 +1706,18 @@ static bool vboxNetLwfWinForwardToIntNet(PVBOXNETLWF_MODULE pModuleCtx, PNET_BUF
     if (!ASMAtomicReadBool(&pModuleCtx->fActive))
     {
         Log(("vboxNetLwfWinForwardToIntNet: trunk is inactive, won't forward\n"));
+        return false;
+    }
+    /* Some NPF protocols make NDIS to loop back packets at miniport level, we must ignore those. */
+    if (NdisTestNblFlag(pBufLists, NDIS_NBL_FLAGS_IS_LOOPBACK_PACKET))
+    {
+        if (pBufLists->SourceHandle == pModuleCtx->hFilter && !pModuleCtx->fPassVmTrafficToHost)
+        {
+            /* Drop the packets we've injected. */
+            vboxNetLwfWinDumpPackets("vboxNetLwfWinForwardToIntNet: dropping loopback", pBufLists);
+            return true;
+        }
+        vboxNetLwfWinDumpPackets("vboxNetLwfWinForwardToIntNet: passing through loopback", pBufLists);
         return false;
     }
 
@@ -1613,6 +1758,11 @@ static bool vboxNetLwfWinForwardToIntNet(PVBOXNETLWF_MODULE pModuleCtx, PNET_BUF
         Log(("vboxNetLwfWinForwardToIntNet: list=%d buffers=%d\n", nLists, nBuffers));
     }
     Log(("vboxNetLwfWinForwardToIntNet: lists=%d drop=%s don't=%s\n", nLists, fDropIt ? "true":"false", fDontDrop ? "true":"false"));
+
+    /* If the host (and the user) wants to see all packets we must not drop any. */
+    if (pModuleCtx->fPassVmTrafficToHost && vboxNetLwfWinIsPromiscuous(pModuleCtx))
+        fDropIt = false;
+
     LogFlow(("<==vboxNetLwfWinForwardToIntNet: return '%s'\n",
              fDropIt ? (fDontDrop ? "do not drop (some)" : "drop it") : "do not drop (any)"));
     return fDropIt && !fDontDrop; /* Drop the list if ALL its buffers are being dropped! */
@@ -1768,7 +1918,7 @@ VOID vboxNetLwfWinReceiveNetBufferLists(IN NDIS_HANDLE hModuleCtx,
     if (!ASMAtomicReadBool(&pModule->fActive))
     {
         /*
-         * The trunk is inactive, jusp pass along all packets to the next
+         * The trunk is inactive, just pass along all packets to the next
          * overlying driver.
          */
         NdisFIndicateReceiveNetBufferLists(pModule->hFilter, pBufLists, nPort, nBufLists, fFlags);
@@ -1780,34 +1930,16 @@ VOID vboxNetLwfWinReceiveNetBufferLists(IN NDIS_HANDLE hModuleCtx,
     {
         if (NDIS_TEST_RECEIVE_CANNOT_PEND(fFlags))
         {
-            /* We do not own NBLs so we do not need to return them */
-            /* First we need to scan through the list to see if some packets must be dropped */
-            bool bDropIt = false;
             for (PNET_BUFFER_LIST pList = pBufLists; pList; pList = NET_BUFFER_LIST_NEXT_NBL(pList))
             {
                 PNET_BUFFER_LIST pNext = NET_BUFFER_LIST_NEXT_NBL(pList);
                 NET_BUFFER_LIST_NEXT_NBL(pList) = NULL; /* Unlink temporarily */
-                if (vboxNetLwfWinForwardToIntNet(pModule, pList, INTNETTRUNKDIR_WIRE))
-                    bDropIt = true;
-                NET_BUFFER_LIST_NEXT_NBL(pList) = pNext; /* Restore the link */
-            }
-            if (bDropIt)
-            {
-                /* Some NBLs must be dropped, indicate selectively one by one */
-                for (PNET_BUFFER_LIST pList = pBufLists; pList; pList = NET_BUFFER_LIST_NEXT_NBL(pList))
+                if (!vboxNetLwfWinForwardToIntNet(pModule, pList, INTNETTRUNKDIR_WIRE))
                 {
-                    PNET_BUFFER_LIST pNext = NET_BUFFER_LIST_NEXT_NBL(pList);
-                    NET_BUFFER_LIST_NEXT_NBL(pList) = NULL; /* Unlink temporarily */
                     vboxNetLwfWinDumpPackets("vboxNetLwfWinReceiveNetBufferLists: passing up", pList);
                     NdisFIndicateReceiveNetBufferLists(pModule->hFilter, pList, nPort, nBufLists, fFlags);
-                    NET_BUFFER_LIST_NEXT_NBL(pList) = pNext; /* Restore the link */
                 }
-            }
-            else
-            {
-                /* All NBLs must be indicated, do it in bulk. */
-                vboxNetLwfWinDumpPackets("vboxNetLwfWinReceiveNetBufferLists: passing up", pBufLists);
-                NdisFIndicateReceiveNetBufferLists(pModule->hFilter, pBufLists, nPort, nBufLists, fFlags);
+                NET_BUFFER_LIST_NEXT_NBL(pList) = pNext; /* Restore the link */
             }
         }
         else
@@ -2333,21 +2465,7 @@ VOID vboxNetLwfWinToggleOffloading(PVOID WorkItemContext, NDIS_HANDLE NdisIoWork
     {
         /* Disable offloading temporarily by indicating offload config change. */
         /** @todo Be sure to revise this when implementing offloading support! */
-        NDIS_OFFLOAD OffloadConfig;
-        if (pModuleCtx->fOffloadConfigValid)
-        {
-            OffloadConfig = pModuleCtx->SavedOffloadConfig;
-            vboxNetLwfWinDisableOffloading(&OffloadConfig);
-        }
-        else
-        {
-            DbgPrint("VBoxNetLwf: no saved offload config to modify for %s\n", pModuleCtx->szMiniportName);
-            NdisZeroMemory(&OffloadConfig, sizeof(OffloadConfig));
-            OffloadConfig.Header.Type = NDIS_OBJECT_TYPE_OFFLOAD;
-            OffloadConfig.Header.Revision = NDIS_OFFLOAD_REVISION_1;
-            OffloadConfig.Header.Size = NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_1;
-        }
-        vboxNetLwfWinIndicateOffload(pModuleCtx, &OffloadConfig);
+        vboxNetLwfWinIndicateOffload(pModuleCtx, pModuleCtx->pDisabledOffloadConfig);
         Log(("vboxNetLwfWinToggleOffloading: set offloading off\n"));
     }
     else
@@ -2355,7 +2473,7 @@ VOID vboxNetLwfWinToggleOffloading(PVOID WorkItemContext, NDIS_HANDLE NdisIoWork
         /* The filter is inactive -- restore offloading configuration. */
         if (pModuleCtx->fOffloadConfigValid)
         {
-            vboxNetLwfWinIndicateOffload(pModuleCtx, &pModuleCtx->SavedOffloadConfig);
+            vboxNetLwfWinIndicateOffload(pModuleCtx, pModuleCtx->pSavedOffloadConfig);
             Log(("vboxNetLwfWinToggleOffloading: restored offloading config\n"));
         }
         else
@@ -2566,7 +2684,8 @@ int vboxNetFltOsInitInstance(PVBOXNETFLTINS pThis, void *pvContext)
         }
     }
     NdisReleaseSpinLock(&g_VBoxNetLwfGlobals.Lock);
-    vboxNetLwfLogErrorEvent(IO_ERR_INTERNAL_ERROR, STATUS_SUCCESS, 6);
+    // Internal network code will try to reconnect periodically, we should not spam in event log
+    //vboxNetLwfLogErrorEvent(IO_ERR_INTERNAL_ERROR, STATUS_SUCCESS, 6);
     LogFlow(("<==vboxNetFltOsInitInstance: return VERR_INTNET_FLT_IF_NOT_FOUND\n"));
     return VERR_INTNET_FLT_IF_NOT_FOUND;
 }

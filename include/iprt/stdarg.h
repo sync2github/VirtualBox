@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_stdarg_h
-#define ___iprt_stdarg_h
+#ifndef IPRT_INCLUDED_stdarg_h
+#define IPRT_INCLUDED_stdarg_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #ifdef IPRT_NO_CRT
 # include <iprt/types.h>
@@ -40,17 +43,27 @@
 #  if __GNUC__ >= 4 /* System headers refers to __builtin_stdarg_start. */
 #   define __builtin_stdarg_start __builtin_va_start
 #  endif
+# elif defined(RT_OS_LINUX) && defined(IN_RING0)
+#  include "linux/version.h"
+#  if RTLNX_VER_MIN(5,15,0)
+#   include <linux/stdarg.h>
+#  else
+#   include <stdarg.h>
+#  endif
 # else
 #  include <stdarg.h>
 # endif
 #endif
 
 /*
- * MSC doesn't implement va_copy.
+ * Older MSC versions doesn't implement va_copy.  Newer (12.0+?) ones does
+ * implement it like below, but for now it's easier to continue like for the
+ * older ones so we can more easily handle R0, RC and other weird contexts.
  */
-#ifndef va_copy
+#if !defined(va_copy) || defined(_MSC_VER)
+# undef  va_copy
 # define va_copy(dst, src) do { (dst) = (src); } while (0) /** @todo check AMD64 */
 #endif
 
-#endif
+#endif /* !IPRT_INCLUDED_stdarg_h */
 

@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: bs3-cmn-PerCpuData.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - Per CPU Data.
  *
@@ -7,7 +7,7 @@
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -51,6 +51,10 @@ uint32_t g_pBs3TrapSetJmpFrame = 0;
 uint8_t  g_bBs3CurrentMode = BS3_MODE_RM;
 
 uint8_t  g_bStupidUnalignedCompiler1 = 0xfe;
+
+/** Set to disable special V8086 \#GP and \#UD handling in Bs3TrapDefaultHandler.
+ * This is useful for getting   */
+bool volatile g_fBs3TrapNoV86Assist = false;
 
 /** The context of the last Bs3TrapSetJmp call.
  * This will have eax set to 1 and need only be restored when it triggers. */

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: USBProxyService.cpp 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  * VirtualBox USB Proxy Service (base) class.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define LOG_GROUP LOG_GROUP_MAIN_USBPROXYBACKEND
 #include "USBProxyService.h"
 #include "HostUSBDeviceImpl.h"
 #include "HostImpl.h"
@@ -22,10 +23,10 @@
 #include "VirtualBoxImpl.h"
 
 #include "AutoCaller.h"
-#include "Logging.h"
+#include "LoggingNew.h"
 
 #include <VBox/com/array.h>
-#include <VBox/err.h>
+#include <iprt/errcore.h>
 #include <iprt/asm.h>
 #include <iprt/semaphore.h>
 #include <iprt/thread.h>
@@ -80,7 +81,7 @@ HRESULT USBProxyService::init(void)
     ComObjPtr<USBProxyBackend> UsbProxyBackendHost;
 # endif
     UsbProxyBackendHost.createObject();
-    int vrc = UsbProxyBackendHost->init(this, Utf8Str("host"), Utf8Str(""));
+    int vrc = UsbProxyBackendHost->init(this, Utf8Str("host"), Utf8Str(""), false /* fLoadingSettings */);
     if (RT_FAILURE(vrc))
     {
         mLastError = vrc;
@@ -211,7 +212,8 @@ HRESULT USBProxyService::addUSBDeviceSource(const com::Utf8Str &aBackend, const 
 {
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-    HRESULT hrc = createUSBDeviceSource(aBackend, aId, aAddress, aPropertyNames, aPropertyValues);
+    HRESULT hrc = createUSBDeviceSource(aBackend, aId, aAddress, aPropertyNames,
+                                        aPropertyValues, false /* fLoadingSettings */);
     if (SUCCEEDED(hrc))
     {
         alock.release();
@@ -263,6 +265,7 @@ HRESULT USBProxyService::removeUSBDeviceSource(const com::Utf8Str &aId)
  *
  * @param   aMachine        The machine to attach the device to.
  * @param   aId             The UUID of the USB device to capture and attach.
+ * @param   aCaptureFilename
  *
  * @returns COM status code and error info.
  *
@@ -422,6 +425,8 @@ HRESULT USBProxyService::autoCaptureDevicesForVM(SessionMachine *aMachine)
  * to other VMs.
  *
  * @param   aMachine        The machine to detach devices from.
+ * @param   aDone
+ * @param   aAbnormal
  *
  * @returns COM status code, perhaps with error info.
  *
@@ -496,7 +501,8 @@ HRESULT USBProxyService::i_loadSettings(const settings::USBDeviceSourcesList &ll
     {
         std::vector<com::Utf8Str> vecPropNames, vecPropValues;
         const settings::USBDeviceSource &src = *it;
-        hrc = createUSBDeviceSource(src.strBackend, src.strName, src.strAddress, vecPropNames, vecPropValues);
+        hrc = createUSBDeviceSource(src.strBackend, src.strName, src.strAddress,
+                                    vecPropNames, vecPropValues, true /* fLoadingSettings */);
     }
 
     return hrc;
@@ -539,7 +545,7 @@ HRESULT USBProxyService::i_saveSettings(settings::USBDeviceSourcesList &llUSBDev
  * VM attaching. This may result in IPC and temporary lock abandonment.
  *
  * @param   aDevice     The device in question.
- * @param   aUSBDevice  The USB device structure.
+ * @param   pDev        The USB device structure.
  */
 void USBProxyService::i_deviceAdded(ComObjPtr<HostUSBDevice> &aDevice,
                                     PUSBDEVICE pDev)
@@ -572,7 +578,7 @@ void USBProxyService::i_deviceAdded(ComObjPtr<HostUSBDevice> &aDevice,
             && pHostDevice->i_compare(pDev) < 0)
             break;
 
-        it++;
+        ++it;
     }
 
     mDevices.insert(it, aDevice);
@@ -707,6 +713,7 @@ void USBProxyService::deviceChanged(ComObjPtr<HostUSBDevice> &aDevice, bool fRun
  *
  * @returns COM status code (only parameter & state checks will fail).
  * @param   aDevice         The USB device to apply filters to.
+ * @param   llOpenedMachines The list of opened machines.
  * @param   aIgnoreMachine  The machine to ignore filters from (we've just
  *                          detached the device from this machine).
  *
@@ -887,10 +894,13 @@ ComObjPtr<HostUSBDevice> USBProxyService::findDeviceById(IN_GUID aId)
  * @param   aAddress          The backend specific address.
  * @param   aPropertyNames    Vector of optional property keys the backend supports.
  * @param   aPropertyValues   Vector of optional property values the backend supports.
+ * @param   fLoadingSettings  Flag whether the USB device source is created while the
+ *                            settings are loaded or through the Main API.
  */
 HRESULT USBProxyService::createUSBDeviceSource(const com::Utf8Str &aBackend, const com::Utf8Str &aId,
                                                const com::Utf8Str &aAddress, const std::vector<com::Utf8Str> &aPropertyNames,
-                                               const std::vector<com::Utf8Str> &aPropertyValues)
+                                               const std::vector<com::Utf8Str> &aPropertyValues,
+                                               bool fLoadingSettings)
 {
     HRESULT hrc = S_OK;
 
@@ -918,7 +928,7 @@ HRESULT USBProxyService::createUSBDeviceSource(const com::Utf8Str &aBackend, con
         ComObjPtr<USBProxyBackendUsbIp> UsbProxyBackend;
 
         UsbProxyBackend.createObject();
-        int vrc = UsbProxyBackend->init(this, aId, aAddress);
+        int vrc = UsbProxyBackend->init(this, aId, aAddress, fLoadingSettings);
         if (RT_FAILURE(vrc))
             hrc = setError(E_FAIL,
                            tr("Creating the USB device source \"%s\" using backend \"%s\" failed with %Rrc"),
@@ -938,12 +948,12 @@ HRESULT USBProxyService::setError(HRESULT aResultCode, const char *aText, ...)
 {
     va_list va;
     va_start(va, aText);
-    HRESULT rc = VirtualBoxBase::setErrorInternal(aResultCode,
-                                                    COM_IIDOF(IHost),
-                                                    "USBProxyService",
-                                                    Utf8StrFmt(aText, va),
-                                                    false /* aWarning*/,
-                                                    true /* aLogIt*/);
+    HRESULT rc = VirtualBoxBase::setErrorInternalV(aResultCode,
+                                                   COM_IIDOF(IHost),
+                                                   "USBProxyService",
+                                                   aText, va,
+                                                   false /* aWarning*/,
+                                                   true /* aLogIt*/);
     va_end(va);
     return rc;
 }

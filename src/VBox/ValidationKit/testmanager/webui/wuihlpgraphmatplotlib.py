@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# $Id$
+# $Id: wuihlpgraphmatplotlib.py 82968 2020-02-04 10:35:17Z vboxsync $
 
 """
 Test Manager Web-UI - Graph Helpers - Implemented using matplotlib.
@@ -7,7 +7,7 @@ Test Manager Web-UI - Graph Helpers - Implemented using matplotlib.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,16 +26,20 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 # Standard Python Import and extensions installed on the system.
 import re;
-import StringIO;
+import sys;
+if sys.version_info[0] >= 3:
+    from io       import StringIO as StringIO;  # pylint: disable=import-error,no-name-in-module,useless-import-alias
+else:
+    from StringIO import StringIO as StringIO;  # pylint: disable=import-error,no-name-in-module,useless-import-alias
 
-import matplotlib;                          # pylint: disable=F0401
+import matplotlib;                              # pylint: disable=import-error
 matplotlib.use('Agg'); # Force backend.
-import matplotlib.pyplot;                   # pylint: disable=F0401
-from numpy import arange as numpy_arange;   # pylint: disable=E0611,E0401
+import matplotlib.pyplot;                       # pylint: disable=import-error
+from numpy import arange as numpy_arange;       # pylint: disable=no-name-in-module,import-error,wrong-import-order
 
 # Validation Kit imports.
 from testmanager.webui.wuihlpgraphbase  import WuiHlpGraphBase;
@@ -59,7 +63,7 @@ class WuiHlpGraphMatplotlibBase(WuiHlpGraphBase):
         basic graph configuration.
         """
         if self._fXkcdStyle and matplotlib.__version__ > '1.2.9':
-            matplotlib.pyplot.xkcd();           # pylint: disable=E1101
+            matplotlib.pyplot.xkcd();           # pylint: disable=no-member
         matplotlib.rcParams.update({'font.size': self._cPtFont});
 
         oFigure = matplotlib.pyplot.figure(figsize = (float(self._cxGraph) / self._cDpiGraph,
@@ -69,7 +73,7 @@ class WuiHlpGraphMatplotlibBase(WuiHlpGraphBase):
 
     def _produceSvg(self, oFigure, fTightLayout = True):
         """ Creates an SVG string from the given figure. """
-        oOutput = StringIO.StringIO();
+        oOutput = StringIO();
         if fTightLayout:
             oFigure.tight_layout();
         oFigure.savefig(oOutput, format = 'svg');
@@ -101,7 +105,12 @@ class WuiHlpBarGraph(WuiHlpGraphMatplotlibBase):
         self.fpMax = float(fpMax);
         return None;
 
-    def renderGraph(self): # pylint: disable=R0914
+    def invertYDirection(self):
+        """ Inverts the direction of the Y-axis direction. """
+        ## @todo self.fYInverted = True;
+        return None;
+
+    def renderGraph(self): # pylint: disable=too-many-locals
         aoTable  = self._oData.aoTable;
 
         #
@@ -193,7 +202,7 @@ class WuiHlpLineGraph(WuiHlpGraphMatplotlibBase):
         self._fErrorBarY = fEnable;
         return True;
 
-    def renderGraph(self): # pylint: disable=R0914
+    def renderGraph(self): # pylint: disable=too-many-locals
         aoSeries = self._oData.aoSeries;
 
         oFigure = self._createFigure();
@@ -241,7 +250,7 @@ class WuiHlpLineGraph(WuiHlpGraphMatplotlibBase):
             oSubPlot.grid(True, 'major', axis = 'both');
             oSubPlot.grid(True, 'both', axis = 'x');
 
-        if True: # pylint: disable=W0125
+        if True: # pylint: disable=using-constant-test
             #    oSubPlot.axis('off');
             #oSubPlot.grid(True, 'major', axis = 'none');
             #oSubPlot.grid(True, 'both', axis = 'none');
@@ -273,7 +282,7 @@ class WuiHlpMiniSuccessRateGraph(WuiHlpGraphMatplotlibBase):
         WuiHlpGraphMatplotlibBase.__init__(self, sId, oData, oDisp);
         self.setFontSize(6);
 
-    def renderGraph(self): # pylint: disable=R0914
+    def renderGraph(self): # pylint: disable=too-many-locals
         assert len(self._oData.aoSeries) == 1;
         oSeries = self._oData.aoSeries[0];
 
@@ -283,7 +292,7 @@ class WuiHlpMiniSuccessRateGraph(WuiHlpGraphMatplotlibBase):
         # end
 
         oFigure = self._createFigure();
-        from mpl_toolkits.axes_grid.axislines import SubplotZero; # pylint: disable=E0401
+        from mpl_toolkits.axes_grid.axislines import SubplotZero; # pylint: disable=import-error
         oAxis = SubplotZero(oFigure, 111);
         oFigure.add_subplot(oAxis);
 

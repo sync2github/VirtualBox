@@ -1,19 +1,21 @@
-// $Id$
-/// @file
-//
-// VirtualBox ACPI
-//
-// Copyright (C) 2006-2015 Oracle Corporation
-//
-// This file is part of VirtualBox Open Source Edition (OSE), as
-// available from http://www.virtualbox.org. This file is free software;
-// you can redistribute it and/or modify it under the terms of the GNU
-// General Public License (GPL) as published by the Free Software
-// Foundation, in version 2 as it comes in the "COPYING" file of the
-// VirtualBox OSE distribution. VirtualBox OSE is distributed in the
-// hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+/* $Id: vbox.dsl 91234 2021-09-14 13:35:02Z vboxsync $ */
+/** @file
+ * VirtualBox ACPI
+ */
 
-DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
+/*
+ * Copyright (C) 2006-2020 Oracle Corporation
+ *
+ * This file is part of VirtualBox Open Source Edition (OSE), as
+ * available from http://www.virtualbox.org. This file is free software;
+ * you can redistribute it and/or modify it under the terms of the GNU
+ * General Public License (GPL) as published by the Free Software
+ * Foundation, in version 2 as it comes in the "COPYING" file of the
+ * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+ * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ */
+
+DefinitionBlock ("DSDT.aml", "DSDT", 2, "VBOX  ", "VBOXBIOS", 2)
 {
     // Declare debugging ports withing SystemIO
     OperationRegion(DBG0, SystemIO, 0x3000, 4)
@@ -134,17 +136,17 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
         // Local6 is the length of Str2.
         // Local7 is the minimum of Str1 or Str2 length.
         //
-    
+
         Store(Arg0, Local0)
         Store(S2BF(Local0), Local0)
-    
+
         Store(S2BF(Arg1), Local1)
         Store(Zero, Local4)
-    
+
         Store(SLEN(Arg0), Local5)
         Store(SLEN(Arg1), Local6)
         Store(MIN(Local5, Local6), Local7)
-    
+
         While (LLess(Local4, Local7))
         {
             Store(Derefof(Index(Local0, Local4)), Local2)
@@ -160,10 +162,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                     Return(Ones)
                 }
             }
-    
+
             Increment(Local4)
         }
-    
+
         If (LLess(Local4, Local5))
         {
             Return(One)
@@ -241,7 +243,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
             DBG("_OSI exists\n")
             // OS returns non-zero value in response to _OSI query if it
             // supports the interface. Newer Windows releases support older
-            // versions of the ACPI interface. 
+            // versions of the ACPI interface.
             If (_OSI("Windows 2001"))
             {
                 Store(4, MSWV)  // XP
@@ -337,16 +339,16 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
 
     IndexField (IDX0, DAT0, DwordAcc, NoLock, Preserve)
     {
-        MEML,  32,
+        MEML,  32, // low-memory length (64KB units)
         UIOA,  32, // if IO APIC enabled
         UHPT,  32, // if HPET enabled
         USMC,  32, // if SMC enabled
         UFDC,  32, // if floppy controller enabled
-        SL2B,  32, // Serial2 base IO address  
+        SL2B,  32, // Serial2 base IO address
         SL2I,  32, // Serial2 IRQ
-        SL3B,  32, // Serial3 base IO address  
+        SL3B,  32, // Serial3 base IO address
         SL3I,  32, // Serial3 IRQ
-        MEMH,  32,
+        PMNN,  32, // start of 64-bit prefetch window (64KB units)
         URTC,  32, // if RTC shown in tables
         CPUL,  32, // flag of CPU lock state
         CPUC,  32, // CPU to check lock status
@@ -359,16 +361,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
         HBCA,  32, // host bus controller address
         PCIB,  32, // PCI MCFG base start
         PCIL,  32, // PCI MCFG length
-        SL0B,  32, // Serial0 base IO address  
+        SL0B,  32, // Serial0 base IO address
         SL0I,  32, // Serial0 IRQ
-        SL1B,  32, // Serial1 base IO address  
+        SL1B,  32, // Serial1 base IO address
         SL1I,  32, // Serial1 IRQ
-        PP0B,  32, // Parallel0 base IO address  
+        PP0B,  32, // Parallel0 base IO address
         PP0I,  32, // Parallel0 IRQ
-        PP1B,  32, // Parallel1 base IO address  
+        PP1B,  32, // Parallel1 base IO address
         PP1I,  32, // Parallel1 IRQ
-        Offset (0x80),
-        ININ, 32,
+        PMNX,  32, // limit of 64-bit prefetch window (64KB units)
+        NVMA,  32, // Primary NVMe controller PCI address
+        IOMA,  32, // AMD IOMMU
+        SIOA,  32, // Southbridge IO APIC (when AMD IOMMU is present)
         Offset (0x200),
         VAIN, 32,
     }
@@ -388,14 +392,15 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
             HEX4 (USMC)
             DBG ("UFDC: ")
             HEX4 (UFDC)
-            DBG ("MEMH: ")
-            HEX4 (MEMH)
+            DBG ("PMNN: ")
+            HEX4 (PMNN)
         }
 
         // PCI PIC IRQ Routing table
         // Must match pci.c:pci_slot_get_pirq
         Name (PR00, Package ()
         {
+/** @todo add devices 0/1 to be complete */
             Package (0x04) {0x0002FFFF, 0x00, LNKB, 0x00,},
             Package (0x04) {0x0002FFFF, 0x01, LNKC, 0x00,},
             Package (0x04) {0x0002FFFF, 0x02, LNKD, 0x00,},
@@ -551,6 +556,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
         // Must match pci.c:pci_slot_get_acpi_pirq
         Name (PR01, Package ()
         {
+/** @todo add devices 0/1 to be complete */
             Package (0x04) {0x0002FFFF, 0x00, 0x00, 0x12,},
             Package (0x04) {0x0002FFFF, 0x01, 0x00, 0x13,},
             Package (0x04) {0x0002FFFF, 0x02, 0x00, 0x14,},
@@ -729,7 +735,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
         // PCI bus 0
         Device (PCI0)
         {
-            
+
             Name (_HID, EisaId ("PNP0A03")) // PCI bus PNP id
             Method(_ADR, 0, NotSerialized)  // PCI address
             {
@@ -738,7 +744,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
             Name (_BBN, 0x00) // base bus address (bus number)
             Name (_UID, 0x00)
 
-            // Method that returns routing table; also opens PCI to I/O APIC 
+            // Method that returns routing table; also opens PCI to I/O APIC
             // interrupt routing backdoor by writing 0xdead 0xbeef signature
             // to ISA bridge config space. See DevPCI.cpp/pciSetIrqInternal().
             Method (_PRT, 0, NotSerialized)
@@ -773,7 +779,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                     Offset (0xde),
                     APDE,   8,
                 }
-              
+
                 // PCI MCFG MMIO ranges
                 Device (^PCIE)
                 {
@@ -803,7 +809,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                         Return (0x0F)
                      }
                     }
-                }               
+                }
 
                 // Keyboard device
                 Device (PS2K)
@@ -905,9 +911,15 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                     {
                         CreateWordField (CRS, \_SB.PCI0.LPT0._Y18._MIN, PMI0)
                         CreateWordField (CRS, \_SB.PCI0.LPT0._Y18._MAX, PMA0)
+                        CreateWordField (CRS, \_SB.PCI0.LPT0._Y18._ALN, PAL0)
+                        CreateWordField (CRS, \_SB.PCI0.LPT0._Y18._LEN, PLE0)
                         CreateWordField (CRS, \_SB.PCI0.LPT0._Y19._INT, PIQ0)
                         Store (PP0B, PMI0)
                         Store (PP0B, PMA0)
+                        If (LEqual (0x3BC, PP0B)) {
+                            Store (0x04, PAL0)
+                            Store (0x04, PLE0)
+                        }
                         ShiftLeft (0x01, PP0I, PIQ0)
                         Return (CRS)
                     }
@@ -938,9 +950,15 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                     {
                         CreateWordField (CRS, \_SB.PCI0.LPT1._Y20._MIN, PMI1)
                         CreateWordField (CRS, \_SB.PCI0.LPT1._Y20._MAX, PMA1)
+                        CreateWordField (CRS, \_SB.PCI0.LPT1._Y20._ALN, PAL1)
+                        CreateWordField (CRS, \_SB.PCI0.LPT1._Y20._LEN, PLE1)
                         CreateWordField (CRS, \_SB.PCI0.LPT1._Y21._INT, PIQ1)
                         Store (PP1B, PMI1)
                         Store (PP1B, PMA1)
+                        If (LEqual (0x3BC, PP1B)) {
+                            Store (0x04, PAL1)
+                            Store (0x04, PLE1)
+                        }
                         ShiftLeft (0x01, PP1I, PIQ1)
                         Return (CRS)
                     }
@@ -965,7 +983,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                     }
                     Name (CRS, ResourceTemplate ()
                     {
-                        IO (Decode16, 0x03F8, 0x03F8, 0x01, 0x08, _Y14) 
+                        IO (Decode16, 0x03F8, 0x03F8, 0x01, 0x08, _Y14)
                         IRQNoFlags (_Y15) {4}
                     })
                     Method (_CRS, 0, NotSerialized)
@@ -979,7 +997,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                         Return (CRS)
                     }
                 }
-                
+
                 // Serial port 1
                 Device (^SRL1)
                 {
@@ -998,7 +1016,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                     }
                     Name (CRS, ResourceTemplate ()
                     {
-                        IO (Decode16, 0x02F8, 0x02F8, 0x01, 0x08, _Y16) 
+                        IO (Decode16, 0x02F8, 0x02F8, 0x01, 0x08, _Y16)
                         IRQNoFlags (_Y17) {3}
                     })
                     Method (_CRS, 0, NotSerialized)
@@ -1031,7 +1049,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                     }
                     Name (CRS, ResourceTemplate ()
                     {
-                        IO (Decode16, 0x03E8, 0x03E8, 0x01, 0x08, _Y22) 
+                        IO (Decode16, 0x03E8, 0x03E8, 0x01, 0x08, _Y22)
                         IRQNoFlags (_Y23) {3}
                     })
                     Method (_CRS, 0, NotSerialized)
@@ -1127,7 +1145,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
 
 
                 // Real Time Clock and CMOS (MC146818)
-                Device (RTC) 
+                Device (RTC)
                 {
                     Name (_HID, EisaId ("PNP0B00"))
                     Name (_CRS, ResourceTemplate ()
@@ -1146,18 +1164,18 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                 }
 
                 // High Precision Event Timer
-                Device(HPET) 
+                Device(HPET)
                 {
                   Name (_HID,  EISAID("PNP0103"))
                   Name (_CID, EISAID("PNP0C01"))
                   Name(_UID, 0)
 
-                  Method (_STA, 0, NotSerialized) 
+                  Method (_STA, 0, NotSerialized)
                   {
                        Return(UHPT)
                   }
 
-                  Name(CRS, ResourceTemplate() 
+                  Name(CRS, ResourceTemplate()
                   {
                       IRQNoFlags ()
                             {0}
@@ -1168,11 +1186,29 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                             0x00000400         // Address Length
                             )
                   })
-                
+
                   Method (_CRS, 0, NotSerialized)
                   {
                      Return (CRS)
                   }
+                }
+
+                // AMD IOMMU (AMD-Vi), I/O Virtualization Reporting Structure
+                Device (IVRS)
+                {
+                    Method(_ADR, 0, NotSerialized)
+                    {
+                        Return (IOMA)
+                    }
+                    Method (_STA, 0, NotSerialized)
+                    {
+                        if (LEqual (IOMA, Zero)) {
+                            Return (0x00)
+                        }
+                        else {
+                            Return (0x0F)
+                        }
+                    }
                 }
 
                 // System Management Controller
@@ -1191,7 +1227,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                            0x0300,             // Range Minimum
                            0x0300,             // Range Maximum
                            0x01,               // Alignment
-                           0x20)               // Length                   
+                           0x20)               // Length
                     IRQNoFlags ()
                             {6}
 
@@ -1200,8 +1236,32 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                     {
                        Return (CRS)
                     }
-                 }                 
+                 }
              }
+
+            // NVMe controller. Required to convince OS X that
+            // the controller is an internal (built-in) device.
+            Device (SSD0)
+            {
+                Method(_ADR, 0, NotSerialized)
+                {
+                     Return (NVMA)
+                }
+                Method (_STA, 0, NotSerialized)
+                {
+                    if (LEqual (NVMA, Zero)) {
+                        Return (0x00)
+                    }
+                    else {
+                        Return (0x0F)
+                    }
+                }
+                // Port 0
+                Device (PRT0)
+                {
+                    Name (_ADR, 0xffff)
+                }
+            }
 
             // NIC
             Device (GIGE)
@@ -1297,42 +1357,42 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
             {
                 Method(_DSM, 4, NotSerialized)
                 {
-                    Store (Package (0x04)                                                                                                                              
-                    {                                                                                                                                              
-                        "layout-id",                                                                                                                               
-                        Buffer (0x04)                                                                                                                              
-                        {                                                                                                                                          
-                            /* 04 */    0x04, 0x00, 0x00, 0x00                                                                                                   
-                        },                                                                                                                                         
-                                                                                                                                                                   
-                        "PinConfigurations",                                                                                                                       
-                        Buffer (Zero) {}                                                                                                                           
-                    }, Local0)                                                                                                                                     
+                    Store (Package (0x04)
+                    {
+                        "layout-id",
+                        Buffer (0x04)
+                        {
+                            /* 04 */    0x04, 0x00, 0x00, 0x00
+                        },
+
+                        "PinConfigurations",
+                        Buffer (Zero) {}
+                    }, Local0)
                     if (LEqual (Arg0, ToUUID("a0b5b7c6-1318-441c-b0c9-fe695eaf949b")))
                     {
                         If (LEqual (Arg1, One))
                         {
                             if (LEqual(Arg2, Zero))
                             {
-                                    Store (Buffer (0x01)                                                                                                                              
-                                        {                                                                                                                                          
+                                    Store (Buffer (0x01)
+                                        {
                                             0x03
                                         }
-                                    , Local0)                                                                                                                                     
-                                    Return (Local0)   
+                                    , Local0)
+                                    Return (Local0)
                             }
                             if (LEqual(Arg2, One))
                             {
-                                    Return (Local0)   
+                                    Return (Local0)
                             }
                         }
                     }
-                    Store (Buffer (0x01)                                                                                                                              
-                        {                                                                                                                                          
+                    Store (Buffer (0x01)
+                        {
                             0x0
                         }
-                    , Local0)                                                                                                                                     
-                    Return (Local0)   
+                    , Local0)
+                    Return (Local0)
                 }
 
                 Method(_ADR, 0, NotSerialized)
@@ -1349,7 +1409,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                         Return (0x0F)
                     }
                  }
-            }            
+            }
 
 
             // Control method battery
@@ -1548,16 +1608,16 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                              // (all of low memory space)
                      ResourceProducer,        // bit 0 of general flags is 0
                      PosDecode,               // positive Decode
-                     MinNotFixed,             // Range is not fixed
+                     MinFixed,                // Range is fixed
                      MaxFixed,                // Range is fixed
                      Cacheable,
                      ReadWrite,
                      0x00000000,              // Granularity
-                     0x00000000,              // Min (calculated dynamically)
+                     0xe0000000,              // Min (calculated dynamically)
 
-                     0xffdfffff,              // Max = 4GB - 2MB
+                     0xfdffffff,              // Max = 4GB - 32MB
                      0x00000000,              // Translation
-                     0x00000000,              // Range Length (calculated
+                     0x1e000000,              // Range Length (calculated
                                               // dynamically)
                      ,                        // Optional field left blank
                      ,                        // Optional field left blank
@@ -1566,62 +1626,103 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                      )
             })
 
-//            Name (TOM, ResourceTemplate ()      // Memory above 4GB (aka high), appended when needed.
-//            {
-//                QWORDMemory(
-//                    ResourceProducer,           // bit 0 of general flags is 0
-//                    PosDecode,                  // positive Decode
-//                    MinFixed,                   // Range is fixed
-//                    MaxFixed,                   // Range is fixed
-//                    Cacheable,
-//                    ReadWrite,
-//                    0x0000000000000000,         // _GRA: Granularity.
-//                    0 /*0x0000000100000000*/,   // _MIN: Min address, 4GB.
-//                    0 /*0x00000fffffffffff*/,   // _MAX: Max possible address, 16TB.
-//                    0x0000000000000000,         // _TRA: Translation
-//                    0x0000000000000000,         // _LEN: Range length (calculated dynamically)
-//                    ,                           // ResourceSourceIndex: Optional field left blank
-//                    ,                           // ResourceSource:      Optional field left blank
-//                    MEM4                        // Name declaration for this descriptor.
-//                    )
-//            })
+            Name (TOM, ResourceTemplate ()
+            {
+                QwordMemory(
+                    ResourceProducer,         // bit 0 of general flags is 0
+                    PosDecode,                // positive Decode
+                    MinFixed,                 // Range is fixed
+                    MaxFixed,                 // Range is fixed
+                    Prefetchable,
+                    ReadWrite,
+                    0x0000000000000000,       // _GRA: Granularity.
+                    0x0000000100000000,       // _MIN: Min address, def. 4GB, will be overwritten.
+                    0x0000000fffffffff,       // _MAX: Max address, def. 64GB-1, will be overwritten.
+                    0x0000000000000000,       // _TRA: Translation
+                    0x0000000f00000000,       // _LEN: Range length (_MAX-_MIN+1)
+                    ,                         // ResourceSourceIndex: Optional field left blank
+                    ,                         // ResourceSource:      Optional field left blank
+                    MEM4                      // Name declaration for this descriptor.
+                    )
+            })
 
             Method (_CRS, 0, NotSerialized)
             {
                 CreateDwordField (CRS, \_SB.PCI0.MEM3._MIN, RAMT)
                 CreateDwordField (CRS, \_SB.PCI0.MEM3._LEN, RAMR)
-//                CreateQwordField (TOM, \_SB.PCI0.MEM4._LEN, TM4L)
-//                CreateQwordField (TOM, \_SB.PCI0.MEM4._LEN, TM4N)
-//                CreateQwordField (TOM, \_SB.PCI0.MEM4._LEN, TM4X)
 
                 Store (MEML, RAMT)
-                Subtract (0xffe00000, RAMT, RAMR)
+                Subtract (0xfe000000, RAMT, RAMR)
 
-//                If (LNotEqual (MEMH, 0x00000000))
-//                {
-//                    //
-//                    // Update the TOM resource template and append it to CRS.
-//                    // This way old < 4GB guest doesn't see anything different.
-//                    // (MEMH is the memory above 4GB specified in 64KB units.)
-//                    //
-//                    // Note: ACPI v2 doesn't do 32-bit integers. IASL may fail on
-//                    //       seeing 64-bit constants and the code probably wont work.
-//                    //
-//                    Store (1, TM4N)
-//                    ShiftLeft (TM4N, 32, TM4N)
-//
-//                    Store (0x00000fff, TM4X)
-//                    ShiftLeft (TM4X, 32, TM4X)
-//                    Or (TM4X, 0xffffffff, TM4X)
-//
-//                    Store (MEMH, TM4L)
-//                    ShiftLeft (TM4L, 16, TM4L)
-//
-//                    ConcatenateResTemplate (CRS, TOM, Local2)
-//                    Return (Local2)
-//                }
+                if (LNotEqual (PMNN, 0x00000000))
+                {
+                    // Not for Windows < 7!
+                    If (LOr (LLess (MSWN(), 0x01), LGreater (MSWN(), 0x06)))
+                    {
+                        CreateQwordField (TOM, \_SB.PCI0.MEM4._MIN, TM4N)
+                        CreateQwordField (TOM, \_SB.PCI0.MEM4._MAX, TM4X)
+                        CreateQwordField (TOM, \_SB.PCI0.MEM4._LEN, TM4L)
+
+                        Multiply (PMNN, 0x10000, TM4N)       // PMNN in units of 64KB
+                        Subtract (Multiply (PMNX, 0x10000), 1, TM4X) // PMNX in units of 64KB
+                        Add (Subtract (TM4X, TM4N), 1, TM4L) // determine LEN, MAX is already there
+
+                        ConcatenateResTemplate (CRS, TOM, Local2)
+
+                        Return (Local2)
+                    }
+                }
 
                 Return (CRS)
+            }
+
+            /* Defined in PCI Firmware Specification 3.0 and ACPI 3.0, with both specs
+             * referencing each other. The _OSC method must be present to make Linux happy,
+             * but needs to prevent the OS from taking much control so as to not upset Windows.
+             * NB: The first DWORD is defined in the ACPI spec but not the PCI FW spec.
+             */
+            Method (_OSC, 4)
+            {
+                Name(SUPP, 0)   // Support field value
+                Name(CTRL, 0)   // Control field value
+
+                // Break down the input capabilities buffer into individual DWORDs
+                CreateDWordField(Arg3, 0, CDW1)
+                CreateDWordField(Arg3, 4, CDW2)
+                CreateDWordField(Arg3, 8, CDW3)
+
+                If (LEqual (Arg0, ToUUID("33db4d5b-1ff7-401c-9657-7441c03dd766")))
+                {
+                    // Stash the Support and Control fields
+                    Store(CDW2, SUPP)
+                    Store(CDW3, CTRL)
+
+                    DBG("_OSC: SUPP=")
+                    HEX4(SUPP)
+                    DBG(" CTRL=")
+                    HEX4(CTRL)
+                    DBG("\n")
+
+                    // Mask off the PCI Express Capability Structure control
+                    // Not emulated well enough to satisfy Windows (Vista and later)
+                    And(CTRL, 0x0F, CTRL)
+
+                    // If capabilities were masked, set the Capabilities Masked flag (bit 4)
+                    If (LNotEqual(CDW3, CTRL))
+                    {
+                        Or(CDW1, 0x10, CDW1)
+                    }
+
+                    // Update the Control field and return
+                    Store(CTRL, CDW3)
+                    Return(Arg3)
+                }
+                Else
+                {
+                    // UUID not known, set Unrecognized UUID flag (bit 2)
+                    Or(CDW1, 0x04, CDW1)
+                    Return(Arg3)
+                }
             }
         }
     }

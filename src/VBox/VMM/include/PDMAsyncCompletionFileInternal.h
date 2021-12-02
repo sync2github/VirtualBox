@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: PDMAsyncCompletionFileInternal.h 87766 2021-02-16 14:27:43Z vboxsync $ */
 /** @file
  * PDM Async I/O - Transport data asynchronous in R3 using EMT.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___PDMAsyncCompletionFileInternal_h
-#define ___PDMAsyncCompletionFileInternal_h
+#ifndef VMM_INCLUDED_SRC_include_PDMAsyncCompletionFileInternal_h
+#define VMM_INCLUDED_SRC_include_PDMAsyncCompletionFileInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/vmm/cfgm.h>
 #include <VBox/vmm/stam.h>
@@ -273,7 +276,7 @@ typedef struct PDMASYNCCOMPLETIONEPCLASSFILE
     bool                                fOutOfResourcesWarningPrinted;
 #ifdef PDM_ASYNC_COMPLETION_FILE_WITH_DELAY
     /** Timer for delayed request completion. */
-    PTMTIMERR3                          pTimer;
+    TMTIMERHANDLE                       hTimer;
     /** Milliseconds until the next delay expires. */
     volatile uint64_t                   cMilliesNext;
 #endif
@@ -449,7 +452,7 @@ AssertCompileMemberAlignment(PDMASYNCCOMPLETIONENDPOINTFILE, StatRead, sizeof(ui
 #endif
 
 /** Request completion function */
-typedef DECLCALLBACK(void)   FNPDMACTASKCOMPLETED(PPDMACTASKFILE pTask, void *pvUser, int rc);
+typedef DECLCALLBACKTYPE(void, FNPDMACTASKCOMPLETED,(PPDMACTASKFILE pTask, void *pvUser, int rc));
 /** Pointer to a request completion function. */
 typedef FNPDMACTASKCOMPLETED *PFNPDMACTASKCOMPLETED;
 
@@ -483,6 +486,8 @@ typedef struct PDMACTASKFILE
     PDMACTASKFILETRANSFER                enmTransferType;
     /** Start offset */
     RTFOFF                               Off;
+    /** Amount of data transfered so far. */
+    size_t                               cbTransfered;
     /** Data segment. */
     RTSGSEG                              DataSeg;
     /** When non-zero the segment uses a bounce buffer because the provided buffer
@@ -557,5 +562,5 @@ int pdmacFileEpCacheFlush(PPDMASYNCCOMPLETIONENDPOINTFILE pEndpoint);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VMM_INCLUDED_SRC_include_PDMAsyncCompletionFileInternal_h */
 

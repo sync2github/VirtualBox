@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2014-2016 Oracle Corporation
+ * Copyright (C) 2014-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_gim_h
-#define ___VBox_vmm_gim_h
+#ifndef VBOX_INCLUDED_vmm_gim_h
+#define VBOX_INCLUDED_vmm_gim_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -75,20 +78,21 @@ typedef struct GIMMMIO2REGION
     bool                fRegistered;
     /** Whether this region is currently mapped. */
     bool                fMapped;
-    /** Alignment padding. */
-    uint8_t             au8Alignment0[3];
     /** Size of the region (must be page aligned). */
     uint32_t            cbRegion;
-    /** Alignment padding. */
-    uint32_t            u32Alignment0;
     /** The host ring-0 address of the first page in the region. */
     R0PTRTYPE(void *)   pvPageR0;
     /** The host ring-3 address of the first page in the region. */
     R3PTRTYPE(void *)   pvPageR3;
+# ifdef VBOX_WITH_RAW_MODE_KEEP
     /** The ring-context address of the first page in the region. */
     RCPTRTYPE(void *)   pvPageRC;
+    RTRCPTR             RCPtrAlignment0;
+# endif
     /** The guest-physical address of the first page in the region. */
     RTGCPHYS            GCPhysPage;
+    /** The MMIO2 handle. */
+    PGMMMIO2HANDLE      hMmio2;
     /** The description of the region. */
     char                szDescription[32];
 } GIMMMIO2REGION;
@@ -96,15 +100,15 @@ typedef struct GIMMMIO2REGION
 typedef GIMMMIO2REGION *PGIMMMIO2REGION;
 /** Pointer to a const GIM MMIO2 region. */
 typedef GIMMMIO2REGION const *PCGIMMMIO2REGION;
-AssertCompileMemberAlignment(GIMMMIO2REGION, cbRegion, 8);
 AssertCompileMemberAlignment(GIMMMIO2REGION, pvPageR0, 8);
+AssertCompileMemberAlignment(GIMMMIO2REGION, GCPhysPage, 8);
 
 /**
  * Debug data buffer available callback over the GIM debug connection.
  *
  * @param   pVM             The cross context VM structure.
  */
-typedef DECLCALLBACK(void) FNGIMDEBUGBUFAVAIL(PVM pVM);
+typedef DECLCALLBACKTYPE(void, FNGIMDEBUGBUFAVAIL,(PVM pVM));
 /** Pointer to GIM debug buffer available callback. */
 typedef FNGIMDEBUGBUFAVAIL *PFNGIMDEBUGBUFAVAIL;
 
@@ -161,9 +165,9 @@ typedef struct GIMDEBUG const *PCGIMDEBUG;
 /** @defgroup grp_gim_r0  The GIM Host Context Ring-0 API
  * @{
  */
-VMMR0_INT_DECL(int)         GIMR0InitVM(PVM pVM);
-VMMR0_INT_DECL(int)         GIMR0TermVM(PVM pVM);
-VMMR0_INT_DECL(int)         GIMR0UpdateParavirtTsc(PVM pVM, uint64_t u64Offset);
+VMMR0_INT_DECL(int)         GIMR0InitVM(PVMCC pVM);
+VMMR0_INT_DECL(int)         GIMR0TermVM(PVMCC pVM);
+VMMR0_INT_DECL(int)         GIMR0UpdateParavirtTsc(PVMCC pVM, uint64_t u64Offset);
 /** @} */
 #endif /* IN_RING0 */
 
@@ -179,23 +183,26 @@ VMMR3_INT_DECL(int)         GIMR3Term(PVM pVM);
 VMMR3_INT_DECL(void)        GIMR3Reset(PVM pVM);
 VMMR3DECL(void)             GIMR3GimDeviceRegister(PVM pVM, PPDMDEVINS pDevInsR3, PGIMDEBUG pDbg);
 VMMR3DECL(int)              GIMR3GetDebugSetup(PVM pVM, PGIMDEBUGSETUP pDbgSetup);
-VMMR3DECL(PGIMMMIO2REGION)  GIMR3GetMmio2Regions(PVM pVM, uint32_t *pcRegions);
 /** @} */
 #endif /* IN_RING3 */
 
 VMMDECL(bool)               GIMIsEnabled(PVM pVM);
 VMMDECL(GIMPROVIDERID)      GIMGetProvider(PVM pVM);
-VMM_INT_DECL(bool)          GIMIsParavirtTscEnabled(PVM pVM);
-VMM_INT_DECL(bool)          GIMAreHypercallsEnabled(PVMCPU pVCpu);
-VMM_INT_DECL(VBOXSTRICTRC)  GIMHypercall(PVMCPU pVCpu, PCPUMCTX pCtx);
-VMM_INT_DECL(VBOXSTRICTRC)  GIMExecHypercallInstr(PVMCPU pVCpu, PCPUMCTX pCtx, uint8_t *pcbInstr);
-VMM_INT_DECL(VBOXSTRICTRC)  GIMXcptUD(PVMCPU pVCpu, PCPUMCTX pCtx, PDISCPUSTATE pDis, uint8_t *pcbInstr);
-VMM_INT_DECL(bool)          GIMShouldTrapXcptUD(PVMCPU pVCpu);
-VMM_INT_DECL(VBOXSTRICTRC)  GIMReadMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t *puValue);
-VMM_INT_DECL(VBOXSTRICTRC)  GIMWriteMsr(PVMCPU pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t uValue, uint64_t uRawValue);
+VMMDECL(PGIMMMIO2REGION)    GIMGetMmio2Regions(PVMCC pVM, uint32_t *pcRegions);
+VMM_INT_DECL(bool)          GIMIsParavirtTscEnabled(PVMCC pVM);
+VMM_INT_DECL(bool)          GIMAreHypercallsEnabled(PVMCPUCC pVCpu);
+VMM_INT_DECL(VBOXSTRICTRC)  GIMHypercall(PVMCPUCC pVCpu, PCPUMCTX pCtx);
+VMM_INT_DECL(VBOXSTRICTRC)  GIMHypercallEx(PVMCPUCC pVCpu, PCPUMCTX pCtx, unsigned uDisOpcode, uint8_t cbInstr);
+VMM_INT_DECL(VBOXSTRICTRC)  GIMExecHypercallInstr(PVMCPUCC pVCpu, PCPUMCTX pCtx, uint8_t *pcbInstr);
+VMM_INT_DECL(VBOXSTRICTRC)  GIMXcptUD(PVMCPUCC pVCpu, PCPUMCTX pCtx, PDISCPUSTATE pDis, uint8_t *pcbInstr);
+VMM_INT_DECL(bool)          GIMShouldTrapXcptUD(PVMCPUCC pVCpu);
+VMM_INT_DECL(VBOXSTRICTRC)  GIMReadMsr(PVMCPUCC pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t *puValue);
+VMM_INT_DECL(VBOXSTRICTRC)  GIMWriteMsr(PVMCPUCC pVCpu, uint32_t idMsr, PCCPUMMSRRANGE pRange, uint64_t uValue, uint64_t uRawValue);
+VMM_INT_DECL(int)           GIMQueryHypercallOpcodeBytes(PVM pVM, void *pvBuf, size_t cbBuf,
+                                                         size_t *pcbWritten, uint16_t *puDisOpcode);
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_gim_h */
 

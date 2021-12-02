@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cpu-instr-2.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - bs3-cpu-instr-2, 16-bit C code.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -38,6 +38,11 @@ BS3TESTMODE_PROTOTYPES_CMN(bs3CpuInstr2_mul);
 BS3TESTMODE_PROTOTYPES_CMN(bs3CpuInstr2_imul);
 BS3TESTMODE_PROTOTYPES_CMN(bs3CpuInstr2_div);
 BS3TESTMODE_PROTOTYPES_CMN(bs3CpuInstr2_idiv);
+BS3TESTMODE_PROTOTYPES_CMN_64(bs3CpuInstr2_cmpxchg16b);
+BS3TESTMODE_PROTOTYPES_CMN_64(bs3CpuInstr2_wrfsbase);
+BS3TESTMODE_PROTOTYPES_CMN_64(bs3CpuInstr2_wrgsbase);
+BS3TESTMODE_PROTOTYPES_CMN_64(bs3CpuInstr2_rdfsbase);
+BS3TESTMODE_PROTOTYPES_CMN_64(bs3CpuInstr2_rdgsbase);
 
 
 /*********************************************************************************************************************************
@@ -49,6 +54,11 @@ static const BS3TESTMODEENTRY g_aModeTests[] =
     BS3TESTMODEENTRY_CMN("imul", bs3CpuInstr2_imul),
     BS3TESTMODEENTRY_CMN("div", bs3CpuInstr2_div),
     BS3TESTMODEENTRY_CMN("idiv", bs3CpuInstr2_idiv),
+    BS3TESTMODEENTRY_CMN_64("cmpxchg16b", bs3CpuInstr2_cmpxchg16b),
+    BS3TESTMODEENTRY_CMN_64("wrfsbase", bs3CpuInstr2_wrfsbase),
+    BS3TESTMODEENTRY_CMN_64("wrgsbase", bs3CpuInstr2_wrgsbase),
+    BS3TESTMODEENTRY_CMN_64("rdfsbase", bs3CpuInstr2_rdfsbase),
+    BS3TESTMODEENTRY_CMN_64("rdgsbase", bs3CpuInstr2_rdgsbase),
 };
 
 

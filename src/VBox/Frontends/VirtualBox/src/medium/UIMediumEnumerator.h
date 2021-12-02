@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIMediumEnumerator.h 83353 2020-03-20 16:01:35Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIMediumEnumerator class declaration.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,39 +15,51 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIMediumEnumerator_h___
-#define ___UIMediumEnumerator_h___
+#ifndef FEQT_INCLUDED_SRC_medium_UIMediumEnumerator_h
+#define FEQT_INCLUDED_SRC_medium_UIMediumEnumerator_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
 #include <QObject>
 #include <QSet>
 
 /* GUI includes: */
-#include "UIMedium.h"
 #include "QIWithRetranslateUI.h"
+#include "UILibraryDefs.h"
+#include "UIMedium.h"
+
+/* COM includes: */
+# include "CMedium.h"
+# include "CMediumAttachment.h"
 
 /* Forward declarations: */
-class UIThreadPool;
 class UITask;
+class UIThreadPool;
 
-/* Typedefs: */
-typedef QMap<QString, CMedium> CMediumMap;
+/** A map of CMedium objects ordered by their IDs. */
+typedef QMap<QUuid, CMedium> CMediumMap;
 
-/* Medium-enumerator prototype.
- * Manages access to medium information using thread-pool interface. */
-class UIMediumEnumerator : public QIWithRetranslateUI3<QObject>
+/** QObject extension operating as medium-enumeration object.
+  * Manages access to cached UIMedium information via public API.
+  * Updates cache on corresponding Main events using thread-pool interface. */
+class SHARED_LIBRARY_STUFF UIMediumEnumerator : public QIWithRetranslateUI3<QObject>
 {
     Q_OBJECT;
 
 signals:
 
-    /* Notifiers: Medium-operations stuff: */
-    void sigMediumCreated(const QString &strMediumID);
-    void sigMediumDeleted(const QString &strMediumID);
+    /** Notifies listeners about UIMedium with @a uMediumID created. */
+    void sigMediumCreated(const QUuid &uMediumID);
+    /** Notifies listeners about UIMedium with @a uMediumID deleted. */
+    void sigMediumDeleted(const QUuid &uMediumID);
 
-    /* Notifiers: Medium-enumeration stuff: */
+    /** Notifies listeners about consolidated medium-enumeration process has started. */
     void sigMediumEnumerationStarted();
-    void sigMediumEnumerated(const QString &strMediumID);
+    /** Notifies listeners about UIMedium with @a uMediumID updated. */
+    void sigMediumEnumerated(const QUuid &uMediumID);
+    /** Notifies listeners about consolidated medium-enumeration process has finished. */
     void sigMediumEnumerationFinished();
 
 public:
@@ -55,52 +67,103 @@ public:
     /** Constructs medium-enumerator object. */
     UIMediumEnumerator();
 
-    /* API: Medium-access stuff: */
-    QList<QString> mediumIDs() const;
-    UIMedium medium(const QString &strMediumID);
-    void createMedium(const UIMedium &medium);
-    void deleteMedium(const QString &strMediumID);
+    /** Returns cached UIMedium ID list. */
+    QList<QUuid> mediumIDs() const;
+    /** Returns a wrapper of cached UIMedium with specified @a uMediumID. */
+    UIMedium medium(const QUuid &uMediumID) const;
 
-    /* API: Medium-enumeration stuff: */
+    /** Creates UIMedium thus caching it internally on the basis of passed @a guiMedium information. */
+    void createMedium(const UIMedium &guiMedium);
+
+    /** Returns whether full consolidated medium-enumeration process is requested. */
+    bool isFullMediumEnumerationRequested() const { return m_fFullMediumEnumerationRequested; }
+    /** Returns whether any consolidated medium-enumeration process is in progress. */
     bool isMediumEnumerationInProgress() const { return m_fMediumEnumerationInProgress; }
-    void enumerateMediums();
+    /** Makes a request to enumerate specified @a comMedia.
+      * @note  Empty passed map means that full/overall medium-enumeration is requested.
+      *        In that case previous map will be replaced with the new one, values
+      *        present in both maps will be merged from the previous to new one.
+      * @note  Non-empty passed map means that additional medium-enumeration is requested.
+      *        In that case previous map will be extended with the new one, values
+      *        present in both maps will be merged from the previous to new one. */
+    void enumerateMedia(const CMediumVector &comMedia = CMediumVector());
+    /** Refresh all the lightweight UIMedium information for all the cached UIMedium(s).
+      * @note  Please note that this is a lightweight version, which doesn't perform
+      *        heavy state/accessibility checks thus doesn't require to be performed
+      *        by a worker COM-aware thread. */
+    void refreshMedia();
 
-private slots:
-
-    /** Handles machine-data-change and snapshot-change events. */
-    void sltHandleMachineUpdate(QString strMachineID);
-    /** Handles machine-[un]registration events. */
-    void sltHandleMachineRegistration(QString strMachineID, bool fRegistered);
-    /** Handles snapshot-deleted events. */
-    void sltHandleSnapshotDeleted(QString strMachineID, QString strSnapshotID);
-
-    /* Handler: Medium-enumeration stuff: */
-    void sltHandleMediumEnumerationTaskComplete(UITask *pTask);
-
-private:
+protected:
 
     /** Handles translation event. */
     virtual void retranslateUi() /* override */;
 
-    /* Helpers: Medium-enumeration stuff: */
-    void createMediumEnumerationTask(const UIMedium &medium);
-    void addNullMediumToMap(UIMediumMap &mediums);
-    void addMediumsToMap(const CMediumVector &inputMediums, UIMediumMap &outputMediums, UIMediumType mediumType);
-    void addHardDisksToMap(const CMediumVector &inputMediums, UIMediumMap &outputMediums);
+private slots:
 
-    /* Helpers: Medium re-caching stuff: */
-    void calculateCachedUsage(const QString &strMachineID, QStringList &previousUIMediumIDs, bool fTakeIntoAccountCurrentStateOnly) const;
-    void calculateActualUsage(const QString &strMachineID, CMediumMap &currentCMediums, QStringList &currentCMediumIDs, bool fTakeIntoAccountCurrentStateOnly) const;
-    void calculateActualUsage(const CSnapshot &snapshot, CMediumMap &currentCMediums, QStringList &currentCMediumIDs) const;
-    void calculateActualUsage(const CMachine &machine, CMediumMap &currentCMediums, QStringList &currentCMediumIDs) const;
-    void recacheFromCachedUsage(const QStringList &previousUIMediumIDs);
-    void recacheFromActualUsage(const CMediumMap &currentCMediums, const QStringList &currentCMediumIDs);
+    /** Handles machine-data-change event for a machine with specified @a uMachineId. */
+    void sltHandleMachineDataChange(const QUuid &uMachineId);
 
-    /* Variables: */
-    bool m_fMediumEnumerationInProgress;
-    QSet<UITask*> m_tasks;
-    UIMediumMap m_mediums;
+    /** Handles signal about storage controller change.
+      * @param  uMachineId         Brings the ID of machine corresponding controller belongs to.
+      * @param  strControllerName  Brings the name of controller this event is related to. */
+    void sltHandleStorageControllerChange(const QUuid &uMachineId, const QString &strControllerName);
+    /** Handles signal about storage device change.
+      * @param  comAttachment  Brings corresponding attachment.
+      * @param  fRemoved       Brings whether medium is removed or added.
+      * @param  fSilent        Brings whether this change has gone silent for guest. */
+    void sltHandleStorageDeviceChange(CMediumAttachment comAttachment, bool fRemoved, bool fSilent);
+    /** Handles signal about storage medium @a comAttachment state change. */
+    void sltHandleMediumChange(CMediumAttachment comAttachment);
+    /** Handles signal about storage @a comMedium config change. */
+    void sltHandleMediumConfigChange(CMedium comMedium);
+    /** Handles signal about storage medium is (un)registered.
+      * @param  uMediumId      Brings corresponding medium ID.
+      * @param  enmMediumType  Brings corresponding medium type.
+      * @param  fRegistered    Brings whether medium is registered or unregistered. */
+    void sltHandleMediumRegistered(const QUuid &uMediumId, KDeviceType enmMediumType, bool fRegistered);
+
+    /** Handles medium-enumeration @a pTask complete signal. */
+    void sltHandleMediumEnumerationTaskComplete(UITask *pTask);
+
+private:
+
+    /** Creates medium-enumeration task for certain @a guiMedium. */
+    void createMediumEnumerationTask(const UIMedium &guiMedium);
+    /** Adds NULL UIMedium to specified @a outputMedia map. */
+    void addNullMediumToMap(UIMediumMap &outputMedia);
+    /** Adds @a inputMedia to specified @a outputMedia map. */
+    void addMediaToMap(const CMediumVector &inputMedia, UIMediumMap &outputMedia);
+
+    /** Parses incoming @a comAttachment, enumerating the media it has attached.
+      * @param  result  Brings the list of previously enumerated media
+      *                 IDs to be appended with newly enumerated. */
+    void parseAttachment(CMediumAttachment comAttachment, QList<QUuid> &result);
+    /** Parses incoming @a comMedium, enumerating the media it represents.
+      * @param  result  Brings the list of previously enumerated media
+      *                 IDs to be appended with newly enumerated. */
+    void parseMedium(CMedium comMedium, QList<QUuid> &result);
+
+    /** Enumerates all the known media attached to machine with certain @a uMachineId.
+      * @param  result  Brings the list of previously enumerated media
+      *                 IDs to be appended with newly enumerated. */
+    void enumerateAllMediaOfMachineWithId(const QUuid &uMachineId, QList<QUuid> &result);
+    /** Enumerates all the children media of medium with certain @a uMediumId.
+      * @param  result  Brings the list of previously enumerated media
+      *                 IDs to be appended with newly enumerated. */
+    void enumerateAllMediaOfMediumWithId(const QUuid &uMediumId, QList<QUuid> &result);
+
+    /** Holds whether full consolidated medium-enumeration process is requested. */
+    bool  m_fFullMediumEnumerationRequested;
+    /** Holds whether any consolidated medium-enumeration process is in progress. */
+    bool  m_fMediumEnumerationInProgress;
+
+    /** Holds a set of current medium-enumeration tasks. */
+    QSet<UITask*>  m_tasks;
+
+    /** Holds a map of currently cached (enumerated) media. */
+    UIMediumMap  m_media;
+    /** Holds a set of currently registered media IDs. */
+    QSet<QUuid>  m_registeredMediaIds;
 };
 
-#endif /* !___UIMediumEnumerator_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_medium_UIMediumEnumerator_h */

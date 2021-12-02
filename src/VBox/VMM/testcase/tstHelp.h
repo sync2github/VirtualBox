@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstHelp.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VMM testcase - Helper stuff.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___tstHelp_h
-#define ___tstHelp_h
+#ifndef VMM_INCLUDED_SRC_testcase_tstHelp_h
+#define VMM_INCLUDED_SRC_testcase_tstHelp_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/vmm/cpum.h>
@@ -54,7 +57,7 @@ RT_C_DECLS_END
         if (size != sizeof(type)) \
         { \
             printf("error! sizeof(%s): %#x (%d)  Off by %d!! (expected %#x)\n", \
-                   #type, (int)sizeof(type), (int)sizeof(type), (int)(sizeof(type) - size), (int)size); \
+                   #type, (int)sizeof(type), (int)sizeof(type), (int)sizeof(type) - (int)size, (int)size); \
             rc++; \
         } \
         else \
@@ -67,7 +70,7 @@ RT_C_DECLS_END
 #define CHECK_MEMBER_ALIGNMENT(strct, member, align) \
     do \
     { \
-        if (RT_OFFSETOF(strct, member) & ((align) - 1) ) \
+        if (RT_UOFFSETOF(strct, member) & ((align) - 1) ) \
         { \
             printf("error! %s::%s offset=%#x (%u) expected alignment %#x, meaning %#x (%u) off\n", \
                    #strct, #member, \
@@ -163,4 +166,4 @@ RT_C_DECLS_END
     } while (0)
 
 
-#endif
+#endif /* !VMM_INCLUDED_SRC_testcase_tstHelp_h */

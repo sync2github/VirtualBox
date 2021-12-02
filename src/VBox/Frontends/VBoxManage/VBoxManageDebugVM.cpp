@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManageDebugVM.cpp 89697 2021-06-15 09:54:12Z vboxsync $ */
 /** @file
  * VBoxManage - Implementation of the debugvm command.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,6 @@
 
 #include <VBox/types.h>
 #include <iprt/ctype.h>
-#include <VBox/err.h>
 #include <iprt/getopt.h>
 #include <iprt/path.h>
 #include <iprt/param.h>
@@ -455,7 +454,7 @@ static RTEXITCODE handleDebugVM_SetRegisters(HandlerArg *pArgs, IMachineDebugger
                         || !aBstrValues.push_back(bstrValue.raw()))
                         throw std::bad_alloc();
                 }
-                catch (std::bad_alloc)
+                catch (std::bad_alloc &)
                 {
                     RTMsgError("Out of memory\n");
                     return RTEXITCODE_FAILURE;
@@ -784,6 +783,66 @@ static RTEXITCODE handleDebugVM_Statistics(HandlerArg *pArgs, IMachineDebugger *
     return RTEXITCODE_SUCCESS;
 }
 
+/**
+ * Handles the guestsample sub-command.
+ *
+ * @returns Suitable exit code.
+ * @param   pArgs               The handler arguments.
+ * @param   pDebugger           Pointer to the debugger interface.
+ */
+static RTEXITCODE handleDebugVM_GuestSample(HandlerArg *pArgs, IMachineDebugger *pDebugger)
+{
+    /*
+     * Parse arguments.
+     */
+    const char                 *pszFilename         = NULL;
+    uint32_t                   cSampleIntervalUs    = 1000;
+    uint64_t                   cSampleTimeUs        = 1000*1000;
+
+    RTGETOPTSTATE               GetState;
+    RTGETOPTUNION               ValueUnion;
+    static const RTGETOPTDEF    s_aOptions[] =
+    {
+        { "--filename",           'f', RTGETOPT_REQ_STRING },
+        { "--sample-interval-us", 'i', RTGETOPT_REQ_UINT32 },
+        { "--sample-time-us",     't', RTGETOPT_REQ_UINT64 },
+    };
+    int rc = RTGetOptInit(&GetState, pArgs->argc, pArgs->argv, s_aOptions, RT_ELEMENTS(s_aOptions), 2, 0 /*fFlags*/);
+    AssertRCReturn(rc, RTEXITCODE_FAILURE);
+
+    while ((rc = RTGetOpt(&GetState, &ValueUnion)) != 0)
+    {
+        switch (rc)
+        {
+            case 'f':
+                pszFilename = ValueUnion.psz;
+                break;
+            case 'i':
+                cSampleIntervalUs = ValueUnion.u32;
+                break;
+            case 't':
+                cSampleTimeUs = ValueUnion.u64;
+                break;
+
+            default:
+                return errorGetOpt(rc, &ValueUnion);
+        }
+    }
+
+    if (!pszFilename)
+        return errorSyntax("The --filename is missing");
+
+    /*
+     * Execute the order.
+     */
+    ComPtr<IProgress> ptrProgress;
+    com::Bstr bstrFilename(pszFilename);
+    CHECK_ERROR2I_RET(pDebugger, TakeGuestSample(bstrFilename.raw(), cSampleIntervalUs, cSampleTimeUs, ptrProgress.asOutParam()), RTEXITCODE_FAILURE);
+    showProgress(ptrProgress);
+
+    return RTEXITCODE_SUCCESS;
+}
+
 RTEXITCODE handleDebugVM(HandlerArg *pArgs)
 {
     RTEXITCODE rcExit = RTEXITCODE_FAILURE;
@@ -884,6 +943,11 @@ RTEXITCODE handleDebugVM(HandlerArg *pArgs)
                 {
                     setCurrentSubcommand(HELP_SCOPE_DEBUGVM_STATISTICS);
                     rcExit = handleDebugVM_Statistics(pArgs, ptrDebugger);
+                }
+                else if (!strcmp(pszSubCmd, "guestsample"))
+                {
+                    setCurrentSubcommand(HELP_SCOPE_DEBUGVM_GUESTSAMPLE);
+                    rcExit = handleDebugVM_GuestSample(pArgs, ptrDebugger);
                 }
                 else
                     errorUnknownSubcommand(pszSubCmd);

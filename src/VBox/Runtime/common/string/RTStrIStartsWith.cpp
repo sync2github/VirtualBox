@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: RTStrIStartsWith.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - String starts with predicate, case insensitive.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,7 +33,7 @@
 #include "internal/iprt.h"
 
 
-RTDECL(int) RTStrIStartsWith(const char *pszString, const char *pszStart)
+RTDECL(bool) RTStrIStartsWith(const char *pszString, const char *pszStart)
 {
     if (pszString)
     {

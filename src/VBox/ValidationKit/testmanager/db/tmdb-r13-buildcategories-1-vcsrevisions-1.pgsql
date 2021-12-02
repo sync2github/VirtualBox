@@ -1,10 +1,10 @@
--- $Id$
+-- $Id: tmdb-r13-buildcategories-1-vcsrevisions-1.pgsql 82968 2020-02-04 10:35:17Z vboxsync $
 --- @file
 -- VBox Test Manager Database - Adds an sRepository to Builds and creates a new VcsRepositories table.
 --
 
 --
--- Copyright (C) 2013-2015 Oracle Corporation
+-- Copyright (C) 2013-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;

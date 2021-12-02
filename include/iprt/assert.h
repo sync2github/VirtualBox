@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,12 +23,16 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_assert_h
-#define ___iprt_assert_h
+#ifndef IPRT_INCLUDED_assert_h
+#define IPRT_INCLUDED_assert_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/cdefs.h>
 #include <iprt/types.h>
 #include <iprt/stdarg.h>
+#include <iprt/assertcompile.h>
 
 /** @defgroup grp_rt_assert     Assert - Assertions
  * @ingroup grp_rt
@@ -56,11 +60,6 @@
  *      - RC            - Assert RT_SUCCESS.
  *      - RCSuccess     - Assert VINF_SUCCESS.
  *
- * In addition there is a very special family AssertCompile that can be
- * used for some limited compile-time checking, like structure sizes and member
- * alignment. This family doesn't have the same variations.
- *
- *
  * @remarks As you might have noticed, the macros don't follow the
  * coding guidelines wrt to macros supposedly being all uppercase
  * and underscored. For various  reasons they don't, and nobody
@@ -74,6 +73,15 @@
  */
 
 RT_C_DECLS_BEGIN
+
+#if  !defined(IPRT_WITHOUT_ASSERT_STACK) \
+  && defined(IN_RING3) \
+  && !defined(IN_RT_STATIC) /* try keep static binaries small */ \
+  && (defined(RT_ARCH_AMD64) /*|| defined(RT_ARCH_X86)*/)
+/** @def IPRT_WITH_ASSERT_STACK
+ * Indicates that we collect a callstack stack on assertion. */
+# define IPRT_WITH_ASSERT_STACK
+#endif
 
 /**
  * The 1st part of an assert message.
@@ -219,17 +227,21 @@ RTDECL(bool)    RTAssertMayPanic(void);
  * @remarks     This is the full potential set, it
  * @{
  */
-/** The last assert message, 1st part. */
+/** The last assertion message, 1st part. */
 extern RTDATADECL(char)                     g_szRTAssertMsg1[1024];
-/** The last assert message, 2nd part. */
+/** The last assertion message, 2nd part. */
 extern RTDATADECL(char)                     g_szRTAssertMsg2[4096];
-/** The last assert message, expression. */
+#ifdef IPRT_WITH_ASSERT_STACK
+/** The last assertion message, stack part. */
+extern RTDATADECL(char)                     g_szRTAssertStack[4096];
+#endif
+/** The last assertion message, expression. */
 extern RTDATADECL(const char * volatile)    g_pszRTAssertExpr;
-/** The last assert message, file name. */
+/** The last assertion message, file name. */
 extern RTDATADECL(const char * volatile)    g_pszRTAssertFile;
-/** The last assert message, line number. */
+/** The last assertion message, line number. */
 extern RTDATADECL(uint32_t volatile)        g_u32RTAssertLine;
-/** The last assert message, function name. */
+/** The last assertion message, function name. */
 extern RTDATADECL(const char * volatile)    g_pszRTAssertFunction;
 /** @} */
 
@@ -241,204 +253,6 @@ RT_C_DECLS_END
  * @remarks This macro does not depend on RT_STRICT.
  */
 #define RTAssertDebugBreak()    do { RT_BREAKPOINT(); } while (0)
-
-
-
-/** @name Compile time assertions.
- *
- * These assertions are used to check structure sizes, member/size alignments
- * and similar compile time expressions.
- *
- * @{
- */
-
-/**
- * RTASSERTTYPE is the type the AssertCompile() macro redefines.
- * It has no other function and shouldn't be used.
- * Visual C++ uses this.
- */
-typedef int RTASSERTTYPE[1];
-
-/**
- * RTASSERTVAR is the type the AssertCompile() macro redefines.
- * It has no other function and shouldn't be used.
- * GCC uses this.
- */
-#ifdef __GNUC__
-RT_C_DECLS_BEGIN
-#endif
-extern int RTASSERTVAR[1];
-#ifdef __GNUC__
-RT_C_DECLS_END
-#endif
-
-/** @def RTASSERT_HAVE_STATIC_ASSERT
- * Indicates that the compiler implements static_assert(expr, msg).
- */
-#ifdef _MSC_VER
-# if _MSC_VER >= 1600 && defined(__cplusplus)
-#  define RTASSERT_HAVE_STATIC_ASSERT
-# endif
-#endif
-#if defined(__GNUC__) && defined(__GXX_EXPERIMENTAL_CXX0X__)
-# define RTASSERT_HAVE_STATIC_ASSERT
-#endif
-#if RT_CLANG_PREREQ(6, 0)
-# if __has_feature(cxx_static_assert) || __has_feature(c_static_assert)
-#  define RTASSERT_HAVE_STATIC_ASSERT
-# endif
-#endif
-#ifdef DOXYGEN_RUNNING
-# define RTASSERT_HAVE_STATIC_ASSERT
-#endif
-
-/** @def AssertCompileNS
- * Asserts that a compile-time expression is true. If it's not break the build.
- *
- * This differs from AssertCompile in that it accepts some more expressions
- * than what C++0x allows - NS = Non-standard.
- *
- * @param   expr    Expression which should be true.
- */
-#ifdef __GNUC__
-# define AssertCompileNS(expr)  extern int RTASSERTVAR[1] __attribute__((__unused__)), RTASSERTVAR[(expr) ? 1 : 0] __attribute__((__unused__))
-#elif defined(__IBMC__) || defined(__IBMCPP__)
-# define AssertCompileNS(expr)  extern int RTASSERTVAR[(expr) ? 1 : 0]
-#else
-# define AssertCompileNS(expr)  typedef int RTASSERTTYPE[(expr) ? 1 : 0]
-#endif
-
-/** @def AssertCompile
- * Asserts that a C++0x compile-time expression is true. If it's not break the
- * build.
- * @param   expr    Expression which should be true.
- */
-#ifdef RTASSERT_HAVE_STATIC_ASSERT
-# define AssertCompile(expr)    static_assert(!!(expr), #expr)
-#else
-# define AssertCompile(expr)    AssertCompileNS(expr)
-#endif
-
-/** @def RTASSERT_OFFSET_OF()
- * A offsetof() macro suitable for compile time assertions.
- * Both GCC v4 and VisualAge for C++ v3.08 has trouble using RT_OFFSETOF.
- */
-#if defined(__GNUC__)
-# if __GNUC__ >= 4
-#  define RTASSERT_OFFSET_OF(a_Type, a_Member)  __builtin_offsetof(a_Type, a_Member)
-# else
-#  define RTASSERT_OFFSET_OF(a_Type, a_Member)  RT_OFFSETOF(a_Type, a_Member)
-# endif
-#elif (defined(__IBMC__) || defined(__IBMCPP__)) && defined(RT_OS_OS2)
-# define RTASSERT_OFFSET_OF(a_Type, a_Member)   __offsetof(a_Type, a_Member)
-#else
-# define RTASSERT_OFFSET_OF(a_Type, a_Member)   RT_OFFSETOF(a_Type, a_Member)
-#endif
-
-
-/** @def AssertCompileSize
- * Asserts a size at compile.
- * @param   type    The type.
- * @param   size    The expected type size.
- */
-#define AssertCompileSize(type, size) \
-    AssertCompile(sizeof(type) == (size))
-
-/** @def AssertCompileSizeAlignment
- * Asserts a size alignment at compile.
- * @param   type    The type.
- * @param   align   The size alignment to assert.
- */
-#define AssertCompileSizeAlignment(type, align) \
-    AssertCompile(!(sizeof(type) & ((align) - 1)))
-
-/** @def AssertCompileMemberSize
- * Asserts a member offset alignment at compile.
- * @param   type    The type.
- * @param   member  The member.
- * @param   size    The member size to assert.
- */
-#define AssertCompileMemberSize(type, member, size) \
-    AssertCompile(RT_SIZEOFMEMB(type, member) == (size))
-
-/** @def AssertCompileMemberSizeAlignment
- * Asserts a member size alignment at compile.
- * @param   type    The type.
- * @param   member  The member.
- * @param   align   The member size alignment to assert.
- */
-#define AssertCompileMemberSizeAlignment(type, member, align) \
-    AssertCompile(!(RT_SIZEOFMEMB(type, member) & ((align) - 1)))
-
-/** @def AssertCompileMemberAlignment
- * Asserts a member offset alignment at compile.
- * @param   type    The type.
- * @param   member  The member.
- * @param   align   The member offset alignment to assert.
- */
-#define AssertCompileMemberAlignment(type, member, align) \
-    AssertCompile(!(RTASSERT_OFFSET_OF(type, member) & ((align) - 1)))
-
-/** @def AssertCompileMemberOffset
- * Asserts an offset of a structure member at compile.
- * @param   type    The type.
- * @param   member  The member.
- * @param   off     The expected offset.
- */
-#define AssertCompileMemberOffset(type, member, off) \
-    AssertCompile(RTASSERT_OFFSET_OF(type, member) == (off))
-
-/** @def AssertCompile2MemberOffsets
- * Asserts that two (sub-structure) members in union have the same offset.
- * @param   type    The type.
- * @param   member1 The first member.
- * @param   member2 The second member.
- */
-#define AssertCompile2MemberOffsets(type, member1, member2) \
-    AssertCompile(RTASSERT_OFFSET_OF(type, member1) == RTASSERT_OFFSET_OF(type, member2))
-
-/** @def AssertCompileAdjacentMembers
- * Asserts that two structure members are adjacent.
- * @param   type    The type.
- * @param   member1 The first member.
- * @param   member2 The second member.
- */
-#define AssertCompileAdjacentMembers(type, member1, member2) \
-    AssertCompile(RTASSERT_OFFSET_OF(type, member1) + RT_SIZEOFMEMB(type, member1) == RTASSERT_OFFSET_OF(type, member2))
-
-/** @def AssertCompileMembersAtSameOffset
- * Asserts that members of two different structures are at the same offset.
- * @param   type1   The first type.
- * @param   member1 The first member.
- * @param   type2   The second type.
- * @param   member2 The second member.
- */
-#define AssertCompileMembersAtSameOffset(type1, member1, type2, member2) \
-    AssertCompile(RTASSERT_OFFSET_OF(type1, member1) == RTASSERT_OFFSET_OF(type2, member2))
-
-/** @def AssertCompileMembersSameSize
- * Asserts that members of two different structures have the same size.
- * @param   type1   The first type.
- * @param   member1 The first member.
- * @param   type2   The second type.
- * @param   member2 The second member.
- */
-#define AssertCompileMembersSameSize(type1, member1, type2, member2) \
-    AssertCompile(RT_SIZEOFMEMB(type1, member1) == RT_SIZEOFMEMB(type2, member2))
-
-/** @def AssertCompileMembersSameSizeAndOffset
- * Asserts that members of two different structures have the same size and are
- * at the same offset.
- * @param   type1   The first type.
- * @param   member1 The first member.
- * @param   type2   The second type.
- * @param   member2 The second member.
- */
-#define AssertCompileMembersSameSizeAndOffset(type1, member1, type2, member2) \
-    AssertCompile(   RTASSERT_OFFSET_OF(type1, member1) == RTASSERT_OFFSET_OF(type2, member2) \
-                  && RT_SIZEOFMEMB(type1, member1) == RT_SIZEOFMEMB(type2, member2))
-
-/** @} */
 
 
 
@@ -461,7 +275,11 @@ RT_C_DECLS_END
 #if defined(RTASSERT_QUIET) && !defined(DOXYGEN_RUNNING)
 # define RTAssertMsg1Weak(pszExpr, uLine, pszfile, pszFunction) \
                                 do { } while (0)
-# define RTAssertMsg2Weak       if (1) {} else RTAssertMsg2Weak
+# ifdef RT_COMPILER_SUPPORTS_VA_ARGS
+#  define RTAssertMsg2Weak(...) do { } while (0)
+# else
+#  define RTAssertMsg2Weak      if (1) {} else RTAssertMsg2Weak
+# endif
 #endif
 
 /** @def RTAssertDoPanic
@@ -594,7 +412,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertPanic(); \
             stmt; \
             return (rc); \
@@ -657,7 +475,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertPanic(); \
             stmt; \
             return; \
@@ -689,10 +507,11 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #else
 # define AssertBreak(expr) \
     if (RT_LIKELY(!!(expr))) \
@@ -713,7 +532,7 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         continue; \
     } else do {} while (0)
@@ -738,7 +557,7 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         stmt; \
         break; \
@@ -793,7 +612,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertMsg2Weak a; \
             RTAssertPanic(); \
             stmt; \
@@ -861,7 +680,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertMsg2Weak a; \
             RTAssertPanic(); \
             stmt; \
@@ -928,7 +747,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertMsg2Weak a; \
             RTAssertPanic(); \
             stmt; \
@@ -962,11 +781,12 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertPanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #else
 # define AssertMsgBreak(expr, a) \
     if (RT_LIKELY(!!(expr))) \
@@ -989,12 +809,13 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertPanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #else
 # define AssertMsgBreakStmt(expr, a, stmt) \
     if (RT_LIKELY(!!(expr))) \
@@ -1003,7 +824,8 @@ RT_C_DECLS_END
     { \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #endif
 
 /** @def AssertFailed
@@ -1041,7 +863,7 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertFailedReturn(rc)  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         return (rc); \
     } while (0)
@@ -1062,7 +884,7 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertFailedReturnStmt(stmt, rc)  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         stmt; \
         return (rc); \
@@ -1081,7 +903,7 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertFailedReturnVoid()  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         return; \
     } while (0)
@@ -1101,7 +923,7 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertFailedReturnVoidStmt(stmt)  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         stmt; \
         return; \
@@ -1121,15 +943,17 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertFailedBreak()  \
     if (1) { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #else
 # define AssertFailedBreak()  \
     if (1) \
         break; \
-    else do {} while (0)
+    else \
+        break
 #endif
 
 /** @def AssertFailedBreakStmt
@@ -1141,17 +965,19 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertFailedBreakStmt(stmt) \
     if (1) { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #else
 # define AssertFailedBreakStmt(stmt) \
     if (1) { \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #endif
 
 
@@ -1180,7 +1006,7 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertMsgFailedReturn(a, rc)  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertPanic(); \
         return (rc); \
@@ -1200,7 +1026,7 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertMsgFailedReturnVoid(a)  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertPanic(); \
         return; \
@@ -1221,16 +1047,18 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertMsgFailedBreak(a)  \
     if (1) { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertPanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #else
 # define AssertMsgFailedBreak(a)  \
     if (1) \
         break; \
-    else do {} while (0)
+    else \
+        break
 #endif
 
 /** @def AssertMsgFailedBreakStmt
@@ -1243,18 +1071,20 @@ RT_C_DECLS_END
 #ifdef RT_STRICT
 # define AssertMsgFailedBreakStmt(a, stmt) \
     if (1) { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertPanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #else
 # define AssertMsgFailedBreakStmt(a, stmt) \
     if (1) { \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 #endif
 
 /** @} */
@@ -1304,7 +1134,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertPanic(); \
         } \
     } while (0)
@@ -1322,7 +1152,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertPanic(); \
             return (rc); \
         } \
@@ -1340,7 +1170,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertPanic(); \
             return; \
         } \
@@ -1357,11 +1187,12 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         break; \
     } \
-    else do {} while (0)
+    else \
+        break
 
 /** @def AssertLogRelBreakStmt
  * Assert that an expression is true, execute \a stmt and break if it isn't.
@@ -1375,11 +1206,31 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
+
+/** @def AssertLogRelStmt
+ * Assert that an expression is true, return \a rc if it isn't.
+ * Strict builds will hit a breakpoint, non-strict will only do LogRel.
+ *
+ * @param   expr    Expression which should be true.
+ * @param   stmt    Statement to execute in case of a failed assertion.
+ */
+#define AssertLogRelStmt(expr, stmt) \
+    do { \
+        if (RT_LIKELY(!!(expr))) \
+        { /* likely */ } \
+        else \
+        { \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
+            RTAssertPanic(); \
+            stmt; \
+        } \
+    } while (0)
 
 /** @def AssertLogRelMsg
  * Assert that an expression is true.
@@ -1394,7 +1245,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else\
         { \
-            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertLogRelMsg2(a); \
             RTAssertPanic(); \
         } \
@@ -1414,7 +1265,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else\
         { \
-            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertLogRelMsg2(a); \
             RTAssertPanic(); \
             stmt; \
@@ -1435,7 +1286,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else\
         { \
-            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertLogRelMsg2(a); \
             RTAssertPanic(); \
             return (rc); \
@@ -1459,7 +1310,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else\
         { \
-            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertLogRelMsg2(a); \
             RTAssertPanic(); \
             stmt; \
@@ -1480,7 +1331,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else\
         { \
-            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertLogRelMsg2(a); \
             RTAssertPanic(); \
             return; \
@@ -1499,12 +1350,13 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         break; \
     } \
-    else do {} while (0)
+    else \
+        break
 
 /** @def AssertLogRelMsgBreakStmt
  * Assert that an expression is true, execute \a stmt and break if it isn't.
@@ -1519,12 +1371,13 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @def AssertLogRelFailed
  * An assertion failed.
@@ -1532,7 +1385,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelFailed() \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
     } while (0)
 
@@ -1544,7 +1397,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelFailedReturn(rc) \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         return (rc); \
     } while (0)
@@ -1555,7 +1408,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelFailedReturnVoid() \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         return; \
     } while (0)
@@ -1567,10 +1420,11 @@ RT_C_DECLS_END
 #define AssertLogRelFailedBreak() \
     if (1) \
     { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @def AssertLogRelFailedBreakStmt
  * An assertion failed, execute \a stmt and break.
@@ -1581,11 +1435,12 @@ RT_C_DECLS_END
 #define AssertLogRelFailedBreakStmt(stmt) \
     if (1) \
     { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertPanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @def AssertLogRelMsgFailed
  * An assertion failed.
@@ -1595,7 +1450,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelMsgFailed(a) \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
     } while (0)
@@ -1611,7 +1466,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelMsgFailedStmt(a, stmt) \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         stmt; \
@@ -1626,7 +1481,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelMsgFailedReturn(a, rc) \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         return (rc); \
@@ -1643,7 +1498,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelMsgFailedReturnStmt(a, stmt, rc) \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         stmt; \
@@ -1658,7 +1513,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelMsgFailedReturnVoid(a) \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         return; \
@@ -1674,7 +1529,7 @@ RT_C_DECLS_END
  */
 #define AssertLogRelMsgFailedReturnVoidStmt(a, stmt) \
     do { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         stmt; \
@@ -1690,11 +1545,12 @@ RT_C_DECLS_END
 #define AssertLogRelMsgFailedBreak(a) \
     if (1)\
     { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @def AssertLogRelMsgFailedBreakStmt
  * An assertion failed, execute \a stmt and break.
@@ -1706,12 +1562,13 @@ RT_C_DECLS_END
 #define AssertLogRelMsgFailedBreakStmt(a, stmt) \
     if (1) \
     { \
-        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertLogRelMsg1((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertLogRelMsg2(a); \
         RTAssertPanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @} */
 
@@ -1761,7 +1618,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertReleasePanic(); \
             return (rc); \
         } \
@@ -1778,7 +1635,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertReleasePanic(); \
             return; \
         } \
@@ -1795,10 +1652,11 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertReleasePanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @def AssertReleaseBreakStmt
  * Assert that an expression is true, hit a breakpoint and break if it isn't.
@@ -1811,11 +1669,12 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertReleasePanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 
 /** @def AssertReleaseMsg
@@ -1830,7 +1689,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertMsg2Weak a; \
             RTAssertReleasePanic(); \
         } \
@@ -1849,7 +1708,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertMsg2Weak a; \
             RTAssertReleasePanic(); \
             return (rc); \
@@ -1868,7 +1727,7 @@ RT_C_DECLS_END
         { /* likely */ } \
         else \
         { \
-            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+            RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
             RTAssertMsg2Weak a; \
             RTAssertReleasePanic(); \
             return; \
@@ -1887,11 +1746,12 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertReleasePanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @def AssertReleaseMsgBreakStmt
  * Assert that an expression is true, print the message and hit a breakpoint and break if it isn't.
@@ -1905,12 +1765,13 @@ RT_C_DECLS_END
     { /* likely */ } \
     else if (1) \
     { \
-        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertReleasePanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 
 /** @def AssertReleaseFailed
@@ -1918,7 +1779,7 @@ RT_C_DECLS_END
  */
 #define AssertReleaseFailed()  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertReleasePanic(); \
     } while (0)
 
@@ -1929,7 +1790,7 @@ RT_C_DECLS_END
  */
 #define AssertReleaseFailedReturn(rc)  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertReleasePanic(); \
         return (rc); \
     } while (0)
@@ -1939,7 +1800,7 @@ RT_C_DECLS_END
  */
 #define AssertReleaseFailedReturnVoid()  \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertReleasePanic(); \
         return; \
     } while (0)
@@ -1950,10 +1811,11 @@ RT_C_DECLS_END
  */
 #define AssertReleaseFailedBreak()  \
     if (1) { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertReleasePanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @def AssertReleaseFailedBreakStmt
  * An assertion failed, hit a breakpoint and break.
@@ -1962,11 +1824,12 @@ RT_C_DECLS_END
  */
 #define AssertReleaseFailedBreakStmt(stmt)  \
     if (1) { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertReleasePanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 
 /** @def AssertReleaseMsgFailed
@@ -1989,7 +1852,7 @@ RT_C_DECLS_END
  */
 #define AssertReleaseMsgFailedReturn(a, rc) \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertReleasePanic(); \
         return (rc); \
@@ -2002,7 +1865,7 @@ RT_C_DECLS_END
  */
 #define AssertReleaseMsgFailedReturnVoid(a) \
     do { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertReleasePanic(); \
         return; \
@@ -2016,11 +1879,12 @@ RT_C_DECLS_END
  */
 #define AssertReleaseMsgFailedBreak(a) \
     if (1) { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertReleasePanic(); \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @def AssertReleaseMsgFailedBreakStmt
  * An assertion failed, print a message, hit a breakpoint and break.
@@ -2030,12 +1894,13 @@ RT_C_DECLS_END
  */
 #define AssertReleaseMsgFailedBreakStmt(a, stmt) \
     if (1) { \
-        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+        RTAssertMsg1Weak((const char *)0, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
         RTAssertMsg2Weak a; \
         RTAssertReleasePanic(); \
         stmt; \
         break; \
-    } else do {} while (0)
+    } else \
+        break
 
 /** @} */
 
@@ -2060,7 +1925,7 @@ RT_C_DECLS_END
         else \
             for (;;) \
             { \
-                RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+                RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
                 RTAssertReleasePanic(); \
             } \
     } while (0)
@@ -2078,7 +1943,7 @@ RT_C_DECLS_END
         else \
             for (;;) \
             { \
-                RTAssertMsg1Weak(#expr, __LINE__, __FILE__, __PRETTY_FUNCTION__); \
+                RTAssertMsg1Weak(#expr, __LINE__, __FILE__, RT_GCC_EXTENSION __PRETTY_FUNCTION__); \
                 RTAssertMsg2Weak a; \
                 RTAssertReleasePanic(); \
             } \
@@ -2706,7 +2571,7 @@ RT_C_DECLS_END
  *
  * @param   pv      The pointer.
  */
-#define AssertPtr(pv)                   AssertMsg(VALID_PTR(pv), ("%p\n", (pv)))
+#define AssertPtr(pv)                   AssertMsg(RT_VALID_PTR(pv), ("%p\n", (pv)))
 
 /** @def AssertPtrReturn
  * Asserts that a pointer is valid.
@@ -2714,21 +2579,40 @@ RT_C_DECLS_END
  * @param   pv      The pointer.
  * @param   rcRet   What is to be presented to return.
  */
-#define AssertPtrReturn(pv, rcRet)      AssertMsgReturn(VALID_PTR(pv), ("%p\n", (pv)), rcRet)
+#define AssertPtrReturn(pv, rcRet)      AssertMsgReturn(RT_VALID_PTR(pv), ("%p\n", (pv)), rcRet)
 
 /** @def AssertPtrReturnVoid
  * Asserts that a pointer is valid.
  *
  * @param   pv      The pointer.
  */
-#define AssertPtrReturnVoid(pv)         AssertMsgReturnVoid(VALID_PTR(pv), ("%p\n", (pv)))
+#define AssertPtrReturnVoid(pv)         AssertMsgReturnVoid(RT_VALID_PTR(pv), ("%p\n", (pv)))
+
+/** @def AssertPtrReturnStmt
+ * Asserts that a pointer is valid.
+ *
+ * @param   pv      The pointer.
+ * @param   stmt    Statement to execute before returninig in case of a failed
+ *                  assertion.
+ * @param   rcRet   What is to be presented to return.
+ */
+#define AssertPtrReturnStmt(pv, stmt, rcRet) AssertMsgReturnStmt(RT_VALID_PTR(pv), ("%p\n", (pv)), stmt, rcRet)
+
+/** @def AssertPtrReturnVoidStmt
+ * Asserts that a pointer is valid.
+ *
+ * @param   pv      The pointer.
+ * @param   stmt    Statement to execute before returninig in case of a failed
+ *                  assertion.
+ */
+#define AssertPtrReturnVoidStmt(pv, stmt) AssertMsgReturnVoid(RT_VALID_PTR(pv), ("%p\n", (pv)), stmt)
 
 /** @def AssertPtrBreak
  * Asserts that a pointer is valid.
  *
  * @param   pv      The pointer.
  */
-#define AssertPtrBreak(pv)              AssertMsgBreak(VALID_PTR(pv), ("%p\n", (pv)))
+#define AssertPtrBreak(pv)              AssertMsgBreak(RT_VALID_PTR(pv), ("%p\n", (pv)))
 
 /** @def AssertPtrBreakStmt
  * Asserts that a pointer is valid.
@@ -2736,14 +2620,14 @@ RT_C_DECLS_END
  * @param   pv      The pointer.
  * @param   stmt    Statement to execute before break in case of a failed assertion.
  */
-#define AssertPtrBreakStmt(pv, stmt)    AssertMsgBreakStmt(VALID_PTR(pv), ("%p\n", (pv)), stmt)
+#define AssertPtrBreakStmt(pv, stmt)    AssertMsgBreakStmt(RT_VALID_PTR(pv), ("%p\n", (pv)), stmt)
 
 /** @def AssertPtrNull
  * Asserts that a pointer is valid or NULL.
  *
  * @param   pv      The pointer.
  */
-#define AssertPtrNull(pv)               AssertMsg(VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)))
+#define AssertPtrNull(pv)               AssertMsg(RT_VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)))
 
 /** @def AssertPtrNullReturn
  * Asserts that a pointer is valid or NULL.
@@ -2751,21 +2635,21 @@ RT_C_DECLS_END
  * @param   pv      The pointer.
  * @param   rcRet   What is to be presented to return.
  */
-#define AssertPtrNullReturn(pv, rcRet)  AssertMsgReturn(VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)), rcRet)
+#define AssertPtrNullReturn(pv, rcRet)  AssertMsgReturn(RT_VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)), rcRet)
 
 /** @def AssertPtrNullReturnVoid
  * Asserts that a pointer is valid or NULL.
  *
  * @param   pv      The pointer.
  */
-#define AssertPtrNullReturnVoid(pv)     AssertMsgReturnVoid(VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)))
+#define AssertPtrNullReturnVoid(pv)     AssertMsgReturnVoid(RT_VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)))
 
 /** @def AssertPtrNullBreak
  * Asserts that a pointer is valid or NULL.
  *
  * @param   pv      The pointer.
  */
-#define AssertPtrNullBreak(pv)          AssertMsgBreak(VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)))
+#define AssertPtrNullBreak(pv)          AssertMsgBreak(RT_VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)))
 
 /** @def AssertPtrNullBreakStmt
  * Asserts that a pointer is valid or NULL.
@@ -2773,7 +2657,7 @@ RT_C_DECLS_END
  * @param   pv      The pointer.
  * @param   stmt    Statement to execute before break in case of a failed assertion.
  */
-#define AssertPtrNullBreakStmt(pv, stmt) AssertMsgBreakStmt(VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)), stmt)
+#define AssertPtrNullBreakStmt(pv, stmt) AssertMsgBreakStmt(RT_VALID_PTR(pv) || (pv) == NULL, ("%p\n", (pv)), stmt)
 
 /** @def AssertGCPhys32
  * Asserts that the high dword of a physical address is zero
@@ -2841,5 +2725,5 @@ RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !IPRT_INCLUDED_assert_h */
 

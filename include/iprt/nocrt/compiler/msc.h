@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,15 +23,22 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_nocrt_compiler_msc_h
-#define ___iprt_nocrt_compiler_msc_h
+#ifndef IPRT_INCLUDED_nocrt_compiler_msc_h
+#define IPRT_INCLUDED_nocrt_compiler_msc_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 
 /* stddef.h */
 #if !defined(_MT) && !defined(_DLL) && _MSC_VER < 1400
 # define errno msvcrt_errno
 #endif
-#include <../include/stddef.h>
+#if _MSC_VER >= 1900
+# include <vcruntime.h>
+#else
+# include <../include/stddef.h>
+#endif
 #undef errno
 
 #undef ssize_t
@@ -41,5 +48,5 @@ typedef intptr_t ssize_t;
 /* stdarg.h */
 #include <../include/stdarg.h>
 
-#endif
+#endif /* !IPRT_INCLUDED_nocrt_compiler_msc_h */
 

@@ -1,8 +1,11 @@
 #!/bin/sh
-#
+# $Id: vboxautostart-service.sh 88524 2021-04-15 11:36:36Z vboxsync $
+## @file
 # VirtualBox autostart service init script.
 #
-# Copyright (C) 2012-2015 Oracle Corporation
+
+#
+# Copyright (C) 2012-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -77,12 +80,37 @@ if which start-stop-daemon >/dev/null 2>&1; then
         shift
         bin="$1"
         shift
-        start-stop-daemon --background --chuid $usr --start --exec $bin -- $@
+        start-stop-daemon --chuid $usr --start --exec $bin -- $@
     }
 fi
 
 vboxdrvrunning() {
     lsmod | grep -q "vboxdrv[^_-]"
+}
+
+valid_db_entry() {
+
+    entry="$1"
+    [ -z "$entry" ] && return 1
+
+    user="$2"
+    [ -z "$user" ] && return 1
+
+    user_name=$(id -n -u "$user" 2>/dev/null)
+    [ -z "$user_name" ] && return 1
+
+    user_id=$(id -u "$user" 2>/dev/null)
+
+    # Verify that @user identifies a user *by name* (i.e. not a numeric id).
+    # Careful, all numeric user names are legal.
+    if [ "$user_id" = "$user" ] && [ "$user_name" != "$user" ]; then
+        return 1
+    fi
+
+    # Verify whether file name is the same as file owner name.
+    [ -z "$(find "$entry" -user "$user" -type f 2>/dev/null)" ] && return 1
+
+    return 0
 }
 
 start() {
@@ -98,9 +126,13 @@ start() {
     # prevent inheriting this setting to VBoxSVC
     unset VBOX_RELEASE_LOG_DEST
 
-    for user in `ls $VBOXAUTOSTART_DB/*.start`
+    for entry in "$VBOXAUTOSTART_DB"/*.start
     do
-        start_daemon `basename $user | sed -ne "s/\(.*\).start/\1/p"` $binary $PARAMS > /dev/null 2>&1
+        user=$(basename "$entry" .start)
+        [ "$user" = "*" ] && break
+        valid_db_entry "$entry" "$user" || continue
+
+        start_daemon "$user" "$binary" $PARAMS > /dev/null 2>&1
     done
 
     return $RETVAL
@@ -115,9 +147,13 @@ stop() {
     # prevent inheriting this setting to VBoxSVC
     unset VBOX_RELEASE_LOG_DEST
 
-    for user in `ls $VBOXAUTOSTART_DB/*.stop`
+    for entry in "$VBOXAUTOSTART_DB"/*.stop
     do
-        start_daemon `basename $user | sed -ne "s/\(.*\).stop/\1/p"` $binary $PARAMS > /dev/null 2>&1
+        user=$(basename "$entry" .stop)
+        [ "$user" = "*" ] && break
+        valid_db_entry "$entry" "$user" || continue
+
+        start_daemon "$user" "$binary" $PARAMS > /dev/null 2>&1
     done
 
     return $RETVAL

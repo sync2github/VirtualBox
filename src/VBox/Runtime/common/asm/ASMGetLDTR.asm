@@ -1,10 +1,10 @@
-; $Id$
+; $Id: ASMGetLDTR.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; IPRT - ASMGetLDTR().
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -34,7 +34,7 @@ BEGINCODE
 ;;
 ; Get the LDTR register.
 ; @returns LDTR.
-; 
+;
 BEGINPROC_EXPORTED ASMGetLDTR
         sldt    ax
         movzx   eax, ax

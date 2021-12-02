@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: fs-win.cpp 90789 2021-08-23 10:27:29Z vboxsync $ */
 /** @file
  * IPRT - File System, Win32.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -186,7 +186,8 @@ RTR3DECL(int) RTFsQuerySizes(const char *pszFsPath, RTFOFF *pcbTotal, RTFOFF *pc
     /*
      * Validate & get valid root path.
      */
-    AssertMsgReturn(VALID_PTR(pszFsPath) && *pszFsPath, ("%p", pszFsPath), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFsPath, VERR_INVALID_POINTER);
+    AssertReturn(*pszFsPath != '\0', VERR_INVALID_PARAMETER);
     PRTUTF16 pwszFsRoot;
     int rc = rtFsGetRoot(pszFsPath, &pwszFsRoot);
     if (RT_FAILURE(rc))
@@ -257,8 +258,9 @@ RTR3DECL(int) RTFsQuerySerial(const char *pszFsPath, uint32_t *pu32Serial)
     /*
      * Validate & get valid root path.
      */
-    AssertMsgReturn(VALID_PTR(pszFsPath) && *pszFsPath, ("%p", pszFsPath), VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pu32Serial), ("%p", pu32Serial), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFsPath, VERR_INVALID_POINTER);
+    AssertReturn(*pszFsPath != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pu32Serial, VERR_INVALID_POINTER);
     PRTUTF16 pwszFsRoot;
     int rc = rtFsGetRoot(pszFsPath, &pwszFsRoot);
     if (RT_FAILURE(rc))
@@ -280,7 +282,7 @@ RTR3DECL(int) RTFsQuerySerial(const char *pszFsPath, uint32_t *pu32Serial)
              pszFsPath, Err, rc));
     }
 
-    RTUtf16Free(pwszFsRoot);
+    rtFsFreeRoot(pwszFsRoot);
     return rc;
 }
 
@@ -297,8 +299,9 @@ RTR3DECL(int) RTFsQueryProperties(const char *pszFsPath, PRTFSPROPERTIES pProper
     /*
      * Validate & get valid root path.
      */
-    AssertMsgReturn(VALID_PTR(pszFsPath) && *pszFsPath, ("%p", pszFsPath), VERR_INVALID_PARAMETER);
-    AssertMsgReturn(VALID_PTR(pProperties), ("%p", pProperties), VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszFsPath, VERR_INVALID_POINTER);
+    AssertReturn(*pszFsPath != '\0', VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pProperties, VERR_INVALID_POINTER);
     PRTUTF16 pwszFsRoot;
     int rc = rtFsGetRoot(pszFsPath, &pwszFsRoot);
     if (RT_FAILURE(rc))
@@ -332,7 +335,7 @@ RTR3DECL(int) RTFsQueryProperties(const char *pszFsPath, PRTFSPROPERTIES pProper
              pszFsPath, Err, rc));
     }
 
-    RTUtf16Free(pwszFsRoot);
+    rtFsFreeRoot(pwszFsRoot);
     return rc;
 }
 
@@ -378,7 +381,7 @@ RTR3DECL(int) RTFsQueryType(const char *pszFsPath, PRTFSTYPE penmType)
      * Convert the path and try open it.
      */
     PRTUTF16 pwszFsPath;
-    int rc = RTStrToUtf16(pszFsPath, &pwszFsPath);
+    int rc = RTPathWinFromUtf8(&pwszFsPath, pszFsPath, 0 /*fFlags*/);
     if (RT_SUCCESS(rc))
     {
         HANDLE hFile = CreateFileW(pwszFsPath,
@@ -409,6 +412,8 @@ RTR3DECL(int) RTFsQueryType(const char *pszFsPath, PRTFSTYPE penmType)
                     *penmType = RTFSTYPE_FAT;
                 else if (IS_FS("FAT32"))
                     *penmType = RTFSTYPE_FAT;
+                else if (IS_FS("EXFAT"))
+                    *penmType = RTFSTYPE_EXFAT;
                 else if (IS_FS("VBoxSharedFolderFS"))
                     *penmType = RTFSTYPE_VBOXSHF;
 #undef IS_FS
@@ -419,7 +424,7 @@ RTR3DECL(int) RTFsQueryType(const char *pszFsPath, PRTFSTYPE penmType)
         }
         else
             rc = RTErrConvertFromWin32(GetLastError());
-        RTUtf16Free(pwszFsPath);
+        RTPathWinFree(pwszFsPath);
     }
     return rc;
 }

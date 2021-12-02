@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0302
+# $Id: txsclient.py 90740 2021-08-19 09:42:27Z vboxsync $
+# pylint: disable=too-many-lines
 
 """
 Test eXecution Service Client.
 """
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -26,25 +26,29 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 90740 $"
 
 # Standard Python imports.
-import array
-import errno
-import os
-import select
-import socket
-import threading
-import time
-import types
-import zlib
-import uuid
+import array;
+import errno;
+import os;
+import select;
+import socket;
+import sys;
+import threading;
+import time;
+import zlib;
+import uuid;
 
 # Validation Kit imports.
-from common     import utils;
-from testdriver import base;
-from testdriver import reporter;
+from common             import utils;
+from testdriver         import base;
+from testdriver         import reporter;
 from testdriver.base    import TdTaskBase;
+
+# Python 3 hacks:
+if sys.version_info[0] >= 3:
+    long = int;     # pylint: disable=redefined-builtin,invalid-name
 
 #
 # Helpers for decoding data received from the TXS.
@@ -67,7 +71,12 @@ def getSZ(abData, off, sDefault = None):
     if cchStr >= 0:
         abStr = abData[off:(off + cchStr)];
         try:
-            return abStr.tostring().decode('utf_8');
+            if sys.version_info < (3, 9, 0):
+                # Removed since Python 3.9.
+                sStr = abStr.tostring(); # pylint: disable=no-member
+            else:
+                sStr = abStr.tobytes();
+            return sStr.decode('utf_8');
         except:
             reporter.errorXcpt('getSZ(,%u)' % (off));
     return sDefault;
@@ -116,11 +125,17 @@ def isValidOpcodeEncoding(sOpcode):
 
 def u32ToByteArray(u32):
     """Encodes the u32 value as a little endian byte (B) array."""
-    return array.array('B', \
-                       (  u32             % 256, \
-                         (u32 / 256)      % 256, \
-                         (u32 / 65536)    % 256, \
-                         (u32 / 16777216) % 256) );
+    return array.array('B',
+                       (  u32              % 256,
+                         (u32 // 256)      % 256,
+                         (u32 // 65536)    % 256,
+                         (u32 // 16777216) % 256) );
+
+def escapeString(sString):
+    """
+    Does $ escaping of the string so TXS doesn't try do variable expansion.
+    """
+    return sString.replace('$', '$$');
 
 
 
@@ -256,7 +271,7 @@ class TransportBase(object):
                                        ord(sOpcode[5]), \
                                        ord(sOpcode[6]), \
                                        ord(sOpcode[7]) ) ) );
-            if len(abPayload) > 0:
+            if abPayload:
                 abMsg.extend(abPayload);
         except:
             reporter.fatalXcpt('sendMsgInt: packing problem...');
@@ -269,7 +284,7 @@ class TransportBase(object):
         while len(abMsg) % 16:
             abMsg.append(0);
 
-        reporter.log2('sendMsgInt: op=%s len=%d to=%d' % (sOpcode, len(abMsg), cMsTimeout));
+        reporter.log2('sendMsgInt: op=%s len=%d timeout=%d' % (sOpcode, len(abMsg), cMsTimeout));
         return self.sendBytes(abMsg, cMsTimeout);
 
     def recvMsg(self, cMsTimeout, fNoDataOk = False):
@@ -281,12 +296,12 @@ class TransportBase(object):
         """
 
         # Read the header.
-        if len(self.abReadAheadHdr) > 0:
+        if self.abReadAheadHdr:
             assert(len(self.abReadAheadHdr) == 16);
             abHdr = self.abReadAheadHdr;
             self.abReadAheadHdr = array.array('B');
         else:
-            abHdr = self.recvBytes(16, cMsTimeout, fNoDataOk);
+            abHdr = self.recvBytes(16, cMsTimeout, fNoDataOk); # (virtual method) # pylint: disable=assignment-from-none
             if abHdr is None:
                 return (None, None, None);
         if len(abHdr) != 16:
@@ -296,7 +311,13 @@ class TransportBase(object):
         # Unpack and validate the header.
         cbMsg   = getU32(abHdr, 0);
         uCrc32  = getU32(abHdr, 4);
-        sOpcode = abHdr[8:16].tostring().decode('ascii');
+
+        if sys.version_info < (3, 9, 0):
+            # Removed since Python 3.9.
+            sOpcode = abHdr[8:16].tostring(); # pylint: disable=no-member
+        else:
+            sOpcode = abHdr[8:16].tobytes();
+        sOpcode = sOpcode.decode('ascii');
 
         if cbMsg < 16:
             reporter.fatal('recvMsg: message length is out of range: %s (min 16 bytes)' % (cbMsg));
@@ -315,7 +336,7 @@ class TransportBase(object):
                 cbPadding = 16 - (cbMsg % 16);
             else:
                 cbPadding = 0;
-            abPayload = self.recvBytes(cbMsg - 16 + cbPadding, cMsTimeout, False);
+            abPayload = self.recvBytes(cbMsg - 16 + cbPadding, cMsTimeout, False); # pylint: disable=assignment-from-none
             if abPayload is None:
                 self.abReadAheadHdr = abHdr;
                 if not fNoDataOk    :
@@ -351,13 +372,16 @@ class TransportBase(object):
         abPayload = array.array('B');
         for o in aoPayload:
             try:
-                if isinstance(o, basestring):
-                    # the primitive approach...
-                    sUtf8 = o.encode('utf_8');
-                    for i in range(0, len(sUtf8)):
-                        abPayload.append(ord(sUtf8[i]))
+                if utils.isString(o):
+                    if sys.version_info[0] >= 3:
+                        abPayload.extend(o.encode('utf_8'));
+                    else:
+                        # the primitive approach...
+                        sUtf8 = o.encode('utf_8');
+                        for ch in sUtf8:
+                            abPayload.append(ord(ch))
                     abPayload.append(0);
-                elif isinstance(o, types.LongType):
+                elif isinstance(o, (long, int)):
                     if o < 0 or o > 0xffffffff:
                         reporter.fatal('sendMsg: uint32_t payload is out of range: %s' % (hex(o)));
                         return None;
@@ -378,14 +402,14 @@ class Session(TdTaskBase):
     A Test eXecution Service (TXS) client session.
     """
 
-    def __init__(self, oTransport, cMsTimeout, cMsIdleFudge, fTryConnect = False):
+    def __init__(self, oTransport, cMsTimeout, cMsIdleFudge, fTryConnect = False, fnProcessEvents = None):
         """
         Construct a TXS session.
 
         This starts by connecting to the TXS and will enter the signalled state
         when connected or the timeout has been reached.
         """
-        TdTaskBase.__init__(self, utils.getCallerName());
+        TdTaskBase.__init__(self, utils.getCallerName(), fnProcessEvents);
         self.oTransport     = oTransport;
         self.sStatus        = "";
         self.cMsTimeout     = 0;
@@ -489,7 +513,11 @@ class Session(TdTaskBase):
             return False;
 
         oThread.join(61.0);
-        return oThread.isAlive();
+
+        if sys.version_info < (3, 9, 0):
+            # Removed since Python 3.9.
+            return oThread.isAlive(); # pylint: disable=no-member
+        return oThread.is_alive();
 
     def taskThread(self):
         """
@@ -541,7 +569,7 @@ class Session(TdTaskBase):
         cMsLeft = self.cMsTimeout - cMsElapsed;
         if cMsLeft <= cMsMin:
             return cMsMin;
-        if cMsLeft > cMsMax and cMsMax > 0:
+        if cMsLeft > cMsMax > 0:
             return cMsMax
         return cMsLeft;
 
@@ -629,7 +657,7 @@ class Session(TdTaskBase):
 
         rc = self.waitForTask(self.cMsTimeout + 5000);
         if rc is False:
-            reporter.maybeErrXcpt(self.fErr, 'asyncToSync: waitForTask failed...');
+            reporter.maybeErr(self.fErr, 'asyncToSync: waitForTask (timeout %d) failed...' % (self.cMsTimeout,));
             self.cancelTask();
             #reporter.log2('asyncToSync(%s): returns False (#2)' % (fnAsync, rc));
             return False;
@@ -684,6 +712,24 @@ class Session(TdTaskBase):
         self.oTransport.disconnect();
         return rc;
 
+    def taskVer(self):
+        """Requests version information from TXS"""
+        rc = self.sendMsg("VER");
+        if rc is True:
+            rc = False;
+            cbMsg, sOpcode, abPayload = self.recvReply();
+            if cbMsg is not None:
+                sOpcode = sOpcode.strip();
+                if sOpcode == "ACK VER":
+                    sVer = getSZ(abPayload, 0);
+                    if sVer is not None:
+                        rc = sVer;
+                else:
+                    reporter.maybeErr(self.fErr, 'taskVer got a bad reply: %s' % (sOpcode,));
+            else:
+                reporter.maybeErr(self.fErr, 'taskVer got 3xNone from recvReply.');
+        return rc;
+
     def taskUuid(self):
         """Gets the TXS UUID"""
         rc = self.sendMsg("UUID");
@@ -711,10 +757,10 @@ class Session(TdTaskBase):
 
     #
     # Process task
-    # pylint: disable=C0111
+    # pylint: disable=missing-docstring
     #
 
-    def taskExecEx(self, sExecName, fFlags, asArgs, asAddEnv, oStdIn, oStdOut, oStdErr, oTestPipe, sAsUser): # pylint: disable=R0913,R0914,R0915,C0301
+    def taskExecEx(self, sExecName, fFlags, asArgs, asAddEnv, oStdIn, oStdOut, oStdErr, oTestPipe, sAsUser): # pylint: disable=too-many-arguments,too-many-locals,too-many-statements,line-too-long
         # Construct the payload.
         aoPayload = [long(fFlags), '%s' % (sExecName), long(len(asArgs))];
         for sArg in asArgs:
@@ -723,11 +769,11 @@ class Session(TdTaskBase):
         for sPutEnv in asAddEnv:
             aoPayload.append('%s' % (sPutEnv));
         for o in (oStdIn, oStdOut, oStdErr, oTestPipe):
-            if isinstance(o, basestring):
+            if utils.isString(o):
                 aoPayload.append(o);
             elif o is not None:
                 aoPayload.append('|');
-                o.uTxsClientCrc32 = zlib.crc32('');
+                o.uTxsClientCrc32 = zlib.crc32(b'');
             else:
                 aoPayload.append('');
         aoPayload.append('%s' % (sAsUser));
@@ -747,7 +793,7 @@ class Session(TdTaskBase):
                 # Pending input?
                 if     msPendingInputReply is None \
                    and oStdIn is not None \
-                   and not isinstance(oStdIn, basestring):
+                   and not utils.isString(oStdIn):
                     try:
                         sInput = oStdIn.read(65536);
                     except:
@@ -755,12 +801,12 @@ class Session(TdTaskBase):
                         sFailure = 'exception reading stdin';
                         rc = None;
                         break;
-                    if len(sInput) > 0:
-                        oStdIn.uTxsClientCrc32 = zlib.crc32(sInput, oStdIn.uTxsClientCrc32);
+                    if sInput:
                         # Convert to a byte array before handing it of to sendMsg or the string
                         # will get some zero termination added breaking the CRC (and injecting
                         # unwanted bytes).
-                        abInput = array.array('B', sInput);
+                        abInput = array.array('B', sInput.encode('utf-8'));
+                        oStdIn.uTxsClientCrc32 = zlib.crc32(abInput, oStdIn.uTxsClientCrc32);
                         rc = self.sendMsg('STDIN', (long(oStdIn.uTxsClientCrc32 & 0xffffffff), abInput));
                         if rc is not True:
                             sFailure = 'sendMsg failure';
@@ -836,7 +882,7 @@ class Session(TdTaskBase):
                     reporter.log('taskExecEx: Standard input is ignored... why?');
                     del oStdIn.uTxsClientCrc32;
                     oStdIn = '/dev/null';
-                elif  (sOpcode == 'STDINMEM' or sOpcode == 'STDINBAD' or sOpcode == 'STDINCRC')\
+                elif  sOpcode in ('STDINMEM', 'STDINBAD', 'STDINCRC',)\
                   and msPendingInputReply is not None:
                     # TXS STDIN error, abort.
                     # TODO: STDINMEM - consider undoing the previous stdin read and try resubmitt it.
@@ -909,10 +955,10 @@ class Session(TdTaskBase):
 
         # Cleanup.
         for o in (oStdIn, oStdOut, oStdErr, oTestPipe):
-            if o is not None and not isinstance(o, basestring):
-                del o.uTxsClientCrc32;      # pylint: disable=E1103
+            if o is not None and not utils.isString(o):
+                del o.uTxsClientCrc32;      # pylint: disable=maybe-no-member
                 # Make sure all files are closed
-                o.close();                  # pylint: disable=E1103
+                o.close();                  # pylint: disable=maybe-no-member
         reporter.log('taskExecEx: returns %s' % (rc));
         return rc;
 
@@ -997,9 +1043,17 @@ class Session(TdTaskBase):
             rc = self.recvAckLogged('RMTREE');
         return rc;
 
-    #def "CHMOD   "
-    #def "CHOWN   "
-    #def "CHGRP   "
+    def taskChMod(self, sRemotePath, fMode):
+        rc = self.sendMsg('CHMOD', (int(fMode), sRemotePath,));
+        if rc is True:
+            rc = self.recvAckLogged('CHMOD');
+        return rc;
+
+    def taskChOwn(self, sRemotePath, idUser, idGroup):
+        rc = self.sendMsg('CHOWN', (int(idUser), int(idGroup), sRemotePath,));
+        if rc is True:
+            rc = self.recvAckLogged('CHOWN');
+        return rc;
 
     def taskIsDir(self, sRemoteDir):
         rc = self.sendMsg('ISDIR', (sRemoteDir,));
@@ -1023,7 +1077,7 @@ class Session(TdTaskBase):
     #def "LSTAT   "
     #def "LIST    "
 
-    def taskUploadFile(self, sLocalFile, sRemoteFile):
+    def taskUploadFile(self, sLocalFile, sRemoteFile, fMode, fFallbackOkay):
         #
         # Open the local file (make sure it exist before bothering TXS) and
         # tell TXS that we want to upload a file.
@@ -1035,15 +1089,15 @@ class Session(TdTaskBase):
             return False;
 
         # Common cause with taskUploadStr
-        rc = self.taskUploadCommon(oLocalFile, sRemoteFile);
+        rc = self.taskUploadCommon(oLocalFile, sRemoteFile, fMode, fFallbackOkay);
 
         # Cleanup.
         oLocalFile.close();
         return rc;
 
-    def taskUploadString(self, sContent, sRemoteFile):
+    def taskUploadString(self, sContent, sRemoteFile, fMode, fFallbackOkay):
         # Wrap sContent in a file like class.
-        class InStringFile(object): # pylint: disable=R0903
+        class InStringFile(object): # pylint: disable=too-few-public-methods
             def __init__(self, sContent):
                 self.sContent = sContent;
                 self.off      = 0;
@@ -1060,19 +1114,40 @@ class Session(TdTaskBase):
                 return sRet;
 
         oLocalString = InStringFile(sContent);
-        return self.taskUploadCommon(oLocalString, sRemoteFile);
+        return self.taskUploadCommon(oLocalString, sRemoteFile, fMode, fFallbackOkay);
 
-    def taskUploadCommon(self, oLocalFile, sRemoteFile):
+    def taskUploadCommon(self, oLocalFile, sRemoteFile, fMode, fFallbackOkay):
         """Common worker used by taskUploadFile and taskUploadString."""
+        #
         # Command + ACK.
-        rc = self.sendMsg('PUT FILE', (sRemoteFile,));
-        if rc is True:
-            rc = self.recvAckLogged('PUT FILE');
+        #
+        # Only used the new PUT2FILE command if we've got a non-zero mode mask.
+        # Fall back on the old command if the new one is not known by the TXS.
+        #
+        if fMode == 0:
+            rc = self.sendMsg('PUT FILE', (sRemoteFile,));
+            if rc is True:
+                rc = self.recvAckLogged('PUT FILE');
+        else:
+            rc = self.sendMsg('PUT2FILE', (fMode, sRemoteFile));
+            if rc is True:
+                rc = self.recvAck();
+                if rc is False:
+                    reporter.maybeErr(self.fErr, 'recvAckLogged: PUT2FILE transport error');
+                elif rc is not True:
+                    if rc[0] == 'UNKNOWN' and fFallbackOkay:
+                        # Fallback:
+                        rc = self.sendMsg('PUT FILE', (sRemoteFile,));
+                        if rc is True:
+                            rc = self.recvAckLogged('PUT FILE');
+                    else:
+                        reporter.maybeErr(self.fErr, 'recvAckLogged: PUT2FILE response was %s: %s' % (rc[0], rc[1],));
+                        rc = False;
         if rc is True:
             #
             # Push data packets until eof.
             #
-            uMyCrc32 = zlib.crc32("");
+            uMyCrc32 = zlib.crc32(b'');
             while True:
                 # Read up to 64 KB of data.
                 try:
@@ -1083,13 +1158,16 @@ class Session(TdTaskBase):
 
                 # Convert to array - this is silly!
                 abBuf = array.array('B');
-                for i, _ in enumerate(sRaw):
-                    abBuf.append(ord(sRaw[i]));
+                if utils.isString(sRaw):
+                    for i, _ in enumerate(sRaw):
+                        abBuf.append(ord(sRaw[i]));
+                else:
+                    abBuf.extend(sRaw);
                 sRaw = None;
 
                 # Update the file stream CRC and send it off.
                 uMyCrc32 = zlib.crc32(abBuf, uMyCrc32);
-                if len(abBuf) == 0:
+                if not abBuf:
                     rc = self.sendMsg('DATA EOF', (long(uMyCrc32 & 0xffffffff), ));
                 else:
                     rc = self.sendMsg('DATA    ', (long(uMyCrc32 & 0xffffffff), abBuf));
@@ -1107,7 +1185,7 @@ class Session(TdTaskBase):
                     break;
 
                 # EOF?
-                if len(abBuf) == 0:
+                if not abBuf:
                     break;
 
             # Send ABORT on ACK and I/O errors.
@@ -1135,9 +1213,9 @@ class Session(TdTaskBase):
                 reporter.errorXcpt();
         return rc;
 
-    def taskDownloadString(self, sRemoteFile):
+    def taskDownloadString(self, sRemoteFile, sEncoding = 'utf-8', fIgnoreEncodingErrors = True):
         # Wrap sContent in a file like class.
-        class OutStringFile(object): # pylint: disable=R0903
+        class OutStringFile(object): # pylint: disable=too-few-public-methods
             def __init__(self):
                 self.asContent = [];
 
@@ -1148,10 +1226,12 @@ class Session(TdTaskBase):
         oLocalString = OutStringFile();
         rc = self.taskDownloadCommon(sRemoteFile, oLocalString);
         if rc is True:
-            if len(oLocalString.asContent) == 0:
-                rc = '';
-            else:
-                rc = ''.join(oLocalString.asContent);
+            rc = '';
+            for sBuf in oLocalString.asContent:
+                if hasattr(sBuf, 'decode'):
+                    rc += sBuf.decode(sEncoding, 'ignore' if fIgnoreEncodingErrors else 'strict');
+                else:
+                    rc += sBuf;
         return rc;
 
     def taskDownloadCommon(self, sRemoteFile, oLocalFile):
@@ -1161,7 +1241,7 @@ class Session(TdTaskBase):
             #
             # Process data packets until eof.
             #
-            uMyCrc32 = zlib.crc32("");
+            uMyCrc32 = zlib.crc32(b'');
             while rc is True:
                 cbMsg, sOpcode, abPayload = self.recvReply();
                 if cbMsg is None:
@@ -1171,7 +1251,7 @@ class Session(TdTaskBase):
 
                 # Validate.
                 sOpcode = sOpcode.rstrip();
-                if sOpcode != 'DATA' and sOpcode != 'DATA EOF':
+                if sOpcode not in ('DATA', 'DATA EOF',):
                     reporter.maybeErr(self.fErr, 'taskDownload got a error reply: opcode="%s" details="%s"'
                                       % (sOpcode, getSZ(abPayload, 0, "None")));
                     rc = False;
@@ -1200,7 +1280,12 @@ class Session(TdTaskBase):
 
                 # Finally, push the data to the file.
                 try:
-                    oLocalFile.write(abPayload[4:].tostring());
+                    if sys.version_info < (3, 9, 0):
+                        # Removed since Python 3.9.
+                        abData = abPayload[4:].tostring();
+                    else:
+                        abData = abPayload[4:].tobytes();
+                    oLocalFile.write(abData);
                 except:
                     reporter.errorXcpt('I/O error writing to "%s"' % (sRemoteFile));
                     rc = None;
@@ -1213,13 +1298,19 @@ class Session(TdTaskBase):
                 rc = False;
         return rc;
 
+    def taskPackFile(self, sRemoteFile, sRemoteSource):
+        rc = self.sendMsg('PKFILE', (sRemoteFile, sRemoteSource));
+        if rc is True:
+            rc = self.recvAckLogged('PKFILE');
+        return rc;
+
     def taskUnpackFile(self, sRemoteFile, sRemoteDir):
         rc = self.sendMsg('UNPKFILE', (sRemoteFile, sRemoteDir));
         if rc is True:
             rc = self.recvAckLogged('UNPKFILE');
         return rc;
 
-    # pylint: enable=C0111
+    # pylint: enable=missing-docstring
 
 
     #
@@ -1279,6 +1370,20 @@ class Session(TdTaskBase):
         """Synchronous version."""
         return self.asyncToSync(self.asyncDisconnect, cMsTimeout, fIgnoreErrors);
 
+    def asyncVer(self, cMsTimeout = 30000, fIgnoreErrors = False):
+        """
+        Initiates a task for getting the TXS version information.
+
+        Returns True on success, False on failure (logged).
+
+        The task returns the version string on success and False on failure.
+        """
+        return self.startTask(cMsTimeout, fIgnoreErrors, "ver", self.taskVer);
+
+    def syncVer(self, cMsTimeout = 30000, fIgnoreErrors = False):
+        """Synchronous version."""
+        return self.asyncToSync(self.asyncVer, cMsTimeout, fIgnoreErrors);
+
     def asyncUuid(self, cMsTimeout = 30000, fIgnoreErrors = False):
         """
         Initiates a task for getting the TXS UUID.
@@ -1287,7 +1392,7 @@ class Session(TdTaskBase):
 
         The task returns UUID string (in {}) on success and False on failure.
         """
-        return self.startTask(cMsTimeout, fIgnoreErrors, "bye", self.taskUuid);
+        return self.startTask(cMsTimeout, fIgnoreErrors, "uuid", self.taskUuid);
 
     def syncUuid(self, cMsTimeout = 30000, fIgnoreErrors = False):
         """Synchronous version."""
@@ -1297,7 +1402,7 @@ class Session(TdTaskBase):
     # Public methods - execution.
     #
 
-    def asyncExecEx(self, sExecName, asArgs = (), asAddEnv = (), # pylint: disable=R0913
+    def asyncExecEx(self, sExecName, asArgs = (), asAddEnv = (), # pylint: disable=too-many-arguments
                     oStdIn = None, oStdOut = None, oStdErr = None, oTestPipe = None,
                     sAsUser = "", cMsTimeout = 3600000, fIgnoreErrors = False):
         """
@@ -1326,7 +1431,7 @@ class Session(TdTaskBase):
                               (sExecName, long(0), asArgs, asAddEnv, oStdIn,
                                oStdOut, oStdErr, oTestPipe, sAsUser));
 
-    def syncExecEx(self, sExecName, asArgs = (), asAddEnv = (), # pylint: disable=R0913
+    def syncExecEx(self, sExecName, asArgs = (), asAddEnv = (), # pylint: disable=too-many-arguments
                    oStdIn = '/dev/null', oStdOut = '/dev/null',
                    oStdErr = '/dev/null', oTestPipe = '/dev/null',
                    sAsUser = '', cMsTimeout = 3600000, fIgnoreErrors = False):
@@ -1368,7 +1473,7 @@ class Session(TdTaskBase):
             cMsTimeout, fIgnoreErrors);
 
     #
-    # Public methods - file system
+    # Public methods - system
     #
 
     def asyncReboot(self, cMsTimeout = 30000, fIgnoreErrors = False):
@@ -1405,7 +1510,7 @@ class Session(TdTaskBase):
     # Public methods - file system
     #
 
-    def asyncMkDir(self, sRemoteDir, fMode = 0700, cMsTimeout = 30000, fIgnoreErrors = False):
+    def asyncMkDir(self, sRemoteDir, fMode = 0o700, cMsTimeout = 30000, fIgnoreErrors = False):
         """
         Initiates a mkdir task.
 
@@ -1415,11 +1520,11 @@ class Session(TdTaskBase):
         """
         return self.startTask(cMsTimeout, fIgnoreErrors, "mkDir", self.taskMkDir, (sRemoteDir, long(fMode)));
 
-    def syncMkDir(self, sRemoteDir, fMode = 0700, cMsTimeout = 30000, fIgnoreErrors = False):
+    def syncMkDir(self, sRemoteDir, fMode = 0o700, cMsTimeout = 30000, fIgnoreErrors = False):
         """Synchronous version."""
         return self.asyncToSync(self.asyncMkDir, sRemoteDir, long(fMode), cMsTimeout, fIgnoreErrors);
 
-    def asyncMkDirPath(self, sRemoteDir, fMode = 0700, cMsTimeout = 30000, fIgnoreErrors = False):
+    def asyncMkDirPath(self, sRemoteDir, fMode = 0o700, cMsTimeout = 30000, fIgnoreErrors = False):
         """
         Initiates a mkdir -p task.
 
@@ -1429,7 +1534,7 @@ class Session(TdTaskBase):
         """
         return self.startTask(cMsTimeout, fIgnoreErrors, "mkDirPath", self.taskMkDirPath, (sRemoteDir, long(fMode)));
 
-    def syncMkDirPath(self, sRemoteDir, fMode = 0700, cMsTimeout = 30000, fIgnoreErrors = False):
+    def syncMkDirPath(self, sRemoteDir, fMode = 0o700, cMsTimeout = 30000, fIgnoreErrors = False):
         """Synchronous version."""
         return self.asyncToSync(self.asyncMkDirPath, sRemoteDir, long(fMode), cMsTimeout, fIgnoreErrors);
 
@@ -1503,9 +1608,33 @@ class Session(TdTaskBase):
         """Synchronous version."""
         return self.asyncToSync(self.asyncRmTree, sRemoteTree, cMsTimeout, fIgnoreErrors);
 
-    #def "CHMOD   "
-    #def "CHOWN   "
-    #def "CHGRP   "
+    def asyncChMod(self, sRemotePath, fMode, cMsTimeout = 30000, fIgnoreErrors = False):
+        """
+        Initiates a chmod task.
+
+        Returns True on success, False on failure (logged).
+
+        The task returns True on success, False on failure (logged).
+        """
+        return self.startTask(cMsTimeout, fIgnoreErrors, "chMod", self.taskChMod, (sRemotePath, fMode));
+
+    def syncChMod(self, sRemotePath, fMode, cMsTimeout = 30000, fIgnoreErrors = False):
+        """Synchronous version."""
+        return self.asyncToSync(self.asyncChMod, sRemotePath, fMode, cMsTimeout, fIgnoreErrors);
+
+    def asyncChOwn(self, sRemotePath, idUser, idGroup, cMsTimeout = 30000, fIgnoreErrors = False):
+        """
+        Initiates a chown task.
+
+        Returns True on success, False on failure (logged).
+
+        The task returns True on success, False on failure (logged).
+        """
+        return self.startTask(cMsTimeout, fIgnoreErrors, "chOwn", self.taskChOwn, (sRemotePath, idUser, idGroup));
+
+    def syncChOwn(self, sRemotePath, idUser, idGroup, cMsTimeout = 30000, fIgnoreErrors = False):
+        """Synchronous version."""
+        return self.asyncToSync(self.asyncChMod, sRemotePath, idUser, idGroup, cMsTimeout, fIgnoreErrors);
 
     def asyncIsDir(self, sRemoteDir, cMsTimeout = 30000, fIgnoreErrors = False):
         """
@@ -1556,7 +1685,28 @@ class Session(TdTaskBase):
     #def "LSTAT   "
     #def "LIST    "
 
-    def asyncUploadFile(self, sLocalFile, sRemoteFile, cMsTimeout = 30000, fIgnoreErrors = False):
+    @staticmethod
+    def calcFileXferTimeout(cbFile):
+        """
+        Calculates a reasonable timeout for an upload/download given the file size.
+
+        Returns timeout in milliseconds.
+        """
+        return 30000 + cbFile / 32; # 32 KiB/s (picked out of thin air)
+
+    @staticmethod
+    def calcUploadTimeout(sLocalFile):
+        """
+        Calculates a reasonable timeout for an upload given the file (will stat it).
+
+        Returns timeout in milliseconds.
+        """
+        try:    cbFile = os.path.getsize(sLocalFile);
+        except: cbFile = 1024*1024;
+        return Session.calcFileXferTimeout(cbFile);
+
+    def asyncUploadFile(self, sLocalFile, sRemoteFile,
+                        fMode = 0, fFallbackOkay = True, cMsTimeout = 30000, fIgnoreErrors = False):
         """
         Initiates a download query task.
 
@@ -1564,13 +1714,17 @@ class Session(TdTaskBase):
 
         The task returns True on success, False on failure (logged).
         """
-        return self.startTask(cMsTimeout, fIgnoreErrors, "upload", self.taskUploadFile, (sLocalFile, sRemoteFile));
+        return self.startTask(cMsTimeout, fIgnoreErrors, "upload",
+                              self.taskUploadFile, (sLocalFile, sRemoteFile, fMode, fFallbackOkay));
 
-    def syncUploadFile(self, sLocalFile, sRemoteFile, cMsTimeout = 30000, fIgnoreErrors = False):
+    def syncUploadFile(self, sLocalFile, sRemoteFile, fMode = 0, fFallbackOkay = True, cMsTimeout = 0, fIgnoreErrors = False):
         """Synchronous version."""
-        return self.asyncToSync(self.asyncUploadFile, sLocalFile, sRemoteFile, cMsTimeout, fIgnoreErrors);
+        if cMsTimeout <= 0:
+            cMsTimeout = self.calcUploadTimeout(sLocalFile);
+        return self.asyncToSync(self.asyncUploadFile, sLocalFile, sRemoteFile, fMode, fFallbackOkay, cMsTimeout, fIgnoreErrors);
 
-    def asyncUploadString(self, sContent, sRemoteFile, cMsTimeout = 30000, fIgnoreErrors = False):
+    def asyncUploadString(self, sContent, sRemoteFile,
+                          fMode = 0, fFallbackOkay = True, cMsTimeout = 0, fIgnoreErrors = False):
         """
         Initiates a upload string task.
 
@@ -1578,13 +1732,18 @@ class Session(TdTaskBase):
 
         The task returns True on success, False on failure (logged).
         """
-        return self.startTask(cMsTimeout, fIgnoreErrors, "uploadString", self.taskUploadString, (sContent, sRemoteFile));
+        if cMsTimeout <= 0:
+            cMsTimeout = self.calcFileXferTimeout(len(sContent));
+        return self.startTask(cMsTimeout, fIgnoreErrors, "uploadString",
+                              self.taskUploadString, (sContent, sRemoteFile, fMode, fFallbackOkay));
 
-    def syncUploadString(self, sContent, sRemoteFile, cMsTimeout = 30000, fIgnoreErrors = False):
+    def syncUploadString(self, sContent, sRemoteFile, fMode = 0, fFallbackOkay = True, cMsTimeout = 0, fIgnoreErrors = False):
         """Synchronous version."""
-        return self.asyncToSync(self.asyncUploadString, sContent, sRemoteFile, cMsTimeout, fIgnoreErrors);
+        if cMsTimeout <= 0:
+            cMsTimeout = self.calcFileXferTimeout(len(sContent));
+        return self.asyncToSync(self.asyncUploadString, sContent, sRemoteFile, fMode, fFallbackOkay, cMsTimeout, fIgnoreErrors);
 
-    def asyncDownloadFile(self, sRemoteFile, sLocalFile, cMsTimeout = 30000, fIgnoreErrors = False):
+    def asyncDownloadFile(self, sRemoteFile, sLocalFile, cMsTimeout = 120000, fIgnoreErrors = False):
         """
         Initiates a download file task.
 
@@ -1594,11 +1753,12 @@ class Session(TdTaskBase):
         """
         return self.startTask(cMsTimeout, fIgnoreErrors, "downloadFile", self.taskDownloadFile, (sRemoteFile, sLocalFile));
 
-    def syncDownloadFile(self, sRemoteFile, sLocalFile, cMsTimeout = 30000, fIgnoreErrors = False):
+    def syncDownloadFile(self, sRemoteFile, sLocalFile, cMsTimeout = 120000, fIgnoreErrors = False):
         """Synchronous version."""
         return self.asyncToSync(self.asyncDownloadFile, sRemoteFile, sLocalFile, cMsTimeout, fIgnoreErrors);
 
-    def asyncDownloadString(self, sRemoteFile, cMsTimeout = 30000, fIgnoreErrors = False):
+    def asyncDownloadString(self, sRemoteFile, sEncoding = 'utf-8', fIgnoreEncodingErrors = True,
+                            cMsTimeout = 30000, fIgnoreErrors = False):
         """
         Initiates a download string task.
 
@@ -1606,13 +1766,31 @@ class Session(TdTaskBase):
 
         The task returns a byte string on success, False on failure (logged).
         """
-        return self.startTask(cMsTimeout, fIgnoreErrors, "downloadString", self.taskDownloadString, (sRemoteFile,));
+        return self.startTask(cMsTimeout, fIgnoreErrors, "downloadString",
+                              self.taskDownloadString, (sRemoteFile, sEncoding, fIgnoreEncodingErrors));
 
-    def syncDownloadString(self, sRemoteFile, cMsTimeout = 30000, fIgnoreErrors = False):
+    def syncDownloadString(self, sRemoteFile, sEncoding = 'utf-8', fIgnoreEncodingErrors = True,
+                           cMsTimeout = 30000, fIgnoreErrors = False):
         """Synchronous version."""
-        return self.asyncToSync(self.asyncDownloadString, sRemoteFile, cMsTimeout, fIgnoreErrors);
+        return self.asyncToSync(self.asyncDownloadString, sRemoteFile, sEncoding, fIgnoreEncodingErrors,
+                                cMsTimeout, fIgnoreErrors);
 
-    def asyncUnpackFile(self, sRemoteFile, sRemoteDir, cMsTimeout = 30000, fIgnoreErrors = False):
+    def asyncPackFile(self, sRemoteFile, sRemoteSource, cMsTimeout = 120000, fIgnoreErrors = False):
+        """
+        Initiates a packing file/directory task.
+
+        Returns True on success, False on failure (logged).
+
+        The task returns True on success, False on failure (logged).
+        """
+        return self.startTask(cMsTimeout, fIgnoreErrors, "packFile", self.taskPackFile,
+                              (sRemoteFile, sRemoteSource));
+
+    def syncPackFile(self, sRemoteFile, sRemoteSource, cMsTimeout = 120000, fIgnoreErrors = False):
+        """Synchronous version."""
+        return self.asyncToSync(self.asyncPackFile, sRemoteFile, sRemoteSource, cMsTimeout, fIgnoreErrors);
+
+    def asyncUnpackFile(self, sRemoteFile, sRemoteDir, cMsTimeout = 120000, fIgnoreErrors = False):
         """
         Initiates a unpack file task.
 
@@ -1620,10 +1798,10 @@ class Session(TdTaskBase):
 
         The task returns True on success, False on failure (logged).
         """
-        return self.startTask(cMsTimeout, fIgnoreErrors, "unpackFile", self.taskUnpackFile, \
+        return self.startTask(cMsTimeout, fIgnoreErrors, "unpackFile", self.taskUnpackFile,
                               (sRemoteFile, sRemoteDir));
 
-    def syncUnpackFile(self, sRemoteFile, sRemoteDir, cMsTimeout = 30000, fIgnoreErrors = False):
+    def syncUnpackFile(self, sRemoteFile, sRemoteDir, cMsTimeout = 120000, fIgnoreErrors = False):
         """Synchronous version."""
         return self.asyncToSync(self.asyncUnpackFile, sRemoteFile, sRemoteDir, cMsTimeout, fIgnoreErrors);
 
@@ -1661,12 +1839,12 @@ class TransportTcp(TransportBase):
         try:
             if isinstance(oXcpt, socket.error):
                 try:
-                    if oXcpt[0] == errno.EINPROGRESS:
+                    if oXcpt.errno == errno.EINPROGRESS:
                         return True;
                 except: pass;
                 # Windows?
                 try:
-                    if oXcpt[0] == errno.EWOULDBLOCK:
+                    if oXcpt.errno == errno.EWOULDBLOCK:
                         return True;
                 except: pass;
         except:
@@ -1678,11 +1856,11 @@ class TransportTcp(TransportBase):
         try:
             if isinstance(oXcpt, socket.error):
                 try:
-                    if oXcpt[0] == errno.EWOULDBLOCK:
+                    if oXcpt.errno == errno.EWOULDBLOCK:
                         return True;
                 except: pass;
                 try:
-                    if oXcpt[0] == errno.EAGAIN:
+                    if oXcpt.errno == errno.EAGAIN:
                         return True;
                 except: pass;
         except:
@@ -1694,11 +1872,11 @@ class TransportTcp(TransportBase):
         try:
             if isinstance(oXcpt, socket.error):
                 try:
-                    if oXcpt[0] == errno.ECONNRESET:
+                    if oXcpt.errno == errno.ECONNRESET:
                         return True;
                 except: pass;
                 try:
-                    if oXcpt[0] == errno.ENETRESET:
+                    if oXcpt.errno == errno.ENETRESET:
                         return True;
                 except: pass;
         except:
@@ -1772,7 +1950,7 @@ class TransportTcp(TransportBase):
         tClientAddr   = None;
         try:
             (oClientSocket, tClientAddr) = oSocket.accept();
-        except socket.error, e:
+        except socket.error as e:
             if not self.__isInProgressXcpt(e):
                 raise;
 
@@ -1780,8 +1958,8 @@ class TransportTcp(TransportBase):
             reporter.log2('TransportTcp::accept: operation in progress (%s)...' % (e,));
             try:
                 select.select([oSocket, oWakeupR], [], [oSocket, oWakeupR], cMsTimeout / 1000.0);
-            except socket.error, e:
-                if e[0] != errno.EBADF  or  not self.fConnectCanceled:
+            except socket.error as oXctp:
+                if oXctp.errno != errno.EBADF  or  not self.fConnectCanceled:
                     raise;
                 reporter.log('socket.select() on accept was canceled');
                 return None;
@@ -1791,9 +1969,9 @@ class TransportTcp(TransportBase):
             # Try accept again.
             try:
                 (oClientSocket, tClientAddr) = oSocket.accept();
-            except socket.error, e:
+            except socket.error as oXcpt:
                 if not self.__isInProgressXcpt(e):
-                    if e[0] != errno.EBADF  or  not self.fConnectCanceled:
+                    if oXcpt.errno != errno.EBADF  or  not self.fConnectCanceled:
                         raise;
                     reporter.log('socket.accept() was canceled');
                     return None;
@@ -1824,31 +2002,26 @@ class TransportTcp(TransportBase):
         try:
             oSocket.connect((self.sHostname, self.uPort));
             rc = True;
-        except socket.error, e:
-            iRc = e[0];
-            if self.__isInProgressXcpt(e):
+        except socket.error as oXcpt:
+            iRc = oXcpt.errno;
+            if self.__isInProgressXcpt(oXcpt):
                 # Do the actual waiting.
-                reporter.log2('TransportTcp::connect: operation in progress (%s)...' % (e,));
+                reporter.log2('TransportTcp::connect: operation in progress (%s)...' % (oXcpt,));
                 try:
                     ttRc = select.select([oWakeupR], [oSocket], [oSocket, oWakeupR], cMsTimeout / 1000.0);
                     if len(ttRc[1]) + len(ttRc[2]) == 0:
                         raise socket.error(errno.ETIMEDOUT, 'select timed out');
                     iRc = oSocket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR);
                     rc = iRc == 0;
-                except socket.error, e:
-                    iRc = e[0];
+                except socket.error as oXcpt2:
+                    iRc = oXcpt2.errno;
                 except:
                     iRc = -42;
                     reporter.fatalXcpt('socket.select() on connect failed');
 
             if rc is True:
                 pass;
-            elif  iRc == errno.ECONNREFUSED \
-               or iRc == errno.EHOSTUNREACH \
-               or iRc == errno.EINTR \
-               or iRc == errno.ENETDOWN \
-               or iRc == errno.ENETUNREACH \
-               or iRc == errno.ETIMEDOUT:
+            elif iRc in (errno.ECONNREFUSED, errno.EHOSTUNREACH, errno.EINTR, errno.ENETDOWN, errno.ENETUNREACH, errno.ETIMEDOUT):
                 rc = False; # try again.
             else:
                 if iRc != errno.EBADF  or  not self.fConnectCanceled:
@@ -1878,7 +2051,7 @@ class TransportTcp(TransportBase):
         oWakeupR = None;
         oWakeupW = None;
         if hasattr(socket, 'socketpair'):
-            try:    (oWakeupR, oWakeupW) = socket.socketpair();         # pylint: disable=E1101
+            try:    (oWakeupR, oWakeupW) = socket.socketpair();         # pylint: disable=no-member
             except: reporter.logXcpt('socket.socketpair() failed');
 
         # Update the state.
@@ -1929,7 +2102,7 @@ class TransportTcp(TransportBase):
             try:
                 self.oSocket.setblocking(0);    # just in case it's not set.
                 sData = "1";
-                while len(sData) > 0:
+                while sData:
                     sData = self.oSocket.recv(16384);
             except:
                 pass;
@@ -1945,19 +2118,19 @@ class TransportTcp(TransportBase):
         self._closeWakeupSockets();
         self.oCv.release();
 
-    def sendBytes(self, abMsg, cMsTimeout):
+    def sendBytes(self, abBuf, cMsTimeout):
         if self.oSocket is None:
             reporter.error('TransportTcp.sendBytes: No connection.');
             return False;
 
         # Try send it all.
         try:
-            cbSent = self.oSocket.send(abMsg);
-            if cbSent == len(abMsg):
+            cbSent = self.oSocket.send(abBuf);
+            if cbSent == len(abBuf):
                 return True;
-        except Exception, oXcpt:
+        except Exception as oXcpt:
             if not self.__isWouldBlockXcpt(oXcpt):
-                reporter.errorXcpt('TranportTcp.sendBytes: %s bytes' % (len(abMsg)));
+                reporter.errorXcpt('TranportTcp.sendBytes: %s bytes' % (len(abBuf)));
                 return False;
             cbSent = 0;
 
@@ -1966,17 +2139,17 @@ class TransportTcp(TransportBase):
         while True:
             cMsElapsed = base.timestampMilli() - msStart;
             if cMsElapsed > cMsTimeout:
-                reporter.error('TranportTcp.sendBytes: %s bytes timed out (1)' % (len(abMsg)));
+                reporter.error('TranportTcp.sendBytes: %s bytes timed out (1)' % (len(abBuf)));
                 break;
 
             # wait.
             try:
                 ttRc = select.select([], [self.oSocket], [self.oSocket], (cMsTimeout - cMsElapsed) / 1000.0);
-                if len(ttRc[2]) > 0 and len(ttRc[1]) == 0:
+                if ttRc[2] and not ttRc[1]:
                     reporter.error('TranportTcp.sendBytes: select returned with exception');
                     break;
-                if len(ttRc[1]) == 0:
-                    reporter.error('TranportTcp.sendBytes: %s bytes timed out (2)' % (len(abMsg)));
+                if not ttRc[1]:
+                    reporter.error('TranportTcp.sendBytes: %s bytes timed out (2)' % (len(abBuf)));
                     break;
             except:
                 reporter.errorXcpt('TranportTcp.sendBytes: select failed');
@@ -1984,12 +2157,12 @@ class TransportTcp(TransportBase):
 
             # Try send more.
             try:
-                cbSent += self.oSocket.send(abMsg[cbSent:]);
-                if cbSent == len(abMsg):
+                cbSent += self.oSocket.send(abBuf[cbSent:]);
+                if cbSent == len(abBuf):
                     return True;
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 if not self.__isWouldBlockXcpt(oXcpt):
-                    reporter.errorXcpt('TranportTcp.sendBytes: %s bytes' % (len(abMsg)));
+                    reporter.errorXcpt('TranportTcp.sendBytes: %s bytes' % (len(abBuf)));
                     break;
 
         return False;
@@ -2010,9 +2183,9 @@ class TransportTcp(TransportBase):
         if len(self.abReadAhead) < cb:
             try:
                 abBuf = self.oSocket.recv(cb - len(self.abReadAhead));
-                if len(abBuf) > 0:
+                if abBuf:
                     self.abReadAhead.extend(array.array('B', abBuf));
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 if not self.__isWouldBlockXcpt(oXcpt):
                     reporter.errorXcpt('TranportTcp.recvBytes: 0/%s bytes' % (cb,));
                     return None;
@@ -2025,18 +2198,18 @@ class TransportTcp(TransportBase):
         while True:
             cMsElapsed = base.timestampMilli() - msStart;
             if cMsElapsed > cMsTimeout:
-                if not fNoDataOk or len(self.abReadAhead) > 0:
+                if not fNoDataOk or self.abReadAhead:
                     reporter.error('TranportTcp.recvBytes: %s/%s bytes timed out (1)' % (len(self.abReadAhead), cb));
                 break;
 
             # Wait.
             try:
                 ttRc = select.select([self.oSocket], [], [self.oSocket], (cMsTimeout - cMsElapsed) / 1000.0);
-                if len(ttRc[2]) > 0 and len(ttRc[0]) == 0:
+                if ttRc[2] and not ttRc[0]:
                     reporter.error('TranportTcp.recvBytes: select returned with exception');
                     break;
-                if len(ttRc[0]) == 0:
-                    if not fNoDataOk or len(self.abReadAhead) > 0:
+                if not ttRc[0]:
+                    if not fNoDataOk or self.abReadAhead:
                         reporter.error('TranportTcp.recvBytes: %s/%s bytes timed out (2) fNoDataOk=%s'
                                        % (len(self.abReadAhead), cb, fNoDataOk));
                     break;
@@ -2047,7 +2220,7 @@ class TransportTcp(TransportBase):
             # Try read more.
             try:
                 abBuf = self.oSocket.recv(cb - len(self.abReadAhead));
-                if len(abBuf) == 0:
+                if not abBuf:
                     reporter.error('TranportTcp.recvBytes: %s/%s bytes (%s) - connection has been shut down'
                                    % (len(self.abReadAhead), cb, fNoDataOk));
                     self.disconnect();
@@ -2055,10 +2228,10 @@ class TransportTcp(TransportBase):
 
                 self.abReadAhead.extend(array.array('B', abBuf));
 
-            except Exception, oXcpt:
+            except Exception as oXcpt:
                 reporter.log('recv => exception %s' % (oXcpt,));
                 if not self.__isWouldBlockXcpt(oXcpt):
-                    if not fNoDataOk  or  not self.__isConnectionReset(oXcpt)  or  len(self.abReadAhead) > 0:
+                    if not fNoDataOk  or  not self.__isConnectionReset(oXcpt)  or  self.abReadAhead:
                         reporter.errorXcpt('TranportTcp.recvBytes: %s/%s bytes (%s)' % (len(self.abReadAhead), cb, fNoDataOk));
                     break;
 
@@ -2074,7 +2247,7 @@ class TransportTcp(TransportBase):
             return False;
         try:
             ttRc = select.select([], [], [self.oSocket], 0.0);
-            if len(ttRc[2]) > 0:
+            if ttRc[2]:
                 return False;
 
             self.oSocket.send(array.array('B')); # send zero bytes.
@@ -2085,29 +2258,32 @@ class TransportTcp(TransportBase):
     def isRecvPending(self, cMsTimeout = 0):
         try:
             ttRc = select.select([self.oSocket], [], [], cMsTimeout / 1000.0);
-            if len(ttRc[0]) == 0:
+            if not ttRc[0]:
                 return False;
         except:
             pass;
         return True;
 
 
-def openTcpSession(cMsTimeout, sHostname, uPort = None, fReversedSetup = False, cMsIdleFudge = 0):
+def openTcpSession(cMsTimeout, sHostname, uPort = None, fReversedSetup = False, cMsIdleFudge = 0, fnProcessEvents = None):
     """
     Opens a connection to a Test Execution Service via TCP, given its name.
+
+    The optional fnProcessEvents callback should be set to vbox.processPendingEvents
+    or similar.
     """
-    reporter.log2('openTcpSession(%s, %s, %s, %s, %s)' % \
+    reporter.log2('openTcpSession(%s, %s, %s, %s, %s)' %
                   (cMsTimeout, sHostname, uPort, fReversedSetup, cMsIdleFudge));
     try:
         oTransport = TransportTcp(sHostname, uPort, fReversedSetup);
-        oSession = Session(oTransport, cMsTimeout, cMsIdleFudge);
+        oSession = Session(oTransport, cMsTimeout, cMsIdleFudge, fnProcessEvents = fnProcessEvents);
     except:
         reporter.errorXcpt(None, 15);
         return None;
     return oSession;
 
 
-def tryOpenTcpSession(cMsTimeout, sHostname, uPort = None, fReversedSetup = False, cMsIdleFudge = 0):
+def tryOpenTcpSession(cMsTimeout, sHostname, uPort = None, fReversedSetup = False, cMsIdleFudge = 0, fnProcessEvents = None):
     """
     Tries to open a connection to a Test Execution Service via TCP, given its name.
 
@@ -2116,9 +2292,8 @@ def tryOpenTcpSession(cMsTimeout, sHostname, uPort = None, fReversedSetup = Fals
     """
     try:
         oTransport = TransportTcp(sHostname, uPort, fReversedSetup);
-        oSession = Session(oTransport, cMsTimeout, cMsIdleFudge, fTryConnect = True);
+        oSession = Session(oTransport, cMsTimeout, cMsIdleFudge, fTryConnect = True, fnProcessEvents = fnProcessEvents);
     except:
         reporter.errorXcpt(None, 15);
         return None;
     return oSession;
-

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MakeAlternativeSource.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * MakeAlternative - Generate an Alternative BIOS Source that requires less tools.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,6 +23,7 @@
 #include <iprt/buildconfig.h>
 #include <iprt/ctype.h>
 #include <iprt/dbg.h>
+#include <iprt/err.h>
 #include <iprt/file.h>
 #include <iprt/getopt.h>
 #include <iprt/initterm.h>
@@ -50,6 +51,8 @@ typedef struct BIOSSEG
     RTFAR16     Address;
     uint32_t    uFlatAddr;
     uint32_t    cb;
+    /** RVA into g_hSymMod. */
+    uint32_t    uRva;
 } BIOSSEG;
 /** Pointer to a BIOS segment. */
 typedef BIOSSEG *PBIOSSEG;
@@ -96,7 +99,7 @@ typedef BIOSMAP *PBIOSMAP;
 *   Global Variables                                                                                                             *
 *********************************************************************************************************************************/
 /** The verbosity level.*/
-static unsigned         g_cVerbose = 1 /*0*/;
+static unsigned         g_cVerbose = 2 /*0*/;
 /** Pointer to the BIOS image. */
 static uint8_t const   *g_pbImg;
 /** The size of the BIOS image. */
@@ -110,6 +113,9 @@ static uint32_t         g_cSegs = 0;
 static BIOSSEG          g_aSegs[32];
 /** List of BIOSOBJFILE. */
 static RTLISTANCHOR     g_ObjList;
+
+/** Debug module with symbols. */
+static RTDBGMOD         g_hSymMod = NIL_RTDBGMOD;
 
 /** The output stream. */
 static PRTSTREAM        g_hStrmOutput = NULL;
@@ -191,7 +197,7 @@ static bool disError(const char *pszFormat, ...)
 static bool disFileHeader(void)
 {
     bool fRc;
-    fRc = outputPrintf("; $Id$ \n"
+    fRc = outputPrintf("; $Id: MakeAlternativeSource.cpp 82968 2020-02-04 10:35:17Z vboxsync $ \n"
                        ";; @file\n"
                        "; Auto Generated source file. Do not edit.\n"
                        ";\n"
@@ -632,14 +638,40 @@ static bool disCopySegmentGap(uint32_t uFlatAddr, uint32_t cbPadding)
  */
 static void disGetNextSymbolWorker(uint32_t uFlatAddr, uint32_t cbMax, uint32_t *poff, PRTDBGSYMBOL pSym)
 {
-    RTINTPTR off = 0;
-    int rc = RTDbgModSymbolByAddr(g_hMapMod, RTDBGSEGIDX_RVA, uFlatAddr, RTDBGSYMADDR_FLAGS_GREATER_OR_EQUAL, &off, pSym);
+    RTINTPTR offMap = RTINTPTR_MAX;
+    RTDBGSYMBOL MapSym;
+    int rcMap = RTDbgModSymbolByAddr(g_hMapMod, RTDBGSEGIDX_RVA, uFlatAddr, RTDBGSYMADDR_FLAGS_GREATER_OR_EQUAL, &offMap, &MapSym);
+
+    RTINTPTR off = RTINTPTR_MAX;
+    int rc = RTDbgModSymbolByAddr(g_hSymMod, RTDBGSEGIDX_RVA, uFlatAddr - g_uBiosFlatBase,
+                                  RTDBGSYMADDR_FLAGS_GREATER_OR_EQUAL, &off, pSym);
+    if (   RT_SUCCESS(rc)
+        && RT_ABS(off) <= RT_ABS(offMap))
+        pSym->Value += g_uBiosFlatBase;
+    else
+    {
+        *pSym = MapSym;
+        off   = offMap;
+        rc    = rcMap;
+    }
     if (RT_SUCCESS(rc))
     {
         /* negative offset, indicates beyond. */
         if (off <= 0)
         {
             *poff = (uint32_t)-off;
+
+            /* Mangle symbols the assembler might confuse with instructions. */
+            size_t cchName = strlen(pSym->szName);
+            if (   cchName <= 4
+                && (   strcmp("wait", pSym->szName) == 0
+                    || strcmp("hlt", pSym->szName) == 0))
+            {
+                memmove(&pSym->szName[1], &pSym->szName[0], cchName);
+                pSym->szName[0] = '_';
+                pSym->szName[cchName + 1] = '_';
+                pSym->szName[cchName + 2] = '\0';
+            }
             return;
         }
 
@@ -860,6 +892,23 @@ static bool disIs16BitCode(const char *pszSymbol)
 }
 
 
+static bool disIsMemoryParameter(PCDISOPPARAM pParam, uint16_t fParam)
+{
+    return fParam != OP_PARM_NONE
+        && DISUSE_IS_EFFECTIVE_ADDR(pParam->fUse);
+}
+
+
+static bool disAccessesMemory(PCDISCPUSTATE pCpuState)
+{
+    PCDISOPCODE pCurInstr = pCpuState->pCurInstr;
+    return disIsMemoryParameter(&pCpuState->Param1, pCurInstr->fParam1)
+        || disIsMemoryParameter(&pCpuState->Param2, pCurInstr->fParam2)
+        || disIsMemoryParameter(&pCpuState->Param3, pCurInstr->fParam3)
+        || disIsMemoryParameter(&pCpuState->Param4, pCurInstr->fParam4);
+}
+
+
 /**
  * Deals with instructions that YASM will assemble differently than WASM/WCC.
  */
@@ -983,6 +1032,20 @@ static bool disCode(uint32_t uFlatAddr, uint32_t cb, bool fIs16Bit)
                      && pb[3] == 0x48
                      && pb[4] == 0x47
                     )
+                 || (   pb[0] == 0x8b   /* _int13_harddisk_ext switch */
+                     && pb[1] == 0x46
+                     && pb[2] == 0x16
+                     && pb[3] == 0x30
+                     && pb[4] == 0xe8
+                     && pb[5] == 0x80
+                    )
+                 || (   pb[0] == 0xd8
+                     && pb[1] == 0x5f
+                     && pb[2] == 0x0b
+                     && pb[3] == 0x60
+                     && pb[4] == 0x0b
+                     && pb[5] == 0x60
+                    )
                  || (   pb[0] == 0x67   /* _pci16_function switch */
                      && pb[1] == 0x92
                      && pb[2] == 0x81
@@ -1013,25 +1076,50 @@ static bool disCode(uint32_t uFlatAddr, uint32_t cb, bool fIs16Bit)
                      && pb[6] == 0xe0
                      && pb[7] == 0xa0
                      && pb[8] == 0xe2
-                     && pb[9] == 0xa0)
+                     && pb[9] == 0xa0
+                    )
+                 || (   pb[0] == 0xf0   /* switch for apm_worker */
+                     && pb[1] == 0xa0
+                     && pb[2] == 0xf2
+                     && pb[3] == 0xa0
+                     && pb[4] == 0xf6
+                     && pb[5] == 0xa0
+                    )
                  || (   pb[0] == 0xd4
                      && pb[1] == 0xc6
                      && pb[2] == 0xc5
                      && pb[3] == 0xba
                      && pb[4] == 0xb8
-                     && pb[5] == 0xb6)
-                 || (   pb[0] == 0xec  /* _int15_function switch */
+                     && pb[5] == 0xb6
+                    )
+                 || (   pb[0] == 0xec   /* _int15_function switch */
                      && pb[1] == 0xe9
                      && pb[2] == 0xd8
                      && pb[3] == 0xc1
                      && pb[4] == 0xc0
-                     && pb[5] == 0xbf)
+                     && pb[5] == 0xbf
+                    )
                  || (   pb[0] == 0x21   /* _int15_function32 switch */
                      && pb[1] == 0x66
                      && pb[2] == 0x43
                      && pb[3] == 0x66
                      && pb[4] == 0x66
-                     && pb[5] == 0x66)
+                     && pb[5] == 0x66
+                    )
+                 || (   pb[0] == 0xf0   /* int15_function_mouse switch */
+                     && pb[1] == 0x75
+                     && pb[2] == 0x66
+                     && pb[3] == 0x76
+                     && pb[4] == 0xe9
+                     && pb[5] == 0x76
+                    )
+                 || (   pb[0] == 0x60
+                     && pb[1] == 0xa0
+                     && pb[2] == 0x62
+                     && pb[3] == 0xa0
+                     && pb[4] == 0x66
+                     && pb[5] == 0xa0
+                    )
                  || 0
                  )
             return disByteData(uFlatAddr, cb);
@@ -1039,12 +1127,16 @@ static bool disCode(uint32_t uFlatAddr, uint32_t cb, bool fIs16Bit)
         {
             unsigned    cbInstr;
             DISCPUSTATE CpuState;
+            CpuState.ModRM.Bits.Mod = 3;
             int rc = DISInstrWithReader(uFlatAddr, fIs16Bit ? DISCPUMODE_16BIT : DISCPUMODE_32BIT,
                                         disReadOpcodeBytes, NULL, &CpuState, &cbInstr);
             if (   RT_SUCCESS(rc)
                 && cbInstr <= cb
                 && CpuState.pCurInstr
-                && CpuState.pCurInstr->uOpcode != OP_INVALID)
+                && CpuState.pCurInstr->uOpcode != OP_INVALID
+                && CpuState.pCurInstr->uOpcode != OP_ILLUD2
+                && (   !(CpuState.fPrefix & DISPREFIX_ADDRSIZE)
+                    || disAccessesMemory(&CpuState)))
             {
                 char szTmp[4096];
                 size_t cch = DISFormatYasmEx(&CpuState, szTmp, sizeof(szTmp),
@@ -1058,7 +1150,15 @@ static bool disCode(uint32_t uFlatAddr, uint32_t cb, bool fIs16Bit)
                 {
                     while (cch < 72)
                         szTmp[cch++] = ' ';
-                    RTStrPrintf(&szTmp[cch], sizeof(szTmp) - cch, "; %#x", uFlatAddr);
+
+                    RTDBGLINE LineInfo = {0};
+                    RTINTPTR  offLine = -1;
+                    int rcLine = RTDbgModLineByAddr(g_hSymMod, RTDBGSEGIDX_RVA, uFlatAddr - g_uBiosFlatBase,  &offLine, &LineInfo);
+                    if (RT_SUCCESS(rcLine) && offLine == 0 && cch < sizeof(szTmp) - 16)
+                        RTStrPrintf(&szTmp[cch], sizeof(szTmp) - cch, "; %#x %Rbn:%u",
+                                    uFlatAddr, LineInfo.szFilename, LineInfo.uLineNo);
+                    else
+                        RTStrPrintf(&szTmp[cch], sizeof(szTmp) - cch, "; %#x", uFlatAddr);
                 }
 
                 if (!outputPrintf("    %s\n", szTmp))
@@ -1197,18 +1297,25 @@ static RTEXITCODE DisassembleBiosImage(void)
  */
 static RTEXITCODE ParseSymFile(const char *pszBiosSym)
 {
-#if 1
-    /** @todo use RTDbg* later. (Just checking for existance currently.) */
-    PRTSTREAM hStrm;
-    int rc = RTStrmOpen(pszBiosSym, "rb", &hStrm);
+    int rc = RTDbgModCreateFromImage(&g_hSymMod, pszBiosSym, "VBoxBios",  RTLDRARCH_WHATEVER, NIL_RTDBGCFG);
     if (RT_FAILURE(rc))
         return RTMsgErrorExit(RTEXITCODE_FAILURE, "Error opening '%s': %Rrc", pszBiosSym, rc);
-    RTStrmClose(hStrm);
-#else
-    RTDBGMOD hDbgMod;
-    int rc = RTDbgModCreateFromImage(&hDbgMod, pszBiosSym, "VBoxBios", 0 /*fFlags*/);
-    RTMsgInfo("RTDbgModCreateFromImage -> %Rrc\n", rc);
-#endif
+
+    if (g_cVerbose > 0)
+    {
+        /* Show segments */
+        RTDBGSEGIDX cSegs = RTDbgModSegmentCount(g_hSymMod);
+        for (RTDBGSEGIDX iSeg = 0; iSeg < cSegs; iSeg++)
+        {
+            RTDBGSEGMENT SegInfo;
+            rc = RTDbgModSegmentByIndex(g_hSymMod, iSeg, &SegInfo);
+            if (RT_SUCCESS(rc))
+                RTMsgInfo("Seg#%u: %05RX64 LB %04RX64 rva %04RX64 %s\n", iSeg, SegInfo.Address, SegInfo.cb, SegInfo.uRva, SegInfo.szName);
+            else
+                RTMsgInfo("Seg#%u: RTDbgModSegmentByIndex -> %Rrc\n", iSeg, rc);
+
+        }
+    }
     return RTEXITCODE_SUCCESS;
 }
 
@@ -1225,7 +1332,7 @@ static bool mapError(PBIOSMAP pMap, const char *pszFormat, ...)
 {
     va_list va;
     va_start(va, pszFormat);
-    RTMsgError("%s:%d: %N", pMap->pszMapFile, pMap->iLine, pszFormat, va);
+    RTMsgError("%s:%d: %N", pMap->pszMapFile, pMap->iLine, pszFormat, &va);
     va_end(va);
     return false;
 }
@@ -1715,9 +1822,12 @@ static bool mapSortAndAddSegments(void)
                 g_aSegs[i] = g_aSegs[j];
                 g_aSegs[j] = Tmp;
             }
+        g_aSegs[i].uRva = g_aSegs[i].uFlatAddr - g_aSegs[0].uFlatAddr;
+
         if (g_cVerbose > 0)
-            RTStrmPrintf(g_pStdErr, "segment at %08x / %04x:%04x LB %04x %s / %s / %s\n",
+            RTStrmPrintf(g_pStdErr, "segment at %08x / %04x / %04x:%04x LB %04x %s / %s / %s\n",
                          g_aSegs[i].uFlatAddr,
+                         g_aSegs[i].uRva,
                          g_aSegs[i].Address.sel,
                          g_aSegs[i].Address.off,
                          g_aSegs[i].cb,
@@ -2037,7 +2147,7 @@ int main(int argc, char **argv)
             case 'V':
             {
                 /* The following is assuming that svn does it's job here. */
-                char szRev[] = "$Revision$";
+                char szRev[] = "$Revision: 82968 $";
                 char *psz = szRev;
                 while (*psz && !RT_C_IS_DIGIT(*psz))
                     psz++;

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: timer-r0drv-solaris.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Timer, Ring-0 Driver, Solaris.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -376,7 +376,7 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
      * variable sized array of ticks counts, thus the size calculation.
      */
     PRTTIMER pTimer = (PRTTIMER)RTMemAllocZ(  (fFlags & RTTIMER_FLAGS_CPU_ALL) == RTTIMER_FLAGS_CPU_ALL
-                                            ? RT_OFFSETOF(RTTIMER, u.Omni.aPerCpu[RTMpGetCount()])
+                                            ? RT_UOFFSETOF_DYN(RTTIMER, u.Omni.aPerCpu[RTMpGetCount()])
                                             : sizeof(RTTIMER));
     if (!pTimer)
         return VERR_NO_MEMORY;

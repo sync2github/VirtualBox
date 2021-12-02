@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: MM.cpp 92192 2021-11-03 14:44:45Z vboxsync $ */
 /** @file
  * MM - Memory Manager.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,8 +19,9 @@
 /** @page pg_mm     MM - The Memory Manager
  *
  * The memory manager is in charge of the following memory:
- *      - Hypervisor Memory Area (HMA) - Address space management.
+ *      - Hypervisor Memory Area (HMA) - Address space management (obsolete in 6.1).
  *      - Hypervisor Heap - A memory heap that lives in all contexts.
+ *      - User-Kernel Heap - A memory heap lives in both host context.
  *      - Tagged ring-3 heap.
  *      - Page pools - Primarily used by PGM for shadow page tables.
  *      - Locked process memory - Guest RAM and other. (reduce/obsolete this)
@@ -33,7 +34,7 @@
  * @see grp_mm
  *
  *
- * @section sec_mm_hma  Hypervisor Memory Area
+ * @section sec_mm_hma  Hypervisor Memory Area - Obsolete in 6.1
  *
  * The HMA is used when executing in raw-mode. We borrow, with the help of
  * PGMMap, some unused space (one or more page directory entries to be precise)
@@ -199,13 +200,7 @@ VMMR3DECL(int) MMR3InitUVM(PUVM pUVM)
      */
     int rc = mmR3HeapCreateU(pUVM, &pUVM->mm.s.pHeap);
     if (RT_SUCCESS(rc))
-    {
-        rc = mmR3UkHeapCreateU(pUVM, &pUVM->mm.s.pUkHeap);
-        if (RT_SUCCESS(rc))
-            return VINF_SUCCESS;
-        mmR3HeapDestroy(pUVM->mm.s.pHeap);
-        pUVM->mm.s.pHeap = NULL;
-    }
+        return VINF_SUCCESS;
     return rc;
 }
 
@@ -235,51 +230,44 @@ VMMR3DECL(int) MMR3Init(PVM pVM)
     /*
      * Assert alignment, sizes and order.
      */
-    AssertRelease(!(RT_OFFSETOF(VM, mm.s) & 31));
+    AssertRelease(!(RT_UOFFSETOF(VM, mm.s) & 31));
     AssertRelease(sizeof(pVM->mm.s) <= sizeof(pVM->mm.padding));
     AssertMsg(pVM->mm.s.offVM == 0, ("Already initialized!\n"));
 
     /*
      * Init the structure.
      */
-    pVM->mm.s.offVM = RT_OFFSETOF(VM, mm);
+    pVM->mm.s.offVM = RT_UOFFSETOF(VM, mm);
     pVM->mm.s.offLookupHyper = NIL_OFFSET;
 
     /*
-     * Init the page pool.
+     * Init the hypervisor related stuff.
      */
-    int rc = mmR3PagePoolInit(pVM);
+    int rc = mmR3HyperInit(pVM);
     if (RT_SUCCESS(rc))
     {
         /*
-         * Init the hypervisor related stuff.
+         * Register the saved state data unit.
          */
-        rc = mmR3HyperInit(pVM);
+        rc = SSMR3RegisterInternal(pVM, "mm", 1, MM_SAVED_STATE_VERSION, sizeof(uint32_t) * 2,
+                                   NULL, NULL, NULL,
+                                   NULL, mmR3Save, NULL,
+                                   NULL, mmR3Load, NULL);
         if (RT_SUCCESS(rc))
         {
             /*
-             * Register the saved state data unit.
+             * Statistics.
              */
-            rc = SSMR3RegisterInternal(pVM, "mm", 1, MM_SAVED_STATE_VERSION, sizeof(uint32_t) * 2,
-                                       NULL, NULL, NULL,
-                                       NULL, mmR3Save, NULL,
-                                       NULL, mmR3Load, NULL);
-            if (RT_SUCCESS(rc))
-            {
-                /*
-                 * Statistics.
-                 */
-                STAM_REG(pVM, &pVM->mm.s.cBasePages,   STAMTYPE_U64, "/MM/Reserved/cBasePages",   STAMUNIT_PAGES, "Reserved number of base pages, ROM and Shadow ROM included.");
-                STAM_REG(pVM, &pVM->mm.s.cHandyPages,  STAMTYPE_U32, "/MM/Reserved/cHandyPages",  STAMUNIT_PAGES, "Reserved number of handy pages.");
-                STAM_REG(pVM, &pVM->mm.s.cShadowPages, STAMTYPE_U32, "/MM/Reserved/cShadowPages", STAMUNIT_PAGES, "Reserved number of shadow paging pages.");
-                STAM_REG(pVM, &pVM->mm.s.cFixedPages,  STAMTYPE_U32, "/MM/Reserved/cFixedPages",  STAMUNIT_PAGES, "Reserved number of fixed pages (MMIO2).");
-                STAM_REG(pVM, &pVM->mm.s.cbRamBase,    STAMTYPE_U64, "/MM/cbRamBase",             STAMUNIT_BYTES, "Size of the base RAM.");
+            STAM_REG(pVM, &pVM->mm.s.cBasePages,   STAMTYPE_U64, "/MM/Reserved/cBasePages",   STAMUNIT_PAGES, "Reserved number of base pages, ROM and Shadow ROM included.");
+            STAM_REG(pVM, &pVM->mm.s.cHandyPages,  STAMTYPE_U32, "/MM/Reserved/cHandyPages",  STAMUNIT_PAGES, "Reserved number of handy pages.");
+            STAM_REG(pVM, &pVM->mm.s.cShadowPages, STAMTYPE_U32, "/MM/Reserved/cShadowPages", STAMUNIT_PAGES, "Reserved number of shadow paging pages.");
+            STAM_REG(pVM, &pVM->mm.s.cFixedPages,  STAMTYPE_U32, "/MM/Reserved/cFixedPages",  STAMUNIT_PAGES, "Reserved number of fixed pages (MMIO2).");
+            STAM_REG(pVM, &pVM->mm.s.cbRamBase,    STAMTYPE_U64, "/MM/cbRamBase",             STAMUNIT_BYTES, "Size of the base RAM.");
 
-                return rc;
-            }
-
-            /* .... failure .... */
+            return rc;
         }
+
+        /* .... failure .... */
     }
     MMR3Term(pVM);
     return rc;
@@ -388,7 +376,8 @@ VMMR3DECL(int) MMR3InitPaging(PVM pVM)
     /*
      * Make the initial memory reservation with GMM.
      */
-    uint64_t cBasePages = (cbRam >> PAGE_SHIFT) + pVM->mm.s.cBasePages;
+    uint32_t const cbUma      = _1M - 640*_1K;
+    uint64_t       cBasePages = ((cbRam - cbUma) >> PAGE_SHIFT) + pVM->mm.s.cBasePages;
     rc = GMMR3InitialReservation(pVM,
                                  RT_MAX(cBasePages + pVM->mm.s.cHandyPages, 1),
                                  RT_MAX(pVM->mm.s.cShadowPages, 1),
@@ -418,21 +407,30 @@ VMMR3DECL(int) MMR3InitPaging(PVM pVM)
      * Setup the base ram (PGM).
      */
     pVM->mm.s.cbRamHole = cbRamHole;
-    if (cbRam > offRamHole)
+
+    /* First the conventional memory: */
+    rc = PGMR3PhysRegisterRam(pVM, 0, RT_MIN(cbRam, 640*_1K), "Conventional RAM");
+    if (RT_SUCCESS(rc))
     {
-        pVM->mm.s.cbRamBelow4GB = offRamHole;
-        rc = PGMR3PhysRegisterRam(pVM, 0, offRamHole, "Base RAM");
-        if (RT_SUCCESS(rc))
+        /* The extended memory from 1MiB up to 4GiB: */
+        if (cbRam > offRamHole)
         {
-            pVM->mm.s.cbRamAbove4GB = cbRam - offRamHole;
-            rc = PGMR3PhysRegisterRam(pVM, _4G, cbRam - offRamHole, "Above 4GB Base RAM");
+            pVM->mm.s.cbRamBelow4GB = offRamHole;
+            rc = PGMR3PhysRegisterRam(pVM, _1M, offRamHole - _1M, "Extended RAM");
+            if (RT_SUCCESS(rc))
+            {
+                /* Then all the memory above 4GiB: */
+                pVM->mm.s.cbRamAbove4GB = cbRam - offRamHole;
+                rc = PGMR3PhysRegisterRam(pVM, _4G, cbRam - offRamHole, "Above 4GB Base RAM");
+            }
         }
-    }
-    else
-    {
-        pVM->mm.s.cbRamBelow4GB = cbRam;
-        pVM->mm.s.cbRamAbove4GB = 0;
-        rc = PGMR3PhysRegisterRam(pVM, 0, cbRam, "Base RAM");
+        else
+        {
+            pVM->mm.s.cbRamBelow4GB = cbRam;
+            pVM->mm.s.cbRamAbove4GB = 0;
+            if (cbRam > _1M)
+                rc = PGMR3PhysRegisterRam(pVM, _1M, cbRam - _1M, "Extended RAM");
+        }
     }
 
     /*
@@ -459,11 +457,8 @@ VMMR3DECL(int) MMR3InitPaging(PVM pVM)
 VMMR3DECL(int) MMR3Term(PVM pVM)
 {
     /*
-     * Destroy the page pool. (first as it used the hyper heap)
+     * Clean up the hypervisor heap.
      */
-    mmR3PagePoolTerm(pVM);
-
-    /* Clean up the hypervisor heap. */
     mmR3HyperTerm(pVM);
 
     /*
@@ -474,13 +469,6 @@ VMMR3DECL(int) MMR3Term(PVM pVM)
     pVM->mm.s.pHyperHeapR0   = NIL_RTR0PTR; /* freed above. */
     pVM->mm.s.pHyperHeapRC   = NIL_RTRCPTR; /* freed above. */
     pVM->mm.s.offVM          = 0;           /* init assertion on this */
-
-    /*
-     * Destroy the User-kernel heap here since the support driver session
-     * may have been terminated by the time we get to MMR3TermUVM.
-     */
-    mmR3UkHeapDestroy(pVM->pUVM->mm.s.pUkHeap);
-    pVM->pUVM->mm.s.pUkHeap = NULL;
 
     return VINF_SUCCESS;
 }
@@ -498,13 +486,8 @@ VMMR3DECL(int) MMR3Term(PVM pVM)
 VMMR3DECL(void) MMR3TermUVM(PUVM pUVM)
 {
     /*
-     * Destroy the heaps.
+     * Destroy the heap.
      */
-    if (pUVM->mm.s.pUkHeap)
-    {
-        mmR3UkHeapDestroy(pUVM->mm.s.pUkHeap);
-        pUVM->mm.s.pUkHeap = NULL;
-    }
     mmR3HeapDestroy(pUVM->mm.s.pHeap);
     pUVM->mm.s.pHeap = NULL;
 }
@@ -634,7 +617,7 @@ VMMR3DECL(int) MMR3IncreaseBaseReservation(PVM pVM, uint64_t cAddBasePages)
 {
     uint64_t cOld = pVM->mm.s.cBasePages;
     pVM->mm.s.cBasePages += cAddBasePages;
-    LogFlow(("MMR3IncreaseBaseReservation: +%RU64 (%RU64 -> %RU64\n", cAddBasePages, cOld, pVM->mm.s.cBasePages));
+    LogFlow(("MMR3IncreaseBaseReservation: +%RU64 (%RU64 -> %RU64)\n", cAddBasePages, cOld, pVM->mm.s.cBasePages));
     int rc = mmR3UpdateReservation(pVM);
     if (RT_FAILURE(rc))
     {
@@ -738,12 +721,14 @@ VMMR3DECL(int) MMR3UpdateShadowReservation(PVM pVM, uint32_t cShadowPages)
  */
 VMMR3DECL(int) MMR3HCPhys2HCVirt(PVM pVM, RTHCPHYS HCPhys, void **ppv)
 {
+#if 0
     /*
      * Try page tables.
      */
     int rc = MMPagePhys2PageTry(pVM, HCPhys, ppv);
     if (RT_SUCCESS(rc))
         return rc;
+#endif
 
     /*
      * Iterate thru the lookup records for HMA.
@@ -853,5 +838,4 @@ VMMR3DECL(uint32_t) MMR3PhysGet4GBRamHoleSize(PVM pVM)
     VM_ASSERT_VALID_EXT_RETURN(pVM, UINT32_MAX);
     return pVM->mm.s.cbRamHole;
 }
-
 

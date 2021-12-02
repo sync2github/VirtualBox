@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIVMInformationDialog.h 89049 2021-05-14 14:59:39Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIVMInformationDialog class declaration.
  */
 
 /*
- * Copyright (C) 2016 Oracle Corporation
+ * Copyright (C) 2016-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,13 +15,17 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___UIVMInformationDialog_h___
-#define ___UIVMInformationDialog_h___
+#ifndef FEQT_INCLUDED_SRC_runtime_information_UIVMInformationDialog_h
+#define FEQT_INCLUDED_SRC_runtime_information_UIVMInformationDialog_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Qt includes: */
+#include <QMainWindow>
 
 /* GUI includes: */
-#include "QIMainWindow.h"
+#include "QIWithRestorableGeometry.h"
 #include "QIWithRetranslateUI.h"
 
 /* COM includes: */
@@ -30,83 +34,76 @@
 
 /* Forward declarations: */
 class QITabWidget;
-class UIMachineWindow;
 class QIDialogButtonBox;
+class UIMachineWindow;
 
-/** QIMainWindow based dialog providing user with VM details and statistics. */
-class UIVMInformationDialog : public QIWithRetranslateUI<QIMainWindow>
+/* Type definitions: */
+typedef QIWithRestorableGeometry<QMainWindow> QMainWindowWithRestorableGeometry;
+typedef QIWithRetranslateUI<QMainWindowWithRestorableGeometry> QMainWindowWithRestorableGeometryAndRetranslateUi;
+
+
+/** QMainWindow subclass providing user
+  * with the dialog unifying VM details and statistics. */
+class UIVMInformationDialog : public QMainWindowWithRestorableGeometryAndRetranslateUi
 {
     Q_OBJECT;
 
+signals:
+
+    void sigClose();
+
 public:
 
-    /** Shows (and creates if necessary)
-      * information-dialog for passed @a pMachineWindow. */
-    static void invoke(UIMachineWindow *pMachineWindow);
-
-protected:
-
-    /** Information dialog constructor. */
+    /** Constructs information dialog for passed @a pMachineWindow. */
     UIVMInformationDialog(UIMachineWindow *pMachineWindow);
-    /** Information dialog destructor. */
+    /** Destructs information dialog. */
     ~UIVMInformationDialog();
 
     /** Returns whether the dialog should be maximized when geometry being restored. */
     virtual bool shouldBeMaximized() const /* override */;
 
-    /** Translation handler. */
-    void retranslateUi();
+protected:
 
-    /** Common event-handler. */
-    bool event(QEvent *pEvent);
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
+    virtual void closeEvent(QCloseEvent *pEvent) /* override */;
+    virtual bool event(QEvent *pEvent) /* override */;
 
 private slots:
 
-    /** Slot to destroy dialog immediately. */
-    void suicide() { delete this; }
-    /** Slot to handle tab-widget page change. */
+    /** Handles tab-widget page change. */
     void sltHandlePageChanged(int iIndex);
 
 private:
 
-    /** General prepare helper. */
+    /** Prepares all. */
     void prepare();
-    /** Prepare helper for dialog itself. */
+    /** Prepares this. */
     void prepareThis();
-    /** Prepare helper for central-widget. */
+    /** Prepares central-widget. */
     void prepareCentralWidget();
-    /** Prepare helper for tab-widget. */
+    /** Prepares tab-widget. */
     void prepareTabWidget();
-    /** Prepare helper for @a iTabIndex. */
+    /** Prepares tab with @a iTabIndex. */
     void prepareTab(int iTabIndex);
-    /** Prepare helper for button-box. */
+    /** Prepares button-box. */
     void prepareButtonBox();
-    /** Load settings helper. */
-    void loadSettings();
-
-    /** Save settings helper. */
-    void saveSettings();
-    /** General cleanup helper. */
-    void cleanup();
-
-    /** @name General variables.
-     * @{ */
-    /** Dialog instance pointer. */
-    static UIVMInformationDialog *m_spInstance;
-    /** @} */
+    void loadDialogGeometry();
+    void saveDialogGeometry();
 
     /** @name Widget variables.
      * @{ */
-    /** Dialog tab-widget. */
-    QITabWidget               *m_pTabWidget;
-    /** Dialog tabs map. */
-    QMap<int, QWidget*>        m_tabs;
-    /** Dialog button-box. */
-    QIDialogButtonBox         *m_pButtonBox;
-    /** machine-window. */
-    UIMachineWindow         *m_pMachineWindow;
+       /** Holds the dialog tab-widget instance. */
+       QITabWidget                  *m_pTabWidget;
+       /** Holds the map of dialog tab instances. */
+       QMap<int, QWidget*>           m_tabs;
+       /** Holds the dialog button-box instance. */
+       QIDialogButtonBox            *m_pButtonBox;
+       /** Holds the machine-window reference. */
+       UIMachineWindow              *m_pMachineWindow;
     /** @} */
+    bool m_fCloseEmitted;
+    int m_iGeometrySaveTimerId;
 };
 
-#endif /* !___UIVMInformationDialog_h___ */
-
+#endif /* !FEQT_INCLUDED_SRC_runtime_information_UIVMInformationDialog_h */

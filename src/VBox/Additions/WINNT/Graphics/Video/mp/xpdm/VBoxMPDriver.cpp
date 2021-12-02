@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxMPDriver.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox XPDM Miniport driver interface functions
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,9 +20,9 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include "VBoxMPInternal.h"
-#include <VBox/Hardware/VBoxVideoVBE.h>
+#include <VBoxVideoVBE.h>
 #include <VBox/VBoxGuestLib.h>
-#include <VBox/VBoxVideo.h>
+#include <VBoxVideo.h>
 #include "common/VBoxMPHGSMI.h"
 #include "common/VBoxMPCommon.h"
 #include "VBoxDisplay.h"
@@ -113,7 +113,7 @@ VBoxDrvFindAdapter(IN PVOID HwDeviceExtension, IN PVOID HwContext, IN PWSTR Argu
 
         VideoPortZeroMemory(tmpRanges, sizeof(tmpRanges));
 
-        if (VBoxQueryWinVersion() == WINVERSION_NT4)
+        if (VBoxQueryWinVersion(NULL) == WINVERSION_NT4)
         {
             /* NT crashes if either of 'vendorId, 'deviceId' or 'slot' parameters is NULL,
              * and needs PCI ids for a successful VideoPortGetAccessRanges call.
@@ -132,13 +132,20 @@ VBoxDrvFindAdapter(IN PVOID HwDeviceExtension, IN PVOID HwContext, IN PWSTR Argu
             return rc;
         }
 
-        /* The first range is the framebuffer. We require that information. */
-        phVRAM = tmpRanges[0].RangeStart;
-        ulApertureSize = tmpRanges[0].RangeLength;
+        /* The first non-IO range is the framebuffer. We require that information. */
+        for (int iRange = 0; iRange < RT_ELEMENTS(tmpRanges); ++iRange)
+        {
+            if (!tmpRanges[iRange].RangeInIoSpace)
+            {
+                phVRAM = tmpRanges[iRange].RangeStart;
+                ulApertureSize = tmpRanges[iRange].RangeLength;
+                break;
+            }
+        }
     }
 
     /* Initialize VBoxGuest library, which is used for requests which go through VMMDev. */
-    rc = VbglInitClient();
+    rc = VbglR0InitClient();
     VBOXMP_WARN_VPS(rc);
 
     /* Preinitialize the primary extension. */
@@ -232,7 +239,7 @@ VBoxDrvStartIO(PVOID HwDeviceExtension, PVIDEO_REQUEST_PACKET RequestPacket)
 
     PAGED_CODE();
 
-    LOGF(("IOCTL %#p, fn(%#x)", (void*)RequestPacket->IoControlCode, (RequestPacket->IoControlCode >> 2) & 0xFFF));
+    LOGF(("IOCTL %#x, fn(%#x)", RequestPacket->IoControlCode, (RequestPacket->IoControlCode >> 2) & 0xFFF));
 
     pStatus->Status = NO_ERROR;
 
@@ -574,8 +581,7 @@ VBoxDrvStartIO(PVOID HwDeviceExtension, PVIDEO_REQUEST_PACKET RequestPacket)
 
         default:
         {
-            WARN(("unsupported IOCTL %p, fn(%#x)",
-                  (void*)RequestPacket->IoControlCode, (RequestPacket->IoControlCode >> 2) & 0xFFF));
+            WARN(("unsupported IOCTL %#x, fn(%#x)", RequestPacket->IoControlCode, (RequestPacket->IoControlCode >> 2) & 0xFFF));
             RequestPacket->StatusBlock->Status = ERROR_INVALID_FUNCTION;
         }
     }
@@ -665,11 +671,11 @@ VBoxDrvResetHW(PVOID HwDeviceExtension, ULONG Columns, ULONG Rows)
         /* ResetHW is not the place to do such cleanup. See MSDN. */
         if (pExt->u.primary.pvReqFlush != NULL)
         {
-            VbglGRFree((VMMDevRequestHeader *)pExt->u.primary.pvReqFlush);
+            VbglR0GRFree((VMMDevRequestHeader *)pExt->u.primary.pvReqFlush);
             pExt->u.primary.pvReqFlush = NULL;
         }
 
-        VbglTerminate();
+        VbglR0TerminateClient();
 
         VBoxFreeDisplaysHGSMI(VBoxCommonFromDeviceExt(pExt));
 #endif
@@ -774,7 +780,7 @@ ULONG DriverEntry(IN PVOID Context1, IN PVOID Context2)
      *so we query current version and report the expected size
      *to allow our driver to be loaded.
      */
-    switch (VBoxQueryWinVersion())
+    switch (VBoxQueryWinVersion(NULL))
     {
         case WINVERSION_NT4:
             LOG(("WINVERSION_NT4"));

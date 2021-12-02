@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: listeners.h 90770 2021-08-21 01:35:39Z vboxsync $ */
 /** @file
  * MS COM / XPCOM Abstraction Layer - Listener helpers.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_com_listeners_h
-#define ___VBox_com_listeners_h
+#ifndef VBOX_INCLUDED_com_listeners_h
+#define VBOX_INCLUDED_com_listeners_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/com/com.h>
 #include <VBox/com/VirtualBox.h>
@@ -164,7 +167,8 @@ public:
     STDMETHOD(HandleEvent)(IEvent * aEvent)
     {
         VBoxEventType_T aType = VBoxEventType_Invalid;
-        aEvent->COMGETTER(Type)(&aType);
+        HRESULT hrc = aEvent->COMGETTER(Type)(&aType);
+        AssertMsg(SUCCEEDED(hrc), ("hrc=%Rhrc\n", hrc)); RT_NOREF(hrc);
         return mListener->HandleEvent(aType, aEvent);
     }
 };
@@ -176,5 +180,5 @@ public:
 #endif
 
 /** @} */
-#endif
+#endif /* !VBOX_INCLUDED_com_listeners_h */
 

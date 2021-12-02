@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: waitqueue-r0drv-linux.h 85701 2020-08-11 17:46:17Z vboxsync $ */
 /** @file
  * IPRT - Linux Ring-0 Driver Helpers for Abstracting Wait Queues,
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,9 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-
-#ifndef ___r0drv_linux_waitqueue_r0drv_linux_h
-#define ___r0drv_linux_waitqueue_r0drv_linux_h
+#ifndef IPRT_INCLUDED_SRC_r0drv_linux_waitqueue_r0drv_linux_h
+#define IPRT_INCLUDED_SRC_r0drv_linux_waitqueue_r0drv_linux_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "the-linux-kernel.h"
 
@@ -46,7 +48,11 @@
 typedef struct RTR0SEMLNXWAIT
 {
     /** The wait queue entry. */
+#if RTLNX_VER_MIN(4,13,0) || RTLNX_SUSE_MAJ_PREREQ(12, 4) || RTLNX_SUSE_MAJ_PREREQ(15, 0)
+    wait_queue_entry_t WaitQE;
+#else
     wait_queue_t    WaitQE;
+#endif
     /** The absolute timeout given as nano seconds since the start of the
      *  monotonic clock. */
     uint64_t        uNsAbsTimeout;
@@ -175,7 +181,7 @@ DECLINLINE(int) rtR0SemLnxWaitInit(PRTR0SEMLNXWAIT pWait, uint32_t fFlags, uint6
     /*
      * Initialize the wait queue related bits.
      */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 39)
+#if RTLNX_VER_MIN(2,5,39)
     init_wait((&pWait->WaitQE));
 #else
     RT_ZERO(pWait->WaitQE);
@@ -282,5 +288,5 @@ DECLINLINE(uint32_t) rtR0SemLnxWaitGetResolution(void)
 #endif
 }
 
-#endif
+#endif /* !IPRT_INCLUDED_SRC_r0drv_linux_waitqueue_r0drv_linux_h */
 

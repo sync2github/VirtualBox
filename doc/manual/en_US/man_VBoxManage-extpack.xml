@@ -2,7 +2,7 @@
 <!--
     manpage, user manual, usage: VBoxManage extpack
 
-    Copyright (C) 2006-2015 Oracle Corporation
+    Copyright (C) 2006-2020 Oracle Corporation
 
     This file is part of VirtualBox Open Source Edition (OSE), as
     available from http://www.virtualbox.org. This file is free software;
@@ -12,11 +12,11 @@
     VirtualBox OSE distribution. VirtualBox OSE is distributed in the
     hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  -->
-<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN" "http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN" "http://www.oasis-open.org/docbook/xml/4.5/docbookx.dtd">
 <refentry id="vboxmanage-extpack" lang="en">
 
   <refentryinfo>
-    <pubdate>$Date$</pubdate>
+    <pubdate>$Date: 2020-04-07 18:00:15 +0800 (Tue, 07 Apr 2020) $</pubdate>
     <title>VBoxManage extpack</title>
   </refentryinfo>
 
@@ -35,6 +35,7 @@
     <cmdsynopsis id="synopsis-vboxmanage-extpack-install"> <!-- The 'id' is mandatory and must start with 'synopsis-'. -->
       <command>VBoxManage extpack install</command>
       <arg>--replace</arg>
+      <arg>--accept-license=<replaceable>sha256</replaceable></arg>
       <arg choice="req"><replaceable>tarball</replaceable></arg>
     </cmdsynopsis>
     <cmdsynopsis id="synopsis-vboxmanage-extpack-uninstall">
@@ -62,6 +63,15 @@
       <variablelist>
         <varlistentry>
           <term><option>--replace</option></term><listitem><para>Uninstall existing extension pack version.</para></listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><option>--accept-license=<replaceable>sha256</replaceable></option></term>
+          <listitem>
+            <para>Accept the license text with the given SHA-256 hash value.</para>
+            <para>VBoxManage will display the SHA-256 value when performing a manual
+            installation.  The hash can of course be calculated by looking inside
+            the extension pack and using sha256sum or similar on the license file.</para>
+          </listitem>
         </varlistentry>
         <varlistentry>
           <term><replaceable>tarball</replaceable></term>

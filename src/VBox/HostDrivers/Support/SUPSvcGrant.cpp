@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPSvcGrant.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Support Service - The Grant Service.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -33,7 +33,7 @@
 
 #include <VBox/log.h>
 #include <iprt/asm.h>
-#include <iprt/err.h>
+#include <iprt/errcore.h>
 #include <iprt/assert.h>
 #include <iprt/critsect.h>
 #include <iprt/mem.h>
@@ -494,7 +494,7 @@ static DECLCALLBACK(int) supSvcGrantThread(RTTHREAD hThread, void *pvThis)
                 rc = RTSemEventSignal(pThis->hResponseEvent);
                 if (RT_FAILURE(rc))
                     return supSvcGrantThreadButchered(pThis, true /* fOwnCritSect*/, "RTSemEventSignal", rc);
-                /* fall thru */
+                RT_FALL_THRU();
 
             case kSupSvcGrantState_Paused:
                 RTCritSectLeave(&pThis->CritSect);
@@ -509,7 +509,7 @@ static DECLCALLBACK(int) supSvcGrantThread(RTTHREAD hThread, void *pvThis)
                 rc = RTSemEventSignal(pThis->hResponseEvent);
                 if (RT_FAILURE(rc))
                     return supSvcGrantThreadButchered(pThis, true /* fOwnCritSect*/, "RTSemEventSignal", rc);
-                /* fall thru */
+                RT_FALL_THRU();
 
             case kSupSvcGrantState_Listen:
                 RTCritSectLeave(&pThis->CritSect);

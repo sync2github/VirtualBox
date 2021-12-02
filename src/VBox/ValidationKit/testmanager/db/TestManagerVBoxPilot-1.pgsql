@@ -1,10 +1,10 @@
--- $Id$
+-- $Id: TestManagerVBoxPilot-1.pgsql 82968 2020-02-04 10:35:17Z vboxsync $
 --- @file
 -- VBox Test Manager - Setup for the 1st VBox Pilot.
 --
 
 --
--- Copyright (C) 2012-2015 Oracle Corporation
+-- Copyright (C) 2012-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;
@@ -49,7 +49,7 @@ INSERT INTO BuildSources (uidAuthor, sName, sProduct, sBranch, asTypes, asOsArch
 
 INSERT INTO SchedGroups (sName, sDescription, fEnabled, idBuildSrc, idBuildSrcTestSuite)
     VALUES ('VirtualBox Trunk', NULL, TRUE,
-            (SELECT idBuildSrc FROM BuildSources WHERE sName = 'VBox trunk builds'), 
+            (SELECT idBuildSrc FROM BuildSources WHERE sName = 'VBox trunk builds'),
             (SELECT idBuildSrc FROM BuildSources WHERE sName = 'VBox TestSuite trunk builds') );
 \set idSchedGroupQuery '(SELECT idSchedGroup FROM SchedGroups WHERE sName = \'VirtualBox Trunk\')'
 
@@ -79,8 +79,8 @@ INSERT INTO SchedGroupMembers (idSchedGroup, idTestGroup, uidAuthor, idTestGroup
 -- Testcases
 --
 INSERT INTO TestCases (uidAuthor, sName, fEnabled, cSecTimeout, sBaseCmd, sTestSuiteZips)
-    VALUES (:idUserQuery, 'VBox install', TRUE, 600,  
-            'validationkit/testdriver/vboxinstaller.py --vbox-build @BUILD_BINARIES@ @ACTION@ -- testdriver/base.py @ACTION@', 
+    VALUES (:idUserQuery, 'VBox install', TRUE, 600,
+            'validationkit/testdriver/vboxinstaller.py --vbox-build @BUILD_BINARIES@ @ACTION@ -- testdriver/base.py @ACTION@',
             '@VALIDATIONKIT_ZIP@');
 INSERT INTO TestCaseArgs (idTestCase, uidAuthor, sArgs)
     VALUES ((SELECT idTestCase FROM TestCases WHERE sName = 'VBox install'), :idUserQuery, '');
@@ -88,5 +88,4 @@ INSERT INTO TestGroupMembers (idTestGroup, idTestCase, uidAuthor)
     VALUES (:idGrpSmokeQuery, (SELECT idTestCase FROM TestCases WHERE sName = 'VBox install'), :idUserQuery);
 
 COMMIT WORK;
-
 

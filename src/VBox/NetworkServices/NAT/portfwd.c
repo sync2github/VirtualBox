@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: portfwd.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * NAT Network - port-forwarding rules.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -87,6 +87,7 @@ portfwd_rule_add_del(struct fwspec *fwspec, int add)
 
     msg = (struct portfwd_msg *)malloc(sizeof(*msg));
     if (msg == NULL) {
+        DPRINTF0(("%s: failed to allocate message\n", __func__));
         return -1;
     }
 

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxDispD3DBase.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxVideo Display D3D Base Include
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxDispD3DBase_h
-#define ___VBoxDispD3DBase_h
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispD3DBase_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispD3DBase_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* Include nt-and-windows.h here so we get NT_SUCCESS, but don't try if
    something windowsy is already included because that'll cause conflicts. */
@@ -29,5 +32,5 @@
 #include <D3dumddi.h>
 #include <d3dhal.h>
 
-#endif
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_disp_wddm_VBoxDispD3DBase_h */
 

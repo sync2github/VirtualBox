@@ -1,11 +1,10 @@
-/* $Id$ */
-
+/* $Id: VBoxMPVidPn.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBox WDDM Miniport driver
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___VBoxMPVidPn_h___
-#define ___VBoxMPVidPn_h___
+#ifndef GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPVidPn_h
+#define GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPVidPn_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #define VBOXVDPN_C_DISPLAY_HBLANK_SIZE 200
 #define VBOXVDPN_C_DISPLAY_VBLANK_SIZE 180
@@ -50,27 +52,38 @@ PVBOXWDDM_TARGET VBoxVidPnStTIterNext(VBOXWDDM_TARGET_ITER *pIter);
 void VBoxDumpSourceTargetArrays(VBOXWDDM_SOURCE *paSources, VBOXWDDM_TARGET *paTargets, uint32_t cScreens);
 
 /* !!!NOTE: The callback is responsible for releasing the path */
-typedef DECLCALLBACK(BOOLEAN) FNVBOXVIDPNENUMPATHS(D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology, const DXGK_VIDPNTOPOLOGY_INTERFACE* pVidPnTopologyInterface,
-        const D3DKMDT_VIDPN_PRESENT_PATH *pNewVidPnPresentPathInfo, PVOID pContext);
+typedef DECLCALLBACKTYPE(BOOLEAN, FNVBOXVIDPNENUMPATHS,(D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+                                                        const DXGK_VIDPNTOPOLOGY_INTERFACE *pVidPnTopologyInterface,
+                                                        const D3DKMDT_VIDPN_PRESENT_PATH *pNewVidPnPresentPathInfo,
+                                                        PVOID pContext));
 typedef FNVBOXVIDPNENUMPATHS *PFNVBOXVIDPNENUMPATHS;
 
 /* !!!NOTE: The callback is responsible for releasing the source mode info */
-typedef DECLCALLBACK(BOOLEAN) FNVBOXVIDPNENUMSOURCEMODES(D3DKMDT_HVIDPNSOURCEMODESET hNewVidPnSourceModeSet, const DXGK_VIDPNSOURCEMODESET_INTERFACE *pVidPnSourceModeSetInterface,
-        const D3DKMDT_VIDPN_SOURCE_MODE *pNewVidPnSourceModeInfo, PVOID pContext);
+typedef DECLCALLBACKTYPE(BOOLEAN, FNVBOXVIDPNENUMSOURCEMODES,(D3DKMDT_HVIDPNSOURCEMODESET hNewVidPnSourceModeSet,
+                                                              const DXGK_VIDPNSOURCEMODESET_INTERFACE *pVidPnSourceModeSetInterface,
+                                                              const D3DKMDT_VIDPN_SOURCE_MODE *pNewVidPnSourceModeInfo,
+                                                              PVOID pContext));
 typedef FNVBOXVIDPNENUMSOURCEMODES *PFNVBOXVIDPNENUMSOURCEMODES;
 
 /* !!!NOTE: The callback is responsible for releasing the target mode info */
-typedef DECLCALLBACK(BOOLEAN) FNVBOXVIDPNENUMTARGETMODES(D3DKMDT_HVIDPNTARGETMODESET hNewVidPnTargetModeSet, const DXGK_VIDPNTARGETMODESET_INTERFACE *pVidPnTargetModeSetInterface,
-        const D3DKMDT_VIDPN_TARGET_MODE *pNewVidPnTargetModeInfo, PVOID pContext);
+typedef DECLCALLBACKTYPE(BOOLEAN, FNVBOXVIDPNENUMTARGETMODES,(D3DKMDT_HVIDPNTARGETMODESET hNewVidPnTargetModeSet,
+                                                              const DXGK_VIDPNTARGETMODESET_INTERFACE *pVidPnTargetModeSetInterface,
+                                                              const D3DKMDT_VIDPN_TARGET_MODE *pNewVidPnTargetModeInfo,
+                                                              PVOID pContext));
 typedef FNVBOXVIDPNENUMTARGETMODES *PFNVBOXVIDPNENUMTARGETMODES;
 
 /* !!!NOTE: The callback is responsible for releasing the source mode info */
-typedef DECLCALLBACK(BOOLEAN) FNVBOXVIDPNENUMMONITORSOURCEMODES(D3DKMDT_HMONITORSOURCEMODESET hMonitorSMS, CONST DXGK_MONITORSOURCEMODESET_INTERFACE *pMonitorSMSIf,
-        CONST D3DKMDT_MONITOR_SOURCE_MODE *pMonitorSMI, PVOID pContext);
+typedef DECLCALLBACKTYPE(BOOLEAN, FNVBOXVIDPNENUMMONITORSOURCEMODES,(D3DKMDT_HMONITORSOURCEMODESET hMonitorSMS,
+                                                                     CONST DXGK_MONITORSOURCEMODESET_INTERFACE *pMonitorSMSIf,
+                                                                     CONST D3DKMDT_MONITOR_SOURCE_MODE *pMonitorSMI,
+                                                                     PVOID pContext));
 typedef FNVBOXVIDPNENUMMONITORSOURCEMODES *PFNVBOXVIDPNENUMMONITORSOURCEMODES;
 
-typedef DECLCALLBACK(BOOLEAN) FNVBOXVIDPNENUMTARGETSFORSOURCE(PVBOXMP_DEVEXT pDevExt, D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology, const DXGK_VIDPNTOPOLOGY_INTERFACE* pVidPnTopologyInterface,
-        CONST D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId, D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId, SIZE_T cTgtPaths, PVOID pContext);
+typedef DECLCALLBACKTYPE(BOOLEAN, FNVBOXVIDPNENUMTARGETSFORSOURCE,(PVBOXMP_DEVEXT pDevExt, D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+                                                                   const DXGK_VIDPNTOPOLOGY_INTERFACE* pVidPnTopologyInterface,
+                                                                   CONST D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+                                                                   D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+                                                                   SIZE_T cTgtPaths, PVOID pContext));
 typedef FNVBOXVIDPNENUMTARGETSFORSOURCE *PFNVBOXVIDPNENUMTARGETSFORSOURCE;
 
 NTSTATUS VBoxVidPnCommitSourceModeForSrcId(PVBOXMP_DEVEXT pDevExt, const D3DKMDT_HVIDPN hDesiredVidPn, const DXGK_VIDPN_INTERFACE* pVidPnInterface,
@@ -371,4 +384,4 @@ NTSTATUS VBoxVidPnIsSupported(PVBOXMP_DEVEXT pDevExt, D3DKMDT_HVIDPN hVidPn, BOO
 
 NTSTATUS VBoxVidPnUpdateModes(PVBOXMP_DEVEXT pDevExt, uint32_t u32TargetId, const RTRECTSIZE *pSize);
 
-#endif /* #ifndef ___VBoxMPVidPn_h___ */
+#endif /* !GA_INCLUDED_SRC_WINNT_Graphics_Video_mp_wddm_VBoxMPVidPn_h */

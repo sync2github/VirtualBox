@@ -5,7 +5,7 @@
 # for Linux Guest Additions
 
 #
-# Copyright (C) 2006-2015 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -16,21 +16,25 @@
 # hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
 #
 
-# This is a stub installation script to be included in VirtualBox Makeself
-# installers which removes any previous installations of the package, unpacks
-# the package into the filesystem (by default under /opt) and starts the real
-# installation script.
-#
+# Testing:
+# * After successful installation, 0 is returned if the vboxguest module version
+#   built matches the one loaded and 2 is returned otherwise.  E.g. VBoxClient
+#   running will prevent vboxguest reloading.
+# * If the kernel modules cannot be built (run the installer with KERN_VER=none)
+#   or loaded (run with KERN_VER=<installed non-current version>) then 1 is
+#   returned.
+
 PATH=$PATH:/bin:/sbin:/usr/sbin
 
 # Note: These variable names must *not* clash with variables in $CONFIG_DIR/$CONFIG!
 PACKAGE="VBoxGuestAdditions"
 PACKAGE_NAME="VirtualBox Guest Additions"
 UNINSTALL="uninstall.sh"
+PUBLIC_UNINSTALL_HOOK="/usr/sbin/vbox-uninstall-guest-additions"
 ROUTINES="routines.sh"
 INSTALLATION_VER="_VERSION_"
-BUILD_TYPE="_BUILDTYPE_"
-USERNAME="_USERNAME_"
+BUILD_VBOX_KBUILD_TYPE="_BUILDTYPE_"
+BUILD_USERNAME="_USERNAME_"
 UNINSTALL_SCRIPTS="vboxadd-x11 vboxvfs vboxadd-timesync vboxadd-service vboxadd"
 
 INSTALLATION_DIR="/opt/$PACKAGE-$INSTALLATION_VER"
@@ -40,24 +44,37 @@ CONFIG_FILES="filelist"
 SELF=$1
 LOGFILE="/var/log/vboxadd-install.log"
 
+## Were we able to stop any previously running Additions kernel modules?
+MODULES_STOPPED=1
+
 . "./$ROUTINES"
 
 check_root
 
+check_deps bzip2 tar
+
 create_log "$LOGFILE"
 
-## @todo r=andy: Explain options like "force" and "no_setup" -- not self-explanatory
-#        to the user.
 usage()
 {
-    info ""
-    info "Usage: $SELF install [<installation directory>]"
-    info "       [--with-<module>] |"
-    info "       uninstall"
-    info "       [--force] [--no-setup]"
-    info ""
-    info "Example:"
-    info "$SELF install"
+    catinfo << EOF
+
+Usage: $SELF install [<installation directory>]
+       [--with-<module>]
+       [--package-base <base> |
+       uninstall
+       [--force] [--no-setup]
+
+Options:
+  --package-base <base>    For use when building distribution packages.
+                           Installs relative to <base> instead of to "/",
+                           does not run setup, installs to "<base>/usr/lib"
+                           instead of to "/opt" and does not create uninstall.
+  --force                  Forces an upgrade. Not recommended.
+
+Example:
+$SELF install
+EOF
     exit 1
 }
 
@@ -122,16 +139,23 @@ def_uninstall()
         done
     test "$found" = 0 && return 0
     if ! test "$1" = "force" ; then
+        # Try to make the promised notification appear on next start.
+        VBoxControl guestproperty delete \
+            /VirtualBox/GuestAdd/HostVerLastChecked 2>&1 > /dev/null
         cat 1>&2 << EOF
-You appear to have a version of the VirtualBox Guest Additions
-on your system which was installed from a different source or using a
-different type of installer.  If you installed it from a package from your
-Linux distribution or if it is a default part of the system then we strongly
-recommend that you cancel this installation and remove it properly before
-installing this version.  If this is simply an older or a damaged
-installation you may safely proceed.
+This system appears to have a version of the VirtualBox Guest Additions
+already installed.  If it is part of the operating system and kept up-to-date,
+there is most likely no need to replace it.  If it is not up-to-date, you
+should get a notification when you start the system.  If you wish to replace
+it with this version, please do not continue with this installation now, but
+instead remove the current version first, following the instructions for the
+operating system.
 
-Do you wish to continue anyway? [yes or no]
+If your system simply has the remains of a version of the Additions you could
+not remove you should probably continue now, and these will be removed during
+installation.
+
+Do you wish to continue? [yes or no]
 EOF
         read reply dummy
         if ! expr "$reply" : [yY] > /dev/null &&
@@ -142,6 +166,11 @@ EOF
             return 1
         fi
     fi
+    # Inhibit rebuilding of any installed kernels.
+    for i in /lib/modules/*; do
+        ver="${i##*/}"
+        test ! -d "$i"/build || touch /var/lib/VBoxGuestAdditions/skip-"$ver"
+    done
     # Stop what we can in the way of services and remove them from the
     # system
     for i in $UNINSTALL_SCRIPTS; do
@@ -178,45 +207,11 @@ EOF
 
 info "$PACKAGE_NAME installer"
 
-# Check architecture
-cpu=`uname -m`;
-case "$cpu" in
-  i[3456789]86|x86)
-    cpu="x86"
-    lib_candidates="/usr/lib/i386-linux-gnu /usr/lib /lib"
-    ;;
-  x86_64|amd64)
-    cpu="amd64"
-    lib_candidates="/usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib /lib64 /lib"
-    ;;
-  *)
-    cpu="unknown"
-esac
-ARCH_PACKAGE="$PACKAGE-$cpu.tar.bz2"
-if [ ! -r "$ARCH_PACKAGE" ]; then
-  info "Detected unsupported $cpu machine type."
-  exit 1
-fi
-# Find the most appropriate libary folder by seeing which of the candidate paths
-# are actually in the shared linker path list and choosing the first.  We look
-# for Debian-specific paths first, then LSB ones, then the new RedHat ones.
-libs=`ldconfig -v 2>/dev/null | grep -v ^$'\t'`
-for i in $lib_candidates; do
-  if echo $libs | grep -q $i; then
-    lib_path=$i
-    break
-  fi
-done
-if [ ! -x "$lib_path" ]; then
-  info "Unable to determine correct library path."
-  exit 1
-fi
-
 # Sensible default actions
 ACTION="install"
-DO_SETUP="true"
 NO_CLEANUP=""
 FORCE_UPGRADE=""
+PACKAGE_BASE=""
 
 while [ $# -ge 2 ];
 do
@@ -232,6 +227,17 @@ do
 
             uninstall)
                 ACTION="uninstall"
+                ;;
+
+            package)
+                ACTION="package"
+                INSTALLATION_DIR=/usr/lib
+                PACKAGE_BASE="$2"
+                shift
+                if test ! -d "${PACKAGE_BASE}"; then
+                    info "Package base directory not found."
+                    usage
+                fi
                 ;;
 
             ## @todo Add per-module options handling, e.g. --lightdm-greeter-dir
@@ -271,14 +277,13 @@ do
                 FORCE_UPGRADE="force"
                 ;;
 
-            --no-setup|no_setup) # Keep "no_setup" for backwards compatibility.
-                DO_SETUP=""
+            --no-setup|no_setup)
+                # Deprecated; keep this setting for backwards compatibility.
                 ;;
 
             --no-cleanup|no_cleanup) # Keep "no_cleanup" for backwards compatibility.
                 # Do not do cleanup of old modules when removing them.  For
                 # testing purposes only.
-                DO_SETUP=""
                 NO_CLEANUP="no_cleanup"
                 ;;
 
@@ -298,13 +303,53 @@ do
     fi
 done
 
+# Check architecture
+cpu=`uname -m`;
+case "$cpu" in
+  i[3456789]86|x86)
+    cpu="x86"
+    lib_candidates="/usr/lib/i386-linux-gnu /usr/lib /lib"
+    ;;
+  x86_64|amd64)
+    cpu="amd64"
+    lib_candidates="/usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib /lib64 /lib"
+    ;;
+  *)
+    cpu="unknown"
+esac
+ARCH_PACKAGE="$PACKAGE-$cpu.tar.bz2"
+if [ ! -r "$ARCH_PACKAGE" ]; then
+  info "Detected unsupported $cpu machine type."
+  exit 1
+fi
+# Find the most appropriate libary folder by seeing which of the candidate paths
+# are actually in the shared linker path list and choosing the first.  We look
+# for Debian-specific paths first, then LSB ones, then the new RedHat ones.
+libs=`ldconfig -v 2>/dev/null | grep -v ^$'\t'`
+for i in $lib_candidates; do
+  if echo $libs | grep -q $i; then
+    lib_path=$i
+    break
+  fi
+done
+if [ ! -x "$lib_path" ]; then
+  info "Unable to determine correct library path."
+  exit 1
+fi
+
 # uninstall any previous installation
+# If the currently installed Additions have provided an uninstallation hook, try
+# that first.
+if test -x "${PUBLIC_UNINSTALL_HOOK}"; then
+  "${PUBLIC_UNINSTALL_HOOK}" 1>&2 ||
+    abort "Failed to remove existing installation.  Aborting..."
+fi
+
 INSTALL_DIR=""
 uninstalled=0
-test -r "$CONFIG_DIR/$CONFIG" &&
-    eval `grep ^INSTALL_DIR= "$CONFIG_DIR/$CONFIG"` 2>/dev/null &&
-    eval `grep ^UNINSTALLER= "$CONFIG_DIR/$CONFIG"` 2>/dev/null
-if test -n "$INSTALL_DIR" -a -x "$INSTALL_DIR/$UNINSTALLER"; then
+test -r "$CONFIG_DIR/$CONFIG" && . "$CONFIG_DIR/$CONFIG"
+if test -n "$INSTALL_DIR" && test -n "$UNINSTALLER" &&
+    test -x "$INSTALL_DIR/$UNINSTALLER"; then
   "$INSTALL_DIR/$UNINSTALLER" $NO_CLEANUP 1>&2 ||
     abort "Failed to remove existing installation.  Aborting..."
   uninstalled=1
@@ -313,8 +358,11 @@ test "$uninstalled" = 0 && def_uninstall "$FORCE_UPGRADE" && uninstalled=1
 test "$uninstalled" = 0 && exit 1
 rm -f "$CONFIG_DIR/$CONFIG"
 rm -f "$CONFIG_DIR/$CONFIG_FILES"
-rmdir "$CONFIG_DIR" 2>/dev/null
+rmdir "$CONFIG_DIR" 2>/dev/null || true
 test "$ACTION" = "install" || exit 0
+
+# Now check whether the kernel modules were stopped.
+lsmod | grep -q vboxguest && MODULES_STOPPED=
 
 # Choose a proper umask
 umask 022
@@ -360,11 +408,10 @@ bzip2 -d -c "$ARCH_PACKAGE" | tar -tf - |
 bzip2 -d -c "$ARCH_PACKAGE" | tar -xf - -C "$INSTALLATION_DIR" || exit 1
 
 # Set symlinks into /usr and /sbin
-link_into_fs "bin" "/usr/bin"
-link_into_fs "sbin" "/usr/sbin"
+link_into_fs "bin" "${PACKAGE_BASE}/usr/bin"
+link_into_fs "sbin" "${PACKAGE_BASE}/usr/sbin"
 link_into_fs "lib" "$lib_path"
-add_symlink "$INSTALLATION_DIR/lib/$PACKAGE" /usr/lib/"$PACKAGE"
-link_into_fs "src" "/usr/src"
+link_into_fs "src" "${PACKAGE_BASE}/usr/src"
 
 if [ -d "$INSTALLATION_MODULES_DIR" ]; then
   info "Installing additional modules ..."
@@ -401,8 +448,8 @@ UNINSTALLER='$UNINSTALL'
 # Package version
 INSTALL_VER='$INSTALLATION_VER'
 # Build type and user name for logging purposes
-BUILD_TYPE='$BUILD_TYPE'
-USERNAME='$USERNAME'
+BUILD_VBOX_KBUILD_TYPE='$BUILD_BUILDTYPE'
+BUILD_USERNAME='$USERNAME'
 EOF
 
 # Give the modules the chance to write their stuff
@@ -415,14 +462,17 @@ if [ -n "${INSTALLATION_MODULES_LIST}" ]; then
   done
 fi
 
-"$INSTALLATION_DIR/init/vboxadd" setup 1>&2 2>> "${LOGFILE}"
+"$INSTALLATION_DIR"/init/vboxadd setup 2>&1 | tee -a "$LOGFILE"
 
 # Install, set up and start init scripts
-for i in "$INSTALLATION_DIR/init/vboxadd" "$INSTALLATION_DIR/init/vboxadd-service"; do
-    install_init_script "$i" "`basename "$i"`" 2>> "${LOGFILE}"
-    addrunlevel "`basename "$i"`" 2>> "${LOGFILE}"
-    start_init_script "`basename "$i"`" 2>> "${LOGFILE}"
-done
+install_init_script "$INSTALLATION_DIR"/init/vboxadd vboxadd 2>> "$LOGFILE"
+install_init_script "$INSTALLATION_DIR"/init/vboxadd-service vboxadd-service \
+    2>> "$LOGFILE"
+finish_init_script_install
+addrunlevel vboxadd 2>> "$LOGFILE"
+addrunlevel vboxadd-service 2>> "$LOGFILE"
+start_init_script vboxadd 2>> "$LOGFILE"
+start_init_script vboxadd-service 2>> "$LOGFILE"
 
 cp $ROUTINES $INSTALLATION_DIR
 echo $INSTALLATION_DIR/$ROUTINES >> "$CONFIG_DIR/$CONFIG_FILES"
@@ -456,14 +506,18 @@ fi
 test -r "$CONFIG_DIR/$CONFIG_FILES" || abort "Required file $CONFIG_FILES not found.  Aborting..."
 
 # Stop and clean up all services
-for i in "$INSTALLATION_DIR/init/vboxadd-service" "$INSTALLATION_DIR/init/vboxadd"; do
-    if test -r "\$i"; then
-        stop_init_script "\`basename "\$i"\`" 2>> "${LOGFILE}"
-        test -z "\${NO_CLEANUP}" && grep -q '^# *cleanup_script *$' "\${i}" && "\${i}" cleanup 2>> "\$LOGFILE"
-        delrunlevel "\`basename "\$i"\`" 2>> "${LOGFILE}"
-        remove_init_script "\`basename "\$i"\`" 2>> "${LOGFILE}"
-    fi
-done
+if test -r "$INSTALLATION_DIR"/init/vboxadd-service; then
+    stop_init_script vboxadd-service 2>> "\$LOGFILE"
+    delrunlevel vboxadd-service 2>> "\$LOGFILE"
+    remove_init_script vboxadd-service 2>> "\$LOGFILE"
+fi
+if test -r "$INSTALLATION_DIR"/init/vboxadd; then
+    stop_init_script vboxadd 2>> "\$LOGFILE"
+    test -n "\$NO_CLEANUP" || "$INSTALLATION_DIR"/init/vboxadd cleanup 2>> "\$LOGFILE"
+    delrunlevel vboxadd 2>> "\$LOGFILE"
+    remove_init_script vboxadd 2>> "\$LOGFILE"
+fi
+finish_init_script_install
 
 # Load all modules
 # Important: This needs to be done before loading the configuration
@@ -528,6 +582,20 @@ echo $INSTALLATION_DIR/$UNINSTALL >> "$CONFIG_DIR/$CONFIG_FILES"
 test -n "$REMOVE_INSTALLATION_DIR" &&
   echo "$INSTALLATION_DIR/" >> "$CONFIG_DIR/$CONFIG_FILES"
 
+cat > "${PUBLIC_UNINSTALL_HOOK}" << EOF
+#!/bin/sh
+# This executable provides a well-known way to uninstall VirtualBox Guest
+# Additions in order to re-install them from a different source.  A common case
+# is uninstalling distribution-provide Additions to install the version provided
+# by VirtualBox.  Distributions should put the right command in here to do the
+# removal, e.g. "dnf remove VirtualBox-guest-additions".  Leaving kernel modules
+# provided by the distribution kernel package in place is acceptable if the
+# location does not clash with the VirtualBox-provided module location (misc).
+$INSTALLATION_DIR/$UNINSTALL
+EOF
+chmod 0755 "${PUBLIC_UNINSTALL_HOOK}"
+echo "$PUBLIC_UNINSTALL_HOOK" >> "$CONFIG_DIR/$CONFIG_FILES"
+
 # Test for a problem with old Mesa versions which stopped our 3D libraries
 # from working.  Known to affect Debian 7.11, probably OL/RHEL 5.
 # The problem was that the system Mesa library had an ABI note, which caused
@@ -546,3 +614,18 @@ EOF
     done
     echo >&2 "  ldconfig"
 fi
+
+# setuid bit of our drm client as drm ioctl calls
+# need to be done by elevated privileges
+chmod 4755 "$INSTALLATION_DIR"/bin/VBoxDRMClient
+
+# And do a final test as to whether the kernel modules were properly created
+# and loaded.  Return 0 if both are true, 1 if the modules could not be built
+# or loaded (except due to already running older modules) and 2 if already
+# running modules probably prevented new ones from loading.  vboxvideo is
+# currently not tested.
+# Assume that we have already printed enough messages by now and stay silent.
+modinfo vboxguest >/dev/null 2>&1 || exit 1
+lsmod | grep -q vboxguest || exit 1
+test -n "${MODULES_STOPPED}" || exit 2
+exit 0

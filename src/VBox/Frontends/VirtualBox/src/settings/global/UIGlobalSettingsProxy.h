@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIGlobalSettingsProxy.h 89323 2021-05-27 14:23:11Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIGlobalSettingsProxy class declaration.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,70 +15,97 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIGlobalSettingsProxy_h__
-#define __UIGlobalSettingsProxy_h__
+#ifndef FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsProxy_h
+#define FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsProxy_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/* Local includes */
-#include "VBoxUtils.h"
+/* GUI includes: */
 #include "UISettingsPage.h"
-#include "UIGlobalSettingsProxy.gen.h"
+#include "VBoxUtils.h"
 
-/* Global settings / Proxy page / Cache: */
-struct UISettingsCacheGlobalProxy
-{
-    UISettingsCacheGlobalProxy()
-        : m_enmProxyState(UIProxyManager::ProxyState_Auto)
-    {}
-    UIProxyManager::ProxyState m_enmProxyState;
-    QString m_strProxyHost;
-    QString m_strProxyPort;
-};
+/* Forward declarations: */
+class QButtonGroup;
+class QLabel;
+class QRadioButton;
+class QILineEdit;
+struct UIDataSettingsGlobalProxy;
+typedef UISettingsCache<UIDataSettingsGlobalProxy> UISettingsCacheGlobalProxy;
 
-/* Global settings / Proxy page: */
-class UIGlobalSettingsProxy : public UISettingsPageGlobal, public Ui::UIGlobalSettingsProxy
+/** Global settings: Proxy page. */
+class SHARED_LIBRARY_STUFF UIGlobalSettingsProxy : public UISettingsPageGlobal
 {
     Q_OBJECT;
 
 public:
 
-    /* Constructor: */
+    /** Constructs Proxy settings page. */
     UIGlobalSettingsProxy();
+    /** Destructs Proxy settings page. */
+    ~UIGlobalSettingsProxy();
 
 protected:
 
-    /* Load data to cache from corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void loadToCacheFrom(QVariant &data);
-    /* Load data to corresponding widgets from cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void getFromCache();
+    /** Loads settings from external object(s) packed inside @a data to cache.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void loadToCacheFrom(QVariant &data) /* override */;
+    /** Loads data from cache to corresponding widgets.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void getFromCache() /* override */;
 
-    /* Save data from corresponding widgets to cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void putToCache();
-    /* Save data from cache to corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void saveFromCacheTo(QVariant &data);
+    /** Saves data from corresponding widgets to cache.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void putToCache() /* override */;
+    /** Saves settings from cache to external object(s) packed inside @a data.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void saveFromCacheTo(QVariant &data) /* overrride */;
 
-    /* API: Validation stuff: */
-    bool validate(QList<UIValidationMessage> &messages);
+    /** Performs validation, updates @a messages list if something is wrong. */
+    virtual bool validate(QList<UIValidationMessage> &messages) /* override */;
 
-    /* Helper: Navigation stuff: */
-    void setOrderAfter(QWidget *pWidget);
-
-    /* Helper: Translation stuff: */
-    void retranslateUi();
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
 
 private slots:
 
-    /* Handler: Proxy-checkbox stuff: */
-    void sltProxyToggled();
+    /** Handles proxy toggling. */
+    void sltHandleProxyToggle();
 
 private:
 
-    /* Cache: */
-    UISettingsCacheGlobalProxy m_cache;
+    /** Prepares all. */
+    void prepare();
+    /** Prepares wıdgets. */
+    void prepareWidgets();
+    /** Prepares connections. */
+    void prepareConnections();
+    /** Cleanups all. */
+    void cleanup();
+
+    /** Saves existing proxy data from cache. */
+    bool saveData();
+
+    /** Holds the page data cache instance. */
+    UISettingsCacheGlobalProxy *m_pCache;
+
+    /** @name Widgets
+     * @{ */
+        /** Holds the button-group instance. */
+        QButtonGroup *m_pButtonGroup;
+        /** Holds the 'proxy auto' radio-button instance. */
+        QRadioButton *m_pRadioButtonProxyAuto;
+        /** Holds the 'proxy disabled' radio-button instance. */
+        QRadioButton *m_pRadioButtonProxyDisabled;
+        /** Holds the 'proxy enabled' radio-button instance. */
+        QRadioButton *m_pRadioButtonProxyEnabled;
+        /** Holds the settings widget instance. */
+        QWidget      *m_pWidgetSettings;
+        /** Holds the host label instance. */
+        QLabel       *m_pLabelHost;
+        /** Holds the host editor instance. */
+        QILineEdit   *m_pEditorHost;
+    /** @} */
 };
 
-#endif // __UIGlobalSettingsProxy_h__
-
+#endif /* !FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsProxy_h */

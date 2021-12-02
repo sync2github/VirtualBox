@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: TMInternal.h 91939 2021-10-21 12:43:45Z vboxsync $ */
 /** @file
  * TM - Internal header file.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___TMInternal_h
-#define ___TMInternal_h
+#ifndef VMM_INCLUDED_SRC_include_TMInternal_h
+#define VMM_INCLUDED_SRC_include_TMInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -25,6 +28,7 @@
 #include <iprt/assert.h>
 #include <VBox/vmm/stam.h>
 #include <VBox/vmm/pdmcritsect.h>
+#include <VBox/vmm/pdmcritsectrw.h>
 
 RT_C_DECLS_BEGIN
 
@@ -46,16 +50,16 @@ RT_C_DECLS_BEGIN
  */
 typedef enum TMTIMERTYPE
 {
+    /** Invalid zero value. */
+    TMTIMERTYPE_INVALID = 0,
     /** Device timer. */
-    TMTIMERTYPE_DEV = 1,
+    TMTIMERTYPE_DEV,
     /** USB device timer. */
     TMTIMERTYPE_USB,
     /** Driver timer. */
     TMTIMERTYPE_DRV,
     /** Internal timer . */
-    TMTIMERTYPE_INTERNAL,
-    /** External timer. */
-    TMTIMERTYPE_EXTERNAL
+    TMTIMERTYPE_INTERNAL
 } TMTIMERTYPE;
 
 /**
@@ -63,8 +67,10 @@ typedef enum TMTIMERTYPE
  */
 typedef enum TMTIMERSTATE
 {
+    /** Invalid zero entry (used for table entry zero). */
+    TMTIMERSTATE_INVALID = 0,
     /** Timer is stopped. */
-    TMTIMERSTATE_STOPPED = 1,
+    TMTIMERSTATE_STOPPED,
     /** Timer is active. */
     TMTIMERSTATE_ACTIVE,
     /** Timer is expired, getting expire and unlinking. */
@@ -102,6 +108,15 @@ typedef enum TMTIMERSTATE
     (   (enmState) <= TMTIMERSTATE_PENDING_RESCHEDULE \
      && (enmState) >= TMTIMERSTATE_PENDING_SCHEDULE_SET_EXPIRE)
 
+/** @name Timer handle value elements
+ * @{ */
+#define TMTIMERHANDLE_RANDOM_MASK       UINT64_C(0xffffffffff000000)
+#define TMTIMERHANDLE_QUEUE_IDX_SHIFT   16
+#define TMTIMERHANDLE_QUEUE_IDX_MASK    UINT64_C(0x0000000000ff0000)
+#define TMTIMERHANDLE_QUEUE_IDX_SMASK   UINT64_C(0x00000000000000ff)
+#define TMTIMERHANDLE_TIMER_IDX_MASK    UINT64_C(0x000000000000ffff)
+/** @} */
+
 
 /**
  * Internal representation of a timer.
@@ -120,10 +135,36 @@ typedef struct TMTIMER
 {
     /** Expire time. */
     volatile uint64_t       u64Expire;
-    /** Clock to apply to u64Expire. */
-    TMCLOCK                 enmClock;
+
+    /** Timer state. */
+    volatile TMTIMERSTATE   enmState;
+    /** The index of the next next timer in the schedule list. */
+    uint32_t volatile       idxScheduleNext;
+
+    /** The index of the next timer in the chain. */
+    uint32_t                idxNext;
+    /** The index of the previous timer in the chain. */
+    uint32_t                idxPrev;
+
+    /** The timer frequency hint.  This is 0 if not hint was given. */
+    uint32_t volatile       uHzHint;
     /** Timer callback type. */
     TMTIMERTYPE             enmType;
+
+    /** It's own handle value. */
+    TMTIMERHANDLE           hSelf;
+    /** TMTIMER_FLAGS_XXX.   */
+    uint32_t                fFlags;
+    /** Explicit alignment padding. */
+    uint32_t                u32Alignment;
+
+    /** User argument. */
+    RTR3PTR                 pvUser;
+    /** The critical section associated with the lock. */
+    R3PTRTYPE(PPDMCRITSECT) pCritSect;
+
+    /* --- new cache line (64-bit / 64 bytes) --- */
+
     /** Type specific data. */
     union
     {
@@ -160,50 +201,28 @@ typedef struct TMTIMER
             /** Callback. */
             R3PTRTYPE(PFNTMTIMERINT)    pfnTimer;
         } Internal;
-
-        /** TMTIMERTYPE_EXTERNAL. */
-        struct
-        {
-            /** Callback. */
-            R3PTRTYPE(PFNTMTIMEREXT)    pfnTimer;
-        } External;
     } u;
 
-    /** Timer state. */
-    volatile TMTIMERSTATE   enmState;
-    /** Timer relative offset to the next timer in the schedule list. */
-    int32_t volatile        offScheduleNext;
+    /** The timer name. */
+    char                    szName[32];
 
-    /** Timer relative offset to the next timer in the chain. */
-    int32_t                 offNext;
-    /** Timer relative offset to the previous timer in the chain. */
-    int32_t                 offPrev;
-
-    /** Pointer to the VM the timer belongs to - R3 Ptr. */
-    PVMR3                   pVMR3;
-    /** Pointer to the VM the timer belongs to - R0 Ptr. */
-    PVMR0                   pVMR0;
-    /** Pointer to the VM the timer belongs to - RC Ptr. */
-    PVMRC                   pVMRC;
-    /** The timer frequency hint.  This is 0 if not hint was given. */
-    uint32_t volatile       uHzHint;
-
-    /** User argument. */
-    RTR3PTR                 pvUser;
-    /** The critical section associated with the lock. */
-    R3PTRTYPE(PPDMCRITSECT) pCritSect;
-
-    /** Pointer to the next timer in the list of created or free timers. (TM::pTimers or TM::pFree) */
-    PTMTIMERR3              pBigNext;
-    /** Pointer to the previous timer in the list of all created timers. (TM::pTimers) */
-    PTMTIMERR3              pBigPrev;
-    /** Pointer to the timer description. */
-    R3PTRTYPE(const char *) pszDesc;
-#if HC_ARCH_BITS == 32
-    uint32_t                padding0; /**< pad structure to multiple of 8 bytes. */
+    /** @todo think of two useful release statistics counters here to fill up the
+     *        cache line. */
+#ifndef VBOX_WITH_STATISTICS
+    uint64_t                auAlignment2[2];
+#else
+    STAMPROFILE             StatTimer;
+    STAMPROFILE             StatCritSectEnter;
+    STAMCOUNTER             StatGet;
+    STAMCOUNTER             StatSetAbsolute;
+    STAMCOUNTER             StatSetRelative;
+    STAMCOUNTER             StatStop;
+    uint64_t                auAlignment2[6];
 #endif
 } TMTIMER;
+AssertCompileMemberSize(TMTIMER, u64Expire, sizeof(uint64_t));
 AssertCompileMemberSize(TMTIMER, enmState, sizeof(uint32_t));
+AssertCompileSizeAlignment(TMTIMER, 64);
 
 
 /**
@@ -235,23 +254,15 @@ AssertCompileMemberSize(TMTIMER, enmState, sizeof(uint32_t));
     } while (0)
 #endif
 
-/** Get the previous timer. */
-#define TMTIMER_GET_PREV(pTimer) ((PTMTIMER)((pTimer)->offPrev ? (intptr_t)(pTimer) + (pTimer)->offPrev : 0))
-/** Get the next timer. */
-#define TMTIMER_GET_NEXT(pTimer) ((PTMTIMER)((pTimer)->offNext ? (intptr_t)(pTimer) + (pTimer)->offNext : 0))
-/** Set the previous timer link. */
-#define TMTIMER_SET_PREV(pTimer, pPrev) ((pTimer)->offPrev = (pPrev) ? (intptr_t)(pPrev) - (intptr_t)(pTimer) : 0)
-/** Set the next timer link. */
-#define TMTIMER_SET_NEXT(pTimer, pNext) ((pTimer)->offNext = (pNext) ? (intptr_t)(pNext) - (intptr_t)(pTimer) : 0)
-
 
 /**
- * A timer queue.
- *
- * This is allocated on the hyper heap.
+ * A timer queue, shared.
  */
 typedef struct TMTIMERQUEUE
 {
+    /** The ring-0 mapping of the timer table. */
+    R3PTRTYPE(PTMTIMER)     paTimers;
+
     /** The cached expire time for this queue.
      * Updated by EMT when scheduling the queue or modifying the head timer.
      * Assigned UINT64_MAX when there is no head timer. */
@@ -260,32 +271,90 @@ typedef struct TMTIMERQUEUE
      *
      * When no scheduling is pending, this list is will be ordered by expire time (ascending).
      * Access is serialized by only letting the emulation thread (EMT) do changes.
-     *
-     * The offset is relative to the queue structure.
      */
-    int32_t                 offActive;
+    uint32_t                idxActive;
     /** List of timers pending scheduling of some kind.
      *
      * Timer stats allowed in the list are TMTIMERSTATE_PENDING_STOPPING,
      * TMTIMERSTATE_PENDING_DESTRUCTION, TMTIMERSTATE_PENDING_STOPPING_DESTRUCTION,
      * TMTIMERSTATE_PENDING_RESCHEDULING and TMTIMERSTATE_PENDING_SCHEDULE.
-     *
-     * The offset is relative to the queue structure.
      */
-    int32_t volatile        offSchedule;
+    uint32_t volatile       idxSchedule;
     /** The clock for this queue. */
-    TMCLOCK                 enmClock;
-    /** Pad the structure up to 32 bytes. */
-    uint32_t                au32Padding[3];
-} TMTIMERQUEUE;
+    TMCLOCK                 enmClock;   /**< @todo consider duplicating this in TMTIMERQUEUER0 for better cache locality (paTimers). */
 
+    /** The size of the paTimers allocation (in entries). */
+    uint32_t                cTimersAlloc;
+    /** Number of free timer entries. */
+    uint32_t                cTimersFree;
+    /** Where to start looking for free timers. */
+    uint32_t                idxFreeHint;
+    /** The queue name. */
+    char                    szName[16];
+    /** Set when a thread is doing scheduling and callback. */
+    bool volatile           fBeingProcessed;
+    /** Set if we've disabled growing. */
+    bool                    fCannotGrow;
+    /** Align on 64-byte boundrary. */
+    bool                    afAlignment1[2];
+    /** The current max timer Hz hint. */
+    uint32_t volatile       uMaxHzHint;
+
+    /* --- new cache line (64-bit / 64 bytes) --- */
+
+    /** Time spent doing scheduling and timer callbacks. */
+    STAMPROFILE             StatDo;
+    /** The thread servicing this queue, NIL if none. */
+    R3PTRTYPE(RTTHREAD)     hThread;
+    /** The handle to the event semaphore the worker thread sleeps on. */
+    SUPSEMEVENT             hWorkerEvt;
+    /** Absolute sleep deadline for the worker (enmClock time). */
+    uint64_t volatile       tsWorkerWakeup;
+    uint64_t                u64Alignment2;
+
+    /** Lock serializing the active timer list and associated work. */
+    PDMCRITSECT             TimerLock;
+    /** Lock serializing timer allocation and deallocation.
+     * @note This may be used in read-mode all over the place if we later
+     *       implement runtime array growing. */
+    PDMCRITSECTRW           AllocLock;
+} TMTIMERQUEUE;
+AssertCompileMemberAlignment(TMTIMERQUEUE, AllocLock, 64);
+AssertCompileSizeAlignment(TMTIMERQUEUE, 64);
 /** Pointer to a timer queue. */
 typedef TMTIMERQUEUE *PTMTIMERQUEUE;
 
-/** Get the head of the active timer list. */
-#define TMTIMER_GET_HEAD(pQueue)        ((PTMTIMER)((pQueue)->offActive ? (intptr_t)(pQueue) + (pQueue)->offActive : 0))
-/** Set the head of the active timer list. */
-#define TMTIMER_SET_HEAD(pQueue, pHead) ((pQueue)->offActive = pHead ? (intptr_t)pHead - (intptr_t)(pQueue) : 0)
+/**
+ * A timer queue, ring-0 only bits.
+ */
+typedef struct TMTIMERQUEUER0
+{
+    /** The size of the paTimers allocation (in entries). */
+    uint32_t                cTimersAlloc;
+    uint32_t                uAlignment;
+    /** The ring-0 mapping of the timer table. */
+    R0PTRTYPE(PTMTIMER)     paTimers;
+    /** Handle to the timer table allocation. */
+    RTR0MEMOBJ              hMemObj;
+    /** Handle to the ring-3 mapping of the timer table. */
+    RTR0MEMOBJ              hMapObj;
+} TMTIMERQUEUER0;
+/** Pointer to the ring-0 timer queue data. */
+typedef TMTIMERQUEUER0 *PTMTIMERQUEUER0;
+
+/** Pointer to the current context data for a timer queue.
+ * @note In ring-3 this is the same as the shared data. */
+#ifdef IN_RING3
+typedef TMTIMERQUEUE   *PTMTIMERQUEUECC;
+#else
+typedef TMTIMERQUEUER0 *PTMTIMERQUEUECC;
+#endif
+/** Helper macro for getting the current context queue point. */
+#ifdef IN_RING3
+# define TM_GET_TIMER_QUEUE_CC(a_pVM, a_idxQueue, a_pQueueShared)  (a_pQueueShared)
+#else
+# define TM_GET_TIMER_QUEUE_CC(a_pVM, a_idxQueue, a_pQueueShared)  (&(a_pVM)->tmr0.s.aTimerQueues[a_idxQueue])
+#endif
 
 
 /**
@@ -301,7 +370,11 @@ typedef struct TMCPULOADSTATE
     /** The percent of the period spent on other things. */
     uint8_t                 cPctOther;
     /** Explicit alignment padding */
-    uint8_t                 au8Alignment[5];
+    uint8_t                 au8Alignment[1];
+    /** Index into aHistory of the current entry. */
+    uint16_t volatile       idxHistory;
+    /** Number of valid history entries before idxHistory. */
+    uint16_t volatile       cHistoryEntries;
 
     /** Previous cNsTotal value. */
     uint64_t                cNsPrevTotal;
@@ -309,6 +382,15 @@ typedef struct TMCPULOADSTATE
     uint64_t                cNsPrevExecuting;
     /** Previous cNsHalted value. */
     uint64_t                cNsPrevHalted;
+    /** Data for the last 30 min (given an interval of 1 second). */
+    struct
+    {
+        uint8_t             cPctExecuting;
+        /** The percent of the period spent halted. */
+        uint8_t             cPctHalted;
+        /** The percent of the period spent on other things. */
+        uint8_t             cPctOther;
+    }                       aHistory[30*60];
 } TMCPULOADSTATE;
 AssertCompileSizeAlignment(TMCPULOADSTATE, 8);
 AssertCompileMemberAlignment(TMCPULOADSTATE, cNsPrevTotal, 8);
@@ -328,17 +410,11 @@ typedef enum TMTSCMODE
     /** The guest TSC is an offset of the real TSC. */
     TMTSCMODE_REAL_TSC_OFFSET,
     /** The guest TSC is dynamically derived through emulating or offsetting. */
-    TMTSCMODE_DYNAMIC
+    TMTSCMODE_DYNAMIC,
+    /** The native API provides it. */
+    TMTSCMODE_NATIVE_API
 } TMTSCMODE;
 AssertCompileSize(TMTSCMODE, sizeof(uint32_t));
-
-
-/**
- * Converts a TM pointer into a VM pointer.
- * @returns Pointer to the VM structure the TM is part of.
- * @param   pTM   Pointer to TM instance data.
- */
-#define TM2VM(pTM)  ( (PVM)((char*)pTM - pTM->offVM) )
 
 
 /**
@@ -347,17 +423,15 @@ AssertCompileSize(TMTSCMODE, sizeof(uint32_t));
  */
 typedef struct TM
 {
-    /** Offset to the VM structure.
-     * See TM2VM(). */
-    RTUINT                      offVM;
+    /** Timer queues for the different clock types.
+     * @note is first in the structure to ensure cache-line alignment.  */
+    TMTIMERQUEUE                aTimerQueues[TMCLOCK_MAX];
 
     /** The current TSC mode of the VM.
      *  Config variable: Mode (string). */
     TMTSCMODE                   enmTSCMode;
     /** The original TSC mode of the VM. */
     TMTSCMODE                   enmOriginalTSCMode;
-    /** Alignment padding. */
-    uint32_t                    u32Alignment0;
     /** Whether the TSC is tied to the execution of code.
      * Config variable: TSCTiedToExecution (bool) */
     bool                        fTSCTiedToExecution;
@@ -415,16 +489,10 @@ typedef struct TM
     RTTIMENANOTSDATAR3          VirtualGetRawDataR3;
     /** The ring-0 data structure for the RTTimeNanoTS workers used by tmVirtualGetRawNanoTS. */
     RTTIMENANOTSDATAR0          VirtualGetRawDataR0;
-    /** The ring-0 data structure for the RTTimeNanoTS workers used by tmVirtualGetRawNanoTS. */
-    RTTIMENANOTSDATARC          VirtualGetRawDataRC;
     /** Pointer to the ring-3 tmVirtualGetRawNanoTS worker function. */
     R3PTRTYPE(PFNTIMENANOTSINTERNAL) pfnVirtualGetRawR3;
     /** Pointer to the ring-0 tmVirtualGetRawNanoTS worker function. */
     R0PTRTYPE(PFNTIMENANOTSINTERNAL) pfnVirtualGetRawR0;
-    /** Pointer to the raw-mode tmVirtualGetRawNanoTS worker function. */
-    RCPTRTYPE(PFNTIMENANOTSINTERNAL) pfnVirtualGetRawRC;
-    /** Alignment. */
-    RTRCPTR                     AlignmentRCPtr;
     /** The guest virtual timer synchronous time when fVirtualSyncTicking is cleared.
      * When fVirtualSyncTicking is set it holds the last time returned to
      * the guest (while the lock was held). */
@@ -458,12 +526,18 @@ typedef struct TM
         uint32_t                u32Alignment;   /**< Structure alignment */
     }                           aVirtualSyncCatchUpPeriods[TM_MAX_CATCHUP_PERIODS];
 
-    /** The current max timer Hz hint. */
-    uint32_t volatile           uMaxHzHint;
-    /** Whether to recalulate the HzHint next time its queried. */
-    bool volatile               fHzHintNeedsUpdating;
-    /** Alignment */
-    bool                        afAlignment2[3];
+    union
+    {
+        /** Combined value for updating. */
+        uint64_t volatile       u64Combined;
+        struct
+        {
+            /** Bitmap indicating which timer queues needs their uMaxHzHint updated. */
+            uint32_t volatile   bmNeedsUpdating;
+            /** The current max timer Hz hint. */
+            uint32_t volatile   uMax;
+        } s;
+    } HzHint;
     /** @cfgm{/TM/HostHzMax, uint32_t, Hz, 0, UINT32_MAX, 20000}
      * The max host Hz frequency hint returned by TMCalcHostTimerFrequency.  */
     uint32_t                    cHostHzMax;
@@ -492,28 +566,13 @@ typedef struct TM
      * testing of software and similar.
      * @todo Implement warpdrive on UTC. */
     int64_t                     offUTC;
+    /** The last value TMR3UtcNow returned. */
+    int64_t volatile            nsLastUtcNow;
+    /** File to touch on UTC jump. */
+    R3PTRTYPE(char *)           pszUtcTouchFileOnJump;
 
-    /** Timer queues for the different clock types - R3 Ptr */
-    R3PTRTYPE(PTMTIMERQUEUE)    paTimerQueuesR3;
-    /** Timer queues for the different clock types - R0 Ptr */
-    R0PTRTYPE(PTMTIMERQUEUE)    paTimerQueuesR0;
-    /** Timer queues for the different clock types - RC Ptr */
-    RCPTRTYPE(PTMTIMERQUEUE)    paTimerQueuesRC;
-
-    /** Pointer to our RC mapping of the GIP. */
-    RCPTRTYPE(void *)           pvGIPRC;
     /** Pointer to our R3 mapping of the GIP. */
     R3PTRTYPE(void *)           pvGIPR3;
-
-    /** Pointer to a singly linked list of free timers.
-     * This chain is using the TMTIMER::pBigNext members.
-     * Only accessible from the emulation thread. */
-    PTMTIMERR3                  pFree;
-
-    /** Pointer to a doubly linked list of created timers.
-     * This chain is using the TMTIMER::pBigNext and TMTIMER::pBigPrev members.
-     * Only accessible from the emulation thread. */
-    PTMTIMERR3                  pCreated;
 
     /** The schedule timer timer handle (runtime timer).
      * This timer will do frequent check on pending queue schedules and
@@ -530,10 +589,10 @@ typedef struct TM
     /** Alignment */
     bool                        afAlignment3[2];
 
-    /** Lock serializing access to the timer lists. */
-    PDMCRITSECT                 TimerCritSect;
     /** Lock serializing access to the VirtualSync clock and the associated
-     * timer queue. */
+     * timer queue.
+     * @todo Consider merging this with the TMTIMERQUEUE::TimerLock for the
+     *       virtual sync queue. */
     PDMCRITSECT                 VirtualSyncLock;
 
     /** CPU load state for all the virtual CPUs (tmR3CpuLoadTimer). */
@@ -542,7 +601,6 @@ typedef struct TM
     /** TMR3TimerQueuesDo
      * @{ */
     STAMPROFILE                 StatDoQueues;
-    STAMPROFILEADV              aStatDoQueues[TMCLOCK_MAX];
     /** @} */
     /** tmSchedule
      * @{ */
@@ -677,135 +735,138 @@ typedef struct TM
 /** Pointer to TM VM instance data. */
 typedef TM *PTM;
 
+
 /**
  * TM VMCPU Instance data.
  * Changes to this must checked against the padding of the tm union in VM!
  */
 typedef struct TMCPU
 {
-    /** Offset to the VMCPU structure.
-     * See TMCPU2VM(). */
-    RTUINT                      offVMCPU;
-
-    /** CPU timestamp ticking enabled indicator (bool). (RDTSC) */
-    bool                        fTSCTicking;
-    bool                        afAlignment0[3]; /**< alignment padding */
-
     /** The offset between the host tick (TSC/virtual depending on the TSC mode) and
      *  the guest tick. */
     uint64_t                    offTSCRawSrc;
-
     /** The guest TSC when fTicking is cleared. */
     uint64_t                    u64TSC;
-
     /** The last seen TSC by the guest. */
     uint64_t                    u64TSCLastSeen;
+    /** CPU timestamp ticking enabled indicator (bool). (RDTSC) */
+    bool                        fTSCTicking;
+#ifdef VBOX_WITHOUT_NS_ACCOUNTING
+    bool                        afAlignment1[7]; /**< alignment padding */
+#else /* !VBOX_WITHOUT_NS_ACCOUNTING */
 
-#ifndef VBOX_WITHOUT_NS_ACCOUNTING
+    /** Set by the timer callback to trigger updating of statistics in
+     *  TMNotifyEndOfExecution. */
+    bool volatile               fUpdateStats;
+    bool                        afAlignment1[6];
+    /** The time not spent executing or halted.
+     * @note Only updated after halting and after the timer runs. */
+    uint64_t                    cNsOtherStat;
+    /** Reasonably up to date total run time value.
+     * @note Only updated after halting and after the timer runs. */
+    uint64_t                    cNsTotalStat;
+# if defined(VBOX_WITH_STATISTICS) || defined(VBOX_WITH_NS_ACCOUNTING_STATS)
+    /** Resettable copy of version of cNsOtherStat.
+    * @note Only updated after halting. */
+    STAMCOUNTER                 StatNsOther;
+    /** Resettable copy of cNsTotalStat.
+     * @note Only updated after halting. */
+    STAMCOUNTER                 StatNsTotal;
+# else
+    uint64_t                    auAlignment2[2];
+# endif
+
+    /** @name Core accounting data.
+     * @note Must be cache-line aligned and only written to by the EMT owning it.
+     * @{ */
+    /** The cNsXXX generation. */
+    uint32_t volatile           uTimesGen;
+    /** Set if executing (between TMNotifyStartOfExecution and
+     *  TMNotifyEndOfExecution). */
+    bool volatile               fExecuting;
+    /** Set if halting (between TMNotifyStartOfHalt and TMNotifyEndOfHalt). */
+    bool volatile               fHalting;
+    /** Set if we're suspended and u64NsTsStartTotal is to be cNsTotal. */
+    bool volatile               fSuspended;
+    bool                        afAlignment;
     /** The nanosecond timestamp of the CPU start or resume.
      * This is recalculated when the VM is started so that
      * cNsTotal = RTTimeNanoTS() - u64NsTsStartCpu. */
-    uint64_t                    u64NsTsStartTotal;
-    /** The nanosecond timestamp of the last start-execute notification. */
-    uint64_t                    u64NsTsStartExecuting;
-    /** The nanosecond timestamp of the last start-halt notification. */
-    uint64_t                    u64NsTsStartHalting;
-    /** The cNsXXX generation. */
-    uint32_t volatile           uTimesGen;
-    /** Explicit alignment padding.  */
-    uint32_t                    u32Alignment;
-    /** The number of nanoseconds total run time.
-     * @remarks This is updated when cNsExecuting and cNsHalted are updated. */
-    uint64_t                    cNsTotal;
+    uint64_t                    nsStartTotal;
+    /** The TSC of the last start-execute notification. */
+    uint64_t                    uTscStartExecuting;
     /** The number of nanoseconds spent executing. */
     uint64_t                    cNsExecuting;
-    /** The number of nanoseconds being halted. */
-    uint64_t                    cNsHalted;
-    /** The number of nanoseconds spent on other things.
-     * @remarks This is updated when cNsExecuting and cNsHalted are updated. */
-    uint64_t                    cNsOther;
-    /** The number of halts. */
-    uint64_t                    cPeriodsHalted;
     /** The number of guest execution runs. */
     uint64_t                    cPeriodsExecuting;
+    /** The nanosecond timestamp of the last start-halt notification. */
+    uint64_t                    nsStartHalting;
+    /** The number of nanoseconds being halted. */
+    uint64_t                    cNsHalted;
+    /** The number of halts. */
+    uint64_t                    cPeriodsHalted;
+    /** @} */
+
 # if defined(VBOX_WITH_STATISTICS) || defined(VBOX_WITH_NS_ACCOUNTING_STATS)
-    /** Resettable version of cNsTotal. */
-    STAMCOUNTER                 StatNsTotal;
     /** Resettable version of cNsExecuting. */
     STAMPROFILE                 StatNsExecuting;
     /** Long execution intervals. */
     STAMPROFILE                 StatNsExecLong;
-    /** Short execution intervals . */
+    /** Short execution intervals. */
     STAMPROFILE                 StatNsExecShort;
-    /** Tiny execution intervals . */
+    /** Tiny execution intervals. */
     STAMPROFILE                 StatNsExecTiny;
     /** Resettable version of cNsHalted. */
     STAMPROFILE                 StatNsHalted;
-    /** Resettable version of cNsOther. */
-    STAMPROFILE                 StatNsOther;
 # endif
 
     /** CPU load state for this virtual CPU (tmR3CpuLoadTimer). */
     TMCPULOADSTATE              CpuLoad;
 #endif
 } TMCPU;
+#ifndef VBOX_WITHOUT_NS_ACCOUNTING
+AssertCompileMemberAlignment(TMCPU, uTimesGen, 64);
+# if defined(VBOX_WITH_STATISTICS) || defined(VBOX_WITH_NS_ACCOUNTING_STATS)
+AssertCompileMemberAlignment(TMCPU, StatNsExecuting, 64);
+# else
+AssertCompileMemberAlignment(TMCPU, CpuLoad, 64);
+# endif
+#endif
 /** Pointer to TM VMCPU instance data. */
 typedef TMCPU *PTMCPU;
 
+
+/**
+ * TM data kept in the ring-0 GVM.
+ */
+typedef struct TMR0PERVM
+{
+    /** Timer queues for the different clock types. */
+    TMTIMERQUEUER0              aTimerQueues[TMCLOCK_MAX];
+} TMR0PERVM;
+
+
 const char             *tmTimerState(TMTIMERSTATE enmState);
-void                    tmTimerQueueSchedule(PVM pVM, PTMTIMERQUEUE pQueue);
+void                    tmTimerQueueSchedule(PVMCC pVM, PTMTIMERQUEUECC pQueueCC, PTMTIMERQUEUE pQueue);
 #ifdef VBOX_STRICT
-void                    tmTimerQueuesSanityChecks(PVM pVM, const char *pszWhere);
+void                    tmTimerQueuesSanityChecks(PVMCC pVM, const char *pszWhere);
 #endif
 
 uint64_t                tmR3CpuTickGetRawVirtualNoCheck(PVM pVM);
-int                     tmCpuTickPause(PVMCPU pVCpu);
-int                     tmCpuTickPauseLocked(PVM pVM, PVMCPU pVCpu);
-int                     tmCpuTickResume(PVM pVM, PVMCPU pVCpu);
-int                     tmCpuTickResumeLocked(PVM pVM, PVMCPU pVCpu);
+int                     tmCpuTickPause(PVMCPUCC pVCpu);
+int                     tmCpuTickPauseLocked(PVMCC pVM, PVMCPUCC pVCpu);
+int                     tmCpuTickResume(PVMCC pVM, PVMCPUCC pVCpu);
+int                     tmCpuTickResumeLocked(PVMCC pVM, PVMCPUCC pVCpu);
 
-int                     tmVirtualPauseLocked(PVM pVM);
-int                     tmVirtualResumeLocked(PVM pVM);
+int                     tmVirtualPauseLocked(PVMCC pVM);
+int                     tmVirtualResumeLocked(PVMCC pVM);
 DECLCALLBACK(DECLEXPORT(void))      tmVirtualNanoTSBad(PRTTIMENANOTSDATA pData, uint64_t u64NanoTS,
                                                        uint64_t u64DeltaPrev, uint64_t u64PrevNanoTS);
-DECLCALLBACK(DECLEXPORT(uint64_t))  tmVirtualNanoTSRediscover(PRTTIMENANOTSDATA pData);
-DECLCALLBACK(DECLEXPORT(uint64_t))  tmVirtualNanoTSBadCpuIndex(PRTTIMENANOTSDATA pData, uint16_t idApic,
-                                                               uint16_t iCpuSet, uint16_t iGipCpu);
-
-/**
- * Try take the timer lock, wait in ring-3 return VERR_SEM_BUSY in R0/RC.
- *
- * @retval  VINF_SUCCESS on success (always in ring-3).
- * @retval  VERR_SEM_BUSY in RC and R0 if the semaphore is busy.
- *
- * @param   a_pVM       Pointer to the VM.
- *
- * @remarks The virtual sync timer queue requires the virtual sync lock.
- */
-#define TM_LOCK_TIMERS(a_pVM)       PDMCritSectEnter(&(a_pVM)->tm.s.TimerCritSect, VERR_SEM_BUSY)
-
-/**
- * Try take the timer lock, no waiting.
- *
- * @retval  VINF_SUCCESS on success.
- * @retval  VERR_SEM_BUSY if busy.
- *
- * @param   a_pVM       Pointer to the VM.
- *
- * @remarks The virtual sync timer queue requires the virtual sync lock.
- */
-#define TM_TRY_LOCK_TIMERS(a_pVM)   PDMCritSectTryEnter(&(a_pVM)->tm.s.TimerCritSect)
-
-/** Lock the timers (sans the virtual sync queue). */
-#define TM_UNLOCK_TIMERS(a_pVM)     do { PDMCritSectLeave(&(a_pVM)->tm.s.TimerCritSect); } while (0)
-
-/** Checks that the caller owns the timer lock.  */
-#define TM_ASSERT_TIMER_LOCK_OWNERSHIP(a_pVM) \
-    Assert(PDMCritSectIsOwner(&(a_pVM)->tm.s.TimerCritSect))
-
+DECLCALLBACK(DECLEXPORT(uint64_t))  tmVirtualNanoTSRediscover(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra);
+DECLCALLBACK(DECLEXPORT(uint64_t))  tmVirtualNanoTSBadCpuIndex(PRTTIMENANOTSDATA pData, PRTITMENANOTSEXTRA pExtra,
+                                                              uint16_t idApic, uint16_t iCpuSet, uint16_t iGipCpu);
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
-
+#endif /* !VMM_INCLUDED_SRC_include_TMInternal_h */

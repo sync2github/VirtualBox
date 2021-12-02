@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxManage.cpp 91617 2021-10-07 11:17:43Z vboxsync $ */
 /** @file
  * VBoxManage - VirtualBox's command-line interface.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -31,12 +31,13 @@
 # include <VBox/com/VirtualBox.h>
 #endif /* !VBOX_ONLY_DOCS */
 
-#include <VBox/err.h>
 #include <VBox/version.h>
 
 #include <iprt/asm.h>
 #include <iprt/buildconfig.h>
 #include <iprt/ctype.h>
+#include <iprt/file.h>
+#include <iprt/getopt.h>
 #include <iprt/initterm.h>
 #include <iprt/path.h>
 #include <iprt/stream.h>
@@ -96,12 +97,13 @@ static volatile bool    g_fCanceled = false;
  */
 static const VBMGCMD g_aCommands[] =
 {
-    { "internalcommands",   0,                      VBMG_CMD_TODO, handleInternalCommands,     0 },
-    { "list",               USAGE_LIST,             VBMG_CMD_TODO, handleList,                 0 },
-    { "showvminfo",         USAGE_SHOWVMINFO,       VBMG_CMD_TODO, handleShowVMInfo,           0 },
-    { "registervm",         USAGE_REGISTERVM,       VBMG_CMD_TODO, handleRegisterVM,           0 },
-    { "unregistervm",       USAGE_UNREGISTERVM,     VBMG_CMD_TODO, handleUnregisterVM,         0 },
-    { "clonevm",            USAGE_CLONEVM,          VBMG_CMD_TODO, handleCloneVM,              0 },
+    { "internalcommands",   USAGE_INVALID,          VBMG_CMD_TODO, handleInternalCommands,     0 },
+    { "list",               USAGE_S_NEWCMD,         HELP_CMD_LIST, handleList,                 0 },
+    { "showvminfo",         USAGE_S_NEWCMD,   HELP_CMD_SHOWVMINFO, handleShowVMInfo,           0 },
+    { "registervm",         USAGE_S_NEWCMD,   HELP_CMD_REGISTERVM, handleRegisterVM,           0 },
+    { "unregistervm",       USAGE_S_NEWCMD, HELP_CMD_UNREGISTERVM, handleUnregisterVM,         0 },
+    { "clonevm",            USAGE_S_NEWCMD,      HELP_CMD_CLONEVM, handleCloneVM,              0 },
+    { "movevm",             USAGE_S_NEWCMD,       HELP_CMD_MOVEVM, handleMoveVM,               0 },
     { "mediumproperty",     USAGE_MEDIUMPROPERTY,   VBMG_CMD_TODO, handleMediumProperty,       0 },
     { "hdproperty",         USAGE_MEDIUMPROPERTY,   VBMG_CMD_TODO, handleMediumProperty,       0 }, /* backward compatibility */
     { "createmedium",       USAGE_CREATEMEDIUM,     VBMG_CMD_TODO, handleCreateMedium,         0 },
@@ -115,24 +117,26 @@ static const VBMGCMD g_aCommands[] =
     { "clonevdi",           USAGE_CLONEMEDIUM,      VBMG_CMD_TODO, handleCloneMedium,          0 }, /* backward compatibility */
     { "encryptmedium",      USAGE_ENCRYPTMEDIUM,    VBMG_CMD_TODO, handleEncryptMedium,        0 },
     { "checkmediumpwd",     USAGE_MEDIUMENCCHKPWD,  VBMG_CMD_TODO, handleCheckMediumPassword,  0 },
-    { "createvm",           USAGE_CREATEVM,         VBMG_CMD_TODO, handleCreateVM,             0 },
-    { "modifyvm",           USAGE_MODIFYVM,         VBMG_CMD_TODO, handleModifyVM,             0 },
+    { "createvm",           USAGE_S_NEWCMD,     HELP_CMD_CREATEVM, handleCreateVM,             0 },
+    { "modifyvm",           USAGE_S_NEWCMD,     HELP_CMD_MODIFYVM, handleModifyVM,             0 },
     { "startvm",            USAGE_STARTVM,          VBMG_CMD_TODO, handleStartVM,              0 },
     { "controlvm",          USAGE_CONTROLVM,        VBMG_CMD_TODO, handleControlVM,            0 },
+    { "unattended",         USAGE_S_NEWCMD,   HELP_CMD_UNATTENDED, handleUnattended,           0 },
     { "discardstate",       USAGE_DISCARDSTATE,     VBMG_CMD_TODO, handleDiscardState,         0 },
     { "adoptstate",         USAGE_ADOPTSTATE,       VBMG_CMD_TODO, handleAdoptState,           0 },
-    { "snapshot",           USAGE_SNAPSHOT,         VBMG_CMD_TODO, handleSnapshot,             0 },
+    { "snapshot",           USAGE_S_NEWCMD,     HELP_CMD_SNAPSHOT, handleSnapshot,             0 },
     { "closemedium",        USAGE_CLOSEMEDIUM,      VBMG_CMD_TODO, handleCloseMedium,          0 },
     { "storageattach",      USAGE_STORAGEATTACH,    VBMG_CMD_TODO, handleStorageAttach,        0 },
     { "storagectl",         USAGE_STORAGECONTROLLER,VBMG_CMD_TODO, handleStorageController,    0 },
     { "showmediuminfo",     USAGE_SHOWMEDIUMINFO,   VBMG_CMD_TODO, handleShowMediumInfo,       0 },
     { "showhdinfo",         USAGE_SHOWMEDIUMINFO,   VBMG_CMD_TODO, handleShowMediumInfo,       0 }, /* backward compatibility */
     { "showvdiinfo",        USAGE_SHOWMEDIUMINFO,   VBMG_CMD_TODO, handleShowMediumInfo,       0 }, /* backward compatibility */
+    { "mediumio",           USAGE_S_NEWCMD,     HELP_CMD_MEDIUMIO, handleMediumIO,             0 },
     { "getextradata",       USAGE_GETEXTRADATA,     VBMG_CMD_TODO, handleGetExtraData,         0 },
     { "setextradata",       USAGE_SETEXTRADATA,     VBMG_CMD_TODO, handleSetExtraData,         0 },
     { "setproperty",        USAGE_SETPROPERTY,      VBMG_CMD_TODO, handleSetProperty,          0 },
     { "usbfilter",          USAGE_USBFILTER,        VBMG_CMD_TODO, handleUSBFilter,            0 },
-    { "sharedfolder",       USAGE_SHAREDFOLDER,     VBMG_CMD_TODO, handleSharedFolder,         0 },
+    { "sharedfolder",       USAGE_S_NEWCMD, HELP_CMD_SHAREDFOLDER, handleSharedFolder,         0 },
 #ifdef VBOX_WITH_GUEST_PROPS
     { "guestproperty",      USAGE_GUESTPROPERTY,    VBMG_CMD_TODO, handleGuestProperty,        0 },
 #endif
@@ -140,23 +144,30 @@ static const VBMGCMD g_aCommands[] =
     { "guestcontrol",       USAGE_GUESTCONTROL,     VBMG_CMD_TODO, handleGuestControl,         0 },
 #endif
     { "metrics",            USAGE_METRICS,          VBMG_CMD_TODO, handleMetrics,              0 },
-    { "import",             USAGE_IMPORTAPPLIANCE,  VBMG_CMD_TODO, handleImportAppliance,      0 },
-    { "export",             USAGE_EXPORTAPPLIANCE,  VBMG_CMD_TODO, handleExportAppliance,      0 },
+    { "import",             USAGE_S_NEWCMD,       HELP_CMD_IMPORT, handleImportAppliance,      0 },
+    { "export",             USAGE_S_NEWCMD,       HELP_CMD_EXPORT, handleExportAppliance,      0 },
+    { "signova",            USAGE_S_NEWCMD,      HELP_CMD_SIGNOVA, handleSignAppliance,        VBMG_CMD_F_NO_COM },
 #ifdef VBOX_WITH_NETFLT
     { "hostonlyif",         USAGE_HOSTONLYIFS,      VBMG_CMD_TODO, handleHostonlyIf,           0 },
 #endif
-    { "dhcpserver",         USAGE_DHCPSERVER,       VBMG_CMD_TODO, handleDHCPServer,           0 },
+#ifdef VBOX_WITH_VMNET
+    { "hostonlynet",        USAGE_S_NEWCMD,  HELP_CMD_HOSTONLYNET, handleHostonlyNet,          0 },
+#endif
+    { "dhcpserver",         USAGE_S_NEWCMD,   HELP_CMD_DHCPSERVER, handleDHCPServer,           0 },
 #ifdef VBOX_WITH_NAT_SERVICE
     { "natnetwork",         USAGE_NATNETWORK,       VBMG_CMD_TODO, handleNATNetwork,           0 },
 #endif
-    { "extpack",            USAGE_EXTPACK,       HELP_CMD_EXTPACK, handleExtPack,              0 },
+    { "extpack",            USAGE_S_NEWCMD,      HELP_CMD_EXTPACK, handleExtPack,              0 },
     { "bandwidthctl",       USAGE_BANDWIDTHCONTROL, VBMG_CMD_TODO, handleBandwidthControl,     0 },
-    { "debugvm",            USAGE_DEBUGVM,       HELP_CMD_DEBUGVM, handleDebugVM,              0 },
+    { "debugvm",            USAGE_S_NEWCMD,      HELP_CMD_DEBUGVM, handleDebugVM,              0 },
     { "convertfromraw",     USAGE_CONVERTFROMRAW,   VBMG_CMD_TODO, handleConvertFromRaw,       VBMG_CMD_F_NO_COM },
     { "convertdd",          USAGE_CONVERTFROMRAW,   VBMG_CMD_TODO, handleConvertFromRaw,       VBMG_CMD_F_NO_COM },
-    { "usbdevsource",       USAGE_USBDEVSOURCE,     VBMG_CMD_TODO, handleUSBDevSource,         0 }
+    { "usbdevsource",       USAGE_USBDEVSOURCE,     VBMG_CMD_TODO, handleUSBDevSource,         0 },
+    { "cloudprofile",       USAGE_S_NEWCMD,      HELP_CMD_CLOUDPROFILE, handleCloudProfile,         0 },
+    { "cloud",              USAGE_S_NEWCMD,         HELP_CMD_CLOUD, handleCloud,               0 },
+    { "updatecheck",        USAGE_S_NEWCMD,   HELP_CMD_UPDATECHECK, handleUpdateCheck,         0 },
+    { "modifynvram",        USAGE_S_NEWCMD,   HELP_CMD_MODIFYNVRAM, handleModifyNvram,          0 },
 };
-
 
 /**
  * Looks up a command by name.
@@ -181,7 +192,7 @@ static PCVBMGCMD lookupCommand(const char *pszCommand)
  * a thread dedicated to delivering this signal.  Do not doing anything
  * unnecessary here.
  */
-static void showProgressSignalHandler(int iSignal)
+static void showProgressSignalHandler(int iSignal) RT_NOTHROW_DEF
 {
     NOREF(iSignal);
     ASMAtomicWriteBool(&g_fCanceled, true);
@@ -194,9 +205,20 @@ static void showProgressSignalHandler(int iSignal)
  * unhandled things (which doesn't cause real problems, just makes things
  * react a little slower than in the ideal case).
  */
-HRESULT showProgress(ComPtr<IProgress> progress)
+HRESULT showProgress(ComPtr<IProgress> progress, unsigned int fFlags)
 {
     using namespace com;
+    HRESULT hrc;
+
+    AssertReturn(progress.isNotNull(), E_FAIL);
+
+    /* grandfather the old callers */
+    if (g_fDetailedProgress)
+        fFlags = SHOW_PROGRESS_DETAILS;
+
+    const bool fDetailed = RT_BOOL(fFlags & SHOW_PROGRESS_DETAILS);
+    const bool fQuiet = !RT_BOOL(fFlags & (SHOW_PROGRESS | SHOW_PROGRESS_DETAILS));
+
 
     BOOL fCompleted = FALSE;
     ULONG ulCurrentPercent = 0;
@@ -210,7 +232,7 @@ HRESULT showProgress(ComPtr<IProgress> progress)
     NativeEventQueue::getMainEventQueue()->processEventQueue(0);
 
     ULONG cOperations = 1;
-    HRESULT hrc = progress->COMGETTER(OperationCount)(&cOperations);
+    hrc = progress->COMGETTER(OperationCount)(&cOperations);
     if (FAILED(hrc))
     {
         RTStrmPrintf(g_pStdErr, "Progress object failure: %Rhrc\n", hrc);
@@ -224,7 +246,27 @@ HRESULT showProgress(ComPtr<IProgress> progress)
      *       written in the meanwhile.
      */
 
-    if (!g_fDetailedProgress)
+    if (fFlags & SHOW_PROGRESS_DESC)
+    {
+        com::Bstr bstrDescription;
+        hrc = progress->COMGETTER(Description(bstrDescription.asOutParam()));
+        if (FAILED(hrc))
+        {
+            RTStrmPrintf(g_pStdErr, "Failed to get progress description: %Rhrc\n", hrc);
+            return hrc;
+        }
+
+        const char *pcszDescSep;
+        if (fDetailed)          /* multiline output */
+            pcszDescSep = "\n";
+        else                    /* continues on the same line */
+            pcszDescSep = ": ";
+
+        RTStrmPrintf(g_pStdErr, "%ls%s", bstrDescription.raw(), pcszDescSep);
+        RTStrmFlush(g_pStdErr);
+    }
+
+    if (!fQuiet && !fDetailed)
     {
         RTStrmPrintf(g_pStdErr, "0%%...");
         RTStrmFlush(g_pStdErr);
@@ -250,7 +292,7 @@ HRESULT showProgress(ComPtr<IProgress> progress)
     {
         progress->COMGETTER(Percent(&ulCurrentPercent));
 
-        if (g_fDetailedProgress)
+        if (fDetailed)
         {
             ULONG ulOperation = 1;
             hrc = progress->COMGETTER(Operation)(&ulOperation);
@@ -283,7 +325,7 @@ HRESULT showProgress(ComPtr<IProgress> progress)
                 ulLastOperationPercent = ulCurrentOperationPercent;
             }
         }
-        else
+        else if (!fQuiet)
         {
             /* did we cross a 10% mark? */
             if (ulCurrentPercent / 10  >  ulLastPercent / 10)
@@ -335,118 +377,36 @@ HRESULT showProgress(ComPtr<IProgress> progress)
     hrc = progress->COMGETTER(ResultCode)(&iRc);
     if (SUCCEEDED(hrc))
     {
+        /* async operation completed successfully */
         if (SUCCEEDED(iRc))
-            RTStrmPrintf(g_pStdErr, "100%%\n");
+        {
+            if (!fDetailed)
+            {
+                if (fFlags == SHOW_PROGRESS_DESC)
+                    RTStrmPrintf(g_pStdErr, "ok\n");
+                else if (!fQuiet)
+                    RTStrmPrintf(g_pStdErr, "100%%\n");
+            }
+        }
         else if (g_fCanceled)
             RTStrmPrintf(g_pStdErr, "CANCELED\n");
         else
         {
-            if (!g_fDetailedProgress)
-                RTStrmPrintf(g_pStdErr, "\n");
-            RTStrmPrintf(g_pStdErr, "Progress state: %Rhrc\n", iRc);
+            if (fDetailed)
+                RTStrmPrintf(g_pStdErr, "Progress state: %Rhrc\n", iRc);
+            else if (fFlags != SHOW_PROGRESS_NONE)
+                RTStrmPrintf(g_pStdErr, "%Rhrc\n", iRc);
         }
         hrc = iRc;
     }
     else
     {
-        if (!g_fDetailedProgress)
+        if (!fDetailed)
             RTStrmPrintf(g_pStdErr, "\n");
         RTStrmPrintf(g_pStdErr, "Progress object failure: %Rhrc\n", hrc);
     }
     RTStrmFlush(g_pStdErr);
     return hrc;
-}
-
-RTEXITCODE readPasswordFile(const char *pszFilename, com::Utf8Str *pPasswd)
-{
-    size_t cbFile;
-    char szPasswd[512];
-    int vrc = VINF_SUCCESS;
-    RTEXITCODE rcExit = RTEXITCODE_SUCCESS;
-    bool fStdIn = !strcmp(pszFilename, "stdin");
-    PRTSTREAM pStrm;
-    if (!fStdIn)
-        vrc = RTStrmOpen(pszFilename, "r", &pStrm);
-    else
-        pStrm = g_pStdIn;
-    if (RT_SUCCESS(vrc))
-    {
-        vrc = RTStrmReadEx(pStrm, szPasswd, sizeof(szPasswd)-1, &cbFile);
-        if (RT_SUCCESS(vrc))
-        {
-            if (cbFile >= sizeof(szPasswd)-1)
-                rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "Provided password in file '%s' is too long", pszFilename);
-            else
-            {
-                unsigned i;
-                for (i = 0; i < cbFile && !RT_C_IS_CNTRL(szPasswd[i]); i++)
-                    ;
-                szPasswd[i] = '\0';
-                *pPasswd = szPasswd;
-            }
-        }
-        else
-            rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "Cannot read password from file '%s': %Rrc", pszFilename, vrc);
-        if (!fStdIn)
-            RTStrmClose(pStrm);
-    }
-    else
-        rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "Cannot open password file '%s' (%Rrc)", pszFilename, vrc);
-
-    return rcExit;
-}
-
-static RTEXITCODE settingsPasswordFile(ComPtr<IVirtualBox> virtualBox, const char *pszFilename)
-{
-    com::Utf8Str passwd;
-    RTEXITCODE rcExit = readPasswordFile(pszFilename, &passwd);
-    if (rcExit == RTEXITCODE_SUCCESS)
-    {
-        CHECK_ERROR2I_STMT(virtualBox, SetSettingsSecret(com::Bstr(passwd).raw()), rcExit = RTEXITCODE_FAILURE);
-    }
-
-    return rcExit;
-}
-
-RTEXITCODE readPasswordFromConsole(com::Utf8Str *pPassword, const char *pszPrompt, ...)
-{
-    RTEXITCODE rcExit = RTEXITCODE_SUCCESS;
-    char aszPwdInput[_1K] = { 0 };
-    va_list vaArgs;
-
-    va_start(vaArgs, pszPrompt);
-    int vrc = RTStrmPrintfV(g_pStdOut, pszPrompt, vaArgs);
-    if (RT_SUCCESS(vrc))
-    {
-        bool fEchoOld = false;
-        vrc = RTStrmInputGetEchoChars(g_pStdIn, &fEchoOld);
-        if (RT_SUCCESS(vrc))
-        {
-            vrc = RTStrmInputSetEchoChars(g_pStdIn, false);
-            if (RT_SUCCESS(vrc))
-            {
-                vrc = RTStrmGetLine(g_pStdIn, &aszPwdInput[0], sizeof(aszPwdInput));
-                if (RT_SUCCESS(vrc))
-                    *pPassword = aszPwdInput;
-                else
-                    rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "Failed read password from command line (%Rrc)", vrc);
-
-                int vrc2 = RTStrmInputSetEchoChars(g_pStdIn, fEchoOld);
-                AssertRC(vrc2);
-            }
-            else
-                rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "Failed to disable echoing typed characters (%Rrc)", vrc);
-        }
-        else
-            rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "Failed to retrieve echo setting (%Rrc)", vrc);
-
-        RTStrmPutStr(g_pStdOut, "\n");
-    }
-    else
-        rcExit = RTMsgErrorExit(RTEXITCODE_FAILURE, "Failed to print prompt (%Rrc)", vrc);
-    va_end(vaArgs);
-
-    return rcExit;
 }
 
 #endif /* !VBOX_ONLY_DOCS */
@@ -458,7 +418,9 @@ int main(int argc, char *argv[])
      * Before we do anything, init the runtime without loading
      * the support driver.
      */
-    RTR3InitExe(argc, &argv, 0);
+    int vrc = RTR3InitExe(argc, &argv, 0);
+    if (RT_FAILURE(vrc))
+        return RTMsgInitFailure(vrc);
 #if defined(RT_OS_WINDOWS) && !defined(VBOX_ONLY_DOCS)
     ATL::CComModule _Module; /* Required internally by ATL (constructor records instance in global variable). */
 #endif
@@ -472,6 +434,11 @@ int main(int argc, char *argv[])
     int  iCmdArg;
     const char *pszSettingsPw = NULL;
     const char *pszSettingsPwFile = NULL;
+#ifndef VBOX_ONLY_DOCS
+    int         cResponseFileArgs     = 0;
+    char      **papszResponseFileArgs = NULL;
+    char      **papszNewArgv          = NULL;
+#endif
 
     for (int i = 1; i < argc || argc <= iCmd; i++)
     {
@@ -485,7 +452,7 @@ int main(int argc, char *argv[])
             if (i >= argc - 1)
             {
                 showLogo(g_pStdOut);
-                printUsage(USAGE_ALL, ~0U, g_pStdOut);
+                printUsage(USAGE_S_ALL, RTMSGREFENTRYSTR_SCOPE_GLOBAL, g_pStdOut);
                 return 0;
             }
             fShowLogo = true;
@@ -505,6 +472,12 @@ int main(int argc, char *argv[])
             RTPrintf("%sr%u\n", VBOX_VERSION_STRING, RTBldCfgRevision());
             return 0;
         }
+        if (!strcmp(argv[i], "--dump-build-type"))
+        {
+            /* Print the build type, and do nothing else. (Used by ValKit to detect build type.) */
+            RTPrintf("%s\n", RTBldCfgType());
+            return 0;
+        }
 #endif
 
         if (   !strcmp(argv[i], "--dumpopts")
@@ -512,7 +485,7 @@ int main(int argc, char *argv[])
         {
             /* Special option to dump really all commands,
              * even the ones not understood on this platform. */
-            printUsage(USAGE_DUMPOPTS, ~0U, g_pStdOut);
+            printUsage(USAGE_S_DUMPOPTS, RTMSGREFENTRYSTR_SCOPE_GLOBAL, g_pStdOut);
             return 0;
         }
 
@@ -546,6 +519,47 @@ int main(int argc, char *argv[])
             pszSettingsPwFile = argv[i+1];
             iCmd += 2;
         }
+#ifndef VBOX_ONLY_DOCS
+        else if (argv[i][0] == '@')
+        {
+            if (papszResponseFileArgs)
+                return RTMsgErrorExitFailure("Only one response file allowed");
+
+            /* Load response file, making sure it's valid UTF-8. */
+            char  *pszResponseFile;
+            size_t cbResponseFile;
+            vrc = RTFileReadAllEx(&argv[i][1], 0, RTFOFF_MAX, RTFILE_RDALL_O_DENY_NONE | RTFILE_RDALL_F_TRAILING_ZERO_BYTE,
+                                  (void **)&pszResponseFile, &cbResponseFile);
+            if (RT_FAILURE(vrc))
+                return RTMsgErrorExitFailure("Error reading response file '%s': %Rrc", &argv[i][1], vrc);
+            vrc = RTStrValidateEncoding(pszResponseFile);
+            if (RT_FAILURE(vrc))
+            {
+                RTFileReadAllFree(pszResponseFile, cbResponseFile);
+                return RTMsgErrorExitFailure("Invalid response file ('%s') encoding: %Rrc", &argv[i][1], vrc);
+            }
+
+            /* Parse it. */
+            vrc = RTGetOptArgvFromString(&papszResponseFileArgs, &cResponseFileArgs, pszResponseFile,
+                                         RTGETOPTARGV_CNV_QUOTE_BOURNE_SH, NULL);
+            RTFileReadAllFree(pszResponseFile, cbResponseFile);
+            if (RT_FAILURE(vrc))
+                return RTMsgErrorExitFailure("Failed to parse response file '%s' (bourne shell style): %Rrc", &argv[i][1], vrc);
+
+            /* Construct new argv+argc with the response file arguments inserted. */
+            int cNewArgs = argc + cResponseFileArgs;
+            papszNewArgv = (char **)RTMemAllocZ((cNewArgs + 2) * sizeof(papszNewArgv[0]));
+            if (!papszNewArgv)
+                return RTMsgErrorExitFailure("out of memory");
+            memcpy(&papszNewArgv[0], &argv[0], sizeof(argv[0]) * (i + 1));
+            memcpy(&papszNewArgv[i + 1], papszResponseFileArgs, sizeof(argv[0]) * cResponseFileArgs);
+            memcpy(&papszNewArgv[i + 1 + cResponseFileArgs], &argv[i + 1], sizeof(argv[0]) * (argc - i - 1 + 1));
+            argv = papszNewArgv;
+            argc = argc + cResponseFileArgs;
+
+            iCmd++;
+        }
+#endif
         else
             break;
     }
@@ -566,10 +580,10 @@ int main(int argc, char *argv[])
     if (   pCmd
         && (   fShowHelp
             || (   argc - iCmdArg == 0
-                && pCmd->enmHelpCat != 0)))
+                && pCmd->enmHelpCat != USAGE_INVALID)))
     {
         if (pCmd->enmCmdHelp == VBMG_CMD_TODO)
-            printUsage(pCmd->enmHelpCat, ~0U, g_pStdOut);
+            printUsage(pCmd->enmHelpCat, RTMSGREFENTRYSTR_SCOPE_GLOBAL, g_pStdOut);
         else if (fShowHelp)
             printHelp(g_pStdOut);
         else
@@ -583,11 +597,13 @@ int main(int argc, char *argv[])
             RTPrintf("commands:\n");
             for (unsigned i = 0; i < RT_ELEMENTS(g_aCommands); i++)
                 if (   i == 0  /* skip backwards compatibility entries */
-                    || g_aCommands[i].enmHelpCat != g_aCommands[i - 1].enmHelpCat)
+                    || (g_aCommands[i].enmHelpCat != USAGE_S_NEWCMD
+                        ? g_aCommands[i].enmHelpCat != g_aCommands[i - 1].enmHelpCat
+                        : g_aCommands[i].enmCmdHelp != g_aCommands[i - 1].enmCmdHelp))
                     RTPrintf("    %s\n", g_aCommands[i].pszCommand);
             return RTEXITCODE_SUCCESS;
         }
-        return errorSyntax(USAGE_ALL, "Invalid command '%s'", argv[iCmd]);
+        return errorSyntax(USAGE_S_ALL, "Invalid command '%s'", argv[iCmd]);
     }
 
     RTEXITCODE rcExit;
@@ -693,6 +709,12 @@ int main(int argc, char *argv[])
         handlerArg.argc = argc - iCmdArg;
         handlerArg.argv = &argv[iCmdArg];
         rcExit = pCmd->pfnHandler(&handlerArg);
+    }
+
+    if (papszResponseFileArgs)
+    {
+        RTGetOptArgvFree(papszResponseFileArgs);
+        RTMemFree(papszNewArgv);
     }
 
     return rcExit;

@@ -11,7 +11,7 @@ other VBox test drivers.
 
 __copyright__ = \
 """
-Copyright (C) 2010-2016 Oracle Corporation
+Copyright (C) 2010-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 87468 $"
 
 
 # Standard Python imports.
@@ -70,6 +70,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
         self._asSubDriver   = [];   # The sub driver and it's arguments.
         self._asBuildUrls   = [];   # The URLs passed us on the command line.
         self._asBuildFiles  = [];   # The downloaded file names.
+        self._fUnpackedBuildFiles = False;
         self._fAutoInstallPuelExtPack = True;
 
     #
@@ -82,7 +83,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
         #             012345678901234567890123456789012345678901234567890123456789012345678901234567890
         reporter.log('');
         reporter.log('vboxinstaller Options:');
-        reporter.log('  --vbox-build    <url[,url2[,..]]>');
+        reporter.log('  --vbox-build    <url[,url2[,...]]>');
         reporter.log('      Comma separated list of URL to file to download and install or/and');
         reporter.log('      unpack.  URLs without a schema are assumed to be files on the');
         reporter.log('      build share and will be copied off it.');
@@ -101,7 +102,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
         if asArgs[iArg] == '--':
             # End of our parameters and start of the sub driver invocation.
             iArg = self.requireMoreArgs(1, asArgs, iArg);
-            assert len(self._asSubDriver) == 0;
+            assert not self._asSubDriver;
             self._asSubDriver = asArgs[iArg:];
             self._asSubDriver[0] = self._asSubDriver[0].replace('/', os.path.sep);
             iArg = len(asArgs) - 1;
@@ -121,10 +122,10 @@ class VBoxInstallerTestDriver(TestDriverBase):
         #
         # Check that we've got what we need.
         #
-        if len(self._asBuildUrls) == 0:
-            reporter.error('No build files specfiied ("--vbox-build file1[,file2[...]]")');
+        if not self._asBuildUrls:
+            reporter.error('No build files specified ("--vbox-build file1[,file2[...]]")');
             return False;
-        if len(self._asSubDriver) == 0:
+        if not self._asSubDriver:
             reporter.error('No sub testdriver specified. (" -- test/stuff/tdStuff1.py args")');
             return False;
 
@@ -155,21 +156,24 @@ class VBoxInstallerTestDriver(TestDriverBase):
         Install VBox and pass on the configure request to the sub testdriver.
         """
         fRc = self._installVBox();
-        if fRc is None: self._persistentVarSet(self.ksVar_Skipped, 'true');
-        else:           self._persistentVarUnset(self.ksVar_Skipped);
+        if fRc is None:
+            self._persistentVarSet(self.ksVar_Skipped, 'true');
+            self.fBadTestbox = True;
+        else:
+            self._persistentVarUnset(self.ksVar_Skipped);
 
         ## @todo vbox.py still has bugs preventing us from invoking it seperately with each action.
         if fRc is True and 'execute' not in self.asActions and 'all' not in self.asActions:
             fRc = self._executeSubDriver([ 'verify', ]);
         if fRc is True and 'execute' not in self.asActions and 'all' not in self.asActions:
-            fRc = self._executeSubDriver([ 'config', ]);
+            fRc = self._executeSubDriver([ 'config', ], fPreloadASan = True);
         return fRc;
 
     def actionExecute(self):
         """
         Execute the sub testdriver.
         """
-        return self._executeSubDriver(self.asActions);
+        return self._executeSubDriver(self.asActions, fPreloadASan = True);
 
     def actionCleanupAfter(self):
         """
@@ -196,19 +200,19 @@ class VBoxInstallerTestDriver(TestDriverBase):
 
     def actionAbort(self):
         """
-        Forward this to the sub testdriver first, then do the default pid file
-        based cleanup and finally swipe the scene with the heavy artillery.
+        Forward this to the sub testdriver first, then wipe all VBox like
+        processes, and finally do the pid file processing (again).
         """
-        fRc1 = self._executeSubDriver([ 'abort', ], fMaySkip = False);
-        fRc2 = TestDriverBase.actionAbort(self);
-        fRc3 = self._killAllVBoxProcesses();
+        fRc1 = self._executeSubDriver([ 'abort', ], fMaySkip = False, fPreloadASan = True);
+        fRc2 = self._killAllVBoxProcesses();
+        fRc3 = TestDriverBase.actionAbort(self);
         return fRc1 and fRc2 and fRc3;
 
 
     #
     # Persistent variables.
     #
-    ## @todo integrate into the base driver. Persisten accross scratch wipes?
+    ## @todo integrate into the base driver. Persistent accross scratch wipes?
 
     def __persistentVarCalcName(self, sVar):
         """Returns the (full) filename for the given persistent variable."""
@@ -227,7 +231,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
         sFull = self.__persistentVarCalcName(sVar);
         try:
             oFile = open(sFull, 'w');
-            if len(sValue) > 0:
+            if sValue:
                 oFile.write(sValue.encode('utf-8'));
             oFile.close();
         except:
@@ -305,19 +309,22 @@ class VBoxInstallerTestDriver(TestDriverBase):
                 if sBase is None:
                     continue;
                 sBase = sBase.lower();
-                if sBase in [ 'vboxsvc', 'virtualbox', 'virtualboxvm', 'vboxheadless', 'vboxmanage', 'vboxsdl', 'vboxwebsrv',
-                              'vboxautostart', 'vboxballoonctrl', 'vboxbfe', 'vboxextpackhelperapp', 'vboxnetdhcp',
-                              'vboxnetadpctl', 'vboxtestogl', 'vboxtunctl', 'vboxvmmpreload', 'vboxxpcomipcd', 'vmCreator', ]:
+                if sBase in [ 'vboxsvc', 'vboxsds', 'virtualbox', 'virtualboxvm', 'vboxheadless', 'vboxmanage', 'vboxsdl',
+                              'vboxwebsrv', 'vboxautostart', 'vboxballoonctrl', 'vboxbfe', 'vboxextpackhelperapp', 'vboxnetdhcp',
+                              'vboxnetnat', 'vboxnetadpctl', 'vboxtestogl', 'vboxtunctl', 'vboxvmmpreload', 'vboxxpcomipcd', ]:
+                    aoTodo.append(oProcess);
+                if sBase.startswith('virtualbox-') and sBase.endswith('-multiarch.exe'):
                     aoTodo.append(oProcess);
                 if iIteration in [0, 21]  and  sBase in [ 'windbg', 'gdb', 'gdb-i386-apple-darwin', ]:
                     reporter.log('Warning: debugger running: %s (%s)' % (oProcess.iPid, sBase,));
-            if len(aoTodo) == 0:
+            if not aoTodo:
                 return True;
 
             # Kill.
             for oProcess in aoTodo:
-                reporter.log('Loop #%d - Killing %s (%s)'
-                             % (iIteration, oProcess.iPid, oProcess.sImage if oProcess.sName is None else oProcess.sName,));
+                reporter.log('Loop #%d - Killing %s (%s, uid=%s)'
+                             % ( iIteration, oProcess.iPid, oProcess.sImage if oProcess.sName is None else oProcess.sName,
+                                 oProcess.iUid, ));
                 utils.processKill(oProcess.iPid); # No mercy.
 
             # Check if they're all dead like they should be.
@@ -347,7 +354,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
         reporter.log('Exit code: %s (%s)' % (iRc, asArgs));
         if fMaySkip and iRc == rtexitcode.RTEXITCODE_SKIPPED:
             return None;
-        return iRc is 0;
+        return iRc == 0;
 
     def _sudoExecuteSync(self, asArgs):
         """
@@ -364,15 +371,55 @@ class VBoxInstallerTestDriver(TestDriverBase):
             reporter.errorXcpt();
             return (False, 0);
         reporter.log('Exit code [sudo]: %s (%s)' % (iRc, asArgs));
-        return (iRc is 0, iRc);
+        return (iRc == 0, iRc);
 
-    def _executeSubDriver(self, asActions, fMaySkip = True):
+    def _findASanLibsForASanBuild(self):
+        """
+        Returns a list of (address) santizier related libraries to preload
+        when launching the sub driver.
+        Returns empty list for non-asan builds or on platforms where this isn't needed.
+        """
+        # Note! We include libasan.so.X in the VBoxAll tarball for asan builds, so we
+        #       can use its presence both to detect an 'asan' build and to return it.
+        #       Only the libasan.so.X library needs preloading at present.
+        if self.sHost in ('linux',):
+            sLibASan = self._findFile(r'libasan\.so\..*');
+            if sLibASan:
+                return [sLibASan,];
+        return [];
+
+    def _executeSubDriver(self, asActions, fMaySkip = True, fPreloadASan = True):
         """
         Execute the sub testdriver with the specified action.
         """
         asArgs = list(self._asSubDriver)
         asArgs.append('--no-wipe-clean');
         asArgs.extend(asActions);
+
+        asASanLibs = [];
+        if fPreloadASan:
+            asASanLibs = self._findASanLibsForASanBuild();
+        if asASanLibs:
+            os.environ['LD_PRELOAD'] = ':'.join(asASanLibs);
+            os.environ['LSAN_OPTIONS'] = 'detect_leaks=0'; # We don't want python leaks. vbox.py disables this.
+
+            # Because of https://github.com/google/sanitizers/issues/856 we must try use setarch to disable
+            # address space randomization.
+
+            reporter.log('LD_PRELOAD...')
+            if utils.getHostArch() == 'amd64':
+                sSetArch = utils.whichProgram('setarch');
+                reporter.log('sSetArch=%s' % (sSetArch,));
+                if sSetArch:
+                    asArgs = [ sSetArch, 'x86_64', '-R', sys.executable ] + asArgs;
+                    reporter.log('asArgs=%s' % (asArgs,));
+
+            rc = self._executeSync(asArgs, fMaySkip = fMaySkip);
+
+            del os.environ['LSAN_OPTIONS'];
+            del os.environ['LD_PRELOAD'];
+            return rc;
+
         return self._executeSync(asArgs, fMaySkip = fMaySkip);
 
     def _maybeUnpackArchive(self, sMaybeArchive, fNonFatal = False):
@@ -418,11 +465,12 @@ class VBoxInstallerTestDriver(TestDriverBase):
         # Unpack anything we know what is and append it to the build files
         # list.  This allows us to use VBoxAll*.tar.gz files.
         #
-        for sFile in list(self._asBuildFiles):
+        for sFile in list(self._asBuildFiles): # Note! We copy the list as _maybeUnpackArchive updates it.
             if self._maybeUnpackArchive(sFile, fNonFatal = True) is not True:
                 reporter.testDone(fSkipped = True);
                 return None; # Failed to unpack. Probably local error, like busy
                              # DLLs on windows, no reason for failing the build.
+        self._fUnpackedBuildFiles = True;
 
         #
         # Go to system specific installation code.
@@ -436,6 +484,8 @@ class VBoxInstallerTestDriver(TestDriverBase):
             reporter.error('Unsupported host "%s".' % (sHost,));
         if fRc is False:
             reporter.testFailure('Installation error.');
+        elif fRc is not True:
+            reporter.log('Seems installation was skipped. Old version lurking behind? Not the fault of this build/test run!');
 
         #
         # Install the extension pack.
@@ -452,7 +502,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
         except:
             reporter.logXcpt('Unable to get disk free space. Ignored. Continuing.');
 
-        reporter.testDone();
+        reporter.testDone(fRc is None);
         return fRc;
 
     def _uninstallVBox(self, fIgnoreError = False):
@@ -464,8 +514,8 @@ class VBoxInstallerTestDriver(TestDriverBase):
         sHost = utils.getHostOs()
         if   sHost == 'darwin':     fRc = self._uninstallVBoxOnDarwin();
         elif sHost == 'linux':      fRc = self._uninstallVBoxOnLinux();
-        elif sHost == 'solaris':    fRc = self._uninstallVBoxOnSolaris();
-        elif sHost == 'win':        fRc = self._uninstallVBoxOnWindows();
+        elif sHost == 'solaris':    fRc = self._uninstallVBoxOnSolaris(True);
+        elif sHost == 'win':        fRc = self._uninstallVBoxOnWindows('uninstall');
         else:
             reporter.error('Unsupported host "%s".' % (sHost,));
         if fRc is False and not fIgnoreError:
@@ -488,9 +538,18 @@ class VBoxInstallerTestDriver(TestDriverBase):
         """
         oRegExp = re.compile(sRegExp);
 
+        reporter.log('_findFile: %s' % (sRegExp,));
         for sFile in self._asBuildFiles:
             if oRegExp.match(os.path.basename(sFile)) and os.path.exists(sFile):
                 return sFile;
+
+        # If we didn't unpack the build files, search all the files in the scratch area:
+        if not self._fUnpackedBuildFiles:
+            for sDir, _, asFiles in os.walk(self.sScratchPath):
+                for sFile in asFiles:
+                    #reporter.log('_findFile: considering %s' % (sFile,));
+                    if oRegExp.match(sFile):
+                        return os.path.join(sDir, sFile);
 
         if fMandatory:
             reporter.error('Failed to find a file matching "%s" in %s.' % (sRegExp, self._asBuildFiles,));
@@ -558,7 +617,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
         sMountPath = self._darwinDmgPath();
         if not os.path.exists(sMountPath):
             try:
-                os.mkdir(sMountPath, 0755);
+                os.mkdir(sMountPath, 0o755);
             except:
                 reporter.logXcpt();
                 return False;
@@ -699,24 +758,39 @@ class VBoxInstallerTestDriver(TestDriverBase):
             return False;
 
         # Uninstall first (ignore result).
-        self._uninstallVBoxOnSolaris();
+        self._uninstallVBoxOnSolaris(False);
 
         # Install the new one.
         fRc, _ = self._sudoExecuteSync(['pkgadd', '-d', sPkg, '-n', '-a', sRsp, 'SUNWvbox']);
         return fRc;
 
-    def _uninstallVBoxOnSolaris(self):
+    def _uninstallVBoxOnSolaris(self, fRestartSvcConfigD):
         """ Uninstalls VBox on Solaris."""
         reporter.flushall();
         if utils.processCall(['pkginfo', '-q', 'SUNWvbox']) != 0:
             return True;
         sRsp = self._generateAutoResponseOnSolaris();
         fRc, _ = self._sudoExecuteSync(['pkgrm', '-n', '-a', sRsp, 'SUNWvbox']);
+
+        #
+        # Restart the svc.configd as it has a tendency to clog up with time and
+        # become  unresponsive.  It will handle SIGHUP by exiting the sigwait()
+        # look in the main function and shut down the service nicely (backend_fini).
+        # The restarter will then start a new instance of it.
+        #
+        if fRestartSvcConfigD:
+            time.sleep(1); # Give it a chance to flush pkgrm stuff.
+            self._sudoExecuteSync(['pkill', '-HUP', 'svc.configd']);
+            time.sleep(5); # Spare a few cpu cycles it to shutdown and restart.
+
         return fRc;
 
     #
     # Windows
     #
+
+    ## VBox windows services we can query the status of.
+    kasWindowsServices = [ 'vboxdrv', 'vboxusbmon', 'vboxnetadp', 'vboxnetflt', 'vboxnetlwf' ];
 
     def _installVBoxOnWindows(self):
         """ Installs VBox on Windows."""
@@ -744,7 +818,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
         # TEMPORARY HACK - END
 
         # Uninstall any previous vbox version first.
-        fRc = self._uninstallVBoxOnWindows();
+        fRc = self._uninstallVBoxOnWindows('install');
         if fRc is not True:
             return None; # There shouldn't be anything to uninstall, and if there is, it's not our fault.
 
@@ -754,26 +828,71 @@ class VBoxInstallerTestDriver(TestDriverBase):
         sVBoxInstallPath = os.environ.get('VBOX_INSTALL_PATH', None);
         if sVBoxInstallPath is not None:
             asArgs.extend(['INSTALLDIR="%s"' % (sVBoxInstallPath,)]);
+
         fRc2, iRc = self._sudoExecuteSync(asArgs);
         if fRc2 is False:
             if iRc == 3010: # ERROR_SUCCESS_REBOOT_REQUIRED
-                reporter.log('Note: Installer required a reboot to complete installation');
-                # Optional, don't fail.
+                reporter.error('Installer required a reboot to complete installation (ERROR_SUCCESS_REBOOT_REQUIRED)');
             else:
-                fRc = False;
+                reporter.error('Installer failed, exit code: %s' % (iRc,));
+            fRc = False;
+
         sLogFile = os.path.join(tempfile.gettempdir(), 'VirtualBox', 'VBoxInstallLog.txt');
-        if      sLogFile is not None \
-            and os.path.isfile(sLogFile):
+        if os.path.isfile(sLogFile):
             reporter.addLogFile(sLogFile, 'log/installer', "Verbose MSI installation log file");
         self._waitForTestManagerConnectivity(30);
         return fRc;
 
-    def _uninstallVBoxOnWindows(self):
+    def _isProcessPresent(self, sName):
+        """ Checks whether the named process is present or not. """
+        for oProcess in utils.processListAll():
+            sBase = oProcess.getBaseImageNameNoExeSuff();
+            if sBase is not None and sBase.lower() == sName:
+                return True;
+        return False;
+
+    def _killProcessesByName(self, sName, sDesc, fChildren = False):
+        """ Kills the named process, optionally including children. """
+        cKilled = 0;
+        aoProcesses = utils.processListAll();
+        for oProcess in aoProcesses:
+            sBase = oProcess.getBaseImageNameNoExeSuff();
+            if sBase is not None and sBase.lower() == sName:
+                reporter.log('Killing %s process: %s (%s)' % (sDesc, oProcess.iPid, sBase));
+                utils.processKill(oProcess.iPid);
+                cKilled += 1;
+
+                if fChildren:
+                    for oChild in aoProcesses:
+                        if oChild.iParentPid == oProcess.iPid and oChild.iParentPid is not None:
+                            reporter.log('Killing %s child process: %s (%s)' % (sDesc, oChild.iPid, sBase));
+                            utils.processKill(oChild.iPid);
+                            cKilled += 1;
+        return cKilled;
+
+    def _terminateProcessesByNameAndArgSubstr(self, sName, sArg, sDesc):
+        """
+        Terminates the named process using taskkill.exe, if any of its args
+        contains the passed string.
+        """
+        cKilled = 0;
+        aoProcesses = utils.processListAll();
+        for oProcess in aoProcesses:
+            sBase = oProcess.getBaseImageNameNoExeSuff();
+            if sBase is not None and sBase.lower() == sName and any(sArg in s for s in oProcess.asArgs):
+
+                reporter.log('Killing %s process: %s (%s)' % (sDesc, oProcess.iPid, sBase));
+                self._executeSync(['taskkill.exe', '/pid', '%u' % (oProcess.iPid,)]);
+                cKilled += 1;
+        return cKilled;
+
+    def _uninstallVBoxOnWindows(self, sMode):
         """
         Uninstalls VBox on Windows, all installations we find to be on the safe side...
         """
+        assert sMode in ['install', 'uninstall',];
 
-        import win32com.client; # pylint: disable=F0401
+        import win32com.client; # pylint: disable=import-error
         win32com.client.gencache.EnsureModule('{000C1092-0000-0000-C000-000000000046}', 1033, 1, 0);
         oInstaller = win32com.client.Dispatch('WindowsInstaller.Installer',
                                               resultCLSID = '{000C1090-0000-0000-C000-000000000046}')
@@ -791,17 +910,51 @@ class VBoxInstallerTestDriver(TestDriverBase):
              or sProdName.startswith('Sun VirtualBox'):
                 asProdCodes.append([sProdCode, sProdName]);
 
-        # Before we start uninstalling anything, just ruthlessly kill any
-        # msiexec process we might find hanging around.
-        cKilled = 0;
-        for oProcess in utils.processListAll():
-            sBase = oProcess.getBaseImageNameNoExeSuff();
-            if sBase is not None and sBase.lower() in [ 'msiexec', ]:
-                reporter.log('Killing MSI process: %s (%s)' % (oProcess.iPid, sBase));
-                utils.processKill(oProcess.iPid);
-                cKilled += 1;
-        if cKilled > 0:
-            time.sleep(16); # fudge.
+        # Before we start uninstalling anything, just ruthlessly kill any cdb,
+        # msiexec, drvinst and some rundll process we might find hanging around.
+        if self._isProcessPresent('rundll32'):
+            cTimes = 0;
+            while cTimes < 3:
+                cTimes += 1;
+                cKilled = self._terminateProcessesByNameAndArgSubstr('rundll32', 'InstallSecurityPromptRunDllW',
+                                                                     'MSI driver installation');
+                if cKilled <= 0:
+                    break;
+                time.sleep(10); # Give related drvinst process a chance to clean up after we killed the verification dialog.
+
+        if self._isProcessPresent('drvinst'):
+            time.sleep(15);     # In the hope that it goes away.
+            cTimes = 0;
+            while cTimes < 4:
+                cTimes += 1;
+                cKilled = self._killProcessesByName('drvinst', 'MSI driver installation', True);
+                if cKilled <= 0:
+                    break;
+                time.sleep(10); # Give related MSI process a chance to clean up after we killed the driver installer.
+
+        if self._isProcessPresent('msiexec'):
+            cTimes = 0;
+            while cTimes < 3:
+                reporter.log('found running msiexec process, waiting a bit...');
+                time.sleep(20)  # In the hope that it goes away.
+                if not self._isProcessPresent('msiexec'):
+                    break;
+                cTimes += 1;
+            ## @todo this could also be the msiexec system service, try to detect this case!
+            if cTimes >= 6:
+                cKilled = self._killProcessesByName('msiexec', 'MSI driver installation');
+                if cKilled > 0:
+                    time.sleep(16); # fudge.
+
+        # cdb.exe sometimes stays running (from utils.getProcessInfo), blocking
+        # the scratch directory. No idea why.
+        if self._isProcessPresent('cdb'):
+            cTimes = 0;
+            while cTimes < 3:
+                cKilled = self._killProcessesByName('cdb', 'cdb.exe from getProcessInfo');
+                if cKilled <= 0:
+                    break;
+                time.sleep(2); # fudge.
 
         # Do the uninstalling.
         fRc = True;
@@ -812,15 +965,61 @@ class VBoxInstallerTestDriver(TestDriverBase):
                                                '/L*v', '%s' % (sLogFile), ]);
             if fRc2 is False:
                 if iRc == 3010: # ERROR_SUCCESS_REBOOT_REQUIRED
-                    reporter.log('Note: Uninstaller required a reboot to complete uninstallation');
-                    # Optional, don't fail.
+                    reporter.error('Uninstaller required a reboot to complete uninstallation');
                 else:
-                    fRc = False;
-            reporter.addLogFile(sLogFile, 'log/uninstaller', "Verbose MSI uninstallation log file");
+                    reporter.error('Uninstaller failed, exit code: %s' % (iRc,));
+                fRc = False;
 
         self._waitForTestManagerConnectivity(30);
+
+        # Upload the log on failure.  Do it early if the extra cleanups below causes trouble.
         if fRc is False and os.path.isfile(sLogFile):
-            reporter.addLogFile(sLogFile, 'log/uninstaller');
+            reporter.addLogFile(sLogFile, 'log/uninstaller', "Verbose MSI uninstallation log file");
+            sLogFile = None;
+
+        # Log driver service states (should ls \Driver\VBox* and \Device\VBox*).
+        fHadLeftovers = False;
+        asLeftovers = [];
+        for sService in reversed(self.kasWindowsServices):
+            cTries = 0;
+            while True:
+                fRc2, _ = self._sudoExecuteSync(['sc.exe', 'query', sService]);
+                if not fRc2:
+                    break;
+                fHadLeftovers = True;
+
+                cTries += 1;
+                if cTries > 3:
+                    asLeftovers.append(sService,);
+                    break;
+
+                # Get the status output.
+                try:
+                    sOutput = utils.sudoProcessOutputChecked(['sc.exe', 'query', sService]);
+                except:
+                    reporter.logXcpt();
+                else:
+                    if re.search(r'STATE\s+:\s*1\s*STOPPED', sOutput) is None:
+                        reporter.log('Trying to stop %s...' % (sService,));
+                        fRc2, _ = self._sudoExecuteSync(['sc.exe', 'stop', sService]);
+                        time.sleep(1); # fudge
+
+                    reporter.log('Trying to delete %s...' % (sService,));
+                    self._sudoExecuteSync(['sc.exe', 'delete', sService]);
+
+                time.sleep(1); # fudge
+
+        if asLeftovers:
+            reporter.log('Warning! Leftover VBox drivers: %s' % (', '.join(asLeftovers),));
+            fRc = False;
+
+        if fHadLeftovers:
+            self._waitForTestManagerConnectivity(30);
+
+        # Upload the log if we have any leftovers and didn't upload it already.
+        if sLogFile is not None and (fRc is False or fHadLeftovers) and os.path.isfile(sLogFile):
+            reporter.addLogFile(sLogFile, 'log/uninstaller', "Verbose MSI uninstallation log file");
+
         return fRc;
 
 
@@ -838,7 +1037,7 @@ class VBoxInstallerTestDriver(TestDriverBase):
                 os.path.join(sProgFiles, 'OracleVM', 'VirtualBox'),
                 os.path.join(sProgFiles, 'Sun', 'VirtualBox'),
             ];
-        elif sHost == 'linux' or sHost == 'solaris':
+        elif sHost in ('linux', 'solaris',):
             asLocs = [ '/opt/VirtualBox', '/opt/VirtualBox-3.2', '/opt/VirtualBox-3.1', '/opt/VirtualBox-3.0'];
         elif sHost == 'darwin':
             asLocs = [ '/Applications/VirtualBox.app/Contents/MacOS' ];

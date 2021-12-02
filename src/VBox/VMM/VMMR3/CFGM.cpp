@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: CFGM.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * CFGM - Configuration Manager.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -69,6 +69,7 @@
 #include <iprt/mem.h>
 #include <iprt/param.h>
 #include <iprt/string.h>
+#include <iprt/utf16.h>
 #include <iprt/uuid.h>
 
 
@@ -218,9 +219,9 @@ VMMR3DECL(int) CFGMR3Init(PVM pVM, PFNCFGMCONSTRUCTOR pfnCFGMConstructor, void *
     pRoot->cchName    = 0;
     pVM->cfgm.s.pRoot = pRoot;
 
-        /*
-         * Call the constructor if specified, if not use the default one.
-         */
+    /*
+     * Call the constructor if specified, if not use the default one.
+     */
     if (pfnCFGMConstructor)
         rc = pfnCFGMConstructor(pVM->pUVM, pVM, pvUser);
     else
@@ -231,7 +232,7 @@ VMMR3DECL(int) CFGMR3Init(PVM pVM, PFNCFGMCONSTRUCTOR pfnCFGMConstructor, void *
         CFGMR3Dump(CFGMR3GetRoot(pVM));
     }
     else
-        AssertMsgFailed(("Constructor failed with rc=%Rrc pfnCFGMConstructor=%p\n", rc, pfnCFGMConstructor));
+        LogRel(("Constructor failed with rc=%Rrc pfnCFGMConstructor=%p\n", rc, pfnCFGMConstructor));
 
     return rc;
 }
@@ -284,7 +285,7 @@ VMMR3DECL(PCFGMNODE) CFGMR3GetRootU(PUVM pUVM)
  *
  * @returns Pointer to the parent node.
  * @returns NULL if pNode is Root or pNode is the start of a
- *          restricted subtree (use CFGMr3GetParentEx() for that).
+ *          restricted subtree (use CFGMR3GetParentEx() for that).
  *
  * @param   pNode           The node which parent we query.
  */
@@ -974,15 +975,6 @@ VMMR3DECL(int) CFGMR3ConstructDefaultTree(PVM pVM)
     UPDATERC();
     rc = CFGMR3InsertInteger(pRoot, "TimerMillies",         10);
     UPDATERC();
-    rc = CFGMR3InsertInteger(pRoot, "RawR3Enabled",         1);
-    UPDATERC();
-    /** @todo CFGM Defaults: RawR0, PATMEnabled and CASMEnabled needs attention later. */
-    rc = CFGMR3InsertInteger(pRoot, "RawR0Enabled",         1);
-    UPDATERC();
-    rc = CFGMR3InsertInteger(pRoot, "PATMEnabled",          1);
-    UPDATERC();
-    rc = CFGMR3InsertInteger(pRoot, "CSAMEnabled",          1);
-    UPDATERC();
 
     /*
      * PDM.
@@ -1039,10 +1031,6 @@ VMMR3DECL(int) CFGMR3ConstructDefaultTree(PVM pVM)
     rc = CFGMR3InsertInteger(pInst, "Trusted",              1);         /* boolean */
     UPDATERC();
     rc = CFGMR3InsertNode(pInst,    "Config", &pCfg);
-    UPDATERC();
-    rc = CFGMR3InsertInteger(pCfg,  "RamSize",              128U * _1M);
-    UPDATERC();
-    rc = CFGMR3InsertInteger(pCfg,  "RamHoleSize",          512U * _1M);
     UPDATERC();
     rc = CFGMR3InsertString(pCfg,   "BootDevice0",          "IDE");
     UPDATERC();
@@ -1204,8 +1192,6 @@ VMMR3DECL(int) CFGMR3ConstructDefaultTree(PVM pVM)
     rc = CFGMR3InsertNode(pInst,    "Config", &pCfg);
     UPDATERC();
     rc = CFGMR3InsertInteger(pInst, "Trusted",              1); /* boolean */
-    UPDATERC();
-    rc = CFGMR3InsertInteger(pCfg,  "RamSize",              128U * _1M);
     UPDATERC();
 
 

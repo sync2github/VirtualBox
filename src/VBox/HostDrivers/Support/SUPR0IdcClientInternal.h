@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPR0IdcClientInternal.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Support Driver - Internal header for the IDC client library.
  */
 
 /*
- * Copyright (C) 2008-2016 Oracle Corporation
+ * Copyright (C) 2008-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___SUPR0IdcClientInternal_h__
-#define ___SUPR0IdcClientInternal_h__
+#ifndef VBOX_INCLUDED_SRC_Support_SUPR0IdcClientInternal_h
+#define VBOX_INCLUDED_SRC_Support_SUPR0IdcClientInternal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <iprt/assert.h>
@@ -63,5 +66,5 @@ int VBOXCALL supR0IdcNativeClose(PSUPDRVIDCHANDLE pHandle, PSUPDRVIDCREQHDR pReq
 int VBOXCALL supR0IdcNativeCall(PSUPDRVIDCHANDLE pHandle, uint32_t iReq, PSUPDRVIDCREQHDR pReq);
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_SRC_Support_SUPR0IdcClientInternal_h */
 

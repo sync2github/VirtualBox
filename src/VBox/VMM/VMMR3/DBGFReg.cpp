@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DBGFReg.cpp 86149 2020-09-17 11:34:21Z vboxsync $ */
 /** @file
  * DBGF - Debugger Facility, Register Methods.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -294,7 +294,7 @@ static int dbgfR3RegRegisterCommon(PUVM pUVM, PCDBGFREGDESC paRegisters, DBGFREG
         AssertMsgReturn(dbgfR3RegIsNameValid(paRegisters[iDesc].pszName, 0), ("%s (#%u)\n", paRegisters[iDesc].pszName, iDesc), VERR_INVALID_NAME);
 
         if (enmType == DBGFREGSETTYPE_CPU)
-            AssertMsgReturn((unsigned)paRegisters[iDesc].enmReg == iDesc && iDesc < (unsigned)DBGFREG_END,
+            AssertMsgReturn(iDesc < (unsigned)DBGFREG_END && (unsigned)paRegisters[iDesc].enmReg == iDesc,
                             ("%d iDesc=%d\n", paRegisters[iDesc].enmReg, iDesc),
                             VERR_INVALID_PARAMETER);
         else
@@ -345,7 +345,7 @@ static int dbgfR3RegRegisterCommon(PUVM pUVM, PCDBGFREGDESC paRegisters, DBGFREG
     /*
      * Allocate a new record and all associated lookup records.
      */
-    size_t cbRegSet = RT_OFFSETOF(DBGFREGSET, szPrefix[cchPrefix + 4 + 1]);
+    size_t cbRegSet = RT_UOFFSETOF_DYN(DBGFREGSET, szPrefix[cchPrefix + 4 + 1]);
     cbRegSet = RT_ALIGN_Z(cbRegSet, 32);
     size_t const offLookupRecArray = cbRegSet;
     cbRegSet += cLookupRecs * sizeof(DBGFREGLOOKUP);
@@ -551,6 +551,12 @@ DECLINLINE(void) dbgfR3RegValClear(PDBGFREGVAL pValue)
 {
     pValue->au64[0] = 0;
     pValue->au64[1] = 0;
+    pValue->au64[2] = 0;
+    pValue->au64[3] = 0;
+    pValue->au64[4] = 0;
+    pValue->au64[5] = 0;
+    pValue->au64[6] = 0;
+    pValue->au64[7] = 0;
 }
 
 
@@ -647,6 +653,8 @@ static int dbgfR3RegValCast(PDBGFREGVAL pValue, DBGFREGVALTYPE enmFromType, DBGF
                 case DBGFREGVALTYPE_U32:    pValue->u32       = InVal.u8; return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_U64:    pValue->u64       = InVal.u8; return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_U128:   pValue->u128.s.Lo = InVal.u8; return VINF_DBGF_ZERO_EXTENDED_REGISTER;
+                case DBGFREGVALTYPE_U256:   pValue->u256.Words.w0 = InVal.u8; return VINF_DBGF_ZERO_EXTENDED_REGISTER;
+                case DBGFREGVALTYPE_U512:   pValue->u512.Words.w0 = InVal.u8; return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_R80:    dbgfR3RegValR80SetU64(pValue, InVal.u8); return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_DTR:                                  return VERR_DBGF_UNSUPPORTED_CAST;
 
@@ -665,6 +673,8 @@ static int dbgfR3RegValCast(PDBGFREGVAL pValue, DBGFREGVALTYPE enmFromType, DBGF
                 case DBGFREGVALTYPE_U32:    pValue->u32       = InVal.u16;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_U64:    pValue->u64       = InVal.u16;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_U128:   pValue->u128.s.Lo = InVal.u16;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
+                case DBGFREGVALTYPE_U256:   pValue->u256.Words.w0 = InVal.u16;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
+                case DBGFREGVALTYPE_U512:   pValue->u512.Words.w0 = InVal.u16;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_R80:    dbgfR3RegValR80SetU64(pValue, InVal.u16); return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_DTR:                                    return VERR_DBGF_UNSUPPORTED_CAST;
 
@@ -683,6 +693,8 @@ static int dbgfR3RegValCast(PDBGFREGVAL pValue, DBGFREGVALTYPE enmFromType, DBGF
                 case DBGFREGVALTYPE_U32:    pValue->u32       = InVal.u32;  return VINF_SUCCESS;
                 case DBGFREGVALTYPE_U64:    pValue->u64       = InVal.u32;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_U128:   pValue->u128.s.Lo = InVal.u32;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
+                case DBGFREGVALTYPE_U256:   pValue->u256.DWords.dw0 = InVal.u32;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
+                case DBGFREGVALTYPE_U512:   pValue->u512.DWords.dw0 = InVal.u32;  return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_R80:    dbgfR3RegValR80SetU64(pValue, InVal.u32); return VINF_DBGF_ZERO_EXTENDED_REGISTER;
                 case DBGFREGVALTYPE_DTR:                                    return VERR_DBGF_UNSUPPORTED_CAST;
 
@@ -701,6 +713,8 @@ static int dbgfR3RegValCast(PDBGFREGVAL pValue, DBGFREGVALTYPE enmFromType, DBGF
                 case DBGFREGVALTYPE_U32:    pValue->u32       = InVal.u64;  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_U64:    pValue->u64       = InVal.u64;  return VINF_SUCCESS;
                 case DBGFREGVALTYPE_U128:   pValue->u128.s.Lo = InVal.u64;  return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U256:   pValue->u256.QWords.qw0 = InVal.u64;  return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U512:   pValue->u512.QWords.qw0 = InVal.u64;  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_R80:    dbgfR3RegValR80SetU64(pValue, InVal.u64); return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_DTR:                                    return VERR_DBGF_UNSUPPORTED_CAST;
 
@@ -719,8 +733,50 @@ static int dbgfR3RegValCast(PDBGFREGVAL pValue, DBGFREGVALTYPE enmFromType, DBGF
                 case DBGFREGVALTYPE_U32:    pValue->u32       = InVal.u128.s.Lo;  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_U64:    pValue->u64       = InVal.u128.s.Lo;  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_U128:   pValue->u128      = InVal.u128;       return VINF_SUCCESS;
+                case DBGFREGVALTYPE_U256:   pValue->u256.DQWords.dqw0 = InVal.u128; return VINF_SUCCESS;
+                case DBGFREGVALTYPE_U512:   pValue->u512.DQWords.dqw0 = InVal.u128; return VINF_SUCCESS;
                 case DBGFREGVALTYPE_R80:    dbgfR3RegValR80SetU128(pValue, InVal.u128); return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_DTR:                                          return VERR_DBGF_UNSUPPORTED_CAST;
+
+                case DBGFREGVALTYPE_32BIT_HACK:
+                case DBGFREGVALTYPE_END:
+                case DBGFREGVALTYPE_INVALID:
+                    break;
+            }
+            break;
+
+        case DBGFREGVALTYPE_U256:
+            switch (enmToType)
+            {
+                case DBGFREGVALTYPE_U8:     pValue->u8        = InVal.u256.Words.w0;        return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U16:    pValue->u16       = InVal.u256.Words.w0;        return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U32:    pValue->u32       = InVal.u256.DWords.dw0;      return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U64:    pValue->u64       = InVal.u256.QWords.qw0;      return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U128:   pValue->u128      = InVal.u256.DQWords.dqw0;    return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U256:   pValue->u256      = InVal.u256;                 return VINF_SUCCESS;
+                case DBGFREGVALTYPE_U512:   pValue->u512.OWords.ow0 = InVal.u256;           return VINF_SUCCESS;
+                case DBGFREGVALTYPE_R80:    dbgfR3RegValR80SetU128(pValue, InVal.u256.DQWords.dqw0); return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_DTR:                                                    return VERR_DBGF_UNSUPPORTED_CAST;
+
+                case DBGFREGVALTYPE_32BIT_HACK:
+                case DBGFREGVALTYPE_END:
+                case DBGFREGVALTYPE_INVALID:
+                    break;
+            }
+            break;
+
+        case DBGFREGVALTYPE_U512:
+            switch (enmToType)
+            {
+                case DBGFREGVALTYPE_U8:     pValue->u8        = InVal.u512.Words.w0;        return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U16:    pValue->u16       = InVal.u512.Words.w0;        return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U32:    pValue->u32       = InVal.u512.DWords.dw0;      return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U64:    pValue->u64       = InVal.u512.QWords.qw0;      return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U128:   pValue->u128      = InVal.u512.DQWords.dqw0;    return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U256:   pValue->u256      = InVal.u512.OWords.ow0;      return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U512:   pValue->u512      = InVal.u512;                 return VINF_SUCCESS;
+                case DBGFREGVALTYPE_R80:    dbgfR3RegValR80SetU128(pValue, InVal.u512.DQWords.dqw0); return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_DTR:                                                    return VERR_DBGF_UNSUPPORTED_CAST;
 
                 case DBGFREGVALTYPE_32BIT_HACK:
                 case DBGFREGVALTYPE_END:
@@ -737,6 +793,8 @@ static int dbgfR3RegValCast(PDBGFREGVAL pValue, DBGFREGVALTYPE enmFromType, DBGF
                 case DBGFREGVALTYPE_U32:    pValue->u32       = (uint32_t)dbgfR3RegValR80GetU64(&InVal);  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_U64:    pValue->u64       = (uint64_t)dbgfR3RegValR80GetU64(&InVal);  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_U128:   pValue->u128      = dbgfR3RegValR80GetU128(&InVal);           return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U256:   pValue->u256.DQWords.dqw0 = dbgfR3RegValR80GetU128(&InVal);   return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U512:   pValue->u512.DQWords.dqw0 = dbgfR3RegValR80GetU128(&InVal);   return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_R80:    pValue->r80       = InVal.r80;          return VINF_SUCCESS;
                 case DBGFREGVALTYPE_DTR:                                            return VERR_DBGF_UNSUPPORTED_CAST;
 
@@ -755,6 +813,8 @@ static int dbgfR3RegValCast(PDBGFREGVAL pValue, DBGFREGVALTYPE enmFromType, DBGF
                 case DBGFREGVALTYPE_U32:    pValue->u32       = InVal.dtr.u64Base;  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_U64:    pValue->u64       = InVal.dtr.u64Base;  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_U128:   pValue->u128.s.Lo = InVal.dtr.u64Base;  return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U256:   pValue->u256.QWords.qw0 = InVal.dtr.u64Base;  return VINF_DBGF_TRUNCATED_REGISTER;
+                case DBGFREGVALTYPE_U512:   pValue->u512.QWords.qw0 = InVal.dtr.u64Base;  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_R80:    dbgfR3RegValR80SetU64(pValue, InVal.dtr.u64Base);  return VINF_DBGF_TRUNCATED_REGISTER;
                 case DBGFREGVALTYPE_DTR:    pValue->dtr       = InVal.dtr;          return VINF_SUCCESS;
 
@@ -989,6 +1049,43 @@ VMMR3DECL(int) DBGFR3RegCpuQueryU64(PUVM pUVM, VMCPUID idCpu, DBGFREG enmReg, ui
         *pu64 = 0;
     return rc;
 }
+
+
+/**
+ * Queries a descriptor table register value.
+ *
+ * @retval  VINF_SUCCESS
+ * @retval  VERR_INVALID_VM_HANDLE
+ * @retval  VERR_INVALID_CPU_ID
+ * @retval  VERR_DBGF_REGISTER_NOT_FOUND
+ * @retval  VERR_DBGF_UNSUPPORTED_CAST
+ * @retval  VINF_DBGF_TRUNCATED_REGISTER
+ * @retval  VINF_DBGF_ZERO_EXTENDED_REGISTER
+ *
+ * @param   pUVM                The user mode VM handle.
+ * @param   idCpu               The target CPU ID.  Can be OR'ed with
+ *                              DBGFREG_HYPER_VMCPUID.
+ * @param   enmReg              The register that's being queried.
+ * @param   pu64Base            Where to store the register base value.
+ * @param   pu16Limit           Where to store the register limit value.
+ */
+VMMR3DECL(int) DBGFR3RegCpuQueryXdtr(PUVM pUVM, VMCPUID idCpu, DBGFREG enmReg, uint64_t *pu64Base, uint16_t *pu16Limit)
+{
+    DBGFREGVAL Value;
+    int rc = dbgfR3RegCpuQueryWorker(pUVM, idCpu, enmReg, DBGFREGVALTYPE_DTR, &Value);
+    if (RT_SUCCESS(rc))
+    {
+        *pu64Base  = Value.dtr.u64Base;
+        *pu16Limit = Value.dtr.u32Limit;
+    }
+    else
+    {
+        *pu64Base  = 0;
+        *pu16Limit = 0;
+    }
+    return rc;
+}
+
 
 #if 0 /* rewrite / remove */
 
@@ -1709,21 +1806,21 @@ VMMR3DECL(int) DBGFR3RegNmQueryLrd(PUVM pUVM, VMCPUID idDefCpu, const char *pszR
  *                              CPU registers, this must be on the form
  *                              "set.reg[.sub]".
  * @param   pu64Base            Where to store the register base value.
- * @param   pu32Limit           Where to store the register limit value.
+ * @param   pu16Limit           Where to store the register limit value.
  */
-VMMR3DECL(int) DBGFR3RegNmQueryXdtr(PUVM pUVM, VMCPUID idDefCpu, const char *pszReg, uint64_t *pu64Base, uint32_t *pu32Limit)
+VMMR3DECL(int) DBGFR3RegNmQueryXdtr(PUVM pUVM, VMCPUID idDefCpu, const char *pszReg, uint64_t *pu64Base, uint16_t *pu16Limit)
 {
     DBGFREGVAL Value;
     int rc = dbgfR3RegNmQueryWorker(pUVM, idDefCpu, pszReg, DBGFREGVALTYPE_DTR, &Value, NULL);
     if (RT_SUCCESS(rc))
     {
         *pu64Base  = Value.dtr.u64Base;
-        *pu32Limit = Value.dtr.u32Limit;
+        *pu16Limit = Value.dtr.u32Limit;
     }
     else
     {
         *pu64Base  = 0;
-        *pu32Limit = 0;
+        *pu16Limit = 0;
     }
     return rc;
 }
@@ -2004,6 +2101,24 @@ VMMR3DECL(int) DBGFR3RegNmSet(PUVM pUVM, VMCPUID idDefCpu, const char *pszReg, P
                     Mask.u128.s.Lo = UINT64_MAX;
                     Mask.u128.s.Hi = UINT64_MAX;
                     break;
+                case DBGFREGVALTYPE_U256:
+                    Value.u256 = pValue->u256;
+                    Mask.u256.QWords.qw0 = UINT64_MAX;
+                    Mask.u256.QWords.qw1 = UINT64_MAX;
+                    Mask.u256.QWords.qw2 = UINT64_MAX;
+                    Mask.u256.QWords.qw3 = UINT64_MAX;
+                    break;
+                case DBGFREGVALTYPE_U512:
+                    Value.u512 = pValue->u512;
+                    Mask.u512.QWords.qw0 = UINT64_MAX;
+                    Mask.u512.QWords.qw1 = UINT64_MAX;
+                    Mask.u512.QWords.qw2 = UINT64_MAX;
+                    Mask.u512.QWords.qw3 = UINT64_MAX;
+                    Mask.u512.QWords.qw4 = UINT64_MAX;
+                    Mask.u512.QWords.qw5 = UINT64_MAX;
+                    Mask.u512.QWords.qw6 = UINT64_MAX;
+                    Mask.u512.QWords.qw7 = UINT64_MAX;
+                    break;
                 case DBGFREGVALTYPE_R80:
 #ifdef RT_COMPILER_WITH_80BIT_LONG_DOUBLE
                     Value.r80Ex.lrd = pValue->r80Ex.lrd;
@@ -2039,8 +2154,12 @@ VMMR3DECL(int) DBGFR3RegNmSet(PUVM pUVM, VMCPUID idDefCpu, const char *pszReg, P
                     enmRegType = DBGFREGVALTYPE_U32;
                 else if (cBits <= 64)
                     enmRegType = DBGFREGVALTYPE_U64;
-                else
+                else if (cBits <= 128)
                     enmRegType = DBGFREGVALTYPE_U128;
+                else if (cBits <= 256)
+                    enmRegType = DBGFREGVALTYPE_U256;
+                else
+                    enmRegType = DBGFREGVALTYPE_U512;
             }
             else if (pLookupRec->pAlias)
             {
@@ -2122,6 +2241,52 @@ VMMR3DECL(int) DBGFR3RegNmSet(PUVM pUVM, VMCPUID idDefCpu, const char *pszReg, P
 
 
 /**
+ * Set a given set of registers.
+ *
+ * @returns VBox status code.
+ * @retval  VINF_SUCCESS
+ * @retval  VERR_INVALID_VM_HANDLE
+ * @retval  VERR_INVALID_CPU_ID
+ * @retval  VERR_DBGF_REGISTER_NOT_FOUND
+ * @retval  VERR_DBGF_UNSUPPORTED_CAST
+ * @retval  VINF_DBGF_TRUNCATED_REGISTER
+ * @retval  VINF_DBGF_ZERO_EXTENDED_REGISTER
+ *
+ * @param   pUVM                The user mode VM handle.
+ * @param   idDefCpu            The virtual CPU ID for the default CPU register
+ *                              set.  Can be OR'ed with DBGFREG_HYPER_VMCPUID.
+ * @param   paRegs              The array of registers to set.
+ * @param   cRegs               Number of registers in the array.
+ *
+ * @todo This is a _very_ lazy implementation by a lazy developer, some semantics
+  *      need to be figured out before the real implementation especially how and
+  *      when errors and informational status codes like VINF_DBGF_TRUNCATED_REGISTER
+  *      should be returned (think of an error right in the middle of the batch, should we
+  *      save the state and roll back?).
+ */
+VMMR3DECL(int) DBGFR3RegNmSetBatch(PUVM pUVM, VMCPUID idDefCpu, PCDBGFREGENTRYNM paRegs, size_t cRegs)
+{
+    /*
+     * Validate input.
+     */
+    UVM_ASSERT_VALID_EXT_RETURN(pUVM, VERR_INVALID_VM_HANDLE);
+    VM_ASSERT_VALID_EXT_RETURN(pUVM->pVM, VERR_INVALID_VM_HANDLE);
+    AssertReturn((idDefCpu & ~DBGFREG_HYPER_VMCPUID) < pUVM->cCpus || idDefCpu == VMCPUID_ANY, VERR_INVALID_CPU_ID);
+    AssertPtrReturn(paRegs, VERR_INVALID_PARAMETER);
+    AssertReturn(cRegs > 0, VERR_INVALID_PARAMETER);
+
+    for (uint32_t i = 0; i < cRegs; i++)
+    {
+        int rc = DBGFR3RegNmSet(pUVM, idDefCpu, paRegs[i].pszName, &paRegs[i].Val, paRegs[i].enmType);
+        if (RT_FAILURE(rc))
+            return rc;
+    }
+
+    return VINF_SUCCESS;
+}
+
+
+/**
  * Internal worker for DBGFR3RegFormatValue, cbBuf is sufficent.
  *
  * @copydoc DBGFR3RegFormatValueEx
@@ -2141,6 +2306,10 @@ DECLINLINE(ssize_t) dbgfR3RegFormatValueInt(char *pszBuf, size_t cbBuf, PCDBGFRE
             return RTStrFormatU64(pszBuf, cbBuf, pValue->u64, uBase, cchWidth, cchPrecision, fFlags);
         case DBGFREGVALTYPE_U128:
             return RTStrFormatU128(pszBuf, cbBuf, &pValue->u128, uBase, cchWidth, cchPrecision, fFlags);
+        case DBGFREGVALTYPE_U256:
+            return RTStrFormatU256(pszBuf, cbBuf, &pValue->u256, uBase, cchWidth, cchPrecision, fFlags);
+        case DBGFREGVALTYPE_U512:
+            return RTStrFormatU512(pszBuf, cbBuf, &pValue->u512, uBase, cchWidth, cchPrecision, fFlags);
         case DBGFREGVALTYPE_R80:
             return RTStrFormatR80u2(pszBuf, cbBuf, &pValue->r80Ex, cchWidth, cchPrecision, fFlags);
         case DBGFREGVALTYPE_DTR:
@@ -2223,11 +2392,13 @@ VMMR3DECL(ssize_t) DBGFR3RegFormatValue(char *pszBuf, size_t cbBuf, PCDBGFREGVAL
     int cchWidth = 0;
     switch (enmType)
     {
-        case DBGFREGVALTYPE_U8:     cchWidth = 2  + fSpecial*2; break;
-        case DBGFREGVALTYPE_U16:    cchWidth = 4  + fSpecial*2; break;
-        case DBGFREGVALTYPE_U32:    cchWidth = 8  + fSpecial*2; break;
-        case DBGFREGVALTYPE_U64:    cchWidth = 16 + fSpecial*2; break;
-        case DBGFREGVALTYPE_U128:   cchWidth = 32 + fSpecial*2; break;
+        case DBGFREGVALTYPE_U8:     cchWidth = 2   + fSpecial*2; break;
+        case DBGFREGVALTYPE_U16:    cchWidth = 4   + fSpecial*2; break;
+        case DBGFREGVALTYPE_U32:    cchWidth = 8   + fSpecial*2; break;
+        case DBGFREGVALTYPE_U64:    cchWidth = 16  + fSpecial*2; break;
+        case DBGFREGVALTYPE_U128:   cchWidth = 32  + fSpecial*2; break;
+        case DBGFREGVALTYPE_U256:   cchWidth = 64  + fSpecial*2; break;
+        case DBGFREGVALTYPE_U512:   cchWidth = 128 + fSpecial*2; break;
         case DBGFREGVALTYPE_R80:    cchWidth = 0; break;
         case DBGFREGVALTYPE_DTR:    cchWidth = 16+1+4 + fSpecial*2; break;
 
@@ -2266,10 +2437,10 @@ dbgfR3RegPrintfCbFormatField(PDBGFR3REGPRINTFARGS pThis, PFNRTSTROUTPUT pfnOutpu
     int rc = dbgfR3RegNmQueryWorkerOnCpu(pThis->pUVM, pLookupRec, DBGFREGVALTYPE_END, &Value, &enmType);
     if (RT_FAILURE(rc))
     {
-        PCRTSTATUSMSG pErr = RTErrGet(rc);
-        if (pErr)
-            return pfnOutput(pvArgOutput, pErr->pszDefine, strlen(pErr->pszDefine));
-        return pfnOutput(pvArgOutput, szTmp, RTStrPrintf(szTmp, sizeof(szTmp), "rc=%d", rc));
+        ssize_t cchDefine = RTErrQueryDefine(rc, szTmp, sizeof(szTmp), true /*fFailIfUnknown*/);
+        if (cchDefine <= 0)
+            cchDefine = RTStrPrintf(szTmp, sizeof(szTmp), "rc=%d", rc);
+        return pfnOutput(pvArgOutput, szTmp, cchDefine);
     }
 
     char *psz = szTmp;
@@ -2359,10 +2530,10 @@ dbgfR3RegPrintfCbFormatNormal(PDBGFR3REGPRINTFARGS pThis, PFNRTSTROUTPUT pfnOutp
     int rc = dbgfR3RegNmQueryWorkerOnCpu(pThis->pUVM, pLookupRec, DBGFREGVALTYPE_END, &Value, &enmType);
     if (RT_FAILURE(rc))
     {
-        PCRTSTATUSMSG pErr = RTErrGet(rc);
-        if (pErr)
-            return pfnOutput(pvArgOutput, pErr->pszDefine, strlen(pErr->pszDefine));
-        return pfnOutput(pvArgOutput, szTmp, RTStrPrintf(szTmp, sizeof(szTmp), "rc=%d", rc));
+        ssize_t cchDefine = RTErrQueryDefine(rc, szTmp, sizeof(szTmp), true /*fFailIfUnknown*/);
+        if (cchDefine <= 0)
+            cchDefine = RTStrPrintf(szTmp, sizeof(szTmp), "rc=%d", rc);
+        return pfnOutput(pvArgOutput, szTmp, cchDefine);
     }
 
     /*

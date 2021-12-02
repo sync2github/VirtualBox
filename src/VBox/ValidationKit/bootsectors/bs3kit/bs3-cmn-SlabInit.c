@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bs3-cmn-SlabInit.c 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * BS3Kit - Bs3SlabInit
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -48,7 +48,7 @@ BS3_CMN_DEF(void, Bs3SlabInit,(PBS3SLABCTL pSlabCtl, size_t cbSlabCtl, uint32_t 
     pSlabCtl->cChunks           = cbSlab >> pSlabCtl->cChunkShift;
     pSlabCtl->cFreeChunks       = pSlabCtl->cChunks;
     cBits                       = RT_ALIGN_T(pSlabCtl->cChunks, 32, uint16_t);
-    BS3_ASSERT(cbSlabCtl >= RT_OFFSETOF(BS3SLABCTL, bmAllocated[cBits >> 3]));
+    BS3_ASSERT(cbSlabCtl >= RT_UOFFSETOF_DYN(BS3SLABCTL, bmAllocated[cBits >> 3]));
     Bs3MemZero(&pSlabCtl->bmAllocated, cBits >> 3);
 
     /* Mark excess bitmap padding bits as allocated. */

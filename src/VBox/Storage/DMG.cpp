@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DMG.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBoxDMG - Interpreter for Apple Disk Images (DMG).
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -36,6 +36,7 @@
 #include <iprt/formats/xar.h>
 
 #include "VDBackends.h"
+#include "VDBackendsInline.h"
 
 
 /*********************************************************************************************************************************
@@ -370,6 +371,8 @@ typedef struct DMGIMAGE
     void               *pvDecompExtent;
     /** Size of the buffer. */
     size_t              cbDecompExtent;
+    /** The static region list. */
+    VDREGIONLIST        RegionList;
 } DMGIMAGE;
 /** Pointer to an instance of the DMG Image Interpreter. */
 typedef DMGIMAGE *PDMGIMAGE;
@@ -423,7 +426,7 @@ typedef struct DMGINFLATESTATE
 /** NULL-terminated array of supported file extensions. */
 static const VDFILEEXTENSION s_aDmgFileExtensions[] =
 {
-    {"dmg", VDTYPE_DVD},
+    {"dmg", VDTYPE_OPTICAL_DISC},
     {NULL, VDTYPE_INVALID}
 };
 
@@ -498,7 +501,7 @@ static int dmgWrapFileReadUser(PDMGIMAGE pThis, RTFOFF off, PVDIOCTX pIoCtx, siz
 }
 
 /**
- * vdIfIoIntFileGetSize / RTVfsFileGetSize wrapper.
+ * vdIfIoIntFileGetSize / RTVfsFileQuerySize wrapper.
  */
 static int dmgWrapFileGetSize(PDMGIMAGE pThis, uint64_t *pcbFile)
 {
@@ -506,7 +509,7 @@ static int dmgWrapFileGetSize(PDMGIMAGE pThis, uint64_t *pcbFile)
     if (pThis->hDmgFileInXar == NIL_RTVFSFILE)
         rc = vdIfIoIntFileGetSize(pThis->pIfIoXxx, pThis->pStorage, pcbFile);
     else
-        rc = RTVfsFileGetSize(pThis->hDmgFileInXar, pcbFile);
+        rc = RTVfsFileQuerySize(pThis->hDmgFileInXar, pcbFile);
     return rc;
 }
 
@@ -1716,7 +1719,21 @@ static DECLCALLBACK(int) dmgOpenImage(PDMGIMAGE pThis, unsigned uOpenFlags)
     }
     RTMemFree(pszXml);
 
-    if (RT_FAILURE(rc))
+    if (RT_SUCCESS(rc))
+    {
+        PVDREGIONDESC pRegion = &pThis->RegionList.aRegions[0];
+        pThis->RegionList.fFlags   = 0;
+        pThis->RegionList.cRegions = 1;
+
+        pRegion->offRegion            = 0; /* Disk start. */
+        pRegion->cbBlock              = 2048;
+        pRegion->enmDataForm          = VDREGIONDATAFORM_RAW;
+        pRegion->enmMetadataForm      = VDREGIONMETADATAFORM_NONE;
+        pRegion->cbData               = 2048;
+        pRegion->cbMetadata           = 0;
+        pRegion->cRegionBlocksOrBytes = pThis->cbSize;
+    }
+    else
         dmgFreeImage(pThis, false);
     return rc;
 }
@@ -1724,9 +1741,9 @@ static DECLCALLBACK(int) dmgOpenImage(PDMGIMAGE pThis, unsigned uOpenFlags)
 
 /** @interface_method_impl{VDIMAGEBACKEND,pfnProbe} */
 static DECLCALLBACK(int) dmgProbe(const char *pszFilename, PVDINTERFACE pVDIfsDisk,
-                                  PVDINTERFACE pVDIfsImage, VDTYPE *penmType)
+                                  PVDINTERFACE pVDIfsImage, VDTYPE enmDesiredType, VDTYPE *penmType)
 {
-    RT_NOREF1(pVDIfsDisk);
+    RT_NOREF(pVDIfsDisk, enmDesiredType);
     LogFlowFunc(("pszFilename=\"%s\" pVDIfsDisk=%#p pVDIfsImage=%#p penmType=%#p\n",
                  pszFilename, pVDIfsDisk, pVDIfsImage, penmType));
 
@@ -1770,8 +1787,9 @@ static DECLCALLBACK(int) dmgProbe(const char *pszFilename, PVDINTERFACE pVDIfsDi
     if (hDmgFileInXar == NIL_RTVFSFILE)
         rc = vdIfIoIntFileGetSize(pIfIo, pStorage, &cbFile);
     else
-        rc = RTVfsFileGetSize(hDmgFileInXar, &cbFile);
-    if (RT_SUCCESS(rc))
+        rc = RTVfsFileQuerySize(hDmgFileInXar, &cbFile);
+    if (   RT_SUCCESS(rc)
+        && cbFile >= sizeof(DMGUDIF))
     {
         DMGUDIF  Ftr;
         uint64_t offFtr = cbFile - sizeof(Ftr);
@@ -1792,7 +1810,7 @@ static DECLCALLBACK(int) dmgProbe(const char *pszFilename, PVDINTERFACE pVDIfsDi
                 if (dmgUdifFtrIsValid(&Ftr, offFtr))
                 {
                     rc = VINF_SUCCESS;
-                    *penmType = VDTYPE_DVD;
+                    *penmType = VDTYPE_OPTICAL_DISC;
                 }
                 else
                 {
@@ -1803,6 +1821,8 @@ static DECLCALLBACK(int) dmgProbe(const char *pszFilename, PVDINTERFACE pVDIfsDi
             else
                 rc = VERR_VD_DMG_INVALID_HEADER;
         }
+        else
+            rc = VERR_VD_DMG_INVALID_HEADER;
     }
     else
         rc = VERR_VD_DMG_INVALID_HEADER;
@@ -1851,7 +1871,7 @@ static DECLCALLBACK(int) dmgOpen(const char *pszFilename, unsigned uOpenFlags,
      * then hand it over to a worker function that does all the rest.
      */
     int rc = VERR_NO_MEMORY;
-    PDMGIMAGE pThis = (PDMGIMAGE)RTMemAllocZ(sizeof(*pThis));
+    PDMGIMAGE pThis = (PDMGIMAGE)RTMemAllocZ(RT_UOFFSETOF(DMGIMAGE, RegionList.aRegions[1]));
     if (pThis)
     {
         pThis->pszFilename = pszFilename;
@@ -2053,38 +2073,6 @@ static DECLCALLBACK(unsigned) dmgGetVersion(void *pBackendData)
     return 1;
 }
 
-/** @interface_method_impl{VDIMAGEBACKEND,pfnGetSectorSize} */
-static DECLCALLBACK(uint32_t) dmgGetSectorSize(void *pBackendData)
-{
-    LogFlowFunc(("pBackendData=%#p\n", pBackendData));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, 0);
-
-    uint32_t cb = 0;
-    if (pThis->pStorage || pThis->hDmgFileInXar != NIL_RTVFSFILE)
-        cb = 2048;
-
-    LogFlowFunc(("returns %u\n", cb));
-    return cb;
-}
-
-/** @interface_method_impl{VDIMAGEBACKEND,pfnGetSize} */
-static DECLCALLBACK(uint64_t) dmgGetSize(void *pBackendData)
-{
-    LogFlowFunc(("pBackendData=%#p\n", pBackendData));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, 0);
-
-    uint64_t cb = 0;
-    if (pThis->pStorage || pThis->hDmgFileInXar != NIL_RTVFSFILE)
-        cb = pThis->cbSize;
-
-    LogFlowFunc(("returns %llu\n", cb));
-    return cb;
-}
-
 /** @interface_method_impl{VDIMAGEBACKEND,pfnGetFileSize} */
 static DECLCALLBACK(uint64_t) dmgGetFileSize(void *pBackendData)
 {
@@ -2179,6 +2167,30 @@ static DECLCALLBACK(int) dmgSetLCHSGeometry(void *pBackendData, PCVDGEOMETRY pLC
     return rc;
 }
 
+/** @copydoc VDIMAGEBACKEND::pfnQueryRegions */
+static DECLCALLBACK(int) dmgQueryRegions(void *pBackendData, PCVDREGIONLIST *ppRegionList)
+{
+    LogFlowFunc(("pBackendData=%#p ppRegionList=%#p\n", pBackendData, ppRegionList));
+    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
+
+    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
+
+    *ppRegionList = &pThis->RegionList;
+    LogFlowFunc(("returns %Rrc\n", VINF_SUCCESS));
+    return VINF_SUCCESS;
+}
+
+/** @copydoc VDIMAGEBACKEND::pfnRegionListRelease */
+static DECLCALLBACK(void) dmgRegionListRelease(void *pBackendData, PCVDREGIONLIST pRegionList)
+{
+    RT_NOREF1(pRegionList);
+    LogFlowFunc(("pBackendData=%#p pRegionList=%#p\n", pBackendData, pRegionList));
+    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
+    AssertPtr(pThis); RT_NOREF(pThis);
+
+    /* Nothing to do here. */
+}
+
 /** @interface_method_impl{VDIMAGEBACKEND,pfnGetImageFlags} */
 static DECLCALLBACK(unsigned) dmgGetImageFlags(void *pBackendData)
 {
@@ -2226,171 +2238,35 @@ static DECLCALLBACK(int) dmgSetOpenFlags(void *pBackendData, unsigned uOpenFlags
     return rc;
 }
 
-/** @interface_method_impl{VDIMAGEBACKEND,pfnGetComment} */
-static DECLCALLBACK(int) dmgGetComment(void *pBackendData, char *pszComment, size_t cbComment)
-{
-    RT_NOREF2(pszComment, cbComment);
-    LogFlowFunc(("pBackendData=%#p pszComment=%#p cbComment=%zu\n", pBackendData, pszComment, cbComment));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
+/** @copydoc VDIMAGEBACKEND::pfnGetComment */
+VD_BACKEND_CALLBACK_GET_COMMENT_DEF_NOT_SUPPORTED(dmgGetComment);
 
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
+/** @copydoc VDIMAGEBACKEND::pfnSetComment */
+VD_BACKEND_CALLBACK_SET_COMMENT_DEF_NOT_SUPPORTED(dmgSetComment, PDMGIMAGE);
 
-    LogFlowFunc(("returns %Rrc comment='%s'\n", VERR_NOT_SUPPORTED, pszComment));
-    return VERR_NOT_SUPPORTED;
-}
+/** @copydoc VDIMAGEBACKEND::pfnGetUuid */
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(dmgGetUuid);
 
-/** @interface_method_impl{VDIMAGEBACKEND,pfnSetComment} */
-static DECLCALLBACK(int) dmgSetComment(void *pBackendData, const char *pszComment)
-{
-    RT_NOREF1(pszComment);
-    LogFlowFunc(("pBackendData=%#p pszComment=\"%s\"\n", pBackendData, pszComment));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
+/** @copydoc VDIMAGEBACKEND::pfnSetUuid */
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(dmgSetUuid, PDMGIMAGE);
 
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
+/** @copydoc VDIMAGEBACKEND::pfnGetModificationUuid */
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(dmgGetModificationUuid);
 
-    int rc;
-    if (pThis->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
+/** @copydoc VDIMAGEBACKEND::pfnSetModificationUuid */
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(dmgSetModificationUuid, PDMGIMAGE);
 
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+/** @copydoc VDIMAGEBACKEND::pfnGetParentUuid */
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(dmgGetParentUuid);
 
-/** @interface_method_impl{VDIMAGEBACKEND,pfnGetUuid} */
-static DECLCALLBACK(int) dmgGetUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
+/** @copydoc VDIMAGEBACKEND::pfnSetParentUuid */
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(dmgSetParentUuid, PDMGIMAGE);
 
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
+/** @copydoc VDIMAGEBACKEND::pfnGetParentModificationUuid */
+VD_BACKEND_CALLBACK_GET_UUID_DEF_NOT_SUPPORTED(dmgGetParentModificationUuid);
 
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
-
-/** @interface_method_impl{VDIMAGEBACKEND,pfnSetUuid} */
-static DECLCALLBACK(int) dmgSetUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pThis->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
-
-/** @interface_method_impl{VDIMAGEBACKEND,pfnGetModificationUuid} */
-static DECLCALLBACK(int) dmgGetModificationUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
-
-/** @interface_method_impl{VDIMAGEBACKEND,pfnSetModificationUuid} */
-static DECLCALLBACK(int) dmgSetModificationUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pThis->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
-
-/** @interface_method_impl{VDIMAGEBACKEND,pfnGetParentUuid} */
-static DECLCALLBACK(int) dmgGetParentUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", VERR_NOT_SUPPORTED, pUuid));
-    return VERR_NOT_SUPPORTED;
-}
-
-/** @interface_method_impl{VDIMAGEBACKEND,pfnSetParentUuid} */
-static DECLCALLBACK(int) dmgSetParentUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pThis->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
-
-/** @interface_method_impl{VDIMAGEBACKEND,pfnGetParentModificationUuid} */
-static DECLCALLBACK(int) dmgGetParentModificationUuid(void *pBackendData, PRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p pUuid=%#p\n", pBackendData, pUuid));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pThis->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc (%RTuuid)\n", rc, pUuid));
-    return rc;
-}
-
-/** @interface_method_impl{VDIMAGEBACKEND,pfnSetParentModificationUuid} */
-static DECLCALLBACK(int) dmgSetParentModificationUuid(void *pBackendData, PCRTUUID pUuid)
-{
-    RT_NOREF1(pUuid);
-    LogFlowFunc(("pBackendData=%#p Uuid=%RTuuid\n", pBackendData, pUuid));
-    PDMGIMAGE pThis = (PDMGIMAGE)pBackendData;
-
-    AssertPtrReturn(pThis, VERR_VD_NOT_OPENED);
-
-    int rc;
-    if (pThis->uOpenFlags & VD_OPEN_FLAGS_READONLY)
-        rc = VERR_VD_IMAGE_READ_ONLY;
-    else
-        rc = VERR_NOT_SUPPORTED;
-
-    LogFlowFunc(("returns %Rrc\n", rc));
-    return rc;
-}
+/** @copydoc VDIMAGEBACKEND::pfnSetParentModificationUuid */
+VD_BACKEND_CALLBACK_SET_UUID_DEF_NOT_SUPPORTED(dmgSetParentModificationUuid, PDMGIMAGE);
 
 /** @interface_method_impl{VDIMAGEBACKEND,pfnDump} */
 static DECLCALLBACK(void) dmgDump(void *pBackendData)
@@ -2437,10 +2313,6 @@ const VDIMAGEBACKEND g_DmgBackend =
     NULL,
     /* pfnGetVersion */
     dmgGetVersion,
-    /* pfnGetSectorSize */
-    dmgGetSectorSize,
-    /* pfnGetSize */
-    dmgGetSize,
     /* pfnGetFileSize */
     dmgGetFileSize,
     /* pfnGetPCHSGeometry */
@@ -2451,6 +2323,10 @@ const VDIMAGEBACKEND g_DmgBackend =
     dmgGetLCHSGeometry,
     /* pfnSetLCHSGeometry */
     dmgSetLCHSGeometry,
+    /* pfnQueryRegions */
+    dmgQueryRegions,
+    /* pfnRegionListRelease */
+    dmgRegionListRelease,
     /* pfnGetImageFlags */
     dmgGetImageFlags,
     /* pfnGetOpenFlags */

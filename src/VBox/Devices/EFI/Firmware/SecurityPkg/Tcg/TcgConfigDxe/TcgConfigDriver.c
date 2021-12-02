@@ -1,14 +1,8 @@
 /** @file
   The module entry point for Tcg configuration module.
 
-Copyright (c) 2011 - 2014, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2011 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -23,7 +17,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
   @retval EFI_ALREADY_STARTED    The driver already exists in system.
   @retval EFI_OUT_OF_RESOURCES   Fail to execute entry point due to lack of resources.
-  @retval EFI_SUCCES             All the related protocols are installed on the driver.
+  @retval EFI_SUCCESS            All the related protocols are installed on the driver.
   @retval Others                 Fail to install protocols as indicated.
 
 **/
@@ -43,7 +37,7 @@ TcgConfigDriverEntryPoint (
     return EFI_UNSUPPORTED;
   }
 
-  Status = TisPcRequestUseTpm ((TIS_TPM_HANDLE) (UINTN) TPM_BASE_ADDRESS);
+  Status = Tpm12RequestUseTpm ();
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "TPM not detected!\n"));
     return Status;
@@ -72,6 +66,12 @@ TcgConfigDriverEntryPoint (
   PrivateData = AllocateCopyPool (sizeof (TCG_CONFIG_PRIVATE_DATA), &mTcgConfigPrivateDateTemplate);
   if (PrivateData == NULL) {
     return EFI_OUT_OF_RESOURCES;
+  }
+
+  PrivateData->Configuration = AllocatePool (sizeof (TCG_CONFIGURATION));
+  if (PrivateData->Configuration == NULL) {
+    Status = EFI_OUT_OF_RESOURCES;
+    goto ErrorExit;
   }
 
   PrivateData->TcgProtocol = TcgProtocol;
@@ -138,7 +138,7 @@ TcgConfigDriverUnload (
   ASSERT (PrivateData->Signature == TCG_CONFIG_PRIVATE_DATA_SIGNATURE);
 
   gBS->UninstallMultipleProtocolInterfaces (
-         &ImageHandle,
+         ImageHandle,
          &gEfiCallerIdGuid,
          PrivateData,
          NULL

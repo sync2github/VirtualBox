@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTR0Timer.h 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT R0 Testcase - Timers, common header.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,6 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
+#ifndef IPRT_INCLUDED_SRC_testcase_tstRTR0Timer_h
+#define IPRT_INCLUDED_SRC_testcase_tstRTR0Timer_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include "tstRTR0CommonReq.h"
 
@@ -73,3 +78,4 @@ typedef enum TSTRTR0TIMER
      || (uOperation) == TSTRTR0TIMER_LATENCY_OMNI_HIRES \
     )
 
+#endif /* !IPRT_INCLUDED_SRC_testcase_tstRTR0Timer_h */

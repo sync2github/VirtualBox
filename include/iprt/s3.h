@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: s3.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * IPRT - Simple Storage Service (S3) Communication API.
  */
 
 /*
- * Copyright (C) 2009-2016 Oracle Corporation
+ * Copyright (C) 2009-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___iprt_s3_h
-#define ___iprt_s3_h
+#ifndef IPRT_INCLUDED_s3_h
+#define IPRT_INCLUDED_s3_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <iprt/types.h>
 
@@ -53,7 +56,7 @@ typedef RTS3                               *PRTS3;
  * @param   uPercent    The process completion percentage.
  * @param   pvUser      The user parameter given to RTS3SetProgressCallback.
  */
-typedef DECLCALLBACK(int) FNRTS3PROGRESS(unsigned uPercent, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNRTS3PROGRESS,(unsigned uPercent, void *pvUser));
 /** Pointer to a S3 progress callback. */
 typedef FNRTS3PROGRESS *PFNRTS3PROGRESS;
 
@@ -266,5 +269,5 @@ RTR3DECL(int) RTS3PutKey(RTS3 hS3, const char *pszBucketName, const char *pszKey
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !IPRT_INCLUDED_s3_h */
 

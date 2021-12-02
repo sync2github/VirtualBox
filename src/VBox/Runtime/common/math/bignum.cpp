@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: bignum.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Big Integer Numbers.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -676,13 +676,15 @@ RTDECL(int) RTBigNumInit(PRTBIGNUM pBigNum, uint32_t fFlags, void const *pvRaw, 
                 {
                     default: AssertFailed();
 #if RTBIGNUM_ELEMENT_SIZE == 8
-                    case 7: uLast = (uLast << 8) | pb[6];
-                    case 6: uLast = (uLast << 8) | pb[5];
-                    case 5: uLast = (uLast << 8) | pb[4];
+                                                          RT_FALL_THRU();
+                    case 7: uLast = (uLast << 8) | pb[6]; RT_FALL_THRU();
+                    case 6: uLast = (uLast << 8) | pb[5]; RT_FALL_THRU();
+                    case 5: uLast = (uLast << 8) | pb[4]; RT_FALL_THRU();
                     case 4: uLast = (uLast << 8) | pb[3];
 #endif
-                    case 3: uLast = (uLast << 8) | pb[2];
-                    case 2: uLast = (uLast << 8) | pb[1];
+                                                          RT_FALL_THRU();
+                    case 3: uLast = (uLast << 8) | pb[2]; RT_FALL_THRU();
+                    case 2: uLast = (uLast << 8) | pb[1]; RT_FALL_THRU();
                     case 1: uLast = (uLast << 8) | pb[0];
                 }
                 pBigNum->pauElements[i] = uLast;
@@ -713,13 +715,15 @@ RTDECL(int) RTBigNumInit(PRTBIGNUM pBigNum, uint32_t fFlags, void const *pvRaw, 
                 {
                     default: AssertFailed();
 #if RTBIGNUM_ELEMENT_SIZE == 8
-                    case 7: uLast = (uLast << 8) | *pb++;
-                    case 6: uLast = (uLast << 8) | *pb++;
-                    case 5: uLast = (uLast << 8) | *pb++;
+                                                          RT_FALL_THRU();
+                    case 7: uLast = (uLast << 8) | *pb++; RT_FALL_THRU();
+                    case 6: uLast = (uLast << 8) | *pb++; RT_FALL_THRU();
+                    case 5: uLast = (uLast << 8) | *pb++; RT_FALL_THRU();
                     case 4: uLast = (uLast << 8) | *pb++;
 #endif
-                    case 3: uLast = (uLast << 8) | *pb++;
-                    case 2: uLast = (uLast << 8) | *pb++;
+                                                          RT_FALL_THRU();
+                    case 3: uLast = (uLast << 8) | *pb++; RT_FALL_THRU();
+                    case 2: uLast = (uLast << 8) | *pb++; RT_FALL_THRU();
                     case 1: uLast = (uLast << 8) | *pb++;
                 }
                 pBigNum->pauElements[i] = uLast;
@@ -745,9 +749,9 @@ RTDECL(int) RTBigNumInit(PRTBIGNUM pBigNum, uint32_t fFlags, void const *pvRaw, 
             AssertCompile(RTBIGNUM_ALIGNMENT <= 4);
             switch (pBigNum->cAllocated - pBigNum->cUsed)
             {
-                default: AssertFailed();
-                case 3: *puUnused++ = 0;
-                case 2: *puUnused++ = 0;
+                default: AssertFailed(); RT_FALL_THRU();
+                case 3: *puUnused++ = 0; RT_FALL_THRU();
+                case 2: *puUnused++ = 0; RT_FALL_THRU();
                 case 1: *puUnused++ = 0;
             }
         }
@@ -835,12 +839,13 @@ RTDECL(int) RTBigNumDestroy(PRTBIGNUM pBigNum)
         if (pBigNum->pauElements)
         {
             Assert(pBigNum->cAllocated > 0);
-            if (pBigNum->fSensitive)
+            if (!pBigNum->fSensitive)
+                RTMemFree(pBigNum->pauElements);
+            else
             {
                 RTMemSaferFree(pBigNum->pauElements, pBigNum->cAllocated * RTBIGNUM_ELEMENT_SIZE);
                 RT_ZERO(*pBigNum);
             }
-            RTMemFree(pBigNum->pauElements);
             pBigNum->pauElements = NULL;
         }
     }
@@ -2226,7 +2231,7 @@ static int rtBigNumMagnitudeDivideKnuth(PRTBIGNUM pQuotient, PRTBIGNUM pRemainde
      * Delete temporary variables.
      */
     RTBigNumDestroy(&NormDividend);
-    if (pDivisor == &NormDivisor)
+    if (pNormDivisor == &NormDivisor)
         RTBigNumDestroy(&NormDivisor);
     return rc;
 }
@@ -2659,6 +2664,8 @@ static int rtBigNumMagnitudeExponentiate(PRTBIGNUM pResult, PCRTBIGNUM pBase, PC
                     if (RT_FAILURE(rc))
                         break;
                 }
+
+                RTBigNumDestroy(&TmpMultiplicand);
             }
         }
         RTBigNumDestroy(&Pow2);

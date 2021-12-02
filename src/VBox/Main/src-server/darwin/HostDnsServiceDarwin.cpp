@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: HostDnsServiceDarwin.cpp 85271 2020-07-12 12:36:21Z vboxsync $ */
 /** @file
  * Darwin specific DNS information fetching.
  */
 
 /*
- * Copyright (C) 2004-2016 Oracle Corporation
+ * Copyright (C) 2004-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,25 +19,29 @@
 #include <VBox/com/ptr.h>
 
 
-#include <iprt/err.h>
+#include <iprt/asm.h>
+#include <iprt/errcore.h>
 #include <iprt/thread.h>
 #include <iprt/semaphore.h>
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <SystemConfiguration/SCDynamicStore.h>
 
-#include <string>
+#include <iprt/sanitized/string>
 #include <vector>
 #include "../HostDnsService.h"
 
 
 struct HostDnsServiceDarwin::Data
 {
+    Data()
+        : m_fStop(false) { }
+
     SCDynamicStoreRef m_store;
     CFRunLoopSourceRef m_DnsWatcher;
     CFRunLoopRef m_RunLoopRef;
-    CFRunLoopSourceRef m_Stopper;
-    bool m_fStop;
+    CFRunLoopSourceRef m_SourceStop;
+    volatile bool m_fStop;
     RTSEMEVENT m_evtStop;
     static void performShutdownCallback(void *);
 };
@@ -46,51 +50,29 @@ struct HostDnsServiceDarwin::Data
 static const CFStringRef kStateNetworkGlobalDNSKey = CFSTR("State:/Network/Global/DNS");
 
 
-HostDnsServiceDarwin::HostDnsServiceDarwin():HostDnsMonitor(true),m(NULL)
+HostDnsServiceDarwin::HostDnsServiceDarwin()
+    : HostDnsServiceBase(true /* fThreaded */)
+    , m(NULL)
 {
     m = new HostDnsServiceDarwin::Data();
 }
 
-
 HostDnsServiceDarwin::~HostDnsServiceDarwin()
 {
-    if (!m)
-        return;
-
-    monitorThreadShutdown();
-
-    CFRelease(m->m_RunLoopRef);
-
-    CFRelease(m->m_DnsWatcher);
-
-    CFRelease(m->m_store);
-
-    RTSemEventDestroy(m->m_evtStop);
-
-    delete m;
-    m = NULL;
+    if (m != NULL)
+        delete m;
 }
 
-
-void HostDnsServiceDarwin::hostDnsServiceStoreCallback(void *, void *, void *info)
-{
-    HostDnsServiceDarwin *pThis = (HostDnsServiceDarwin *)info;
-
-    RTCLock grab(pThis->m_LockMtx);
-    pThis->updateInfo();
-}
-
-
-HRESULT HostDnsServiceDarwin::init(VirtualBox *virtualbox)
+HRESULT HostDnsServiceDarwin::init(HostDnsMonitorProxy *pProxy)
 {
     SCDynamicStoreContext ctx;
     RT_ZERO(ctx);
 
     ctx.info = this;
 
-    m->m_store = SCDynamicStoreCreate(NULL, CFSTR("org.virtualbox.VBoxSVC"),
-                                   (SCDynamicStoreCallBack)HostDnsServiceDarwin::hostDnsServiceStoreCallback,
-                                   &ctx);
+    m->m_store = SCDynamicStoreCreate(NULL, CFSTR("org.virtualbox.VBoxSVC.HostDNS"),
+                                      (SCDynamicStoreCallBack)HostDnsServiceDarwin::hostDnsServiceStoreCallback,
+                                      &ctx);
     AssertReturn(m->m_store, E_FAIL);
 
     m->m_DnsWatcher = SCDynamicStoreCreateRunLoopSource(NULL, m->m_store, 0);
@@ -102,36 +84,51 @@ HRESULT HostDnsServiceDarwin::init(VirtualBox *virtualbox)
 
     CFRunLoopSourceContext sctx;
     RT_ZERO(sctx);
+    sctx.info    = this;
     sctx.perform = HostDnsServiceDarwin::Data::performShutdownCallback;
-    m->m_Stopper = CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &sctx);
-    AssertReturn(m->m_Stopper, E_FAIL);
 
-    HRESULT hrc = HostDnsMonitor::init(virtualbox);
-    AssertComRCReturn(hrc, hrc);
+    m->m_SourceStop = CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &sctx);
+    AssertReturn(m->m_SourceStop, E_FAIL);
 
-    return updateInfo();
+    HRESULT hrc = HostDnsServiceBase::init(pProxy);
+    return hrc;
 }
 
+void HostDnsServiceDarwin::uninit(void)
+{
+    HostDnsServiceBase::uninit();
 
-void HostDnsServiceDarwin::monitorThreadShutdown()
+    CFRelease(m->m_SourceStop);
+    CFRelease(m->m_RunLoopRef);
+    CFRelease(m->m_DnsWatcher);
+    CFRelease(m->m_store);
+
+    RTSemEventDestroy(m->m_evtStop);
+}
+
+int HostDnsServiceDarwin::monitorThreadShutdown(RTMSINTERVAL uTimeoutMs)
 {
     RTCLock grab(m_LockMtx);
     if (!m->m_fStop)
     {
-        CFRunLoopSourceSignal(m->m_Stopper);
-        CFRunLoopWakeUp(m->m_RunLoopRef);
+        ASMAtomicXchgBool(&m->m_fStop, true);
+        CFRunLoopSourceSignal(m->m_SourceStop);
+        CFRunLoopStop(m->m_RunLoopRef);
 
-        RTSemEventWait(m->m_evtStop, RT_INDEFINITE_WAIT);
+        RTSemEventWait(m->m_evtStop, uTimeoutMs);
     }
+
+    return VINF_SUCCESS;
 }
 
-
-int HostDnsServiceDarwin::monitorWorker()
+int HostDnsServiceDarwin::monitorThreadProc(void)
 {
     m->m_RunLoopRef = CFRunLoopGetCurrent();
     AssertReturn(m->m_RunLoopRef, VERR_INTERNAL_ERROR);
 
     CFRetain(m->m_RunLoopRef);
+
+    CFRunLoopAddSource(m->m_RunLoopRef, m->m_SourceStop, kCFRunLoopCommonModes);
 
     CFArrayRef watchingArrayRef = CFArrayCreate(NULL,
                                                 (const void **)&kStateNetworkGlobalDNSKey,
@@ -139,22 +136,26 @@ int HostDnsServiceDarwin::monitorWorker()
     if (!watchingArrayRef)
     {
         CFRelease(m->m_DnsWatcher);
-        return E_OUTOFMEMORY;
+        return VERR_NO_MEMORY;
     }
 
-    if(SCDynamicStoreSetNotificationKeys(m->m_store, watchingArrayRef, NULL))
+    if (SCDynamicStoreSetNotificationKeys(m->m_store, watchingArrayRef, NULL))
         CFRunLoopAddSource(CFRunLoopGetCurrent(), m->m_DnsWatcher, kCFRunLoopCommonModes);
 
     CFRelease(watchingArrayRef);
 
-    monitorThreadInitializationDone();
+    onMonitorThreadInitDone();
 
-    while (!m->m_fStop)
+    /* Trigger initial update. */
+    int rc = updateInfo();
+    AssertRC(rc); /* Not fatal in release builds. */  /** @todo r=bird: The function always returns VINF_SUCCESS. */
+
+    while (!ASMAtomicReadBool(&m->m_fStop))
     {
         CFRunLoopRun();
     }
 
-    CFRelease(m->m_RunLoopRef);
+    CFRunLoopRemoveSource(m->m_RunLoopRef, m->m_SourceStop, kCFRunLoopCommonModes);
 
     /* We're notifying stopper thread. */
     RTSemEventSignal(m->m_evtStop);
@@ -162,22 +163,20 @@ int HostDnsServiceDarwin::monitorWorker()
     return VINF_SUCCESS;
 }
 
-
-HRESULT HostDnsServiceDarwin::updateInfo()
+int HostDnsServiceDarwin::updateInfo(void)
 {
-    CFPropertyListRef propertyRef = SCDynamicStoreCopyValue(m->m_store,
-                                                            kStateNetworkGlobalDNSKey);
+    CFPropertyListRef propertyRef = SCDynamicStoreCopyValue(m->m_store, kStateNetworkGlobalDNSKey);
     /**
-     * 0:vvl@nb-mbp-i7-2(0)# scutil
-     * > get State:/Network/Global/DNS
-     * > d.show
-     * <dictionary> {
+     * # scutil
+     * \> get State:/Network/Global/DNS
+     * \> d.show
+     * \<dictionary\> {
      * DomainName : vvl-domain
-     * SearchDomains : <array> {
+     * SearchDomains : \<array\> {
      * 0 : vvl-domain
      * 1 : de.vvl-domain.com
      * }
-     * ServerAddresses : <array> {
+     * ServerAddresses : \<array\> {
      * 0 : 192.168.1.4
      * 1 : 192.168.1.1
      * 2 : 8.8.4.4
@@ -186,57 +185,61 @@ HRESULT HostDnsServiceDarwin::updateInfo()
      */
 
     if (!propertyRef)
-        return S_OK;
+        return VINF_SUCCESS;
 
     HostDnsInformation info;
-    CFStringRef domainNameRef = (CFStringRef)CFDictionaryGetValue(
-      static_cast<CFDictionaryRef>(propertyRef), CFSTR("DomainName"));
+    CFStringRef domainNameRef = (CFStringRef)CFDictionaryGetValue(static_cast<CFDictionaryRef>(propertyRef), CFSTR("DomainName"));
     if (domainNameRef)
     {
-        const char *pszDomainName = CFStringGetCStringPtr(domainNameRef,
-                                                    CFStringGetSystemEncoding());
+        const char *pszDomainName = CFStringGetCStringPtr(domainNameRef, CFStringGetSystemEncoding());
         if (pszDomainName)
             info.domain = pszDomainName;
     }
 
-    int i, arrayCount;
-    CFArrayRef serverArrayRef = (CFArrayRef)CFDictionaryGetValue(
-      static_cast<CFDictionaryRef>(propertyRef), CFSTR("ServerAddresses"));
+    CFArrayRef serverArrayRef = (CFArrayRef)CFDictionaryGetValue(static_cast<CFDictionaryRef>(propertyRef),
+                                                                 CFSTR("ServerAddresses"));
     if (serverArrayRef)
     {
-        arrayCount = CFArrayGetCount(serverArrayRef);
-        for (i = 0; i < arrayCount; ++i)
+        CFIndex const cItems = CFArrayGetCount(serverArrayRef);
+        for (CFIndex i = 0; i < cItems; ++i)
         {
             CFStringRef serverAddressRef = (CFStringRef)CFArrayGetValueAtIndex(serverArrayRef, i);
             if (!serverArrayRef)
                 continue;
 
-            const char *pszServerAddress = CFStringGetCStringPtr(serverAddressRef,
-                                                           CFStringGetSystemEncoding());
+            /** @todo r=bird: This code is messed up as CFStringGetCStringPtr is documented
+             *  to return NULL even if the string is valid.   Furthermore, we must have
+             *  UTF-8 - some joker might decide latin-1 is better here for all we know
+             *  and we'll end up with evil invalid UTF-8 sequences. */
+            const char *pszServerAddress = CFStringGetCStringPtr(serverAddressRef, CFStringGetSystemEncoding());
             if (!pszServerAddress)
                 continue;
 
+            /** @todo r=bird: Why on earth are we using std::string and not Utf8Str?   */
             info.servers.push_back(std::string(pszServerAddress));
         }
     }
 
-    CFArrayRef searchArrayRef = (CFArrayRef)CFDictionaryGetValue(
-      static_cast<CFDictionaryRef>(propertyRef), CFSTR("SearchDomains"));
+    CFArrayRef searchArrayRef = (CFArrayRef)CFDictionaryGetValue(static_cast<CFDictionaryRef>(propertyRef),
+                                                                 CFSTR("SearchDomains"));
     if (searchArrayRef)
     {
-        arrayCount = CFArrayGetCount(searchArrayRef);
-
-        for (i = 0; i < arrayCount; ++i)
+        CFIndex const cItems = CFArrayGetCount(searchArrayRef);
+        for (CFIndex i = 0; i < cItems; ++i)
         {
             CFStringRef searchStringRef = (CFStringRef)CFArrayGetValueAtIndex(searchArrayRef, i);
             if (!searchArrayRef)
                 continue;
 
-            const char *pszSearchString = CFStringGetCStringPtr(searchStringRef,
-                                                          CFStringGetSystemEncoding());
+            /** @todo r=bird: This code is messed up as CFStringGetCStringPtr is documented
+             *  to return NULL even if the string is valid.   Furthermore, we must have
+             *  UTF-8 - some joker might decide latin-1 is better here for all we know
+             *  and we'll end up with evil invalid UTF-8 sequences. */
+            const char *pszSearchString = CFStringGetCStringPtr(searchStringRef, CFStringGetSystemEncoding());
             if (!pszSearchString)
                 continue;
 
+            /** @todo r=bird: Why on earth are we using std::string and not Utf8Str?   */
             info.searchList.push_back(std::string(pszSearchString));
         }
     }
@@ -245,11 +248,24 @@ HRESULT HostDnsServiceDarwin::updateInfo()
 
     setInfo(info);
 
-    return S_OK;
+    return VINF_SUCCESS;
 }
 
-void HostDnsServiceDarwin::Data::performShutdownCallback(void *info)
+void HostDnsServiceDarwin::hostDnsServiceStoreCallback(void *, void *, void *pInfo)
 {
-    HostDnsServiceDarwin::Data *pThis = static_cast<HostDnsServiceDarwin::Data *>(info);
-    pThis->m_fStop = true;
+    HostDnsServiceDarwin *pThis = (HostDnsServiceDarwin *)pInfo;
+    AssertPtrReturnVoid(pThis);
+
+    RTCLock grab(pThis->m_LockMtx);
+    pThis->updateInfo();
 }
+
+void HostDnsServiceDarwin::Data::performShutdownCallback(void *pInfo)
+{
+    HostDnsServiceDarwin *pThis = (HostDnsServiceDarwin *)pInfo;
+    AssertPtrReturnVoid(pThis);
+
+    AssertPtrReturnVoid(pThis->m);
+    ASMAtomicXchgBool(&pThis->m->m_fStop, true);
+}
+

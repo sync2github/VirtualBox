@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: VBoxAutostartUtils.cpp 91363 2021-09-24 13:08:32Z vboxsync $ */
 /** @file
  * VBoxAutostart - VirtualBox Autostart service, start machines during system boot.
  *                 Utils used by the windows and posix frontends.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,11 +29,7 @@
 #include <iprt/thread.h>
 #include <iprt/stream.h>
 #include <iprt/log.h>
-#include <iprt/path.h>
-
-#include <algorithm>
-#include <list>
-#include <string>
+#include <iprt/path.h>      /* RTPATH_MAX */
 
 #include "VBoxAutostart.h"
 
@@ -51,6 +47,8 @@ DECLHIDDEN(const char *) machineStateToName(MachineState_T machineState, bool fS
             return "teleported";
         case MachineState_Aborted:
             return "aborted";
+        case MachineState_AbortedSaved:
+            return "aborted-saved";
         case MachineState_Running:
             return "running";
         case MachineState_Paused:
@@ -93,7 +91,7 @@ DECLHIDDEN(const char *) machineStateToName(MachineState_T machineState, bool fS
     return "unknown";
 }
 
-DECLHIDDEN(void) autostartSvcLogErrorV(const char *pszFormat, va_list va)
+DECLHIDDEN(RTEXITCODE) autostartSvcLogErrorV(const char *pszFormat, va_list va)
 {
     if (*pszFormat)
     {
@@ -106,14 +104,16 @@ DECLHIDDEN(void) autostartSvcLogErrorV(const char *pszFormat, va_list va)
         else
             autostartSvcOsLogStr(pszFormat, AUTOSTARTLOGTYPE_ERROR);
     }
+    return RTEXITCODE_FAILURE;
 }
 
-DECLHIDDEN(void) autostartSvcLogError(const char *pszFormat, ...)
+DECLHIDDEN(RTEXITCODE) autostartSvcLogError(const char *pszFormat, ...)
 {
     va_list va;
     va_start(va, pszFormat);
     autostartSvcLogErrorV(pszFormat, va);
     va_end(va);
+    return RTEXITCODE_FAILURE;
 }
 
 DECLHIDDEN(void) autostartSvcLogVerboseV(const char *pszFormat, va_list va)
@@ -202,36 +202,29 @@ DECLHIDDEN(RTEXITCODE) autostartSvcLogTooManyArgsError(const char *pszAction, in
     return RTEXITCODE_FAILURE;
 }
 
-DECLHIDDEN(void) autostartSvcDisplayErrorV(const char *pszFormat, va_list va)
+DECLHIDDEN(RTEXITCODE) autostartSvcDisplayErrorV(const char *pszFormat, va_list va)
 {
     RTStrmPrintf(g_pStdErr, "VBoxSupSvc error: ");
     RTStrmPrintfV(g_pStdErr, pszFormat, va);
     Log(("autostartSvcDisplayErrorV: %s", pszFormat)); /** @todo format it! */
+    return RTEXITCODE_FAILURE;
 }
 
-DECLHIDDEN(void) autostartSvcDisplayError(const char *pszFormat, ...)
+DECLHIDDEN(RTEXITCODE) autostartSvcDisplayError(const char *pszFormat, ...)
 {
     va_list va;
     va_start(va, pszFormat);
     autostartSvcDisplayErrorV(pszFormat, va);
     va_end(va);
-}
-
-DECLHIDDEN(RTEXITCODE) autostartSvcDisplayGetOptError(const char *pszAction, int rc, int argc, char **argv, int iArg,
-                                                      PCRTGETOPTUNION pValue)
-{
-    RT_NOREF(pValue);
-    autostartSvcDisplayError("%s - RTGetOpt failure, %Rrc (%d): %s\n",
-                       pszAction, rc, rc, iArg < argc ? argv[iArg] : "<null>");
     return RTEXITCODE_FAILURE;
 }
 
-DECLHIDDEN(RTEXITCODE) autostartSvcDisplayTooManyArgsError(const char *pszAction, int argc, char **argv, int iArg)
+DECLHIDDEN(RTEXITCODE) autostartSvcDisplayGetOptError(const char *pszAction, int rc, PCRTGETOPTUNION pValue)
 {
-    RT_NOREF(argc);
-    Assert(iArg < argc);
-    autostartSvcDisplayError("%s - Too many arguments: %s\n", pszAction, argv[iArg]);
-    return RTEXITCODE_FAILURE;
+    char szMsg[4096];
+    RTGetOptFormatError(szMsg, sizeof(szMsg), rc, pValue);
+    autostartSvcDisplayError("%s - %s", pszAction, szMsg);
+    return RTEXITCODE_SYNTAX;
 }
 
 DECLHIDDEN(int) autostartSetup()

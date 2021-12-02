@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_err_h
-#define ___VBox_err_h
+#ifndef VBOX_INCLUDED_err_h
+#define VBOX_INCLUDED_err_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <iprt/err.h>
@@ -90,6 +93,12 @@
 #define VERR_INVALID_CPU_INDEX              (-1022)
 /** This VirtualBox build does not support raw-mode. */
 #define VERR_RAW_MODE_NOT_SUPPORTED         (-1023)
+/** Essential fields in the shared VM structure doesn't match the global one. */
+#define VERR_INCONSISTENT_VM_HANDLE         (-1024)
+/** The VM has been restored. */
+#define VERR_VM_RESTORED                    (-1025)
+/** The requested feature is not supported by NEM. */
+#define VERR_NOT_SUP_BY_NEM                 (-1026)
 /** @} */
 
 
@@ -162,9 +171,9 @@
  * to virtualize rawly.
  * @remarks Important to have a higher priority (lower number) than the other rescheduling status codes. */
 #define VINF_EM_RESCHEDULE_REM              1115
-/** Indicating that a rescheduling to vmx-mode execution.
+/** Indicating that a rescheduling to vmx-mode execution (HM/NEM).
  * Typically caused by REM detecting that hardware-accelerated raw-mode execution is possible. */
-#define VINF_EM_RESCHEDULE_HM            1116
+#define VINF_EM_RESCHEDULE_HM               1116
 /** Indicating that a rescheduling to raw-mode execution.
  * Typically caused by REM detecting that raw-mode execution is possible.
  * @remarks Important to have a higher priority (lower number) than VINF_EM_RESCHEDULE. */
@@ -226,8 +235,6 @@
 #define VINF_EM_RAW_STALE_SELECTOR          1138
 /** Reason for leaving RC: The IRET resuming guest code trapped. */
 #define VINF_EM_RAW_IRET_TRAP               1139
-/** Reason for leaving RC: Emulate (MM)IO intensive code in the recompiler. */
-#define VINF_EM_RAW_EMULATE_IO_BLOCK        1140
 /** The interpreter was unable to deal with the instruction at hand. */
 #define VERR_EM_INTERPRETER                 (-1148)
 /** Internal EM error caused by an unknown warning or informational status code. */
@@ -250,6 +257,14 @@
 #define VINF_EM_RAW_INJECT_TRPM_EVENT       1157
 /** Guest tried to trigger a CPU hang.  The guest is probably up to no good. */
 #define VERR_EM_GUEST_CPU_HANG              (-1158)
+/** Reason for leaving RZ: Pending ring-3 IN instruction. */
+#define VINF_EM_PENDING_R3_IOPORT_READ       1159
+/** Reason for leaving RZ: Pending ring-3 OUT instruction. */
+#define VINF_EM_PENDING_R3_IOPORT_WRITE      1160
+/** Trick for resuming EMHistoryExec after a VMCPU_FF_IOM is handled. */
+#define VINF_EM_RESUME_R3_HISTORY_EXEC       1161
+/** Emulate split-lock access on SMP. */
+#define VINF_EM_EMULATE_SPLIT_LOCK           1162
 /** @} */
 
 
@@ -262,8 +277,7 @@
 /** Someone (including the caller) was already attached as
  * debugger to the VM. */
 #define VERR_DBGF_ALREADY_ATTACHED          (-1201)
-/** Tried to halt a debugger which was already halted.
- * (This is a warning and not an error.) */
+/** Tried to halt a VM or CPU that was already halted. */
 #define VWRN_DBGF_ALREADY_HALTED            1202
 /** The DBGF has no more free breakpoint slots. */
 #define VERR_DBGF_NO_MORE_BP_SLOTS          (-1203)
@@ -307,6 +321,49 @@
 #define VERR_DBGF_STACK_IPE_2               (-1219)
 /** No trace buffer available, please change the VM config. */
 #define VERR_DBGF_NO_TRACE_BUFFER           (-1220)
+/** Internal processing error \#1 in the DBGF event tracing code. */
+#define VERR_DBGF_TRACER_IPE_1              (-1221)
+/** Tried to resume a VM or CPU that is already fully running. */
+#define VWRN_DBGF_ALREADY_RUNNING           (-1222)
+/** Internal processing error \#1 in the DBGF core code. */
+#define VERR_DBGF_IPE_1                     (-1223)
+/** Returned by a breakpoint callback when guest execution should be suspended
+ * and the VM should be dropped into the debugger. */
+#define VINF_DBGF_BP_HALT                   (1224)
+/** The breakpoint owner handle is still used by one or more breakpoints. */
+#define VERR_DBGF_OWNER_BUSY                (-1225)
+/** Number of tries to add an int3 breakpoint table to the lookup tables reached. */
+#define VERR_DBGF_BP_INT3_ADD_TRIES_REACHED (-1226)
+/** Internal processing error \#1 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_1                  (-1227)
+/** Internal processing error \#2 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_2                  (-1228)
+/** Internal processing error \#3 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_3                  (-1229)
+/** Internal processing error \#4 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_4                  (-1230)
+/** Internal processing error \#5 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_5                  (-1231)
+/** Internal processing error \#6 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_6                  (-1232)
+/** Internal processing error \#7 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_7                  (-1233)
+/** Internal processing error \#8 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_8                  (-1234)
+/** Internal processing error \#9 in the DBGF breakpoint manager code. */
+#define VERR_DBGF_BP_IPE_9                  (-1235)
+/** Level 2 lookup failed because the L1 lookup table is corrupted. */
+#define VERR_DBGF_BP_L1_LOOKUP_FAILED       (-1236)
+/** Level 2 lookup failed because the L2 lookup table is corrupted. */
+#define VERR_DBGF_BP_L2_LOOKUP_FAILED       (-1237)
+/** The DBGF has no more free breakpoint owner handles. */
+#define VERR_DBGF_BP_OWNER_NO_MORE_HANDLES  (-1238)
+/** Reason for leaving RZ: Defer the owner callback invocation to Ring-3. */
+#define VINF_DBGF_R3_BP_OWNER_DEFER         1239
+/** The breakpoint owner callback returned an invalid status code. */
+#define VERR_DBGF_BP_OWNER_CALLBACK_WRONG_STATUS (-1240)
+/** The operation was cancelled. */
+#define VERR_DBGF_CANCELLED                 (-1241)
 /** @} */
 
 
@@ -446,14 +503,8 @@
 #define VERR_PGM_PHYS_PAGE_RESERVED         (-1618)
 /** No page directory available for the hypervisor. */
 #define VERR_PGM_NO_HYPERVISOR_ADDRESS      (-1619)
-/** The shadow page pool was flushed.
- * This means that a global CR3 sync was flagged. Anyone receiving this kind of status
- * will have to get down to a SyncCR3 ASAP. See also VINF_PGM_SYNC_CR3. */
-#define VERR_PGM_POOL_FLUSHED               (-1620)
-/** The shadow page pool was cleared.
- * This is a error code internal to the shadow page pool, it will be
- * converted to a VERR_PGM_POOL_FLUSHED before leaving the pool code. */
-#define VERR_PGM_POOL_CLEARED               (-1621)
+
+
 /** The returned shadow page is cached. */
 #define VINF_PGM_CACHED_PAGE                1622
 /** Returned by handler registration, modification and deregistration
@@ -595,6 +646,14 @@
 /** Internal processing error in the PGM physcal page handling code related to
  *  MMIO/MMIO2. */
 #define VERR_PGM_PHYS_MMIO_EX_IPE               (-1685)
+/** Mode table internal error. */
+#define VERR_PGM_MODE_IPE                       (-1686)
+/** Shadow mode 'none' internal error. */
+#define VERR_PGM_SHW_NONE_IPE                   (-1687)
+/** One or more PAE PDPEs are invalid due to reserved bits being set. */
+#define VERR_PGM_PAE_PDPE_RSVD                  (-1688)
+/** Attemted illegal operation in simplified memory management mode. */
+#define VERR_PGM_NOT_SUPPORTED_FOR_NEM_MODE     (-1689)
 /** @} */
 
 
@@ -650,6 +709,10 @@
 #define VERR_CPUM_INVALID_XCR0                  (-1765)
 /** Indicates that we modified the host CR0 (FPU related). */
 #define VINF_CPUM_HOST_CR0_MODIFIED             (1766)
+/** Invalid/unsupported nested hardware virtualization configuration. */
+#define VERR_CPUM_INVALID_HWVIRT_CONFIG         (-1767)
+/** Invalid nested hardware virtualization feature combination. */
+#define VERR_CPUM_INVALID_HWVIRT_FEAT_COMBO     (-1768)
 /** @} */
 
 
@@ -975,6 +1038,30 @@
 #define VERR_TM_TSC_ALREADY_PAUSED          (-2210)
 /** Invalid value for cVirtualTicking.  */
 #define VERR_TM_VIRTUAL_TICKING_IPE         (-2211)
+/** Max timer limit reached.  */
+#define VERR_TM_TOO_MANY_TIMERS             (-2212)
+/** Invalid timer queue number. */
+#define VERR_TM_INVALID_TIMER_QUEUE         (-2213)
+/** The timer queue is not longer allowed to grow. */
+#define VERR_TM_TIMER_QUEUE_CANNOT_GROW     (-2214)
+/** TM internal processing error \#1. */
+#define VERR_TM_IPE_1                       (-2291)
+/** TM internal processing error \#2. */
+#define VERR_TM_IPE_2                       (-2292)
+/** TM internal processing error \#3. */
+#define VERR_TM_IPE_3                       (-2293)
+/** TM internal processing error \#4. */
+#define VERR_TM_IPE_4                       (-2294)
+/** TM internal processing error \#5. */
+#define VERR_TM_IPE_5                       (-2295)
+/** TM internal processing error \#6. */
+#define VERR_TM_IPE_6                       (-2296)
+/** TM internal processing error \#7. */
+#define VERR_TM_IPE_7                       (-2297)
+/** TM internal processing error \#8. */
+#define VERR_TM_IPE_8                       (-2298)
+/** TM internal processing error \#9. */
+#define VERR_TM_IPE_9                       (-2299)
 /** @} */
 
 
@@ -1012,18 +1099,16 @@
 #define VERR_TRPM_DONT_PANIC                (-2403)
 /** Reason for leaving RC: Double Fault. */
 #define VERR_TRPM_PANIC                     (-2404)
-/** The exception was dispatched for raw-mode execution. */
-#define VINF_TRPM_XCPT_DISPATCHED           2405
 /** Bad TRPM_TRAP_IN_OP. */
-#define VERR_TRPM_BAD_TRAP_IN_OP            (-2406)
+#define VERR_TRPM_BAD_TRAP_IN_OP            (-2405)
 /** Internal processing error \#1 in TRPM. */
-#define VERR_TRPM_IPE_1                     (-2407)
+#define VERR_TRPM_IPE_1                     (-2406)
 /** Internal processing error \#2 in TRPM. */
-#define VERR_TRPM_IPE_2                     (-2408)
+#define VERR_TRPM_IPE_2                     (-2407)
 /** Internal processing error \#3 in TRPM. */
-#define VERR_TRPM_IPE_3                     (-2409)
+#define VERR_TRPM_IPE_3                     (-2408)
 /** Got into a part of TRPM that is not used when HM (VT-x/AMD-V) is enabled. */
-#define VERR_TRPM_HM_IPE                    (-2410)
+#define VERR_TRPM_HM_IPE                    (-2409)
 /** @} */
 
 
@@ -1148,6 +1233,24 @@
 #define VERR_IOM_HM_IPE                     (-2637)
 /** Internal processing error while merging status codes. */
 #define VERR_IOM_FF_STATUS_IPE              (-2638)
+
+/** Too many I/O port registrations. */
+#define VERR_IOM_TOO_MANY_IOPORT_REGISTRATIONS  (-2650)
+/** Invalid I/O port handle. */
+#define VERR_IOM_INVALID_IOPORT_HANDLE          (-2651)
+/** I/O ports are already mapped. */
+#define VERR_IOM_IOPORTS_ALREADY_MAPPED         (-2652)
+/** I/O ports are not mapped. */
+#define VERR_IOM_IOPORTS_NOT_MAPPED             (-2653)
+
+/** Too many MMIO registrations. */
+#define VERR_IOM_TOO_MANY_MMIO_REGISTRATIONS    (-2660)
+/** Invalid MMIO handle. */
+#define VERR_IOM_INVALID_MMIO_HANDLE            (-2661)
+/** MMIO region is already mapped. */
+#define VERR_IOM_MMIO_REGION_ALREADY_MAPPED     (-2662)
+/** MMIO region is not mapped. */
+#define VERR_IOM_MMIO_REGION_NOT_MAPPED         (-2663)
 /** @} */
 
 
@@ -1196,6 +1299,12 @@
 /** SMAP enabled, but the AC flag was found to be clear - check the kernel
  * log for details. */
 #define VERR_VMM_SMAP_BUT_AC_CLEAR          (-2717)
+/** NEM returned in the wrong state. */
+#define VERR_VMM_WRONG_NEM_VMCPU_STATE      (-2718)
+/** Got back from vmmR0CallRing3SetJmp with the context hook still enabled. */
+#define VERR_VMM_CONTEXT_HOOK_STILL_ENABLED (-2719)
+/** Cannot block in ring-0. */
+#define VERR_VMM_CANNOT_BLOCK               (-2720)
 /** @} */
 
 
@@ -1405,7 +1514,7 @@
  * If you have upgraded VirtualBox recently, please make sure you have
  * terminated all VMs and upgraded any extension packs.  If this error
  * persists, try re-installing VirtualBox. */
-#define VERR_PDM_DEVHLPR3_VERSION_MISMATCH          (-2871)
+#define VERR_PDM_DEVHLP_VERSION_MISMATCH            (-2871)
 /** The USB device instance structure version has changed.
  *
  * If you have upgraded VirtualBox recently, please make sure you have
@@ -1492,6 +1601,21 @@
 #define VINF_PDM_MEDIAEX_IOREQ_IN_PROGRESS          2898
 /** The I/O request is in an invalid state for this operation. */
 #define VERR_PDM_MEDIAEX_IOREQ_INVALID_STATE        (-2899)
+
+/** Returned by PCI config space callbacks to indicate taking default action. */
+#define VINF_PDM_PCI_DO_DEFAULT                     (7200)
+/** Failed to abort entering a critical section in ring-0. */
+#define VERR_PDM_CRITSECT_ABORT_FAILED              (-7201)
+/** Too many readers on read/write critical section. */
+#define VERR_PDM_CRITSECTRW_TOO_MANY_READERS        (-7202)
+/** Too many writes on read/write critical section. */
+#define VERR_PDM_CRITSECTRW_TOO_MANY_WRITERS        (-7203)
+/** Too many write or write/read recursions on read/write critical section. */
+#define VERR_PDM_CRITSECTRW_TOO_MANY_RECURSIONS     (-7204)
+/** Internal error in read-write critical section. */
+#define VERR_PDM_CRITSECTRW_IPE                     (-7205)
+/** Misaligned read/write critical section. */
+#define VERR_PDM_CRITSECTRW_MISALIGNED              (-7206)
 /** @} */
 
 
@@ -1514,15 +1638,16 @@
 #define VINF_HGCM_SAVE_STATE                        (2906)
 /** Requested service already exists. */
 #define VERR_HGCM_SERVICE_EXISTS                    (-2907)
-
+/** Too many clients for the service. */
+#define VERR_HGCM_TOO_MANY_CLIENTS                  (-2908)
+/** Too many calls to the service from a client. */
+#define VERR_HGCM_TOO_MANY_CLIENT_CALLS             (-2909)
 /** @} */
 
 
 /** @name Network Address Translation Driver (DrvNAT) Status Codes
  * @{
  */
-/** Failed to find the DNS configured for this machine. */
-#define VINF_NAT_DNS                                3000
 /** Failed to convert the specified Guest IP to a binary IP address.
  * Malformed input. */
 #define VERR_NAT_REDIR_GUEST_IP                     (-3001)
@@ -1664,7 +1789,8 @@
 #define VERR_VD_RAW_SIZE_OPTICAL_TOO_SMALL          (-3288)
 /** The size of the raw floppy image is too big (>2.88MB) */
 #define VERR_VD_RAW_SIZE_FLOPPY_TOO_BIG             (-3289)
-
+/** Reducing the size is not supported */
+#define VERR_VD_SHRINK_NOT_SUPPORTED                (-3290)
 /** @} */
 
 
@@ -1719,6 +1845,12 @@
 #define VERR_VGA_INVALID_CUSTOM_MODE                (-3500)
 /** The display connector is resizing. */
 #define VINF_VGA_RESIZE_IN_PROGRESS                 (3501)
+/** Unexpected PCI region change during VGA saved state loading. */
+#define VERR_VGA_UNEXPECTED_PCI_REGION_LOAD_CHANGE  (-3502)
+/** Unabled to locate or load the OpenGL library. */
+#define VERR_VGA_GL_LOAD_FAILURE                    (-3503)
+/** Unabled to locate an OpenGL symbol. */
+#define VERR_VGA_GL_SYMBOL_NOT_FOUND                (-3504)
 /** @} */
 
 
@@ -1859,6 +1991,9 @@
 #define VERR_SUPDRV_NOT_BUDDING_VM_PROCESS_1        (-3748)
 /** The process trying to open VBoxDrv is not a budding VM process (2). */
 #define VERR_SUPDRV_NOT_BUDDING_VM_PROCESS_2        (-3749)
+
+/** Raw-mode is unavailable courtesy of Hyper-V. */
+#define VERR_SUPDRV_NO_RAW_MODE_HYPER_V_ROOT        (-7000)
 /** @} */
 
 
@@ -1918,15 +2053,19 @@
 #define VERR_SUPLIB_NT_PROCESS_UNTRUSTED_4          (-3774)
 /** Unable to establish trusted of VM process (5). */
 #define VERR_SUPLIB_NT_PROCESS_UNTRUSTED_5          (-3775)
+/** Unable to make text memory writeable (hardening). */
+#define VERR_SUPLIB_TEXT_NOT_WRITEABLE              (-3776)
+/** Unable to seal text memory again to protect against write access (hardening). */
+#define VERR_SUPLIB_TEXT_NOT_SEALED                 (-3777)
+/** Unexpected instruction encountered for which there is no patch strategy
+ * implemented (hardening). */
+#define VERR_SUPLIB_UNEXPECTED_INSTRUCTION          (-3778)
 /** @} */
 
 
 /** @name VBox GMM Status Codes
  * @{
  */
-/** The GMM is out of pages and needs to be give another chunk of user memory that
- * it can lock down and borrow pages from. */
-#define VERR_GMM_SEED_ME                            (-3800)
 /** Unable to allocate more pages from the host system. */
 #define VERR_GMM_OUT_OF_MEMORY                      (-3801)
 /** Hit the global allocation limit.
@@ -2029,11 +2168,7 @@
 #define VERR_VMX_UNABLE_TO_START_VM                 (-4005)
 /** Unable to switch due to invalid host state. */
 #define VERR_VMX_INVALID_HOST_STATE                 (-4006)
-/** IA32_FEATURE_CONTROL MSR not setup correcty (turn on VMX in the host system BIOS) */
-#define VERR_VMX_ILLEGAL_FEATURE_CONTROL_MSR        (-4007)
-/** Invalid CPU mode for VMX execution. */
-#define VERR_VMX_UNSUPPORTED_MODE                   (-4008)
-/** VMX CPU extension not available */
+/** VMX CPU extension not available in hardware. */
 #define VERR_VMX_NO_VMX                             (-4009)
 /** CPU was incorrectly left in VMX root mode; incompatible with VirtualBox */
 #define VERR_VMX_IN_VMX_ROOT_MODE                   (-4011)
@@ -2071,22 +2206,36 @@
 #define VERR_VMX_MSR_ALL_VMX_DISABLED               (-4028)
 /** VT-x features disabled by the BIOS. */
 #define VERR_VMX_MSR_VMX_DISABLED                   (-4029)
-/** VM-Entry Controls internal cache invalid. */
-#define VERR_VMX_ENTRY_CTLS_CACHE_INVALID           (-4030)
-/** VM-Exit Controls internal cache invalid. */
-#define VERR_VMX_EXIT_CTLS_CACHE_INVALID            (-4031)
-/** VM-Execution Pin-based Controls internal cache invalid. */
-#define VERR_VMX_PIN_EXEC_CTLS_CACHE_INVALID        (-4032)
-/** VM-Execution Primary Processor-based Controls internal cache
- *  invalid. */
-#define VERR_VMX_PROC_EXEC_CTLS_CACHE_INVALID       (-4033)
-/** VM-Execution Secondary Processor-based Controls internal
- *  cache invalid. */
-#define VERR_VMX_PROC_EXEC2_CTLS_CACHE_INVALID      (-4034)
+/** VT-x VMCS field cache invalid. */
+#define VERR_VMX_VMCS_FIELD_CACHE_INVALID           (-4030)
 /** Failed to set VMXON enable bit while enabling VT-x through the MSR. */
-#define VERR_VMX_MSR_VMX_ENABLE_FAILED              (-4035)
+#define VERR_VMX_MSR_VMX_ENABLE_FAILED              (-4031)
 /** Failed to enable VMXON-in-SMX bit while enabling VT-x through the MSR. */
-#define VERR_VMX_MSR_SMX_VMX_ENABLE_FAILED          (-4036)
+#define VERR_VMX_MSR_SMX_VMX_ENABLE_FAILED          (-4032)
+/** An operation caused a nested-guest VM-exit. */
+#define VINF_VMX_VMEXIT                             4033
+/** Generic VM-entry failure. */
+#define VERR_VMX_VMENTRY_FAILED                     (-4033)
+/** Generic VM-exit failure. */
+#define VERR_VMX_VMEXIT_FAILED                      (-4034)
+/** The requested nested-guest VMX intercept is not active or not in
+ *  nested-guest execution mode. */
+#define VINF_VMX_INTERCEPT_NOT_ACTIVE               4035
+/** The behavior of the instruction/operation is modified/needs modification
+ *  in VMX non-root mode. */
+#define VINF_VMX_MODIFIES_BEHAVIOR                  4036
+/** VMLAUNCH/VMRESUME succeeded, can enter nested-guest execution. */
+#define VINF_VMX_VMLAUNCH_VMRESUME                  4037
+/** VT-x VMCS launch state invalid. */
+#define VERR_VMX_INVALID_VMCS_LAUNCH_STATE          (-4038)
+/** Precodition no 0 in hmR0VMXStartVm failed. */
+#define VERR_VMX_STARTVM_PRECOND_0                  (-4039)
+/** Precodition no 1 in hmR0VMXStartVm failed. */
+#define VERR_VMX_STARTVM_PRECOND_1                  (-4040)
+/** Precodition no 2 in hmR0VMXStartVm failed. */
+#define VERR_VMX_STARTVM_PRECOND_2                  (-4041)
+/** Precodition no 3 in hmR0VMXStartVm failed. */
+#define VERR_VMX_STARTVM_PRECOND_3                  (-4042)
 /** @} */
 
 
@@ -2125,18 +2274,31 @@
 #define VERR_SVM_IPE_4                              (-4064)
 /** Internal SVM processing error no 5. */
 #define VERR_SVM_IPE_5                              (-4065)
+/** The nested-guest \#VMEXIT processing failed, initiate shutdown. */
+#define VERR_SVM_VMEXIT_FAILED                      (-4066)
+/** An operation caused a nested-guest SVM \#VMEXIT. */
+#define VINF_SVM_VMEXIT                             4067
+/** VMRUN emulation succeeded, ready to immediately enter the nested-guest. */
+#define VINF_SVM_VMRUN                              4068
+/** The requested nested-guest SVM intercept is not active or not in
+ *  nested-guest execution mode. */
+#define VINF_SVM_INTERCEPT_NOT_ACTIVE               4069
+/** Precodition no 0 in hmR0SvmVmRun failed. */
+#define VERR_SVM_VMRUN_PRECOND_0                    (-4070)
+/** Precodition no 1 in hmR0SvmVmRun failed. */
+#define VERR_SVM_VMRUN_PRECOND_1                    (-4071)
+/** Precodition no 2 in hmR0SvmVmRun failed. */
+#define VERR_SVM_VMRUN_PRECOND_2                    (-4072)
+/** Precodition no 3 in hmR0SvmVmRun failed. */
+#define VERR_SVM_VMRUN_PRECOND_3                    (-4073)
 /** @} */
 
 
 /** @name VBox HM Status Codes
  * @{
  */
-/** Unable to start VM execution. */
-#define VERR_HM_UNKNOWN_CPU                         (-4100)
-/** No CPUID support. */
-#define VERR_HM_NO_CPUID                            (-4101)
 /** Host is about to go into suspend mode. */
-#define VERR_HM_SUSPEND_PENDING                     (-4102)
+#define VERR_HM_SUSPEND_PENDING                     (-4100)
 /** Conflicting CFGM values. */
 #define VERR_HM_CONFIG_MISMATCH                     (-4103)
 /** Internal processing error in the HM init code. */
@@ -2167,6 +2329,8 @@
 #define VERR_HM_INVALID_HM64ON32OP                  (-4116)
 /** Resume guest execution after injecting a double-fault. */
 #define VINF_HM_DOUBLE_FAULT                        4117
+/** Pending exception; continue guest execution. */
+#define VINF_HM_PENDING_XCPT                        4118
 /** @} */
 
 
@@ -2304,7 +2468,7 @@
 /** @} */
 
 
-/** @name PCI Passtrhough Status Codes
+/** @name PCI Bus & Passthrough Status Codes
  * @{
  */
 /** RamPreAlloc not set.
@@ -2316,6 +2480,10 @@
 /** Nested paging not active.
  * PCI passthrough currently works only if nested paging is active. */
 #define VERR_PCI_PASSTHROUGH_NO_NESTED_PAGING       (-5102)
+
+/** Special return code from a PCI I/O region mapping handler that tells the BUS
+ * that it has done the mapping already. */
+#define VINF_PCI_MAPPING_DONE                       5150
 /** @} */
 
 
@@ -2332,6 +2500,8 @@
 #define VERR_GVMM_IPE_1                             (-5203)
 /** Internal processing error \#2 in the GVMM code. */
 #define VERR_GVMM_IPE_2                             (-5204)
+/** Cannot destroy VM because not all other EMTs have deregistered. */
+#define VERR_GVMM_NOT_ALL_EMTS_DEREGISTERED         (-5205)
 /** @} */
 
 
@@ -2650,6 +2820,8 @@
 #define VERR_SUP_VP_FILE_MODE_ERROR                 (-5674)
 /** Error creating an event semaphore for used with asynchronous reads. */
 #define VERR_SUP_VP_CREATE_READ_EVT_SEM_FAILED      (-5675)
+/** Undesirable module. */
+#define VERR_SUP_VP_UNDESIRABLE_MODULE              (-5676)
 
 /** @} */
 
@@ -2677,8 +2849,14 @@
 #define VWRN_GSTCTL_OBJECTSTATE_CHANGED             6220
 /** Guest process is in a wrong state. */
 #define VERR_GSTCTL_PROCESS_WRONG_STATE             (-6221)
+/** Maximum (context ID) sessions have been reached. */
+#define VERR_GSTCTL_MAX_CID_SESSIONS_REACHED        (-6222)
+/** Maximum (context ID) objects have been reached. */
+#define VERR_GSTCTL_MAX_CID_OBJECTS_REACHED         (-6223)
+/** Maximum (context ID object) count has been reached. */
+#define VERR_GSTCTL_MAX_CID_COUNT_REACHED           (-6224)
 /** Started guest process terminated with an exit code <> 0. */
-#define VWRN_GSTCTL_PROCESS_EXIT_CODE               6221
+#define VERR_GSTCTL_PROCESS_EXIT_CODE               (-6225)
 /** @} */
 
 
@@ -2753,12 +2931,31 @@
  *  reachable, audio hardware is not available or similar.  We should use the
  *  NULL audio driver. */
 #define VERR_AUDIO_BACKEND_INIT_FAILED              (-6600)
+/** No host backend attached / available. */
+#define VERR_AUDIO_BACKEND_NOT_ATTACHED             (-6601)
 /** No free input streams.  */
-#define VERR_AUDIO_NO_FREE_INPUT_STREAMS            (-6601)
+#define VERR_AUDIO_NO_FREE_INPUT_STREAMS            (-6602)
 /** No free output streams.  */
-#define VERR_AUDIO_NO_FREE_OUTPUT_STREAMS           (-6602)
+#define VERR_AUDIO_NO_FREE_OUTPUT_STREAMS           (-6603)
 /** Pending stream disable operation in progress.  */
-#define VERR_AUDIO_STREAM_PENDING_DISABLE           (-6603)
+#define VERR_AUDIO_STREAM_PENDING_DISABLE           (-6604)
+/** There is more data available.
+ *  This can happen due to a buffer wraparound of a buffer read/write operation. */
+#define VINF_AUDIO_MORE_DATA_AVAILABLE              (6605)
+/** Stream is not ready for requested operation.  */
+#define VERR_AUDIO_STREAM_NOT_READY                 (-6605)
+/** Stream could not be created.
+ *  This might due to missing host (backend) drivers or a host not having the
+ *  required hardware, or that the requested stream configuration
+ *  is not supported by the host backend. */
+#define VERR_AUDIO_STREAM_COULD_NOT_CREATE          (-6606)
+/** Generic audio device enumeration error. */
+#define VERR_AUDIO_ENUMERATION_FAILED               (-6607)
+/** Asynchronous stream initialization still on-going. */
+#define VERR_AUDIO_STREAM_INIT_IN_PROGRESS          (-6608)
+/** Special PDMIHOSTAUDIO::pfnStreamCreate return value for triggering
+ * calling of PDMIHOSTAUDIO::pfnStreamInitAsync on a worker thread. */
+#define VINF_AUDIO_STREAM_ASYNC_INIT_NEEDED         (6609)
 /** @} */
 
 
@@ -2773,10 +2970,169 @@
 #define VERR_APIC_INTR_DISCARDED                    (-6702)
 /** @} */
 
+/** @name NEM Status Codes
+ * @{
+ */
+/** NEM is not enabled. */
+#define VERR_NEM_NOT_ENABLED                        (-6800)
+/** NEM is not available. */
+#define VERR_NEM_NOT_AVAILABLE                      (-6801)
+/** NEM init failed. */
+#define VERR_NEM_INIT_FAILED                        (-6802)
+/** NEM init failed because of missing kernel API (\#1). */
+#define VERR_NEM_MISSING_KERNEL_API_1               (-6803)
+/** NEM can only operate from ring-3. */
+#define VERR_NEM_RING3_ONLY                         (-6804)
+/** NEM failed to create a native VM instance. */
+#define VERR_NEM_VM_CREATE_FAILED                   (-6805)
+/** NEM failed to map page(s) into the VM. */
+#define VERR_NEM_MAP_PAGES_FAILED                   (-6806)
+/** NEM failed to unmap page(s) into the VM. */
+#define VERR_NEM_UNMAP_PAGES_FAILED                 (-6807)
+/** NEM failed to get registers. */
+#define VERR_NEM_GET_REGISTERS_FAILED               (-6808)
+/** NEM failed to set registers. */
+#define VERR_NEM_SET_REGISTERS_FAILED               (-6809)
+/** Get register caller must flush the TLB (not an error). */
+#define VERR_NEM_FLUSH_TLB                          (-6810)
+/** Get register caller must flush the TLB. */
+#define VINF_NEM_FLUSH_TLB                          (6810)
+/** NEM failed to set TSC. */
+#define VERR_NEM_SET_TSC                            (-6811)
+/** NEM init failed because of missing kernel API (\#2). */
+#define VERR_NEM_MISSING_KERNEL_API_2               (-6812)
+/** NEM init failed because of missing kernel API (\#3). */
+#define VERR_NEM_MISSING_KERNEL_API_3               (-6813)
+/** NEM init failed because of missing kernel API (\#4). */
+#define VERR_NEM_MISSING_KERNEL_API_4               (-6814)
+/** NEM init failed because of missing kernel API (\#5). */
+#define VERR_NEM_MISSING_KERNEL_API_5               (-6815)
+/** NEM failed to query dirty page bitmap. */
+#define VERR_NEM_QUERY_DIRTY_BITMAP_FAILED          (-6816)
+
+/** NEM internal processing error \#0. */
+#define VERR_NEM_IPE_0                              (-6890)
+/** NEM internal processing error \#1. */
+#define VERR_NEM_IPE_1                              (-6891)
+/** NEM internal processing error \#2. */
+#define VERR_NEM_IPE_2                              (-6892)
+/** NEM internal processing error \#3. */
+#define VERR_NEM_IPE_3                              (-6893)
+/** NEM internal processing error \#4. */
+#define VERR_NEM_IPE_4                              (-6894)
+/** NEM internal processing error \#5. */
+#define VERR_NEM_IPE_5                              (-6895)
+/** NEM internal processing error \#6. */
+#define VERR_NEM_IPE_6                              (-6896)
+/** NEM internal processing error \#7. */
+#define VERR_NEM_IPE_7                              (-6897)
+/** NEM internal processing error \#8. */
+#define VERR_NEM_IPE_8                              (-6898)
+/** NEM internal processing error \#9. */
+#define VERR_NEM_IPE_9                              (-6899)
+/** @} */
+
+/** @name Recording Status Codes
+ * @{
+ */
+/** Codec was not found. */
+#define VERR_RECORDING_CODEC_NOT_FOUND              (-6900)
+/** Codec initialization failed. */
+#define VERR_RECORDING_CODEC_INIT_FAILED            (-6902)
+/** Codec is not supported. */
+#define VERR_RECORDING_CODEC_NOT_SUPPORTED          (-6903)
+/** Format not supported by the codec. */
+#define VERR_RECORDING_FORMAT_NOT_SUPPORTED         (-6904)
+/** Recording is not possible due to a set restriction. */
+#define VERR_RECORDING_RESTRICTED                   (-6905)
+/** Recording limit (time, size, ...) has been reached. */
+#define VINF_RECORDING_LIMIT_REACHED                (6906)
+/** Recording limit (time, size, ...) has been reached. */
+#define VERR_RECORDING_LIMIT_REACHED                (-6906)
+/** Recording has been throttled due to current settings.
+ *  This e.g. can happen when submitting more video frames than
+ *  the current FPS setting allows. */
+#define VINF_RECORDING_THROTTLED                    (6907)
+/** Recording has been throttled due to current settings.
+ *  This e.g. can happen when submitting more video frames than
+ *  the current FPS setting allows. */
+#define VERR_RECORDING_THROTTLED                    (-6907)
+/** @} */
+
+/** @name Shared Clipboard Status Codes
+ * @{
+ */
+/** Maximum of concurrent clipboard transfers has been reached. */
+#define VERR_SHCLPB_MAX_TRANSFERS_REACHED           (-7100)
+/** Maximum number of Shared Clipboard objects has been reached. */
+#define VERR_SHCLPB_MAX_OBJECTS_REACHED             (-7101)
+/** Maximum number of Shared Clipboard lists has been reached. */
+#define VERR_SHCLPB_MAX_LISTS_REACHED               (-7102)
+/** A Shared Clipboard list handle is invalid. */
+#define VERR_SHCLPB_LIST_HANDLE_INVALID             (-7103)
+/** A Shared Clipboard objects handle is invalid. */
+#define VERR_SHCLPB_OBJ_HANDLE_INVALID              (-7104)
+/** A Shared Clipboard transfer ID is invalid. */
+#define VERR_SHCLPB_TRANSFER_ID_NOT_FOUND           (-7105)
+/** Maximum number of Shared Clipboard events for an event source has been reached. */
+#define VERR_SHCLPB_MAX_EVENTS_REACHED              (-7106)
+/** @} */
+
+/** @name Virtual IOMMU Status Codes
+ * @{
+ */
+/** Failed to read the device table entry from guest memory. */
+#define VERR_IOMMU_DTE_READ_FAILED                  (-7300)
+/** Failed to read the device table entry due to an invalid offset. */
+#define VERR_IOMMU_DTE_BAD_OFFSET                   (-7301)
+/** Address translation failed. */
+#define VERR_IOMMU_ADDR_TRANSLATION_FAILED          (-7302)
+/** Access denied for the address. */
+#define VERR_IOMMU_ADDR_ACCESS_DENIED               (-7303)
+/** Remapping failed for the interrupt. */
+#define VERR_IOMMU_INTR_REMAP_FAILED                (-7304)
+/** Remapping denied for the interrupt (might have caused a PCI target abort). */
+#define VERR_IOMMU_INTR_REMAP_DENIED                (-7305)
+/** Command not supported. */
+#define VERR_IOMMU_CMD_NOT_SUPPORTED                (-7306)
+/** Command format (or reserved bits) invalid. */
+#define VERR_IOMMU_CMD_INVALID_FORMAT               (-7307)
+/** Command hardware failure. */
+#define VERR_IOMMU_CMD_HW_ERROR                     (-7308)
+/** IOMMU device is not present. */
+#define VERR_IOMMU_NOT_PRESENT                      (-7309)
+/** IOMMU instance cannot call itself (for remapping interrupts or translating
+ *  addresses). */
+#define VERR_IOMMU_CANNOT_CALL_SELF                 (-7310)
+/** Address translation disabled (but permission bits apply). */
+#define VINF_IOMMU_ADDR_TRANSLATION_DISABLED        7311
+
+/** IOMMU Internal processing error \#0. */
+#define VERR_IOMMU_IPE_0                            (-7390)
+/** IOMMU Internal processing error \#1. */
+#define VERR_IOMMU_IPE_1                            (-7391)
+/** IOMMU Internal processing error \#2. */
+#define VERR_IOMMU_IPE_2                            (-7392)
+/** IOMMU Internal processing error \#3. */
+#define VERR_IOMMU_IPE_3                            (-7393)
+/** IOMMU Internal processing error \#4. */
+#define VERR_IOMMU_IPE_4                            (-7394)
+/** IOMMU Internal processing error \#5. */
+#define VERR_IOMMU_IPE_5                            (-7395)
+/** IOMMU Internal processing error \#6. */
+#define VERR_IOMMU_IPE_6                            (-7396)
+/** IOMMU Internal processing error \#7. */
+#define VERR_IOMMU_IPE_7                            (-7397)
+/** IOMMU Internal processing error \#8. */
+#define VERR_IOMMU_IPE_8                            (-7398)
+/** IOMMU Internal processing error \#9. */
+#define VERR_IOMMU_IPE_9                            (-7399)
+/** @} */
+
 /* SED-END */
 
 /** @} */
 
 
-#endif
+#endif /* !VBOX_INCLUDED_err_h */
 

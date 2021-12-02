@@ -1,10 +1,10 @@
-; $Id$
+; $Id: RTUInt128MulByU64.asm 82968 2020-02-04 10:35:17Z vboxsync $
 ;; @file
 ; IPRT - RTUInt128MulByU64 - AMD64 implementation.
 ;
 
 ;
-; Copyright (C) 2006-2016 Oracle Corporation
+; Copyright (C) 2006-2020 Oracle Corporation
 ;
 ; This file is part of VirtualBox Open Source Edition (OSE), as
 ; available from http://www.virtualbox.org. This file is free software;
@@ -78,5 +78,4 @@ SEH64_END_PROLOGUE
 
         ret
 ENDPROC RTUInt128MulByU64
-
 

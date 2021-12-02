@@ -1,10 +1,10 @@
--- $Id$
+-- $Id: tmdb-r11-testsets-2.pgsql 82968 2020-02-04 10:35:17Z vboxsync $
 --- @file
 -- VBox Test Manager Database - Adds an idBuildCategories to TestSets.
 --
 
 --
--- Copyright (C) 2013-2015 Oracle Corporation
+-- Copyright (C) 2013-2020 Oracle Corporation
 --
 -- This file is part of VirtualBox Open Source Edition (OSE), as
 -- available from http://www.virtualbox.org. This file is free software;
@@ -30,7 +30,7 @@
 DROP INDEX TestSetsGangIdx;
 DROP INDEX TestSetsBoxIdx;
 DROP INDEX TestSetsBuildIdx;
-DROP INDEX TestSetsTestCaseIdx;    
+DROP INDEX TestSetsTestCaseIdx;
 DROP INDEX TestSetsTestVarIdx;
 DROP INDEX TestSetsCreated;
 DROP INDEX TestSetsDone;
@@ -77,7 +77,7 @@ CREATE TABLE NewTestSets (
     -- Non-unique foreign key: Builds(idBuild)
     idBuild             INTEGER     NOT NULL,
     --- The build category of idBuild when the test started.
-    -- This is for speeding up graph data collection, i.e. avoid idBuild 
+    -- This is for speeding up graph data collection, i.e. avoid idBuild
     -- the WHERE part of the selection.
     idBuildCategory     INTEGER     , -- NOT NULL REFERENCES BuildCategories(idBuildCategory)
     --- The test suite build we're using to do the testing.
@@ -147,11 +147,11 @@ COMMIT;
 SELECT COUNT(*) FROM TestSets a LEFT OUTER JOIN Builds b ON (a.idBuild = b.idBuild AND b.tsExpire = 'infinity'::TIMESTAMP);
 SELECT COUNT(*) FROM TestSets;
 
-INSERT INTO NewTestSets (idTestSet, tsConfig, tsCreated, tsDone, enmStatus, idBuild, idBuildCategory, idBuildTestSuite, 
-                         idGenTestBox, idTestBox, idTestGroup, idGenTestCase, idTestCase, idGenTestCaseArgs, idTestCaseArgs, 
+INSERT INTO NewTestSets (idTestSet, tsConfig, tsCreated, tsDone, enmStatus, idBuild, idBuildCategory, idBuildTestSuite,
+                         idGenTestBox, idTestBox, idTestGroup, idGenTestCase, idTestCase, idGenTestCaseArgs, idTestCaseArgs,
                          idTestResult, sBaseFilename, iGangMemberNo, idTestSetGangLeader )
-    SELECT a.idTestSet, a.tsConfig, a.tsCreated, tsDone, a.enmStatus, a.idBuild, b.idBuildCategory, a.idBuildTestSuite, 
-           a.idGenTestBox, a.idTestBox, a.idTestGroup, a.idGenTestCase, a.idTestCase, a.idGenTestCaseArgs, a.idTestCaseArgs, 
+    SELECT a.idTestSet, a.tsConfig, a.tsCreated, tsDone, a.enmStatus, a.idBuild, b.idBuildCategory, a.idBuildTestSuite,
+           a.idGenTestBox, a.idTestBox, a.idTestGroup, a.idGenTestCase, a.idTestCase, a.idGenTestCaseArgs, a.idTestCaseArgs,
            a.idTestResult, a.sBaseFilename, a.iGangMemberNo, a.idTestSetGangLeader
     FROM   TestSets a LEFT OUTER JOIN Builds b ON (a.idBuild = b.idBuild AND b.tsExpire = 'infinity'::TIMESTAMP);
 COMMIT;

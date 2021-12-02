@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: SUPHardenedVerifyProcess-win.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VirtualBox Support Library/Driver - Hardened Process Verification, Windows.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -29,7 +29,9 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #ifdef IN_RING0
-# define IPRT_NT_MAP_TO_ZW
+# ifndef IPRT_NT_MAP_TO_ZW
+#  define IPRT_NT_MAP_TO_ZW
+# endif
 # include <iprt/nt/nt.h>
 # include <ntimage.h>
 #else
@@ -42,6 +44,7 @@
 #include <iprt/ctype.h>
 #include <iprt/param.h>
 #include <iprt/string.h>
+#include <iprt/utf16.h>
 #include <iprt/zero.h>
 
 #ifdef IN_RING0
@@ -212,7 +215,7 @@ static const char *g_apszSupNtVpAllowedDlls[] =
 static const char *g_apszSupNtVpAllowedVmExes[] =
 {
     "VBoxHeadless.exe",
-    "VirtualBox.exe",
+    "VirtualBoxVM.exe",
     "VBoxSDL.exe",
     "VBoxNetDHCP.exe",
     "VBoxNetNAT.exe",
@@ -488,7 +491,8 @@ static int supHardNtVpFileMemCompareSection(PSUPHNTVPSTATE pThis, PSUPHNTVPIMAGE
 
 #ifdef IN_RING3
             if (   pThis->enmKind == SUPHARDNTVPKIND_CHILD_PURIFICATION
-                || pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION)
+                || pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION
+                || pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION_LIMITED)
             {
                 PVOID pvRestoreAddr = (uint8_t *)pImage->uImageBase + uRva;
                 rcNt = supHardNtVpFileMemRestore(pThis, pvRestoreAddr, pbFile, cbThis, fCorrectProtection);
@@ -528,7 +532,8 @@ static int supHardNtVpCheckSectionProtection(PSUPHNTVPSTATE pThis, PSUPHNTVPIMAG
     if (!cb)
         return VINF_SUCCESS;
     if (   pThis->enmKind == SUPHARDNTVPKIND_CHILD_PURIFICATION
-        || pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION)
+        || pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION
+        || pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION_LIMITED)
         return VINF_SUCCESS;
 
     for (uint32_t i = 0; i < pImage->cRegions; i++)
@@ -869,7 +874,7 @@ static int supHardNtVpVerifyImageMemoryCompare(PSUPHNTVPSTATE pThis, PSUPHNTVPIM
      * Figure out areas we should skip during comparison.
      */
     uint32_t         cSkipAreas = 0;
-    SUPHNTVPSKIPAREA aSkipAreas[5];
+    SUPHNTVPSKIPAREA aSkipAreas[7];
     if (pImage->fNtCreateSectionPatch)
     {
         RTLDRADDR uValue;
@@ -896,6 +901,22 @@ static int supHardNtVpVerifyImageMemoryCompare(PSUPHNTVPSTATE pThis, PSUPHNTVPIM
             return supHardNtVpSetInfo2(pThis, rc, "%s: Failed to find 'LdrInitializeThunk': %Rrc", pImage->pszName, rc);
         aSkipAreas[cSkipAreas].uRva = (uint32_t)uValue;
         aSkipAreas[cSkipAreas++].cb = 14;
+
+        /* Ignore our patched KiUserApcDispatcher hack. */
+        rc = RTLdrGetSymbolEx(pImage->pCacheEntry->hLdrMod, pbBits, 0, UINT32_MAX, "KiUserApcDispatcher", &uValue);
+        if (RT_FAILURE(rc))
+            return supHardNtVpSetInfo2(pThis, rc, "%s: Failed to find 'KiUserApcDispatcher': %Rrc", pImage->pszName, rc);
+        aSkipAreas[cSkipAreas].uRva = (uint32_t)uValue;
+        aSkipAreas[cSkipAreas++].cb = 14;
+
+#ifndef VBOX_WITHOUT_HARDENDED_XCPT_LOGGING
+        /* Ignore our patched KiUserExceptionDispatcher hack. */
+        rc = RTLdrGetSymbolEx(pImage->pCacheEntry->hLdrMod, pbBits, 0, UINT32_MAX, "KiUserExceptionDispatcher", &uValue);
+        if (RT_FAILURE(rc))
+            return supHardNtVpSetInfo2(pThis, rc, "%s: Failed to find 'KiUserExceptionDispatcher': %Rrc", pImage->pszName, rc);
+        aSkipAreas[cSkipAreas].uRva = (uint32_t)uValue + (HC_ARCH_BITS == 64);
+        aSkipAreas[cSkipAreas++].cb = HC_ARCH_BITS == 64 ? 13 : 12;
+#endif
 
         /* LdrSystemDllInitBlock is filled in by the kernel. It mainly contains addresses of 32-bit ntdll method for wow64. */
         rc = RTLdrGetSymbolEx(pImage->pCacheEntry->hLdrMod, pbBits, 0, UINT32_MAX, "LdrSystemDllInitBlock", &uValue);
@@ -1088,7 +1109,7 @@ DECLHIDDEN(int) supHardNtVpThread(HANDLE hProcess, HANDLE hThread, PRTERRINFO pE
         return supHardNtVpSetInfo1(pErrInfo, VERR_SUP_VP_THREAD_NOT_ALONE,
                                    "More than one thread in process");
 
-    /** @todo Would be nice to verify the relation ship between hProcess and hThread
+    /** @todo Would be nice to verify the relationship between hProcess and hThread
      *        as well... */
     return VINF_SUCCESS;
 }
@@ -1168,6 +1189,53 @@ static bool supHardNtVpAreNamesEqual(const char *pszName1, PCRTUTF16 pwszName2)
 
 
 /**
+ * Compares two paths, expanding 8.3 short names as needed.
+ *
+ * @returns true / false.
+ * @param   pUniStr1        The first path.  Must be zero terminated!
+ * @param   pUniStr2        The second path.  Must be zero terminated!
+ */
+static bool supHardNtVpArePathsEqual(PCUNICODE_STRING pUniStr1, PCUNICODE_STRING pUniStr2)
+{
+    /* Both strings must be null terminated. */
+    Assert(pUniStr1->Buffer[pUniStr1->Length / sizeof(WCHAR)] == '\0');
+    Assert(pUniStr2->Buffer[pUniStr1->Length / sizeof(WCHAR)] == '\0');
+
+    /* Simple compare first.*/
+    if (supHardNtVpAreUniStringsEqual(pUniStr1, pUniStr2))
+        return true;
+
+    /* Make long names if needed. */
+    UNICODE_STRING UniStrLong1 = { 0, 0, NULL };
+    if (RTNtPathFindPossible8dot3Name(pUniStr1->Buffer))
+    {
+        int rc = RTNtPathExpand8dot3PathA(pUniStr1, false /*fPathOnly*/, &UniStrLong1);
+        if (RT_SUCCESS(rc))
+            pUniStr1 = &UniStrLong1;
+    }
+
+    UNICODE_STRING UniStrLong2 = { 0, 0, NULL };
+    if (RTNtPathFindPossible8dot3Name(pUniStr2->Buffer))
+    {
+        int rc = RTNtPathExpand8dot3PathA(pUniStr2, false /*fPathOnly*/, &UniStrLong2);
+        if (RT_SUCCESS(rc))
+            pUniStr2 = &UniStrLong2;
+    }
+
+    /* Compare again. */
+    bool fCompare = supHardNtVpAreUniStringsEqual(pUniStr1, pUniStr2);
+
+    /* Clean up. */
+    if (UniStrLong1.Buffer)
+        RTUtf16Free(UniStrLong1.Buffer);
+    if (UniStrLong2.Buffer)
+        RTUtf16Free(UniStrLong2.Buffer);
+
+    return fCompare;
+}
+
+
+/**
  * Records an additional memory region for an image.
  *
  * May trash pThis->abMemory.
@@ -1200,7 +1268,9 @@ static int supHardNtVpNewImage(PSUPHNTVPSTATE pThis, PSUPHNTVPIMAGE pImage, PMEM
         rc83Exp = RTNtPathExpand8dot3Path(pTmp, false /*fPathOnly*/);
         Assert(rc83Exp == VINF_SUCCESS);
         Assert(pTmp->Buffer[pTmp->Length / sizeof(RTUTF16)] == '\0');
-        if (rc83Exp != VINF_SUCCESS)
+        if (rc83Exp == VINF_SUCCESS)
+            SUP_DPRINTF(("supHardNtVpNewImage: 8dot3 -> long: '%ls' -> '%ls'\n", pLongName->Buffer, pTmp->Buffer));
+        else
             SUP_DPRINTF(("supHardNtVpNewImage: RTNtPathExpand8dot3Path returns %Rrc for '%ls' (-> '%ls')\n",
                          rc83Exp, pLongName->Buffer, pTmp->Buffer));
 
@@ -1297,6 +1367,12 @@ static int supHardNtVpNewImage(PSUPHNTVPSTATE pThis, PSUPHNTVPIMAGE pImage, PMEM
                 return VINF_OBJECT_DESTROYED;
             pThis->cFixes++;
             SUP_DPRINTF(("supHardNtVpScanVirtualMemory: NtUnmapViewOfSection(,%p) failed: %#x\n", pMemInfo->AllocationBase, rcNt));
+        }
+        else if (pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION_LIMITED)
+        {
+            SUP_DPRINTF(("supHardNtVpScanVirtualMemory: Ignoring unknown mem at %p LB %#zx (base %p) - '%ls'\n",
+                         pMemInfo->BaseAddress, pMemInfo->RegionSize, pMemInfo->AllocationBase, pwszFilename));
+            return VINF_OBJECT_DESTROYED;
         }
 #endif
         /*
@@ -1466,12 +1542,12 @@ static bool supHardNtVpFreeOrReplacePrivateExecMemory(PSUPHNTVPSTATE pThis, HAND
 
     /*
      * In the BSOD workaround mode, we need to make a copy of the memory before
-     * freeing it.
+     * freeing it.  Bird abuses this code for logging purposes too.
      */
     uintptr_t   uCopySrc  = (uintptr_t)pvFree;
     size_t      cbCopy    = 0;
     void       *pvCopy    = NULL;
-    if (pThis->fFlags & SUPHARDNTVP_F_EXEC_ALLOC_REPLACE_WITH_RW)
+    //if (pThis->fFlags & SUPHARDNTVP_F_EXEC_ALLOC_REPLACE_WITH_RW)
     {
         cbCopy = cbFree;
         pvCopy = RTMemAllocZ(cbCopy);
@@ -1485,7 +1561,15 @@ static bool supHardNtVpFreeOrReplacePrivateExecMemory(PSUPHNTVPSTATE pThis, HAND
         if (!NT_SUCCESS(rcNt))
             supHardNtVpSetInfo2(pThis, VERR_SUP_VP_REPLACE_VIRTUAL_MEMORY_FAILED,
                                 "Error reading data from original alloc: %#x (%p LB %#zx)", rcNt, uCopySrc, cbCopy, rcNt);
-        supR3HardenedLogFlush();
+        for (size_t off = 0; off < cbCopy; off += 256)
+        {
+            size_t const cbChunk = RT_MIN(256, cbCopy - off);
+            void const  *pvChunk = (uint8_t const *)pvCopy + off;
+            if (!ASMMemIsZero(pvChunk, cbChunk))
+                SUP_DPRINTF(("%.*RhxD\n", cbChunk, pvChunk));
+        }
+        if (pThis->fFlags & SUPHARDNTVP_F_EXEC_ALLOC_REPLACE_WITH_RW)
+            supR3HardenedLogFlush();
     }
 
     /*
@@ -1757,7 +1841,7 @@ static int supHardNtVpScanVirtualMemory(PSUPHNTVPSTATE pThis, HANDLE hProcess)
         {
             cXpExceptions++;
             SUP_DPRINTF(("  %p-%p %#06x/%#06x %#09x  XP CSRSS read-only region\n", MemInfo.BaseAddress,
-                         (uintptr_t)MemInfo.BaseAddress - MemInfo.RegionSize - 1, MemInfo.Protect,
+                         (uintptr_t)MemInfo.BaseAddress + MemInfo.RegionSize - 1, MemInfo.Protect,
                          MemInfo.AllocationProtect, MemInfo.Type));
         }
         /*
@@ -1769,7 +1853,7 @@ static int supHardNtVpScanVirtualMemory(PSUPHNTVPSTATE pThis, HANDLE hProcess)
             SUP_DPRINTF((MemInfo.AllocationBase == MemInfo.BaseAddress
                          ? " *%p-%p %#06x/%#06x %#09x !!\n"
                          : "  %p-%p %#06x/%#06x %#09x !!\n",
-                         MemInfo.BaseAddress, (uintptr_t)MemInfo.BaseAddress - MemInfo.RegionSize - 1,
+                         MemInfo.BaseAddress, (uintptr_t)MemInfo.BaseAddress + MemInfo.RegionSize - 1,
                          MemInfo.Protect, MemInfo.AllocationProtect, MemInfo.Type));
 # ifdef IN_RING3
             if (pThis->enmKind == SUPHARDNTVPKIND_CHILD_PURIFICATION)
@@ -1809,7 +1893,7 @@ static int supHardNtVpScanVirtualMemory(PSUPHNTVPSTATE pThis, HANDLE hProcess)
                                         MemInfo.Type, MemInfo.AllocationBase, MemInfo.BaseAddress, MemInfo.RegionSize);
                 pThis->cFixes++;
             }
-            else
+            else if (pThis->enmKind != SUPHARDNTVPKIND_SELF_PURIFICATION_LIMITED)
 # endif /* IN_RING3 */
                 supHardNtVpSetInfo2(pThis, VERR_SUP_VP_FOUND_EXEC_MEMORY,
                                     "Found executable memory at %p (%p LB %#zx): type=%#x prot=%#x state=%#x aprot=%#x abase=%p",
@@ -1827,7 +1911,7 @@ static int supHardNtVpScanVirtualMemory(PSUPHNTVPSTATE pThis, HANDLE hProcess)
             SUP_DPRINTF((MemInfo.AllocationBase == MemInfo.BaseAddress
                          ? " *%p-%p %#06x/%#06x %#09x\n"
                          : "  %p-%p %#06x/%#06x %#09x\n",
-                         MemInfo.BaseAddress, (uintptr_t)MemInfo.BaseAddress - MemInfo.RegionSize - 1,
+                         MemInfo.BaseAddress, (uintptr_t)MemInfo.BaseAddress + MemInfo.RegionSize - 1,
                          MemInfo.Protect, MemInfo.AllocationProtect, MemInfo.Type));
 
         /*
@@ -2260,15 +2344,13 @@ static int supHardNtVpCheckExe(PSUPHNTVPSTATE pThis)
     NTSTATUS rcNt = NtQueryInformationProcess(pThis->hProcess, ProcessImageFileName, pUniStr, cbUniStr - sizeof(WCHAR), &cbIgn);
     if (NT_SUCCESS(rcNt))
     {
-        if (supHardNtVpAreUniStringsEqual(pUniStr, &pImage->Name.UniStr))
+        pUniStr->Buffer[pUniStr->Length / sizeof(WCHAR)] = '\0';
+        if (supHardNtVpArePathsEqual(pUniStr, &pImage->Name.UniStr))
             rc = VINF_SUCCESS;
         else
-        {
-            pUniStr->Buffer[pUniStr->Length / sizeof(WCHAR)] = '\0';
             rc = supHardNtVpSetInfo2(pThis, VERR_SUP_VP_EXE_VS_PROC_NAME_MISMATCH,
                                      "Process image name does not match the exectuable we found: %ls vs %ls.",
                                      pUniStr->Buffer, pImage->Name.UniStr.Buffer);
-        }
     }
     else
         rc = supHardNtVpSetInfo2(pThis, VERR_SUP_VP_NT_QI_PROCESS_NM_ERROR,
@@ -2370,7 +2452,8 @@ static int supHardNtVpCheckDlls(PSUPHNTVPSTATE pThis)
     if (iNtDll == UINT32_MAX)
         return supHardNtVpSetInfo2(pThis, VERR_SUP_VP_NO_NTDLL_MAPPING,
                                    "The process has no NTDLL.DLL.");
-    if (iKernel32 == UINT32_MAX && pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION)
+    if (iKernel32 == UINT32_MAX && (   pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION
+                                    || pThis->enmKind == SUPHARDNTVPKIND_SELF_PURIFICATION_LIMITED))
         return supHardNtVpSetInfo2(pThis, VERR_SUP_VP_NO_KERNEL32_MAPPING,
                                    "The process has no KERNEL32.DLL.");
     else if (iKernel32 != UINT32_MAX && pThis->enmKind == SUPHARDNTVPKIND_CHILD_PURIFICATION)
@@ -2426,7 +2509,8 @@ DECLHIDDEN(int) supHardenedWinVerifyProcess(HANDLE hProcess, HANDLE hThread, SUP
      * allocate any state memory for these.
      */
     int rc = VINF_SUCCESS;
-    if (enmKind != SUPHARDNTVPKIND_CHILD_PURIFICATION)
+    if (   enmKind != SUPHARDNTVPKIND_CHILD_PURIFICATION
+        && enmKind != SUPHARDNTVPKIND_SELF_PURIFICATION_LIMITED)
        rc = supHardNtVpThread(hProcess, hThread, pErrInfo);
     if (RT_SUCCESS(rc))
         rc = supHardNtVpDebugger(hProcess, pErrInfo);

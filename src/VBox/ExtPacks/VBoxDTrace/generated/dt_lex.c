@@ -900,6 +900,7 @@ char *yytext_ptr;
 #  endif
 # endif
 # include <iprt/ctype.h>
+# include <iprt/err.h>
 # define isdigit(a_ch) RT_C_IS_DIGIT(a_ch)
 #endif /* VBOX */
 
@@ -1713,11 +1714,12 @@ YY_RULE_SETUP
 #ifndef VBOX
 				errno = 0;
 				yylval.l_int = strtoull(v, &p, 0);
-#else
-				rc = RTStrToUInt64Ex(v, &p, 0, &yylval.l_int);
-#endif
 				(void) strncpy(yyintsuffix, p,
 				    sizeof (yyintsuffix));
+#else
+				rc = RTStrToUInt64Ex(v, &p, 0, &yylval.l_int);
+				RTStrCopy(yyintsuffix, sizeof(yyintsuffix), p);
+#endif
 				yyintdecimal = *v != '0';
 
 #ifndef VBOX
@@ -1822,11 +1824,12 @@ YY_RULE_SETUP
 #ifndef VBOX
 			errno = 0;
 			yylval.l_int = strtoull(yytext, &p, 0);
+			(void) strncpy(yyintsuffix, p, sizeof (yyintsuffix));
 #else
 			int rc = RTStrToUInt64Ex(yytext, &p, 0, &yylval.l_int);
+			RTStrCopy(yyintsuffix, sizeof(yyintsuffix), p);
 #endif
 			yyintprefix = 0;
-			(void) strncpy(yyintsuffix, p, sizeof (yyintsuffix));
 			yyintdecimal = yytext[0] != '0';
 
 #ifndef VBOX

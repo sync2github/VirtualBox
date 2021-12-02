@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmpcidev_h
-#define ___VBox_vmm_pdmpcidev_h
+#ifndef VBOX_INCLUDED_vmm_pdmpcidev_h
+#define VBOX_INCLUDED_vmm_pdmpcidev_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/pci.h>
 #include <iprt/assert.h>
@@ -36,58 +39,86 @@
  */
 
 /**
- * Callback function for reading from the PCI configuration space.
+ * Callback function for intercept reading from the PCI configuration space.
  *
- * @returns The register value.
+ * @returns VINF_SUCCESS or PDMDevHlpDBGFStop status (maybe others later).
+ * @retval  VINF_PDM_PCI_DO_DEFAULT to do default read (same as calling
+ *          PDMDevHlpPCIConfigRead()).
+ *
  * @param   pDevIns         Pointer to the device instance the PCI device
  *                          belongs to.
  * @param   pPciDev         Pointer to PCI device. Use pPciDev->pDevIns to get the device instance.
  * @param   uAddress        The configuration space register address. [0..4096]
  * @param   cb              The register size. [1,2,4]
+ * @param   pu32Value       Where to return the register value.
  *
  * @remarks Called with the PDM lock held.  The device lock is NOT take because
  *          that is very likely be a lock order violation.
  */
-typedef DECLCALLBACK(uint32_t) FNPCICONFIGREAD(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev, uint32_t uAddress, unsigned cb);
+typedef DECLCALLBACKTYPE(VBOXSTRICTRC, FNPCICONFIGREAD,(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev,
+                                                        uint32_t uAddress, unsigned cb, uint32_t *pu32Value));
 /** Pointer to a FNPCICONFIGREAD() function. */
 typedef FNPCICONFIGREAD *PFNPCICONFIGREAD;
+#if !RT_CLANG_PREREQ(11, 0) /* Clang 11 (at least) has trouble with nothrow and pointers to function pointers. */
 /** Pointer to a PFNPCICONFIGREAD. */
 typedef PFNPCICONFIGREAD *PPFNPCICONFIGREAD;
+#endif
 
 /**
  * Callback function for writing to the PCI configuration space.
  *
+ * @returns VINF_SUCCESS or PDMDevHlpDBGFStop status (maybe others later).
+ * @retval  VINF_PDM_PCI_DO_DEFAULT to do default read (same as calling
+ *          PDMDevHlpPCIConfigWrite()).
+ *
  * @param   pDevIns         Pointer to the device instance the PCI device
  *                          belongs to.
  * @param   pPciDev         Pointer to PCI device. Use pPciDev->pDevIns to get the device instance.
  * @param   uAddress        The configuration space register address. [0..4096]
+ * @param   cb              The register size. [1,2,4]
  * @param   u32Value        The value that's being written. The number of bits actually used from
  *                          this value is determined by the cb parameter.
- * @param   cb              The register size. [1,2,4]
  *
  * @remarks Called with the PDM lock held.  The device lock is NOT take because
  *          that is very likely be a lock order violation.
  */
-typedef DECLCALLBACK(void) FNPCICONFIGWRITE(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev, uint32_t uAddress, uint32_t u32Value, unsigned cb);
+typedef DECLCALLBACKTYPE(VBOXSTRICTRC, FNPCICONFIGWRITE,(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev,
+                                                         uint32_t uAddress, unsigned cb, uint32_t u32Value));
 /** Pointer to a FNPCICONFIGWRITE() function. */
 typedef FNPCICONFIGWRITE *PFNPCICONFIGWRITE;
+#if !RT_CLANG_PREREQ(11, 0) /* Clang 11 (at least) has trouble with nothrow and pointers to function pointers. */
 /** Pointer to a PFNPCICONFIGWRITE. */
 typedef PFNPCICONFIGWRITE *PPFNPCICONFIGWRITE;
+#endif
 
 /**
  * Callback function for mapping an PCI I/O region.
  *
+ * This is called when a PCI I/O region is mapped, and for new-style devices
+ * also when unmapped (address set to NIL_RTGCPHYS).  For new-style devices,
+ * this callback is optional as the PCI bus calls IOM to map and unmap the
+ * regions.
+ *
+ * Old style devices have to call IOM to map the region themselves, while
+ * unmapping is done by the PCI bus like with the new style devices.
+ *
  * @returns VBox status code.
+ * @retval  VINF_PCI_MAPPING_DONE if the caller already did the mapping and the
+ *          PCI bus should not use the handle it got to do the registration
+ *          again.  (Only allowed when @a GCPhysAddress is not NIL_RTGCPHYS.)
+ *
  * @param   pDevIns         Pointer to the device instance the PCI device
  *                          belongs to.
- * @param   pPciDev         Pointer to PCI device. Use pPciDev->pDevIns to get the device instance.
+ * @param   pPciDev         Pointer to the PCI device.
  * @param   iRegion         The region number.
- * @param   GCPhysAddress   Physical address of the region. If enmType is PCI_ADDRESS_SPACE_IO, this
- *                          is an I/O port, otherwise it's a physical address.
+ * @param   GCPhysAddress   Physical address of the region.  If @a enmType is
+ *                          PCI_ADDRESS_SPACE_IO, this is an I/O port, otherwise
+ *                          it's a physical address.
  *
- *                          NIL_RTGCPHYS indicates that a MMIO2 mapping is about to be unmapped and
- *                          that the device deregister access handlers for it and update its internal
- *                          state to reflect this.
+ *                          NIL_RTGCPHYS indicates that a mapping is about to be
+ *                          unmapped and that the device deregister access
+ *                          handlers for it and update its internal state to
+ *                          reflect this.
  *
  * @param   cb              Size of the region in bytes.
  * @param   enmType         One of the PCI_ADDRESS_SPACE_* values.
@@ -95,10 +126,40 @@ typedef PFNPCICONFIGWRITE *PPFNPCICONFIGWRITE;
  * @remarks Called with the PDM lock held.  The device lock is NOT take because
  *          that is very likely be a lock order violation.
  */
-typedef DECLCALLBACK(int) FNPCIIOREGIONMAP(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev, uint32_t iRegion,
-                                           RTGCPHYS GCPhysAddress, RTGCPHYS cb, PCIADDRESSSPACE enmType);
+typedef DECLCALLBACKTYPE(int, FNPCIIOREGIONMAP,(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev, uint32_t iRegion,
+                                                RTGCPHYS GCPhysAddress, RTGCPHYS cb, PCIADDRESSSPACE enmType));
 /** Pointer to a FNPCIIOREGIONMAP() function. */
 typedef FNPCIIOREGIONMAP *PFNPCIIOREGIONMAP;
+
+
+/**
+ * Sets the size and type for old saved states from within a
+ * PDMPCIDEV::pfnRegionLoadChangeHookR3 callback.
+ *
+ * @returns VBox status code.
+ * @param   pPciDev         Pointer to the PCI device.
+ * @param   iRegion         The region number.
+ * @param   cbRegion        The region size.
+ * @param   enmType         Combination of the PCI_ADDRESS_SPACE_* values.
+ */
+typedef DECLCALLBACKTYPE(int, FNPCIIOREGIONOLDSETTER,(PPDMPCIDEV pPciDev, uint32_t iRegion, RTGCPHYS cbRegion,
+                                                      PCIADDRESSSPACE enmType));
+/** Pointer to a FNPCIIOREGIONOLDSETTER() function. */
+typedef FNPCIIOREGIONOLDSETTER *PFNPCIIOREGIONOLDSETTER;
+
+/**
+ * Swaps two PCI I/O regions from within a PDMPCIDEV::pfnRegionLoadChangeHookR3
+ * callback.
+ *
+ * @returns VBox status code.
+ * @param   pPciDev         Pointer to the PCI device.
+ * @param   iRegion         The region number.
+ * @param   iOtherRegion    The number of the region swap with.
+ * @sa      @bugref{9359}
+ */
+typedef DECLCALLBACKTYPE(int, FNPCIIOREGIONSWAP,(PPDMPCIDEV pPciDev, uint32_t iRegion, uint32_t iOtherRegion));
+/** Pointer to a FNPCIIOREGIONSWAP() function. */
+typedef FNPCIIOREGIONSWAP *PFNPCIIOREGIONSWAP;
 
 
 /*
@@ -116,12 +177,62 @@ typedef FNPCIIOREGIONMAP *PFNPCIIOREGIONMAP;
  * devices associated with it.  The first PCI device that it registers
  * automatically becomes the default PCI device and can be used implicitly
  * with the device helper APIs.  Subsequent PCI devices must be specified
- * expeclitly to the device helper APIs when used.
+ * explicitly to the device helper APIs when used.
  */
 typedef struct PDMPCIDEV
 {
-    /** PCI config space. */
-    uint8_t                 abConfig[256];
+    /** @name Read only data.
+     * @{
+     */
+    /** Magic number (PDMPCIDEV_MAGIC). */
+    uint32_t                u32Magic;
+    /** PCI device number [11:3] and function [2:0] on the pci bus.
+     * @sa VBOX_PCI_DEVFN_MAKE, VBOX_PCI_DEVFN_FUN_MASK, VBOX_PCI_DEVFN_DEV_SHIFT */
+    uint32_t                uDevFn;
+    /** Size of the valid config space (we always allocate 4KB). */
+    uint16_t                cbConfig;
+    /** Size of the MSI-X state data optionally following the config space. */
+    uint16_t                cbMsixState;
+    /** Index into the PDMDEVINS::apPciDev array. */
+    uint16_t                idxSubDev;
+    uint16_t                u16Padding;
+    /** Device name. */
+    R3PTRTYPE(const char *) pszNameR3;
+    /** @} */
+
+    /**
+     * Callback for dealing with size changes.
+     *
+     * This is set by the PCI device when needed.  It is only needed if any changes
+     * in the PCI resources have been made that may be incompatible with saved state
+     * (i.e. does not reflect configuration, but configuration defaults changed).
+     *
+     * The implementation can use PDMDevHlpMMIOExReduce to adjust the resource
+     * allocation down in size.  There is currently no way of growing resources.
+     * Dropping a resource is automatic.
+     *
+     * @returns VBox status code.
+     * @param   pDevIns         Pointer to the device instance the PCI device
+     *                          belongs to.
+     * @param   pPciDev         Pointer to the PCI device.
+     * @param   iRegion         The region number or UINT32_MAX if old saved state call.
+     * @param   cbRegion        The size being loaded, RTGCPHYS_MAX if old saved state
+     *                          call, or 0 for dummy 64-bit top half region.
+     * @param   enmType         The type being loaded, -1 if old saved state call, or
+     *                          0xff if dummy 64-bit top half region.
+     * @param   pfnOldSetter    Callback for setting size and type for call
+     *                          regarding old saved states.  NULL otherwise.
+     * @param   pfnSwapRegions  Used to swaps two regions. The second one must be a
+     *                          higher number than @a iRegion.  NULL if old saved
+     *                          state.
+     */
+    DECLR3CALLBACKMEMBER(int, pfnRegionLoadChangeHookR3,(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev, uint32_t iRegion,
+                                                         uint64_t cbRegion, PCIADDRESSSPACE enmType,
+                                                         PFNPCIIOREGIONOLDSETTER pfnOldSetter,
+                                                         PFNPCIIOREGIONSWAP pfnSwapRegion));
+
+    /** Reserved for future stuff. */
+    uint64_t au64Reserved[4 + (R3_ARCH_BITS == 32 ? 1 : 0)];
 
     /** Internal data. */
     union
@@ -129,25 +240,71 @@ typedef struct PDMPCIDEV
 #ifdef PDMPCIDEVINT_DECLARED
         PDMPCIDEVINT        s;
 #endif
-        uint8_t             padding[HC_ARCH_BITS == 32 ? 272 : 384];
+        uint8_t             padding[0x180];
     } Int;
 
-    /** @name Read only data.
-     * @{
-     */
-    /** PCI device number [11:3] and function [2:0] on the pci bus.
-     * @sa VBOX_PCI_DEVFN_MAKE, VBOX_PCI_DEVFN_FUN_MASK, VBOX_PCI_DEVFN_DEV_SHIFT */
-    uint32_t                uDevFn;
-    uint32_t                Alignment0; /**< Alignment. */
-    /** Device name. */
-    R3PTRTYPE(const char *) pszNameR3;
-    /** Reserved. */
-    RTR3PTR                 pvReserved;
-    /** @} */
+    /** PCI config space.
+     * This is either 256 or 4096 in size.  In the latter case it may be
+     * followed by a MSI-X state area. */
+    uint8_t                 abConfig[4096];
+    /** The MSI-X state data.  Optional. */
+    RT_FLEXIBLE_ARRAY_EXTENSION
+    uint8_t                 abMsixState[RT_FLEXIBLE_ARRAY];
 } PDMPCIDEV;
 #ifdef PDMPCIDEVINT_DECLARED
 AssertCompile(RT_SIZEOFMEMB(PDMPCIDEV, Int.s) <= RT_SIZEOFMEMB(PDMPCIDEV, Int.padding));
 #endif
+/** Magic number of PDMPCIDEV::u32Magic (Margaret Eleanor Atwood). */
+#define PDMPCIDEV_MAGIC     UINT32_C(0x19391118)
+
+/** Checks that the PCI device structure is valid and belongs to the device
+ *  instance, but does not return. */
+#ifdef VBOX_STRICT
+# define PDMPCIDEV_ASSERT_VALID(a_pDevIns, a_pPciDev) \
+    do { \
+        uintptr_t const offPciDevInTable = (uintptr_t)(a_pPciDev) - (uintptr_t)pDevIns->apPciDevs[0]; \
+        uint32_t  const cbPciDevTmp      = pDevIns->cbPciDev; \
+        ASMCompilerBarrier(); \
+        AssertMsg(   offPciDevInTable < pDevIns->cPciDevs * cbPciDevTmp \
+                  && cbPciDevTmp >= RT_UOFFSETOF(PDMPCIDEV, abConfig) + 256 \
+                  && offPciDevInTable % cbPciDevTmp == 0, \
+                  ("pPciDev=%p apPciDevs[0]=%p offPciDevInTable=%p cPciDevs=%#x cbPciDev=%#x\n", \
+                   (a_pPciDev), pDevIns->apPciDevs[0], offPciDevInTable, pDevIns->cPciDevs, cbPciDevTmp)); \
+        AssertPtr((a_pPciDev)); \
+        AssertMsg((a_pPciDev)->u32Magic == PDMPCIDEV_MAGIC, ("%#x\n", (a_pPciDev)->u32Magic)); \
+    } while (0)
+#else
+# define PDMPCIDEV_ASSERT_VALID(a_pDevIns, a_pPciDev) do { } while (0)
+#endif
+
+/** Checks that the PCI device structure is valid, belongs to the device
+ *  instance and that it is registered, but does not return. */
+#ifdef VBOX_STRICT
+# define PDMPCIDEV_ASSERT_VALID_AND_REGISTERED(a_pDevIns, a_pPciDev) \
+    do { \
+        PDMPCIDEV_ASSERT_VALID(a_pDevIns, a_pPciDev); \
+        Assert((a_pPciDev)->Int.s.fRegistered); \
+    } while (0)
+#else
+# define PDMPCIDEV_ASSERT_VALID_AND_REGISTERED(a_pDevIns, a_pPciDev) do { } while (0)
+#endif
+
+/** Checks that the PCI device structure is valid and belongs to the device
+ *  instance, returns appropriate status code if not valid. */
+#define PDMPCIDEV_ASSERT_VALID_RET(a_pDevIns, a_pPciDev) \
+    do { \
+        uintptr_t const offPciDevInTable = (uintptr_t)(a_pPciDev) - (uintptr_t)pDevIns->apPciDevs[0]; \
+        uint32_t  const cbPciDevTmp      = pDevIns->cbPciDev; \
+        ASMCompilerBarrier(); \
+        AssertMsgReturn(   offPciDevInTable < pDevIns->cPciDevs * cbPciDevTmp \
+                        && cbPciDevTmp >= RT_UOFFSETOF(PDMPCIDEV, abConfig) + 256  \
+                        && offPciDevInTable % cbPciDevTmp == 0, \
+                        ("pPciDev=%p apPciDevs[0]=%p offPciDevInTable=%p cPciDevs=%#x cbPciDev=%#x\n", \
+                        (a_pPciDev), pDevIns->apPciDevs[0], offPciDevInTable, pDevIns->cPciDevs, cbPciDevTmp), \
+                        VERR_PDM_NOT_PCI_DEVICE); \
+        AssertMsgReturn((a_pPciDev)->u32Magic == PDMPCIDEV_MAGIC, ("%#x\n", (a_pPciDev)->u32Magic), VERR_PDM_NOT_PCI_DEVICE); \
+        AssertReturn((a_pPciDev)->Int.s.fRegistered, VERR_PDM_NOT_PCI_DEVICE); \
+    } while (0)
 
 
 
@@ -163,7 +320,7 @@ DECLINLINE(void)     PDMPciDevSetByte(PPDMPCIDEV pPciDev, uint32_t offReg, uint8
     pPciDev->abConfig[offReg] = u8Value;
 }
 
-DECLINLINE(uint8_t)  PDMPciDevGetByte(PPDMPCIDEV pPciDev, uint32_t offReg)
+DECLINLINE(uint8_t)  PDMPciDevGetByte(PCPDMPCIDEV pPciDev, uint32_t offReg)
 {
     Assert(offReg < sizeof(pPciDev->abConfig));
     return pPciDev->abConfig[offReg];
@@ -175,7 +332,7 @@ DECLINLINE(void)     PDMPciDevSetWord(PPDMPCIDEV pPciDev, uint32_t offReg, uint1
     *(uint16_t*)&pPciDev->abConfig[offReg] = RT_H2LE_U16(u16Value);
 }
 
-DECLINLINE(uint16_t) PDMPciDevGetWord(PPDMPCIDEV pPciDev, uint32_t offReg)
+DECLINLINE(uint16_t) PDMPciDevGetWord(PCPDMPCIDEV pPciDev, uint32_t offReg)
 {
     uint16_t u16Value;
     Assert(offReg <= sizeof(pPciDev->abConfig) - sizeof(uint16_t));
@@ -189,7 +346,7 @@ DECLINLINE(void)     PDMPciDevSetDWord(PPDMPCIDEV pPciDev, uint32_t offReg, uint
     *(uint32_t*)&pPciDev->abConfig[offReg] = RT_H2LE_U32(u32Value);
 }
 
-DECLINLINE(uint32_t) PDMPciDevGetDWord(PPDMPCIDEV pPciDev, uint32_t offReg)
+DECLINLINE(uint32_t) PDMPciDevGetDWord(PCPDMPCIDEV pPciDev, uint32_t offReg)
 {
     uint32_t u32Value;
     Assert(offReg <= sizeof(pPciDev->abConfig) - sizeof(uint32_t));
@@ -203,7 +360,7 @@ DECLINLINE(void)     PDMPciDevSetQWord(PPDMPCIDEV pPciDev, uint32_t offReg, uint
     *(uint64_t*)&pPciDev->abConfig[offReg] = RT_H2LE_U64(u64Value);
 }
 
-DECLINLINE(uint64_t) PDMPciDevGetQWord(PPDMPCIDEV pPciDev, uint32_t offReg)
+DECLINLINE(uint64_t) PDMPciDevGetQWord(PCPDMPCIDEV pPciDev, uint32_t offReg)
 {
     uint64_t u64Value;
     Assert(offReg <= sizeof(pPciDev->abConfig) - sizeof(uint64_t));
@@ -226,7 +383,7 @@ DECLINLINE(void) PDMPciDevSetVendorId(PPDMPCIDEV pPciDev, uint16_t u16VendorId)
  * @returns the vendor id.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint16_t) PDMPciDevGetVendorId(PPDMPCIDEV pPciDev)
+DECLINLINE(uint16_t) PDMPciDevGetVendorId(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetWord(pPciDev, VBOX_PCI_VENDOR_ID);
 }
@@ -247,7 +404,7 @@ DECLINLINE(void) PDMPciDevSetDeviceId(PPDMPCIDEV pPciDev, uint16_t u16DeviceId)
  * @returns the device id.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint16_t) PDMPciDevGetDeviceId(PPDMPCIDEV pPciDev)
+DECLINLINE(uint16_t) PDMPciDevGetDeviceId(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetWord(pPciDev, VBOX_PCI_DEVICE_ID);
 }
@@ -269,7 +426,7 @@ DECLINLINE(void) PDMPciDevSetCommand(PPDMPCIDEV pPciDev, uint16_t u16Command)
  * @returns The command register value.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint16_t) PDMPciDevGetCommand(PPDMPCIDEV pPciDev)
+DECLINLINE(uint16_t) PDMPciDevGetCommand(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetWord(pPciDev, VBOX_PCI_COMMAND);
 }
@@ -279,7 +436,7 @@ DECLINLINE(uint16_t) PDMPciDevGetCommand(PPDMPCIDEV pPciDev)
  * @returns true if the device is a bus master, false if not.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(bool) PDMPciDevIsBusmaster(PPDMPCIDEV pPciDev)
+DECLINLINE(bool) PDMPciDevIsBusmaster(PCPDMPCIDEV pPciDev)
 {
     return (PDMPciDevGetCommand(pPciDev) & VBOX_PCI_COMMAND_MASTER) != 0;
 }
@@ -289,7 +446,7 @@ DECLINLINE(bool) PDMPciDevIsBusmaster(PPDMPCIDEV pPciDev)
  * @returns true if disabled.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(bool) PDMPciDevIsIntxDisabled(PPDMPCIDEV pPciDev)
+DECLINLINE(bool) PDMPciDevIsIntxDisabled(PCPDMPCIDEV pPciDev)
 {
     return (PDMPciDevGetCommand(pPciDev) & VBOX_PCI_COMMAND_INTX_DISABLE) != 0;
 }
@@ -300,7 +457,7 @@ DECLINLINE(bool) PDMPciDevIsIntxDisabled(PPDMPCIDEV pPciDev)
  * @returns status config register.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint16_t) PDMPciDevGetStatus(PPDMPCIDEV pPciDev)
+DECLINLINE(uint16_t) PDMPciDevGetStatus(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetWord(pPciDev, VBOX_PCI_STATUS);
 }
@@ -381,7 +538,7 @@ DECLINLINE(void) PDMPciDevSetHeaderType(PPDMPCIDEV pPciDev, uint8_t u8HdrType)
  * @param   pPciDev         The PCI device.
  * @returns u8HdrType       The header type.
  */
-DECLINLINE(uint8_t) PDMPciDevGetHeaderType(PPDMPCIDEV pPciDev)
+DECLINLINE(uint8_t) PDMPciDevGetHeaderType(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetByte(pPciDev, VBOX_PCI_HEADER_TYPE);
 }
@@ -403,7 +560,7 @@ DECLINLINE(void) PDMPciDevSetBIST(PPDMPCIDEV pPciDev, uint8_t u8Bist)
  * @param   pPciDev         The PCI device.
  * @returns u8Bist          The BIST.
  */
-DECLINLINE(uint8_t) PDMPciDevGetBIST(PPDMPCIDEV pPciDev)
+DECLINLINE(uint8_t) PDMPciDevGetBIST(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetByte(pPciDev, VBOX_PCI_BIST);
 }
@@ -475,7 +632,7 @@ DECLINLINE(void) PDMPciDevSetSubSystemVendorId(PPDMPCIDEV pPciDev, uint16_t u16S
  * @returns the sub-system vendor id.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint16_t) PDMPciDevGetSubSystemVendorId(PPDMPCIDEV pPciDev)
+DECLINLINE(uint16_t) PDMPciDevGetSubSystemVendorId(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetWord(pPciDev, VBOX_PCI_SUBSYSTEM_VENDOR_ID);
 }
@@ -497,7 +654,7 @@ DECLINLINE(void) PDMPciDevSetSubSystemId(PPDMPCIDEV pPciDev, uint16_t u16SubSyst
  * @returns the sub-system id.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint16_t) PDMPciDevGetSubSystemId(PPDMPCIDEV pPciDev)
+DECLINLINE(uint16_t) PDMPciDevGetSubSystemId(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetWord(pPciDev, VBOX_PCI_SUBSYSTEM_ID);
 }
@@ -519,7 +676,7 @@ DECLINLINE(void) PDMPciDevSetCapabilityList(PPDMPCIDEV pPciDev, uint8_t u8Offset
  * @returns offset to capability list.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint8_t) PDMPciDevGetCapabilityList(PPDMPCIDEV pPciDev)
+DECLINLINE(uint8_t) PDMPciDevGetCapabilityList(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetByte(pPciDev, VBOX_PCI_CAPABILITY_LIST);
 }
@@ -541,7 +698,7 @@ DECLINLINE(void) PDMPciDevSetInterruptLine(PPDMPCIDEV pPciDev, uint8_t u8Line)
  * @returns The interrupt line.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint8_t) PDMPciDevGetInterruptLine(PPDMPCIDEV pPciDev)
+DECLINLINE(uint8_t) PDMPciDevGetInterruptLine(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetByte(pPciDev, VBOX_PCI_INTERRUPT_LINE);
 }
@@ -563,7 +720,7 @@ DECLINLINE(void) PDMPciDevSetInterruptPin(PPDMPCIDEV pPciDev, uint8_t u8Pin)
  * @returns The interrupt pin.
  * @param   pPciDev         The PCI device.
  */
-DECLINLINE(uint8_t) PDMPciDevGetInterruptPin(PPDMPCIDEV pPciDev)
+DECLINLINE(uint8_t) PDMPciDevGetInterruptPin(PCPDMPCIDEV pPciDev)
 {
     return PDMPciDevGetByte(pPciDev, VBOX_PCI_INTERRUPT_PIN);
 }
@@ -616,6 +773,21 @@ DECLINLINE(uint8_t) PDMPciDevGetInterruptPin(PPDMPCIDEV pPciDev)
 /** @} */
 
 
+/** @name PDMIICH9BRIDGEPDMPCIDEV_IID - Ugly 3rd party bridge/raw PCI hack.
+ *
+ * When querying this IID via IBase::pfnQueryInterface on a ICH9 bridge, you
+ * will get a pointer to a PDMPCIDEV rather pointer to an interface function
+ * table as is the custom.  This was needed by some unusual 3rd-party raw and/or
+ * pass-through implementation which need to provide different PCI configuration
+ * space content for bridges (as long as we don't allow pass-through of bridges
+ * or custom bridge device implementations).  So, HACK ALERT to all of this!
+ * @{ */
+#define PDMIICH9BRIDGEPDMPCIDEV_IID "785c74b1-8510-4458-9422-56750bf221db"
+typedef PPDMPCIDEV PPDMIICH9BRIDGEPDMPCIDEV;
+typedef PDMPCIDEV  PDMIICH9BRIDGEPDMPCIDEV;
 /** @} */
 
-#endif
+
+/** @} */
+
+#endif /* !VBOX_INCLUDED_vmm_pdmpcidev_h */

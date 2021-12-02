@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: vfsreadahead.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IPRT - Virtual File System, Read-Ahead Thread.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -484,7 +484,39 @@ static DECLCALLBACK(int) rtVfsReadAhead_QuerySize(void *pvThis, uint64_t *pcbFil
     AssertReturn(pThis->hFile != NIL_RTVFSFILE, VERR_NOT_SUPPORTED);
 
     RTCritSectEnter(&pThis->IoCritSect); /* paranoia */
-    int rc = RTVfsFileGetSize(pThis->hFile, pcbFile);
+    int rc = RTVfsFileQuerySize(pThis->hFile, pcbFile);
+    RTCritSectLeave(&pThis->IoCritSect);
+
+    return rc;
+}
+
+
+/**
+ * @interface_method_impl{RTVFSFILEOPS,pfnSetSize}
+ */
+static DECLCALLBACK(int) rtVfsReadAhead_SetSize(void *pvThis, uint64_t cbFile, uint32_t fFlags)
+{
+    PRTVFSREADAHEAD pThis = (PRTVFSREADAHEAD)pvThis;
+    AssertReturn(pThis->hFile != NIL_RTVFSFILE, VERR_NOT_SUPPORTED);
+
+    RTCritSectEnter(&pThis->IoCritSect); /* paranoia */
+    int rc = RTVfsFileSetSize(pThis->hFile, cbFile, fFlags);
+    RTCritSectLeave(&pThis->IoCritSect);
+
+    return rc;
+}
+
+
+/**
+ * @interface_method_impl{RTVFSFILEOPS,pfnQueryMaxSize}
+ */
+static DECLCALLBACK(int) rtVfsReadAhead_QueryMaxSize(void *pvThis, uint64_t *pcbMax)
+{
+    PRTVFSREADAHEAD pThis = (PRTVFSREADAHEAD)pvThis;
+    AssertReturn(pThis->hFile != NIL_RTVFSFILE, VERR_NOT_SUPPORTED);
+
+    RTCritSectEnter(&pThis->IoCritSect); /* paranoia */
+    int rc = RTVfsFileQueryMaxSize(pThis->hFile, pcbMax);
     RTCritSectLeave(&pThis->IoCritSect);
 
     return rc;
@@ -546,7 +578,7 @@ DECL_HIDDEN_CONST(const RTVFSFILEOPS) g_VfsReadAheadFileOps =
     /*RTVFSIOFILEOPS_FEAT_NO_AT_OFFSET*/ 0,
     { /* ObjSet */
         RTVFSOBJSETOPS_VERSION,
-        RT_OFFSETOF(RTVFSFILEOPS, Stream.Obj) - RT_OFFSETOF(RTVFSFILEOPS, ObjSet),
+        RT_UOFFSETOF(RTVFSFILEOPS, ObjSet) - RT_UOFFSETOF(RTVFSFILEOPS, Stream.Obj),
         rtVfsReadAhead_SetMode,
         rtVfsReadAhead_SetTimes,
         rtVfsReadAhead_SetOwner,
@@ -554,6 +586,8 @@ DECL_HIDDEN_CONST(const RTVFSFILEOPS) g_VfsReadAheadFileOps =
     },
     rtVfsReadAhead_Seek,
     rtVfsReadAhead_QuerySize,
+    rtVfsReadAhead_SetSize,
+    rtVfsReadAhead_QueryMaxSize,
     RTVFSFILEOPS_VERSION
 };
 
@@ -698,7 +732,7 @@ static int rtVfsCreateReadAheadInstance(RTVFSIOSTREAM hVfsIosSrc, RTVFSFILE hVfs
         RTVFSFILE       hVfsFileReadAhead = NIL_RTVFSFILE;
         RTVFSIOSTREAM   hVfsIosReadAhead  = NIL_RTVFSIOSTREAM;
         PRTVFSREADAHEAD pThis;
-        size_t          cbThis = RT_OFFSETOF(RTVFSREADAHEAD, aBufDescs[cBuffers]);
+        size_t          cbThis = RT_UOFFSETOF_DYN(RTVFSREADAHEAD, aBufDescs[cBuffers]);
         if (hVfsFileSrc != NIL_RTVFSFILE)
             rc = RTVfsNewFile(&g_VfsReadAheadFileOps, cbThis, RTFILE_O_READ, NIL_RTVFS, NIL_RTVFSLOCK,
                               &hVfsFileReadAhead, (void **)&pThis);
@@ -812,4 +846,156 @@ RTDECL(int) RTVfsCreateReadAheadForFile(RTVFSFILE hVfsFile, uint32_t fFlags, uin
      */
     return rtVfsCreateReadAheadInstance(hVfsIos, hVfsFile, fFlags, cBuffers, cbBuffer, NULL, phVfsFile);
 }
+
+
+/**
+ * @interface_method_impl{RTVFSCHAINELEMENTREG,pfnValidate}
+ */
+static DECLCALLBACK(int) rtVfsChainReadAhead_Validate(PCRTVFSCHAINELEMENTREG pProviderReg, PRTVFSCHAINSPEC pSpec,
+                                                      PRTVFSCHAINELEMSPEC pElement, uint32_t *poffError, PRTERRINFO pErrInfo)
+{
+    RT_NOREF(pProviderReg, poffError, pErrInfo);
+
+    /*
+     * Basics.
+     */
+    if (   pElement->enmType != RTVFSOBJTYPE_FILE
+        && pElement->enmType != RTVFSOBJTYPE_IO_STREAM)
+        return VERR_VFS_CHAIN_ONLY_FILE_OR_IOS;
+    if (pElement->enmTypeIn == RTVFSOBJTYPE_INVALID)
+        return VERR_VFS_CHAIN_CANNOT_BE_FIRST_ELEMENT;
+    if (   pElement->enmTypeIn != RTVFSOBJTYPE_FILE
+        && pElement->enmTypeIn != RTVFSOBJTYPE_IO_STREAM)
+        return VERR_VFS_CHAIN_TAKES_FILE_OR_IOS;
+    if (pSpec->fOpenFile & RTFILE_O_WRITE)
+        return VERR_VFS_CHAIN_READ_ONLY_IOS;
+    if (pElement->cArgs > 2)
+        return VERR_VFS_CHAIN_AT_MOST_TWO_ARGS;
+
+    /*
+     * Parse the two optional arguments.
+     */
+    uint32_t cBuffers = 0;
+    if (pElement->cArgs > 0)
+    {
+        const char *psz = pElement->paArgs[0].psz;
+        if (*psz)
+        {
+            int rc = RTStrToUInt32Full(psz, 0, &cBuffers);
+            if (RT_FAILURE(rc))
+            {
+                *poffError = pElement->paArgs[0].offSpec;
+                return VERR_VFS_CHAIN_INVALID_ARGUMENT;
+            }
+        }
+    }
+
+    uint32_t cbBuffer = 0;
+    if (pElement->cArgs > 1)
+    {
+        const char *psz = pElement->paArgs[1].psz;
+        if (*psz)
+        {
+            int rc = RTStrToUInt32Full(psz, 0, &cbBuffer);
+            if (RT_FAILURE(rc))
+            {
+                *poffError = pElement->paArgs[1].offSpec;
+                return VERR_VFS_CHAIN_INVALID_ARGUMENT;
+            }
+        }
+    }
+
+    /*
+     * Save the parsed arguments in the spec since their both optional.
+     */
+    pElement->uProvider = RT_MAKE_U64(cBuffers, cbBuffer);
+
+    return VINF_SUCCESS;
+}
+
+
+/**
+ * @interface_method_impl{RTVFSCHAINELEMENTREG,pfnInstantiate}
+ */
+static DECLCALLBACK(int) rtVfsChainReadAhead_Instantiate(PCRTVFSCHAINELEMENTREG pProviderReg, PCRTVFSCHAINSPEC pSpec,
+                                                         PCRTVFSCHAINELEMSPEC pElement, RTVFSOBJ hPrevVfsObj,
+                                                         PRTVFSOBJ phVfsObj, uint32_t *poffError, PRTERRINFO pErrInfo)
+{
+    RT_NOREF(pProviderReg, pSpec, pElement, poffError, pErrInfo);
+    AssertReturn(hPrevVfsObj != NIL_RTVFSOBJ, VERR_VFS_CHAIN_IPE);
+
+    /* Try for a file if we can. */
+    int rc;
+    RTVFSFILE hVfsFileIn = RTVfsObjToFile(hPrevVfsObj);
+    if (hVfsFileIn != NIL_RTVFSFILE)
+    {
+        RTVFSFILE hVfsFile = NIL_RTVFSFILE;
+        rc = RTVfsCreateReadAheadForFile(hVfsFileIn, 0 /*fFlags*/, RT_LO_U32(pElement->uProvider),
+                                         RT_HI_U32(pElement->uProvider), &hVfsFile);
+        RTVfsFileRelease(hVfsFileIn);
+        if (RT_SUCCESS(rc))
+        {
+            *phVfsObj = RTVfsObjFromFile(hVfsFile);
+            RTVfsFileRelease(hVfsFile);
+            if (*phVfsObj != NIL_RTVFSOBJ)
+                return VINF_SUCCESS;
+            rc = VERR_VFS_CHAIN_CAST_FAILED;
+        }
+    }
+    else if (pElement->enmType == RTVFSOBJTYPE_IO_STREAM)
+    {
+        RTVFSIOSTREAM hVfsIosIn = RTVfsObjToIoStream(hPrevVfsObj);
+        if (hVfsIosIn != NIL_RTVFSIOSTREAM)
+        {
+            RTVFSIOSTREAM hVfsIos = NIL_RTVFSIOSTREAM;
+            rc = RTVfsCreateReadAheadForIoStream(hVfsIosIn, 0 /*fFlags*/, RT_LO_U32(pElement->uProvider),
+                                                 RT_HI_U32(pElement->uProvider), &hVfsIos);
+            RTVfsIoStrmRelease(hVfsIosIn);
+            if (RT_SUCCESS(rc))
+            {
+                *phVfsObj = RTVfsObjFromIoStream(hVfsIos);
+                RTVfsIoStrmRelease(hVfsIos);
+                if (*phVfsObj != NIL_RTVFSOBJ)
+                    return VINF_SUCCESS;
+                rc = VERR_VFS_CHAIN_CAST_FAILED;
+            }
+        }
+        else
+            rc = VERR_VFS_CHAIN_CAST_FAILED;
+    }
+    else
+        rc = VERR_VFS_CHAIN_CAST_FAILED;
+    return rc;
+}
+
+
+/**
+ * @interface_method_impl{RTVFSCHAINELEMENTREG,pfnCanReuseElement}
+ */
+static DECLCALLBACK(bool) rtVfsChainReadAhead_CanReuseElement(PCRTVFSCHAINELEMENTREG pProviderReg,
+                                                              PCRTVFSCHAINSPEC pSpec, PCRTVFSCHAINELEMSPEC pElement,
+                                                              PCRTVFSCHAINSPEC pReuseSpec, PCRTVFSCHAINELEMSPEC pReuseElement)
+{
+    RT_NOREF(pProviderReg, pSpec, pElement, pReuseSpec, pReuseElement);
+    return false;
+}
+
+
+/** VFS chain element 'pull'. */
+static RTVFSCHAINELEMENTREG g_rtVfsChainReadAheadReg =
+{
+    /* uVersion = */            RTVFSCHAINELEMENTREG_VERSION,
+    /* fReserved = */           0,
+    /* pszName = */             "pull",
+    /* ListEntry = */           { NULL, NULL },
+    /* pszHelp = */             "Takes an I/O stream or file and provides read-ahead caching.\n"
+                                "Optional first argument specifies how many buffers to use, 0 indicating the default.\n"
+                                "Optional second argument specifies the buffer size, 0 indicating the default.",
+    /* pfnValidate = */         rtVfsChainReadAhead_Validate,
+    /* pfnInstantiate = */      rtVfsChainReadAhead_Instantiate,
+    /* pfnCanReuseElement = */  rtVfsChainReadAhead_CanReuseElement,
+    /* uEndMarker = */          RTVFSCHAINELEMENTREG_VERSION
+};
+
+RTVFSCHAIN_AUTO_REGISTER_ELEMENT_PROVIDER(&g_rtVfsChainReadAheadReg, rtVfsChainReadAheadReg);
 

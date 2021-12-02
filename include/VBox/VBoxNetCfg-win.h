@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxNetCfg-win.h 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * Network Configuration API for Windows platforms.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -24,8 +24,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_VBoxNetCfg_win_h
-#define ___VBox_VBoxNetCfg_win_h
+#ifndef VBOX_INCLUDED_VBoxNetCfg_win_h
+#define VBOX_INCLUDED_VBoxNetCfg_win_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /*
  * Defining VBOXNETCFG_DELAYEDRENAME postpones renaming of host-only adapter
@@ -41,6 +44,7 @@
 #include <Netcfgn.h>
 #include <iprt/win/Setupapi.h>
 #include <VBox/cdefs.h>
+#include <iprt/types.h>
 
 /** @defgroup grp_vboxnetcfgwin     The Windows Network Configration Library
  * @{ */
@@ -80,11 +84,11 @@ VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinNetAdpUninstall(IN INetCfg *pNc, IN LPC
 VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinNetAdpInstall(IN INetCfg *pNc,IN LPCWSTR const pInfFullPath);
 
 #ifndef VBOXNETCFG_DELAYEDRENAME
-VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinCreateHostOnlyNetworkInterface(IN LPCWSTR pInfPath, IN bool bIsInfPathFile,
+VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinCreateHostOnlyNetworkInterface(IN LPCWSTR pInfPath, IN bool bIsInfPathFile, IN BSTR bstrDesiredName,
                                                                         OUT GUID *pGuid, OUT BSTR *lppszName,
                                                                         OUT BSTR *pErrMsg);
 #else /* VBOXNETCFG_DELAYEDRENAME */
-VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinCreateHostOnlyNetworkInterface(IN LPCWSTR pInfPath, IN bool bIsInfPathFile,
+VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinCreateHostOnlyNetworkInterface(IN LPCWSTR pInfPath, IN bool bIsInfPathFile, IN BSTR bstrDesiredName,
                                                                         OUT GUID *pGuid, OUT BSTR *lppszId,
                                                                         OUT BSTR *pErrMsg);
 VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinRenameHostOnlyConnection(IN const GUID *pGuid, IN LPCWSTR pszId,  OUT BSTR *pDevName);
@@ -117,12 +121,13 @@ VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinEnableDynamicIpConfig(IN const GUID *pG
 VBOXNETCFGWIN_DECL(HRESULT) VBoxNetCfgWinDhcpRediscover(IN const GUID *pGuid);
 
 
-typedef VOID (*LOG_ROUTINE)(LPCSTR szString); /**< I'm not prefixed. */
-VBOXNETCFGWIN_DECL(VOID) VBoxNetCfgWinSetLogging(IN LOG_ROUTINE pfnLog);
+typedef DECLCALLBACKTYPE(void, FNVBOXNETCFGLOGGER,(const char *pszString));
+typedef FNVBOXNETCFGLOGGER *PFNVBOXNETCFGLOGGER;
+VBOXNETCFGWIN_DECL(void) VBoxNetCfgWinSetLogging(IN PFNVBOXNETCFGLOGGER pfnLogger);
 
 RT_C_DECLS_END
 
 /** @} */
 
-#endif
+#endif /* !VBOX_INCLUDED_VBoxNetCfg_win_h */
 

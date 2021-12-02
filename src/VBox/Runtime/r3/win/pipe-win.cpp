@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: pipe-win.cpp 86412 2020-10-02 11:39:26Z vboxsync $ */
 /** @file
  * IPRT - Anonymous Pipes, Windows Implementation.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -45,6 +45,7 @@
 #include <iprt/time.h>
 #include "internal/pipe.h"
 #include "internal/magics.h"
+#include "internal-r3-win.h"
 
 
 /*********************************************************************************************************************************
@@ -65,6 +66,8 @@ typedef struct RTPIPEINTERNAL
     HANDLE              hPipe;
     /** Set if this is the read end, clear if it's the write end. */
     bool                fRead;
+    /** RTPipeFromNative: Leave native handle open on RTPipeClose. */
+    bool                fLeaveOpen;
     /** Set if there is already pending I/O. */
     bool                fIOPending;
     /** Set if the zero byte read that the poll code using is pending. */
@@ -73,6 +76,8 @@ typedef struct RTPIPEINTERNAL
     bool                fBrokenPipe;
     /** Set if we've promised that the handle is writable. */
     bool                fPromisedWritable;
+    /** Set if created inheritable. */
+    bool                fCreatedInheritable;
     /** Usage counter. */
     uint32_t            cUsers;
     /** The overlapped I/O structure we use. */
@@ -274,30 +279,34 @@ RTDECL(int)  RTPipeCreate(PRTPIPE phPipeRead, PRTPIPE phPipeWrite, uint32_t fFla
                                                                 TRUE /*fInitialState*/, NULL /*pName*/);
                         if (pThisW->Overlapped.hEvent != NULL)
                         {
-                            pThisR->u32Magic        = RTPIPE_MAGIC;
-                            pThisW->u32Magic        = RTPIPE_MAGIC;
-                            pThisR->hPipe           = hPipeR;
-                            pThisW->hPipe           = hPipeW;
-                            pThisR->fRead           = true;
-                            pThisW->fRead           = false;
-                            //pThisR->fIOPending      = false;
-                            //pThisW->fIOPending      = false;
-                            //pThisR->fZeroByteRead   = false;
-                            //pThisW->fZeroByteRead   = false;
-                            //pThisR->fBrokenPipe     = false;
-                            //pThisW->fBrokenPipe     = false;
-                            //pThisW->fPromisedWritable= false;
-                            //pThisR->fPromisedWritable= false;
-                            //pThisR->cUsers          = 0;
-                            //pThisW->cUsers          = 0;
-                            //pThisR->pbBounceBuf     = NULL;
-                            //pThisW->pbBounceBuf     = NULL;
-                            //pThisR->cbBounceBufUsed = 0;
-                            //pThisW->cbBounceBufUsed = 0;
-                            //pThisR->cbBounceBufAlloc= 0;
-                            //pThisW->cbBounceBufAlloc= 0;
-                            pThisR->hPollSet        = NIL_RTPOLLSET;
-                            pThisW->hPollSet        = NIL_RTPOLLSET;
+                            pThisR->u32Magic            = RTPIPE_MAGIC;
+                            pThisW->u32Magic            = RTPIPE_MAGIC;
+                            pThisR->hPipe               = hPipeR;
+                            pThisW->hPipe               = hPipeW;
+                            pThisR->fRead               = true;
+                            pThisW->fRead               = false;
+                            pThisR->fLeaveOpen          = false;
+                            pThisW->fLeaveOpen          = false;
+                            //pThisR->fIOPending        = false;
+                            //pThisW->fIOPending        = false;
+                            //pThisR->fZeroByteRead     = false;
+                            //pThisW->fZeroByteRead     = false;
+                            //pThisR->fBrokenPipe       = false;
+                            //pThisW->fBrokenPipe       = false;
+                            //pThisW->fPromisedWritable = false;
+                            //pThisR->fPromisedWritable = false;
+                            pThisW->fCreatedInheritable = RT_BOOL(fFlags & RTPIPE_C_INHERIT_WRITE);
+                            pThisR->fCreatedInheritable = RT_BOOL(fFlags & RTPIPE_C_INHERIT_READ);
+                            //pThisR->cUsers            = 0;
+                            //pThisW->cUsers            = 0;
+                            //pThisR->pbBounceBuf       = NULL;
+                            //pThisW->pbBounceBuf       = NULL;
+                            //pThisR->cbBounceBufUsed   = 0;
+                            //pThisW->cbBounceBufUsed   = 0;
+                            //pThisR->cbBounceBufAlloc  = 0;
+                            //pThisW->cbBounceBufAlloc  = 0;
+                            pThisR->hPollSet            = NIL_RTPOLLSET;
+                            pThisW->hPollSet            = NIL_RTPOLLSET;
 
                             *phPipeRead  = pThisR;
                             *phPipeWrite = pThisW;
@@ -394,7 +403,7 @@ static int rtPipeWriteCheckCompletion(RTPIPEINTERNAL *pThis)
 
 
 
-RTDECL(int)  RTPipeClose(RTPIPE hPipe)
+RTDECL(int)  RTPipeCloseEx(RTPIPE hPipe, bool fLeaveOpen)
 {
     RTPIPEINTERNAL *pThis = hPipe;
     if (pThis == NIL_RTPIPE)
@@ -412,7 +421,8 @@ RTDECL(int)  RTPipeClose(RTPIPE hPipe)
     if (!pThis->fRead && pThis->fIOPending)
         rtPipeWriteCheckCompletion(pThis);
 
-    CloseHandle(pThis->hPipe);
+    if (!fLeaveOpen && !pThis->fLeaveOpen)
+        CloseHandle(pThis->hPipe);
     pThis->hPipe = INVALID_HANDLE_VALUE;
 
     CloseHandle(pThis->Overlapped.hEvent);
@@ -430,10 +440,16 @@ RTDECL(int)  RTPipeClose(RTPIPE hPipe)
 }
 
 
+RTDECL(int)  RTPipeClose(RTPIPE hPipe)
+{
+    return RTPipeCloseEx(hPipe, false /*fLeaveOpen*/);
+}
+
+
 RTDECL(int)  RTPipeFromNative(PRTPIPE phPipe, RTHCINTPTR hNativePipe, uint32_t fFlags)
 {
     AssertPtrReturn(phPipe, VERR_INVALID_POINTER);
-    AssertReturn(!(fFlags & ~RTPIPE_N_VALID_MASK), VERR_INVALID_PARAMETER);
+    AssertReturn(!(fFlags & ~RTPIPE_N_VALID_MASK_FN), VERR_INVALID_PARAMETER);
     AssertReturn(!!(fFlags & RTPIPE_N_READ) != !!(fFlags & RTPIPE_N_WRITE), VERR_INVALID_PARAMETER);
 
     /*
@@ -446,7 +462,10 @@ RTDECL(int)  RTPipeFromNative(PRTPIPE phPipe, RTHCINTPTR hNativePipe, uint32_t f
     DWORD fInfo;
     if (!GetNamedPipeInfo(hNative, &fInfo, NULL, NULL, &cMaxInstances))
         return RTErrConvertFromWin32(GetLastError());
-    AssertReturn(!(fInfo & PIPE_TYPE_MESSAGE), VERR_INVALID_HANDLE);
+    /* Doesn't seem to matter to much if the pipe is message or byte type. Cygwin
+       seems to hand us such pipes when capturing output (@bugref{9397}), so just
+       ignore skip this check:
+    AssertReturn(!(fInfo & PIPE_TYPE_MESSAGE), VERR_INVALID_HANDLE); */
     AssertReturn(cMaxInstances == 1, VERR_INVALID_HANDLE);
 
     DWORD cInstances;
@@ -471,22 +490,26 @@ RTDECL(int)  RTPipeFromNative(PRTPIPE phPipe, RTHCINTPTR hNativePipe, uint32_t f
                                                TRUE /*fInitialState*/, NULL /*pName*/);
         if (pThis->Overlapped.hEvent != NULL)
         {
-            pThis->u32Magic        = RTPIPE_MAGIC;
-            pThis->hPipe           = hNative;
-            pThis->fRead           = !!(fFlags & RTPIPE_N_READ);
-            //pThis->fIOPending      = false;
-            //pThis->fZeroByteRead   = false;
-            //pThis->fBrokenPipe     = false;
-            //pThisR->fPromisedWritable= false;
-            //pThis->cUsers          = 0;
-            //pThis->pbBounceBuf     = NULL;
-            //pThis->cbBounceBufUsed = 0;
-            //pThis->cbBounceBufAlloc= 0;
-            pThis->hPollSet        = NIL_RTPOLLSET;
+            pThis->u32Magic             = RTPIPE_MAGIC;
+            pThis->hPipe                = hNative;
+            pThis->fRead                = RT_BOOL(fFlags & RTPIPE_N_READ);
+            pThis->fLeaveOpen           = RT_BOOL(fFlags & RTPIPE_N_LEAVE_OPEN);
+            //pThis->fIOPending         = false;
+            //pThis->fZeroByteRead      = false;
+            //pThis->fBrokenPipe        = false;
+            //pThis->fPromisedWritable  = false;
+            pThis->fCreatedInheritable  = RT_BOOL(fFlags & RTPIPE_N_INHERIT);
+            //pThis->cUsers             = 0;
+            //pThis->pbBounceBuf        = NULL;
+            //pThis->cbBounceBufUsed    = 0;
+            //pThis->cbBounceBufAlloc   = 0;
+            pThis->hPollSet             = NIL_RTPOLLSET;
 
-            HANDLE  hNative2 = INVALID_HANDLE_VALUE;
+            HANDLE                      hNative2 = INVALID_HANDLE_VALUE;
             FILE_PIPE_LOCAL_INFORMATION Info;
-            if (rtPipeQueryNtInfo(pThis, &Info))
+            RT_ZERO(Info);
+            if (   g_enmWinVer != kRTWinOSType_NT310
+                && rtPipeQueryNtInfo(pThis, &Info))
                 rc = VINF_SUCCESS;
             else
             {
@@ -498,7 +521,10 @@ RTDECL(int)  RTPipeFromNative(PRTPIPE phPipe, RTHCINTPTR hNativePipe, uint32_t f
                 {
                     pThis->hPipe = hNative2;
                     if (rtPipeQueryNtInfo(pThis, &Info))
+                    {
+                        pThis->fLeaveOpen = false;
                         rc = VINF_SUCCESS;
+                    }
                     else
                     {
                         rc = VERR_ACCESS_DENIED;
@@ -535,11 +561,17 @@ RTDECL(int)  RTPipeFromNative(PRTPIPE phPipe, RTHCINTPTR hNativePipe, uint32_t f
                 if (RT_SUCCESS(rc))
                 {
                     /*
-                     * Ok, we're good!
+                     * Ok, we're good!  If we replaced the handle, make sure it's not a standard
+                     * handle if we think we need to close it.
                      */
-/** @todo This is bogus for standard handles! */
                     if (hNative2 != INVALID_HANDLE_VALUE)
-                        CloseHandle(hNative);
+                    {
+                        if (   !(fFlags & RTPIPE_N_LEAVE_OPEN)
+                            && hNative != GetStdHandle(STD_INPUT_HANDLE)
+                            && hNative != GetStdHandle(STD_OUTPUT_HANDLE)
+                            && hNative != GetStdHandle(STD_ERROR_HANDLE) )
+                            CloseHandle(hNative);
+                    }
                     *phPipe = pThis;
                     return VINF_SUCCESS;
                 }
@@ -564,6 +596,16 @@ RTDECL(RTHCINTPTR) RTPipeToNative(RTPIPE hPipe)
     AssertReturn(pThis->u32Magic == RTPIPE_MAGIC, -1);
 
     return (RTHCINTPTR)pThis->hPipe;
+}
+
+
+RTDECL(int) RTPipeGetCreationInheritability(RTPIPE hPipe)
+{
+    RTPIPEINTERNAL *pThis = hPipe;
+    AssertPtrReturn(pThis, false);
+    AssertReturn(pThis->u32Magic == RTPIPE_MAGIC, false);
+
+    return pThis->fCreatedInheritable;
 }
 
 
@@ -796,7 +838,7 @@ RTDECL(int) RTPipeWrite(RTPIPE hPipe, const void *pvBuf, size_t cbToWrite, size_
                     if (WriteFile(pThis->hPipe, pThis->pbBounceBuf, (DWORD)pThis->cbBounceBufUsed,
                                   &cbWritten, &pThis->Overlapped))
                     {
-                        *pcbWritten = cbWritten;
+                        *pcbWritten = RT_MIN(cbWritten, cbToWrite); /* paranoia^3 */
                         rc = VINF_SUCCESS;
                     }
                     else if (GetLastError() == ERROR_IO_PENDING)
@@ -878,9 +920,8 @@ RTDECL(int) RTPipeWriteBlocking(RTPIPE hPipe, const void *pvBuf, size_t cbToWrit
                     RTCritSectLeave(&pThis->CritSect);
 
                     DWORD cbWritten = 0;
-                    if (WriteFile(pThis->hPipe, pvBuf,
-                                  cbToWrite <= ~(DWORD)0 ? (DWORD)cbToWrite : ~(DWORD)0,
-                                  &cbWritten, &pThis->Overlapped))
+                    DWORD const cbToWriteInThisIteration = cbToWrite <= ~(DWORD)0 ? (DWORD)cbToWrite : ~(DWORD)0;
+                    if (WriteFile(pThis->hPipe, pvBuf, cbToWriteInThisIteration, &cbWritten, &pThis->Overlapped))
                         rc = VINF_SUCCESS;
                     else if (GetLastError() == ERROR_IO_PENDING)
                     {
@@ -901,6 +942,8 @@ RTDECL(int) RTPipeWriteBlocking(RTPIPE hPipe, const void *pvBuf, size_t cbToWrit
                         break;
 
                     /* advance */
+                    if (cbWritten > cbToWriteInThisIteration) /* paranoia^3 */
+                        cbWritten = cbToWriteInThisIteration;
                     pvBuf           = (char const *)pvBuf + cbWritten;
                     cbTotalWritten += cbWritten;
                     cbToWrite      -= cbWritten;

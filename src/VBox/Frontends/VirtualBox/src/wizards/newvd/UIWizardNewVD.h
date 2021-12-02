@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardNewVD.h 91714 2021-10-13 13:05:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardNewVD class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,71 +15,70 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIWizardNewVD_h__
-#define __UIWizardNewVD_h__
+#ifndef FEQT_INCLUDED_SRC_wizards_newvd_UIWizardNewVD_h
+#define FEQT_INCLUDED_SRC_wizards_newvd_UIWizardNewVD_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
-#include "UIWizard.h"
+#include "UINativeWizard.h"
 
 /* COM includes: */
 #include "COMEnums.h"
 #include "CMedium.h"
+#include "CMediumFormat.h"
 
-/* New Virtual Hard Drive wizard: */
-class UIWizardNewVD : public UIWizard
+/** New Virtual Disk wizard. */
+class SHARED_LIBRARY_STUFF UIWizardNewVD : public UINativeWizard
 {
     Q_OBJECT;
 
 public:
 
-    /* Page IDs: */
-    enum
-    {
-        Page1,
-        Page2,
-        Page3
-    };
-
-    /* Page IDs: */
-    enum
-    {
-        PageExpert
-    };
-
-    /* Constructor: */
     UIWizardNewVD(QWidget *pParent,
                   const QString &strDefaultName, const QString &strDefaultPath,
-                  qulonglong uDefaultSize,
-                  WizardMode mode = WizardMode_Auto);
+                  qulonglong uDefaultSize, WizardMode mode = WizardMode_Auto);
 
-    /* Pages related stuff: */
-    void prepare();
+    bool createVirtualDisk();
 
-    /* Returns virtual-disk: */
-    CMedium virtualDisk() const { return m_virtualDisk; }
+    /** @name Setter/getters for vm parameters
+     * @{ */
+       qulonglong mediumVariant() const;
+       void setMediumVariant(qulonglong uMediumVariant);
+
+       const CMediumFormat &mediumFormat();
+       void setMediumFormat(const CMediumFormat &mediumFormat);
+
+       const QString &mediumPath() const;
+       void setMediumPath(const QString &strMediumPath);
+
+       qulonglong mediumSize() const;
+       void setMediumSize(qulonglong mediumSize);
+
+       QUuid mediumId() const;
+    /** @} */
 
 protected:
 
-    /* Creates virtual-disk: */
-    bool createVirtualDisk();
-
-    /* Who will be able to create virtual-disk: */
-    friend class UIWizardNewVDPageBasic3;
-    friend class UIWizardNewVDPageExpert;
+    virtual void populatePages() /* final override */;
 
 private:
 
-    /* Translation stuff: */
     void retranslateUi();
-
-    /* Variables: */
-    QString m_strDefaultName;
-    QString m_strDefaultPath;
-    qulonglong m_uDefaultSize;
-    CMedium m_virtualDisk;
+    /** Check medium capabilities and decide if medium variant page should be hidden. */
+    void setMediumVariantPageVisibility();
+    qulonglong m_uMediumVariant;
+    CMediumFormat m_comMediumFormat;
+    QString m_strMediumPath;
+    qulonglong m_uMediumSize;
+    QString     m_strDefaultName;
+    QString     m_strDefaultPath;
+    qulonglong  m_uDefaultSize;
+    int m_iMediumVariantPageIndex;
+    QUuid m_uMediumId;
 };
 
 typedef QPointer<UIWizardNewVD> UISafePointerWizardNewVD;
 
-#endif // __UIWizardNewVD_h__
-
+#endif /* !FEQT_INCLUDED_SRC_wizards_newvd_UIWizardNewVD_h */

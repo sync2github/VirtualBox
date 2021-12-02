@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: asn1-encode.cpp 84310 2020-05-14 17:40:35Z vboxsync $ */
 /** @file
  * IPRT - ASN.1, Encoding.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -35,6 +35,7 @@
 #include <iprt/bignum.h>
 #include <iprt/ctype.h>
 #include <iprt/err.h>
+#include <iprt/mem.h>
 #include <iprt/string.h>
 
 #include <iprt/formats/asn1.h>
@@ -472,5 +473,53 @@ RTDECL(int) RTAsn1EncodeToBuffer(PCRTASN1CORE pRoot, uint32_t fFlags, void *pvBu
     Args.pbDst = (uint8_t *)pvBuf;
     Args.cbDst = cbBuf;
     return RTAsn1EncodeWrite(pRoot, fFlags, rtAsn1EncodeToBufferCallback, &Args, pErrInfo);
+}
+
+
+RTDECL(int) RTAsn1EncodeQueryRawBits(PRTASN1CORE pRoot, const uint8_t **ppbRaw, uint32_t *pcbRaw,
+                                     void **ppvFree, PRTERRINFO pErrInfo)
+{
+    /*
+     * ASSUME that if we've got pointers here, they are valid...
+     */
+    if (   pRoot->uData.pv
+        && !(pRoot->fFlags & RTASN1CORE_F_INDEFINITE_LENGTH) /* BER, not DER. */
+        && (pRoot->fFlags & RTASN1CORE_F_DECODED_CONTENT) )
+    {
+        /** @todo Check that it's DER encoding. */
+        *ppbRaw  = RTASN1CORE_GET_RAW_ASN1_PTR(pRoot);
+        *pcbRaw  = RTASN1CORE_GET_RAW_ASN1_SIZE(pRoot);
+        *ppvFree = NULL;
+        return VINF_SUCCESS;
+    }
+
+    /*
+     * Encode it into a temporary heap buffer.
+     */
+    uint32_t cbEncoded = 0;
+    int rc = RTAsn1EncodePrepare(pRoot, RTASN1ENCODE_F_DER, &cbEncoded, pErrInfo);
+    if (RT_SUCCESS(rc))
+    {
+        void *pvEncoded = RTMemTmpAllocZ(cbEncoded);
+        if (pvEncoded)
+        {
+            rc = RTAsn1EncodeToBuffer(pRoot, RTASN1ENCODE_F_DER, pvEncoded, cbEncoded, pErrInfo);
+            if (RT_SUCCESS(rc))
+            {
+                *ppvFree = pvEncoded;
+                *ppbRaw  = (unsigned char *)pvEncoded;
+                *pcbRaw  = cbEncoded;
+                return VINF_SUCCESS;
+            }
+            RTMemTmpFree(pvEncoded);
+        }
+        else
+            rc = RTErrInfoSetF(pErrInfo, VERR_NO_TMP_MEMORY, "RTMemTmpAllocZ(%u)", cbEncoded);
+    }
+
+    *ppvFree = NULL;
+    *ppbRaw  = NULL;
+    *pcbRaw  = 0;
+    return rc;
 }
 

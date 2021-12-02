@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_vmm_pdmcritsect_h
-#define ___VBox_vmm_pdmcritsect_h
+#ifndef VBOX_INCLUDED_vmm_pdmcritsect_h
+#define VBOX_INCLUDED_vmm_pdmcritsect_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <iprt/critsect.h>
@@ -44,7 +47,7 @@ RT_C_DECLS_BEGIN
 typedef union PDMCRITSECT
 {
     /** Padding. */
-    uint8_t padding[HC_ARCH_BITS == 32 ? 0x80 : 0xc0];
+    uint8_t padding[HC_ARCH_BITS == 32 ? 0xc0 : 0x100];
 #ifdef PDMCRITSECTINT_DECLARED
     /** The internal structure (not normally visible). */
     struct PDMCRITSECTINT s;
@@ -53,51 +56,78 @@ typedef union PDMCRITSECT
 
 VMMR3_INT_DECL(int)     PDMR3CritSectBothTerm(PVM pVM);
 VMMR3_INT_DECL(void)    PDMR3CritSectLeaveAll(PVM pVM);
-VMM_INT_DECL(void)      PDMCritSectBothFF(PVMCPU pVCpu);
+VMM_INT_DECL(void)      PDMCritSectBothFF(PVMCC pVM, PVMCPUCC pVCpu);
 
 
 VMMR3DECL(uint32_t) PDMR3CritSectCountOwned(PVM pVM, char *pszNames, size_t cbNames);
 
 VMMR3DECL(int)      PDMR3CritSectInit(PVM pVM, PPDMCRITSECT pCritSect, RT_SRC_POS_DECL,
                                       const char *pszNameFmt, ...) RT_IPRT_FORMAT_ATTR(6, 7);
-VMMR3DECL(int)      PDMR3CritSectEnterEx(PPDMCRITSECT pCritSect, bool fCallRing3);
-VMMR3DECL(bool)     PDMR3CritSectYield(PPDMCRITSECT pCritSect);
+VMMR3DECL(int)      PDMR3CritSectEnterEx(PVM pVM, PPDMCRITSECT pCritSect, bool fCallRing3);
+VMMR3DECL(bool)     PDMR3CritSectYield(PVM pVM, PPDMCRITSECT pCritSect);
 VMMR3DECL(const char *) PDMR3CritSectName(PCPDMCRITSECT pCritSect);
-VMMR3DECL(int)      PDMR3CritSectDelete(PPDMCRITSECT pCritSect);
+VMMR3DECL(int)      PDMR3CritSectDelete(PVM pVM, PPDMCRITSECT pCritSect);
 #if defined(IN_RING0) || defined(IN_RING3)
 VMMDECL(int)        PDMHCCritSectScheduleExitEvent(PPDMCRITSECT pCritSect, SUPSEMEVENT hEventToSignal);
 #endif
 
-VMMDECL(int)        PDMCritSectEnter(PPDMCRITSECT pCritSect, int rcBusy);
-VMMDECL(int)        PDMCritSectEnterDebug(PPDMCRITSECT pCritSect, int rcBusy, RTHCUINTPTR uId, RT_SRC_POS_DECL);
-VMMDECL(int)        PDMCritSectTryEnter(PPDMCRITSECT pCritSect);
-VMMDECL(int)        PDMCritSectTryEnterDebug(PPDMCRITSECT pCritSect, RTHCUINTPTR uId, RT_SRC_POS_DECL);
-VMMDECL(int)        PDMCritSectLeave(PPDMCRITSECT pCritSect);
+VMMDECL(DECL_CHECK_RETURN_NOT_R3(int))
+                    PDMCritSectEnter(PVMCC pVM, PPDMCRITSECT pCritSect, int rcBusy);
+VMMDECL(DECL_CHECK_RETURN_NOT_R3(int))
+                    PDMCritSectEnterDebug(PVMCC pVM, PPDMCRITSECT pCritSect, int rcBusy, RTHCUINTPTR uId, RT_SRC_POS_DECL);
+VMMDECL(DECL_CHECK_RETURN(int))
+                    PDMCritSectTryEnter(PVMCC pVM, PPDMCRITSECT pCritSect);
+VMMDECL(DECL_CHECK_RETURN(int))
+                    PDMCritSectTryEnterDebug(PVMCC pVM, PPDMCRITSECT pCritSect, RTHCUINTPTR uId, RT_SRC_POS_DECL);
+VMMDECL(int)        PDMCritSectLeave(PVMCC pVM, PPDMCRITSECT pCritSect);
 
-VMMDECL(bool)       PDMCritSectIsOwner(PCPDMCRITSECT pCritSect);
-VMMDECL(bool)       PDMCritSectIsOwnerEx(PCPDMCRITSECT pCritSect, PVMCPU pVCpu);
+VMMDECL(bool)       PDMCritSectIsOwner(PVMCC pVM, PCPDMCRITSECT pCritSect);
+VMMDECL(bool)       PDMCritSectIsOwnerEx(PVMCPUCC pVCpu, PCPDMCRITSECT pCritSect);
 VMMDECL(bool)       PDMCritSectIsInitialized(PCPDMCRITSECT pCritSect);
-VMMDECL(bool)       PDMCritSectHasWaiters(PCPDMCRITSECT pCritSect);
+VMMDECL(bool)       PDMCritSectHasWaiters(PVMCC pVM, PCPDMCRITSECT pCritSect);
 VMMDECL(uint32_t)   PDMCritSectGetRecursion(PCPDMCRITSECT pCritSect);
 
 VMMR3DECL(PPDMCRITSECT)             PDMR3CritSectGetNop(PVM pVM);
-VMMR3DECL(R0PTRTYPE(PPDMCRITSECT))  PDMR3CritSectGetNopR0(PVM pVM);
-VMMR3DECL(RCPTRTYPE(PPDMCRITSECT))  PDMR3CritSectGetNopRC(PVM pVM);
 
 /* Strict build: Remap the two enter calls to the debug versions. */
 #ifdef VBOX_STRICT
-# ifdef ___iprt_asm_h
-#  define PDMCritSectEnter(pCritSect, rcBusy)   PDMCritSectEnterDebug((pCritSect), (rcBusy), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
-#  define PDMCritSectTryEnter(pCritSect)        PDMCritSectTryEnterDebug((pCritSect), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
+# ifdef IPRT_INCLUDED_asm_h
+#  define PDMCritSectEnter(a_pVM, pCritSect, rcBusy)   PDMCritSectEnterDebug((a_pVM), (pCritSect), (rcBusy), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
+#  define PDMCritSectTryEnter(a_pVM, pCritSect)        PDMCritSectTryEnterDebug((a_pVM), (pCritSect), (uintptr_t)ASMReturnAddress(), RT_SRC_POS)
 # else
-#  define PDMCritSectEnter(pCritSect, rcBusy)   PDMCritSectEnterDebug((pCritSect), (rcBusy), 0, RT_SRC_POS)
-#  define PDMCritSectTryEnter(pCritSect)        PDMCritSectTryEnterDebug((pCritSect), 0, RT_SRC_POS)
+#  define PDMCritSectEnter(a_pVM, pCritSect, rcBusy)   PDMCritSectEnterDebug((a_pVM), (pCritSect), (rcBusy), 0, RT_SRC_POS)
+#  define PDMCritSectTryEnter(a_pVM, pCritSect)        PDMCritSectTryEnterDebug((a_pVM), (pCritSect), 0, RT_SRC_POS)
 # endif
 #endif
+
+/** @def PDM_CRITSECT_RELEASE_ASSERT_RC
+ * Helper for PDMCritSectEnter w/ rcBusy VINF_SUCCESS when there is no way
+ * to forward failures to the caller. */
+#define PDM_CRITSECT_RELEASE_ASSERT_RC(a_pVM, a_pCritSect, a_rc) \
+    AssertReleaseMsg(RT_SUCCESS(a_rc), ("pVM=%p pCritSect=%p: %Rrc\n", (a_pVM), (a_pCritSect), (a_rc)))
+
+/** @def PDM_CRITSECT_RELEASE_ASSERT_RC_DEV
+ * Helper for PDMCritSectEnter w/ rcBusy VINF_SUCCESS when there is no way
+ * to forward failures to the caller, device edition. */
+#define PDM_CRITSECT_RELEASE_ASSERT_RC_DEV(a_pDevIns, a_pCritSect, a_rc) \
+    AssertReleaseMsg(RT_SUCCESS(a_rc), ("pDevIns=%p pCritSect=%p: %Rrc\n", (a_pDevIns), (a_pCritSect), (a_rc)))
+
+/** @def PDM_CRITSECT_RELEASE_ASSERT_RC_DRV
+ * Helper for PDMCritSectEnter w/ rcBusy VINF_SUCCESS when there is no way
+ * to forward failures to the caller, driver edition. */
+#define PDM_CRITSECT_RELEASE_ASSERT_RC_DRV(a_pDrvIns, a_pCritSect, a_rc) \
+    AssertReleaseMsg(RT_SUCCESS(a_rc), ("pDrvIns=%p pCritSect=%p: %Rrc\n", (a_pDrvIns), (a_pCritSect), (a_rc)))
+
+/** @def PDM_CRITSECT_RELEASE_ASSERT_RC_USB
+ * Helper for PDMCritSectEnter w/ rcBusy VINF_SUCCESS when there is no way
+ * to forward failures to the caller, USB device edition. */
+#define PDM_CRITSECT_RELEASE_ASSERT_RC_USB(a_pUsbIns, a_pCritSect, a_rc) \
+    AssertReleaseMsg(RT_SUCCESS(a_rc), ("pUsbIns=%p pCritSect=%p: %Rrc\n", (a_pUsbIns), (a_pCritSect), (a_rc)))
+
 
 /** @} */
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_vmm_pdmcritsect_h */
 

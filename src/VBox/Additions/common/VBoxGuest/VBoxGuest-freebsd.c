@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxGuest-freebsd.c 90794 2021-08-23 13:16:11Z vboxsync $ */
 /** @file
  * VirtualBox Guest Additions Driver for FreeBSD.
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -13,6 +13,15 @@
  * Foundation, in version 2 as it comes in the "COPYING" file of the
  * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * The contents of this file may alternatively be used under the terms
+ * of the Common Development and Distribution License Version 1.0
+ * (CDDL) only, as it comes in the "COPYING.CDDL" file of the
+ * VirtualBox OSE distribution, in which case the provisions of the
+ * CDDL are applicable instead of those of the GPL.
+ *
+ * You may elect to license modified versions of this file under the
+ * terms and conditions of either the GPL or the CDDL or both.
  */
 
 /** @todo r=bird: This must merge with SUPDrv-freebsd.c before long. The two
@@ -54,6 +63,7 @@
 #include <iprt/assert.h>
 #include <iprt/initterm.h>
 #include <iprt/process.h>
+#include <iprt/string.h>
 #include <iprt/mem.h>
 #include <iprt/asm.h>
 
@@ -106,6 +116,7 @@ struct VBoxGuestDeviceState
 static d_fdopen_t vgdrvFreeBSDOpen;
 static d_close_t  vgdrvFreeBSDClose;
 static d_ioctl_t  vgdrvFreeBSDIOCtl;
+static int        vgdrvFreeBSDIOCtlSlow(PVBOXGUESTSESSION pSession, u_long ulCmd, caddr_t pvData, struct thread *pTd);
 static d_write_t  vgdrvFreeBSDWrite;
 static d_read_t   vgdrvFreeBSDRead;
 static d_poll_t   vgdrvFreeBSDPoll;
@@ -221,6 +232,10 @@ static int vgdrvFreeBSDOpen(struct cdev *pDev, int fOpen, struct thread *pTd)
 {
     int                 rc;
     PVBOXGUESTSESSION   pSession;
+    uint32_t            fRequestor;
+    struct ucred       *pCred = curthread->td_ucred;
+    if (!pCred)
+        pCred = curproc->p_ucred;
 
     LogFlow(("vgdrvFreeBSDOpen:\n"));
 
@@ -233,7 +248,18 @@ static int vgdrvFreeBSDOpen(struct cdev *pDev, int fOpen, struct thread *pTd)
     /*
      * Create a new session.
      */
-    rc = VGDrvCommonCreateUserSession(&g_DevExt, &pSession);
+    fRequestor = VMMDEV_REQUESTOR_USERMODE | VMMDEV_REQUESTOR_TRUST_NOT_GIVEN;
+    if (pCred && pCred->cr_uid == 0)
+        fRequestor |= VMMDEV_REQUESTOR_USR_ROOT;
+    else
+        fRequestor |= VMMDEV_REQUESTOR_USR_USER;
+    if (pCred && groupmember(0, pCred))
+        fRequestor |= VMMDEV_REQUESTOR_GRP_WHEEL;
+    fRequestor |= VMMDEV_REQUESTOR_NO_USER_DEVICE; /** @todo implement /dev/vboxuser
+    if (!fUnrestricted)
+        fRequestor |= VMMDEV_REQUESTOR_USER_DEVICE; */
+    fRequestor |= VMMDEV_REQUESTOR_CON_DONT_KNOW; /** @todo see if we can figure out console relationship of pProc. */
+    rc = VGDrvCommonCreateUserSession(&g_DevExt, fRequestor, &pSession);
     if (RT_SUCCESS(rc))
     {
         if (ASMAtomicCmpXchgPtr(&pDev->si_drv1, pSession, (void *)0x42))
@@ -262,7 +288,7 @@ static int vgdrvFreeBSDClose(struct cdev *pDev, int fFile, int DevType, struct t
     /*
      * Close the session if it's still hanging on to the device...
      */
-    if (VALID_PTR(pSession))
+    if (RT_VALID_PTR(pSession))
     {
         VGDrvCommonCloseSession(&g_DevExt, pSession);
         if (!ASMAtomicCmpXchgPtr(&pDev->si_drv1, NULL, pSession))
@@ -276,102 +302,213 @@ static int vgdrvFreeBSDClose(struct cdev *pDev, int fFile, int DevType, struct t
     return 0;
 }
 
+
 /**
- * IOCTL handler
+ * I/O control request.
  *
+ * @returns depends...
+ * @param   pDev        The device.
+ * @param   ulCmd       The command.
+ * @param   pvData      Pointer to the data.
+ * @param   fFile       The file descriptor flags.
+ * @param   pTd         The calling thread.
  */
 static int vgdrvFreeBSDIOCtl(struct cdev *pDev, u_long ulCmd, caddr_t pvData, int fFile, struct thread *pTd)
 {
-    LogFlow(("vgdrvFreeBSDIOCtl\n"));
-
-    int rc = 0;
-
-    /*
-     * Validate the input.
-     */
-    PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)pDev->si_drv1;
-    if (RT_UNLIKELY(!VALID_PTR(pSession)))
-        return EINVAL;
+    PVBOXGUESTSESSION pSession;
+    devfs_get_cdevpriv((void **)&pSession);
 
     /*
-     * Validate the request wrapper.
+     * Deal with the fast ioctl path first.
      */
-    if (IOCPARM_LEN(ulCmd) != sizeof(VBGLBIGREQ))
-    {
-        Log(("vgdrvFreeBSDIOCtl: bad request %lu size=%lu expected=%d\n", ulCmd, IOCPARM_LEN(ulCmd), sizeof(VBGLBIGREQ)));
-        return ENOTTY;
-    }
+    if (VBGL_IOCTL_IS_FAST(ulCmd))
+        return VGDrvCommonIoCtlFast(ulCmd, &g_DevExt, pSession);
 
-    PVBGLBIGREQ ReqWrap = (PVBGLBIGREQ)pvData;
-    if (ReqWrap->u32Magic != VBGLBIGREQ_MAGIC)
-    {
-        Log(("vgdrvFreeBSDIOCtl: bad magic %#x; pArg=%p Cmd=%lu.\n", ReqWrap->u32Magic, pvData, ulCmd));
-        return EINVAL;
-    }
-    if (RT_UNLIKELY(   ReqWrap->cbData == 0
-                    || ReqWrap->cbData > _1M*16))
-    {
-        printf("vgdrvFreeBSDIOCtl: bad size %#x; pArg=%p Cmd=%lu.\n", ReqWrap->cbData, pvData, ulCmd);
-        return EINVAL;
-    }
+    return vgdrvFreeBSDIOCtlSlow(pSession, ulCmd, pvData, pTd);
+}
+
+
+/**
+ * Deal with the 'slow' I/O control requests.
+ *
+ * @returns 0 on success, appropriate errno on failure.
+ * @param   pSession    The session.
+ * @param   ulCmd       The command.
+ * @param   pvData      The request data.
+ * @param   pTd         The calling thread.
+ */
+static int vgdrvFreeBSDIOCtlSlow(PVBOXGUESTSESSION pSession, u_long ulCmd, caddr_t pvData, struct thread *pTd)
+{
+    PVBGLREQHDR pHdr;
+    uint32_t    cbReq = IOCPARM_LEN(ulCmd);
+    void       *pvUser = NULL;
 
     /*
-     * Read the request.
+     * Buffered request?
      */
-    void *pvBuf = RTMemTmpAlloc(ReqWrap->cbData);
-    if (RT_UNLIKELY(!pvBuf))
+    if ((IOC_DIRMASK & ulCmd) == IOC_INOUT)
     {
-        Log(("vgdrvFreeBSDIOCtl: RTMemTmpAlloc failed to alloc %d bytes.\n", ReqWrap->cbData));
-        return ENOMEM;
+        pHdr = (PVBGLREQHDR)pvData;
+        if (RT_UNLIKELY(cbReq < sizeof(*pHdr)))
+        {
+            LogRel(("vgdrvFreeBSDIOCtlSlow: cbReq=%#x < %#x; ulCmd=%#lx\n", cbReq, (int)sizeof(*pHdr), ulCmd));
+            return EINVAL;
+        }
+        if (RT_UNLIKELY(pHdr->uVersion != VBGLREQHDR_VERSION))
+        {
+            LogRel(("vgdrvFreeBSDIOCtlSlow: bad uVersion=%#x; ulCmd=%#lx\n", pHdr->uVersion, ulCmd));
+            return EINVAL;
+        }
+        if (RT_UNLIKELY(   RT_MAX(pHdr->cbIn, pHdr->cbOut) != cbReq
+                        || pHdr->cbIn < sizeof(*pHdr)
+                        || (pHdr->cbOut < sizeof(*pHdr) && pHdr->cbOut != 0)))
+        {
+            LogRel(("vgdrvFreeBSDIOCtlSlow: max(%#x,%#x) != %#x; ulCmd=%#lx\n", pHdr->cbIn, pHdr->cbOut, cbReq, ulCmd));
+            return EINVAL;
+        }
     }
+    /*
+     * Big unbuffered request?
+     */
+    else if ((IOC_DIRMASK & ulCmd) == IOC_VOID && !cbReq)
+    {
+        /*
+         * Read the header, validate it and figure out how much that needs to be buffered.
+         */
+        VBGLREQHDR Hdr;
+        pvUser = *(void **)pvData;
+        int rc = copyin(pvUser, &Hdr, sizeof(Hdr));
+        if (RT_UNLIKELY(rc))
+        {
+            LogRel(("vgdrvFreeBSDIOCtlSlow: copyin(%p,Hdr,) -> %#x; ulCmd=%#lx\n", pvUser, rc, ulCmd));
+            return rc;
+        }
+        if (RT_UNLIKELY(Hdr.uVersion != VBGLREQHDR_VERSION))
+        {
+            LogRel(("vgdrvFreeBSDIOCtlSlow: bad uVersion=%#x; ulCmd=%#lx\n", Hdr.uVersion, ulCmd));
+            return EINVAL;
+        }
+        cbReq = RT_MAX(Hdr.cbIn, Hdr.cbOut);
+        if (RT_UNLIKELY(   Hdr.cbIn < sizeof(Hdr)
+                        || (Hdr.cbOut < sizeof(Hdr) && Hdr.cbOut != 0)
+                        || cbReq > _1M*16))
+        {
+            LogRel(("vgdrvFreeBSDIOCtlSlow: max(%#x,%#x); ulCmd=%#lx\n", Hdr.cbIn, Hdr.cbOut, ulCmd));
+            return EINVAL;
+        }
 
-    rc = copyin((void *)(uintptr_t)ReqWrap->pvDataR3, pvBuf, ReqWrap->cbData);
-    if (RT_UNLIKELY(rc))
-    {
-        RTMemTmpFree(pvBuf);
-        Log(("vgdrvFreeBSDIOCtl: copyin failed; pvBuf=%p pArg=%p Cmd=%lu. rc=%d\n", pvBuf, pvData, ulCmd, rc));
-        return EFAULT;
+        /*
+         * Allocate buffer and copy in the data.
+         */
+        pHdr = (PVBGLREQHDR)RTMemTmpAlloc(cbReq);
+        if (RT_UNLIKELY(!pHdr))
+        {
+            LogRel(("vgdrvFreeBSDIOCtlSlow: failed to allocate buffer of %d bytes; ulCmd=%#lx\n", cbReq, ulCmd));
+            return ENOMEM;
+        }
+        rc = copyin(pvUser, pHdr, Hdr.cbIn);
+        if (RT_UNLIKELY(rc))
+        {
+            LogRel(("vgdrvFreeBSDIOCtlSlow: copyin(%p,%p,%#x) -> %#x; ulCmd=%#lx\n",
+                        pvUser, pHdr, Hdr.cbIn, rc, ulCmd));
+            RTMemTmpFree(pHdr);
+            return rc;
+        }
+        if (Hdr.cbIn < cbReq)
+            RT_BZERO((uint8_t *)pHdr + Hdr.cbIn, cbReq - Hdr.cbIn);
     }
-    if (RT_UNLIKELY(   ReqWrap->cbData != 0
-                    && !VALID_PTR(pvBuf)))
+    else
     {
-        RTMemTmpFree(pvBuf);
-        Log(("vgdrvFreeBSDIOCtl: pvBuf invalid pointer %p\n", pvBuf));
+        Log(("vgdrvFreeBSDIOCtlSlow: huh? cbReq=%#x ulCmd=%#lx\n", cbReq, ulCmd));
         return EINVAL;
     }
-    Log(("vgdrvFreeBSDIOCtl: pSession=%p pid=%d.\n", pSession, (int)RTProcSelf()));
 
     /*
      * Process the IOCtl.
      */
-    size_t cbDataReturned;
-    rc = VGDrvCommonIoCtl(ulCmd, &g_DevExt, pSession, pvBuf, ReqWrap->cbData, &cbDataReturned);
-    if (RT_SUCCESS(rc))
+    int rc = VGDrvCommonIoCtl(ulCmd, &g_DevExt, pSession, pHdr, cbReq);
+    if (RT_LIKELY(!rc))
     {
-        rc = 0;
-        if (RT_UNLIKELY(cbDataReturned > ReqWrap->cbData))
+        /*
+         * If unbuffered, copy back the result before returning.
+         */
+        if (pvUser)
         {
-            Log(("vgdrvFreeBSDIOCtl: too much output data %d expected %d\n", cbDataReturned, ReqWrap->cbData));
-            cbDataReturned = ReqWrap->cbData;
-        }
-        if (cbDataReturned > 0)
-        {
-            rc = copyout(pvBuf, (void *)(uintptr_t)ReqWrap->pvDataR3, cbDataReturned);
-            if (RT_UNLIKELY(rc))
+            uint32_t cbOut = pHdr->cbOut;
+            if (cbOut > cbReq)
             {
-                Log(("vgdrvFreeBSDIOCtl: copyout failed; pvBuf=%p pArg=%p Cmd=%lu. rc=%d\n", pvBuf, pvData, ulCmd, rc));
-                rc = EFAULT;
+                LogRel(("vgdrvFreeBSDIOCtlSlow: too much output! %#x > %#x; uCmd=%#lx!\n", cbOut, cbReq, ulCmd));
+                cbOut = cbReq;
             }
+            rc = copyout(pHdr, pvUser, cbOut);
+            if (RT_UNLIKELY(rc))
+                LogRel(("vgdrvFreeBSDIOCtlSlow: copyout(%p,%p,%#x) -> %d; uCmd=%#lx!\n", pHdr, pvUser, cbOut, rc, ulCmd));
+
+            Log(("vgdrvFreeBSDIOCtlSlow: returns %d / %d ulCmd=%lx\n", 0, pHdr->rc, ulCmd));
+
+            /* cleanup */
+            RTMemTmpFree(pHdr);
         }
     }
     else
     {
-        Log(("vgdrvFreeBSDIOCtl: VGDrvCommonIoCtl failed. rc=%d\n", rc));
-        rc = EFAULT;
+        /*
+         * The request failed, just clean up.
+         */
+        if (pvUser)
+            RTMemTmpFree(pHdr);
+
+        Log(("vgdrvFreeBSDIOCtlSlow: ulCmd=%lx pData=%p failed, rc=%d\n", ulCmd, pvData, rc));
+        rc = EINVAL;
     }
-    RTMemTmpFree(pvBuf);
+
     return rc;
 }
+
+
+/**
+ * @note This code is duplicated on other platforms with variations, so please
+ *       keep them all up to date when making changes!
+ */
+int VBOXCALL VBoxGuestIDC(void *pvSession, uintptr_t uReq, PVBGLREQHDR pReqHdr, size_t cbReq)
+{
+    /*
+     * Simple request validation (common code does the rest).
+     */
+    int rc;
+    if (   RT_VALID_PTR(pReqHdr)
+        && cbReq >= sizeof(*pReqHdr))
+    {
+        /*
+         * All requests except the connect one requires a valid session.
+         */
+        PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)pvSession;
+        if (pSession)
+        {
+            if (   RT_VALID_PTR(pSession)
+                && pSession->pDevExt == &g_DevExt)
+                rc = VGDrvCommonIoCtl(uReq, &g_DevExt, pSession, pReqHdr, cbReq);
+            else
+                rc = VERR_INVALID_HANDLE;
+        }
+        else if (uReq == VBGL_IOCTL_IDC_CONNECT)
+        {
+            rc = VGDrvCommonCreateKernelSession(&g_DevExt, &pSession);
+            if (RT_SUCCESS(rc))
+            {
+                rc = VGDrvCommonIoCtl(uReq, &g_DevExt, pSession, pReqHdr, cbReq);
+                if (RT_FAILURE(rc))
+                    VGDrvCommonCloseSession(&g_DevExt, pSession);
+            }
+        }
+        else
+            rc = VERR_INVALID_HANDLE;
+    }
+    else
+        rc = VERR_INVALID_POINTER;
+    return rc;
+}
+
 
 static int vgdrvFreeBSDPoll(struct cdev *pDev, int fEvents, struct thread *td)
 {
@@ -380,7 +517,7 @@ static int vgdrvFreeBSDPoll(struct cdev *pDev, int fEvents, struct thread *td)
     LogFlow(("vgdrvFreeBSDPoll: fEvents=%d\n", fEvents));
 
     PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)pDev->si_drv1;
-    if (RT_UNLIKELY(!VALID_PTR(pSession))) {
+    if (RT_UNLIKELY(!RT_VALID_PTR(pSession))) {
         Log(("vgdrvFreeBSDPoll: no state data for %s\n", devtoname(pDev)));
         return (fEvents & (POLLHUP|POLLIN|POLLRDNORM|POLLOUT|POLLWRNORM));
     }
@@ -440,6 +577,7 @@ static int vgdrvFreeBSDDetach(device_t pDevice)
     return 0;
 }
 
+
 /**
  * Interrupt service routine.
  *
@@ -464,6 +602,14 @@ void VGDrvNativeISRMousePollEvent(PVBOXGUESTDEVEXT pDevExt)
      */
     selwakeup(&g_SelInfo);
 }
+
+
+bool VGDrvNativeProcessOption(PVBOXGUESTDEVEXT pDevExt, const char *pszName, const char *pszValue)
+{
+    RT_NOREF(pDevExt); RT_NOREF(pszName); RT_NOREF(pszValue);
+    return false;
+}
+
 
 /**
  * Sets IRQ for VMMDev.
@@ -576,6 +722,11 @@ static int vgdrvFreeBSDAttach(device_t pDevice)
                 if (RT_SUCCESS(rc))
                 {
                     /*
+                     * Read host configuration.
+                     */
+                    VGDrvCommonProcessOptionsFromHost(&g_DevExt);
+
+                    /*
                      * Configure device cloning.
                      */
                     clone_setup(&g_pvgdrvFreeBSDClones);
@@ -635,7 +786,4 @@ static devclass_t vgdrvFreeBSDClass;
 
 DRIVER_MODULE(vboxguest, pci, vgdrvFreeBSDDriver, vgdrvFreeBSDClass, 0, 0);
 MODULE_VERSION(vboxguest, 1);
-
-/* Common code that depend on g_DevExt. */
-#include "VBoxGuestIDC-unix.c.h"
 

@@ -1,11 +1,11 @@
-/* $Id$ */
+/* $Id: BandwidthGroupImpl.h 90828 2021-08-24 09:44:46Z vboxsync $ */
 /** @file
  *
  * VirtualBox COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -16,8 +16,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_BANDWIDTHGROUPIMPL
-#define ____H_BANDWIDTHGROUPIMPL
+#ifndef MAIN_INCLUDED_BandwidthGroupImpl_h
+#define MAIN_INCLUDED_BandwidthGroupImpl_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/settings.h>
 #include "BandwidthControlImpl.h"
@@ -29,14 +32,14 @@ class ATL_NO_VTABLE BandwidthGroup :
 {
 public:
 
-    DECLARE_EMPTY_CTOR_DTOR(BandwidthGroup)
+    DECLARE_COMMON_CLASS_METHODS(BandwidthGroup)
 
     HRESULT FinalConstruct();
     void FinalRelease();
 
     // public initializer/uninitializer for internal purposes only
     HRESULT init(BandwidthControl *aParent,
-                 const Utf8Str &aName,
+                 const com::Utf8Str &aName,
                  BandwidthGroupType_T aType,
                  LONG64 aMaxBytesPerSec);
     HRESULT init(BandwidthControl *aParent, BandwidthGroup *aThat, bool aReshare = false);
@@ -53,7 +56,7 @@ public:
     ComObjPtr<BandwidthGroup> i_getPeer() { return m->pPeer; }
     const Utf8Str &i_getName() const { return m->bd->mData.strName; }
     BandwidthGroupType_T i_getType() const { return m->bd->mData.enmType; }
-    LONG64 i_getMaxBytesPerSec() const { return m->bd->mData.cMaxBytesPerSec; }
+    LONG64 i_getMaxBytesPerSec() const { return (LONG64)m->bd->mData.cMaxBytesPerSec; }
     ULONG i_getReferences() const { return m->bd->cReferences; }
 
 private:
@@ -98,5 +101,5 @@ private:
     Data *m;
 };
 
-#endif // ____H_BANDWIDTHGROUPIMPL
+#endif /* !MAIN_INCLUDED_BandwidthGroupImpl_h */
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

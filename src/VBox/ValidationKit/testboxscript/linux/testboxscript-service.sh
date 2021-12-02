@@ -4,7 +4,7 @@
 #
 
 #
-# Copyright (C) 2006-2015 Oracle Corporation
+# Copyright (C) 2006-2020 Oracle Corporation
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -125,7 +125,7 @@ my_query_status() {
     return $RETVAL;
 }
 
-## Starts detached daeamon in screen.
+## Starts detached daeamon in screen or tmux.
 # $1 = daemon-user; $2+ = daemon and its arguments
 my_start_daemon() {
     a_USER="$1"
@@ -138,7 +138,14 @@ my_start_daemon() {
             shift
         done
         ARGS="$ARGS --pidfile '$PIDFILE'";
-        su - "${a_USER}" -c "screen -S ${service_name} -d -m ${ARGS} ";
+        if type screen > /dev/null; then
+            su - "${a_USER}" -c "screen -S ${service_name} -d -m ${ARGS}";
+        elif type tmux > /dev/null; then
+            su - "${a_USER}" -c "tmux new-session -AdD -s ${service_name} ${ARGS}";
+        else
+            echo "Need screen or tmux, please install!"
+            exit 1
+        fi
         RETVAL=$?;
         if [ $RETVAL -eq 0 ]; then
             sleep 0.6;
@@ -395,6 +402,7 @@ start() {
         if [ "${TESTBOXSCRIPT_NESTED_PAGING}" = "no"  ]; then PARAMS="${PARAMS} --no-nested-paging"; fi
         if [ "${TESTBOXSCRIPT_IOMMU}"         = "yes" ]; then PARAMS="${PARAMS} --io-mmu"; fi
         if [ "${TESTBOXSCRIPT_IOMMU}"         = "no"  ]; then PARAMS="${PARAMS} --no-io-mmu"; fi
+        if [ "${TESTBOXSCRIPT_SPB}"           = "yes" ]; then PARAMS="${PARAMS} --spb"; fi
         if [ -n "${TESTBOXSCRIPT_SYSTEM_UUID}"     ]; then PARAMS="${PARAMS} --system-uuid '${TESTBOXSCRIPT_SYSTEM_UUID}'"; fi
         if [ -n "${TESTBOXSCRIPT_TEST_MANAGER}"    ]; then PARAMS="${PARAMS} --test-manager '${TESTBOXSCRIPT_TEST_MANAGER}'"; fi
         if [ -n "${TESTBOXSCRIPT_SCRATCH_ROOT}"    ]; then PARAMS="${PARAMS} --scratch-root '${TESTBOXSCRIPT_SCRATCH_ROOT}'"; fi
@@ -405,12 +413,14 @@ start() {
         if [ -n "${TESTBOXSCRIPT_BUILDS_SHARE}"    ]; then PARAMS="${PARAMS} --builds-server-share  '${TESTBOXSCRIPT_BUILDS_SHARE}'"; fi
         if [ -n "${TESTBOXSCRIPT_BUILDS_USER}"     ]; then PARAMS="${PARAMS} --builds-server-user   '${TESTBOXSCRIPT_BUILDS_USER}'"; fi
         if [ -n "${TESTBOXSCRIPT_BUILDS_PASSWD}"   ]; then PARAMS="${PARAMS} --builds-server-passwd '${TESTBOXSCRIPT_BUILDS_PASSWD}'"; fi
+        if [ -n "${TESTBOXSCRIPT_BUILDS_MOUNTOPT}" ]; then PARAMS="${PARAMS} --builds-server-mountopt '${TESTBOXSCRIPT_BUILDS_MOUNTOPT}'"; fi
         if [ -n "${TESTBOXSCRIPT_TESTRSRC_PATH}"   ]; then PARAMS="${PARAMS} --testrsrc-path '${TESTBOXSCRIPT_TESTRSRC_PATH}'"; fi
         if [ -n "${TESTBOXSCRIPT_TESTRSRC_TYPE}"   ]; then PARAMS="${PARAMS} --testrsrc-server-type   '${TESTBOXSCRIPT_TESTRSRC_TYPE}'"; fi
         if [ -n "${TESTBOXSCRIPT_TESTRSRC_NAME}"   ]; then PARAMS="${PARAMS} --testrsrc-server-name   '${TESTBOXSCRIPT_TESTRSRC_NAME}'"; fi
         if [ -n "${TESTBOXSCRIPT_TESTRSRC_SHARE}"  ]; then PARAMS="${PARAMS} --testrsrc-server-share  '${TESTBOXSCRIPT_TESTRSRC_SHARE}'"; fi
         if [ -n "${TESTBOXSCRIPT_TESTRSRC_USER}"   ]; then PARAMS="${PARAMS} --testrsrc-server-user   '${TESTBOXSCRIPT_TESTRSRC_USER}'"; fi
         if [ -n "${TESTBOXSCRIPT_TESTRSRC_PASSWD}" ]; then PARAMS="${PARAMS} --testrsrc-server-passwd '${TESTBOXSCRIPT_TESTRSRC_PASSWD}'"; fi
+        if [ -n "${TESTBOXSCRIPT_TESTRSRC_MOUNTOPT}" ]; then PARAMS="${PARAMS} --testrsrc-server-mountopt '${TESTBOXSCRIPT_TESTRSRC_MOUNTOPT}'"; fi
 
         if [ -n "${TESTBOXSCRIPT_PYTHON}" ]; then
             my_start_daemon "${TESTBOXSCRIPT_USER}" "${TESTBOXSCRIPT_PYTHON}" "${binary}" ${PARAMS}

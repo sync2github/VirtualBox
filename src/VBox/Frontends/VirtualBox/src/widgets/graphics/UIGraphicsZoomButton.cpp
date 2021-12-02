@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIGraphicsZoomButton.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIGraphicsZoomButton class definition.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,21 +15,15 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifdef VBOX_WITH_PRECOMPILED_HEADERS
-# include <precomp.h>
-#else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
-
 /* Qt includes: */
-# include <QStateMachine>
-# include <QSignalTransition>
-# include <QPropertyAnimation>
-# include <QPainter>
-# include <QStyleOptionGraphicsItem>
+#include <QStateMachine>
+#include <QSignalTransition>
+#include <QPropertyAnimation>
+#include <QPainter>
+#include <QStyleOptionGraphicsItem>
 
 /* GUI includes: */
-# include "UIGraphicsZoomButton.h"
-
-#endif /* !VBOX_WITH_PRECOMPILED_HEADERS */
+#include "UIGraphicsZoomButton.h"
 
 
 UIGraphicsZoomButton::UIGraphicsZoomButton(QIGraphicsWidget *pParent, const QIcon &icon, int iDirection)

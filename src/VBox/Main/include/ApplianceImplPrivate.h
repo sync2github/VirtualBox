@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: ApplianceImplPrivate.h 84340 2020-05-18 17:37:30Z vboxsync $ */
 /** @file
  * VirtualBox Appliance private data definitions
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,12 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ____H_APPLIANCEIMPLPRIVATE
-#define ____H_APPLIANCEIMPLPRIVATE
+#ifndef MAIN_INCLUDED_ApplianceImplPrivate_h
+#define MAIN_INCLUDED_ApplianceImplPrivate_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
+
 
 class VirtualSystemDescription;
 
@@ -29,6 +33,7 @@ class VirtualSystemDescription;
 #include <iprt/manifest.h>
 #include <iprt/vfs.h>
 #include <iprt/crypto/x509.h>
+#include <iprt/crypto/pkcs7.h>
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -52,24 +57,25 @@ struct LocationInfo
     LocationInfo()
       : storageType(VFSType_File) {}
     VFSType_T storageType; /* Which type of storage should be handled */
+    Utf8Str strProvider;   /* cloud provider name in case of export/import to Cloud */
     Utf8Str strPath;       /* File path for the import/export */
     Utf8Str strHostname;   /* Hostname on remote storage locations (could be empty) */
     Utf8Str strUsername;   /* Username on remote storage locations (could be empty) */
     Utf8Str strPassword;   /* Password on remote storage locations (could be empty) */
 };
 
-// opaque private instance data of Appliance class
+/**
+ * opaque private instance data of Appliance class
+ */
 struct Appliance::Data
 {
-    enum ApplianceState { ApplianceIdle, ApplianceImporting, ApplianceExporting };
     enum digest_T {SHA1, SHA256};
 
     Data()
-      : state(ApplianceIdle)
+      : state(Appliance::ApplianceIdle)
       , fDigestTypes(0)
       , hOurManifest(NIL_RTMANIFEST)
       , fManifest(true)
-      , fSha256(false)
       , fDeterminedDigestTypes(false)
       , hTheirManifest(NIL_RTMANIFEST)
       , hMemFileTheirManifest(NIL_RTVFSFILE)
@@ -82,6 +88,10 @@ struct Appliance::Data
       , pbSignedDigest(NULL)
       , cbSignedDigest(0)
       , enmSignedDigestType(RTDIGESTTYPE_INVALID)
+      , fContentInfoLoaded(false)
+      , fContentInfoOkay(false)
+      , fContentInfoSameCert(false)
+      , fContentInfoValidSignature(false)
       , fExportISOImages(false)
       , pReader(NULL)
       , ulWeightForXmlOperation(0)
@@ -90,6 +100,8 @@ struct Appliance::Data
       , cDisks(0)
       , m_cPwProvided(0)
     {
+        RT_ZERO(SignerCert);
+        RT_ZERO(ContentInfo);
     }
 
     ~Data()
@@ -134,6 +146,7 @@ struct Appliance::Data
             RTCrX509Certificate_Delete(&SignerCert);
             fSignerCertLoaded = false;
         }
+        RT_ZERO(SignerCert);
         enmSignedDigestType      = RTDIGESTTYPE_INVALID;
         fCertificateIsSelfSigned = false;
         fSignatureValid          = false;
@@ -144,9 +157,15 @@ struct Appliance::Data
         fDigestTypes             = RTMANIFEST_ATTR_SHA1 | RTMANIFEST_ATTR_SHA256 | RTMANIFEST_ATTR_SHA512;
         ptrCertificateInfo.setNull();
         strCertError.setNull();
+        if (fContentInfoLoaded)
+        {
+            RTCrPkcs7ContentInfo_Delete(&ContentInfo);
+            fContentInfoLoaded = false;
+        }
+        RT_ZERO(ContentInfo);
     }
 
-    ApplianceState      state;
+    Appliance::ApplianceState      state;
 
     LocationInfo        locInfo;        // location info for the currently processed OVF
     /** The digests types to calculate (RTMANIFEST_ATTR_XXX) for the manifest.
@@ -158,7 +177,6 @@ struct Appliance::Data
     /** @name Write data
      * @{ */
     bool                fManifest;      // Create a manifest file on export
-    bool                fSha256;        // true = SHA256 (OVF 2.0), false = SHA1 (OVF 1.0)
     /** @} */
 
     /** @name Read data
@@ -201,6 +219,29 @@ struct Appliance::Data
     /** The certificate info object.  This is NULL if no signature and
      *  successfully loaded certificate. */
     ComObjPtr<Certificate> ptrCertificateInfo;
+
+    /** The PKCS\#7/CMS signed data signing manifest, optional VBox extension.
+     * This contains at least one signature using the same certificate as above
+     * (SignerCert), but should preferrably use a different digest.  The PKCS\#7/CMS
+     * format is a lot more versatile, allow multiple signatures using different
+     * digests and certificates, optionally with counter signed timestamps.
+     * Additional intermediate certificates can also be shipped, helping to bridge
+     * the gap to a trusted root certificate installed on the recieving system.  */
+    RTCRPKCS7CONTENTINFO ContentInfo;
+    /** Set if the ContentInfo member contains usable data. */
+    bool                fContentInfoLoaded;
+    /** Set by read() if the ContentInfo member checked out okay (says nothing about
+     *  the signature or certificates within it). */
+    bool                fContentInfoOkay;
+    /** Set by read() if the ContentInfo member is using the SignerCert too. */
+    bool                fContentInfoSameCert;
+    /** Set by read() if the ContentInfo member contains valid signatures (not
+     * saying anything about valid signing certificates). */
+    bool                fContentInfoValidSignature;
+    /** Set by read() if we've already verified the signed data signature(s). */
+    bool                fContentInfoDoneVerification;
+
+    bool                fContentInfoVerifiedOkay;
     /** @} */
 
     bool                fExportISOImages;// when 1 the ISO images are exported
@@ -235,6 +276,8 @@ struct Appliance::Data
 struct Appliance::XMLStack
 {
     std::map<Utf8Str, const VirtualSystemDescriptionEntry*> mapDisks;
+    std::list<Utf8Str> mapDiskSequence;
+    std::list<Utf8Str> mapDiskSequenceForOneVM;//temporary keeps all disks attached to one exported VM
     std::map<Utf8Str, bool> mapNetworks;
 };
 
@@ -286,6 +329,97 @@ public:
     }
 };
 
+class Appliance::TaskOPC : public ThreadTask
+{
+public:
+    enum TaskType
+    {
+        Export
+    };
+
+    TaskOPC(Appliance *aThat,
+            TaskType aType,
+            LocationInfo aLocInfo,
+            ComObjPtr<Progress> &aProgress)
+      : ThreadTask("TaskOPC"),
+        pAppliance(aThat),
+        taskType(aType),
+        locInfo(aLocInfo),
+        pProgress(aProgress),
+        rc(S_OK)
+    {
+        m_strTaskName = "OPCExpt";
+    }
+
+    ~TaskOPC()
+    {
+    }
+
+    static DECLCALLBACK(int) updateProgress(unsigned uPercent, void *pvUser);
+
+    Appliance *pAppliance;
+    TaskType taskType;
+    const LocationInfo locInfo;
+    ComObjPtr<Progress> pProgress;
+
+    HRESULT rc;
+
+    void handler()
+    {
+        Appliance::i_exportOPCThreadTask(this);
+    }
+};
+
+
+class Appliance::TaskCloud : public ThreadTask
+{
+public:
+    enum TaskType
+    {
+        Export,
+        Import,
+        ReadData
+    };
+
+    TaskCloud(Appliance *aThat,
+            TaskType aType,
+            LocationInfo aLocInfo,
+            ComObjPtr<Progress> &aProgress)
+      : ThreadTask("TaskCloud"),
+        pAppliance(aThat),
+        taskType(aType),
+        locInfo(aLocInfo),
+        pProgress(aProgress),
+        rc(S_OK)
+    {
+        switch (taskType)
+        {
+            case TaskCloud::Export:    m_strTaskName = "CloudExpt"; break;
+            case TaskCloud::Import:    m_strTaskName = "CloudImpt"; break;
+            case TaskCloud::ReadData:  m_strTaskName = "CloudRead"; break;
+            default:                   m_strTaskName = "CloudTask"; break;
+        }
+    }
+
+    ~TaskCloud()
+    {
+    }
+
+    static DECLCALLBACK(int) updateProgress(unsigned uPercent, void *pvUser);
+
+    Appliance *pAppliance;
+    TaskType taskType;
+    const LocationInfo locInfo;
+    ComObjPtr<Progress> pProgress;
+
+    HRESULT rc;
+
+    void handler()
+    {
+        Appliance::i_importOrExportCloudThreadTask(this);
+    }
+};
+
 struct MyHardDiskAttachment
 {
     ComPtr<IMachine>    pMachine;
@@ -308,13 +442,16 @@ struct Appliance::ImportStack
 
     // input parameters from VirtualSystemDescriptions
     Utf8Str                         strNameVBox;        // VM name
-    Utf8Str                         strMachineFolder;   // FQ host folder where the VirtualBox machine would be created
+    Utf8Str                         strSettingsFilename; // Absolute path to VM config file
+    Utf8Str                         strMachineFolder;   // Absolute path to VM folder (derived from strSettingsFilename)
     Utf8Str                         strOsTypeVBox;      // VirtualBox guest OS type as string
+    Utf8Str                         strPrimaryGroup;    // VM primary group as string
     Utf8Str                         strDescription;
     uint32_t                        cCPUs;              // CPU count
     bool                            fForceHWVirt;       // if true, we force enabling hardware virtualization
     bool                            fForceIOAPIC;       // if true, we force enabling the IOAPIC
     uint32_t                        ulMemorySizeMB;     // virtual machine RAM in megabytes
+    Utf8Str                         strFirmwareType;    //Firmware - BIOS or EFI
 #ifdef VBOX_WITH_USB
     bool                            fUSBEnabled;
 #endif
@@ -421,19 +558,5 @@ ovf::CIMOSType_T convertVBoxOSType2CIMOSType(const char *pcszVBox, BOOL fLongMod
 Utf8Str convertNetworkAttachmentTypeToString(NetworkAttachmentType_T type);
 
 
-typedef struct SHASTORAGE
-{
-    PVDINTERFACE pVDImageIfaces;
-    bool         fCreateDigest;
-    bool         fSha256;        /* false = SHA1 (OVF 1.x), true = SHA256 (OVF 2.0) */
-    Utf8Str      strDigest;
-} SHASTORAGE, *PSHASTORAGE;
-
-PVDINTERFACEIO ShaCreateInterface();
-PVDINTERFACEIO FileCreateInterface();
-PVDINTERFACEIO tarWriterCreateInterface(void);
-
-int writeBufferToFile(const char *pcszFilename, void *pvBuf, size_t cbSize, PVDINTERFACEIO pIfIo, void *pvUser);
-
-#endif // !____H_APPLIANCEIMPLPRIVATE
+#endif /* !MAIN_INCLUDED_ApplianceImplPrivate_h */
 

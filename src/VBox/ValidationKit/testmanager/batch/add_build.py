@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
-# pylint: disable=C0301
+# $Id: add_build.py 82968 2020-02-04 10:35:17Z vboxsync $
+# pylint: disable=line-too-long
 
 """
 Interface used by the tinderbox server side software to add a fresh build.
@@ -9,7 +9,7 @@ Interface used by the tinderbox server side software to add a fresh build.
 
 __copyright__ = \
 """
-Copyright (C) 2012-2016 Oracle Corporation
+Copyright (C) 2012-2020 Oracle Corporation
 
 This file is part of VirtualBox Open Source Edition (OSE), as
 available from http://www.virtualbox.org. This file is free software;
@@ -28,12 +28,12 @@ CDDL are applicable instead of those of the GPL.
 You may elect to license modified versions of this file under the
 terms and conditions of either the GPL or the CDDL or both.
 """
-__version__ = "$Revision$"
+__version__ = "$Revision: 82968 $"
 
 # Standard python imports
 import sys;
 import os;
-from optparse import OptionParser;
+from optparse import OptionParser;  # pylint: disable=deprecated-module
 
 # Add Test Manager's modules path
 g_ksTestManagerDir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))));
@@ -43,7 +43,7 @@ sys.path.append(g_ksTestManagerDir);
 from testmanager.core.db    import TMDatabaseConnection;
 from testmanager.core.build import BuildDataEx, BuildLogic, BuildCategoryData;
 
-class Build(object): # pylint: disable=R0903
+class Build(object): # pylint: disable=too-few-public-methods
     """
     Add build info into Test Manager database.
     """
@@ -86,7 +86,7 @@ class Build(object): # pylint: disable=R0903
         if self.oConfig.sBuildType is None:         asMissing.append('--type');
         if self.oConfig.asTargetOsArches is None:   asMissing.append('--os-arch');
         if self.oConfig.asFiles is None:            asMissing.append('--file');
-        if len(asMissing) > 0:
+        if asMissing:
             sys.stderr.write('syntax error: Missing: %s\n' % (asMissing,));
             sys.exit(1);
         # Temporary default.

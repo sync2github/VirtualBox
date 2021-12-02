@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: VBoxStub.cpp 85121 2020-07-08 19:33:26Z vboxsync $ */
 /** @file
  * VBoxStub - VirtualBox's Windows installer stub.
  */
 
 /*
- * Copyright (C) 2010-2016 Oracle Corporation
+ * Copyright (C) 2010-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,7 +25,7 @@
 #endif
 
 #include <iprt/win/windows.h>
-#include <commctrl.h>
+#include <iprt/win/commctrl.h>
 #include <fcntl.h>
 #include <io.h>
 #include <lmerr.h>
@@ -42,6 +42,7 @@
 
 #include <iprt/assert.h>
 #include <iprt/dir.h>
+#include <iprt/err.h>
 #include <iprt/file.h>
 #include <iprt/getopt.h>
 #include <iprt/initterm.h>
@@ -53,6 +54,7 @@
 #include <iprt/stream.h>
 #include <iprt/string.h>
 #include <iprt/thread.h>
+#include <iprt/utf16.h>
 
 #include "VBoxStub.h"
 #include "../StubBld/VBoxStubBld.h"
@@ -166,7 +168,7 @@ static void ShowInfo(const char *pszFmt, ...)
         else
         {
             PRTUTF16 pwszMsg;
-            int rc = RTStrToUtf16(pszMsg, &pwszMsg);
+            rc = RTStrToUtf16(pszMsg, &pwszMsg);
             if (RT_SUCCESS(rc))
             {
                 MessageBoxW(GetDesktopWindow(), pwszMsg, MY_UNICODE(VBOX_STUB_TITLE), MB_ICONINFORMATION);
@@ -374,7 +376,6 @@ static int ExtractFile(const char *pszResourceName,
  *
  * @param   pPackage            Pointer to a VBOXSTUBPKG struct that contains the resource.
  * @param   pszTempFile         The full file path + name to extract the resource to.
- *
  */
 static int Extract(const PVBOXSTUBPKG  pPackage,
                    const char         *pszTempFile)
@@ -387,21 +388,20 @@ static int Extract(const PVBOXSTUBPKG  pPackage,
  * Detects whether we're running on a 32- or 64-bit platform and returns the result.
  *
  * @returns TRUE if we're running on a 64-bit OS, FALSE if not.
- *
  */
 static BOOL IsWow64(void)
 {
-    BOOL bIsWow64 = TRUE;
+    BOOL fIsWow64 = TRUE;
     fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress(GetModuleHandle(TEXT("kernel32")), "IsWow64Process");
     if (NULL != fnIsWow64Process)
     {
-        if (!fnIsWow64Process(GetCurrentProcess(), &bIsWow64))
+        if (!fnIsWow64Process(GetCurrentProcess(), &fIsWow64))
         {
             /* Error in retrieving process type - assume that we're running on 32bit. */
             return FALSE;
         }
     }
-    return bIsWow64;
+    return fIsWow64;
 }
 
 
@@ -411,7 +411,6 @@ static BOOL IsWow64(void)
  * @returns @c true if we need to handle the specified package, @c false if not.
  *
  * @param   pPackage            Pointer to a VBOXSTUBPKG struct that contains the resource.
- *
  */
 static bool PackageIsNeeded(PVBOXSTUBPKG pPackage)
 {
@@ -432,7 +431,7 @@ static bool PackageIsNeeded(PVBOXSTUBPKG pPackage)
 static bool AddCleanupRec(const char *pszPath, bool fFile)
 {
     size_t cchPath = strlen(pszPath); Assert(cchPath > 0);
-    PSTUBCLEANUPREC pRec = (PSTUBCLEANUPREC)RTMemAlloc(RT_OFFSETOF(STUBCLEANUPREC, szPath[cchPath + 1]));
+    PSTUBCLEANUPREC pRec = (PSTUBCLEANUPREC)RTMemAlloc(RT_UOFFSETOF_DYN(STUBCLEANUPREC, szPath[cchPath + 1]));
     if (!pRec)
     {
         ShowError("Out of memory!");
@@ -584,7 +583,11 @@ static RTEXITCODE ProcessMsiPackage(const char *pszMsi, const char *pszMsiArgs, 
     if (uStatus == ERROR_SUCCESS)
         return RTEXITCODE_SUCCESS;
     if (uStatus == ERROR_SUCCESS_REBOOT_REQUIRED)
-        return RTEXITCODE_SUCCESS; /* we currently don't indicate this */
+    {
+        if (g_fSilent)
+            RTMsgInfo("Reboot required (by %s)\n", pszMsi);
+        return (RTEXITCODE)uStatus;
+    }
 
     /*
      * Installation failed. Figure out what to say.
@@ -876,6 +879,7 @@ int WINAPI WinMain(HINSTANCE  hInstance,
 #ifdef VBOX_WITH_CODE_SIGNING
     bool fEnableSilentCert         = true;
 #endif
+    bool fIgnoreReboot             = false;
     char szExtractPath[RTPATH_MAX] = {0};
     char szMSIArgs[_4K]            = {0};
 
@@ -906,6 +910,7 @@ int WINAPI WinMain(HINSTANCE  hInstance,
         { "--reinstall",        'f', RTGETOPT_REQ_NOTHING },
         { "-reinstall",         'f', RTGETOPT_REQ_NOTHING },
         { "/reinstall",         'f', RTGETOPT_REQ_NOTHING },
+        { "--ignore-reboot",    'r', RTGETOPT_REQ_NOTHING },
         { "--verbose",          'v', RTGETOPT_REQ_NOTHING },
         { "-verbose",           'v', RTGETOPT_REQ_NOTHING },
         { "/verbose",           'v', RTGETOPT_REQ_NOTHING },
@@ -975,6 +980,10 @@ int WINAPI WinMain(HINSTANCE  hInstance,
                     rcExit = ShowError("MSI parameters are too long.");
                 break;
 
+            case 'r':
+                fIgnoreReboot = true;
+                break;
+
             case 'V':
                 ShowInfo("Version: %d.%d.%d.%d",
                          VBOX_VERSION_MAJOR, VBOX_VERSION_MINOR, VBOX_VERSION_BUILD,
@@ -997,8 +1006,10 @@ int WINAPI WinMain(HINSTANCE  hInstance,
                          "--no-silent-cert         - Do not install VirtualBox Certificate automatically when --silent option is specified\n"
                          "--path                   - Sets the path of the extraction directory\n"
                          "--reinstall              - Forces VirtualBox to get re-installed\n"
+                         "--ignore-reboot          - Don't set exit code to 3010 if a reboot is required\n"
                          "--silent                 - Enables silent mode installation\n"
-                         "--version                - Print version number and exit\n\n"
+                         "--version                - Print version number and exit\n"
+                         "\n"
                          "Examples:\n"
                          "%s --msiparams INSTALLDIR=C:\\VBox\n"
                          "%s --extract -path C:\\VBox",
@@ -1086,6 +1097,17 @@ int WINAPI WinMain(HINSTANCE  hInstance,
                  szMSIArgs[0] ? szMSIArgs : "<None>");
     }
 
+    /*
+     * 32-bit is not officially supported any more.
+     */
+    if (   !fExtractOnly
+        && !g_fSilent
+        && !IsWow64())
+    {
+        rcExit = ShowError("32-bit Windows hosts are not supported by this VirtualBox release.");
+        vrc = VERR_NOT_SUPPORTED;
+    }
+
     if (RT_SUCCESS(vrc))
     {
         /*
@@ -1141,10 +1163,11 @@ int WINAPI WinMain(HINSTANCE  hInstance,
 #endif
                     unsigned iPackage = 0;
                     while (   iPackage < pHeader->byCntPkgs
-                           && rcExit == RTEXITCODE_SUCCESS)
+                           && (rcExit == RTEXITCODE_SUCCESS || rcExit == (RTEXITCODE)ERROR_SUCCESS_REBOOT_REQUIRED))
                     {
-                        rcExit = ProcessPackage(iPackage, szExtractPath,
-                                                szMSIArgs, fEnableLogging);
+                        RTEXITCODE rcExit2 = ProcessPackage(iPackage, szExtractPath, szMSIArgs, fEnableLogging);
+                        if (rcExit2 != RTEXITCODE_SUCCESS)
+                            rcExit = rcExit2;
                         iPackage++;
                     }
 
@@ -1182,6 +1205,6 @@ int WINAPI WinMain(HINSTANCE  hInstance,
         hMutexAppRunning = NULL;
     }
 
-    return rcExit;
+    return rcExit != (RTEXITCODE)ERROR_SUCCESS_REBOOT_REQUIRED || !fIgnoreReboot ? rcExit : RTEXITCODE_SUCCESS;
 }
 

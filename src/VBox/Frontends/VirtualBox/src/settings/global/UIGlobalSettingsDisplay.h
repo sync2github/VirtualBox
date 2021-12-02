@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIGlobalSettingsDisplay.h 89910 2021-06-25 10:18:08Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIGlobalSettingsDisplay class declaration.
  */
 
 /*
- * Copyright (C) 2012-2016 Oracle Corporation
+ * Copyright (C) 2012-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,65 +15,90 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIGlobalSettingsDisplay_h__
-#define __UIGlobalSettingsDisplay_h__
+#ifndef FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsDisplay_h
+#define FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsDisplay_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
-/* Local includes: */
+/* GUI includes: */
 #include "UISettingsPage.h"
-#include "UIGlobalSettingsDisplay.gen.h"
 
-/* Global settings / Display page / Cache: */
-struct UISettingsCacheGlobalDisplay
-{
-    QString m_strMaxGuestResolution;
-    bool m_fActivateHoveredMachineWindow;
-};
+/* Forward declarations: */
+class QCheckBox;
+class QLabel;
+class UIMaximumGuestScreenSizeEditor;
+class UIScaleFactorEditor;
+struct UIDataSettingsGlobalDisplay;
+typedef UISettingsCache<UIDataSettingsGlobalDisplay> UISettingsCacheGlobalDisplay;
 
-/* Global settings / Display page: */
-class UIGlobalSettingsDisplay : public UISettingsPageGlobal, public Ui::UIGlobalSettingsDisplay
+/** Global settings: Display page. */
+class SHARED_LIBRARY_STUFF UIGlobalSettingsDisplay : public UISettingsPageGlobal
 {
     Q_OBJECT;
 
 public:
 
-    /* Constructor: */
+    /** Constructs Display settings page. */
     UIGlobalSettingsDisplay();
+    /** Destructs Display settings page. */
+    virtual ~UIGlobalSettingsDisplay() /* override */;
 
 protected:
 
-    /* Load data to cache from corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void loadToCacheFrom(QVariant &data);
-    /* Load data to corresponding widgets from cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void getFromCache();
+    /** Loads settings from external object(s) packed inside @a data to cache.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void loadToCacheFrom(QVariant &data) /* override */;
+    /** Loads data from cache to corresponding widgets.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void getFromCache() /* override */;
 
-    /* Save data from corresponding widgets to cache,
-     * this task SHOULD be performed in GUI thread only: */
-    void putToCache();
-    /* Save data from cache to corresponding external object(s),
-     * this task COULD be performed in other than GUI thread: */
-    void saveFromCacheTo(QVariant &data);
+    /** Saves data from corresponding widgets to cache.
+      * @note  This task WILL be performed in the GUI thread only, all widget interactions here! */
+    virtual void putToCache() /* override */;
+    /** Saves settings from cache to external object(s) packed inside @a data.
+      * @note  This task WILL be performed in other than the GUI thread, no widget interactions! */
+    virtual void saveFromCacheTo(QVariant &data) /* overrride */;
 
-    /* Helper: Navigation stuff: */
-    void setOrderAfter(QWidget *pWidget);
-
-    /* Helper: Translation stuff: */
-    void retranslateUi();
-
-protected slots:
-
-    /* Handler: Resolution-combo stuff: */
-    void sltMaxResolutionComboActivated();
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
 
 private:
 
-    /* Helper: Resolution-combo stuff: */
-    void populate();
+    /** Prepares all. */
+    void prepare();
+    /** Prepares widgets. */
+    void prepareWidgets();
+    /** Cleanups all. */
+    void cleanup();
 
-    /* Cache: */
-    UISettingsCacheGlobalDisplay m_cache;
+    /** Saves existing data from cache. */
+    bool saveData();
+
+    /** Holds the page data cache instance. */
+    UISettingsCacheGlobalDisplay *m_pCache;
+
+    /** @name Widgets
+     * @{ */
+        /** Holds the maximum guest screen size label instance. */
+        QLabel                         *m_pLabelMaximumGuestScreenSizePolicy;
+        /** Holds the maximum guest screen width label instance. */
+        QLabel                         *m_pLabelMaximumGuestScreenWidth;
+        /** Holds the maximum guest screen height label instance. */
+        QLabel                         *m_pLabelMaximumGuestScreenHeight;
+        /** Holds the maximum guest screen size editor instance. */
+        UIMaximumGuestScreenSizeEditor *m_pEditorMaximumGuestScreenSize;
+        /** Holds the scale-factor label instance. */
+        QLabel                         *m_pLabelScaleFactor;
+        /** Holds the scale-factor editor instance. */
+        UIScaleFactorEditor            *m_pEditorScaleFactor;
+        /** Holds the 'machine-windows' label instance. */
+        QLabel                         *m_pLabelMachineWindows;
+        /** Holds the 'activate on mouse hover' check-box instance. */
+        QCheckBox                      *m_pCheckBoxActivateOnMouseHover;
+        /** Holds the 'disable host screen saver' check-box instance. */
+        QCheckBox                      *m_pCheckBoxDisableHostScreenSaver;
+    /** @} */
 };
 
-#endif // __UIGlobalSettingsDisplay_h__
-
+#endif /* !FEQT_INCLUDED_SRC_settings_global_UIGlobalSettingsDisplay_h */

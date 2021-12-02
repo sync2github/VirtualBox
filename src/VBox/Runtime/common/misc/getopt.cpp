@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: getopt.cpp 83982 2020-04-26 23:36:21Z vboxsync $ */
 /** @file
  * IPRT - Command Line Parsing
  */
 
 /*
- * Copyright (C) 2007-2016 Oracle Corporation
+ * Copyright (C) 2007-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -39,6 +39,15 @@
 #include <iprt/message.h>
 #include <iprt/string.h>
 #include <iprt/uuid.h>
+
+
+/*********************************************************************************************************************************
+*   Defined Constants And Macros                                                                                                 *
+*********************************************************************************************************************************/
+#ifdef IN_RT_STATIC  /* We don't need full unicode case insensitive if we ASSUME basic latin only. */
+# define RTStrICmp  RTStrICmpAscii
+# define RTStrNICmp RTStrNICmpAscii
+#endif
 
 
 /*********************************************************************************************************************************
@@ -77,6 +86,7 @@ RTDECL(int) RTGetOptInit(PRTGETOPTSTATE pState, int argc, char **argv,
     pState->fFlags       = fFlags;
     pState->cNonOptions  = 0;
 
+#ifdef RT_STRICT
     /* validate the options. */
     for (size_t i = 0; i < cOptions; i++)
     {
@@ -84,12 +94,21 @@ RTDECL(int) RTGetOptInit(PRTGETOPTSTATE pState, int argc, char **argv,
         Assert(paOptions[i].iShort > 0);
         Assert(paOptions[i].iShort != VINF_GETOPT_NOT_OPTION);
         Assert(paOptions[i].iShort != '-');
+        if (paOptions[i].fFlags & RTGETOPT_FLAG_ICASE)
+        {
+            const char   *psz = paOptions[i].pszLong;
+            unsigned char ch;
+            while ((ch = *psz++) != '\0')
+                Assert(ch <= 0x7f); /* ASSUMPTION that we can use RTStrICmpAscii and RTStrNICmpAscii. */
+        }
     }
+#endif
 
     return VINF_SUCCESS;
 }
 RT_EXPORT_SYMBOL(RTGetOptInit);
 
+#ifndef IPRT_GETOPT_WITHOUT_NETWORK_ADDRESSES
 
 /**
  * Converts an stringified IPv4 address into the RTNETADDRIPV4 representation.
@@ -127,6 +146,7 @@ static int rtgetoptConvertMacAddr(const char *pszValue, PRTMAC pAddr)
     return VINF_SUCCESS;
 }
 
+#endif /* IPRT_GETOPT_WITHOUT_NETWORK_ADDRESSES */
 
 /**
  * Searches for a long option.
@@ -253,10 +273,11 @@ static int rtGetOptProcessValue(uint32_t fFlags, const char *pszValue, PRTGETOPT
      * try a 16 based conversion. We will not interpret any of the
      * generic ints as octals.
      */
-    switch (fFlags & (  RTGETOPT_REQ_MASK
-                      | RTGETOPT_FLAG_HEX
-                      | RTGETOPT_FLAG_DEC
-                      | RTGETOPT_FLAG_OCT))
+    uint32_t const fSwitchValue =  fFlags & (  RTGETOPT_REQ_MASK
+                                             | RTGETOPT_FLAG_HEX
+                                             | RTGETOPT_FLAG_DEC
+                                             | RTGETOPT_FLAG_OCT);
+    switch (fSwitchValue)
     {
         case RTGETOPT_REQ_STRING:
             pValueUnion->psz = pszValue;
@@ -368,6 +389,8 @@ static int rtGetOptProcessValue(uint32_t fFlags, const char *pszValue, PRTGETOPT
 #undef MY_INT_CASE
 #undef MY_BASE_INT_CASE
 
+#ifndef IPRT_GETOPT_WITHOUT_NETWORK_ADDRESSES
+
         case RTGETOPT_REQ_IPV4ADDR:
         {
             RTNETADDRIPV4 Addr;
@@ -397,6 +420,8 @@ static int rtGetOptProcessValue(uint32_t fFlags, const char *pszValue, PRTGETOPT
             break;
         }
 
+#endif /* IPRT_GETOPT_WITHOUT_NETWORK_ADDRESSES */
+
         case RTGETOPT_REQ_UUID:
         {
             RTUUID Uuid;
@@ -405,6 +430,73 @@ static int rtGetOptProcessValue(uint32_t fFlags, const char *pszValue, PRTGETOPT
             pValueUnion->Uuid = Uuid;
             break;
         }
+
+#define MY_INT_PAIR_CASE(a_fReqValue, a_fReqValueOptional, a_Type, a_MemberPrefix, a_fnConv, a_ConvBase, a_DefaultValue) \
+            case a_fReqValue: \
+            case a_fReqValueOptional: \
+            { \
+                /* First value: */ \
+                a_Type Value1; \
+                char *pszNext = NULL; \
+                unsigned uBase =   pszValue[0] == '0' \
+                                && (pszValue[1] == 'x' || pszValue[1] == 'X') \
+                                && RT_C_IS_XDIGIT(pszValue[2]) \
+                              ? 16 : a_ConvBase; \
+                int rc = a_fnConv(pszValue, &pszNext, uBase, &Value1); \
+                if (rc == VINF_SUCCESS || rc == VWRN_TRAILING_CHARS || rc == VWRN_TRAILING_SPACES) \
+                { \
+                    /* The second value, could be optional: */ \
+                    a_Type Value2 = a_DefaultValue; \
+                    pszValue = pszNext;\
+                    if (pszValue) \
+                    { \
+                        while (RT_C_IS_BLANK(*pszValue)) \
+                            pszValue++; \
+                        if (*pszValue == ':' || *pszValue == '/' || *pszValue == '|') \
+                            do pszValue++; \
+                            while (RT_C_IS_BLANK(*pszValue)); \
+                        if (pszValue != pszNext) \
+                        { \
+                            uBase =    pszValue[0] == '0' \
+                                    && (pszValue[1] == 'x' || pszValue[1] == 'X') \
+                                    && RT_C_IS_XDIGIT(pszValue[2]) \
+                                  ? 16 : a_ConvBase; \
+                            rc = a_fnConv(pszValue, &pszNext, uBase, &Value2); \
+                            if (rc == VINF_SUCCESS) \
+                            { /* likely */ } \
+                            else \
+                                AssertMsgFailedReturn(("z rc=%Rrc: '%s' '%s' uBase=%d\n", rc, pszValue, pszNext, uBase), \
+                                                       VERR_GETOPT_INVALID_ARGUMENT_FORMAT); \
+                        } \
+                        else if (fSwitchValue != (a_fReqValueOptional)) \
+                            AssertMsgFailedReturn(("x\n"), VERR_GETOPT_INVALID_ARGUMENT_FORMAT); \
+                    } \
+                    else if (fSwitchValue != (a_fReqValueOptional)) \
+                        AssertMsgFailedReturn(("y\n"), VERR_GETOPT_INVALID_ARGUMENT_FORMAT); \
+                    pValueUnion->a_MemberPrefix##Second = Value2; \
+                    pValueUnion->a_MemberPrefix##First  = Value1; \
+                    break; \
+                } \
+                return VERR_GETOPT_INVALID_ARGUMENT_FORMAT; \
+            }
+
+        MY_INT_PAIR_CASE(RTGETOPT_REQ_UINT32_PAIR,                      RTGETOPT_REQ_UINT32_OPTIONAL_PAIR,
+                         uint32_t, PairU32.u, RTStrToUInt32Ex, 10, UINT32_MAX)
+        MY_INT_PAIR_CASE(RTGETOPT_REQ_UINT32_PAIR | RTGETOPT_FLAG_DEC,  RTGETOPT_REQ_UINT32_OPTIONAL_PAIR | RTGETOPT_FLAG_DEC,
+                         uint32_t, PairU32.u, RTStrToUInt32Ex, 10, UINT32_MAX)
+        MY_INT_PAIR_CASE(RTGETOPT_REQ_UINT32_PAIR | RTGETOPT_FLAG_HEX,  RTGETOPT_REQ_UINT32_OPTIONAL_PAIR | RTGETOPT_FLAG_HEX,
+                         uint32_t, PairU32.u, RTStrToUInt32Ex, 16, UINT32_MAX)
+        MY_INT_PAIR_CASE(RTGETOPT_REQ_UINT32_PAIR | RTGETOPT_FLAG_OCT,  RTGETOPT_REQ_UINT32_OPTIONAL_PAIR | RTGETOPT_FLAG_OCT,
+                         uint32_t, PairU32.u, RTStrToUInt32Ex,  8, UINT32_MAX)
+
+        MY_INT_PAIR_CASE(RTGETOPT_REQ_UINT64_PAIR,                      RTGETOPT_REQ_UINT64_OPTIONAL_PAIR,
+                         uint64_t, PairU64.u, RTStrToUInt64Ex, 10, UINT64_MAX)
+        MY_INT_PAIR_CASE(RTGETOPT_REQ_UINT64_PAIR | RTGETOPT_FLAG_DEC,  RTGETOPT_REQ_UINT64_OPTIONAL_PAIR | RTGETOPT_FLAG_DEC,
+                         uint64_t, PairU64.u, RTStrToUInt64Ex, 10, UINT64_MAX)
+        MY_INT_PAIR_CASE(RTGETOPT_REQ_UINT64_PAIR | RTGETOPT_FLAG_HEX,  RTGETOPT_REQ_UINT64_OPTIONAL_PAIR | RTGETOPT_FLAG_HEX,
+                         uint64_t, PairU64.u, RTStrToUInt64Ex, 16, UINT64_MAX)
+        MY_INT_PAIR_CASE(RTGETOPT_REQ_UINT64_PAIR | RTGETOPT_FLAG_OCT,  RTGETOPT_REQ_UINT64_OPTIONAL_PAIR | RTGETOPT_FLAG_OCT,
+                         uint64_t, PairU64.u, RTStrToUInt64Ex,  8, UINT64_MAX)
 
         default:
             AssertMsgFailed(("f=%#x\n", fFlags));
@@ -608,7 +700,7 @@ RTDECL(int) RTGetOpt(PRTGETOPTSTATE pState, PRTGETOPTUNION pValueUnion)
                     }
                     else if (rc == VINF_SUCCESS)
                     {
-                        if (iThis + 1 >= pState->argc)
+                        if (iThis + 1 + pState->cNonOptions >= pState->argc)
                             return VERR_GETOPT_REQUIRED_ARGUMENT_MISSING;
                         pState->uIndex = uIndex;
                         pszValue = pState->argv[iThis + pState->cNonOptions + 1];
@@ -622,7 +714,7 @@ RTDECL(int) RTGetOpt(PRTGETOPTSTATE pState, PRTGETOPTUNION pValueUnion)
                 {
                     if (pszArgThis[cchLong] == '\0')
                     {
-                        if (iThis + 1 >= pState->argc)
+                        if (iThis + 1 + pState->cNonOptions >= pState->argc)
                             return VERR_GETOPT_REQUIRED_ARGUMENT_MISSING;
                         pszValue = pState->argv[iThis + pState->cNonOptions + 1];
                         rtGetOptMoveArgvEntries(&pState->argv[iThis + 1], &pState->argv[iThis + pState->cNonOptions + 1]);
@@ -759,4 +851,31 @@ RTDECL(RTEXITCODE) RTGetOptPrintError(int ch, PCRTGETOPTUNION pValueUnion)
     return RTEXITCODE_SYNTAX;
 }
 RT_EXPORT_SYMBOL(RTGetOptPrintError);
+
+
+RTDECL(ssize_t) RTGetOptFormatError(char *pszBuf, size_t cbBuf, int ch, PCRTGETOPTUNION pValueUnion)
+{
+    ssize_t cchRet;
+    if (ch == VINF_GETOPT_NOT_OPTION)
+        cchRet = RTStrPrintf2(pszBuf, cbBuf, "Invalid parameter: %s", pValueUnion->psz);
+    else if (ch > 0)
+    {
+        if (RT_C_IS_GRAPH(ch))
+            cchRet = RTStrPrintf2(pszBuf, cbBuf, "Unhandled option: -%c", ch);
+        else
+            cchRet = RTStrPrintf2(pszBuf, cbBuf, "Unhandled option: %i (%#x)", ch, ch);
+    }
+    else if (ch == VERR_GETOPT_UNKNOWN_OPTION)
+        cchRet = RTStrPrintf2(pszBuf, cbBuf, "Unknown option: '%s'", pValueUnion->psz);
+    else if (pValueUnion->pDef && ch == VERR_GETOPT_INVALID_ARGUMENT_FORMAT)
+        /** @todo r=klaus not really ideal, as the value isn't available */
+        cchRet = RTStrPrintf2(pszBuf, cbBuf, "The value given '%s' has an invalid format.", pValueUnion->pDef->pszLong);
+    else if (pValueUnion->pDef)
+        cchRet = RTStrPrintf2(pszBuf, cbBuf, "%s: %Rrs\n", pValueUnion->pDef->pszLong, ch);
+    else
+        cchRet = RTStrPrintf2(pszBuf, cbBuf, "%Rrs\n", ch);
+
+    return cchRet;
+}
+RT_EXPORT_SYMBOL(RTGetOptFormatError);
 

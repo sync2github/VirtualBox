@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: tstRTPath.cpp 85384 2020-07-18 21:17:43Z vboxsync $ */
 /** @file
  * IPRT Testcase - Test various path functions.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -46,45 +46,49 @@ static void testParserAndSplitter(RTTEST hTest)
         uint16_t    cComps;
         uint16_t    cchPath;
         uint16_t    offSuffix;
+        int16_t     offName;    /**< RTPathParseSimple */
+        uint16_t    cchDir;     /**< RTPathParseSimple */
         const char *pszPath;
         uint16_t    fProps;
         uint32_t    fFlags;
     } const s_aTests[] =
     {
-        { 2,  5,  5,  "/bin/",            RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_DIR_SLASH,                                                RTPATH_STR_F_STYLE_UNIX },
-        { 2, 13,  9,  "C:/Config.sys",    RTPATH_PROP_VOLUME | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,       RTPATH_STR_F_STYLE_DOS },
-        { 2, 13, 10,  "C://Config.sys",   RTPATH_PROP_VOLUME | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX | RTPATH_PROP_EXTRA_SLASHES, RTPATH_STR_F_STYLE_DOS },
-        { 2, 12,  8,  "C:Config.sys",     RTPATH_PROP_VOLUME | RTPATH_PROP_RELATIVE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,                                RTPATH_STR_F_STYLE_DOS },
-        { 1, 10,  6,  "Config.sys",       RTPATH_PROP_RELATIVE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,                                                     RTPATH_STR_F_STYLE_DOS },
-        { 1,  4,  4,  "//./",             RTPATH_PROP_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE,                                                      RTPATH_STR_F_STYLE_DOS },
-        { 2,  5,  5,  "//./f",            RTPATH_PROP_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                               RTPATH_STR_F_STYLE_DOS },
-        { 2,  5,  6,  "//.//f",           RTPATH_PROP_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_EXTRA_SLASHES,   RTPATH_STR_F_STYLE_DOS },
-        { 3,  7,  7,  "//././f",          RTPATH_PROP_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_DOT_REFS,        RTPATH_STR_F_STYLE_DOS },
-        { 3,  8,  8,  "//.././f",         RTPATH_PROP_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_DOT_REFS,        RTPATH_STR_F_STYLE_DOS },
-        { 3,  9,  9,  "//../../f",        RTPATH_PROP_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_RELATIVE | RTPATH_PROP_FILENAME | RTPATH_PROP_DOTDOT_REFS,     RTPATH_STR_F_STYLE_DOS },
-        { 1,  1,  1,  "/",                RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE,                                                                        RTPATH_STR_F_STYLE_UNIX },
-        { 2,  4,  4,  "/bin",             RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 2,  5,  5,  "/bin/",            RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_DIR_SLASH,                                                RTPATH_STR_F_STYLE_UNIX },
-        { 3,  7,  7,  "/bin/ls",          RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 3,  12, 7,  "/etc/rc.conf",     RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,                            RTPATH_STR_F_STYLE_UNIX },
-        { 1,  1,  2,  "//",               RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_EXTRA_SLASHES,                                            RTPATH_STR_F_STYLE_UNIX },
-        { 1,  1,  3,  "///",              RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_EXTRA_SLASHES,                                            RTPATH_STR_F_STYLE_UNIX },
-        { 3,  6,  7,  "/.//bin",          RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_EXTRA_SLASHES | RTPATH_PROP_DOT_REFS | RTPATH_PROP_FILENAME, RTPATH_STR_F_STYLE_UNIX },
-        { 1,  3,  3,  "bin",              RTPATH_PROP_RELATIVE | RTPATH_PROP_FILENAME,                                                                          RTPATH_STR_F_STYLE_UNIX },
-        { 1,  4,  4,  "bin/",             RTPATH_PROP_RELATIVE | RTPATH_PROP_DIR_SLASH,                                                                         RTPATH_STR_F_STYLE_UNIX },
-        { 1,  4,  7,  "bin////",          RTPATH_PROP_RELATIVE | RTPATH_PROP_DIR_SLASH | RTPATH_PROP_EXTRA_SLASHES,                                             RTPATH_STR_F_STYLE_UNIX },
-        { 3, 10, 10,  "bin/../usr",       RTPATH_PROP_RELATIVE | RTPATH_PROP_DOTDOT_REFS | RTPATH_PROP_FILENAME,                                                RTPATH_STR_F_STYLE_UNIX },
-        { 4, 11, 11,  "/bin/../usr",      RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_RELATIVE | RTPATH_PROP_DOTDOT_REFS | RTPATH_PROP_FILENAME,                       RTPATH_STR_F_STYLE_UNIX },
-        { 4,  8,  8,  "/a/.../u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 4,  8,  8,  "/a/.b./u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 4,  8,  8,  "/a/..c/u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 4,  8,  8,  "/a/d../u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 4,  8,  8,  "/a/.e/.u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 4,  8,  8,  "/a/.f/.u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 4,  8,  8,  "/a/.g/u.",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
-        { 3,  9, 10,  "/a/h/u.ext",       RTPATH_PROP_EXTRA_SLASHES | RTPATH_PROP_RELATIVE,                                                                     RTPATH_STR_F_STYLE_UNIX | RTPATH_STR_F_MIDDLE },
-        { 3,  9,  9,  "a/h/u.ext",        RTPATH_PROP_RELATIVE,                                                                                                 RTPATH_STR_F_STYLE_UNIX | RTPATH_STR_F_MIDDLE },
-        { 3,  9, 10,  "a/h/u.ext/",       RTPATH_PROP_EXTRA_SLASHES | RTPATH_PROP_RELATIVE,                                                                     RTPATH_STR_F_STYLE_UNIX | RTPATH_STR_F_MIDDLE },
+        { 2,  5,  5,  -1,  4, "/bin/",            RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_DIR_SLASH,                                                RTPATH_STR_F_STYLE_UNIX },
+        { 2, 13,  9,   3,  3, "C:/Config.sys",    RTPATH_PROP_VOLUME | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,       RTPATH_STR_F_STYLE_DOS },
+        { 2, 13, 10,   4,  4, "C://Config.sys",   RTPATH_PROP_VOLUME | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX | RTPATH_PROP_EXTRA_SLASHES, RTPATH_STR_F_STYLE_DOS },
+        { 2, 12,  8,   2,  2, "C:Config.sys",     RTPATH_PROP_VOLUME | RTPATH_PROP_RELATIVE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,                                RTPATH_STR_F_STYLE_DOS },
+        { 1, 10,  6,   0,  0, "Config.sys",       RTPATH_PROP_RELATIVE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,                                                     RTPATH_STR_F_STYLE_DOS },
+        { 3, 15, 11,   7,  6, "C:/Win/file.ext",  RTPATH_PROP_VOLUME | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX ,      RTPATH_STR_F_STYLE_DOS },
+        { 1,  4,  4,  -1,  4, "//./",             RTPATH_PROP_UNC | RTPATH_PROP_SPECIAL_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE,                                                      RTPATH_STR_F_STYLE_DOS },
+        { 2,  5,  5,   4,  4, "//./f",            RTPATH_PROP_UNC | RTPATH_PROP_SPECIAL_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                               RTPATH_STR_F_STYLE_DOS },
+        { 2,  5,  6,   5,  5, "//.//f",           RTPATH_PROP_UNC | RTPATH_PROP_SPECIAL_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_EXTRA_SLASHES,   RTPATH_STR_F_STYLE_DOS },
+        { 3,  7,  7,   6,  5, "//././f",          RTPATH_PROP_UNC | RTPATH_PROP_SPECIAL_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_DOT_REFS,        RTPATH_STR_F_STYLE_DOS },
+        { 3,  8,  8,   7,  6, "//.././f",         RTPATH_PROP_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_DOT_REFS,        RTPATH_STR_F_STYLE_DOS },
+        { 3,  9,  9,   8,  7, "//../../f",        RTPATH_PROP_UNC | RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_RELATIVE | RTPATH_PROP_FILENAME | RTPATH_PROP_DOTDOT_REFS,     RTPATH_STR_F_STYLE_DOS },
+        { 1,  1,  1,  -1,  1, "/",                RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE,                                                                        RTPATH_STR_F_STYLE_UNIX },
+        { 2,  4,  4,   1,  1, "/bin",             RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 2,  5,  5,  -1,  4, "/bin/",            RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_DIR_SLASH,                                                RTPATH_STR_F_STYLE_UNIX },
+        { 3,  7,  7,   5,  4, "/bin/ls",          RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 3,  12, 7,   5,  4, "/etc/rc.conf",     RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,                            RTPATH_STR_F_STYLE_UNIX },
+        { 1,  1,  2,  -1,  2, "//",               RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_EXTRA_SLASHES,                                            RTPATH_STR_F_STYLE_UNIX },
+        { 1,  1,  3,  -1,  3, "///",              RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_EXTRA_SLASHES,                                            RTPATH_STR_F_STYLE_UNIX },
+        { 3,  6,  7,   4,  2, "/.//bin",          RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_EXTRA_SLASHES | RTPATH_PROP_DOT_REFS | RTPATH_PROP_FILENAME, RTPATH_STR_F_STYLE_UNIX },
+        { 1,  3,  3,   0,  0, "bin",              RTPATH_PROP_RELATIVE | RTPATH_PROP_FILENAME,                                                                          RTPATH_STR_F_STYLE_UNIX },
+        { 1,  4,  4,  -1,  3, "bin/",             RTPATH_PROP_RELATIVE | RTPATH_PROP_DIR_SLASH,                                                                         RTPATH_STR_F_STYLE_UNIX },
+        { 1,  4,  7,  -1,  3, "bin////",          RTPATH_PROP_RELATIVE | RTPATH_PROP_DIR_SLASH | RTPATH_PROP_EXTRA_SLASHES,                                             RTPATH_STR_F_STYLE_UNIX },
+        { 3, 10, 10,   7,  6, "bin/../usr",       RTPATH_PROP_RELATIVE | RTPATH_PROP_DOTDOT_REFS | RTPATH_PROP_FILENAME,                                                RTPATH_STR_F_STYLE_UNIX },
+        { 4, 11, 11,   8,  7, "/bin/../usr",      RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_RELATIVE | RTPATH_PROP_DOTDOT_REFS | RTPATH_PROP_FILENAME,                       RTPATH_STR_F_STYLE_UNIX },
+        { 4,  8,  8,   7,  6, "/a/.../u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 4,  8,  8,   7,  6, "/a/.b./u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 4,  8,  8,   7,  6, "/a/..c/u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 4,  8,  8,   7,  6, "/a/d../u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 4,  8,  8,   6,  5, "/a/.e/.u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 4,  8,  8,   6,  5, "/a/.f/.u",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 4, 11,  7,   6,  5, "/a/.f/u.ext",      RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME | RTPATH_PROP_SUFFIX,                            RTPATH_STR_F_STYLE_UNIX },
+        { 4,  8,  8,   6,  5, "/a/.g/u.",         RTPATH_PROP_ROOT_SLASH | RTPATH_PROP_ABSOLUTE | RTPATH_PROP_FILENAME,                                                 RTPATH_STR_F_STYLE_UNIX },
+        { 3,  9, 10,   5,  4, "/a/h/u.ext",       RTPATH_PROP_EXTRA_SLASHES | RTPATH_PROP_RELATIVE,                                                                     RTPATH_STR_F_STYLE_UNIX | RTPATH_STR_F_MIDDLE },
+        { 3,  9,  9,   5,  3, "a/h/u.ext",        RTPATH_PROP_RELATIVE,                                                                                                 RTPATH_STR_F_STYLE_UNIX | RTPATH_STR_F_MIDDLE },
+        { 3,  9, 10,  -1, 10, "a/h/u.ext/",       RTPATH_PROP_EXTRA_SLASHES | RTPATH_PROP_RELATIVE,                                                                     RTPATH_STR_F_STYLE_UNIX | RTPATH_STR_F_MIDDLE },
     };
 
     char szPath1[RTPATH_MAX];
@@ -190,6 +194,260 @@ static void testParserAndSplitter(RTTEST hTest)
                 RTTestIFailed("RTPathSplitReassemble -> %Rrc", rc);
         }
     }
+
+    RTTestSub(hTest, "RTPathParseSimple");
+    for (uint32_t i = 0; i < RT_ELEMENTS(s_aTests); i++)
+    {
+        if (   (s_aTests[i].fFlags & RTPATH_STR_F_STYLE_MASK) != RTPATH_STR_F_STYLE_HOST
+            && (s_aTests[i].fFlags & RTPATH_STR_F_STYLE_MASK) != RTPATH_STYLE)
+            continue;
+        if (s_aTests[i].fFlags & ~RTPATH_STR_F_STYLE_MASK)
+            continue;
+
+        size_t const cchPathIn = strlen(s_aTests[i].pszPath);
+        size_t  cchDir  = ~(size_t)1;
+        ssize_t offName = -97;
+        ssize_t offSuff = -99;
+        size_t  cchPath = RTPathParseSimple(s_aTests[i].pszPath, &cchDir, &offName, &offSuff);
+        if (   cchPath != cchPathIn
+            || offSuff != (s_aTests[i].offSuffix >= cchPathIn ? -1 : s_aTests[i].offSuffix)
+            || offName != s_aTests[i].offName
+            || cchDir  != s_aTests[i].cchDir)
+        {
+            RTTestFailed(hTest, "i=%u %s", i, s_aTests[i].pszPath);
+            RTTestFailureDetails(hTest,
+                                 "  cchPath   %zu, got %zu\n"
+                                 "  cchDir    %u, got %zu\n"
+                                 "  offName   %d, got %zd\n"
+                                 "  offSuff   %d, got %zd\n"
+                                 ,
+                                 cchPathIn, cchPath,
+                                 s_aTests[i].cchDir, cchDir,
+                                 s_aTests[i].offName, offName,
+                                 (s_aTests[i].offSuffix >= cchPathIn ? -1 : s_aTests[i].offSuffix), offSuff);
+        }
+    }
+}
+
+
+static void testParentLength(RTTEST hTest)
+{
+    static struct
+    {
+        const char *pszPath;
+        uint32_t    cchNonParent;
+        uint32_t    fFlags;
+    } const s_aTests[] =
+    {
+        { "/usr/bin", 3,                 RTPATH_STR_F_STYLE_UNIX },
+        { "/usr/bin", 3,                 RTPATH_STR_F_STYLE_DOS },
+        { "\\usr\\bin", 3,               RTPATH_STR_F_STYLE_DOS },
+        { "/usr/bin/", 4,                RTPATH_STR_F_STYLE_UNIX },
+        { "/usr/bin/", 4,                RTPATH_STR_F_STYLE_DOS },
+        { "\\usr\\bin\\", 4,             RTPATH_STR_F_STYLE_DOS },
+        { "A:\\usr\\bin\\", 4,           RTPATH_STR_F_STYLE_DOS },
+        { "/bin",  3,                    RTPATH_STR_F_STYLE_UNIX },
+        { "/bin",  3,                    RTPATH_STR_F_STYLE_DOS },
+        { "\\bin",  3,                   RTPATH_STR_F_STYLE_DOS },
+        { "A:\\bin",  3,                 RTPATH_STR_F_STYLE_DOS },
+        { "A:/bin",  3,                  RTPATH_STR_F_STYLE_DOS },
+        { "A:bin",  3,                   RTPATH_STR_F_STYLE_DOS },
+        { "/bin/", 4,                    RTPATH_STR_F_STYLE_UNIX },
+        { "/bin/", 4,                    RTPATH_STR_F_STYLE_DOS },
+        { "A:\\bin\\", 4,                RTPATH_STR_F_STYLE_DOS },
+        { "A:/bin\\", 4,                 RTPATH_STR_F_STYLE_DOS },
+        { "A:bin\\", 4,                  RTPATH_STR_F_STYLE_DOS },
+        { "/", 0,                        RTPATH_STR_F_STYLE_UNIX },
+        { "/", 0,                        RTPATH_STR_F_STYLE_DOS },
+        { "\\", 0,                       RTPATH_STR_F_STYLE_DOS },
+        { "A:\\", 0,                     RTPATH_STR_F_STYLE_DOS },
+        { "A:", 0,                       RTPATH_STR_F_STYLE_DOS },
+        { "bin", 3,                      RTPATH_STR_F_STYLE_UNIX },
+        { "bin", 3,                      RTPATH_STR_F_STYLE_DOS },
+        { "//unc/bin/bin", 3,            RTPATH_STR_F_STYLE_DOS },
+        { "//unc/bin/bin/", 4,           RTPATH_STR_F_STYLE_DOS },
+        { "//unc/bin", 3,                RTPATH_STR_F_STYLE_DOS },
+        { "//unc/bin/", 4,               RTPATH_STR_F_STYLE_DOS },
+        { "//unc/", 0,                   RTPATH_STR_F_STYLE_DOS },
+        { "//unc", 0,                    RTPATH_STR_F_STYLE_DOS },
+    };
+
+    RTTestSub(hTest, "RTPathParentLength");
+    for (uint32_t i = 0; i < RT_ELEMENTS(s_aTests); i++)
+    {
+        size_t const cchParent = RTPathParentLengthEx(s_aTests[i].pszPath, s_aTests[i].fFlags);
+        size_t const cchExpected = strlen(s_aTests[i].pszPath) - s_aTests[i].cchNonParent;
+        if (cchParent != cchExpected)
+            RTTestFailed(hTest, "sub-test #%u: got %u, expected %u (%s)",
+                         i, cchParent, cchExpected, s_aTests[i].pszPath);
+        if (s_aTests[i].fFlags == RTPATH_STYLE)
+        {
+            size_t const cchParent2 = RTPathParentLength(s_aTests[i].pszPath);
+            if (cchParent2 != cchExpected)
+                RTTestFailed(hTest, "sub-test #%u: RTPathParentLength returned %u, expected %u (%s)",
+                             i, cchParent2, cchExpected, s_aTests[i].pszPath);
+        }
+    }
+}
+
+
+static void testPurgeFilename(RTTEST hTest)
+{
+    static struct
+    {
+        const char *pszIn, *pszOut;
+        uint32_t    fFlags;
+    } const s_aTests[] =
+    {
+        { "start///end",            "start___end",      RTPATH_STR_F_STYLE_UNIX },
+        { "start///end",            "start___end",      RTPATH_STR_F_STYLE_DOS },
+        { "start///end",            "start___end",      RTPATH_STR_F_STYLE_HOST },
+        { "1:<>\\9",                "1:<>\\9",          RTPATH_STR_F_STYLE_UNIX },
+        { "1:<>\\9",                "1____9",           RTPATH_STR_F_STYLE_DOS },
+        { "\t\r\n",                 "\t\r\n",           RTPATH_STR_F_STYLE_UNIX },
+        { "\t\r\n",                 "___",              RTPATH_STR_F_STYLE_DOS },
+    };
+    RTTestSub(hTest, "RTPathPurgeFilename");
+    for (uint32_t i = 0; i < RT_ELEMENTS(s_aTests); i++)
+    {
+        char szPath[RTPATH_MAX];
+        strcpy(szPath, s_aTests[i].pszIn);
+        char *pszRet = RTPathPurgeFilename(szPath, s_aTests[i].fFlags);
+        RTTEST_CHECK(hTest, pszRet == &szPath[0]);
+        if (strcmp(szPath, s_aTests[i].pszOut) != 0)
+            RTTestFailed(hTest, "sub-test #%u: got '%s', expected '%s' (style %#x)",
+                         i, szPath, s_aTests[i].pszOut, s_aTests[i].fFlags);
+    }
+}
+
+
+static void testEnsureTrailingSeparator(RTTEST hTest)
+{
+    static struct
+    {
+        const char *pszIn, *pszOut;
+        uint32_t    fFlags;
+    } const s_aTests[] =
+    {
+        { "/foo",                   "/foo/",                RTPATH_STR_F_STYLE_UNIX },
+        { "/foo\\",                 "/foo\\/",              RTPATH_STR_F_STYLE_UNIX },
+        { "/foo:",                  "/foo:/",               RTPATH_STR_F_STYLE_UNIX },
+        { "/foo/",                  "/foo/",                RTPATH_STR_F_STYLE_UNIX },
+        { "D:/foo",                 "D:/foo\\",             RTPATH_STR_F_STYLE_DOS },
+        { "D:/foo\\",               "D:/foo\\",             RTPATH_STR_F_STYLE_DOS },
+        { "",                       "./",                   RTPATH_STR_F_STYLE_UNIX},
+        { "",                       ".\\",                  RTPATH_STR_F_STYLE_DOS },
+        { "",                       "." RTPATH_SLASH_STR,   RTPATH_STR_F_STYLE_HOST },
+        { ".",                      "." RTPATH_SLASH_STR,   RTPATH_STR_F_STYLE_HOST },
+        { "x",                      "x" RTPATH_SLASH_STR,   RTPATH_STR_F_STYLE_HOST },
+        { "y" RTPATH_SLASH_STR,     "y" RTPATH_SLASH_STR,   RTPATH_STR_F_STYLE_HOST },
+    };
+    RTTestSub(hTest, "RTPathEnsureTrailingSeparatorEx");
+    for (uint32_t i = 0; i < RT_ELEMENTS(s_aTests); i++)
+    {
+        char szPath[RTPATH_MAX];
+        strcpy(szPath, s_aTests[i].pszIn);
+        size_t cchRet = RTPathEnsureTrailingSeparatorEx(szPath, sizeof(szPath), s_aTests[i].fFlags);
+        RTTEST_CHECK(hTest, cchRet == strlen(s_aTests[i].pszOut));
+        if (strcmp(szPath, s_aTests[i].pszOut) != 0)
+            RTTestFailed(hTest, "sub-test #%u: got '%s', expected '%s' (style %#x)",
+                         i, szPath, s_aTests[i].pszOut, s_aTests[i].fFlags);
+    }
+}
+
+
+static void testFindCommon(RTTEST hTest)
+{
+    RTTestSub(hTest, "RTPathFindCommon");
+
+    static struct
+    {
+        char const *apszPaths[4];
+        uint32_t    fFlags;
+        char const *pszCommon;
+    } const aTests[] =
+    {
+        /* Simple stuff first. */
+        { { "",                     "",                 "",                     NULL, },            RTPATH_STR_F_STYLE_UNIX,
+            "" },
+        { { "",                     "",                 "",                     NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "" },
+        { { "none",                 "none",             "",                     NULL, },            RTPATH_STR_F_STYLE_UNIX,
+            "" },
+        { { "none",                 "none",             "",                     NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "" },
+        { { "same",                 "same",             "same",                 "same", },          RTPATH_STR_F_STYLE_UNIX,
+            "same" },
+        { { "same",                 "same",             "same",                 "same", },          RTPATH_STR_F_STYLE_DOS,
+            "same" },
+        /* More complicated. */
+        { { "/path/to/stuff1",      "path/to/stuff2",   NULL,                   NULL, },            RTPATH_STR_F_STYLE_UNIX,
+            "" },
+        { { "/path/to/stuff1",      "/path/to/stuff2",  "/path/to/stuff3",      NULL, },            RTPATH_STR_F_STYLE_UNIX,
+            "/path/to/" },
+        { { "/path/to/stuff1",      "/path/to/",        "/path/",               NULL, },            RTPATH_STR_F_STYLE_UNIX,
+            "/path/" },
+        { { "/path/to/stuff1",      "/",                "/path/",               NULL, },            RTPATH_STR_F_STYLE_UNIX,
+            "/" },
+        { { "/path/to/../stuff1",   "./../",            "/path/to/stuff2/..",   NULL, },            RTPATH_STR_F_STYLE_UNIX,
+            "" },
+        { { "a/single/path",        NULL,               NULL,                   NULL, },            RTPATH_STR_F_STYLE_UNIX,
+            "a/single/path" },
+        { { "a/single\\path",       NULL,               NULL,                   NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "a/single\\path" },
+        { { "C:\\Windows",          NULL,               NULL,                   NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "C:\\Windows" },
+        { { "c:/windows",           "c:\\program files", "C:\\AppData",         NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "c:/" },
+        { { "c:/windows",           "c:windows",        "C:system32",           NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "c:" },
+        { { "c:/windows",           "d:windows",        "e:windows",            NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "" },
+        { { "//usr/bin/env",        "/usr//bin/env",   "/usr/bin///env",        "/usr/bin/env", },  RTPATH_STR_F_STYLE_UNIX,
+            "//usr/bin/env" },
+        { { "//usr/bin/env",        "/usr//./././bin/env", "/usr/bin///env",    "/usr/bin/env", },  RTPATH_STR_F_STYLE_UNIX,
+            "//usr/bin/env" },
+        { { "//./what/ever",        "\\\\.\\what\\is\\up", "\\\\.\\\\what\\is\\up", NULL, },        RTPATH_STR_F_STYLE_DOS,
+            "//./what/" },
+        { { "//./unc/is/weird",     "///./unc/is/weird", NULL,                  NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "" },
+        { { "//system360/share",    "//system370/share", "//system390/share",   NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "" },
+        { { "//system370/share1",   "//sysTEM370/share2", "//SYsTeM370/share3", NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "//system370/" },
+        { { "//system370/share1",   "Z:/",              NULL,                   NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "" },
+        { { "//system370/share1",   "/",                NULL,                   NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "" },
+        { { "//system370/share1",   "somedir",          NULL,                   NULL, },            RTPATH_STR_F_STYLE_DOS,
+            "" },
+        { { "/path/to/stuff1",      "path/to/stuff2",   NULL,                   NULL, },            RTPATH_STR_F_STYLE_UNIX | RTPATH_STR_F_NO_START,
+            "/path/to/" },
+        { { "path/to/stuff1",       "//path\\/to\\stuff2", NULL,                NULL, },            RTPATH_STR_F_STYLE_DOS | RTPATH_STR_F_NO_START,
+            "path/to/" },
+        /* '..' elements are not supported for now and leads to zero return, unless RTPATHFINDCOMMON_F_IGNORE_DOTDOT is given. */
+        { { "/usr/bin/env",         "/usr/../usr/bin/env", "/usr/bin/../bin/env", NULL, },          RTPATH_STR_F_STYLE_UNIX,
+            "" },
+        { { "/lib/",                "/lib/amd64/../lib.so", "/lib/i386/../libdl.so", NULL, },       RTPATH_STR_F_STYLE_UNIX,
+            "" },
+        { { "/lib/",                "/lib/amd64/../lib.so", "/lib/i386/../libdl.so", NULL, },       RTPATH_STR_F_STYLE_UNIX | RTPATHFINDCOMMON_F_IGNORE_DOTDOT,
+            "/lib/" },
+    };
+
+    for (size_t i = 0; i < RT_ELEMENTS(aTests); i++)
+    {
+        size_t cPaths = RT_ELEMENTS(aTests[i].apszPaths);
+        while (cPaths > 0 && aTests[i].apszPaths[cPaths - 1] == NULL)
+            cPaths--;
+
+        size_t const cchCommon = RTPathFindCommonEx(cPaths, aTests[i].apszPaths, aTests[i].fFlags);
+        size_t const cchExpect = strlen(aTests[i].pszCommon);
+        if (cchCommon != cchExpect)
+            RTTestFailed(hTest,
+                         "Test %zu failed: got %zu, expected %zu (cPaths=%zu: '%s' '%s' '%s' '%s', fFlags=%#x)", i, cchCommon,
+                         cchExpect, cPaths, aTests[i].apszPaths[0], aTests[i].apszPaths[1], aTests[i].apszPaths[2],
+                         aTests[i].apszPaths[3], aTests[i].fFlags);
+    }
 }
 
 
@@ -267,11 +525,12 @@ int main()
 
 
     /*
-     * RTPathAbsEx
+     * RTPathAbsEx.
      */
     RTTestSub(hTest, "RTPathAbsEx");
     static const struct
     {
+        uint32_t    fFlags;
         const char *pcszInputBase;
         const char *pcszInputPath;
         int rc;
@@ -279,71 +538,93 @@ int main()
     }
     s_aRTPathAbsExTests[] =
     {
+        { RTPATH_STR_F_STYLE_HOST,  NULL, "", VERR_PATH_ZERO_LENGTH, NULL },
+        { RTPATH_STR_F_STYLE_HOST,  NULL, ".", VINF_SUCCESS, "%p" },
 #if defined (RT_OS_OS2) || defined (RT_OS_WINDOWS)
-    { NULL, "", VERR_INVALID_PARAMETER, NULL },
-    { NULL, ".", VINF_SUCCESS, "%p" },
-    { NULL, "\\", VINF_SUCCESS, "%d\\" },
-    { NULL, "\\..", VINF_SUCCESS, "%d\\" },
-    { NULL, "/absolute/..", VINF_SUCCESS, "%d\\" },
-    { NULL, "/absolute\\\\../..", VINF_SUCCESS, "%d\\" },
-    { NULL, "/absolute//../path\\", VINF_SUCCESS, "%d\\path" },
-    { NULL, "/absolute/../../path", VINF_SUCCESS, "%d\\path" },
-    { NULL, "relative/../dir\\.\\.\\.\\file.txt", VINF_SUCCESS, "%p\\dir\\file.txt" },
-    { NULL, "\\data\\", VINF_SUCCESS, "%d\\data" },
-    { "relative_base/dir\\", "\\from_root", VINF_SUCCESS, "%d\\from_root" },
-    { "relative_base/dir/", "relative_also", VINF_SUCCESS, "%p\\relative_base\\dir\\relative_also" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\", VINF_SUCCESS, "%d\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\..", VINF_SUCCESS, "%d\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "/absolute/..", VINF_SUCCESS, "%d\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "/absolute\\\\../..", VINF_SUCCESS, "%d\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "/absolute//../path\\", VINF_SUCCESS, "%d\\path\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "/absolute/../../path", VINF_SUCCESS, "%d\\path" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "relative/../dir\\.\\.\\.\\file.txt", VINF_SUCCESS, "%p\\dir\\file.txt" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\data\\", VINF_SUCCESS, "%d\\data\\" },
+        { RTPATH_STR_F_STYLE_DOS,   "relative_base/dir\\", "\\from_root", VINF_SUCCESS, "%d\\from_root" },
+        { RTPATH_STR_F_STYLE_DOS,   "relative_base/dir/", "relative_also", VINF_SUCCESS, "%p\\relative_base\\dir\\relative_also" },
 #else
-    { NULL, "", VERR_INVALID_PARAMETER, NULL },
-    { NULL, ".", VINF_SUCCESS, "%p" },
-    { NULL, "/", VINF_SUCCESS, "/" },
-    { NULL, "/..", VINF_SUCCESS, "/" },
-    { NULL, "/absolute/..", VINF_SUCCESS, "/" },
-    { NULL, "/absolute\\\\../..", VINF_SUCCESS, "/" },
-    { NULL, "/absolute//../path/", VINF_SUCCESS, "/path" },
-    { NULL, "/absolute/../../path", VINF_SUCCESS, "/path" },
-    { NULL, "relative/../dir/./././file.txt", VINF_SUCCESS, "%p/dir/file.txt" },
-    { NULL, "relative/../dir\\.\\.\\.\\file.txt", VINF_SUCCESS, "%p/dir\\.\\.\\.\\file.txt" },  /* linux-specific */
-    { NULL, "/data/", VINF_SUCCESS, "/data" },
-    { "relative_base/dir/", "/from_root", VINF_SUCCESS, "/from_root" },
-    { "relative_base/dir/", "relative_also", VINF_SUCCESS, "%p/relative_base/dir/relative_also" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, ".", VINF_SUCCESS, "%p" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "relative/../dir/./././file.txt", VINF_SUCCESS, "%p/dir/file.txt" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "relative/../dir\\.\\.\\.\\file.txt", VINF_SUCCESS, "%p/dir\\.\\.\\.\\file.txt" },  /* linux-specific */
+        { RTPATH_STR_F_STYLE_UNIX,  "relative_base/dir/", "/from_root", VINF_SUCCESS, "/from_root" },
+        { RTPATH_STR_F_STYLE_UNIX,  "relative_base/dir/", "relative_also", VINF_SUCCESS, "%p/relative_base/dir/relative_also" },
 #endif
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "/", VINF_SUCCESS, "/" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "/..", VINF_SUCCESS, "/" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "/absolute/..", VINF_SUCCESS, "/" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "/absolute\\\\../..", VINF_SUCCESS, "/" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "/absolute//../path/", VINF_SUCCESS, "/path/" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "/absolute/../../path", VINF_SUCCESS, "/path" },
+        { RTPATH_STR_F_STYLE_UNIX,  NULL, "/data/", VINF_SUCCESS, "/data/" },
 #if defined (RT_OS_OS2) || defined (RT_OS_WINDOWS)
-    { NULL, "C:\\", VINF_SUCCESS, "C:\\" },
-    { "C:\\", "..", VINF_SUCCESS, "C:\\" },
-    { "C:\\temp", "..", VINF_SUCCESS, "C:\\" },
-    { "C:\\VirtualBox/Machines", "..\\VirtualBox.xml", VINF_SUCCESS, "C:\\VirtualBox\\VirtualBox.xml" },
-    { "C:\\MustDie", "\\from_root/dir/..", VINF_SUCCESS, "C:\\from_root" },
-    { "C:\\temp", "D:\\data", VINF_SUCCESS, "D:\\data" },
-    { NULL, "\\\\server\\..\\share", VINF_SUCCESS, "\\\\server\\..\\share" /* kind of strange */ },
-    { NULL, "\\\\server/", VINF_SUCCESS, "\\\\server\\" },
-    { NULL, "\\\\", VINF_SUCCESS, "\\\\" },
-    { NULL, "\\\\\\something", VINF_SUCCESS, "\\\\\\something" /* kind of strange */ },
-    { "\\\\server\\share_as_base", "/from_root", VINF_SUCCESS, "\\\\server\\from_root" },
-    { "\\\\just_server", "/from_root", VINF_SUCCESS, "\\\\just_server\\from_root" },
-    { "\\\\server\\share_as_base", "relative\\data", VINF_SUCCESS, "\\\\server\\share_as_base\\relative\\data" },
-    { "base", "\\\\?\\UNC\\relative/edwef/..", VINF_SUCCESS, "\\\\?\\UNC\\relative" },
-    { "\\\\?\\UNC\\base", "/from_root", VERR_INVALID_NAME, NULL },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "C:\\", VINF_SUCCESS, "C:\\" },
+        { RTPATH_STR_F_STYLE_DOS,   "C:\\", "..", VINF_SUCCESS, "C:\\" },
+        { RTPATH_STR_F_STYLE_DOS,   "C:\\temp", "..", VINF_SUCCESS, "C:\\" },
+        { RTPATH_STR_F_STYLE_DOS,   "C:\\VirtualBox/Machines", "..\\VirtualBox.xml", VINF_SUCCESS, "C:\\VirtualBox\\VirtualBox.xml" },
+        { RTPATH_STR_F_STYLE_DOS,   "C:\\MustDie", "\\from_root/dir/..", VINF_SUCCESS, "C:\\from_root" },
+        { RTPATH_STR_F_STYLE_DOS,   "C:\\temp", "D:\\data", VINF_SUCCESS, "D:\\data" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\\\server\\..\\share", VINF_SUCCESS, "\\\\server\\..\\share" /* kind of strange */ },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\\\server/", VINF_SUCCESS, "\\\\server\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\\\", VINF_SUCCESS, "\\\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\\\\\something", VINF_SUCCESS, "\\\\\\something" /* kind of strange */ },
+        { RTPATH_STR_F_STYLE_DOS,   "\\\\server\\share_as_base", "/from_root", VINF_SUCCESS, "\\\\server\\share_as_base\\from_root" },
+        { RTPATH_STR_F_STYLE_DOS,   "\\\\just_server", "/from_root", VINF_SUCCESS, "\\\\just_server\\from_root" },
+        { RTPATH_STR_F_STYLE_DOS,   "\\\\server\\share_as_base", "relative\\data", VINF_SUCCESS, "\\\\server\\share_as_base\\relative\\data" },
+        { RTPATH_STR_F_STYLE_DOS,   "base", "\\\\?\\UNC\\relative/edwef/..", VINF_SUCCESS, "\\\\?\\UNC\\relative" },
+        { RTPATH_STR_F_STYLE_DOS,   "\\\\?\\UNC\\base", "/from_root", VINF_SUCCESS, "\\\\?\\from_root" },
+        { RTPATH_STR_F_STYLE_DOS,   "\\\\?\\UNC\\base", "./..", VINF_SUCCESS, "\\\\?\\UNC" },
+        { RTPATH_STR_F_STYLE_DOS | RTPATHABS_F_STOP_AT_BASE, "\\\\?\\UNC\\base", "./..", VINF_SUCCESS, "\\\\?\\UNC\\base" },
+        { RTPATH_STR_F_STYLE_DOS | RTPATHABS_F_STOP_AT_BASE, "\\\\?\\UNC\\base", "/..", VINF_SUCCESS, "\\\\?\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\\\.\\asdf\\..", VINF_SUCCESS, "\\\\.\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\\\?\\asdf\\..", VINF_SUCCESS, "\\\\?\\" },
+        { RTPATH_STR_F_STYLE_DOS,   NULL, "\\\\x\\asdf\\..", VINF_SUCCESS, "\\\\x\\asdf" },
 #else
-    { "/temp", "..", VINF_SUCCESS, "/" },
-    { "/VirtualBox/Machines", "../VirtualBox.xml", VINF_SUCCESS, "/VirtualBox/VirtualBox.xml" },
-    { "/MustDie", "/from_root/dir/..", VINF_SUCCESS, "/from_root" },
-    { "\\temp", "\\data", VINF_SUCCESS, "%p/\\temp/\\data" },
+        { RTPATH_STR_F_STYLE_UNIX,  "\\temp", "\\data", VINF_SUCCESS, "%p/\\temp/\\data" },
 #endif
+        { RTPATH_STR_F_STYLE_UNIX,  "/VirtualBox/Machines", "../VirtualBox.xml", VINF_SUCCESS, "/VirtualBox/VirtualBox.xml" },
+        { RTPATH_STR_F_STYLE_UNIX,  "/MustDie", "/from_root/dir/..", VINF_SUCCESS, "/from_root" },
+        { RTPATH_STR_F_STYLE_UNIX,  "/temp", "..", VINF_SUCCESS, "/" },
     };
+
+    char *pszGuardedBuf = NULL;
+    rc = RTTestGuardedAlloc(hTest, RTPATH_MAX, 0, false /*fHead*/, (void **)&pszGuardedBuf);
+    if (RT_FAILURE(rc))
+        pszGuardedBuf = szPath;
 
     for (unsigned i = 0; i < RT_ELEMENTS(s_aRTPathAbsExTests); ++ i)
     {
+        if (RT_FAILURE(s_aRTPathAbsExTests[i].rc))
+            RTTestDisableAssertions(hTest);
+
+        size_t cbAbsPath = sizeof(szPath);
         rc = RTPathAbsEx(s_aRTPathAbsExTests[i].pcszInputBase,
                          s_aRTPathAbsExTests[i].pcszInputPath,
-                         szPath, sizeof(szPath));
+                         s_aRTPathAbsExTests[i].fFlags,
+                         szPath, &cbAbsPath);
+
+        if (RT_FAILURE(s_aRTPathAbsExTests[i].rc))
+            RTTestRestoreAssertions(hTest);
+
         if (rc != s_aRTPathAbsExTests[i].rc)
         {
-            RTTestIFailed("unexpected result code!\n"
+            RTTestIFailed("#%u: unexpected result code!\n"
+                          "        flags: %#x\n"
                           "   input base: '%s'\n"
                           "   input path: '%s'\n"
                           "       output: '%s'\n"
                           "           rc: %Rrc\n"
                           "  expected rc: %Rrc",
+                          i,
+                          s_aRTPathAbsExTests[i].fFlags,
                           s_aRTPathAbsExTests[i].pcszInputBase,
                           s_aRTPathAbsExTests[i].pcszInputPath,
                           szPath, rc,
@@ -383,20 +664,128 @@ int main()
                 pszExpected = szTmp;
             }
 
-            if (strcmp(szPath, pszExpected))
+            if (   strcmp(szPath, pszExpected)
+                || strlen(szPath) != cbAbsPath)
             {
-                RTTestIFailed("Unexpected result\n"
+                RTTestIFailed("#%u: Unexpected result\n"
+                              "        flags: %#x\n"
                               "   input base: '%s'\n"
                               "   input path: '%s'\n"
                               "       output: '%s'\n"
-                              "     expected: '%s'",
+                              "     expected: '%s' ('%s')\n"
+                              "    cchResult: %#x, actual %#x",
+                              i,
+                              s_aRTPathAbsExTests[i].fFlags,
                               s_aRTPathAbsExTests[i].pcszInputBase,
                               s_aRTPathAbsExTests[i].pcszInputPath,
                               szPath,
-                              s_aRTPathAbsExTests[i].pcszOutput);
+                              pszExpected, s_aRTPathAbsExTests[i].pcszOutput,
+                              cbAbsPath, strlen(szPath));
+                continue;
             }
+
+            if (RT_SUCCESS(s_aRTPathAbsExTests[i].rc))
+            {
+                /* Test the RTPATHABS_F_ENSURE_TRAILING_SLASH flag: */
+                cbAbsPath = sizeof(szPath);
+                rc = RTPathAbsEx(s_aRTPathAbsExTests[i].pcszInputBase,
+                                 s_aRTPathAbsExTests[i].pcszInputPath,
+                                 s_aRTPathAbsExTests[i].fFlags | RTPATHABS_F_ENSURE_TRAILING_SLASH,
+                                 szPath, &cbAbsPath);
+                char chSlash = (s_aRTPathAbsExTests[i].fFlags & RTPATH_STR_F_STYLE_MASK) == RTPATH_STR_F_STYLE_DOS  ? '\\'
+                             : (s_aRTPathAbsExTests[i].fFlags & RTPATH_STR_F_STYLE_MASK) == RTPATH_STR_F_STYLE_UNIX ? '/'
+                             : RTPATH_SLASH;
+                if (   RT_FAILURE(rc)
+                    || strlen(szPath) != cbAbsPath
+                    || szPath[cbAbsPath - 1] != chSlash)
+                   RTTestIFailed("#%u: Unexpected RTPATHABS_F_ENSURE_TRAILING_SLASH result: %Rrc\n"
+                                 "        flags: %#x | RTPATHABS_F_ENSURE_TRAILING_SLASH\n"
+                                 "   input base: '%s'\n"
+                                 "   input path: '%s'\n"
+                                 "       output: '%s' ('%c' vs '%c')\n"
+                                 "    cchResult: %#x, actual %#x",
+                                 i, rc,
+                                 s_aRTPathAbsExTests[i].fFlags,
+                                 s_aRTPathAbsExTests[i].pcszInputBase,
+                                 s_aRTPathAbsExTests[i].pcszInputPath,
+                                 szPath, szPath[cbAbsPath - 1], chSlash,
+                                 cbAbsPath, strlen(szPath));
+
+                /* Do overflow testing: */
+                size_t const cbNeeded = strlen(pszExpected) + 1;
+                for (size_t cbBuf = 0; cbBuf < cbNeeded + 64; cbBuf++)
+                {
+                    char *pszBuf = &pszGuardedBuf[RTPATH_MAX - cbBuf];
+                    memset(pszBuf, 0x33, cbBuf);
+                    cbAbsPath = cbBuf;
+                    rc = RTPathAbsEx(s_aRTPathAbsExTests[i].pcszInputBase, s_aRTPathAbsExTests[i].pcszInputPath,
+                                     s_aRTPathAbsExTests[i].fFlags, pszBuf, &cbAbsPath);
+                    if (   cbBuf < cbNeeded
+                        && (   rc != VERR_BUFFER_OVERFLOW
+                            || cbAbsPath < cbNeeded))
+                        RTTestIFailed("#%u: Unexpected overflow result: %Rrc%s\n"
+                                      "        flags: %#x\n"
+                                      "   input base: '%s'\n"
+                                      "   input path: '%s'\n"
+                                      "    cbBuf[in]: %#x\n"
+                                      "   cbBuf[out]: %#x\n"
+                                      "     cbNeeded: %#x\n",
+                                      i, rc, rc != VERR_BUFFER_OVERFLOW ? " - expected VERR_BUFFER_OVERFLOW" : "",
+                                      s_aRTPathAbsExTests[i].fFlags,
+                                      s_aRTPathAbsExTests[i].pcszInputBase,
+                                      s_aRTPathAbsExTests[i].pcszInputPath,
+                                      cbBuf,
+                                      cbAbsPath,
+                                      cbNeeded);
+                    else if (   cbBuf >= cbNeeded
+                             && (   rc != s_aRTPathAbsExTests[i].rc
+                                 || cbAbsPath != cbNeeded - 1
+                                 || strcmp(pszBuf, pszExpected)
+                                 || strlen(pszBuf) != cbAbsPath))
+                        RTTestIFailed("#%u: Unexpected result: %Rrc (expected %Rrc)\n"
+                                      "        flags: %#x\n"
+                                      "   input base: '%s'\n"
+                                      "   input path: '%s'\n"
+                                      "    cbBuf[in]: %#x\n"
+                                      "   cbBuf[out]: %#x\n"
+                                      "     cbNeeded: %#x\n",
+                                      i, rc, s_aRTPathAbsExTests[i].rc,
+                                      s_aRTPathAbsExTests[i].fFlags,
+                                      s_aRTPathAbsExTests[i].pcszInputBase,
+                                      s_aRTPathAbsExTests[i].pcszInputPath,
+                                      cbBuf,
+                                      cbAbsPath,
+                                      cbNeeded);
+
+                }
+            }
+
+            /* RTPathAbsExDup */
+            char *pszDup = RTPathAbsExDup(s_aRTPathAbsExTests[i].pcszInputBase,
+                                          s_aRTPathAbsExTests[i].pcszInputPath,
+                                          s_aRTPathAbsExTests[i].fFlags);
+            if (   (RT_SUCCESS(s_aRTPathAbsExTests[i].rc) ? pszDup == NULL : pszDup != NULL)
+                || RTStrCmp(pszDup, pszExpected))
+                RTTestIFailed("#%u: Unexpected RTPathAbsExDup result: %p%s\n"
+                              "        flags: %#x\n"
+                              "   input base: '%s'\n"
+                              "   input path: '%s'\n"
+                              "       output: '%s'\n"
+                              "     expected: '%s' ('%s')\n",
+                              i, pszDup,
+                              (RT_SUCCESS(s_aRTPathAbsExTests[i].rc) ? pszDup == NULL : pszDup != NULL) ? pszDup ? "NULL" : "!NULL" : "",
+                              s_aRTPathAbsExTests[i].fFlags,
+                              s_aRTPathAbsExTests[i].pcszInputBase,
+                              s_aRTPathAbsExTests[i].pcszInputPath,
+                              pszDup,
+                              pszExpected, s_aRTPathAbsExTests[i].pcszOutput);
+            RTStrFree(pszDup);
         }
     }
+
+    if (pszGuardedBuf != szPath)
+        RTTestGuardedFree(hTest, pszGuardedBuf);
+
 
     /*
      * RTPathStripFilename
@@ -741,42 +1130,58 @@ int main()
     struct
     {
         const char *pszFrom;
+        bool fFromFile;
         const char *pszTo;
         int rc;
         const char *pszExpected;
     } s_aRelPath[] =
     {
-        { "/home/test.ext", "/home/test2.ext", VINF_SUCCESS, "test2.ext"},
-        { "/dir/test.ext", "/dir/dir2/test2.ext", VINF_SUCCESS, "dir2/test2.ext"},
-        { "/dir/dir2/test.ext", "/dir/test2.ext", VINF_SUCCESS, ".." RTPATH_SLASH_STR "test2.ext"},
-        { "/dir/dir2/test.ext", "/dir/dir3/test2.ext", VINF_SUCCESS, ".." RTPATH_SLASH_STR "dir3/test2.ext"},
+        { "/home/test.ext",     true,           "/home/test2.ext",        VINF_SUCCESS, "test2.ext" },
+        { "/dir/test.ext",      true,           "/dir/dir2/test2.ext",    VINF_SUCCESS, "dir2/test2.ext" },
+        { "/dir/dir2/test.ext", true,           "/dir/test2.ext",         VINF_SUCCESS, ".." RTPATH_SLASH_STR "test2.ext" },
+        { "/dir/dir2/test.ext", true,           "/dir/dir3/test2.ext",    VINF_SUCCESS, ".." RTPATH_SLASH_STR "dir3/test2.ext" },
+        { "/dir/dir2",          false,          "/dir/dir3/test2.ext",    VINF_SUCCESS, ".." RTPATH_SLASH_STR "dir3/test2.ext" },
+        { "/dir/dir2",          false,          "/dir/dir3//test2.ext",   VINF_SUCCESS, ".." RTPATH_SLASH_STR "dir3//test2.ext" },
+        { "/dir/dir2/",         false,          "/dir/dir3/test2.ext",    VINF_SUCCESS, ".." RTPATH_SLASH_STR "dir3/test2.ext" },
+        { "/dir/dir2////",      false,          "/dir//dir3/test2.ext",   VINF_SUCCESS, ".." RTPATH_SLASH_STR "dir3/test2.ext" },
+        { "/include/iprt",      false,          "/include/iprt/cdefs.h",  VINF_SUCCESS, "cdefs.h" },
+        { "/include/iprt/",     false,          "/include/iprt/cdefs.h",  VINF_SUCCESS, "cdefs.h" },
+        { "/include/iprt/tt.h", true,           "/include/iprt/cdefs.h",  VINF_SUCCESS, "cdefs.h" },
 #if defined (RT_OS_OS2) || defined (RT_OS_WINDOWS)
-        { "\\\\server\\share\\test.ext", "\\\\server\\share2\\test2.ext", VERR_NOT_SUPPORTED, ""},
-        { "c:\\dir\\test.ext", "f:\\dir\\test.ext", VERR_NOT_SUPPORTED, ""}
+        { "\\\\server\\share\\test.ext", true,  "\\\\server\\share2\\test2.ext", VERR_NOT_SUPPORTED, "" },
+        { "c:\\dir\\test.ext",  true,           "f:\\dir\\test.ext",      VERR_NOT_SUPPORTED, "" },
+        { "F:\\dir\\test.ext",  false,          "f:/dir//test.ext",      VINF_SUCCESS, "." } ,
+        { "F:\\diR\\Test.exT",  true,           "f:/dir//test.ext",      VINF_SUCCESS, "Test.exT" } ,
+        { "F:\\K\xc3\x85RE\\Test.exT", true,    "f:/k\xc3\xa5re//test.ext", VINF_SUCCESS, "Test.exT" } ,
 #endif
     };
     for (unsigned i = 0; i < RT_ELEMENTS(s_aRelPath); i++)
     {
-        const char *pszFrom = s_aRelPath[i].pszFrom;
-        const char *pszTo   = s_aRelPath[i].pszTo;
+        const char *pszFrom   = s_aRelPath[i].pszFrom;
+        bool        fFromFile = s_aRelPath[i].fFromFile;
+        const char *pszTo     = s_aRelPath[i].pszTo;
 
-        rc = RTPathCalcRelative(szPath, sizeof(szPath), pszFrom, pszTo);
+        rc = RTPathCalcRelative(szPath, sizeof(szPath), pszFrom, fFromFile, pszTo);
         if (rc != s_aRelPath[i].rc)
-            RTTestIFailed("Unexpected return code\n"
+            RTTestIFailed("Unexpected return code for %s .. %s\n"
                           "     got: %Rrc\n"
                           "expected: %Rrc",
-                          rc, s_aRelPath[i].rc);
+                          pszFrom, pszTo, rc, s_aRelPath[i].rc);
         else if (   RT_SUCCESS(rc)
                  && strcmp(szPath, s_aRelPath[i].pszExpected))
             RTTestIFailed("Unexpected result\n"
-                          "    from: '%s'\n"
+                          "    from: '%s' (%s)\n"
                           "      to: '%s'\n"
                           "  output: '%s'\n"
                           "expected: '%s'",
-                          pszFrom, pszTo, szPath, s_aRelPath[i].pszExpected);
+                          pszFrom, fFromFile ? "file" : "dir", pszTo, szPath, s_aRelPath[i].pszExpected);
     }
 
     testParserAndSplitter(hTest);
+    testParentLength(hTest);
+    testPurgeFilename(hTest);
+    testEnsureTrailingSeparator(hTest);
+    testFindCommon(hTest);
 
     /*
      * Summary.

@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: DevVGA-SVGA3d-internal.h 91361 2021-09-24 12:48:04Z vboxsync $ */
 /** @file
  * DevVMWare - VMWare SVGA device - 3D part, internal header.
  */
 
 /*
- * Copyright (C) 2013-2016 Oracle Corporation
+ * Copyright (C) 2013-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,8 +15,11 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef ___DevVGA_SVGA3d_internal_h
-#define ___DevVGA_SVGA3d_internal_h
+#ifndef VBOX_INCLUDED_SRC_Graphics_DevVGA_SVGA3d_internal_h
+#define VBOX_INCLUDED_SRC_Graphics_DevVGA_SVGA3d_internal_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /*
  * Assert sane compilation environment.
@@ -25,7 +28,7 @@
 # error "VMSVGA3D_INCL_INTERNALS is only for ring-3 code"
 #endif
 #ifdef VMSVGA3D_OPENGL
-# ifdef VMSVGA3D_DIRECT3D
+# if defined(VMSVGA3D_DIRECT3D)
 #  error "Both VMSVGA3D_DIRECT3D and VMSVGA3D_OPENGL cannot be defined at the same time."
 # endif
 #elif !defined(VMSVGA3D_DIRECT3D)
@@ -37,6 +40,10 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include "DevVGA-SVGA3d.h"
+
+#if defined(VMSVGA3D_DYNAMIC_LOAD) && defined(VMSVGA3D_OPENGL)
+# include "DevVGA-SVGA3d-glLdr.h"
+#endif
 
 #ifdef RT_OS_WINDOWS
 # include <iprt/win/windows.h>
@@ -79,10 +86,13 @@ typedef void (APIENTRYP PFNGLGETPROGRAMIVARBPROC) (GLenum target, GLenum pname, 
 # define VBOX_VMSVGA3D_GL_HACK_LEVEL 0x103
 #endif
 
-#include "vmsvga/svga3d_shaderdefs.h"
 #ifdef VMSVGA3D_OPENGL
 # include "vmsvga_glext/glext.h"
 # include "shaderlib/shaderlib.h"
+#endif
+
+#ifdef VMSVGA3D_DX
+#include "DevVGA-SVGA3d-dx-shader.h"
 #endif
 
 
@@ -246,7 +256,7 @@ typedef void (APIENTRYP PFNGLGETPROGRAMIVARBPROC) (GLenum target, GLenum pname, 
 # else
 #  define VMSVGA3D_GL_COMPLAIN(a_pState, a_pContext, a_LogRelDetails) \
     do { \
-        LogRelMax(32, ("VMSVGA3d: OpenGL error %#x (idActiveContext=%#x) on line %u ", (a_pContext)->lastError, (a_pContext)->id)); \
+        LogRelMax(32, ("VMSVGA3d: OpenGL error %#x (idActiveContext=%#x) on line %u ", (a_pContext)->lastError, (a_pContext)->id, __LINE__)); \
         GLenum iNextError; \
         while ((iNextError = glGetError()) != GL_NO_ERROR) \
             LogRelMax(32, (" - also error %#x ", iNextError)); \
@@ -349,6 +359,7 @@ typedef void (APIENTRYP PFNGLGETPROGRAMIVARBPROC) (GLenum target, GLenum pname, 
  *          VERR_INTERNAL_ERROR in strict builds and just barge on ahead in
  *          release builds.
  */
+/** @todo Rename to VMSVGA3D_CHECK_LAST_ERROR_RETURN */
 # ifdef VBOX_STRICT
 #  define VMSVGA3D_CHECK_LAST_ERROR(pState, pContext) do {                   \
     Assert((pState)->idActiveContext == (pContext)->id);                    \
@@ -381,11 +392,6 @@ typedef void (APIENTRYP PFNGLGETPROGRAMIVARBPROC) (GLenum target, GLenum pname, 
 
 #endif /* VMSVGA3D_OPENGL */
 
-#ifdef VMSVGA3D_DIRECT3D
-/* Enable to use Wine to convert D3D to opengl */
-//#define VBOX_VMSVGA3D_WITH_WINE_OPENGL
-#endif
-
 
 /*********************************************************************************************************************************
 *   Structures and Typedefs                                                                                                      *
@@ -395,13 +401,21 @@ typedef void (APIENTRYP PFNGLGETPROGRAMIVARBPROC) (GLenum target, GLenum pname, 
  */
 typedef struct VMSVGA3DMIPMAPLEVEL
 {
-    /** The mipmap size. */
-    SVGA3dSize              size;
-    /** The size (in bytes) of the mimap data when using the format the surface was
-     *  defined with. */
-    uint32_t                cbSurface;
-    /** The scanline/pitch size in bytes. */
+    /** The mipmap size: width, height and depth. */
+    SVGA3dSize              mipmapSize;
+    /** Width in blocks: (width + cxBlock - 1) / cxBlock. SSM: not saved, recalculated on load. */
+    uint32_t                cBlocksX;
+    /** Height in blocks: (height + cyBlock - 1) / cyBlock. SSM: not saved, recalculated on load. */
+    uint32_t                cBlocksY;
+    /** Number of blocks: cBlocksX * cBlocksY * mipmapSize.depth. SSM: not saved, recalculated on load. */
+    uint32_t                cBlocks;
+    /** The scanline/pitch size in bytes: at least cBlocksX * cbBlock. */
     uint32_t                cbSurfacePitch;
+    /** The size (in bytes) of the mipmap plane: cbSurfacePitch * cBlocksY */
+    uint32_t                cbSurfacePlane;
+    /** The size (in bytes) of the mipmap data when using the format the surface was
+     *  defined with: cbSurfacePlane * mipmapSize.z */
+    uint32_t                cbSurface;
     /** Pointer to the mipmap bytes (cbSurface).  Often NULL.  If the surface has
      * been realized in hardware, this may be outdated. */
     void                   *pSurfaceData;
@@ -419,7 +433,7 @@ typedef VMSVGA3DMIPMAPLEVEL *PVMSVGA3DMIPMAPLEVEL;
  */
 static SSMFIELD const g_aVMSVGA3DMIPMAPLEVELFields[] =
 {
-    SSMFIELD_ENTRY(                 VMSVGA3DMIPMAPLEVEL, size),
+    SSMFIELD_ENTRY(                 VMSVGA3DMIPMAPLEVEL, mipmapSize),
     SSMFIELD_ENTRY(                 VMSVGA3DMIPMAPLEVEL, cbSurface),
     SSMFIELD_ENTRY(                 VMSVGA3DMIPMAPLEVEL, cbSurfacePitch),
     SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DMIPMAPLEVEL, pSurfaceData),
@@ -479,6 +493,19 @@ static SSMFIELD const g_aVMSVGASHADERCONSTFields[] =
 #endif
 
 #ifdef VMSVGA3D_DIRECT3D
+
+/* What kind of Direct3D resource has been created for the VMSVGA3D surface. */
+typedef enum VMSVGA3DD3DRESTYPE
+{
+    VMSVGA3D_D3DRESTYPE_NONE           = 0,
+    VMSVGA3D_D3DRESTYPE_SURFACE        = 1,
+    VMSVGA3D_D3DRESTYPE_TEXTURE        = 2,
+    VMSVGA3D_D3DRESTYPE_CUBE_TEXTURE   = 3,
+    VMSVGA3D_D3DRESTYPE_VOLUME_TEXTURE = 4,
+    VMSVGA3D_D3DRESTYPE_VERTEX_BUFFER  = 5,
+    VMSVGA3D_D3DRESTYPE_INDEX_BUFFER   = 6
+} VMSVGA3DD3DRESTYPE;
+
 /**
  *
  */
@@ -488,41 +515,65 @@ typedef struct
     AVLU32NODECORE          Core;
     union
     {
-        IDirect3DSurface9          *pSurface;
         IDirect3DTexture9          *pTexture;
         IDirect3DCubeTexture9      *pCubeTexture;
+        IDirect3DVolumeTexture9    *pVolumeTexture;
     } u;
 } VMSVGA3DSHAREDSURFACE;
 typedef VMSVGA3DSHAREDSURFACE *PVMSVGA3DSHAREDSURFACE;
 #endif /* VMSVGA3D_DIRECT3D  */
+
+#ifdef VMSVGA3D_OPENGL
+/* What kind of OpenGL resource has been created for the VMSVGA3D surface. */
+typedef enum VMSVGA3DOGLRESTYPE
+{
+    VMSVGA3D_OGLRESTYPE_NONE           = 0,
+    VMSVGA3D_OGLRESTYPE_BUFFER         = 1,
+    VMSVGA3D_OGLRESTYPE_TEXTURE        = 2,
+    VMSVGA3D_OGLRESTYPE_RENDERBUFFER   = 3
+} VMSVGA3DOGLRESTYPE;
+#endif
+
+/* The 3D backend surface. The actual structure is 3D API specific. */
+typedef struct VMSVGA3DBACKENDSURFACE *PVMSVGA3DBACKENDSURFACE;
 
 /**
  * VMSVGA3d surface.
  */
 typedef struct VMSVGA3DSURFACE
 {
-    uint32_t                id;
-#ifdef VMSVGA3D_OPENGL
-    uint32_t                idWeakContextAssociation;
-#else
+    PVMSVGA3DBACKENDSURFACE pBackendSurface;
+
+    uint32_t                id; /** @todo sid */
+    /* Which context created the corresponding resource.
+     * SVGA_ID_INVALID means that resource has not been created yet.
+     * A resource has been created if VMSVGA3DSURFACE_HAS_HW_SURFACE is true.
+     *
+     */
     uint32_t                idAssociatedContext;
-#endif
-    uint32_t                flags;
+
+    SVGA3dSurface1Flags     surfaceFlags; /** @todo SVGA3dSurfaceAllFlags as an union. */
     SVGA3dSurfaceFormat     format;
 #ifdef VMSVGA3D_OPENGL
     GLint                   internalFormatGL;
     GLint                   formatGL;
     GLint                   typeGL;
+    VMSVGA3DOGLRESTYPE      enmOGLResType; /* Which resource was created for the surface. */
     union
     {
         GLuint              texture;
         GLuint              buffer;
         GLuint              renderbuffer;
     } oglId;
+    GLenum                  targetGL;  /* GL_TEXTURE_* */
+    GLenum                  bindingGL; /* GL_TEXTURE_BINDING_* */
+    /* Emulated formats */
+    bool                    fEmulated; /* Whether the texture format is emulated. */
+    GLuint                  idEmulated; /* GL name of the intermediate texture. */
 #endif
-    SVGA3dSurfaceFace       faces[SVGA3D_MAX_SURFACE_FACES];
-    uint32_t                cFaces;
-    PVMSVGA3DMIPMAPLEVEL    pMipmapLevels;
+    uint32_t                cFaces; /* Number of faces: 6 for cubemaps, 1 for everything else. */
+    uint32_t                cLevels; /* Number of mipmap levels per face. */
+    PVMSVGA3DMIPMAPLEVEL    paMipmapLevels; /* cFaces * cLevels elements. */
     uint32_t                multiSampleCount;
     SVGA3dTextureFilter     autogenFilter;
 #ifdef VMSVGA3D_DIRECT3D
@@ -532,6 +583,13 @@ typedef struct VMSVGA3DSURFACE
 #endif
 
     uint32_t                cbBlock;        /* block/pixel size in bytes */
+    /* Dimensions of the surface block, usually 1x1 except for compressed formats. */
+    uint32_t                cxBlock;        /* Block width in pixels. SSM: not saved, recalculated on load. */
+    uint32_t                cyBlock;        /* Block height in pixels. SSM: not saved, recalculated on load. */
+#ifdef VMSVGA3D_OPENGL
+    uint32_t                cbBlockGL;      /* Block size of the OpenGL texture, same as cbBlock for not-emulated formats. */
+#endif
+
     /* Dirty state; surface was manually updated. */
     bool                    fDirty;
 
@@ -540,22 +598,35 @@ typedef struct VMSVGA3DSURFACE
     HANDLE                  hSharedObject;
     /** Event query inserted after each GPU operation that updates or uses this surface. */
     IDirect3DQuery9        *pQuery;
+    /** The context id where the query has been created. */
+    uint32_t                idQueryContext;
+    /** The type of actually created D3D resource. */
+    VMSVGA3DD3DRESTYPE      enmD3DResType;
     union
     {
         IDirect3DSurface9          *pSurface;
-        IDirect3DCubeTexture9      *pCubeTexture;
-        IDirect3DIndexBuffer9      *pIndexBuffer;
         IDirect3DTexture9          *pTexture;
+        IDirect3DCubeTexture9      *pCubeTexture;
+        IDirect3DVolumeTexture9    *pVolumeTexture;
         IDirect3DVertexBuffer9     *pVertexBuffer;
+        IDirect3DIndexBuffer9      *pIndexBuffer;
     } u;
     union
     {
         IDirect3DTexture9          *pTexture;
+        IDirect3DCubeTexture9      *pCubeTexture;
+        IDirect3DVolumeTexture9    *pVolumeTexture;
     } bounce;
     /** AVL tree containing VMSVGA3DSHAREDSURFACE structures. */
     AVLU32TREE              pSharedObjectTree;
     bool                    fStencilAsTexture;
-    uint32_t                fu32ActualUsageFlags;
+    D3DFORMAT               d3dfmtRequested;
+    union
+    {
+        IDirect3DTexture9          *pTexture;
+        IDirect3DCubeTexture9      *pCubeTexture;
+        IDirect3DVolumeTexture9    *pVolumeTexture;
+    } emulated;
 #endif
 } VMSVGA3DSURFACE;
 /** Pointer to a 3d surface. */
@@ -568,40 +639,19 @@ typedef VMSVGA3DSURFACE *PVMSVGA3DSURFACE;
 static SSMFIELD const g_aVMSVGA3DSURFACEFields[] =
 {
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, id),
-# ifdef VMSVGA3D_OPENGL
-    SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, idWeakContextAssociation),
-# else
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, idAssociatedContext),
-# endif
-    SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, flags),
+    SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, surfaceFlags),
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, format),
 # ifdef VMSVGA3D_OPENGL
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, internalFormatGL),
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, formatGL),
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, typeGL),
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DSURFACE, id),
 # endif
-    SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, faces),
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, cFaces),
-    SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DSURFACE, pMipmapLevels),
+    SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, cLevels),
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, multiSampleCount),
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, autogenFilter),
-# ifdef VMSVGA3D_DIRECT3D
-    SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, format), /** @todo format duplicated. */
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DSURFACE, formatD3D),
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DSURFACE, fUsageD3D),
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DSURFACE, multiSampleTypeD3D),
-# endif
     SSMFIELD_ENTRY(                 VMSVGA3DSURFACE, cbBlock),
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DSURFACE, fDirty),
-# ifdef VMSVGA3D_DIRECT3D
-    SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DSURFACE, hSharedObject),
-    SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DSURFACE, pQuery),
-    SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DSURFACE, u.pSurface),
-    SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DSURFACE, bounce.pTexture),
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DSURFACE, pSharedObjectTree),
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DSURFACE, fStencilAsTexture),
-# endif
     SSMFIELD_ENTRY_TERM()
 };
 #endif
@@ -619,16 +669,30 @@ static SSMFIELD const g_aVMSVGA3DSURFACEFields[] =
  * @param   a_pSurface      The VMSVGA3d surface.
  */
 #ifdef VMSVGA3D_DIRECT3D
-# define VMSVGA3DSURFACE_HAS_HW_SURFACE(a_pSurface) ((a_pSurface)->u.pSurface != NULL)
+# define VMSVGA3DSURFACE_HAS_HW_SURFACE(a_pSurface) ((a_pSurface)->pBackendSurface != NULL || (a_pSurface)->u.pSurface != NULL)
 #else
-# define VMSVGA3DSURFACE_HAS_HW_SURFACE(a_pSurface) ((a_pSurface)->oglId.texture != OPENGL_INVALID_ID)
+# define VMSVGA3DSURFACE_HAS_HW_SURFACE(a_pSurface) ((a_pSurface)->pBackendSurface != NULL || (a_pSurface)->oglId.texture != OPENGL_INVALID_ID)
 #endif
 
+/** @def VMSVGA3DSURFACE_NEEDS_DATA
+ * Checks whether SurfaceDMA transfers must always update pSurfaceData,
+ * even if the surface has a host hardware resource.
+ * @returns true/false
+ * @param   a_pSurface      The VMSVGA3d surface.
+ */
+#ifdef VMSVGA3D_DIRECT3D
+# define VMSVGA3DSURFACE_NEEDS_DATA(a_pSurface) \
+   (   (a_pSurface)->enmD3DResType == VMSVGA3D_D3DRESTYPE_VERTEX_BUFFER \
+    || (a_pSurface)->enmD3DResType == VMSVGA3D_D3DRESTYPE_INDEX_BUFFER)
+#else
+# define VMSVGA3DSURFACE_NEEDS_DATA(a_pSurface) \
+    ((a_pSurface)->enmOGLResType == VMSVGA3D_OGLRESTYPE_BUFFER)
+#endif
 
 
 typedef struct VMSVGA3DSHADER
 {
-    uint32_t                        id;
+    uint32_t                        id; /** @todo Rename to shid. */
     uint32_t                        cid;
     SVGA3dShaderType                type;
     uint32_t                        cbData;
@@ -642,8 +706,11 @@ typedef struct VMSVGA3DSHADER
         void                       *pVertexShader;
         void                       *pPixelShader;
 #endif
-        void                       *pv;
+        void                       *pvBackendShader;
     } u;
+#ifdef VMSVGA3D_DX
+    DXShaderInfo                   shaderInfo;
+#endif
 } VMSVGA3DSHADER;
 typedef VMSVGA3DSHADER *PVMSVGA3DSHADER;
 
@@ -658,7 +725,7 @@ static SSMFIELD const g_aVMSVGA3DSHADERFields[] =
     SSMFIELD_ENTRY(                 VMSVGA3DSHADER, type),
     SSMFIELD_ENTRY(                 VMSVGA3DSHADER, cbData),
     SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DSHADER, pShaderProgram),
-    SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DSHADER, u.pv),
+    SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DSHADER, u.pvBackendShader),
     SSMFIELD_ENTRY_TERM()
 };
 #endif
@@ -674,19 +741,62 @@ static SSMFIELD const g_aVMSVGA3DSHADERFields[] =
 #define VMSVGA3D_UPDATE_MATERIAL       RT_BIT_32(6)
 /** @} */
 
+/* Query states. Mostly used for saved state. */
+typedef enum VMSVGA3DQUERYSTATE
+{
+    VMSVGA3DQUERYSTATE_NULL     = 0,  /* Not created. */
+    VMSVGA3DQUERYSTATE_SIGNALED = 1,  /* Result obtained. The guest may or may not read the result yet. */
+    VMSVGA3DQUERYSTATE_BUILDING = 2,  /* In process of collecting data. */
+    VMSVGA3DQUERYSTATE_ISSUED   = 3,  /* Data collected, but result is not yet obtained. */
+    VMSVGA3DQUERYSTATE_32BIT    = 0x7fffffff
+} VMSVGA3DQUERYSTATE;
+AssertCompileSize(VMSVGA3DQUERYSTATE, sizeof(uint32_t));
+
+typedef struct VMSVGA3DQUERY
+{
+#ifdef VMSVGA3D_DIRECT3D
+    IDirect3DQuery9    *pQuery;
+#else /* VMSVGA3D_OPENGL */
+    GLuint              idQuery;
+#endif
+    VMSVGA3DQUERYSTATE  enmQueryState;  /* VMSVGA3DQUERYSTATE_*. State is implicitly _NULL if pQuery is NULL. */
+    uint32_t            u32QueryResult; /* Generic result. Enough for all VGPU9 queries. */
+} VMSVGA3DQUERY;
+
+#ifdef VMSVGA3D_INCL_STRUCTURE_DESCRIPTORS
+/**
+ * SSM descriptor table for the VMSVGA3DQUERY structure.
+ */
+static SSMFIELD const g_aVMSVGA3DQUERYFields[] =
+{
+#ifdef VMSVGA3D_DIRECT3D
+    SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DQUERY, pQuery),
+#else /* VMSVGA3D_OPENGL */
+    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DQUERY, idQuery),
+#endif
+    SSMFIELD_ENTRY(                 VMSVGA3DQUERY, enmQueryState),
+    SSMFIELD_ENTRY(                 VMSVGA3DQUERY, u32QueryResult),
+    SSMFIELD_ENTRY_TERM()
+};
+#endif
+
+#ifdef VMSVGA3D_DIRECT3D
+#define VMSVGA3DQUERY_EXISTS(p) ((p)->pQuery && (p)->enmQueryState != VMSVGA3DQUERYSTATE_NULL)
+#else
+#define VMSVGA3DQUERY_EXISTS(p) ((p)->idQuery && (p)->enmQueryState != VMSVGA3DQUERYSTATE_NULL)
+#endif
+
 /**
  * VMSVGA3d context.
  */
 typedef struct VMSVGA3DCONTEXT
 {
+    /** @todo Legacy contexts with DX backend. */
+
     uint32_t                id;
 #ifdef RT_OS_WINDOWS
 # ifdef VMSVGA3D_DIRECT3D
-#  ifdef VBOX_VMSVGA3D_WITH_WINE_OPENGL
-    IDirect3DDevice9       *pDevice;
-#  else
     IDirect3DDevice9Ex     *pDevice;
-#  endif
 # else
     /* Device context of the context window. */
     HDC                     hdc;
@@ -705,8 +815,6 @@ typedef struct VMSVGA3DCONTEXT
     GLXContext              glxContext;
     /** Device context window handle */
     Window                  window;
-    /** flag whether the window is mapped (=visible) */
-    bool                    fMapped;
 #endif
 
 #ifdef VMSVGA3D_OPENGL
@@ -720,10 +828,8 @@ typedef struct VMSVGA3DCONTEXT
     void                   *pShaderContext;
 #endif
 
-    /* Current active render target (if any) */
-    uint32_t                sidRenderTarget;
     /* Current selected texture surfaces (if any) */
-    uint32_t                aSidActiveTexture[SVGA3D_MAX_TEXTURE_STAGE];
+    uint32_t                aSidActiveTextures[SVGA3D_MAX_SAMPLERS];
     /* Per context pixel and vertex shaders. */
     uint32_t                cPixelShaders;
     PVMSVGA3DSHADER         paPixelShader;
@@ -736,10 +842,13 @@ typedef struct VMSVGA3DCONTEXT
         uint32_t                u32UpdateFlags;
 
         SVGA3dRenderState       aRenderState[SVGA3D_RS_MAX];
-        SVGA3dTextureState      aTextureState[SVGA3D_MAX_TEXTURE_STAGE][SVGA3D_TS_MAX];
+        /* aTextureStates contains both TextureStageStates and SamplerStates, therefore [SVGA3D_MAX_SAMPLERS]. */
+        SVGA3dTextureState      aTextureStates[SVGA3D_MAX_SAMPLERS][SVGA3D_TS_MAX];
         VMSVGATRANSFORMSTATE    aTransformState[SVGA3D_TRANSFORM_MAX];
         VMSVGAMATERIALSTATE     aMaterial[SVGA3D_FACE_MAX];
-        VMSVGACLIPPLANESTATE    aClipPlane[SVGA3D_CLIPPLANE_MAX];
+        /* The aClipPlane array has a wrong (greater) size. Keep it for now because the array is a part of the saved state. */
+        /** @todo Replace SVGA3D_CLIPPLANE_5 with SVGA3D_NUM_CLIPPLANES and increase the saved state version. */
+        VMSVGACLIPPLANESTATE    aClipPlane[SVGA3D_CLIPPLANE_5];
         VMSVGALIGHTSTATE        aLightData[SVGA3D_MAX_LIGHTS];
 
         uint32_t                aRenderTargets[SVGA3D_RT_MAX];
@@ -754,6 +863,23 @@ typedef struct VMSVGA3DCONTEXT
         uint32_t                cVertexShaderConst;
         PVMSVGASHADERCONST      paVertexShaderConst;
     } state;
+
+    /* Occlusion query. */
+    VMSVGA3DQUERY occlusion;
+
+#ifdef VMSVGA3D_DIRECT3D
+    /* State which is currently applied to the D3D device. It is recreated as needed and not saved.
+     * The purpose is to remember the currently applied state and do not re-apply it if it has not changed.
+     * Unnecessary state changes are very bad for performance.
+     */
+    struct
+    {
+        /* Vertex declaration. */
+        IDirect3DVertexDeclaration9 *pVertexDecl;
+        uint32_t cVertexElements;
+        D3DVERTEXELEMENT9 aVertexElements[SVGA3D_MAX_VERTEX_ARRAYS + 1];
+    } d3dState;
+#endif
 } VMSVGA3DCONTEXT;
 /** Pointer to a VMSVGA3d context. */
 typedef VMSVGA3DCONTEXT *PVMSVGA3DCONTEXT;
@@ -781,7 +907,6 @@ static SSMFIELD const g_aVMSVGA3DCONTEXTFields[] =
 # else
     SSMFIELD_ENTRY_IGNORE(          VMSVGA3DCONTEXT, glxContext),
     SSMFIELD_ENTRY_IGNORE(          VMSVGA3DCONTEXT, window),
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DCONTEXT, fMapped),
 # endif
 
 #ifdef VMSVGA3D_OPENGL
@@ -792,8 +917,7 @@ static SSMFIELD const g_aVMSVGA3DCONTEXTFields[] =
     SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DCONTEXT, pShaderContext),
 #endif
 
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DCONTEXT, sidRenderTarget),
-    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DCONTEXT, aSidActiveTexture),
+    SSMFIELD_ENTRY_IGNORE(          VMSVGA3DCONTEXT, aSidActiveTextures),
     SSMFIELD_ENTRY(                 VMSVGA3DCONTEXT, cPixelShaders),
     SSMFIELD_ENTRY_IGN_HCPTR(       VMSVGA3DCONTEXT, paPixelShader),
     SSMFIELD_ENTRY(                 VMSVGA3DCONTEXT, cVertexShaders),
@@ -801,7 +925,8 @@ static SSMFIELD const g_aVMSVGA3DCONTEXTFields[] =
     SSMFIELD_ENTRY(                 VMSVGA3DCONTEXT, state.u32UpdateFlags),
 
     SSMFIELD_ENTRY(                 VMSVGA3DCONTEXT, state.aRenderState),
-    SSMFIELD_ENTRY(                 VMSVGA3DCONTEXT, state.aTextureState),
+    SSMFIELD_ENTRY_OLD(             state.aTextureStates,
+                                    sizeof(SVGA3dTextureState) * /*SVGA3D_MAX_TEXTURE_STAGE=*/ 8 * /*SVGA3D_TS_MAX=*/ 30),
     SSMFIELD_ENTRY(                 VMSVGA3DCONTEXT, state.aTransformState),
     SSMFIELD_ENTRY(                 VMSVGA3DCONTEXT, state.aMaterial),
     SSMFIELD_ENTRY(                 VMSVGA3DCONTEXT, state.aClipPlane),
@@ -822,6 +947,67 @@ static SSMFIELD const g_aVMSVGA3DCONTEXTFields[] =
 #endif /* VMSVGA3D_INCL_STRUCTURE_DESCRIPTORS */
 
 
+#ifdef VMSVGA3D_DX
+/* The 3D backend DX context. The actual structure is 3D API specific. */
+typedef struct VMSVGA3DBACKENDDXCONTEXT *PVMSVGA3DBACKENDDXCONTEXT;
+
+/**
+ * VMSVGA3D DX context (VGPU10+). DX contexts ids are a separate namespace from legacy context ids.
+ */
+typedef struct VMSVGA3DDXCONTEXT
+{
+    /** The DX context id. */
+    uint32_t                  cid;
+    /** . */
+    uint32_t                  u32Reserved;
+    /** Backend specific data. */
+    PVMSVGA3DBACKENDDXCONTEXT pBackendDXContext;
+    /** Copy of the guest memory for this context. The guest will be updated on unbind. */
+    SVGADXContextMobFormat    svgaDXContext;
+    /* Context-Object Tables bound to this context. */
+    PVMSVGAMOB aCOTMobs[SVGA_COTABLE_MAX];
+    struct
+    {
+        SVGACOTableDXRTViewEntry          *paRTView;
+        SVGACOTableDXDSViewEntry          *paDSView;
+        SVGACOTableDXSRViewEntry          *paSRView;
+        SVGACOTableDXElementLayoutEntry   *paElementLayout;
+        SVGACOTableDXBlendStateEntry      *paBlendState;
+        SVGACOTableDXDepthStencilEntry    *paDepthStencil;
+        SVGACOTableDXRasterizerStateEntry *paRasterizerState;
+        SVGACOTableDXSamplerEntry         *paSampler;
+        SVGACOTableDXStreamOutputEntry    *paStreamOutput;
+        SVGACOTableDXQueryEntry           *paQuery;
+        SVGACOTableDXShaderEntry          *paShader;
+        SVGACOTableDXUAViewEntry          *paUAView;
+        uint32_t                           cRTView;
+        uint32_t                           cDSView;
+        uint32_t                           cSRView;
+        uint32_t                           cElementLayout;
+        uint32_t                           cBlendState;
+        uint32_t                           cDepthStencil;
+        uint32_t                           cRasterizerState;
+        uint32_t                           cSampler;
+        uint32_t                           cStreamOutput;
+        uint32_t                           cQuery;
+        uint32_t                           cShader;
+        uint32_t                           cUAView;
+    } cot;
+    /* Shader information. The array has cot.cShader elements. Some data is dublicated in cot.paShader. */
+    PVMSVGA3DSHADER paShader;
+} VMSVGA3DDXCONTEXT;
+/** Pointer to a VMSVGA3D DX context. */
+typedef VMSVGA3DDXCONTEXT *PVMSVGA3DDXCONTEXT;
+#endif /* VMSVGA3D_DX */
+
+
+#ifdef VMSVGA3D_OPENGL
+typedef struct VMSVGA3DFORMATCONVERTER *PVMSVGA3DFORMATCONVERTER;
+#endif
+
+/* The 3D backend. The actual structure is 3D API specific. */
+typedef struct VMSVGA3DBACKEND *PVMSVGA3DBACKEND;
+
 /**
  * VMSVGA3d state data.
  *
@@ -829,25 +1015,37 @@ static SSMFIELD const g_aVMSVGA3DCONTEXTFields[] =
  */
 typedef struct VMSVGA3DSTATE
 {
+    /** Backend specific data. */
+    PVMSVGA3DBACKEND        pBackend;
+
     /** The size of papContexts. */
     uint32_t                cContexts;
     /** The size of papSurfaces. */
     uint32_t                cSurfaces;
+#ifdef VMSVGA3D_DX
+    /** The size of papDXContexts. */
+    uint32_t                cDXContexts;
+    /** Reserved. */
+    uint32_t                u32Reserved;
+#endif
     /** Contexts indexed by ID.  Grown as needed. */
     PVMSVGA3DCONTEXT       *papContexts;
     /** Surfaces indexed by ID.  Grown as needed. */
     PVMSVGA3DSURFACE       *papSurfaces;
+#ifdef VMSVGA3D_DX
+    /** DX contexts indexed by ID.  Grown as needed. */
+    PVMSVGA3DDXCONTEXT     *papDXContexts;
+#endif
 
 #ifdef RT_OS_WINDOWS
 # ifdef VMSVGA3D_DIRECT3D
-#  ifdef VBOX_VMSVGA3D_WITH_WINE_OPENGL
-    IDirect3D9             *pD3D9;
-#  else
     IDirect3D9Ex           *pD3D9;
-#  endif
     D3DCAPS9                caps;
     bool                    fSupportedSurfaceINTZ;
     bool                    fSupportedSurfaceNULL;
+    bool                    fSupportedFormatUYVY : 1;
+    bool                    fSupportedFormatYUY2 : 1;
+    bool                    fSupportedFormatA8B8G8R8 : 1;
 # endif
     /** Window Thread. */
     R3PTRTYPE(RTTHREAD)     pWindowThread;
@@ -917,13 +1115,52 @@ typedef struct VMSVGA3DSTATE
 #endif
         PFNGLGETPROGRAMIVARBPROC                        glGetProgramivARB;
         PFNGLPROVOKINGVERTEXPROC                        glProvokingVertex;
-        bool                                            fEXT_stencil_two_side;
+        PFNGLGENQUERIESPROC                             glGenQueries;
+        PFNGLDELETEQUERIESPROC                          glDeleteQueries;
+        PFNGLBEGINQUERYPROC                             glBeginQuery;
+        PFNGLENDQUERYPROC                               glEndQuery;
+        PFNGLGETQUERYOBJECTUIVPROC                      glGetQueryObjectuiv;
+        PFNGLTEXIMAGE3DPROC                             glTexImage3D;
+        PFNGLTEXSUBIMAGE3DPROC                          glTexSubImage3D;
+        PFNGLVERTEXATTRIBDIVISORPROC                    glVertexAttribDivisor;
+        PFNGLDRAWARRAYSINSTANCEDPROC                    glDrawArraysInstanced;
+        PFNGLDRAWELEMENTSINSTANCEDPROC                  glDrawElementsInstanced;
+        PFNGLGETCOMPRESSEDTEXIMAGEPROC                  glGetCompressedTexImage;
+        PFNGLCOMPRESSEDTEXIMAGE2DPROC                   glCompressedTexImage2D;
+        PFNGLCOMPRESSEDTEXIMAGE3DPROC                   glCompressedTexImage3D;
+        PFNGLCOMPRESSEDTEXSUBIMAGE2DPROC                glCompressedTexSubImage2D;
+        PFNGLCOMPRESSEDTEXSUBIMAGE3DPROC                glCompressedTexSubImage3D;
+        PFNGLDRAWBUFFERSPROC                            glDrawBuffers;
+        PFNGLCREATESHADERPROC                           glCreateShader;
+        PFNGLSHADERSOURCEPROC                           glShaderSource;
+        PFNGLCOMPILESHADERPROC                          glCompileShader;
+        PFNGLGETSHADERIVPROC                            glGetShaderiv;
+        PFNGLGETSHADERINFOLOGPROC                       glGetShaderInfoLog;
+        PFNGLCREATEPROGRAMPROC                          glCreateProgram;
+        PFNGLATTACHSHADERPROC                           glAttachShader;
+        PFNGLLINKPROGRAMPROC                            glLinkProgram;
+        PFNGLGETPROGRAMIVPROC                           glGetProgramiv;
+        PFNGLGETPROGRAMINFOLOGPROC                      glGetProgramInfoLog;
+        PFNGLUSEPROGRAMPROC                             glUseProgram;
+        PFNGLGETUNIFORMLOCATIONPROC                     glGetUniformLocation;
+        PFNGLUNIFORM1IPROC                              glUniform1i;
+        PFNGLUNIFORM4FVPROC                             glUniform4fv;
+        PFNGLDETACHSHADERPROC                           glDetachShader;
+        PFNGLDELETESHADERPROC                           glDeleteShader;
+        PFNGLDELETEPROGRAMPROC                          glDeleteProgram;
+        PFNGLVERTEXATTRIB4FVPROC                        glVertexAttrib4fv;
+        PFNGLVERTEXATTRIB4UBVPROC                       glVertexAttrib4ubv;
+        PFNGLVERTEXATTRIB4NUBVPROC                      glVertexAttrib4Nubv;
+        PFNGLVERTEXATTRIB4SVPROC                        glVertexAttrib4sv;
+        PFNGLVERTEXATTRIB4NSVPROC                       glVertexAttrib4Nsv;
+        PFNGLVERTEXATTRIB4NUSVPROC                      glVertexAttrib4Nusv;
     } ext;
 
     struct
     {
+        bool                            fS3TCSupported : 1;
+        bool                            fTextureFilterAnisotropicSupported : 1;
         GLint                           maxActiveLights;
-        GLint                           maxTextureBufferSize;
         GLint                           maxTextures;
         GLint                           maxClipDistances;
         GLint                           maxColorAttachments;
@@ -936,7 +1173,6 @@ typedef struct VMSVGA3DSTATE
         GLfloat                         flPointSize[2];
         SVGA3dPixelShaderVersion        fragmentShaderVersion;
         SVGA3dVertexShaderVersion       vertexShaderVersion;
-        bool                            fS3TCSupported;
     } caps;
 
     /** The GL_EXTENSIONS value (space padded) for the default OpenGL profile.
@@ -959,6 +1195,9 @@ typedef struct VMSVGA3DSTATE
 # ifdef VMSVGA3D_OPENGL
     /** The shared context. */
     VMSVGA3DCONTEXT         SharedCtx;
+
+    /** Conversion of emulated formats. Resources are created on the SharedCtx. */
+    PVMSVGA3DFORMATCONVERTER pConv;
 # endif
 #endif /* VMSVGA3D_OPENGL */
 } VMSVGA3DSTATE;
@@ -985,7 +1224,7 @@ static SSMFIELD const g_aVMSVGA3DSTATEFields[] =
 D3DFORMAT vmsvga3dSurfaceFormat2D3D(SVGA3dSurfaceFormat format);
 D3DMULTISAMPLE_TYPE vmsvga3dMultipeSampleCount2D3D(uint32_t multisampleCount);
 DECLCALLBACK(int) vmsvga3dSharedSurfaceDestroyTree(PAVLU32NODECORE pNode, void *pvParam);
-int vmsvga3dSurfaceFlush(PVGASTATE pThis, PVMSVGA3DSURFACE pSurface);
+int vmsvga3dSurfaceFlush(PVMSVGA3DSURFACE pSurface);
 #endif /* VMSVGA3D_DIRECT3D */
 
 
@@ -993,15 +1232,28 @@ int vmsvga3dSurfaceFlush(PVGASTATE pThis, PVMSVGA3DSURFACE pSurface);
 /** Save and setup everything. */
 # define VMSVGA3D_PARANOID_TEXTURE_PACKING
 
+/** @name VMSVGAPACKPARAMS_* - which packing parameters were set.
+ * @{ */
+# define VMSVGAPACKPARAMS_ALIGNMENT    RT_BIT_32(0)
+# define VMSVGAPACKPARAMS_ROW_LENGTH   RT_BIT_32(1)
+# define VMSVGAPACKPARAMS_IMAGE_HEIGHT RT_BIT_32(2)
+# define VMSVGAPACKPARAMS_SWAP_BYTES   RT_BIT_32(3)
+# define VMSVGAPACKPARAMS_LSB_FIRST    RT_BIT_32(4)
+# define VMSVGAPACKPARAMS_SKIP_ROWS    RT_BIT_32(5)
+# define VMSVGAPACKPARAMS_SKIP_PIXELS  RT_BIT_32(6)
+# define VMSVGAPACKPARAMS_SKIP_IMAGES  RT_BIT_32(7)
+/** @} */
+
 /**
  * Saved texture packing parameters (shared by both pack and unpack).
  */
 typedef struct VMSVGAPACKPARAMS
 {
+    uint32_t    fChanged;
     GLint       iAlignment;
     GLint       cxRow;
-# ifdef VMSVGA3D_PARANOID_TEXTURE_PACKING
     GLint       cyImage;
+# ifdef VMSVGA3D_PARANOID_TEXTURE_PACKING
     GLboolean   fSwapBytes;
     GLboolean   fLsbFirst;
     GLint       cSkipRows;
@@ -1018,9 +1270,9 @@ void vmsvga3dOglSetPackParams(PVMSVGA3DSTATE pState, PVMSVGA3DCONTEXT pContext, 
                               PVMSVGAPACKPARAMS pSave);
 void vmsvga3dOglRestorePackParams(PVMSVGA3DSTATE pState, PVMSVGA3DCONTEXT pContext, PVMSVGA3DSURFACE pSurface,
                                PCVMSVGAPACKPARAMS pSave);
-void vmsvga3dOglSetUnpackParams(PVMSVGA3DSTATE pState, PVMSVGA3DCONTEXT pContext, PVMSVGA3DSURFACE pSurface,
+void vmsvga3dOglSetUnpackParams(PVMSVGA3DSTATE pState, PVMSVGA3DCONTEXT pContext, GLint cxRow, GLint cyImage,
                                 PVMSVGAPACKPARAMS pSave);
-void vmsvga3dOglRestoreUnpackParams(PVMSVGA3DSTATE pState, PVMSVGA3DCONTEXT pContext, PVMSVGA3DSURFACE pSurface,
+void vmsvga3dOglRestoreUnpackParams(PVMSVGA3DSTATE pState, PVMSVGA3DCONTEXT pContext,
                                     PCVMSVGAPACKPARAMS pSave);
 
 /** @name VMSVGA3D_DEF_CTX_F_XXX - vmsvga3dContextDefineOgl flags.
@@ -1034,7 +1286,7 @@ void vmsvga3dOglRestoreUnpackParams(PVMSVGA3DSTATE pState, PVMSVGA3DCONTEXT pCon
 /** Defining the init time context (EMT).  */
 # define VMSVGA3D_DEF_CTX_F_INIT            RT_BIT_32(2)
 /** @} */
-int  vmsvga3dContextDefineOgl(PVGASTATE pThis, uint32_t cid, uint32_t fFlags);
+int  vmsvga3dContextDefineOgl(PVGASTATECC pThisCC, uint32_t cid, uint32_t fFlags);
 void vmsvga3dSurfaceFormat2OGL(PVMSVGA3DSURFACE pSurface, SVGA3dSurfaceFormat format);
 
 #endif /* VMSVGA3D_OPENGL */
@@ -1045,19 +1297,116 @@ int vmsvga3dSaveShaderConst(PVMSVGA3DCONTEXT pContext, uint32_t reg, SVGA3dShade
                             uint32_t val1, uint32_t val2, uint32_t val3, uint32_t val4);
 
 
+DECLINLINE(int) vmsvga3dContextFromCid(PVMSVGA3DSTATE pState, uint32_t cid, PVMSVGA3DCONTEXT *ppContext)
+{
+    AssertReturn(cid < pState->cContexts, VERR_INVALID_PARAMETER);
+    PVMSVGA3DCONTEXT const pContext = pState->papContexts[cid];
+    if (RT_LIKELY(pContext && pContext->id == cid))
+    {
+        *ppContext = pContext;
+        return VINF_SUCCESS;
+    }
+    LogRelMax(64, ("VMSVGA: unknown cid=%u (%s cid=%u)\n", cid, pContext ? "expected" : "null", pContext ? pContext->id : -1));
+    return VERR_INVALID_PARAMETER;
+}
 
-/* Command implementation workers. */
-void vmsvga3dBackSurfaceDestroy(PVMSVGA3DSTATE pState, PVMSVGA3DSURFACE pSurface);
-int  vmsvga3dBackSurfaceStretchBlt(PVGASTATE pThis, PVMSVGA3DSTATE pState,
-                                   PVMSVGA3DSURFACE pDstSurface, uint32_t uDstMipmap, SVGA3dBox const *pDstBox,
-                                   PVMSVGA3DSURFACE pSrcSurface, uint32_t uSrcMipmap, SVGA3dBox const *pSrcBox,
-                                   SVGA3dStretchBltMode enmMode, PVMSVGA3DCONTEXT pContext);
-int  vmsvga3dBackSurfaceDMACopyBox(PVGASTATE pThis, PVMSVGA3DSTATE pState, PVMSVGA3DSURFACE pSurface, uint32_t uHostMimap,
-                                   SVGAGuestPtr GuestPtr, uint32_t cbSrcPitch, SVGA3dTransferType transfer,
-                                   SVGA3dCopyBox const *pBox, PVMSVGA3DCONTEXT pContext, int rc, int iBox);
-
-int  vmsvga3dBackCreateTexture(PVMSVGA3DSTATE pState, PVMSVGA3DCONTEXT pContext, uint32_t idAssociatedContext,
-                               PVMSVGA3DSURFACE pSurface);
-
+#ifdef VMSVGA3D_DX
+DECLINLINE(int) vmsvga3dDXContextFromCid(PVMSVGA3DSTATE pState, uint32_t cid, PVMSVGA3DDXCONTEXT *ppDXContext)
+{
+    *ppDXContext = NULL;
+    AssertReturn(cid < pState->cDXContexts, VERR_INVALID_PARAMETER);
+    PVMSVGA3DDXCONTEXT const pDXContext = pState->papDXContexts[cid];
+    if (RT_LIKELY(pDXContext && pDXContext->cid == cid))
+    {
+        *ppDXContext = pDXContext;
+        return VINF_SUCCESS;
+    }
+    LogRelMax(64, ("VMSVGA: unknown DX cid=%u (%s cid=%u)\n", cid, pDXContext ? "expected" : "null", pDXContext ? pDXContext->cid : -1));
+    return VERR_INVALID_PARAMETER;
+}
 #endif
+
+DECLINLINE(int) vmsvga3dSurfaceFromSid(PVMSVGA3DSTATE pState, uint32_t sid, PVMSVGA3DSURFACE *ppSurface)
+{
+    AssertReturn(sid < pState->cSurfaces, VERR_INVALID_PARAMETER);
+    PVMSVGA3DSURFACE const pSurface = pState->papSurfaces[sid];
+    if (RT_LIKELY(pSurface && pSurface->id == sid))
+    {
+        *ppSurface = pSurface;
+        return VINF_SUCCESS;
+    }
+    LogRelMax(64, ("VMSVGA: unknown sid=%u (%s sid=%u)\n", sid, pSurface ? "expected" : "null", pSurface ? pSurface->id : -1));
+    return VERR_INVALID_PARAMETER;
+}
+
+DECLINLINE(int) vmsvga3dMipmapLevel(PVMSVGA3DSURFACE pSurface, uint32_t face, uint32_t mipmap,
+                                    PVMSVGA3DMIPMAPLEVEL *ppMipmapLevel)
+{
+    AssertMsgReturn(face < pSurface->cFaces,
+                    ("cFaces %d, face %d\n", pSurface->cFaces, face),
+                    VERR_INVALID_PARAMETER);
+    AssertMsgReturn(mipmap < pSurface->cLevels,
+                    ("numMipLevels %d, mipmap %d", pSurface->cLevels, mipmap),
+                    VERR_INVALID_PARAMETER);
+
+    *ppMipmapLevel = &pSurface->paMipmapLevels[face * pSurface->cLevels + mipmap];
+    return VINF_SUCCESS;
+}
+
+void vmsvga3dInfoSurfaceToBitmap(PCDBGFINFOHLP pHlp, PVMSVGA3DSURFACE pSurface,
+                                 const char *pszPath, const char *pszNamePrefix, const char *pszNameSuffix);
+
+#if defined(RT_OS_WINDOWS)
+#define D3D_RELEASE(ptr) do { \
+    if (ptr) \
+    { \
+        (ptr)->Release(); \
+        (ptr) = 0; \
+    } \
+} while (0)
+#endif
+
+#if defined(VMSVGA3D_DIRECT3D)
+HRESULT D3D9UpdateTexture(PVMSVGA3DCONTEXT pContext,
+                          PVMSVGA3DSURFACE pSurface);
+HRESULT D3D9GetRenderTargetData(PVMSVGA3DCONTEXT pContext,
+                                PVMSVGA3DSURFACE pSurface,
+                                uint32_t uFace,
+                                uint32_t uMipmap);
+HRESULT D3D9GetSurfaceLevel(PVMSVGA3DSURFACE pSurface,
+                            uint32_t uFace,
+                            uint32_t uMipmap,
+                            bool fBounce,
+                            IDirect3DSurface9 **ppD3DSurface);
+D3DFORMAT D3D9GetActualFormat(PVMSVGA3DSTATE pState,
+                              D3DFORMAT d3dfmt);
+bool D3D9CheckDeviceFormat(IDirect3D9 *pD3D9,
+                           DWORD Usage,
+                           D3DRESOURCETYPE RType,
+                           D3DFORMAT CheckFormat);
+#endif
+
+#ifdef VMSVGA3D_OPENGL
+void vmsvga3dOnSharedContextDefine(PVMSVGA3DSTATE pState);
+void vmsvga3dOnSharedContextDestroy(PVMSVGA3DSTATE pState);
+
+DECLINLINE(GLuint) GLTextureId(PVMSVGA3DSURFACE pSurface)
+{
+    return pSurface->fEmulated ? pSurface->idEmulated : pSurface->oglId.texture;
+}
+
+void FormatConvUpdateTexture(PVMSVGA3DSTATE pState,
+                             PVMSVGA3DCONTEXT pCurrentContext,
+                             PVMSVGA3DSURFACE pSurface,
+                             uint32_t iMipmap);
+void FormatConvReadTexture(PVMSVGA3DSTATE pState,
+                           PVMSVGA3DCONTEXT pCurrentContext,
+                           PVMSVGA3DSURFACE pSurface,
+                           uint32_t iMipmap);
+#endif
+
+int vmsvga3dShaderParse(SVGA3dShaderType type, uint32_t cbShaderData, uint32_t *pShaderData);
+void vmsvga3dShaderLogRel(char const *pszMsg, SVGA3dShaderType type, uint32_t cbShaderData, uint32_t const *pShaderData);
+
+#endif /* !VBOX_INCLUDED_SRC_Graphics_DevVGA_SVGA3d_internal_h */
 

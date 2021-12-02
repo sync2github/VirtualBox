@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_usblib_h
-#define ___VBox_usblib_h
+#ifndef VBOX_INCLUDED_usblib_h
+#define VBOX_INCLUDED_usblib_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
@@ -123,6 +126,9 @@ USBLIB_DECL(uint64_t) USBLibHashSerial(const char *pszSerial);
  *
  * @returns String length (excluding terminator).
  * @param   psz                 The string to purge.
+ *
+ * @remarks The return string may be shorter than the input, left over space
+ *          after the end of the string will be filled with zeros.
  */
 DECLINLINE(size_t) USBLibPurgeEncoding(char *psz)
 {
@@ -155,6 +161,13 @@ DECLINLINE(size_t) USBLibPurgeEncoding(char *psz)
                     if (ch == '\0')
                         break;
                 }
+
+                /* Wind back to the zero terminator and zero fill any gap to make
+                   USBFilterValidate happy.  (offSrc is at zero terminator too.) */
+                offDst--;
+                while (offSrc > offDst)
+                    psz[offSrc--] = '\0';
+
                 return offDst;
             }
             if (ch == '\0')
@@ -169,5 +182,5 @@ DECLINLINE(size_t) USBLibPurgeEncoding(char *psz)
 /** @} */
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_usblib_h */
 

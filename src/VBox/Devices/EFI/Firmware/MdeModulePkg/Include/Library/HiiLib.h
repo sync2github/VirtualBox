@@ -1,14 +1,9 @@
 /** @file
   Public include file for the HII Library
 
-Copyright (c) 2007 - 2013, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials are licensed and made available under
-the terms and conditions of the BSD License that accompanies this distribution.
-The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php.
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2007 - 2021, Intel Corporation. All rights reserved.<BR>
+(C) Copyright 2021 Hewlett Packard Enterprise Development LP<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -129,16 +124,8 @@ HiiSetString (
 ;
 
 /**
-  Retrieves a string from a string package in a specific language.  If the language
-  is not specified, then a string from a string package in the current platform
-  language is retrieved.  If the string cannot be retrieved using the specified
-  language or the current platform language, then the string is retrieved from
-  the string package in the first language the string package supports.  The
-  returned string is allocated using AllocatePool().  The caller is responsible
-  for freeing the allocated buffer using FreePool().
-
-  If HiiHandle is NULL, then ASSERT().
-  If StringId is 0, then ASSERT().
+  Retrieves a string from a string package in a specific language specified in Language
+  or in the best lanaguage. See HiiGetStringEx () for the details.
 
   @param[in]  HiiHandle  A handle that was previously registered in the HII Database.
   @param[in]  StringId   The identifier of the string to retrieved from the string
@@ -158,8 +145,49 @@ HiiGetString (
   IN EFI_HII_HANDLE  HiiHandle,
   IN EFI_STRING_ID   StringId,
   IN CONST CHAR8     *Language  OPTIONAL
-  )
-;
+  );
+
+/**
+  Retrieves a string from a string package in a specific language or in the best
+  language at discretion of this function according to the priority of languages.
+  TryBestLanguage is used to get the string in the best language or in the language
+  specified in Language parameter. The behavior is,
+  If TryBestLanguage is TRUE, this function looks for the best language for the string.
+   - If the string can not be retrieved using the specified language or the current
+     platform language, then the string is retrieved from the string package in the
+     first language the string package supports.
+  If TryBestLanguage is FALSE, Language must be specified for retrieving the string.
+
+  The returned string is allocated using AllocatePool().  The caller is responsible
+  for freeing the allocated buffer using FreePool().
+
+  If HiiHandle is NULL, then ASSERT().
+  If StringId is 0, then ASSET.
+  If TryBestLanguage is FALE and Language is NULL, then ASSERT().
+
+  @param[in]  HiiHandle         A handle that was previously registered in the HII Database.
+  @param[in]  StringId          The identifier of the string to retrieved from the string
+                                package associated with HiiHandle.
+  @param[in]  Language          The language of the string to retrieve.  If this parameter
+                                is NULL, then the current platform language is used.  The
+                                format of Language must follow the language format assumed
+                                the HII Database.
+  @param[in]  TryBestLanguage   If TRUE, try to get the best matching language from all
+                                supported languages.If FALSE, the Language must be assigned
+                                for the StringID.
+
+  @retval NULL   The string specified by StringId is not present in the string package.
+  @retval Other  The string was returned.
+
+**/
+EFI_STRING
+EFIAPI
+HiiGetStringEx (
+  IN EFI_HII_HANDLE  HiiHandle,
+  IN EFI_STRING_ID   StringId,
+  IN CONST CHAR8     *Language  OPTIONAL,
+  IN BOOLEAN         TryBestLanguage
+  );
 
 /**
   Retrieves a string from a string package named by GUID, in the specified language.
@@ -225,6 +253,29 @@ HiiGetHiiHandles (
 ;
 
 /**
+  This function allows a caller to extract the form set opcode form the Hii Handle.
+  The returned buffer is allocated using AllocatePool().The caller is responsible
+  for freeing the allocated buffer using FreePool().
+
+  @param Handle            The HII handle.
+  @param Buffer            On return, points to a pointer which point to the buffer that contain the formset opcode.
+  @param BufferSize        On return, points to the length of the buffer.
+
+  @retval EFI_OUT_OF_RESOURCES   No enough memory resource is allocated.
+  @retval EFI_NOT_FOUND          Can't find the package data for the input Handle.
+  @retval EFI_INVALID_PARAMETER  The input parameters are not correct.
+  @retval EFI_SUCCESS            Get the formset opcode from the hii handle successfully.
+
+**/
+EFI_STATUS
+EFIAPI
+HiiGetFormSetFromHiiHandle(
+  IN  EFI_HII_HANDLE     Handle,
+  OUT EFI_IFR_FORM_SET   **Buffer,
+  OUT UINTN              *BufferSize
+  );
+
+/**
   Retrieves a pointer to a Null-terminated ASCII string containing the list
   of languages that an HII handle in the HII Database supports.  The returned
   string is allocated using AllocatePool().  The caller is responsible for freeing
@@ -236,9 +287,9 @@ HiiGetHiiHandles (
   @param[in]  HiiHandle  A handle that was previously registered in the HII Database.
 
   @retval NULL   HiiHandle is not registered in the HII database
-  @retval NULL   There are not enough resources available to retrieve the suported
+  @retval NULL   There are not enough resources available to retrieve the supported
                  languages.
-  @retval NULL   The list of suported languages could not be retrieved.
+  @retval NULL   The list of supported languages could not be retrieved.
   @retval Other  A pointer to the Null-terminated ASCII string of supported languages.
 
 **/
@@ -261,17 +312,17 @@ HiiGetSupportedLanguages (
 
   @param[in]  Guid          The pointer to an EFI_GUID that is the routing information
                             GUID.  Each of the 16 bytes in Guid is converted to
-                            a 2 Unicode character hexidecimal string.  This is
+                            a 2 Unicode character hexadecimal string.  This is
                             an optional parameter that may be NULL.
   @param[in]  Name          The pointer to a Null-terminated Unicode string that is
                             the routing information NAME.  This is an optional
                             parameter that may be NULL.  Each 16-bit Unicode
                             character in Name is converted to a 4 character Unicode
-                            hexidecimal string.
+                            hexadecimal string.
   @param[in]  DriverHandle  The driver handle that supports a Device Path Protocol
                             that is the routing information PATH.  Each byte of
                             the Device Path associated with DriverHandle is converted
-                            to a two (Unicode) character hexidecimal string.
+                            to a two (Unicode) character hexadecimal string.
 
   @retval NULL   DriverHandle does not support the Device Path Protocol.
   @retval NULL   DriverHandle does not support the Device Path Protocol.
@@ -299,7 +350,7 @@ HiiConstructConfigHdr (
                     entirety of the current HII database will be reset.
   @param DefaultId  Specifies the type of defaults to retrieve.
 
-  @retval TURE    The default value was set successfully.
+  @retval TRUE    The default value was set successfully.
   @retval FALSE   The default value was not found.
 **/
 BOOLEAN

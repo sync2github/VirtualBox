@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: UIWizardCloneVD.h 91714 2021-10-13 13:05:36Z vboxsync $ */
 /** @file
  * VBox Qt GUI - UIWizardCloneVD class declaration.
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2021 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -15,65 +15,82 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
-#ifndef __UIWizardCloneVD_h__
-#define __UIWizardCloneVD_h__
+#ifndef FEQT_INCLUDED_SRC_wizards_clonevd_UIWizardCloneVD_h
+#define FEQT_INCLUDED_SRC_wizards_clonevd_UIWizardCloneVD_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 /* GUI includes: */
-#include "UIWizard.h"
+#include "UINativeWizard.h"
 
 /* COM includes: */
 #include "COMEnums.h"
 #include "CMedium.h"
+#include "CMediumFormat.h"
 
-/* Clone Virtual Hard Drive wizard: */
-class UIWizardCloneVD : public UIWizard
+/** Clone Virtual Disk wizard: */
+class UIWizardCloneVD : public UINativeWizard
 {
     Q_OBJECT;
 
 public:
 
-    /* Page IDs: */
-    enum
-    {
-        Page1,
-        Page2,
-        Page3,
-        Page4
-    };
+    /** Constructs wizard to clone @a comSourceVirtualDisk passing @a pParent to the base-class. */
+    UIWizardCloneVD(QWidget *pParent, const CMedium &comSourceVirtualDisk);
 
-    /* Page IDs: */
-    enum
-    {
-        PageExpert
-    };
+    /** Returns source virtual-disk. */
+    const CMedium &sourceVirtualDisk() const;
 
-    /* Constructor: */
-    UIWizardCloneVD(QWidget *pParent, const CMedium &sourceVirtualDisk);
+    /** Makes a copy of source virtual-disk. */
+    bool copyVirtualDisk();
 
-    /* Returns virtual-disk: */
-    CMedium virtualDisk() const { return m_virtualDisk; }
+    /** @name Parameter setter/getters
+      * @{ */
+        /** Returns the source virtual-disk device type. */
+        KDeviceType deviceType() const;
+
+        const CMediumFormat &mediumFormat() const;
+        void setMediumFormat(const CMediumFormat &comMediumFormat);
+
+        qulonglong mediumVariant() const;
+        void setMediumVariant(qulonglong uMediumVariant);
+
+        qulonglong mediumSize() const;
+        void setMediumSize(qulonglong uMediumSize);
+
+        const QString &mediumPath() const;
+        void setMediumPath(const QString &strPath);
+
+        qulonglong sourceDiskLogicalSize() const;
+        QString sourceDiskFilePath() const;
+        QString sourceDiskName() const;
+   /** @} */
 
 protected:
 
-    /* Copy virtual-disk: */
-    bool copyVirtualDisk();
-
-    /* Who will be able to copy virtual-disk: */
-    friend class UIWizardCloneVDPageBasic4;
-    friend class UIWizardCloneVDPageExpert;
+    virtual void populatePages() /* final override */;
 
 private:
 
-    /* Translation stuff: */
-    void retranslateUi();
+    /** Handles translation event. */
+    virtual void retranslateUi() /* override */;
+    void setMediumVariantPageVisibility();
 
-    /* Pages related stuff: */
-    void prepare();
+    /** @name Parameters needed during medium cloning
+      * @{ */
+        CMediumFormat m_comMediumFormat;
+        qulonglong m_uMediumVariant;
+        /** Holds the source virtual disk wrapper. */
+        CMedium m_comSourceVirtualDisk;
 
-    /* Variables: */
-    CMedium m_sourceVirtualDisk;
-    CMedium m_virtualDisk;
+        /** Holds the source virtual-disk device type. */
+        KDeviceType m_enmDeviceType;
+        int m_iMediumVariantPageIndex;
+        qulonglong m_uMediumSize;
+        QString m_strMediumPath;
+        QString m_strSourceDiskPath;
+    /** @} */
 };
 
-#endif // __UIWizardCloneVD_h__
-
+#endif /* !FEQT_INCLUDED_SRC_wizards_clonevd_UIWizardCloneVD_h */

@@ -1,15 +1,10 @@
 /** @file
   Dhcp6 internal functions implementation.
 
-  Copyright (c) 2009 - 2014, Intel Corporation. All rights reserved.<BR>
+  (C) Copyright 2014 Hewlett-Packard Development Company, L.P.<BR>
+  Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
 
-  This program and the accompanying materials
-  are licensed and made available under the terms and conditions of the BSD License
-  which accompanies this distribution.  The full text of the license may be found at
-  http://opensource.org/licenses/bsd-license.php.
-
-  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
@@ -63,7 +58,7 @@ Dhcp6EnqueueRetry (
   TxCb->Elapsed  = Elapsed;
 
   //
-  // Calculate the retransmission according to the the message type.
+  // Calculate the retransmission according to the message type.
   //
   switch (Packet->Dhcp6.Header.MessageType) {
   case Dhcp6MsgSolicit:
@@ -208,6 +203,7 @@ Dhcp6EnqueueRetry (
     //
     // Unexpected message type.
     //
+    FreePool(TxCb);
     return EFI_DEVICE_ERROR;
   }
 
@@ -544,7 +540,6 @@ Dhcp6UpdateIaInfo (
   )
 {
   EFI_STATUS                  Status;
-  EFI_DHCP6_STATE             State;
   UINT8                       *Option;
   UINT8                       *IaInnerOpt;
   UINT16                      IaInnerLen;
@@ -554,18 +549,17 @@ Dhcp6UpdateIaInfo (
 
   ASSERT (Instance->Config != NULL);
   //
-  // If the reply was received in reponse to a solicit with rapid commit option,
+  // If the reply was received in response to a solicit with rapid commit option,
   // request, renew or rebind message, the client updates the information it has
   // recorded about IAs from the IA options contained in the reply message:
   //   1. record the T1 and T2 times
   //   2. add any new addresses in the IA
   //   3. discard any addresses from the IA, that have a valid lifetime of 0
-  //   4. update lifetimes for any addresses that alread recorded
+  //   4. update lifetimes for any addresses that already recorded
   //   5. leave unchanged any information about addresses
   //
   // See details in the section-18.1.8 of rfc-3315.
   //
-  State  = Dhcp6Init;
   Option = Dhcp6SeekIaOption (
              Packet->Dhcp6.Option,
              Packet->Length - sizeof (EFI_DHCP6_HEADER),
@@ -948,7 +942,7 @@ Dhcp6SendSolicitMsg   (
   }
 
   //
-  // Create the Dhcp6 packet and initialize commone fields.
+  // Create the Dhcp6 packet and initialize common fields.
   //
   Packet = AllocateZeroPool (DHCP6_BASE_PACKET_SIZE + UserLen);
   if (Packet == NULL) {
@@ -1130,7 +1124,7 @@ Dhcp6SendRequestMsg (
   }
 
   //
-  // Create the Dhcp6 packet and initialize commone fields.
+  // Create the Dhcp6 packet and initialize common fields.
   //
   Packet = AllocateZeroPool (DHCP6_BASE_PACKET_SIZE + UserLen);
   if (Packet == NULL) {
@@ -1288,7 +1282,7 @@ Dhcp6SendDeclineMsg (
   ServerId = (EFI_DHCP6_DUID *) (Option + 2);
 
   //
-  // Create the Dhcp6 packet and initialize commone fields.
+  // Create the Dhcp6 packet and initialize common fields.
   //
   Packet = AllocateZeroPool (DHCP6_BASE_PACKET_SIZE);
   if (Packet == NULL) {
@@ -1422,7 +1416,7 @@ Dhcp6SendReleaseMsg (
   ServerId = (EFI_DHCP6_DUID *) (Option + 2);
 
   //
-  // Create the Dhcp6 packet and initialize commone fields.
+  // Create the Dhcp6 packet and initialize common fields.
   //
   Packet = AllocateZeroPool (DHCP6_BASE_PACKET_SIZE);
   if (Packet == NULL) {
@@ -1553,7 +1547,7 @@ Dhcp6SendRenewRebindMsg (
   }
 
   //
-  // Create the Dhcp6 packet and initialize commone fields.
+  // Create the Dhcp6 packet and initialize common fields.
   //
   Packet = AllocateZeroPool (DHCP6_BASE_PACKET_SIZE + UserLen);
   if (Packet == NULL) {
@@ -1836,7 +1830,7 @@ Dhcp6SendInfoRequestMsg (
   }
 
   //
-  // Create the Dhcp6 packet and initialize commone fields.
+  // Create the Dhcp6 packet and initialize common fields.
   //
   Packet = AllocateZeroPool (DHCP6_BASE_PACKET_SIZE + UserLen);
   if (Packet == NULL) {
@@ -2156,7 +2150,7 @@ Dhcp6HandleReplyMsg (
     Instance->UdpSts = EFI_SUCCESS;
 
     //
-    // For async, signal the Ia event to inform Ia infomation update.
+    // For async, signal the Ia event to inform Ia information update.
     //
     if (Instance->Config->IaInfoEvent != NULL) {
       gBS->SignalEvent (Instance->Config->IaInfoEvent);
@@ -2219,14 +2213,14 @@ Dhcp6HandleReplyMsg (
 
       //
       // Maybe this is a new round DHCP process due to some reason, such as NotOnLink
-      // ReplyMsg for ConfirmMsg should triger new round to acquire new address. In that
+      // ReplyMsg for ConfirmMsg should trigger new round to acquire new address. In that
       // case, clear old address.ValidLifetime and append to new address. Therefore, DHCP
       // consumers can be notified to flush old address.
       //
       Dhcp6AppendCacheIa (Instance);
 
       //
-      // For async, signal the Ia event to inform Ia infomation update.
+      // For async, signal the Ia event to inform Ia information update.
       //
       if (Instance->Config->IaInfoEvent != NULL) {
         gBS->SignalEvent (Instance->Config->IaInfoEvent);
@@ -2428,18 +2422,16 @@ Dhcp6HandleAdvertiseMsg (
 {
   EFI_STATUS                  Status;
   UINT8                       *Option;
-  UINT16                      StsCode;
   BOOLEAN                     Timeout;
 
   ASSERT(Instance->Config);
   ASSERT(Instance->IaCb.Ia);
 
   Timeout = FALSE;
-  StsCode = Dhcp6StsSuccess;
 
   //
   // If the client does receives a valid reply message that includes a rapid
-  // commit option since a solicit with rapid commit optioin sent before, select
+  // commit option since a solicit with rapid commit option sent before, select
   // this reply message. Or else, process the advertise messages as normal.
   // See details in the section-17.1.4 of rfc-3315.
   //
@@ -2815,6 +2807,7 @@ Dhcp6ReceivePacket (
   LIST_ENTRY                *Next1;
   LIST_ENTRY                *Entry2;
   LIST_ENTRY                *Next2;
+  EFI_STATUS                Status;
 
   ASSERT (Udp6Wrap != NULL);
   ASSERT (Context != NULL);
@@ -2827,6 +2820,10 @@ Dhcp6ReceivePacket (
 
   if (EFI_ERROR (IoStatus)) {
     return ;
+  }
+
+  if (Udp6Wrap->TotalSize < sizeof (EFI_DHCP6_HEADER)) {
+    goto ON_CONTINUE;
   }
 
   //
@@ -2893,6 +2890,21 @@ Dhcp6ReceivePacket (
   }
 
 ON_CONTINUE:
+
+  if (!IsDispatched) {
+    Status = UdpIoRecvDatagram (
+             Service->UdpIo,
+             Dhcp6ReceivePacket,
+             Service,
+             0
+             );
+    if (EFI_ERROR (Status)) {
+      NET_LIST_FOR_EACH_SAFE (Entry1, Next1, &Service->Child) {
+        Instance = NET_LIST_USER_STRUCT (Entry1, DHCP6_INSTANCE, Link);
+        Dhcp6CleanupRetry (Instance, DHCP6_PACKET_ALL);
+      }
+    }
+  }
 
   NetbufFree (Udp6Wrap);
 

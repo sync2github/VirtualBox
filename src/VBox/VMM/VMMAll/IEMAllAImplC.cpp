@@ -1,10 +1,10 @@
-/* $Id$ */
+/* $Id: IEMAllAImplC.cpp 82968 2020-02-04 10:35:17Z vboxsync $ */
 /** @file
  * IEM - Instruction Implementation in Assembly, portable C variant.
  */
 
 /*
- * Copyright (C) 2011-2016 Oracle Corporation
+ * Copyright (C) 2011-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,7 +20,8 @@
 *   Header Files                                                                                                                 *
 *********************************************************************************************************************************/
 #include "IEMInternal.h"
-#include <VBox/vmm/vm.h>
+#include <VBox/vmm/vmcc.h>
+#include <VBox/err.h>
 #include <iprt/x86.h>
 #include <iprt/uint128.h>
 
@@ -338,7 +339,7 @@ static uint8_t const g_afParity[256] =
  * @param   a_cBitsWidth    The width of the result (8, 16, 32, 64).
  */
 #define X86_EFL_CALC_SF(a_uResult, a_cBitsWidth) \
-    ( (uint32_t)((a_uResult) >> ((a_cBitsWidth) - X86_EFL_SF_BIT)) & X86_EFL_SF )
+    ( (uint32_t)((a_uResult) >> ((a_cBitsWidth) - X86_EFL_SF_BIT - 1)) & X86_EFL_SF )
 
 /**
  * Calculates the zero flag value given a result.
@@ -525,7 +526,7 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_test_u64,(uint64_t *puDst, uint64_t uSrc, uint3
 
 IEM_DECL_IMPL_DEF(void, iemAImpl_add_u64_locked,(uint64_t *puDst, uint64_t uSrc, uint32_t *pfEFlags))
 {
-    DO_LOCKED_BIN_OP_U64(adc);
+    DO_LOCKED_BIN_OP_U64(add);
 }
 
 
@@ -682,7 +683,7 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_bts_u64_locked,(uint64_t *puDst, uint64_t uSrc,
 IEM_DECL_IMPL_DEF(void, iemAImpl_bsf_u64,(uint64_t *puDst, uint64_t uSrc, uint32_t *pfEFlags))
 {
     /* Note! "undefined" flags: OF, SF, AF, PF, CF. */
-    /** @todo check what real CPUs does. */
+    /** @todo check what real CPUs do. */
     if (uSrc)
     {
         uint8_t  iBit;
@@ -733,19 +734,19 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_bsf_u64,(uint64_t *puDst, uint64_t uSrc, uint32
 IEM_DECL_IMPL_DEF(void, iemAImpl_bsr_u64,(uint64_t *puDst, uint64_t uSrc, uint32_t *pfEFlags))
 {
     /* Note! "undefined" flags: OF, SF, AF, PF, CF. */
-    /** @todo check what real CPUs does. */
+    /** @todo check what real CPUs do. */
     if (uSrc)
     {
         uint8_t  iBit;
         uint32_t u32Src;
         if (uSrc & UINT64_C(0xffffffff00000000))
         {
-            iBit = 64;
+            iBit = 63;
             u32Src = uSrc >> 32;
         }
         else
         {
-            iBit = 32;
+            iBit = 31;
             u32Src = uSrc;
         }
         if (!(u32Src & UINT32_C(0xffff0000)))
@@ -768,11 +769,10 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_bsr_u64,(uint64_t *puDst, uint64_t uSrc, uint32
             iBit -= 2;
             u32Src <<= 2;
         }
-        if (!(u32Src & UINT32_C(0x10000000)))
+        if (!(u32Src & UINT32_C(0x80000000)))
         {
             iBit -= 1;
-            u32Src <<= 1;
-            Assert(u32Src & RT_BIT_64(63));
+            Assert(u32Src & RT_BIT(30));
         }
 
         *puDst     = iBit;
@@ -1351,4 +1351,100 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_arpl,(uint16_t *pu16Dst, uint16_t u16Src, uint3
     else
         *pfEFlags &= ~X86_EFL_ZF;
 }
+
+
+
+IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg16b_fallback,(PRTUINT128U pu128Dst, PRTUINT128U pu128RaxRdx,
+                                                      PRTUINT128U pu128RbxRcx, uint32_t *pEFlags))
+{
+    RTUINT128U u128Tmp = *pu128Dst;
+    if (   u128Tmp.s.Lo == pu128RaxRdx->s.Lo
+        && u128Tmp.s.Hi == pu128RaxRdx->s.Hi)
+    {
+        *pu128Dst = *pu128RbxRcx;
+        *pEFlags |= X86_EFL_ZF;
+    }
+    else
+    {
+        *pu128RaxRdx = u128Tmp;
+        *pEFlags &= ~X86_EFL_ZF;
+    }
+}
+
+
+IEM_DECL_IMPL_DEF(void, iemAImpl_movsldup,(PCX86FXSTATE pFpuState, PRTUINT128U puDst, PCRTUINT128U puSrc))
+{
+    RT_NOREF(pFpuState);
+    puDst->au32[0] = puSrc->au32[0];
+    puDst->au32[1] = puSrc->au32[0];
+    puDst->au32[2] = puSrc->au32[2];
+    puDst->au32[3] = puSrc->au32[2];
+}
+
+#ifdef IEM_WITH_VEX
+
+IEM_DECL_IMPL_DEF(void, iemAImpl_vmovsldup_256_rr,(PX86XSAVEAREA pXState, uint8_t iYRegDst, uint8_t iYRegSrc))
+{
+    pXState->x87.aXMM[iYRegDst].au32[0] = pXState->x87.aXMM[iYRegSrc].au32[0];
+    pXState->x87.aXMM[iYRegDst].au32[1] = pXState->x87.aXMM[iYRegSrc].au32[0];
+    pXState->x87.aXMM[iYRegDst].au32[2] = pXState->x87.aXMM[iYRegSrc].au32[2];
+    pXState->x87.aXMM[iYRegDst].au32[3] = pXState->x87.aXMM[iYRegSrc].au32[2];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au32[0] = pXState->u.YmmHi.aYmmHi[iYRegSrc].au32[0];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au32[1] = pXState->u.YmmHi.aYmmHi[iYRegSrc].au32[0];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au32[2] = pXState->u.YmmHi.aYmmHi[iYRegSrc].au32[2];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au32[3] = pXState->u.YmmHi.aYmmHi[iYRegSrc].au32[2];
+}
+
+
+IEM_DECL_IMPL_DEF(void, iemAImpl_vmovsldup_256_rm,(PX86XSAVEAREA pXState, uint8_t iYRegDst, PCRTUINT256U pSrc))
+{
+    pXState->x87.aXMM[iYRegDst].au32[0]       = pSrc->au32[0];
+    pXState->x87.aXMM[iYRegDst].au32[1]       = pSrc->au32[0];
+    pXState->x87.aXMM[iYRegDst].au32[2]       = pSrc->au32[2];
+    pXState->x87.aXMM[iYRegDst].au32[3]       = pSrc->au32[2];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au32[0] = pSrc->au32[4];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au32[1] = pSrc->au32[4];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au32[2] = pSrc->au32[6];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au32[3] = pSrc->au32[6];
+}
+
+#endif /* IEM_WITH_VEX */
+
+
+IEM_DECL_IMPL_DEF(void, iemAImpl_movshdup,(PCX86FXSTATE pFpuState, PRTUINT128U puDst, PCRTUINT128U puSrc))
+{
+    RT_NOREF(pFpuState);
+    puDst->au32[0] = puSrc->au32[1];
+    puDst->au32[1] = puSrc->au32[1];
+    puDst->au32[2] = puSrc->au32[3];
+    puDst->au32[3] = puSrc->au32[3];
+}
+
+
+IEM_DECL_IMPL_DEF(void, iemAImpl_movddup,(PCX86FXSTATE pFpuState, PRTUINT128U puDst, uint64_t uSrc))
+{
+    RT_NOREF(pFpuState);
+    puDst->au64[0] = uSrc;
+    puDst->au64[1] = uSrc;
+}
+
+#ifdef IEM_WITH_VEX
+
+IEM_DECL_IMPL_DEF(void, iemAImpl_vmovddup_256_rr,(PX86XSAVEAREA pXState, uint8_t iYRegDst, uint8_t iYRegSrc))
+{
+    pXState->x87.aXMM[iYRegDst].au64[0] = pXState->x87.aXMM[iYRegSrc].au64[0];
+    pXState->x87.aXMM[iYRegDst].au64[1] = pXState->x87.aXMM[iYRegSrc].au64[0];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au64[0] = pXState->u.YmmHi.aYmmHi[iYRegSrc].au64[0];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au64[1] = pXState->u.YmmHi.aYmmHi[iYRegSrc].au64[0];
+}
+
+IEM_DECL_IMPL_DEF(void, iemAImpl_vmovddup_256_rm,(PX86XSAVEAREA pXState, uint8_t iYRegDst, PCRTUINT256U pSrc))
+{
+    pXState->x87.aXMM[iYRegDst].au64[0]       = pSrc->au64[0];
+    pXState->x87.aXMM[iYRegDst].au64[1]       = pSrc->au64[0];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au64[0] = pSrc->au64[2];
+    pXState->u.YmmHi.aYmmHi[iYRegDst].au64[1] = pSrc->au64[2];
+}
+
+#endif /* IEM_WITH_VEX */
 

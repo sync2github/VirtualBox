@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2016 Oracle Corporation
+ * Copyright (C) 2006-2020 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -23,8 +23,11 @@
  * terms and conditions of either the GPL or the CDDL or both.
  */
 
-#ifndef ___VBox_dis_h
-#define ___VBox_dis_h
+#ifndef VBOX_INCLUDED_dis_h
+#define VBOX_INCLUDED_dis_h
+#ifndef RT_WITHOUT_PRAGMA_ONCE
+# pragma once
+#endif
 
 #include <VBox/types.h>
 #include <VBox/disopcode.h>
@@ -535,7 +538,7 @@ typedef const struct DISOPCODE *PCDISOPCODE;
  * @param   cbMinRead       The minimum number of bytes to read.
  * @param   cbMaxRead       The maximum number of bytes that may be read.
  */
-typedef DECLCALLBACK(int) FNDISREADBYTES(PDISSTATE pDis, uint8_t offInstr, uint8_t cbMinRead, uint8_t cbMaxRead);
+typedef DECLCALLBACKTYPE(int, FNDISREADBYTES,(PDISSTATE pDis, uint8_t offInstr, uint8_t cbMinRead, uint8_t cbMaxRead));
 /** Pointer to a opcode byte reader. */
 typedef FNDISREADBYTES *PFNDISREADBYTES;
 
@@ -761,7 +764,8 @@ DISDECL(int) DISPtrReg64(PCPUMCTXCORE pCtx, unsigned reg64, uint64_t **ppReg);
  *                      symbol to the specified address is returned.
  * @param   pvUser      The user argument.
  */
-typedef DECLCALLBACK(int) FNDISGETSYMBOL(PCDISSTATE pDis, uint32_t u32Sel, RTUINTPTR uAddress, char *pszBuf, size_t cchBuf, RTINTPTR *poff, void *pvUser);
+typedef DECLCALLBACKTYPE(int, FNDISGETSYMBOL,(PCDISSTATE pDis, uint32_t u32Sel, RTUINTPTR uAddress, char *pszBuf, size_t cchBuf,
+                                              RTINTPTR *poff, void *pvUser));
 /** Pointer to a FNDISGETSYMBOL(). */
 typedef FNDISGETSYMBOL *PFNDISGETSYMBOL;
 
@@ -844,5 +848,5 @@ DISDECL(bool)   DISFormatYasmIsOddEncoding(PDISSTATE pDis);
 
 RT_C_DECLS_END
 
-#endif
+#endif /* !VBOX_INCLUDED_dis_h */
 
